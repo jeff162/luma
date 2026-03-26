@@ -38,7 +38,7 @@ never leaving your machine.
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/yourusername/fintrack.git
+git clone https://github.com/jeff162/fintrack.git
 cd fintrack
 cp .env.example .env
 # Edit .env — at minimum set SESSION_SECRET to a random string.
