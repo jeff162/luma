@@ -1,0 +1,26 @@
+[project]
+name = "fintrack"
+version = "0.1.0"
+description = "Self-hosted personal finance tracker"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn[standard]==0.30.6",
+    "plaid-python==38.4.0",
+    "pydantic==2.8.2",
+    "python-dotenv==1.0.1",
+    "python-multipart==0.0.9",
+    "itsdangerous==2.2.0",
+    "cryptography==43.0.1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]  # line length handled by formatter
+
+[tool.ruff.lint.isort]
+known-first-party = ["db", "routers", "services"]
