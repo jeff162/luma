@@ -627,7 +627,7 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
 // The parent should optimistically update its local transaction data with the
 // new category fields (id, name, color, icon) so the UI updates without reload.
 
-export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePrompt }) {
+export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePrompt, onOpenDetail }) {
   const [editId, setEditId] = useState(null)
 
   function fireRulePrompt(catId, catObj) {
@@ -675,13 +675,26 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
   }
 
   return (
-    <div onClick={() => setEditId(txn.id)} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }} title="Click to change category">
-      {txn.category_name ? (
-        <Badge label={txn.category_name} color={txn.category_color} icon={txn.category_icon} />
-      ) : (
-        <span style={{ color: 'var(--muted)', fontSize: 13 }}>Uncategorized</span>
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      <div
+        onClick={() => setEditId(txn.id)}
+        style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+        title="Click to change category"
+      >
+        {txn.category_name ? (
+          <Badge label={txn.category_name} color={txn.category_color} icon={txn.category_icon} />
+        ) : (
+          <span style={{ color: 'var(--muted)', fontSize: 13 }}>Uncategorized</span>
+        )}
+        {!!txn.category_overridden && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✎</span>}
+      </div>
+      {onOpenDetail && txn.category_name && (
+        <span
+          onClick={e => { e.stopPropagation(); onOpenDetail() }}
+          title="View category spending history"
+          style={{ fontSize: 10, color: 'var(--accent2)', opacity: 0.7, cursor: 'pointer', lineHeight: 1 }}
+        >↗</span>
       )}
-      {!!txn.category_overridden && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✎</span>}
     </div>
   )
 }

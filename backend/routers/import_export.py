@@ -169,12 +169,29 @@ def parse_amount(row: dict, convention: str, col_map: ColumnMap) -> Optional[flo
 def parse_date(val: str, fmt: str) -> Optional[str]:
     """Parse a date string and return YYYY-MM-DD or None."""
     val = val.strip()
-    for f in [fmt, "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y"]:
+    for f in [fmt, "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y", "%b-%d-%Y", "%b %d, %Y"]:
         try:
             return datetime.strptime(val, f).strftime("%Y-%m-%d")
         except ValueError:
             continue
     return None
+
+
+def _detect_header_row_index(text: str) -> int:
+    """Find header row by scanning the first up to 10 lines."""
+    all_lines = text.splitlines()
+    header_row_index = 0
+    for i, line in enumerate(all_lines[:10]):
+        fields = [f.strip().strip('"') for f in line.split(',')]
+        if len(fields) >= 3:
+            looks_like_header = sum(
+                1 for f in fields
+                if f and not f[0].isdigit() and not f.startswith('$')
+            ) >= len(fields) * 0.6
+            if looks_like_header:
+                header_row_index = i
+                break
+    return header_row_index
 
 
 # ── Profile CRUD ──────────────────────────────────────────────────────────────
@@ -271,37 +288,27 @@ async def preview_csv(file: UploadFile = File(...)):
     except UnicodeDecodeError:
         text = content.decode("latin-1")
 
-    # Capture raw lines for the file preview panel
-    all_lines = text.splitlines()
-    raw_lines  = all_lines[:20]
+    try:
+        # Capture raw lines for the file preview panel
+        all_lines = text.splitlines()
+        raw_lines  = all_lines[:20]
 
-    # Detect the header row: first line with ≥3 comma-separated fields that
-    # don't look like pure data (no $ signs, no leading digits in every field)
-    header_row_index = 0
-    for i, line in enumerate(all_lines[:10]):
-        fields = [f.strip().strip('"') for f in line.split(',')]
-        if len(fields) >= 3:
-            # Likely header if fields don't start with digits or $
-            looks_like_header = sum(
-                1 for f in fields
-                if f and not f[0].isdigit() and not f.startswith('$')
-            ) >= len(fields) * 0.6
-            if looks_like_header:
-                header_row_index = i
-                break
-
-    reader = csv.DictReader(io.StringIO(text))
-    raw_headers = reader.fieldnames or []
-    # Strip leading/trailing whitespace from header names — HTML option values
-    # trim whitespace, so a header like " Amount" would cause a key mismatch.
-    headers = [h.strip() for h in raw_headers]
-    all_rows = []
-    for row in reader:
-        # Re-key each row using stripped header names
-        stripped = {k.strip(): v for k, v in row.items()}
-        all_rows.append(stripped)
-    rows       = all_rows[:10]
-    total_rows = len(all_rows)
+        header_row_index = _detect_header_row_index(text)
+        data_text = "\n".join(all_lines[header_row_index:])
+        reader = csv.DictReader(io.StringIO(data_text))
+        raw_headers = reader.fieldnames or []
+        # Strip leading/trailing whitespace from header names — HTML option values
+        # trim whitespace, so a header like " Amount" would cause a key mismatch.
+        headers = [h.strip() for h in raw_headers]
+        all_rows = []
+        for row in reader:
+            # Re-key each row using stripped header names (skip None keys from malformed rows).
+            stripped = {k.strip(): v for k, v in row.items() if k}
+            all_rows.append(stripped)
+        rows       = all_rows[:10]
+        total_rows = len(all_rows)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not parse CSV: {e}")
 
     filename  = file.filename or ""
     header_fp = "|".join(headers)
@@ -318,49 +325,53 @@ async def preview_csv(file: UploadFile = File(...)):
         for col, vals in column_distinct_values.items()
     }
 
-    with get_db() as conn:
-        # Auto-detect profile
-        profiles = conn.execute(
-            "SELECT id, name, filename_pattern, header_fingerprint FROM csv_import_profile"
-        ).fetchall()
+    try:
+        with get_db() as conn:
+            # Auto-detect profile
+            profiles = conn.execute(
+                "SELECT id, name, filename_pattern, header_fingerprint FROM csv_import_profile"
+            ).fetchall()
 
-        suggested_profile_id = None
-        for p in profiles:
-            if p["filename_pattern"] and p["filename_pattern"].lower() in filename.lower():
-                suggested_profile_id = p["id"]
-                break
-        if not suggested_profile_id:
+            suggested_profile_id = None
             for p in profiles:
-                if p["header_fingerprint"] and p["header_fingerprint"] == header_fp:
+                if p["filename_pattern"] and p["filename_pattern"].lower() in filename.lower():
                     suggested_profile_id = p["id"]
                     break
+            if not suggested_profile_id:
+                for p in profiles:
+                    if p["header_fingerprint"] and p["header_fingerprint"] == header_fp:
+                        suggested_profile_id = p["id"]
+                        break
 
-        # Find most recent completed batch for this filename
-        previous_batch = conn.execute("""
-            SELECT id, imported_at, row_count, status, config_snapshot
-            FROM   import_batch
-            WHERE  filename = ? AND status = 'completed'
-            ORDER  BY imported_at DESC LIMIT 1
-        """, (filename,)).fetchone()
+            # Find most recent completed batch for this filename
+            previous_batch = conn.execute("""
+                SELECT id, imported_at, row_count, status, config_snapshot
+                FROM   import_batch
+                WHERE  filename = ? AND status = 'completed'
+                ORDER  BY imported_at DESC LIMIT 1
+            """, (filename,)).fetchone()
 
-        previous_batch_accounts = []
-        config_snapshot         = None
-        if previous_batch:
-            # Get which accounts were imported (not skipped) from that batch
-            acc_rows = conn.execute("""
-                SELECT iba.csv_value, iba.row_count, iba.was_skipped,
-                       a.id AS account_id, a.name AS account_name
-                FROM   import_batch_account iba
-                LEFT JOIN account a ON a.id = iba.account_id
-                WHERE  iba.batch_id = ? AND iba.was_skipped = 0
-            """, (previous_batch["id"],)).fetchall()
-            previous_batch_accounts = [dict(r) for r in acc_rows]
+            previous_batch_accounts = []
+            config_snapshot         = None
+            if previous_batch:
+                # Get which accounts were imported (not skipped) from that batch
+                acc_rows = conn.execute("""
+                    SELECT iba.csv_value, iba.row_count, iba.was_skipped,
+                           a.id AS account_id, a.name AS account_name
+                    FROM   import_batch_account iba
+                    LEFT JOIN account a ON a.id = iba.account_id
+                    WHERE  iba.batch_id = ? AND iba.was_skipped = 0
+                """, (previous_batch["id"],)).fetchall()
+                previous_batch_accounts = [dict(r) for r in acc_rows]
 
-            if previous_batch["config_snapshot"]:
-                try:
-                    config_snapshot = json.loads(previous_batch["config_snapshot"])
-                except Exception:
-                    pass
+                if previous_batch["config_snapshot"]:
+                    try:
+                        config_snapshot = json.loads(previous_batch["config_snapshot"])
+                    except Exception:
+                        pass
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not parse CSV: {e}")
 
     return {
         "raw_lines":              raw_lines,
@@ -402,11 +413,15 @@ async def run_import(
     except UnicodeDecodeError:
         text = content.decode("latin-1")
 
-    reader   = csv.DictReader(io.StringIO(text))
+    header_row_index = _detect_header_row_index(text)
+    data_text = "\n".join(text.splitlines()[header_row_index:])
+
+    reader   = csv.DictReader(io.StringIO(data_text))
     raw_hdrs = reader.fieldnames or []
     all_rows = []
     for row in reader:
-        all_rows.append({k.strip(): v for k, v in row.items()})
+        # Re-key each row using stripped header names (skip malformed None keys)
+        all_rows.append({k.strip(): v for k, v in row.items() if k})
 
     skip_rows = int(cfg.get("skip_rows", 0))
     data_rows = all_rows[skip_rows:]
