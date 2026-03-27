@@ -33,6 +33,7 @@ const DATE_FORMATS = [
   { value: '%d/%m/%Y',  label: 'DD/MM/YYYY  (e.g. 31/01/2024)' },
   { value: '%m-%d-%Y',  label: 'MM-DD-YYYY  (e.g. 01-31-2024)' },
   { value: '%b %d, %Y', label: 'Mon DD, YYYY  (e.g. Jan 31, 2024)' },
+  { value: '%b-%d-%Y', label: 'MMM-DD-YYYY  (e.g. Mar-23-2026)' },
 ]
 const EXPORT_COLUMNS = [
   { key: 'date',          label: 'Date' },
@@ -584,8 +585,10 @@ function ImportTab() {
         setShowRaw(true)
       }
       setStage('mapping')
-    } catch (e) { alert('Failed to parse CSV: ' + e.message) }
-    finally { setLoading(false) }
+    } catch (e) {
+      const msg = e?.message || e?.detail || 'Unable to parse CSV file.'
+      alert('Failed to parse CSV: ' + msg)
+    } finally { setLoading(false) }
   }
 
   function handleDrop(e) { e.preventDefault(); handleFile(e.dataTransfer.files[0]) }
