@@ -27,6 +27,16 @@ PASSWORD_POLICY_VALUES = {
     PASSWORD_POLICY_MIN_8,
     PASSWORD_POLICY_STRONG,
 }
+SECURITY_PROFILE_LOCAL_PRIVATE = "local_private"
+SECURITY_PROFILE_NETWORK_PRIVATE = "network_private"
+SECURITY_PROFILE_HOUSEHOLD_SHARED = "household_shared"
+SECURITY_PROFILE_MULTI_TENANT = "multi_tenant"
+SECURITY_PROFILE_VALUES = {
+    SECURITY_PROFILE_LOCAL_PRIVATE,
+    SECURITY_PROFILE_NETWORK_PRIVATE,
+    SECURITY_PROFILE_HOUSEHOLD_SHARED,
+    SECURITY_PROFILE_MULTI_TENANT,
+}
 
 
 def _tenant_slug(value: str) -> str:
@@ -256,6 +266,56 @@ def set_password_policy(policy: str):
     set_app_setting("password_policy", normalized)
 
 
+def get_security_profile() -> str:
+    value = (get_app_setting("security_profile", SECURITY_PROFILE_LOCAL_PRIVATE) or SECURITY_PROFILE_LOCAL_PRIVATE).strip()
+    return value if value in SECURITY_PROFILE_VALUES else SECURITY_PROFILE_LOCAL_PRIVATE
+
+
+def set_security_profile(profile: str):
+    normalized = (profile or "").strip()
+    if normalized not in SECURITY_PROFILE_VALUES:
+        raise ValueError("Unsupported security profile")
+    set_app_setting("security_profile", normalized)
+
+
+def security_profile_label(profile: str | None = None) -> str:
+    normalized = profile or get_security_profile()
+    if normalized == SECURITY_PROFILE_NETWORK_PRIVATE:
+        return "Private network or remote access"
+    if normalized == SECURITY_PROFILE_HOUSEHOLD_SHARED:
+        return "Shared household access"
+    if normalized == SECURITY_PROFILE_MULTI_TENANT:
+        return "Multi-tenant preview"
+    return "Private localhost only"
+
+
+def security_profile_guidance(profile: str | None = None) -> dict:
+    normalized = profile or get_security_profile()
+    if normalized == SECURITY_PROFILE_NETWORK_PRIVATE:
+        return {
+            "summary": "Use this when the browser and backend are not on the same machine, or when the app is reachable over your network.",
+            "recommended_auth": True,
+            "suggested_password_policy": PASSWORD_POLICY_MIN_8,
+        }
+    if normalized == SECURITY_PROFILE_HOUSEHOLD_SHARED:
+        return {
+            "summary": "Use this when more than one person in a household may sign in. Separate accounts and stronger sign-in protections usually make sense here.",
+            "recommended_auth": True,
+            "suggested_password_policy": PASSWORD_POLICY_STRONG,
+        }
+    if normalized == SECURITY_PROFILE_MULTI_TENANT:
+        return {
+            "summary": "This is the work-in-progress path for real multi-tenant hosting. Treat strong passwords and explicit sign-in as required.",
+            "recommended_auth": True,
+            "suggested_password_policy": PASSWORD_POLICY_STRONG,
+        }
+    return {
+        "summary": "Use this when FinTrack runs only on the same machine as the browser and never needs access outside localhost.",
+        "recommended_auth": False,
+        "suggested_password_policy": PASSWORD_POLICY_NONE,
+    }
+
+
 def password_policy_label(policy: str | None = None) -> str:
     normalized = policy or get_password_policy()
     if normalized == PASSWORD_POLICY_NONE:
@@ -290,6 +350,13 @@ def validate_password_for_policy(password: str, policy: str | None = None):
 def user_count() -> int:
     with get_control_db() as conn:
         return conn.execute("SELECT COUNT(*) FROM user_account").fetchone()[0]
+
+
+def admin_count() -> int:
+    with get_control_db() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM user_account WHERE role = 'admin' AND status = 'active'"
+        ).fetchone()[0]
 
 
 def bootstrap_required() -> bool:
@@ -335,6 +402,7 @@ def _create_user_with_tenant(
     display_name: str | None = None,
     role: str = "member",
     use_legacy_db_if_present: bool = False,
+    tenant_id: str | None = None,
 ) -> dict:
     if not username.strip():
         raise ValueError("username is required")
@@ -343,13 +411,8 @@ def _create_user_with_tenant(
     if role not in {"member", "admin"}:
         raise ValueError("role must be 'member' or 'admin'")
 
-    tenant_id = str(uuid.uuid4())
     clean_username = username.strip()
-    tenant_name = display_name.strip() if display_name else clean_username
-    base_slug = _tenant_slug(clean_username)
-    db_path = _default_tenant_db_path(tenant_id) if use_legacy_db_if_present else str((TENANT_DATA_ROOT / tenant_id / "fintrack.db"))
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    init_db(db_path)
+    user_display_name = display_name.strip() if display_name else clean_username
 
     with get_control_db() as conn:
         existing = conn.execute(
@@ -358,15 +421,31 @@ def _create_user_with_tenant(
         ).fetchone()
         if existing:
             raise ValueError("username already exists")
-        slug = _unique_tenant_slug(conn, base_slug)
 
-        conn.execute(
-            """
-            INSERT INTO tenant (id, slug, name, db_path)
-            VALUES (?, ?, ?, ?)
-            """,
-            (tenant_id, slug, tenant_name, db_path),
-        )
+        resolved_tenant_id = tenant_id
+        if resolved_tenant_id:
+            tenant = conn.execute(
+                "SELECT id, db_path FROM tenant WHERE id = ?",
+                (resolved_tenant_id,),
+            ).fetchone()
+            if not tenant:
+                raise ValueError("tenant not found")
+        else:
+            resolved_tenant_id = str(uuid.uuid4())
+            tenant_name = user_display_name
+            base_slug = _tenant_slug(clean_username)
+            db_path = _default_tenant_db_path(resolved_tenant_id) if use_legacy_db_if_present else str((TENANT_DATA_ROOT / resolved_tenant_id / "fintrack.db"))
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+            init_db(db_path)
+            slug = _unique_tenant_slug(conn, base_slug)
+            conn.execute(
+                """
+                INSERT INTO tenant (id, slug, name, db_path)
+                VALUES (?, ?, ?, ?)
+                """,
+                (resolved_tenant_id, slug, tenant_name, db_path),
+            )
+
         user_id = str(uuid.uuid4())
         conn.execute(
             """
@@ -376,9 +455,9 @@ def _create_user_with_tenant(
             (
                 user_id,
                 clean_username,
-                display_name.strip() if display_name else clean_username,
+                user_display_name,
                 _hash_password(password),
-                tenant_id,
+                resolved_tenant_id,
                 role,
             ),
         )
@@ -546,14 +625,109 @@ def update_user_secret_material(
         )
 
 
-def create_user(username: str, password: str, display_name: str | None = None, role: str = "member") -> dict:
+def create_user(
+    username: str,
+    password: str,
+    display_name: str | None = None,
+    role: str = "member",
+    tenant_id: str | None = None,
+) -> dict:
     return _create_user_with_tenant(
         username=username,
         password=password,
         display_name=display_name,
         role=role,
         use_legacy_db_if_present=False,
+        tenant_id=tenant_id,
     )
+
+
+def update_user(
+    user_id: str,
+    *,
+    username: str | None = None,
+    display_name: str | None = None,
+    password: str | None = None,
+    role: str | None = None,
+    status: str | None = None,
+) -> dict:
+    current = get_user_by_id(user_id)
+    if not current:
+        raise ValueError("user not found")
+
+    fields = []
+    params = []
+
+    with get_control_db() as conn:
+        if username is not None:
+            clean_username = username.strip()
+            if not clean_username:
+                raise ValueError("username is required")
+            existing = conn.execute(
+                "SELECT id FROM user_account WHERE lower(username) = lower(?) AND id != ?",
+                (clean_username, user_id),
+            ).fetchone()
+            if existing:
+                raise ValueError("username already exists")
+            fields.append("username = ?")
+            params.append(clean_username)
+
+        if display_name is not None:
+            clean_display_name = display_name.strip()
+            if not clean_display_name:
+                raise ValueError("display name is required")
+            fields.append("display_name = ?")
+            params.append(clean_display_name)
+
+        if password is not None:
+            validate_password_for_policy(password)
+            fields.append("password_hash = ?")
+            params.append(_hash_password(password))
+
+        if role is not None:
+            normalized_role = role.strip()
+            if normalized_role not in {"member", "admin"}:
+                raise ValueError("role must be 'member' or 'admin'")
+            if current["role"] == "admin" and normalized_role != "admin" and admin_count() <= 1:
+                raise ValueError("at least one active admin is required")
+            fields.append("role = ?")
+            params.append(normalized_role)
+
+        if status is not None:
+            normalized_status = status.strip()
+            if normalized_status not in {"active", "disabled"}:
+                raise ValueError("status must be 'active' or 'disabled'")
+            if (
+                current["role"] == "admin"
+                and current["status"] == "active"
+                and normalized_status != "active"
+                and admin_count() <= 1
+            ):
+                raise ValueError("at least one active admin is required")
+            fields.append("status = ?")
+            params.append(normalized_status)
+
+        if not fields:
+            return current
+
+        params.append(user_id)
+        conn.execute(
+            f"UPDATE user_account SET {', '.join(fields)} WHERE id = ?",
+            params,
+        )
+
+    return get_user_by_id(user_id)
+
+
+def delete_user(user_id: str):
+    current = get_user_by_id(user_id)
+    if not current:
+        raise ValueError("user not found")
+    if current["role"] == "admin" and current["status"] == "active" and admin_count() <= 1:
+        raise ValueError("at least one active admin is required")
+
+    with get_control_db() as conn:
+        conn.execute("DELETE FROM user_account WHERE id = ?", (user_id,))
 
 
 def begin_totp_setup(user_id: str) -> dict:

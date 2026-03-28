@@ -23,6 +23,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - The setup flow is now organized around launcher scripts and a simpler `.env`
   story, with advanced overrides documented separately.
+- Accounts and Settings were reorganized so account editing lives on the
+  Accounts page, owner/category ownership is managed where it is used, and
+  security settings now cover password policy, 2FA, backup recipients, and
+  environment-backed options more cleanly.
 - Rule evaluation now uses computed specificity instead of manual priority, and
   the Rules page is organized around readable descriptions rather than grid-style
   editing.

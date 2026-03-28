@@ -18,6 +18,7 @@ import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
 import { Card, PageHeader, Button, Spinner, EmptyState } from '../components/ui.jsx'
 import { PASSWORD_POLICIES, passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
+import { SECURITY_PROFILES, getSecurityProfile } from '../lib/securityProfiles.js'
 
 // ── Small reusable owner badge ────────────────────────────────────────────────
 
@@ -461,11 +462,94 @@ function AuthModeSection({ authEnabled, onEnabled, embedded = false }) {
   )
 }
 
+function SecurityProfileSection({ authEnabled, securityProfile, passwordPolicy, onChange }) {
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const currentProfile = getSecurityProfile(securityProfile)
+
+  async function handleChange(nextProfile) {
+    setSaving(true)
+    setError('')
+    try {
+      const resp = await api.saveSecurityProfile(nextProfile)
+      onChange?.(resp)
+    } catch (err) {
+      setError(err.message || 'Failed to save security mode')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card style={{ padding: 20 }}>
+      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Security mode</div>
+      <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, marginBottom: 14 }}>
+        Choose the deployment model this FinTrack instance is meant for. This does not force auth on or off by itself, but it sets expectations for password strength and sign-in protection.
+      </div>
+      <div style={{ display: 'grid', gap: 8 }}>
+        {SECURITY_PROFILES.map(option => (
+          <label
+            key={option.value}
+            style={{
+              display: 'grid',
+              gap: 4,
+              padding: '12px 14px',
+              border: `1px solid ${securityProfile === option.value ? 'var(--accent)' : 'var(--border)'}`,
+              borderRadius: 12,
+              background: securityProfile === option.value
+                ? 'color-mix(in srgb, var(--accent) 7%, var(--surface2))'
+                : 'var(--surface2)',
+              cursor: saving ? 'default' : 'pointer',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <input
+                type="radio"
+                name="security-profile"
+                checked={securityProfile === option.value}
+                onChange={() => handleChange(option.value)}
+                disabled={saving}
+              />
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{option.label}</span>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, paddingLeft: 24 }}>
+              {option.summary}
+            </div>
+          </label>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 14, padding: 12, borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Current recommendation</div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
+          {currentProfile.recommendedAuth
+            ? `This mode usually should have sign-in protection enabled. Suggested password policy: ${currentProfile.suggestedPasswordPolicy.replace('_', ' ')}.`
+            : 'This mode can reasonably stay in local no-login mode if the app is only exposed on localhost.'}
+        </div>
+        {authEnabled && (
+          <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6, marginTop: 6 }}>
+            Active password policy: {passwordPolicyHelpText(passwordPolicy)}
+          </div>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ marginTop: 12, color: '#ef4444', fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+    </Card>
+  )
+}
+
 function UserAdminSection({ passwordPolicy, embedded = false }) {
   const [viewer, setViewer] = useState(null)
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
+  const [savingUserId, setSavingUserId] = useState(null)
+  const [deletingUserId, setDeletingUserId] = useState(null)
+  const [editingUserId, setEditingUserId] = useState(null)
   const [error, setError] = useState('')
   const [form, setForm] = useState({
     username: '',
@@ -473,6 +557,17 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
     password: '',
     role: 'member',
   })
+  const [editForm, setEditForm] = useState({
+    username: '',
+    display_name: '',
+    password: '',
+    role: 'member',
+    status: 'active',
+  })
+  const [newUserId, setNewUserId] = useState(null)
+  const userRowRefs = useRef(new Map())
+  const editRowRefs = useRef(new Map())
+  const userTableHeaderRef = useRef(null)
 
   async function load() {
     setLoading(true)
@@ -493,18 +588,94 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
 
   useEffect(() => { load() }, [])
 
+  useEffect(() => {
+    if (!newUserId) return
+    const row = userRowRefs.current.get(newUserId)
+    if (!row) return
+    row.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    setNewUserId(null)
+  }, [users, newUserId])
+
+  useEffect(() => {
+    if (!editingUserId) return
+    const row = editRowRefs.current.get(editingUserId)
+    if (!row) return
+    row.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [editingUserId])
+
   async function handleCreate(e) {
     e.preventDefault()
     setCreating(true)
     setError('')
     try {
-      await api.createUser(form)
+      const resp = await api.createUser(form)
+      setNewUserId(resp?.user?.id || null)
       setForm({ username: '', display_name: '', password: '', role: 'member' })
       await load()
     } catch (err) {
       setError(err.message || 'Failed to create user')
     } finally {
       setCreating(false)
+    }
+  }
+
+  function startEditing(user) {
+    setEditingUserId(user.id)
+    setEditForm({
+      username: user.username || '',
+      display_name: user.display_name || '',
+      password: '',
+      role: user.role || 'member',
+      status: user.status || 'active',
+    })
+    setError('')
+  }
+
+  function cancelEditing() {
+    setEditingUserId(null)
+    setEditForm({
+      username: '',
+      display_name: '',
+      password: '',
+      role: 'member',
+      status: 'active',
+    })
+  }
+
+  async function handleSaveUser(userId) {
+    setSavingUserId(userId)
+    setError('')
+    try {
+      const payload = {
+        username: editForm.username,
+        display_name: editForm.display_name,
+        role: editForm.role,
+        status: editForm.status,
+        ...(editForm.password ? { password: editForm.password } : {}),
+      }
+      await api.updateUser(userId, payload)
+      cancelEditing()
+      await load()
+    } catch (err) {
+      setError(err.message || 'Failed to update user')
+    } finally {
+      setSavingUserId(null)
+    }
+  }
+
+  async function handleDeleteUser(user) {
+    if (!confirm(`Delete ${user.display_name || user.username}? This removes their sign-in account from this FinTrack instance.`)) return
+    setDeletingUserId(user.id)
+    setError('')
+    try {
+      await api.deleteUser(user.id)
+      if (editingUserId === user.id) cancelEditing()
+      await load()
+      userTableHeaderRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    } catch (err) {
+      setError(err.message || 'Failed to delete user')
+    } finally {
+      setDeletingUserId(null)
     }
   }
 
@@ -521,7 +692,7 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
           <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
-            Each created user gets an independent tenant database. This keeps financial data isolated without rewriting the core finance schema into a shared multi-tenant table model.
+            Use this area when more than one person needs their own sign-in for the same FinTrack installation, such as a shared household system or a password-protected home server.
           </div>
         </div>
 
@@ -559,20 +730,92 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
           </div>
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 120px 1fr 1fr', padding: '8px 16px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)' }}>
-          <span>User</span><span>Tenant</span><span>Role</span><span>Status</span><span>Last login</span>
+        <div ref={userTableHeaderRef} style={{ display: 'grid', gridTemplateColumns: '1.4fr 120px 1fr 1fr auto', padding: '8px 16px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)', gap: 10 }}>
+          <span>User</span><span>Role</span><span>Status</span><span>Last login</span><span />
         </div>
         {users.map(user => (
-          <div key={user.id} style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 120px 1fr 1fr', padding: '10px 16px', fontSize: 13, borderBottom: '1px solid var(--border)', alignItems: 'center' }}>
-            <div>
-              <div style={{ fontWeight: 500 }}>{user.display_name || user.username}</div>
-              <div style={{ fontSize: 11, color: 'var(--muted)' }}>{user.username}</div>
+          editingUserId === user.id ? (
+            <div
+              key={user.id}
+              ref={node => {
+                if (node) editRowRefs.current.set(user.id, node)
+                else editRowRefs.current.delete(user.id)
+              }}
+              style={{ padding: 16, borderBottom: '1px solid var(--border)', display: 'grid', gap: 12, background: 'var(--surface2)' }}
+            >
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 120px 120px', gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Username</label>
+                  <input value={editForm.username} onChange={e => setEditForm(prev => ({ ...prev, username: e.target.value }))} style={inputStyle} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Display name</label>
+                  <input value={editForm.display_name} onChange={e => setEditForm(prev => ({ ...prev, display_name: e.target.value }))} style={inputStyle} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>New password</label>
+                  <input type="password" value={editForm.password} onChange={e => setEditForm(prev => ({ ...prev, password: e.target.value }))} placeholder="Leave blank to keep current" style={inputStyle} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Role</label>
+                  <select value={editForm.role} onChange={e => setEditForm(prev => ({ ...prev, role: e.target.value }))} style={{ ...inputStyle, cursor: 'pointer' }}>
+                    <option value="member">Member</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Status</label>
+                  <select value={editForm.status} onChange={e => setEditForm(prev => ({ ...prev, status: e.target.value }))} style={{ ...inputStyle, cursor: 'pointer' }}>
+                    <option value="active">Active</option>
+                    <option value="disabled">Disabled</option>
+                  </select>
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                {editForm.password ? passwordPolicyHelpText(passwordPolicy) : 'Leave the password field empty to keep the existing password.'}
+              </div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <Button
+                  small
+                  onClick={() => handleSaveUser(user.id)}
+                  disabled={savingUserId === user.id || !editForm.username.trim() || !editForm.display_name.trim() || (editForm.password && !validatePasswordForPolicy(editForm.password, passwordPolicy))}
+                >
+                  {savingUserId === user.id ? 'Saving...' : 'Save changes'}
+                </Button>
+                <Button small variant="ghost" onClick={cancelEditing}>Cancel</Button>
+                {viewer?.id !== user.id && (
+                  <Button small variant="ghost" onClick={() => handleDeleteUser(user)} disabled={deletingUserId === user.id}>
+                    {deletingUserId === user.id ? 'Deleting...' : 'Delete user'}
+                  </Button>
+                )}
+              </div>
             </div>
-            <span>{user.tenant_name}</span>
-            <span style={{ textTransform: 'capitalize' }}>{user.role}</span>
-            <span style={{ textTransform: 'capitalize' }}>{user.status}</span>
-            <span style={{ color: 'var(--muted)' }}>{user.last_login_at || 'Never'}</span>
-          </div>
+          ) : (
+            <div
+              key={user.id}
+              ref={node => {
+                if (node) userRowRefs.current.set(user.id, node)
+                else userRowRefs.current.delete(user.id)
+              }}
+              style={{ display: 'grid', gridTemplateColumns: '1.4fr 120px 1fr 1fr auto', padding: '10px 16px', fontSize: 13, borderBottom: '1px solid var(--border)', alignItems: 'center', gap: 10 }}
+            >
+              <div>
+                <div style={{ fontWeight: 500 }}>
+                  {user.username}
+                  <span style={{ fontWeight: 400, color: 'var(--muted)' }}>
+                    {` - ${user.display_name || user.username}`}
+                  </span>
+                  {viewer?.id === user.id ? ' (you)' : ''}
+                </div>
+              </div>
+              <span style={{ textTransform: 'capitalize' }}>{user.role}</span>
+              <span style={{ textTransform: 'capitalize' }}>{user.status}</span>
+              <span style={{ color: 'var(--muted)' }}>{user.last_login_at || 'Never'}</span>
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <Button small variant="ghost" onClick={() => startEditing(user)}>Edit</Button>
+              </div>
+            </div>
+          )
         ))}
       </Card>
   )
@@ -932,11 +1175,60 @@ function PlaidTokenProtectionSection({ embedded = false }) {
   )
 }
 
-function StickySection({ title, description, actions, children, defaultCollapsed = true }) {
+function StickySection({ title, description, actions, children, defaultCollapsed = true, scrollContainerRef = null }) {
   const [open, setOpen] = useState(!defaultCollapsed)
+  const sectionRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const node = sectionRef.current
+    if (!node) return
+
+    const scrollAfterLayout = () => {
+      const scrollParent = scrollContainerRef?.current
+      if (!scrollParent) {
+        node.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        return
+      }
+      const padding = 12
+      const sectionTop = node.offsetTop
+      const sectionBottom = sectionTop + node.offsetHeight
+      const viewTop = scrollParent.scrollTop
+      const viewBottom = viewTop + scrollParent.clientHeight
+
+      let targetTop = null
+
+      // If the section header ends up above the visible viewport, bring it back.
+      if (sectionTop < viewTop + padding) {
+        targetTop = Math.max(0, sectionTop - padding)
+      }
+      // If the section grows below the visible viewport, scroll just enough to reveal it.
+      else if (sectionBottom > viewBottom - padding) {
+        targetTop = Math.max(0, sectionBottom - scrollParent.clientHeight + padding)
+      }
+
+      if (targetTop !== null && Math.abs(targetTop - scrollParent.scrollTop) > 2) {
+        scrollParent.scrollTo({ top: targetTop, behavior: 'smooth' })
+      }
+    }
+
+    let timeoutId = null
+    let frame2 = null
+    const frame = window.requestAnimationFrame(() => {
+      frame2 = window.requestAnimationFrame(() => {
+        timeoutId = window.setTimeout(scrollAfterLayout, 0)
+      })
+    })
+
+    return () => {
+      window.cancelAnimationFrame(frame)
+      if (frame2 !== null) window.cancelAnimationFrame(frame2)
+      if (timeoutId !== null) window.clearTimeout(timeoutId)
+    }
+  }, [open])
 
   return (
-    <section style={{ marginBottom: 24, display: 'grid', justifyItems: 'start' }}>
+    <section ref={sectionRef} style={{ marginBottom: 24, display: 'grid', justifyItems: 'start' }}>
       <div
         style={{
           padding: '8px 0 8px',
@@ -1433,6 +1725,9 @@ export default function Settings() {
   const [authEnabled, setAuthEnabled] = useState(false)
   const [currentUser, setCurrentUser] = useState(null)
   const [passwordPolicy, setPasswordPolicy] = useState('min_8')
+  const [securityProfile, setSecurityProfile] = useState('local_private')
+  const [experimentalSecuritySettings, setExperimentalSecuritySettings] = useState(false)
+  const settingsScrollRef = useRef(null)
 
   useEffect(() => {
     Promise.all([api.getOwners(), api.getAuthStatus()]).then(([o, status]) => {
@@ -1440,6 +1735,8 @@ export default function Settings() {
       setAuthEnabled(!!status.auth_enabled)
       setCurrentUser(status.user || null)
       setPasswordPolicy(status.password_policy || 'min_8')
+      setSecurityProfile(status.security_profile || 'local_private')
+      setExperimentalSecuritySettings(!!status.experimental_security_settings)
       setLoading(false)
     })
   }, [])
@@ -1462,6 +1759,7 @@ export default function Settings() {
   }
 
   const canManageEnvironment = !authEnabled || currentUser?.role === 'admin'
+  const showPreAuthSecuritySettings = experimentalSecuritySettings || authEnabled
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -1469,10 +1767,11 @@ export default function Settings() {
         <PageHeader title="Settings" />
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+      <div ref={settingsScrollRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
 
       <StickySection
         title="CSV Import Profiles"
+        scrollContainerRef={settingsScrollRef}
       >
         <ImportProfilesSection />
       </StickySection>
@@ -1484,6 +1783,7 @@ export default function Settings() {
           RSA public keys
           </>
         }
+        scrollContainerRef={settingsScrollRef}
       >
         <BackupRecipientsSection />
       </StickySection>
@@ -1496,6 +1796,7 @@ export default function Settings() {
             {showAdd ? 'Cancel' : '+ New account owner'}
           </Button>
         ) : null}
+        scrollContainerRef={settingsScrollRef}
       >
         <Card style={{ padding: 0, overflow: 'hidden' }}>
           {showAdd && (
@@ -1519,21 +1820,41 @@ export default function Settings() {
       {canManageEnvironment && (
         <StickySection
           title="Environment variables (.env)"
+          scrollContainerRef={settingsScrollRef}
         >
           <EnvironmentSection authEnabled={authEnabled} currentUser={currentUser} />
         </StickySection>
       )}
 
-      {!authEnabled && (
+      {showPreAuthSecuritySettings && (
+        <StickySection
+          title="Security model"
+          description="Match FinTrack's sign-in posture to how this instance is deployed and who can reach it."
+          scrollContainerRef={settingsScrollRef}
+        >
+          <SecurityProfileSection
+            authEnabled={authEnabled}
+            securityProfile={securityProfile}
+            passwordPolicy={passwordPolicy}
+            onChange={resp => {
+              setSecurityProfile(resp.security_profile || 'local_private')
+            }}
+          />
+        </StickySection>
+      )}
+
+      {showPreAuthSecuritySettings && !authEnabled && (
         <StickySection
           title="Sign-in protection"
-          description="Enable login when you want user accounts, 2FA, or separate tenant workspaces."
+          description="Enable login when you want passwords, 2FA, or multiple sign-in accounts for the same installation."
+          scrollContainerRef={settingsScrollRef}
         >
           <AuthModeSection
             authEnabled={authEnabled}
             onEnabled={status => {
               setAuthEnabled(!!status.auth_enabled)
               setPasswordPolicy(status.password_policy || 'min_8')
+              setSecurityProfile(status.security_profile || 'local_private')
             }}
             embedded
           />
@@ -1544,6 +1865,7 @@ export default function Settings() {
         <StickySection
           title="Account security"
           description="Manage password requirements and authenticator-based sign-in protection."
+          scrollContainerRef={settingsScrollRef}
         >
           <AccountSecuritySection passwordPolicy={passwordPolicy} onPasswordPolicyChange={setPasswordPolicy} embedded />
         </StickySection>
@@ -1553,6 +1875,7 @@ export default function Settings() {
         <StickySection
           title="Plaid token protection"
           description="Control how Plaid access tokens are protected on disk for this account."
+          scrollContainerRef={settingsScrollRef}
         >
           <PlaidTokenProtectionSection embedded />
         </StickySection>
@@ -1561,7 +1884,8 @@ export default function Settings() {
       {authEnabled && (
         <StickySection
           title="User management"
-          description="Create additional independent FinTrack users and tenant workspaces."
+          description="Manage who can sign in to this shared FinTrack installation."
+          scrollContainerRef={settingsScrollRef}
         >
           <UserAdminSection passwordPolicy={passwordPolicy} embedded />
         </StickySection>

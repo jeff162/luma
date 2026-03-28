@@ -75,6 +75,8 @@ export const api = {
     request('/auth/environment', { method: 'POST', body: JSON.stringify(data) }),
   savePasswordPolicy: (policy) =>
     request('/auth/password-policy', { method: 'POST', body: JSON.stringify({ policy }) }),
+  saveSecurityProfile: (profile) =>
+    request('/auth/security-profile', { method: 'POST', body: JSON.stringify({ profile }) }),
   getBootstrapStatus: () => request('/auth/bootstrap-status'),
   getCurrentUser: () => request('/auth/me'),
   enableAuth: () => request('/auth/enable', { method: 'POST', body: JSON.stringify({ enabled: true }) }),
@@ -87,6 +89,8 @@ export const api = {
   logout: () => request('/auth/logout', { method: 'POST' }),
   listUsers: () => request('/auth/users'),
   createUser: (data) => request('/auth/users', { method: 'POST', body: JSON.stringify(data) }),
+  updateUser: (id, data) => request(`/auth/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteUser: (id) => request(`/auth/users/${id}`, { method: 'DELETE' }),
   startTwoFactorSetup: () => request('/auth/2fa/setup', { method: 'POST' }),
   confirmTwoFactorSetup: (secret, code) =>
     request('/auth/2fa/confirm', { method: 'POST', body: JSON.stringify({ secret, code }) }),

@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
@@ -18,15 +20,21 @@ from db.control_database import (
     create_user,
     create_initial_user,
     disable_totp,
+    delete_user,
     enable_totp,
     get_password_policy,
     get_local_mode_user,
+    get_security_profile,
     get_user_by_id,
     list_users,
     password_policy_label,
     recovery_code_count,
+    security_profile_guidance,
+    security_profile_label,
     replace_recovery_codes,
+    set_security_profile,
     set_password_policy,
+    update_user,
     update_user_secret_material,
     verify_totp_code,
 )
@@ -35,6 +43,17 @@ from services.crypto_service import reencrypt_plaid_items
 
 
 router = APIRouter()
+
+
+def _truthy_env(value: str | None, default: bool = False) -> bool:
+    normalized = (value or "").strip().lower()
+    if not normalized:
+        return default
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 class LoginRequest(BaseModel):
@@ -48,6 +67,14 @@ class BootstrapRequest(LoginRequest):
 
 class UserCreateRequest(BootstrapRequest):
     role: str = "member"
+
+
+class UserUpdateRequest(BaseModel):
+    username: str | None = None
+    display_name: str | None = None
+    password: str | None = None
+    role: str | None = None
+    status: str | None = None
 
 
 class TotpVerifyRequest(BaseModel):
@@ -81,6 +108,10 @@ class EnvironmentSettingsRequest(BaseModel):
 
 class PasswordPolicyRequest(BaseModel):
     policy: str
+
+
+class SecurityProfileRequest(BaseModel):
+    profile: str
 
 
 def _require_admin(request: Request):
@@ -123,12 +154,24 @@ def _session_payload(user: dict) -> dict:
 def _auth_status_payload(request: Request | None = None) -> dict:
     enabled = auth_required()
     password_policy = get_password_policy()
+    security_profile = get_security_profile()
+    security_guidance = security_profile_guidance(security_profile)
+    experimental_security_settings = _truthy_env(
+        os.getenv("FINTRACK_EXPERIMENTAL_SECURITY_SETTINGS"),
+        default=False,
+    )
     payload = {
         "auth_enabled": enabled,
         "needs_bootstrap": enabled and bootstrap_required(),
         "runtime_config": runtime_config_status(),
         "password_policy": password_policy,
         "password_policy_label": password_policy_label(password_policy),
+        "security_profile": security_profile,
+        "security_profile_label": security_profile_label(security_profile),
+        "security_profile_summary": security_guidance["summary"],
+        "security_profile_recommended_auth": security_guidance["recommended_auth"],
+        "security_profile_suggested_password_policy": security_guidance["suggested_password_policy"],
+        "experimental_security_settings": experimental_security_settings,
     }
     if request and enabled:
         user_id = request.session.get("user_id")
@@ -206,6 +249,24 @@ def save_password_policy(body: PasswordPolicyRequest, request: Request):
     return {
         "password_policy": policy,
         "password_policy_label": password_policy_label(policy),
+    }
+
+
+@router.post("/security-profile")
+def save_security_profile(body: SecurityProfileRequest, request: Request):
+    _require_admin_or_local(request)
+    try:
+        set_security_profile(body.profile)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    profile = get_security_profile()
+    guidance = security_profile_guidance(profile)
+    return {
+        "security_profile": profile,
+        "security_profile_label": security_profile_label(profile),
+        "security_profile_summary": guidance["summary"],
+        "security_profile_recommended_auth": guidance["recommended_auth"],
+        "security_profile_suggested_password_policy": guidance["suggested_password_policy"],
     }
 
 
@@ -394,9 +455,58 @@ def users(request: Request):
 
 @router.post("/users")
 def add_user(body: UserCreateRequest, request: Request):
-    _require_admin(request)
+    admin = _require_admin(request)
     try:
-        user = create_user(body.username, body.password, body.display_name, body.role)
+        user = create_user(
+            body.username,
+            body.password,
+            body.display_name,
+            body.role,
+            tenant_id=admin["tenant_id"],
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"user": _session_payload(user)}
+
+
+@router.patch("/users/{user_id}")
+def edit_user(user_id: str, body: UserUpdateRequest, request: Request):
+    admin = _require_admin(request)
+    if admin["id"] == user_id:
+        current = get_user_by_id(user_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="User not found")
+        if body.role is not None and body.role != current.get("role"):
+            raise HTTPException(status_code=400, detail="Use another admin account to change your own role")
+        if body.status is not None and body.status != current.get("status"):
+            raise HTTPException(status_code=400, detail="Use another admin account to change your own status")
+    try:
+        user = update_user(
+            user_id,
+            username=body.username,
+            display_name=body.display_name,
+            password=body.password,
+            role=body.role,
+            status=body.status,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "user not found":
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=400, detail=detail)
+    return {"user": _session_payload(user)}
+
+
+@router.delete("/users/{user_id}")
+def remove_user(user_id: str, request: Request):
+    admin = _require_admin(request)
+    if admin["id"] == user_id:
+        raise HTTPException(status_code=400, detail="You cannot delete the account you are currently signed into")
+    try:
+        delete_user(user_id)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "user not found":
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=400, detail=detail)
+    return {"ok": True}

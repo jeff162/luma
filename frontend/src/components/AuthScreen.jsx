@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../lib/api.js'
 import { passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
+import { getSecurityProfile } from '../lib/securityProfiles.js'
 
 const s = {
   page: {
@@ -43,7 +44,7 @@ const s = {
   },
 }
 
-export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', onAuthenticated }) {
+export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', securityProfile = 'local_private', onAuthenticated }) {
   const [username, setUsername] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [password, setPassword] = useState('')
@@ -52,6 +53,7 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
   const [recoveryCodeCount, setRecoveryCodeCount] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const profile = getSecurityProfile(securityProfile)
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -102,9 +104,14 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', o
           {awaiting2fa
             ? `Enter the 6-digit code from your authenticator app to complete sign-in.${recoveryCodeCount ? ` You can also use one of your ${recoveryCodeCount} recovery codes.` : ''}`
             : needsBootstrap
-            ? 'Create the first account for this FinTrack instance. That account becomes the initial tenant owner.'
-            : 'Sign in to load your FinTrack workspace.'}
+            ? `Create the first account for this FinTrack instance. That account becomes the initial tenant owner. Security mode: ${profile.label}.`
+            : `Sign in to load your FinTrack workspace. Security mode: ${profile.label}.`}
         </div>
+        {!awaiting2fa && (
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16, lineHeight: 1.5 }}>
+            {profile.summary}
+          </div>
+        )}
 
         <div style={{ display: 'grid', gap: 12 }}>
           {!awaiting2fa && (

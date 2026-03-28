@@ -9,8 +9,9 @@ never leaving your machine.
 
 - **Plaid integration** - connect checking, savings, and credit card accounts for automatic transaction sync
 - **CSV import** - import transaction exports from any bank with header detection, reusable mappings, remembered recent settings, account creation during import, and post-import category mapping from CSV category text
+- **Account management** - add manual accounts, rename them inline, change account type, assign owners, and connect or sync provider-linked accounts from the Accounts page
 - **Multi-owner support** - assign accounts and category groups to owners (e.g. Alice, Bob, Shared) for household budgeting
-- **Optional auth** - run in simple local mode or enable session-based login with 2FA for shared or multi-user setups
+- **Flexible security modes** - choose between localhost-only use, private network/remote access, shared household access, or a work-in-progress multi-tenant posture, with optional session-based login, password policy controls, and 2FA
 - **Auto-categorization rules** - keyword rules automatically assign categories to incoming transactions, with optional amount range, owner, and account conditions. Rules are evaluated most-specific first so precise overrides always win without manual priority tuning
 - **Rule suggestions** - after manually categorizing a transaction, a non-intrusive prompt offers to create a rule for that payee
 - **Dashboard** - spending by category with drill-down, month-over-month trends, period comparison, and optional owner split view
@@ -240,6 +241,9 @@ bash ./scripts/start_fintrack.sh
 Log files are off by default. Set `FINTRACK_USE_LOG_FILES=true` in `.env` to
 write fresh launcher logs to `scripts/backend.log` and `scripts/frontend.log`
 on each run.
+Set `FINTRACK_EXPERIMENTAL_SECURITY_SETTINGS=true` in `.env` if you want the
+unfinished `Security model` and pre-auth `Sign-in protection` sections to show
+up in Settings before that work is finalized.
 If first-run dependency installation is slow, increase `FINTRACK_BACKEND_READY_TIMEOUT`
 in `.env` so the launcher waits longer before opening the frontend.
 On Windows, the frontend window usually ends up on top.
@@ -277,6 +281,29 @@ Settings page:
 Security-sensitive bootstrap values such as `SESSION_SECRET` and `APP_MASTER_KEY`
 stay outside the normal settings flow. If you change environment-backed settings
 in the app, restart the backend to apply them.
+
+### Choosing a security model
+
+FinTrack now treats deployment posture and login requirements as related but
+separate choices.
+
+- **Private localhost only**: best when the browser and backend run on the same
+  machine and the app never needs access outside `localhost`. In this mode,
+  many users will reasonably leave sign-in disabled or choose a weak password.
+- **Private network or remote access**: best when the backend/frontend are on
+  different systems or when the app can be reached over your local network. In
+  this mode, a password is usually appropriate unless access is tightly limited.
+- **Shared household access**: best when more than one person in the household
+  may use FinTrack. This mode usually benefits from enabled sign-in protection,
+  separate accounts, and stronger passwords.
+- **Multi-tenant preview**: the work-in-progress path for real hosted
+  multi-tenant use. Treat explicit authentication and strong passwords as the
+  baseline here.
+
+The **Settings -> Security model** section records which of these models the
+instance is intended for and shows matching guidance. Enabling sign-in
+protection remains a separate action so a localhost-only install does not have
+to become a login-first experience.
 
 Node note:
 
@@ -362,9 +389,9 @@ investigation without losing your place in the main UI:
 
 If you track finances for multiple people:
 
-1. Go to **Settings -> Owners** and create owners (e.g. Alice, Bob, Shared)
-2. Assign each account to an owner in Settings
-3. Assign spending category groups to owners in Categories
+1. Go to **Settings -> Account Owners** and create owners (e.g. Alice, Bob)
+2. Assign each account to an owner on the **Accounts** page
+3. Assign spending categories or groups to owners on the **Categories** page
 4. On the Dashboard, use **Split by owner** to see spending per person
 
 ---
@@ -485,6 +512,7 @@ Helpful project docs:
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/data-model.md](docs/data-model.md)
+- [docs/ui-patterns.md](docs/ui-patterns.md)
 - [CHANGELOG.md](CHANGELOG.md)
 
 ---

@@ -85,6 +85,7 @@ export default function App() {
   const [authError, setAuthError] = useState(null)
   const [runtimeConfig, setRuntimeConfig] = useState({ ok: true })
   const [passwordPolicy, setPasswordPolicy] = useState('min_8')
+  const [securityProfile, setSecurityProfile] = useState('local_private')
 
   useEffect(() => {
     let cancelled = false
@@ -97,6 +98,7 @@ export default function App() {
         setAuthEnabled(!!status.auth_enabled)
         setNeedsBootstrap(!!status.needs_bootstrap)
         setPasswordPolicy(status.password_policy || 'min_8')
+        setSecurityProfile(status.security_profile || 'local_private')
 
         if (!status.auth_enabled) {
           setCurrentUser(status.user || null)
@@ -170,6 +172,7 @@ export default function App() {
         <AuthScreen
           needsBootstrap={needsBootstrap}
           passwordPolicy={passwordPolicy}
+          securityProfile={securityProfile}
           onAuthenticated={user => {
             setCurrentUser(user)
             setAuthEnabled(true)
@@ -209,7 +212,7 @@ export default function App() {
             <div style={s.navFooter}>
               <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>Signed in as</div>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
-                {authEnabled ? (currentUser?.display_name || currentUser?.username) : 'Local single-user mode'}
+                {authEnabled ? (currentUser?.display_name || currentUser?.username) : 'Local access mode'}
               </div>
               {authEnabled && (
                 <button
