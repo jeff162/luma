@@ -51,109 +51,6 @@ function buildGridTemplate(cols) {
   return cols.map(c => `${c.width}px`).join(' ')
 }
 
-// ── ColumnConfigurator — drag-to-reorder + resize ────────────────────────────
-
-function ColumnConfigurator({ cols, onUpdate, onClose }) {
-  const [local, setLocal] = useState(cols.map(c => ({ ...c })))
-  const dragIdx = useRef(null)
-
-  function handleDragStart(i) { dragIdx.current = i }
-
-  function handleDrop(i) {
-    if (dragIdx.current === null || dragIdx.current === i) return
-    const next = [...local]
-    const [moved] = next.splice(dragIdx.current, 1)
-    next.splice(i, 0, moved)
-    dragIdx.current = null
-    setLocal(next)
-  }
-
-  function setWidth(key, val) {
-    const def = COLUMN_DEFS.find(d => d.key === key)
-    const w = Math.max(def?.minWidth ?? 60, Math.min(400, Number(val)))
-    setLocal(prev => prev.map(c => c.key === key ? { ...c, width: w } : c))
-  }
-
-  function reset() {
-    setLocal(DEFAULT_ORDER.map(key => {
-      const def = COLUMN_DEFS.find(d => d.key === key)
-      return { key, width: def.defaultWidth }
-    }))
-  }
-
-  return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 600,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: 'rgba(0,0,0,0.4)',
-    }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{
-        background: 'var(--surface)', border: '1px solid var(--border)',
-        borderRadius: 12, padding: 24, width: 360,
-        boxShadow: '0 12px 40px rgba(0,0,0,0.4)',
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <div style={{ fontWeight: 600, fontSize: 15 }}>Configure columns</div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 20 }}>×</button>
-        </div>
-
-        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-          Drag to reorder · adjust width in px
-        </div>
-
-        {local.map((col, i) => {
-          const def = COLUMN_DEFS.find(d => d.key === col.key)
-          const locked = col.key === 'amount' // amount always last, keep simple
-          return (
-            <div
-              key={col.key}
-              draggable={!locked}
-              onDragStart={() => handleDragStart(i)}
-              onDragOver={e => e.preventDefault()}
-              onDrop={() => handleDrop(i)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 10,
-                padding: '7px 10px', marginBottom: 4,
-                background: 'var(--surface2)', borderRadius: 8,
-                border: '1px solid var(--border)',
-                cursor: locked ? 'default' : 'grab',
-                opacity: locked ? 0.6 : 1,
-              }}
-            >
-              <span style={{ color: 'var(--muted)', fontSize: 16, flexShrink: 0 }}>{locked ? '🔒' : '⠿'}</span>
-              <span style={{ flex: 1, fontSize: 13 }}>{def?.label ?? col.key}</span>
-              <input
-                type="number"
-                value={col.width}
-                min={def?.minWidth ?? 60}
-                max={400}
-                onChange={e => setWidth(col.key, e.target.value)}
-                style={{
-                  width: 60, padding: '3px 6px', fontSize: 12,
-                  background: 'var(--surface)', color: 'var(--text)',
-                  border: '1px solid var(--border)', borderRadius: 6, outline: 'none',
-                }}
-              />
-              <span style={{ fontSize: 11, color: 'var(--muted)' }}>px</span>
-            </div>
-          )
-        })}
-
-        <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          <button onClick={reset} style={{
-            flex: 1, padding: '7px 0', borderRadius: 7, fontSize: 13, cursor: 'pointer',
-            background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--muted)',
-          }}>Reset defaults</button>
-          <button onClick={() => { onUpdate(local); onClose() }} style={{
-            flex: 2, padding: '7px 0', borderRadius: 7, fontSize: 13, cursor: 'pointer',
-            background: 'var(--accent)', border: 'none', color: '#fff', fontWeight: 500,
-          }}>Apply</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ── Transactions page ─────────────────────────────────────────────────────────
 
 export default function Transactions() {
@@ -169,8 +66,9 @@ export default function Transactions() {
   const { menu, onContextMenu, close: closeMenu } = useContextMenu()
   const [noteTarget, setNoteTarget] = useState(null)
   const [rulePrompt, setRulePrompt] = useState(null)
-  const [showColConfig, setShowColConfig] = useState(false)
   const isFirstLoad = useRef(true)
+  const dragColKey = useRef(null)
+  const resizeState = useRef(null)
 
   // ── Column config (persisted) ──────────────────────────────────────────────
 
@@ -271,6 +169,52 @@ export default function Transactions() {
 
   function addCategory(cat) {
     setCategories(prev => prev.find(c => c.id === cat.id) ? prev : [...prev, cat])
+  }
+
+  useEffect(() => {
+    function onMove(e) {
+      if (!resizeState.current) return
+      const { key, startX, startWidth } = resizeState.current
+      const def = COLUMN_DEFS.find(col => col.key === key)
+      const nextWidth = Math.max(def?.minWidth ?? 60, Math.min(640, startWidth + (e.clientX - startX)))
+      handleColUpdate(cols.map(col => col.key === key ? { ...col, width: nextWidth } : col))
+    }
+    function onUp() {
+      resizeState.current = null
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [cols])
+
+  function handleHeaderDragStart(key) {
+    dragColKey.current = key
+  }
+
+  function handleHeaderDrop(targetKey) {
+    const sourceKey = dragColKey.current
+    dragColKey.current = null
+    if (!sourceKey || sourceKey === targetKey) return
+    const next = [...cols]
+    const sourceIndex = next.findIndex(col => col.key === sourceKey)
+    const targetIndex = next.findIndex(col => col.key === targetKey)
+    if (sourceIndex === -1 || targetIndex === -1) return
+    const [moved] = next.splice(sourceIndex, 1)
+    next.splice(targetIndex, 0, moved)
+    handleColUpdate(next)
+  }
+
+  function startResize(e, col) {
+    e.preventDefault()
+    e.stopPropagation()
+    resizeState.current = {
+      key: col.key,
+      startX: e.clientX,
+      startWidth: col.width,
+    }
   }
 
   // ── Cell renderers keyed by column ────────────────────────────────────────
@@ -384,15 +328,6 @@ export default function Transactions() {
             <span style={{ fontSize: 13, color: 'var(--muted)' }}>
               {data.total} transactions
             </span>
-            <button
-              onClick={() => setShowColConfig(true)}
-              title="Configure columns"
-              style={{
-                padding: '5px 10px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
-                border: '1px solid var(--border)', background: 'var(--surface2)',
-                color: 'var(--muted)',
-              }}
-            >⚙ Columns</button>
           </div>
         </PageHeader>
       </div>
@@ -412,14 +347,47 @@ export default function Transactions() {
             {cols.map(col => {
               const def = COLUMN_DEFS.find(d => d.key === col.key)
               return (
-                <span
+                <div
                   key={col.key}
-                  style={col.key === 'amount' ? { textAlign: 'right' } : {
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  draggable
+                  onDragStart={() => handleHeaderDragStart(col.key)}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={() => handleHeaderDrop(col.key)}
+                  style={{
+                    position: 'relative',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: col.key === 'amount' ? 'flex-end' : 'space-between',
+                    gap: 8,
+                    minWidth: 0,
+                    cursor: 'grab',
+                    ...(col.key === 'amount' ? { textAlign: 'right' } : {
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }),
                   }}
                 >
-                  {def?.label ?? col.key}
-                </span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {def?.label ?? col.key}
+                  </span>
+                  <span style={{ fontSize: 10, opacity: 0.55, flexShrink: 0 }}>
+                    ↔
+                  </span>
+                  <button
+                    onMouseDown={e => startResize(e, col)}
+                    title={`Resize ${def?.label ?? col.key}`}
+                    style={{
+                      position: 'absolute',
+                      top: -10,
+                      right: -8,
+                      bottom: -10,
+                      width: 16,
+                      cursor: 'col-resize',
+                      border: 'none',
+                      background: 'transparent',
+                      padding: 0,
+                    }}
+                  />
+                </div>
               )
             })}
           </div>
@@ -524,15 +492,6 @@ export default function Transactions() {
           />
         )}
       </div>
-
-      {/* Column configurator modal */}
-      {showColConfig && (
-        <ColumnConfigurator
-          cols={cols}
-          onUpdate={handleColUpdate}
-          onClose={() => setShowColConfig(false)}
-        />
-      )}
     </div>
   )
 }

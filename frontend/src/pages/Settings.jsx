@@ -1,17 +1,13 @@
 /**
- * Settings.jsx — Owner management
+ * Settings.jsx — Owner and category ownership management
  *
- * Three sections on one page:
+ * Two sections on one page:
  *
  * 1. OWNERS — Create / rename / recolor / delete named owners (e.g. Alice, Bob, Shared).
  *    Deleting an owner NULLs out owner_id on all related accounts, categories, and
  *    transactions (handled server-side via ON DELETE SET NULL).
  *
- * 2. ACCOUNTS → OWNER — Assign each linked account to an owner. Changing an account's
- *    owner propagates to all its transactions immediately (backend PATCH /accounts/:id
- *    writes owner_id onto every txn for that account).
- *
- * 3. CATEGORY GROUPS → OWNER — Tag each spending group (Food & Drink, Transportation,
+ * 2. CATEGORY GROUPS → OWNER — Tag each spending group (Food & Drink, Transportation,
  *    etc.) with an owner to indicate whose domain it belongs to. This drives the
  *    Dashboard split-by-owner view: "Shared" groups appear in both columns, personal
  *    groups appear only in that person's column.
@@ -20,8 +16,8 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
-import { refreshTaskBadge } from '../App.jsx'
 import { Card, PageHeader, Button, Spinner, EmptyState } from '../components/ui.jsx'
+import { PASSWORD_POLICIES, passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 
 // ── Small reusable owner badge ────────────────────────────────────────────────
 
@@ -56,13 +52,35 @@ function OwnerRow({ owner, onSave, onDelete }) {
         display: 'flex', alignItems: 'center', gap: 12,
         padding: '10px 16px', borderBottom: '1px solid var(--border)',
       }}>
-        <OwnerDot name={owner.name} />
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-          <button onClick={() => setEditing(true)} style={{
-            background: 'none', color: 'var(--muted)',
-            cursor: 'pointer', fontSize: 12, padding: '2px 8px',
-            borderRadius: 4, border: '1px solid var(--border)',
-          }}>Edit</button>
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: 0,
+            margin: 0,
+            cursor: 'text',
+            font: 'inherit',
+            color: 'inherit',
+            textAlign: 'left',
+            flex: 1,
+          }}
+        >
+          <span style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            padding: '4px 10px',
+            borderRadius: 999,
+            border: '1px solid var(--border)',
+            background: 'var(--surface2)',
+            fontSize: 13,
+            lineHeight: 1.2,
+          }}>
+            {owner.name}
+          </span>
+        </button>
+        <div style={{ display: 'flex', gap: 6 }}>
           <button onClick={() => onDelete(owner.id)} style={{
             background: 'none', color: 'var(--danger)',
             cursor: 'pointer', fontSize: 13, padding: '2px 8px',
@@ -125,408 +143,6 @@ function AddOwnerForm({ onAdd, onCancel }) {
       <Button small onClick={handleAdd} disabled={!name.trim()}>Add owner</Button>
       <Button small variant="ghost" onClick={onCancel}>Cancel</Button>
     </div>
-  )
-}
-
-// ── Owner select dropdown (shared by account and category rows) ───────────────
-
-function OwnerSelect({ value, owners, onChange, placeholder = 'Unassigned' }) {
-  return (
-    <select
-      value={value || ''}
-      onChange={e => onChange(e.target.value || null)}
-      style={{
-        background: 'var(--surface2)', color: 'var(--text)',
-        border: '1px solid var(--border)', borderRadius: 6,
-        padding: '5px 8px', fontSize: 13, cursor: 'pointer',
-        minWidth: 130,
-      }}
-    >
-      <option value="">— {placeholder} —</option>
-      {owners.map(o => (
-        <option key={o.id} value={o.id}>{o.name}</option>
-      ))}
-    </select>
-  )
-}
-
-// ── Custom owner dropdown — opens immediately without a 3rd click ─────────────
-// Renders as an absolutely-positioned list that closes on outside-click or
-// on any selection. Used instead of <select> so the 2nd click opens it directly.
-
-function OwnerDropdown({ value, owners, onSelect, onClose }) {
-  const ref = useRef(null)
-
-  useEffect(() => {
-    function handler(e) {
-      if (ref.current && !ref.current.contains(e.target)) onClose()
-    }
-    // Use mousedown so the click that opened us doesn't immediately close us
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [onClose])
-
-  const options = [{ id: '', name: '— Unassigned —' }, ...owners]
-
-  return (
-    <div ref={ref} style={{
-      position: 'absolute', top: 0, left: 0, zIndex: 200,
-      background: 'var(--surface)', border: '1px solid var(--accent)',
-      borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.25)',
-      minWidth: 160, overflow: 'hidden',
-    }}>
-      {options.map(o => (
-        <div
-          key={o.id}
-          onMouseDown={e => { e.stopPropagation(); onSelect(o.id || null) }}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            padding: '8px 12px', fontSize: 13, cursor: 'pointer',
-            background: o.id === (value || '') ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))' : 'transparent',
-            color: o.id ? 'var(--text)' : 'var(--muted)',
-          }}
-          onMouseEnter={e => e.currentTarget.style.background = 'var(--surface2)'}
-          onMouseLeave={e => e.currentTarget.style.background = o.id === (value || '') ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))' : 'transparent'}
-        >
-          {o.name}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// ── Account assignment ────────────────────────────────────────────────────────
-// UX: first click selects the row (highlights it), second click on a field edits it.
-// Name is always editable (display name can differ from underlying account name).
-// Owner opens a dropdown on click of the owner cell.
-
-function AccountRow({ account, owners, selected, onSelect, onRename, onAssign }) {
-  const [editingName,  setEditingName]  = useState(false)
-  const [editingOwner, setEditingOwner] = useState(false)
-  const [nameDraft,    setNameDraft]    = useState(account.name)
-  const ownerObj = owners.find(o => o.id === account.owner_id)
-
-  function handleRowClick(e) {
-    if (e.target.tagName === 'INPUT') return
-    if (!selected) {
-      onSelect(account.id)
-    }
-  }
-
-  function handleNameClick(e) {
-    e.stopPropagation()
-    if (!selected) { onSelect(account.id); return }
-    setEditingName(true)
-    setNameDraft(account.name)
-  }
-
-  function handleOwnerClick(e) {
-    e.stopPropagation()
-    if (!selected) { onSelect(account.id); return }
-    setEditingOwner(true)
-  }
-
-  async function commitName() {
-    setEditingName(false)
-    const trimmed = nameDraft.trim()
-    if (trimmed && trimmed !== account.name) {
-      await api.updateAccount(account.id, { name: trimmed })
-      onRename(account.id, trimmed)
-    }
-  }
-
-  async function commitOwner(ownerId) {
-    setEditingOwner(false)
-    await onAssign(account.id, ownerId || null)
-  }
-
-  const isUnowned = !account.owner_id
-
-  return (
-    <div
-      onClick={handleRowClick}
-      style={{
-        display: 'grid', gridTemplateColumns: '1fr 110px 170px',
-        padding: '9px 16px', alignItems: 'center',
-        borderBottom: '1px solid var(--border)',
-        background: selected
-          ? 'color-mix(in srgb, var(--accent) 8%, var(--surface2))'
-          : isUnowned
-            ? 'color-mix(in srgb, #f59e0b 4%, transparent)'
-            : 'transparent',
-        cursor: selected ? 'default' : 'pointer',
-        outline: selected ? `1px solid var(--accent)` : 'none',
-        outlineOffset: -1,
-      }}
-    >
-      {/* Name cell */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-        {editingName ? (
-          <input
-            autoFocus
-            value={nameDraft}
-            onChange={e => setNameDraft(e.target.value)}
-            onBlur={commitName}
-            onKeyDown={e => {
-              if (e.key === 'Enter') commitName()
-              if (e.key === 'Escape') { setEditingName(false); setNameDraft(account.name) }
-              e.stopPropagation()
-            }}
-            onClick={e => e.stopPropagation()}
-            style={{
-              flex: 1, background: 'var(--surface)', color: 'var(--text)',
-              border: '1px solid var(--accent)', borderRadius: 6,
-              padding: '3px 8px', fontSize: 13, outline: 'none',
-            }}
-          />
-        ) : (
-          <div
-            onClick={handleNameClick}
-            title={selected ? 'Click to edit name' : 'Click to select'}
-            style={{ minWidth: 0 }}
-          >
-            <div style={{
-              fontSize: 13, fontWeight: 500,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              textDecoration: selected ? 'underline dotted var(--muted)' : 'none',
-              cursor: selected ? 'text' : 'pointer',
-            }}>
-              {account.name}
-            </div>
-            {account.mask && (
-              <div style={{ fontSize: 11, color: 'var(--muted)' }}>···{account.mask}</div>
-            )}
-          </div>
-        )}
-        {isUnowned && !selected && (
-          <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 500, flexShrink: 0 }}>⚠</span>
-        )}
-      </div>
-
-      {/* Type cell */}
-      <span style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'capitalize' }}>
-        {account.subtype || account.type || '—'}
-      </span>
-
-      {/* Owner cell — custom dropdown so it opens on the 2nd click without a 3rd */}
-      <div onClick={handleOwnerClick} style={{ position: 'relative', cursor: selected ? 'pointer' : 'default' }}>
-        {editingOwner ? (
-          <OwnerDropdown
-            value={account.owner_id}
-            owners={owners}
-            onSelect={ownerId => commitOwner(ownerId)}
-            onClose={() => setEditingOwner(false)}
-          />
-        ) : (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '4px 8px', borderRadius: 6, fontSize: 13,
-            border: selected ? '1px solid var(--border)' : '1px solid transparent',
-            background: selected ? 'var(--surface2)' : 'transparent',
-            color: ownerObj ? 'var(--text)' : 'var(--muted)',
-          }}>
-            {ownerObj ? ownerObj.name : <span style={{ opacity: 0.5 }}>Unassigned</span>}
-            {selected && <span style={{ marginLeft: 'auto', opacity: 0.4, fontSize: 11 }}>▾</span>}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function AccountAssignment({ owners }) {
-  const [accounts,    setAccounts]    = useState([])
-  const [selectedId,  setSelectedId]  = useState(null)
-
-  useEffect(() => { api.getAccounts().then(setAccounts) }, [])
-
-  // Deselect when clicking outside
-  useEffect(() => {
-    function handler(e) {
-      if (!e.target.closest('[data-account-table]')) setSelectedId(null)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
-
-  function renameAccount(accountId, name) {
-    setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, name } : a))
-  }
-
-  async function assignOwner(accountId, ownerId) {
-    await api.updateAccount(accountId, { owner_id: ownerId || '' })
-    refreshTaskBadge()
-    const ownerObj = owners.find(o => o.id === ownerId)
-    setAccounts(prev => prev.map(a =>
-      a.id === accountId
-        ? { ...a, owner_id: ownerId ?? null,
-            owner_name:  ownerObj?.name  ?? null,
-            owner_color: ownerObj?.color ?? null,
-          }
-        : a
-    ))
-  }
-
-  if (accounts.length === 0) return <EmptyState message="No accounts linked yet — connect one on the Accounts page" />
-
-  const unownedCount = accounts.filter(a => !a.owner_id).length
-
-  return (
-    <>
-      {unownedCount > 0 && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          padding: '10px 16px',
-          background: 'color-mix(in srgb, var(--warning, #f59e0b) 10%, var(--surface2))',
-          borderBottom: '1px solid var(--border)', fontSize: 13,
-        }}>
-          <span>⚠️</span>
-          <span>
-            {unownedCount} account{unownedCount > 1 ? 's' : ''} without an owner.
-            Assign each below — use <strong>Shared</strong> for joint accounts.
-          </span>
-        </div>
-      )}
-      <div style={{
-        display: 'grid', gridTemplateColumns: '1fr 110px 170px',
-        padding: '7px 16px', fontSize: 11, fontWeight: 600,
-        color: 'var(--muted)', textTransform: 'uppercase',
-        letterSpacing: '0.05em', borderBottom: '1px solid var(--border)',
-        background: 'var(--surface2)',
-      }}>
-        <span>Account</span><span>Type</span><span>Owner</span>
-      </div>
-      <div data-account-table>
-        {accounts.map(a => (
-          <AccountRow
-            key={a.id}
-            account={a}
-            owners={owners}
-            selected={selectedId === a.id}
-            onSelect={setSelectedId}
-            onRename={renameAccount}
-            onAssign={assignOwner}
-          />
-        ))}
-      </div>
-      {selectedId && (
-        <div style={{ padding: '6px 16px', fontSize: 11, color: 'var(--muted)', borderTop: '1px solid var(--border)' }}>
-          Click the name to rename · click the owner to change assignment · click elsewhere to deselect
-        </div>
-      )}
-    </>
-  )
-}
-
-// ── Category group assignment ─────────────────────────────────────────────────
-
-function GroupOwnerCell({ group, owners, onAssign }) {
-  const [editing, setEditing] = useState(false)
-  const ownerObj = owners.find(o => o.id === group.owner_id)
-
-  async function handleChange(ownerId) {
-    setEditing(false)
-    await onAssign(group.id, ownerId || null)
-  }
-
-  if (editing) {
-    // For categories, null owner_id means "Shared" (shown in both Dashboard columns).
-    // Filter out any owner literally named "Shared" to avoid it appearing twice —
-    // the "— Shared —" option at the top already represents that state.
-    const categoryOwners = owners.filter(o => o.name.toLowerCase() !== 'shared')
-    return (
-      <select
-        autoFocus
-        value={group.owner_id || ''}
-        onChange={e => handleChange(e.target.value || null)}
-        onBlur={() => setEditing(false)}
-        style={{
-          background: 'var(--surface2)', color: 'var(--text)',
-          border: '1px solid var(--accent)', borderRadius: 6,
-          padding: '5px 8px', fontSize: 13, cursor: 'pointer',
-          width: '100%',
-        }}
-      >
-        <option value="">— Shared —</option>
-        {categoryOwners.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-      </select>
-    )
-  }
-
-  return (
-    <button
-      onClick={() => setEditing(true)}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        background: 'none', border: '1px solid var(--border)',
-        borderRadius: 6, padding: '4px 10px', cursor: 'pointer',
-        fontSize: 13, color: ownerObj ? 'var(--text)' : 'var(--muted)',
-        width: '100%', textAlign: 'left',
-      }}
-    >
-      {ownerObj ? ownerObj.name : <span style={{ opacity: 0.5 }}>Shared</span>}
-      <span style={{ marginLeft: 'auto', opacity: 0.4, fontSize: 11 }}>▾</span>
-    </button>
-  )
-}
-
-function CategoryGroupAssignment({ owners }) {
-  const [categories, setCategories] = useState([])
-
-  useEffect(() => { api.getCategories().then(setCategories) }, [])
-
-  const groups = categories.filter(c => !c.parent_id)
-
-  async function assignOwner(groupId, ownerId) {
-    await api.updateCategory(groupId, { owner_id: ownerId || null })
-    const leaves = categories.filter(c => c.parent_id === groupId)
-    await Promise.all(leaves.map(c => api.updateCategory(c.id, { owner_id: ownerId || null })))
-    const ownerObj = owners.find(o => o.id === ownerId)
-    setCategories(prev => prev.map(c => {
-      if (c.id === groupId || c.parent_id === groupId) {
-        return { ...c, owner_id: ownerId ?? null,
-          owner_name:  ownerObj?.name  ?? null,
-          owner_color: ownerObj?.color ?? null,
-        }
-      }
-      return c
-    }))
-  }
-
-  if (groups.length === 0) return <Spinner />
-
-  return (
-    <>
-      <div style={{
-        padding: '8px 16px 6px', fontSize: 12, color: 'var(--muted)',
-        borderBottom: '1px solid var(--border)',
-      }}>
-        Tag each spending group with an owner. "Shared" groups appear in both columns
-        of the Dashboard split view; personal groups appear only under that person.
-        Leaf categories silently inherit the group's owner.
-      </div>
-      <div style={{
-        display: 'grid', gridTemplateColumns: '40px 1fr 160px',
-        padding: '8px 16px', fontSize: 11, fontWeight: 600,
-        color: 'var(--muted)', textTransform: 'uppercase',
-        letterSpacing: '0.05em', borderBottom: '1px solid var(--border)',
-      }}>
-        <span></span><span>Group</span><span>Owner</span>
-      </div>
-      {groups.map(g => (
-        <div key={g.id} style={{
-          display: 'grid', gridTemplateColumns: '40px 1fr 160px',
-          padding: '10px 16px', alignItems: 'center',
-          borderBottom: '1px solid var(--border)',
-        }}>
-          <span style={{ fontSize: 18 }}>{g.icon}</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 14 }}>{g.name}</span>
-          </div>
-          <GroupOwnerCell group={g} owners={owners} onAssign={assignOwner} />
-        </div>
-      ))}
-    </>
   )
 }
 
@@ -806,7 +422,7 @@ function ImportProfilesSection() {
 
 // ── Main Settings page ────────────────────────────────────────────────────────
 
-function AuthModeSection({ authEnabled, onEnabled }) {
+function AuthModeSection({ authEnabled, onEnabled, embedded = false }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -827,12 +443,6 @@ function AuthModeSection({ authEnabled, onEnabled }) {
   }
 
   return (
-    <div style={{ marginBottom: 32 }}>
-      <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>Sign-in protection</div>
-      <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14 }}>
-        This instance is currently running in local single-user mode without login. Enable sign-in protection when you want user accounts, 2FA, or separate tenant workspaces.
-      </div>
-
       <Card style={{ padding: 20 }}>
         <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
           Turning this on switches FinTrack into authenticated mode. You&apos;ll then create the first user account and use that account to manage any additional users.
@@ -848,11 +458,10 @@ function AuthModeSection({ authEnabled, onEnabled }) {
           </div>
         )}
       </Card>
-    </div>
   )
 }
 
-function UserAdminSection() {
+function UserAdminSection({ passwordPolicy, embedded = false }) {
   const [viewer, setViewer] = useState(null)
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
@@ -909,12 +518,6 @@ function UserAdminSection() {
   }
 
   return (
-    <div style={{ marginBottom: 32 }}>
-      <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>User management</div>
-      <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14 }}>
-        Create additional independent FinTrack users. Each one receives a separate tenant database.
-      </div>
-
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
           <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
@@ -942,10 +545,13 @@ function UserAdminSection() {
               <option value="admin">Admin</option>
             </select>
           </div>
-          <Button small type="submit" disabled={creating || !form.username.trim() || form.password.length < 8}>
+          <Button small type="submit" disabled={creating || !form.username.trim() || !validatePasswordForPolicy(form.password, passwordPolicy)}>
             {creating ? 'Creating...' : 'Add user'}
           </Button>
         </form>
+        <div style={{ padding: '10px 16px', color: 'var(--muted)', fontSize: 12, borderBottom: '1px solid var(--border)' }}>
+          Password policy: {passwordPolicyHelpText(passwordPolicy)}
+        </div>
 
         {error && (
           <div style={{ padding: '10px 16px', color: '#ef4444', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
@@ -969,11 +575,71 @@ function UserAdminSection() {
           </div>
         ))}
       </Card>
+  )
+}
+
+function PasswordPolicyPanel({ passwordPolicy, onChange }) {
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  async function handleChange(nextPolicy) {
+    setSaving(true)
+    setError('')
+    try {
+      const resp = await api.savePasswordPolicy(nextPolicy)
+      onChange?.(resp.password_policy || nextPolicy)
+    } catch (err) {
+      setError(err.message || 'Failed to save password policy')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: 8, marginBottom: 18 }}>
+      <div style={{ fontSize: 14, fontWeight: 600 }}>Password policy</div>
+      <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+        Choose how strictly FinTrack should validate passwords for new sign-ins and user accounts.
+      </div>
+      <div style={{ display: 'grid', gap: 6, paddingLeft: 14 }}>
+        {PASSWORD_POLICIES.map(option => (
+          <label
+            key={option.value}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '8px 12px',
+              border: `1px solid ${passwordPolicy === option.value ? 'var(--accent)' : 'var(--border)'}`,
+              borderRadius: 999,
+              background: passwordPolicy === option.value
+                ? 'color-mix(in srgb, var(--accent) 8%, var(--surface2))'
+                : 'var(--surface2)',
+              cursor: saving ? 'default' : 'pointer',
+            }}
+          >
+            <input
+              type="radio"
+              name="password-policy"
+              checked={passwordPolicy === option.value}
+              onChange={() => handleChange(option.value)}
+              disabled={saving}
+            />
+            <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>{option.label}</span>
+            <span style={{ fontSize: 12, color: 'var(--muted)' }}>{option.hint}</span>
+          </label>
+        ))}
+      </div>
+      {error && (
+        <div style={{ color: '#ef4444', fontSize: 13 }}>
+          {error}
+        </div>
+      )}
     </div>
   )
 }
 
-function SecuritySection() {
+function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange, embedded = false }) {
   const [currentUser, setCurrentUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [setup, setSetup] = useState(null)
@@ -1061,19 +727,6 @@ function SecuritySection() {
     }
   }
 
-  async function setPrivacyMode(nextMode) {
-    setSaving(true)
-    setError('')
-    try {
-      const resp = await api.setPrivacyMode(nextMode)
-      setCurrentUser(resp.user)
-    } catch (err) {
-      setError(err.message || 'Failed to update privacy mode')
-    } finally {
-      setSaving(false)
-    }
-  }
-
   if (loading) return <Spinner />
   if (!currentUser) return null
 
@@ -1084,36 +737,8 @@ function SecuritySection() {
   }
 
   return (
-    <div style={{ marginBottom: 32 }}>
-      <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>Security</div>
-      <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14 }}>
-        Protect your account with an authenticator app using standard 6-digit TOTP codes.
-      </div>
-
       <Card style={{ padding: 20 }}>
-        <div style={{ display: 'grid', gap: 12, padding: 14, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface2)', marginBottom: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>Sensitive token protection</div>
-              <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
-                Optional protection for Plaid access tokens at rest. Local single-user installs usually do not need this if the machine is already encrypted.
-              </div>
-              <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 6 }}>
-                Status: {currentUser.privacy_mode === 'server_managed' ? 'Server-managed protection enabled' : 'Off'}
-              </div>
-            </div>
-            <Button
-              small
-              onClick={() => setPrivacyMode(currentUser.privacy_mode === 'server_managed' ? 'off' : 'server_managed')}
-              disabled={saving}
-            >
-              {currentUser.privacy_mode === 'server_managed' ? 'Turn off' : 'Enable'}
-            </Button>
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
-            This first step only protects Plaid tokens on disk. It does not change what the app can display after you log in, and it stays optional per account.
-          </div>
-        </div>
+        <PasswordPolicyPanel passwordPolicy={passwordPolicy} onChange={onPasswordPolicyChange} />
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
           <div>
@@ -1233,30 +858,145 @@ function SecuritySection() {
           </div>
         )}
       </Card>
-    </div>
   )
 }
 
-function StickySection({ title, description, actions, children }) {
+function PlaidTokenProtectionSection({ embedded = false }) {
+  const [currentUser, setCurrentUser] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  async function load() {
+    setLoading(true)
+    try {
+      const resp = await api.getCurrentUser()
+      setCurrentUser(resp.user)
+      setError('')
+    } catch (err) {
+      setError(err.message || 'Failed to load Plaid token protection')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  async function setPrivacyMode(nextMode) {
+    setSaving(true)
+    setError('')
+    try {
+      const resp = await api.setPrivacyMode(nextMode)
+      setCurrentUser(resp.user)
+    } catch (err) {
+      setError(err.message || 'Failed to update token protection')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) return <Spinner />
+  if (!currentUser) return null
+
   return (
-    <section style={{ marginBottom: 32 }}>
+      <Card style={{ padding: 20 }}>
+        <div style={{ display: 'grid', gap: 12, padding: 14, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface2)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>Sensitive token protection</div>
+              <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+                Optional protection for Plaid access tokens at rest. Local single-user installs usually do not need this if the machine is already encrypted.
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 6 }}>
+                Status: {currentUser.privacy_mode === 'server_managed' ? 'Server-managed protection enabled' : 'Off'}
+              </div>
+            </div>
+            <Button
+              small
+              onClick={() => setPrivacyMode(currentUser.privacy_mode === 'server_managed' ? 'off' : 'server_managed')}
+              disabled={saving}
+            >
+              {currentUser.privacy_mode === 'server_managed' ? 'Turn off' : 'Enable'}
+            </Button>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+            This only protects Plaid tokens on disk. It does not change what FinTrack can display after you sign in.
+          </div>
+        </div>
+        {error && (
+          <div style={{ marginTop: 14, color: '#ef4444', fontSize: 13 }}>
+            {error}
+          </div>
+        )}
+      </Card>
+  )
+}
+
+function StickySection({ title, description, actions, children, defaultCollapsed = true }) {
+  const [open, setOpen] = useState(!defaultCollapsed)
+
+  return (
+    <section style={{ marginBottom: 24, display: 'grid', justifyItems: 'start' }}>
       <div
         style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 2,
-          padding: '14px 0 14px',
-          marginBottom: 14,
-          background: 'linear-gradient(to bottom, var(--bg) 82%, transparent)',
+          padding: '8px 0 8px',
+          width: '100%',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
-          <div style={{ fontSize: 16, fontWeight: 600 }}>{title}</div>
-          {actions ? <div style={{ flexShrink: 0 }}>{actions}</div> : null}
+        <div style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          padding: '9px 14px',
+          border: '1px solid var(--border)',
+          borderRadius: 999,
+          background: 'var(--surface)',
+          maxWidth: '100%',
+          boxShadow: '0 1px 0 rgba(15, 23, 42, 0.03)',
+        }}>
+          <button
+            type="button"
+            onClick={() => setOpen(prev => !prev)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              margin: 0,
+              color: 'inherit',
+              cursor: 'pointer',
+              textAlign: 'left',
+              flex: 1,
+              minWidth: 0,
+            }}
+          >
+            <span style={{
+              width: 22,
+              height: 22,
+              borderRadius: 999,
+              border: '1px solid var(--border)',
+              display: 'grid',
+              placeItems: 'center',
+              fontSize: 14,
+              color: 'var(--muted)',
+              background: 'var(--surface2)',
+              lineHeight: 1,
+              flexShrink: 0,
+            }}>
+              {open ? '-' : '+'}
+            </span>
+            <span style={{ display: 'grid', gap: description ? 2 : 0, minWidth: 0 }}>
+              <span style={{ fontSize: 16, fontWeight: 600 }}>{title}</span>
+              {description ? <span style={{ fontSize: 13, color: 'var(--muted)' }}>{description}</span> : null}
+            </span>
+          </button>
+          {open && actions ? <div style={{ flexShrink: 0 }}>{actions}</div> : null}
         </div>
-        <div style={{ fontSize: 13, color: 'var(--muted)' }}>{description}</div>
       </div>
-      {children}
+      {open ? <div style={{ marginTop: 5, width: '100%', paddingLeft: 25 }}>{children}</div> : null}
     </section>
   )
 }
@@ -1267,6 +1007,9 @@ function BackupRecipientsSection() {
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const [form, setForm] = useState({ label: '', public_key: '' })
+  const fileInputRef = useRef(null)
+  const [editingRecipientId, setEditingRecipientId] = useState(null)
+  const [editingLabel, setEditingLabel] = useState('')
 
   async function load() {
     setLoading(true)
@@ -1296,6 +1039,19 @@ function BackupRecipientsSection() {
     }
   }
 
+  async function handlePublicKeyDrop(e) {
+    e.preventDefault()
+    const file = e.dataTransfer.files?.[0]
+    if (file) {
+      await loadPublicKeyFile(file)
+      return
+    }
+    const text = e.dataTransfer.getData('text/plain')
+    if (text) {
+      setForm(prev => ({ ...prev, public_key: text.trim() }))
+    }
+  }
+
   async function handleCreate(e) {
     e.preventDefault()
     setCreating(true)
@@ -1320,6 +1076,24 @@ function BackupRecipientsSection() {
     }
   }
 
+  function beginEditRecipient(recipient) {
+    setEditingRecipientId(recipient.id)
+    setEditingLabel(recipient.label || '')
+  }
+
+  async function commitRecipientLabel(recipient) {
+    const next = editingLabel.trim()
+    setEditingRecipientId(null)
+    if (!next || next === recipient.label) return
+    try {
+      const updated = await api.updateBackupRecipient(recipient.id, { label: next })
+      setRecipients(prev => prev.map(item => item.id === recipient.id ? updated : item))
+    } catch (err) {
+      setError(err.message || 'Failed to update recipient')
+      setEditingRecipientId(recipient.id)
+    }
+  }
+
   async function removeRecipient(recipient) {
     if (!confirm(`Delete backup recipient "${recipient.label}"?`)) return
     try {
@@ -1337,36 +1111,69 @@ function BackupRecipientsSection() {
   }
 
   return (
-    <Card style={{ padding: 0, overflow: 'hidden' }}>
-      <form onSubmit={handleCreate} style={{ display: 'grid', gap: 10, padding: 16, borderBottom: '1px solid var(--border)' }}>
-        <input
-          value={form.label}
-          onChange={e => setForm(prev => ({ ...prev, label: e.target.value }))}
-          placeholder="Recipient label (e.g. Jeff laptop)"
-          style={inputStyle}
-        />
-        <textarea
-          value={form.public_key}
-          onChange={e => setForm(prev => ({ ...prev, public_key: e.target.value }))}
-          placeholder="Paste RSA public key"
-          rows={4}
-          style={{ ...inputStyle, resize: 'vertical', fontFamily: 'monospace' }}
-        />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <Card style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ padding: '14px 16px 0', color: 'var(--muted)', fontSize: 13 }}>
+          Used to encrypt backup files for external storage. A matching private key file needs to be provided during the restore; only public keys are stored.
+        </div>
+        <form onSubmit={handleCreate} style={{ display: 'grid', gap: 10, padding: 16, borderBottom: '1px solid var(--border)' }}>
           <input
+            value={form.label}
+            onChange={e => setForm(prev => ({ ...prev, label: e.target.value }))}
+            placeholder="Recipient label (e.g. email)"
+            style={inputStyle}
+          />
+          <input
+            ref={fileInputRef}
             type="file"
             accept=".pub,.pem,.txt,.key"
             onChange={e => loadPublicKeyFile(e.target.files?.[0])}
-            style={{ fontSize: 13 }}
+            style={{ display: 'none' }}
           />
-          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-            Or choose an RSA public key file to fill this in.
-          </div>
-        </div>
-        <div>
-          <Button small type="submit" disabled={creating || !form.label.trim() || !form.public_key.trim()}>
-            {creating ? 'Saving...' : 'Add recipient'}
-          </Button>
+          {!form.public_key.trim() ? (
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={e => e.preventDefault()}
+              onDrop={handlePublicKeyDrop}
+              style={{
+                border: '2px dashed var(--border)',
+                borderRadius: 12,
+                padding: '40px 28px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                background: 'var(--surface2)',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)' }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
+            >
+              <div style={{ fontSize: 32, marginBottom: 12 }}>📂</div>
+              <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>
+                Drop a public key file here, or click to browse
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+                RSA public keys only.
+              </div>
+            </div>
+          ) : (
+            <textarea
+              value={form.public_key}
+              onChange={e => setForm(prev => ({ ...prev, public_key: e.target.value }))}
+              rows={5}
+              onDragOver={e => e.preventDefault()}
+              onDrop={handlePublicKeyDrop}
+              style={{
+                ...inputStyle,
+                minHeight: 120,
+                resize: 'vertical',
+                fontFamily: 'monospace',
+                borderRadius: 10,
+                lineHeight: 1.5,
+              }}
+            />
+          )}
+          <div>
+            <Button small type="submit" disabled={creating || !form.label.trim() || !form.public_key.trim()}>
+              {creating ? 'Saving...' : 'Add recipient'}
+            </Button>
         </div>
       </form>
 
@@ -1378,15 +1185,80 @@ function BackupRecipientsSection() {
       ) : (
         recipients.map(recipient => (
           <div key={recipient.id} style={{ display: 'grid', gridTemplateColumns: '1fr 120px 90px', gap: 10, padding: '12px 16px', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>{recipient.label}</div>
-              <div style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'monospace', wordBreak: 'break-all' }}>{recipient.fingerprint}</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+              {editingRecipientId === recipient.id ? (
+                <input
+                  autoFocus
+                  value={editingLabel}
+                  onChange={e => setEditingLabel(e.target.value)}
+                  onBlur={() => commitRecipientLabel(recipient)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      commitRecipientLabel(recipient)
+                    }
+                    if (e.key === 'Escape') {
+                      setEditingRecipientId(null)
+                    }
+                  }}
+                  style={{
+                    background: 'var(--surface)',
+                    color: 'var(--text)',
+                    border: '1px solid var(--accent)',
+                    borderRadius: 999,
+                    padding: '4px 10px',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    lineHeight: 1.2,
+                    minWidth: 120,
+                    outline: 'none',
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => beginEditRecipient(recipient)}
+                  style={{
+                    background: 'var(--surface2)',
+                    color: 'var(--text)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 999,
+                    padding: '4px 10px',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    lineHeight: 1.2,
+                    whiteSpace: 'nowrap',
+                    cursor: 'text',
+                  }}
+                >
+                  {recipient.label}
+                </button>
+              )}
+              <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'monospace', lineHeight: 1.2, wordBreak: 'break-all', minWidth: 0 }}>
+                {recipient.fingerprint}
+              </div>
             </div>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>
               <input type="checkbox" checked={!!recipient.enabled} onChange={() => toggleRecipient(recipient)} />
               Enabled
             </label>
-            <Button small variant="ghost" onClick={() => removeRecipient(recipient)}>Delete</Button>
+            <button
+              type="button"
+              onClick={() => removeRecipient(recipient)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--danger)',
+                cursor: 'pointer',
+                fontSize: 16,
+                lineHeight: 1,
+                width: 28,
+                height: 28,
+                borderRadius: 999,
+              }}
+            >
+              ×
+            </button>
           </div>
         ))
       )}
@@ -1479,51 +1351,57 @@ function EnvironmentSection({ authEnabled, currentUser }) {
     <Card style={{ padding: 0, overflow: 'hidden' }}>
       {loading ? <Spinner /> : (
         <form onSubmit={handleSave} style={{ display: 'grid', gap: 14, padding: 16 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 160px', gap: 10 }}>
-            <div>
-              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Plaid client ID</label>
-              <input
-                value={settings.plaid_client_id}
-                onChange={e => setSettings(prev => ({ ...prev, plaid_client_id: e.target.value }))}
-                placeholder="Optional"
-                style={inputStyle}
-              />
-            </div>
-            <div>
-              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Plaid secret</label>
-              <input
-                type="password"
-                value={settings.plaid_secret}
-                onChange={e => setSettings(prev => ({ ...prev, plaid_secret: e.target.value }))}
-                placeholder="Optional"
-                style={inputStyle}
-              />
-            </div>
-            <div>
-              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Plaid environment</label>
-              <select
-                value={settings.plaid_env}
-                onChange={e => setSettings(prev => ({ ...prev, plaid_env: e.target.value }))}
-                style={{ ...inputStyle, cursor: 'pointer' }}
-              >
-                <option value="sandbox">sandbox</option>
-                <option value="development">development</option>
-                <option value="production">production</option>
-              </select>
+          <div style={{ display: 'grid', gap: 10, padding: 14, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface2)' }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)' }}>Plaid credentials</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 160px', gap: 10 }}>
+              <div>
+                <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Plaid client ID</label>
+                <input
+                  value={settings.plaid_client_id}
+                  onChange={e => setSettings(prev => ({ ...prev, plaid_client_id: e.target.value }))}
+                  placeholder="Optional"
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Plaid secret</label>
+                <input
+                  type="password"
+                  value={settings.plaid_secret}
+                  onChange={e => setSettings(prev => ({ ...prev, plaid_secret: e.target.value }))}
+                  placeholder="Optional"
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Plaid environment</label>
+                <select
+                  value={settings.plaid_env}
+                  onChange={e => setSettings(prev => ({ ...prev, plaid_env: e.target.value }))}
+                  style={{ ...inputStyle, cursor: 'pointer' }}
+                >
+                  <option value="sandbox">sandbox</option>
+                  <option value="development">development</option>
+                  <option value="production">production</option>
+                </select>
+              </div>
             </div>
           </div>
 
-          <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={settings.fintrack_use_log_files}
-              onChange={e => setSettings(prev => ({ ...prev, fintrack_use_log_files: e.target.checked }))}
-            />
-            Write fresh launcher logs to <code>scripts/backend.log</code> and <code>scripts/frontend.log</code>
-          </label>
+          <div style={{ display: 'grid', gap: 10, padding: 14, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface2)' }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)' }}>Backend/Frontend console logging</div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={settings.fintrack_use_log_files}
+                onChange={e => setSettings(prev => ({ ...prev, fintrack_use_log_files: e.target.checked }))}
+              />
+              Enable log files at startup
+            </label>
+          </div>
 
           <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
-            These values are stored in <code>{settings.env_file_path || '.env'}</code>. Restart the backend after saving for changes to take effect.
+            These settings are stored in <code>{settings.env_file_path || '.env'}</code> and take effect after you restart the backend.
           </div>
 
           {saved && (
@@ -1554,12 +1432,14 @@ export default function Settings() {
   const [showAdd, setShowAdd] = useState(false)
   const [authEnabled, setAuthEnabled] = useState(false)
   const [currentUser, setCurrentUser] = useState(null)
+  const [passwordPolicy, setPasswordPolicy] = useState('min_8')
 
   useEffect(() => {
     Promise.all([api.getOwners(), api.getAuthStatus()]).then(([o, status]) => {
       setOwners(o)
       setAuthEnabled(!!status.auth_enabled)
       setCurrentUser(status.user || null)
+      setPasswordPolicy(status.password_policy || 'min_8')
       setLoading(false)
     })
   }, [])
@@ -1591,54 +1471,42 @@ export default function Settings() {
 
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
 
-      <AuthModeSection authEnabled={authEnabled} onEnabled={status => setAuthEnabled(!!status.auth_enabled)} />
+      <StickySection
+        title="CSV Import Profiles"
+      >
+        <ImportProfilesSection />
+      </StickySection>
 
-      {authEnabled && <SecuritySection />}
-
-      {authEnabled && <UserAdminSection />}
-
-      {canManageEnvironment && (
-        <StickySection
-          title="Environment"
-          description={
-            <>
-            Update Plaid credentials and launcher logging without editing <code>.env</code> by hand.
-            Restart the backend after saving changes here.
-            </>
-          }
-        >
-          <EnvironmentSection authEnabled={authEnabled} currentUser={currentUser} />
-        </StickySection>
-      )}
+      <StickySection
+        title="Backup recipients"
+        description={
+          <>
+          RSA public keys
+          </>
+        }
+      >
+        <BackupRecipientsSection />
+      </StickySection>
 
       {/* ── Section 1: Owners ── */}
       <StickySection
-        title="Owners"
-        actions={
+        title="Account Owners"
+        actions={owners.length > 0 ? (
           <Button small onClick={() => setShowAdd(v => !v)}>
-            {showAdd ? 'Cancel' : '+ New owner'}
+            {showAdd ? 'Cancel' : '+ New account owner'}
           </Button>
-        }
-        description={
-          <>
-          Define the people in your household. Assign accounts and category groups to
-          owners below, then use the owner filter on any page or the Dashboard split view.
-          </>
-        }
+        ) : null}
       >
         <Card style={{ padding: 0, overflow: 'hidden' }}>
           {showAdd && (
             <AddOwnerForm onAdd={handleAdd} onCancel={() => setShowAdd(false)} />
           )}
           {loading ? <Spinner /> : owners.length === 0 && !showAdd ? (
-            <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
-              No owners yet — add one to get started.
-              <br />
-              <button onClick={() => setShowAdd(true)} style={{
-                marginTop: 10, background: 'var(--accent)', color: '#fff',
-                border: 'none', borderRadius: 6, padding: '7px 14px',
-                fontSize: 13, cursor: 'pointer',
-              }}>+ Add first owner</button>
+            <div style={{ padding: '16px', textAlign: 'left', color: 'var(--muted)', fontSize: 13 }}>
+              <div style={{ marginBottom: 10 }}>None.</div>
+              <Button small onClick={() => setShowAdd(true)}>
+                + New account owner
+              </Button>
             </div>
           ) : (
             owners.map(o => (
@@ -1648,73 +1516,56 @@ export default function Settings() {
         </Card>
       </StickySection>
 
-      {/* ── Section 2: Account assignment ── */}
-      <StickySection
-        title="Account ownership"
-        description={
-          <>
-          Assign each linked account to an owner. All transactions on that account
-          will be attributed to that owner and can be filtered or split in the Dashboard.
-          </>
-        }
-      >
-        <Card style={{ padding: 0, overflow: 'hidden' }}>
-          {loading ? <Spinner /> : owners.length === 0 ? (
-            <div style={{ padding: '16px', color: 'var(--muted)', fontSize: 13 }}>
-              Add at least one owner above before assigning accounts.
-            </div>
-          ) : (
-            <AccountAssignment owners={owners} />
-          )}
-        </Card>
-      </StickySection>
+      {canManageEnvironment && (
+        <StickySection
+          title="Environment variables (.env)"
+        >
+          <EnvironmentSection authEnabled={authEnabled} currentUser={currentUser} />
+        </StickySection>
+      )}
 
-      {/* ── Section 3: Category group assignment ── */}
-      <StickySection
-        title="Category group ownership"
-        description={
-          <>
-          Tag each spending group with an owner. Use this to mark joint expenses
-          (Utilities, Groceries) as "Shared" and personal expenses as individual.
-          This drives the Dashboard's "split by owner" view.
-          </>
-        }
-      >
-        <Card style={{ padding: 0, overflow: 'hidden' }}>
-          {loading ? <Spinner /> : owners.length === 0 ? (
-            <div style={{ padding: '16px', color: 'var(--muted)', fontSize: 13 }}>
-              Add at least one owner above before tagging category groups.
-            </div>
-          ) : (
-            <CategoryGroupAssignment owners={owners} />
-          )}
-        </Card>
-      </StickySection>
+      {!authEnabled && (
+        <StickySection
+          title="Sign-in protection"
+          description="Enable login when you want user accounts, 2FA, or separate tenant workspaces."
+        >
+          <AuthModeSection
+            authEnabled={authEnabled}
+            onEnabled={status => {
+              setAuthEnabled(!!status.auth_enabled)
+              setPasswordPolicy(status.password_policy || 'min_8')
+            }}
+            embedded
+          />
+        </StickySection>
+      )}
 
-      {/* ── Section 4: Import profiles ── */}
-      <StickySection
-        title="Import profiles"
-        description={
-          <>
-          Saved column-mapping configurations for recurring CSV imports (e.g. Chase, Riverstone).
-          Profiles are auto-detected when you upload a file on the Import page.
-          </>
-        }
-      >
-        <ImportProfilesSection />
-      </StickySection>
+      {authEnabled && (
+        <StickySection
+          title="Account security"
+          description="Manage password requirements and authenticator-based sign-in protection."
+        >
+          <AccountSecuritySection passwordPolicy={passwordPolicy} onPasswordPolicyChange={setPasswordPolicy} embedded />
+        </StickySection>
+      )}
 
-      <StickySection
-        title="Backup recipients"
-        description={
-          <>
-          Optional RSA public keys used to encrypt backup files for storage outside this app.
-          The app stores only public keys. You will need a matching private key file when restoring an encrypted backup.
-          </>
-        }
-      >
-        <BackupRecipientsSection />
-      </StickySection>
+      {authEnabled && (
+        <StickySection
+          title="Plaid token protection"
+          description="Control how Plaid access tokens are protected on disk for this account."
+        >
+          <PlaidTokenProtectionSection embedded />
+        </StickySection>
+      )}
+
+      {authEnabled && (
+        <StickySection
+          title="User management"
+          description="Create additional independent FinTrack users and tenant workspaces."
+        >
+          <UserAdminSection passwordPolicy={passwordPolicy} embedded />
+        </StickySection>
+      )}
       </div>
     </div>
   )

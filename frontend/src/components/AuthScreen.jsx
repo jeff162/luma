@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '../lib/api.js'
+import { passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 
 const s = {
   page: {
@@ -42,7 +43,7 @@ const s = {
   },
 }
 
-export default function AuthScreen({ needsBootstrap, onAuthenticated }) {
+export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', onAuthenticated }) {
   const [username, setUsername] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [password, setPassword] = useState('')
@@ -91,6 +92,7 @@ export default function AuthScreen({ needsBootstrap, onAuthenticated }) {
   const buttonLabel = submitting
     ? (awaiting2fa ? 'Verifying code...' : (needsBootstrap ? 'Creating account...' : 'Signing in...'))
     : (awaiting2fa ? 'Verify code' : (needsBootstrap ? 'Create first account' : 'Sign in'))
+  const bootstrapPasswordOk = validatePasswordForPolicy(password, passwordPolicy)
 
   return (
     <div style={s.page}>
@@ -124,14 +126,21 @@ export default function AuthScreen({ needsBootstrap, onAuthenticated }) {
             />
           )}
           {!awaiting2fa ? (
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              placeholder="Password"
-              autoComplete={needsBootstrap ? 'new-password' : 'current-password'}
-              style={s.input}
-            />
+            <>
+              <input
+                type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Password"
+                autoComplete={needsBootstrap ? 'new-password' : 'current-password'}
+                style={s.input}
+              />
+              {needsBootstrap && (
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: -4 }}>
+                  {passwordPolicyHelpText(passwordPolicy)}
+                </div>
+              )}
+            </>
           ) : (
             <input
               value={twoFactorCode}
@@ -150,7 +159,7 @@ export default function AuthScreen({ needsBootstrap, onAuthenticated }) {
           </div>
         )}
 
-        <button type="submit" disabled={submitting} style={{ ...s.button, marginTop: 18, opacity: submitting ? 0.7 : 1 }}>
+        <button type="submit" disabled={submitting || (needsBootstrap && !awaiting2fa && !bootstrapPasswordOk)} style={{ ...s.button, marginTop: 18, opacity: (submitting || (needsBootstrap && !awaiting2fa && !bootstrapPasswordOk)) ? 0.7 : 1 }}>
           {buttonLabel}
         </button>
         {awaiting2fa && (

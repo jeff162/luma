@@ -5,8 +5,8 @@ Tasks are computed fresh from the database on every request — no storage neede
 They self-resolve automatically as the user completes the work.
 
 Current tasks:
-  unowned_accounts   — accounts with owner_id IS NULL (excludes plaid_item_id='csv_import'
-                       with no owner, but includes all accounts). Links to Settings.
+  unowned_accounts   — accounts with owner_id IS NULL when more than one owner
+                       exists. Links to Accounts.
   uncategorized_txns — non-pending transactions with no category. Links to Transactions
                        with the __uncategorized__ filter active.
 
@@ -34,22 +34,26 @@ def get_tasks():
     tasks = []
 
     with get_db() as conn:
-        # ── Unowned accounts ─────────────────────────────────────────────────
-        unowned = conn.execute("""
-            SELECT COUNT(*) AS n FROM account WHERE owner_id IS NULL
+        owner_count = conn.execute("""
+            SELECT COUNT(*) AS n FROM owner
         """).fetchone()["n"]
 
-        if unowned:
-            tasks.append({
-                "id":          "unowned_accounts",
-                "title":       "Accounts need an owner",
-                "description": f"{unowned} account{'s have' if unowned != 1 else ' has'} no owner assigned. "
-                               "Ownership drives the Dashboard split view and transaction filtering.",
-                "count":       unowned,
-                "link":        "/settings",
-                "link_label":  "Go to Settings",
-                "severity":    SEVERITY_WARNING,
-            })
+        if owner_count > 1:
+            unowned = conn.execute("""
+                SELECT COUNT(*) AS n FROM account WHERE owner_id IS NULL
+            """).fetchone()["n"]
+
+            if unowned:
+                tasks.append({
+                    "id":          "unowned_accounts",
+                    "title":       "Accounts need an owner",
+                    "description": f"{unowned} account{'s have' if unowned != 1 else ' has'} no owner assigned. "
+                                   "Assign each account to a specific owner.",
+                    "count":       unowned,
+                    "link":        "/accounts",
+                    "link_label":  "Review accounts",
+                    "severity":    SEVERITY_WARNING,
+                })
 
         # ── Uncategorized transactions ────────────────────────────────────────
         uncategorized = conn.execute("""

@@ -558,11 +558,9 @@ function OwnerSplitPanel({ owners, ownerSplitData, onDrill }) {
     Object.values(ownerSplitData).flatMap(rows => rows.map(r => r.group_id))
   )]
 
-  // A group is "shared" if its owner_id is null or matches a Shared owner
-  const sharedOwner = owners.find(o => o.name.toLowerCase() === 'shared')
+  // A group is "shared" when its owner_id is null.
   function isSharedGroup(anyRow) {
-    return anyRow.group_owner_id === null ||
-      (sharedOwner && anyRow.group_owner_id === sharedOwner.id)
+    return anyRow.group_owner_id === null
   }
 
   return (
@@ -759,15 +757,12 @@ export default function Dashboard() {
     api.getGroupTotals(null, accountId || undefined, dateStart, dateEnd)
       .then(allRows => {
         const filtered = allRows.filter(r => r.category_type !== 'income')
-        // Find the "Shared" owner id if one exists (by name convention)
-        const sharedOwner = owners.find(o => o.name.toLowerCase() === 'shared')
         // Build per-owner buckets: each owner gets their own groups + shared groups
         const byOwner = {}
         for (const owner of owners) {
           byOwner[owner.id] = filtered.filter(r =>
             r.group_owner_id === owner.id ||
-            r.group_owner_id === null ||
-            (sharedOwner && r.group_owner_id === sharedOwner.id)
+            r.group_owner_id === null
           )
         }
         setOwnerSplitData(byOwner)

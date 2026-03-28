@@ -84,6 +84,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null)
   const [authError, setAuthError] = useState(null)
   const [runtimeConfig, setRuntimeConfig] = useState({ ok: true })
+  const [passwordPolicy, setPasswordPolicy] = useState('min_8')
 
   useEffect(() => {
     let cancelled = false
@@ -95,6 +96,7 @@ export default function App() {
         setRuntimeConfig(status.runtime_config || { ok: true })
         setAuthEnabled(!!status.auth_enabled)
         setNeedsBootstrap(!!status.needs_bootstrap)
+        setPasswordPolicy(status.password_policy || 'min_8')
 
         if (!status.auth_enabled) {
           setCurrentUser(status.user || null)
@@ -167,6 +169,7 @@ export default function App() {
       <AppErrorBoundary>
         <AuthScreen
           needsBootstrap={needsBootstrap}
+          passwordPolicy={passwordPolicy}
           onAuthenticated={user => {
             setCurrentUser(user)
             setAuthEnabled(true)

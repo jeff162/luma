@@ -31,6 +31,22 @@ function Get-EnvValue([string]$Path, [string]$Key) {
   return $null
 }
 
+function Test-PortInUse([int]$Port) {
+  $client = New-Object System.Net.Sockets.TcpClient
+  try {
+    $async = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
+    if (-not $async.AsyncWaitHandle.WaitOne(500)) {
+      return $false
+    }
+    $client.EndConnect($async)
+    return $true
+  } catch {
+    return $false
+  } finally {
+    $client.Close()
+  }
+}
+
 function Set-EnvValue([string]$Path, [string]$Key, [string]$Value) {
   $escapedKey = [regex]::Escape($Key)
   $lines = if (Test-Path $Path) { Get-Content $Path } else { @() }
@@ -136,6 +152,10 @@ if (-not (Test-Path $venvPython)) {
 $backendPort = Get-EnvValue $envPath 'BACKEND_PORT'
 if ([string]::IsNullOrWhiteSpace($backendPort)) {
   $backendPort = '8000'
+}
+
+if (Test-PortInUse ([int]$backendPort)) {
+  throw "Backend port $backendPort is already in use. Stop the running backend before starting another one."
 }
 
 Push-Location $backendDir

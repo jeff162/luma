@@ -362,11 +362,21 @@ export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
   }
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0, maxWidth: '100%' }}>
       <span
         onClick={startEdit}
-        style={{ fontWeight: 500, cursor: 'pointer' }}
-        title="Click to rename merchant"
+        style={{
+          fontWeight: 500,
+          cursor: 'pointer',
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          flex: '0 1 auto',
+          display: 'inline-block',
+          maxWidth: '100%',
+        }}
+        title={name}
       >
         {name}
       </span>
@@ -374,7 +384,7 @@ export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
         <button
           onClick={e => { e.stopPropagation(); onOpenDetail(txn) }}
           title="View spending history"
-          style={detailButtonStyle}
+          style={{ ...detailButtonStyle, flexShrink: 0 }}
         >↗</button>
       )}
       {!!txn.is_pending && (
@@ -412,9 +422,9 @@ export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
 // bounding rect. This avoids clipping inside overflow:hidden or scrollable
 // containers, at the cost of needing to re-measure on open.
 
-export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAddCategory, onClose }) {
+export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAddCategory, onClose, initialQuery = '' }) {
   const currentCat = categories.find(c => c.id === txn.category_id)
-  const [query, setQuery]             = useState('')
+  const [query, setQuery]             = useState(initialQuery || '')
   const [cursor, setCursor]           = useState(0)
   const [showAll, setShowAll]         = useState(false)
   const [openUp, setOpenUp]           = useState(false)
@@ -428,7 +438,10 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
   const listRef   = useRef(null)
   const wrapRef   = useRef(null)
 
-  useEffect(() => { inputRef.current?.focus() }, [])
+  useEffect(() => {
+    setQuery(initialQuery || '')
+    inputRef.current?.focus()
+  }, [initialQuery])
 
   // Measure available space and decide whether to open the dropdown upward
   useEffect(() => {
@@ -477,7 +490,9 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
   async function handleNewSave() {
     if (!newName.trim()) return
     const cat = await api.createCategory({ name: newName.trim(), icon: '📦', parent_id: newParent || null })
+    onAddCategory?.(cat)
     onSaveNew?.(cat)
+    onClose?.()
   }
 
   function handleParentChange(val) {

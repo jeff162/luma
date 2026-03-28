@@ -73,6 +73,8 @@ export const api = {
   getEnvironmentSettings: () => request('/auth/environment'),
   saveEnvironmentSettings: (data) =>
     request('/auth/environment', { method: 'POST', body: JSON.stringify(data) }),
+  savePasswordPolicy: (policy) =>
+    request('/auth/password-policy', { method: 'POST', body: JSON.stringify({ policy }) }),
   getBootstrapStatus: () => request('/auth/bootstrap-status'),
   getCurrentUser: () => request('/auth/me'),
   enableAuth: () => request('/auth/enable', { method: 'POST', body: JSON.stringify({ enabled: true }) }),
@@ -156,6 +158,7 @@ export const api = {
 
   // Accounts
   getAccounts: () => request('/accounts'),
+  createAccount: (data) => request('/accounts', { method: 'POST', body: JSON.stringify(data) }),
   deleteAccount: (id) => request(`/accounts/${id}`, { method: 'DELETE' }),
 
   // Categories

@@ -52,6 +52,22 @@ function Get-IntValue([string]$Value, [int]$DefaultValue) {
   return $DefaultValue
 }
 
+function Test-PortInUse([int]$Port) {
+  $client = New-Object System.Net.Sockets.TcpClient
+  try {
+    $async = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
+    if (-not $async.AsyncWaitHandle.WaitOne(500)) {
+      return $false
+    }
+    $client.EndConnect($async)
+    return $true
+  } catch {
+    return $false
+  } finally {
+    $client.Close()
+  }
+}
+
 function Wait-BackendReady([string]$Url, [int]$TimeoutSeconds = 60) {
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   $attempt = 0
@@ -94,8 +110,19 @@ $backendPort = Get-EnvValue $envPath 'BACKEND_PORT'
 if ([string]::IsNullOrWhiteSpace($backendPort)) {
   $backendPort = '8000'
 }
+$frontendPort = Get-EnvValue $envPath 'FRONTEND_PORT'
+if ([string]::IsNullOrWhiteSpace($frontendPort)) {
+  $frontendPort = '5173'
+}
 $backendReadyTimeout = Get-IntValue (Get-EnvValue $envPath 'FINTRACK_BACKEND_READY_TIMEOUT') 180
 $backendHealthUrl = "http://127.0.0.1:$backendPort/api/health"
+
+if (Test-PortInUse ([int]$backendPort)) {
+  throw "Backend port $backendPort is already in use. Stop the running backend before running start_fintrack again."
+}
+if (Test-PortInUse ([int]$frontendPort)) {
+  throw "Frontend port $frontendPort is already in use. Stop the running frontend before running start_fintrack again."
+}
 
 Write-Host "Starting FinTrack backend in a new window..."
 $backendArgs = @(

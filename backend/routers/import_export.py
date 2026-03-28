@@ -754,9 +754,10 @@ async def run_import(
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError:
         text = content.decode("latin-1")
+    all_lines = text.splitlines()
 
     header_row_index = _detect_header_row_index(text)
-    data_text = "\n".join(text.splitlines()[header_row_index:])
+    data_text = "\n".join(all_lines[header_row_index:])
 
     reader   = csv.DictReader(io.StringIO(data_text))
     raw_hdrs = reader.fieldnames or []
@@ -801,6 +802,10 @@ async def run_import(
     errors   = []
     row_results = []
     imported_category_counts: dict[str, int] = {}
+    invalid_row_context_lines = None
+    invalid_row_context_start_line = None
+    invalid_rows_suspected = False
+    invalid_rows_message = None
     skip_set = set(skip_accounts_cfg)
 
     with get_db() as conn:
@@ -915,6 +920,32 @@ async def run_import(
         account_counts: dict = {}   # account_id → {csv_value, count}
         skip_counts:    dict = {}   # csv_value → row count for skipped accounts
         account_deduped: dict = {}  # account_id → dedup count
+        consecutive_error_rows = 0
+        footer_error_start_index = None
+        footer_error_start_data_index = None
+        footer_error_start_row = None
+
+        def reset_footer_detection():
+            nonlocal consecutive_error_rows, footer_error_start_index, footer_error_start_data_index, footer_error_start_row
+            consecutive_error_rows = 0
+            footer_error_start_index = None
+            footer_error_start_data_index = None
+            footer_error_start_row = None
+
+        def record_footer_like_error(row_num: int, reason: str, row_index: int):
+            nonlocal consecutive_error_rows, footer_error_start_index, footer_error_start_data_index, footer_error_start_row, skipped
+            if consecutive_error_rows == 0:
+                footer_error_start_index = len(errors)
+                footer_error_start_data_index = row_index
+                footer_error_start_row = row_num
+            consecutive_error_rows += 1
+            errors.append({"row": row_num, "reason": reason})
+            row_results.append({"row": row_num, "status": "error", "reason": reason})
+            skipped += 1
+            if consecutive_error_rows >= 5:
+                # Treat the rest of the file as trailing documentation/footer text.
+                return True, len(data_rows) - row_index - 1
+            return False, 0
 
         for i, row in enumerate(data_rows):
             row_num = header_row_index + skip_rows + i + 2
@@ -925,46 +956,57 @@ async def run_import(
                     skipped += 1
                     skip_counts[csv_val] = skip_counts.get(csv_val, 0) + 1
                     row_results.append({"row": row_num, "status": "skipped_account"})
+                    reset_footer_detection()
                     continue
                 row_account_id = effective_map.get(csv_val)
                 if not row_account_id:
-                    errors.append({"row": row_num, "reason": f"No account mapped for '{csv_val}'"})
-                    skipped += 1
-                    row_results.append({"row": row_num, "status": "error", "reason": f"No account mapped for '{csv_val}'"})
+                    should_stop, remaining = record_footer_like_error(
+                        row_num, f"No account mapped for '{csv_val}'", i
+                    )
+                    if should_stop:
+                        skipped += remaining
+                        break
                     continue
                 acc = get_account(row_account_id)
             elif fallback_acc:
                 csv_val = ""
                 acc     = dict(fallback_acc)
             else:
-                errors.append({"row": row_num, "reason": "No account configured"})
-                skipped += 1
-                row_results.append({"row": row_num, "status": "error", "reason": "No account configured"})
+                should_stop, remaining = record_footer_like_error(row_num, "No account configured", i)
+                if should_stop:
+                    skipped += remaining
+                    break
                 continue
 
             if not acc:
-                errors.append({"row": row_num, "reason": "Account not found"})
-                skipped += 1
-                row_results.append({"row": row_num, "status": "error", "reason": "Account not found"})
+                should_stop, remaining = record_footer_like_error(row_num, "Account not found", i)
+                if should_stop:
+                    skipped += remaining
+                    break
                 continue
 
             raw_date = str(row.get(col.date, "")).strip()
             parsed_date = parse_date(raw_date, date_format)
             if not parsed_date:
-                errors.append({"row": row_num, "reason": f"Invalid date: {raw_date!r}"})
-                skipped += 1
-                row_results.append({"row": row_num, "status": "error", "reason": f"Invalid date: {raw_date!r}"})
+                should_stop, remaining = record_footer_like_error(
+                    row_num, f"Invalid date: {raw_date!r}", i
+                )
+                if should_stop:
+                    skipped += remaining
+                    break
                 continue
 
             amount = parse_amount(row, amount_convention, col)
             if amount is None:
-                errors.append({"row": row_num, "reason": "Invalid amount"})
-                skipped += 1
-                row_results.append({"row": row_num, "status": "error", "reason": "Invalid amount"})
+                should_stop, remaining = record_footer_like_error(row_num, "Invalid amount", i)
+                if should_stop:
+                    skipped += remaining
+                    break
                 continue
             if amount == 0:
                 skipped += 1
                 row_results.append({"row": row_num, "status": "zero_amount"})
+                reset_footer_detection()
                 continue
 
             raw_desc     = str(row.get(col.description, "")).strip()
@@ -976,6 +1018,7 @@ async def run_import(
                 deduped += 1
                 account_deduped[acc["id"]] = account_deduped.get(acc["id"], 0) + 1
                 row_results.append({"row": row_num, "status": "deduped"})
+                reset_footer_detection()
                 continue
 
             if raw_imported_category:
@@ -1000,11 +1043,30 @@ async def run_import(
                   raw_imported_category or None, notes_val or None, 1 if cat_id and raw_imported_category else 0))
             imported += 1
             row_results.append({"row": row_num, "status": "imported"})
+            reset_footer_detection()
 
             aid = acc["id"]
             if aid not in account_counts:
                 account_counts[aid] = {"csv_value": csv_val, "count": 0}
             account_counts[aid]["count"] += 1
+
+        trailing_non_transaction_suspected = footer_error_start_row is not None
+
+        if footer_error_start_index is not None:
+            errors = errors[:footer_error_start_index]
+
+        if errors:
+            first_error_row = min((err.get("row") for err in errors if err.get("row")), default=None)
+            if first_error_row is not None:
+                invalid_rows_suspected = True
+                error_line_idx = max(0, first_error_row - 1)
+                start_idx = max(0, error_line_idx - 4)
+                end_idx = min(len(all_lines), error_line_idx + 6)
+                invalid_row_context_start_line = start_idx
+                invalid_row_context_lines = all_lines[start_idx:end_idx]
+                invalid_rows_message = (
+                    f"Rows {first_error_row} onward contain validation errors. The file viewer has been opened so you can inspect the bad rows."
+                )
 
         conn.execute(
             "UPDATE import_batch SET row_count = ?, skipped_count = ?, deduped_count = ? WHERE id = ?",
@@ -1033,21 +1095,11 @@ async def run_import(
 
         account_skipped = sum(skip_counts.values())
 
-    trailing_errors = []
-    for result in reversed(row_results):
-        if result["status"] != "error":
-            break
-        trailing_errors.append(result)
-    trailing_errors.reverse()
-
-    trailing_non_transaction_suspected = bool(
-        trailing_errors and any(result["status"] != "error" for result in row_results[:-len(trailing_errors)])
-    )
     trailing_non_transaction_message = None
     if trailing_non_transaction_suspected:
-        start_row = trailing_errors[0]["row"]
+        start_row = footer_error_start_row or (row_results[-1]["row"] if row_results else None)
         trailing_non_transaction_message = (
-            f"Rows {start_row} onward could be footer or other non-transaction text at the end of the file."
+            f"Rows {start_row} onward could be footer or other non-transaction text at the end of the file. Import stopped there."
         )
 
     return {
@@ -1061,8 +1113,12 @@ async def run_import(
         "imported_category_value_count": len(imported_category_counts),
         "trailing_non_transaction_suspected": trailing_non_transaction_suspected,
         "trailing_non_transaction_message": trailing_non_transaction_message,
-        "trailing_error_start_row": trailing_errors[0]["row"] if trailing_errors else None,
-        "trailing_error_count": len(trailing_errors),
+        "trailing_error_start_row": footer_error_start_row,
+        "trailing_error_count": len(data_rows) - (footer_error_start_data_index if footer_error_start_data_index is not None else len(data_rows)),
+        "invalid_rows_suspected": invalid_rows_suspected,
+        "invalid_rows_message": invalid_rows_message,
+        "invalid_row_context_start_line": invalid_row_context_start_line,
+        "invalid_row_context_lines": invalid_row_context_lines,
         "errors":               errors[:20],
     }
 
@@ -1087,7 +1143,7 @@ def list_batches():
         for b in batches:
             d = dict(b)
             accs = conn.execute("""
-                SELECT iba.csv_value, iba.row_count, iba.was_skipped,
+                SELECT iba.csv_value, iba.account_id, iba.row_count, iba.was_skipped,
                        COALESCE(a.name, iba.csv_value) AS account_name
                 FROM   import_batch_account iba
                 LEFT JOIN account a ON a.id = iba.account_id

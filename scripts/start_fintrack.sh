@@ -6,6 +6,16 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENV_PATH="$ROOT_DIR/.env"
 BACKEND_SCRIPT="$SCRIPT_DIR/start_backend.sh"
 FRONTEND_SCRIPT="$SCRIPT_DIR/start_frontend.sh"
+SYSTEM_PYTHON=""
+
+if command -v python3 >/dev/null 2>&1; then
+  SYSTEM_PYTHON="python3"
+elif command -v python >/dev/null 2>&1; then
+  SYSTEM_PYTHON="python"
+else
+  echo "Python was not found. Install Python 3.12+ and try again."
+  exit 1
+fi
 
 get_env_value() {
   local file="$1"
@@ -22,6 +32,24 @@ get_positive_int() {
   else
     echo "$fallback"
   fi
+}
+
+port_in_use() {
+  local port="$1"
+  "$SYSTEM_PYTHON" - "$port" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+sock = socket.socket()
+sock.settimeout(0.5)
+try:
+    sock.connect(("127.0.0.1", port))
+except OSError:
+    raise SystemExit(1)
+finally:
+    sock.close()
+PY
 }
 
 is_truthy() {
@@ -105,8 +133,19 @@ BACKEND_LOG="$SCRIPT_DIR/backend.log"
 FRONTEND_LOG="$SCRIPT_DIR/frontend.log"
 BACKEND_PORT="$(get_env_value "$ENV_PATH" BACKEND_PORT)"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
+FRONTEND_PORT="$(get_env_value "$ENV_PATH" FRONTEND_PORT)"
+FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 BACKEND_READY_TIMEOUT="$(get_positive_int "$(get_env_value "$ENV_PATH" FINTRACK_BACKEND_READY_TIMEOUT)" 180)"
 BACKEND_HEALTH_URL="http://127.0.0.1:${BACKEND_PORT}/api/health"
+
+if port_in_use "$BACKEND_PORT"; then
+  echo "Backend port $BACKEND_PORT is already in use. Stop the running backend before running start_fintrack again."
+  exit 1
+fi
+if port_in_use "$FRONTEND_PORT"; then
+  echo "Frontend port $FRONTEND_PORT is already in use. Stop the running frontend before running start_fintrack again."
+  exit 1
+fi
 
 if [[ "$USE_LOG_FILES" == "1" ]]; then
   BACKEND_TERMINAL_LOG="$BACKEND_LOG"

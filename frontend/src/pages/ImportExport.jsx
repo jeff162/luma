@@ -20,6 +20,7 @@ import { api } from '../lib/api.js'
 import { refreshTaskBadge } from '../App.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { Card, PageHeader, Button, Spinner, EmptyState } from '../components/ui.jsx'
+import CategoryPicker from '../components/CategoryPicker.jsx'
 import { formatCurrency } from '../lib/utils.js'
 
 const AMOUNT_CONVENTIONS = [
@@ -172,7 +173,7 @@ function RawFilePreview({ rawLines, headerRowIndex, onClose, lineNumberOffset = 
 
   return (
     <div style={{
-      position: 'fixed', left: pos.x, top: pos.y, zIndex: 400,
+      position: 'fixed', left: pos.x, top: pos.y, zIndex: 1105,
       width: size.w, background: 'var(--surface)',
       border: '1px solid var(--border)', borderRadius: 10,
       boxShadow: '0 8px 32px rgba(0,0,0,0.35)',
@@ -497,9 +498,6 @@ function ImportTab() {
     if (!colAccount || !preview?.column_distinct_values) return []
     return preview.column_distinct_values[colAccount] || []
   }, [colAccount, preview])
-  const categoryGroups = useMemo(() => categories.filter(c => !c.parent_id), [categories])
-  const leafCategories = useMemo(() => categories.filter(c => c.parent_id), [categories])
-
   useEffect(() => {
     setAccountMap(prev => {
       const next = { ...prev }
@@ -575,16 +573,27 @@ function ImportTab() {
   const detectedHeaderOffset = preview?.header_row_index ?? 0
   const displayedSkipRows = skipRows + detectedHeaderOffset
   const showTrailingDataWarning = !!importResult?.trailing_non_transaction_suspected
+  const showInvalidDataWarning = !!importResult?.invalid_rows_suspected
   const rawViewerLines = showTrailingDataWarning
     ? (preview?.raw_tail_lines?.length ? preview.raw_tail_lines : preview?.raw_lines)
-    : preview?.raw_lines
+    : showInvalidDataWarning
+      ? (importResult?.invalid_row_context_lines?.length ? importResult.invalid_row_context_lines : preview?.raw_lines)
+      : preview?.raw_lines
   const rawViewerOffset = showTrailingDataWarning && preview?.raw_tail_lines?.length
     ? (preview.raw_tail_start_line ?? 0)
-    : 0
-  const rawViewerTitle = showTrailingDataWarning ? 'File tail' : 'Raw file'
+    : showInvalidDataWarning
+      ? (importResult?.invalid_row_context_start_line ?? 0)
+      : 0
+  const rawViewerTitle = showTrailingDataWarning
+    ? 'File tail'
+    : showInvalidDataWarning
+      ? 'Invalid rows'
+      : 'Raw file'
   const rawViewerNote = showTrailingDataWarning
     ? (importResult?.trailing_non_transaction_message || 'There appears to be non-transaction data at the end of the file. Please verify the file tail.')
-    : null
+    : showInvalidDataWarning
+      ? (importResult?.invalid_rows_message || 'There appears to be invalid data in the file. Please verify the highlighted rows.')
+      : null
 
   function buildImportSnapshot() {
     const cm = getColumnMap()
@@ -808,7 +817,7 @@ function ImportTab() {
         apply_categorization: applyCat,
       })
       setImportResult(result)
-      if (result.trailing_non_transaction_suspected) setShowRaw(true)
+      if (result.trailing_non_transaction_suspected || result.invalid_rows_suspected) setShowRaw(true)
       refreshTaskBadge()
       const refreshedAccounts = await api.getAccounts()
       setAccounts(refreshedAccounts)
@@ -822,17 +831,16 @@ function ImportTab() {
           setCategoryMappingRows((mappingData.values || []).map(v => ({
             rawValue: v.raw_value,
             rowCount: v.row_count,
-            accountId: v.saved_category_id || v.suggested_category_id || '',
-            createNew: false,
-            newName: v.raw_value,
-            parentId: '',
+            categoryId: v.saved_category_id || v.suggested_category_id || '',
+            chooserQuery: '',
+            chooserToken: 0,
           })))
-          setStage('category-mapping')
+          setStage(result.trailing_non_transaction_suspected ? 'review-data' : 'category-mapping')
         } else {
-          setStage('done')
+          setStage(result.trailing_non_transaction_suspected ? 'review-data' : 'done')
         }
       } else {
-        setStage('done')
+        setStage(result.trailing_non_transaction_suspected ? 'review-data' : 'done')
       }
     } catch (e) { alert('Import failed: ' + e.message) }
     finally { setLoading(false) }
@@ -971,15 +979,20 @@ function ImportTab() {
 
   async function confirmUndo(force) {
     await api.undoBatch(undoTarget.id, force)
-    setUndoTarget(null); setUndoEdited([]); api.listBatches().then(setBatches)
+    setUndoTarget(null); setUndoEdited([]); setDupAccountWarning([]); api.listBatches().then(setBatches)
     refreshTaskBadge()
   }
 
   function canApplyCategoryMappings() {
-    return categoryMappingRows.every(row => {
-      if (row.createNew) return !!row.newName.trim() && !!row.parentId
-      return true
-    })
+    return categoryMappingRows.some(row => !!row.categoryId)
+  }
+
+  function advancePastDataReview() {
+    if (categoryMappingRows.length > 0) {
+      setStage('category-mapping')
+    } else {
+      setStage('done')
+    }
   }
 
   async function applyImportedCategoryMappings() {
@@ -988,15 +1001,7 @@ function ImportTab() {
     try {
       const assignments = {}
       for (const row of categoryMappingRows) {
-        if (row.createNew) {
-          const created = await api.createCategory({
-            parent_id: row.parentId,
-            name: row.newName.trim(),
-          })
-          assignments[row.rawValue] = created.id
-        } else if (row.accountId) {
-          assignments[row.rawValue] = row.accountId
-        }
+        if (row.categoryId) assignments[row.rawValue] = row.categoryId
       }
       const result = await api.applyBatchCategoryMappings(importResult.batch_id, assignments)
       setCategoryAssignments(prev => ({ ...prev, ...assignments }))
@@ -1376,11 +1381,25 @@ function ImportTab() {
                             <option key={a.id} value={a.id}>{a.name}{a.mask ? ` ···${a.mask}` : ''}</option>
                           ))}
                         </select>
-                        <button onClick={() => update({ createNew: true })} style={{
-                          flexShrink: 0, background: 'none', border: '1px solid var(--border)',
-                          borderRadius: 6, color: 'var(--accent2)', cursor: 'pointer',
-                          fontSize: 11, padding: '4px 7px', whiteSpace: 'nowrap',
-                        }}>+New</button>
+                        {m.accountId ? (
+                          <button
+                            onClick={() => update({ accountId: '', createNew: false, newName: csvVal })}
+                            style={{
+                              flexShrink: 0, background: 'none', border: '1px solid var(--border)',
+                              borderRadius: 6, color: 'var(--muted)', cursor: 'pointer',
+                              fontSize: 13, width: 28, height: 28, lineHeight: 1, padding: 0,
+                            }}
+                            aria-label="Clear account mapping"
+                          >
+                            ×
+                          </button>
+                        ) : (
+                          <button onClick={() => update({ createNew: true })} style={{
+                            flexShrink: 0, background: 'none', border: '1px solid var(--border)',
+                            borderRadius: 6, color: 'var(--accent2)', cursor: 'pointer',
+                            fontSize: 11, padding: '4px 7px', whiteSpace: 'nowrap',
+                          }}>+New</button>
+                        )}
                       </div>
                     ) : (
                       <div style={{ display: 'flex', gap: 4, alignItems: 'center', minWidth: 0, flexWrap: 'wrap' }}>
@@ -1465,89 +1484,186 @@ function ImportTab() {
       )}
 
       {stage === 'category-mapping' && importResult && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          <Card>
-            <div style={{ fontSize: 18, marginBottom: 8 }}>Map imported categories</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14 }}>
-              Review category values found in this CSV. These mappings will be reused for this import source next time.
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {categoryMappingRows.map((row, idx) => (
-                <div key={row.rawValue} style={{
-                  padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8,
-                  background: 'var(--surface2)',
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{row.rawValue}</div>
-                    <div style={{ fontSize: 11, color: 'var(--muted)' }}>{row.rowCount} row{row.rowCount !== 1 ? 's' : ''}</div>
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1000,
+            background: 'rgba(15, 23, 42, 0.48)',
+            padding: 24,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              width: 'min(1120px, 100%)',
+              maxHeight: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              background: 'var(--surface)',
+              borderRadius: 16,
+              border: '1px solid var(--border)',
+              boxShadow: '0 28px 80px rgba(15, 23, 42, 0.28)',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{
+              padding: '18px 22px 12px',
+              borderBottom: '1px solid var(--border)',
+              background: 'linear-gradient(to bottom, var(--surface), color-mix(in srgb, var(--surface2) 65%, var(--surface)))',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 16 }}>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 6 }}>Map imported categories</div>
+                  <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+                    Mappings will be saved as part of the import profile.
                   </div>
-                  {!row.createNew ? (
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <select
-                        value={row.accountId}
-                        onChange={e => setCategoryMappingRows(prev => prev.map((item, i) => i === idx ? { ...item, accountId: e.target.value } : item))}
-                        style={{
-                          flex: 1, minWidth: 220, background: 'var(--surface)', color: 'var(--text)',
-                          border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', fontSize: 13,
-                        }}
-                      >
-                        <option value="">— Select category —</option>
-                        {leafCategories.map(cat => {
-                          const group = categories.find(c => c.id === cat.parent_id)
-                          return <option key={cat.id} value={cat.id}>{group ? `${group.name} / ` : ''}{cat.name}</option>
-                        })}
-                      </select>
-                      <button
-                        onClick={() => setCategoryMappingRows(prev => prev.map((item, i) => i === idx ? { ...item, createNew: true, parentId: categoryGroups[0]?.id || '' } : item))}
-                        style={{
-                          background: 'none', border: '1px solid var(--border)', borderRadius: 6,
-                          color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, padding: '5px 8px',
-                        }}
-                      >
-                        + New category
-                      </button>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <input
-                        value={row.newName}
-                        onChange={e => setCategoryMappingRows(prev => prev.map((item, i) => i === idx ? { ...item, newName: e.target.value } : item))}
-                        placeholder="New category name"
-                        style={{
-                          flex: 1, minWidth: 180, background: 'var(--surface)', color: 'var(--text)',
-                          border: '1px solid var(--accent)', borderRadius: 6, padding: '5px 8px', fontSize: 13,
-                        }}
-                      />
-                      <select
-                        value={row.parentId}
-                        onChange={e => setCategoryMappingRows(prev => prev.map((item, i) => i === idx ? { ...item, parentId: e.target.value } : item))}
-                        style={{
-                          minWidth: 180, background: 'var(--surface)', color: 'var(--text)',
-                          border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', fontSize: 12,
-                        }}
-                      >
-                        <option value="">— Select group —</option>
-                        {categoryGroups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}
-                      </select>
-                      <button
-                        onClick={() => setCategoryMappingRows(prev => prev.map((item, i) => i === idx ? { ...item, createNew: false, accountId: '' } : item))}
-                        style={{
-                          background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 16, padding: '2px 4px',
-                        }}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  )}
                 </div>
-              ))}
+              </div>
             </div>
-          </Card>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <Button onClick={applyImportedCategoryMappings} disabled={loading || !canApplyCategoryMappings()}>
-              {loading ? 'Applying…' : 'Apply category mappings'}
-            </Button>
-            <Button variant="ghost" onClick={() => setStage('done')}>Skip for now</Button>
+            <div style={{ padding: 22, overflow: 'auto', flex: 1 }}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                gap: '8px 0',
+              }}>
+                {categoryMappingRows.map((row, idx) => (
+                  <div key={row.rawValue} style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.35fr)',
+                    gap: 10,
+                    alignItems: 'center',
+                    padding: '6px 14px 6px 0',
+                    borderBottom: '1px solid var(--border)',
+                    borderRight: idx % 2 === 0 ? '1px solid var(--border)' : 'none',
+                    paddingLeft: idx % 2 === 1 ? 14 : 0,
+                  }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={row.rawValue}>
+                        {row.rawValue}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifySelf: 'stretch', minWidth: 0 }}>
+                      <button
+                        type="button"
+                        onClick={() => setCategoryMappingRows(prev => prev.map((item, i) => i === idx ? {
+                          ...item,
+                          chooserQuery: row.rawValue,
+                          chooserToken: (item.chooserToken || 0) + 1,
+                        } : item))}
+                        style={{
+                          flexShrink: 0,
+                          background: 'none',
+                          border: '1px solid var(--border)',
+                          borderRadius: 6,
+                          color: 'var(--accent2)',
+                          cursor: 'pointer',
+                          fontSize: 11,
+                          padding: '4px 7px',
+                          whiteSpace: 'nowrap',
+                        }}
+                        title={`Use "${row.rawValue}" in the category chooser`}
+                      >
+                        Use file text
+                      </button>
+                      <CategoryPicker
+                        value={row.categoryId}
+                        categories={categories}
+                        onChange={categoryId => setCategoryMappingRows(prev => prev.map((item, i) => i === idx ? { ...item, categoryId } : item))}
+                        onAddCategory={cat => setCategories(prev => prev.find(c => c.id === cat.id) ? prev : [...prev, cat])}
+                        initialQuery={row.chooserQuery || ''}
+                        openToken={row.chooserToken || 0}
+                        compact
+                        style={{ width: '100%', maxWidth: 280, minWidth: 0 }}
+                      />
+                      <div style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap', minWidth: 46, textAlign: 'right' }}>
+                        {row.rowCount} row{row.rowCount !== 1 ? 's' : ''}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{
+              padding: '14px 22px 18px',
+              borderTop: '1px solid var(--border)',
+              display: 'flex',
+              gap: 10,
+              justifyContent: 'flex-end',
+              background: 'var(--surface)',
+            }}>
+              <Button onClick={applyImportedCategoryMappings} disabled={loading || !canApplyCategoryMappings()}>
+                {loading ? 'Applying…' : 'Apply category mappings'}
+              </Button>
+              <Button variant="ghost" onClick={() => setStage('done')}>Skip for now</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {stage === 'review-data' && importResult && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1000,
+            background: 'rgba(15, 23, 42, 0.48)',
+            padding: 24,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              width: 'min(880px, 100%)',
+              display: 'flex',
+              flexDirection: 'column',
+              background: 'var(--surface)',
+              borderRadius: 16,
+              border: '1px solid var(--border)',
+              boxShadow: '0 28px 80px rgba(15, 23, 42, 0.28)',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{
+              padding: '18px 22px 12px',
+              borderBottom: '1px solid var(--border)',
+              background: 'linear-gradient(to bottom, var(--surface), color-mix(in srgb, var(--surface2) 65%, var(--surface)))',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 16 }}>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 6 }}>Review imported file tail</div>
+                  <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+                    This CSV appears to have non-transaction data after the rows that imported. Please inspect the raw file viewer, then confirm whether it looks correct before continuing.
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div style={{ padding: 22, display: 'grid', gap: 14 }}>
+              <div style={{
+                fontSize: 13,
+                color: 'var(--muted)',
+                background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
+                border: '1px solid #f59e0b',
+                borderRadius: 10,
+                padding: '10px 12px',
+              }}>
+                The raw file viewer is already open on the file tail. If the ending text is expected, choose Continue. If not, close this and undo the import from Recent imports.
+              </div>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <Button variant="ghost" onClick={() => setStage('done')}>
+                  Not OK
+                </Button>
+                <Button onClick={advancePastDataReview}>
+                  Continue
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1562,8 +1678,10 @@ function ImportTab() {
             const parts = []
             if (importResult.deduped > 0)         parts.push(`${importResult.deduped} duplicate${importResult.deduped !== 1 ? 's' : ''}`)
             if (importResult.account_skipped > 0)  parts.push(`${importResult.account_skipped} from skipped accounts`)
-            const otherSkipped = importResult.skipped - importResult.account_skipped
-            if (otherSkipped > 0)                  parts.push(`${otherSkipped} invalid rows`)
+            const nonTransactionRows = importResult.trailing_non_transaction_suspected ? (importResult.trailing_error_count || 0) : 0
+            const validationErrors = Math.max(0, importResult.skipped - importResult.account_skipped - nonTransactionRows)
+            if (validationErrors > 0)              parts.push(`${validationErrors} validation errors`)
+            if (nonTransactionRows > 0)            parts.push(`${nonTransactionRows} non-transaction rows`)
             return (
               <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
                 {importResult.skipped + importResult.deduped} rows not imported
@@ -1578,19 +1696,9 @@ function ImportTab() {
           )}
           {categoryMappingSummary && (
             <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
-              {categoryMappingSummary.applied_count} imported categor{categoryMappingSummary.applied_count === 1 ? 'y was' : 'ies were'} applied.
+              {categoryMappingSummary.saved_mapping_count} imported categor{categoryMappingSummary.saved_mapping_count === 1 ? 'y mapping was' : 'y mappings were'} saved.
+              {categoryMappingSummary.applied_count > 0 && ` ${categoryMappingSummary.applied_count} transaction${categoryMappingSummary.applied_count === 1 ? ' was' : 's were'} updated.`}
               {categoryMappingSummary.categorized_by_rules > 0 && ` ${categoryMappingSummary.categorized_by_rules} remaining transaction${categoryMappingSummary.categorized_by_rules === 1 ? '' : 's'} were categorized by rules.`}
-            </div>
-          )}
-          {importResult.trailing_non_transaction_suspected && (
-            <div style={{
-              fontSize: 13, marginBottom: 16, padding: '8px 12px',
-              background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
-              border: '1px solid #f59e0b',
-              borderRadius: 8,
-            }}>
-              {importResult.trailing_non_transaction_message || 'There appears to be non-transaction data at the end of the file.'}{' '}
-              The file viewer has been opened so you can check the tail of the CSV.
             </div>
           )}
           {importResult.new_accounts_created > 0 && (
@@ -1610,7 +1718,7 @@ function ImportTab() {
           )}
           {importResult.errors?.length > 0 && (
             <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, color: 'var(--danger)' }}>{importResult.errors.length} rows had errors:</div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, color: 'var(--danger)' }}>{importResult.errors.length} validation errors:</div>
               {importResult.errors.map((e, i) => <div key={i} style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 3 }}>Row {e.row}: {e.reason}</div>)}
             </div>
           )}
@@ -1641,6 +1749,7 @@ function ImportTab() {
                   <div style={{ padding: '4px 16px 10px 28px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                     {b.accounts.map((a, i) => {
                       const label = a.was_skipped ? a.csv_value : a.account_name
+                      const count = Number(a.row_count || 0)
                       const truncated = label?.length > 22 ? label.slice(0, 20) + '…' : label
                       return (
                         <span key={i} title={label} style={{
@@ -1656,8 +1765,7 @@ function ImportTab() {
                             {a.was_skipped ? '✕' : '✓'}
                           </span>
                           {truncated}
-                          {!a.was_skipped && <span style={{ color: 'var(--muted)' }}>{a.row_count}</span>}
-                          {a.was_skipped && a.row_count > 0 && <span style={{ color: 'var(--muted)' }}>{a.row_count}</span>}
+                          {count > 0 && <span style={{ color: 'var(--muted)' }}>{count}</span>}
                         </span>
                       )
                     })}

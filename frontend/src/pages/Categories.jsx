@@ -1108,45 +1108,45 @@ export default function Categories() {
                 </div>
               )}
 
-              {!selected.parent_id ? (
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 16,
-                    flexWrap: 'wrap',
-                    marginBottom: 20,
-                    padding: '10px 14px',
-                    background: 'var(--surface2)',
-                    borderRadius: 8,
-                    border: '1px solid var(--border)',
-                  }}
-                >
-                  {owners.length > 0 ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '1 1 160px' }}>
-                      <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Owner</span>
-                      <select
-                        value={selected.owner_id || ''}
-                        onChange={e => handleOwnerChange(selected.id, e.target.value || null)}
-                        style={{
-                          flex: 1,
-                          background: 'var(--surface)',
-                          color: 'var(--text)',
-                          border: '1px solid var(--border)',
-                          borderRadius: 6,
-                          padding: '4px 8px',
-                          fontSize: 12,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        <option value="">- Shared -</option>
-                        {categoryOwners.map(owner => (
-                          <option key={owner.id} value={owner.id}>{owner.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                  ) : null}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 16,
+                  flexWrap: 'wrap',
+                  marginBottom: 20,
+                  padding: '10px 14px',
+                  background: 'var(--surface2)',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                }}
+              >
+                {owners.length > 0 ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '1 1 160px' }}>
+                    <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Owner</span>
+                    <select
+                      value={selected.owner_id || ''}
+                      onChange={e => handleOwnerChange(selected.id, e.target.value || null)}
+                      style={{
+                        flex: 1,
+                        background: 'var(--surface)',
+                        color: 'var(--text)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 6,
+                        padding: '4px 8px',
+                        fontSize: 12,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <option value="">- Shared -</option>
+                      {categoryOwners.map(owner => (
+                        <option key={owner.id} value={owner.id}>{owner.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
 
+                {!selected.parent_id ? (
                   <label
                     style={{
                       display: 'flex',
@@ -1167,8 +1167,8 @@ export default function Categories() {
                     />
                     Exclude from totals
                   </label>
-                </div>
-              ) : null}
+                ) : null}
+              </div>
 
               {!selected.parent_id && inlineForm?.mode !== 'category' ? (
                 <button

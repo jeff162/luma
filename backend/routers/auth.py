@@ -19,11 +19,14 @@ from db.control_database import (
     create_initial_user,
     disable_totp,
     enable_totp,
+    get_password_policy,
     get_local_mode_user,
     get_user_by_id,
     list_users,
+    password_policy_label,
     recovery_code_count,
     replace_recovery_codes,
+    set_password_policy,
     update_user_secret_material,
     verify_totp_code,
 )
@@ -76,6 +79,10 @@ class EnvironmentSettingsRequest(BaseModel):
     fintrack_use_log_files: bool | None = None
 
 
+class PasswordPolicyRequest(BaseModel):
+    policy: str
+
+
 def _require_admin(request: Request):
     user = getattr(request.state, "user", None)
     if not user or user.get("role") != "admin":
@@ -92,10 +99,10 @@ def _ensure_runtime_config_ok():
 
 def _require_admin_or_local(request: Request):
     if not auth_required():
+        # Environment settings are global app config, not tenant data, so local
+        # mode does not need a control-db user record just to read/write them.
         user = getattr(request.state, "user", None)
-        if not user:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        return user
+        return user or {"role": "admin", "local_mode": True}
     return _require_admin(request)
 
 
@@ -115,10 +122,13 @@ def _session_payload(user: dict) -> dict:
 
 def _auth_status_payload(request: Request | None = None) -> dict:
     enabled = auth_required()
+    password_policy = get_password_policy()
     payload = {
         "auth_enabled": enabled,
         "needs_bootstrap": enabled and bootstrap_required(),
         "runtime_config": runtime_config_status(),
+        "password_policy": password_policy,
+        "password_policy_label": password_policy_label(password_policy),
     }
     if request and enabled:
         user_id = request.session.get("user_id")
@@ -183,6 +193,20 @@ def save_environment_settings(body: EnvironmentSettingsRequest, request: Request
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/password-policy")
+def save_password_policy(body: PasswordPolicyRequest, request: Request):
+    _require_admin_or_local(request)
+    try:
+        set_password_policy(body.policy)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    policy = get_password_policy()
+    return {
+        "password_policy": policy,
+        "password_policy_label": password_policy_label(policy),
+    }
 
 
 @router.post("/enable")

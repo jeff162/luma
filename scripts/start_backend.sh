@@ -29,6 +29,24 @@ get_env_value() {
   grep -E "^${key}=" "$file" | tail -1 | cut -d= -f2-
 }
 
+port_in_use() {
+  local port="$1"
+  "$SYSTEM_PYTHON" - "$port" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+sock = socket.socket()
+sock.settimeout(0.5)
+try:
+    sock.connect(("127.0.0.1", port))
+except OSError:
+    raise SystemExit(1)
+finally:
+    sock.close()
+PY
+}
+
 set_env_value() {
   local file="$1"
   local key="$2"
@@ -144,6 +162,11 @@ fi
 
 BACKEND_PORT="$(get_env_value "$ENV_PATH" BACKEND_PORT)"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
+
+if port_in_use "$BACKEND_PORT"; then
+  echo "Backend port $BACKEND_PORT is already in use. Stop the running backend before starting another one."
+  exit 1
+fi
 
 cd "$BACKEND_DIR"
 echo "Checking/installing backend dependencies. This can take a minute on first run..."

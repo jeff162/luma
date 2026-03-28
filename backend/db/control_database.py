@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import os
+import re
 import sqlite3
 import struct
 import time
@@ -18,6 +19,14 @@ TENANT_DATA_ROOT = Path(os.getenv("TENANT_DATA_ROOT", "data"))
 PASSWORD_ITERATIONS = 600_000
 TOTP_PERIOD = 30
 RECOVERY_CODE_COUNT = 8
+PASSWORD_POLICY_NONE = "none"
+PASSWORD_POLICY_MIN_8 = "min_8"
+PASSWORD_POLICY_STRONG = "strong"
+PASSWORD_POLICY_VALUES = {
+    PASSWORD_POLICY_NONE,
+    PASSWORD_POLICY_MIN_8,
+    PASSWORD_POLICY_STRONG,
+}
 
 
 def _tenant_slug(value: str) -> str:
@@ -235,6 +244,49 @@ def set_app_setting(key: str, value: str):
         )
 
 
+def get_password_policy() -> str:
+    value = (get_app_setting("password_policy", PASSWORD_POLICY_MIN_8) or PASSWORD_POLICY_MIN_8).strip()
+    return value if value in PASSWORD_POLICY_VALUES else PASSWORD_POLICY_MIN_8
+
+
+def set_password_policy(policy: str):
+    normalized = (policy or "").strip()
+    if normalized not in PASSWORD_POLICY_VALUES:
+        raise ValueError("Unsupported password policy")
+    set_app_setting("password_policy", normalized)
+
+
+def password_policy_label(policy: str | None = None) -> str:
+    normalized = policy or get_password_policy()
+    if normalized == PASSWORD_POLICY_NONE:
+        return "No password restrictions"
+    if normalized == PASSWORD_POLICY_STRONG:
+        return "Strong password requirements"
+    return "8 character minimum"
+
+
+def validate_password_for_policy(password: str, policy: str | None = None):
+    normalized = policy or get_password_policy()
+    if normalized == PASSWORD_POLICY_NONE:
+        if not password:
+            raise ValueError("password is required")
+        return
+    if normalized == PASSWORD_POLICY_MIN_8:
+        if len(password) < 8:
+            raise ValueError("password must be at least 8 characters")
+        return
+    if len(password) < 16:
+        raise ValueError("strong passwords must be at least 16 characters")
+    checks = [
+        re.search(r"[a-z]", password),
+        re.search(r"[A-Z]", password),
+        re.search(r"[0-9]", password),
+        re.search(r"[^A-Za-z0-9]", password),
+    ]
+    if not all(checks):
+        raise ValueError("strong passwords must include upper, lower, number, and symbol")
+
+
 def user_count() -> int:
     with get_control_db() as conn:
         return conn.execute("SELECT COUNT(*) FROM user_account").fetchone()[0]
@@ -286,8 +338,7 @@ def _create_user_with_tenant(
 ) -> dict:
     if not username.strip():
         raise ValueError("username is required")
-    if len(password) < 8:
-        raise ValueError("password must be at least 8 characters")
+    validate_password_for_policy(password)
 
     if role not in {"member", "admin"}:
         raise ValueError("role must be 'member' or 'admin'")
