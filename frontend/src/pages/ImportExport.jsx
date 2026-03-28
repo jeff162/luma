@@ -50,9 +50,43 @@ const EXPORT_COLUMNS = [
   { key: 'import_batch',  label: 'Import batch ID' },
 ]
 const DEFAULT_EXPORT_COLS = ['date', 'merchant_name', 'amount', 'account', 'category']
+const IMPORT_DRAFTS_STORAGE_KEY = 'fintrack.importDrafts.v1'
 
 function SectionTitle({ children }) {
   return <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6, marginTop: 28 }}>{children}</div>
+}
+
+function deriveImportSourceHints(previewLike) {
+  const filename = previewLike?.filename || ''
+  const filenamePattern = filename.replace(/[_\-\d.]+\.(csv)$/i, '').trim().toLowerCase()
+  return {
+    headerFingerprint: previewLike?.header_fingerprint || '',
+    filenamePattern,
+  }
+}
+
+function loadSavedImportDraft(previewLike) {
+  try {
+    const raw = window.localStorage.getItem(IMPORT_DRAFTS_STORAGE_KEY)
+    if (!raw) return null
+    const drafts = JSON.parse(raw)
+    const { headerFingerprint, filenamePattern } = deriveImportSourceHints(previewLike)
+    return drafts[headerFingerprint] || drafts[filenamePattern] || drafts.__last__ || null
+  } catch {
+    return null
+  }
+}
+
+function saveImportDraft(previewLike, snapshot) {
+  try {
+    const raw = window.localStorage.getItem(IMPORT_DRAFTS_STORAGE_KEY)
+    const drafts = raw ? JSON.parse(raw) : {}
+    const { headerFingerprint, filenamePattern } = deriveImportSourceHints(previewLike)
+    if (headerFingerprint) drafts[headerFingerprint] = snapshot
+    if (filenamePattern) drafts[filenamePattern] = snapshot
+    drafts.__last__ = snapshot
+    window.localStorage.setItem(IMPORT_DRAFTS_STORAGE_KEY, JSON.stringify(drafts))
+  } catch {}
 }
 
 function SelectInput({ value, onChange, options, style }) {
@@ -92,7 +126,7 @@ function ColSelect({ label, headers, value, onChange, required }) {
 
 // ── Raw file preview — draggable + resizable floating panel ──────────────────
 
-function RawFilePreview({ rawLines, headerRowIndex, onClose }) {
+function RawFilePreview({ rawLines, headerRowIndex, onClose, lineNumberOffset = 0, title = 'Raw file', note = null }) {
   const [pos,  setPos]  = useState({ x: Math.max(0, window.innerWidth - 560), y: 80 })
   const [size, setSize] = useState({ w: 520, h: 320 })
   const [dragState, setDragState] = useState(null) // null | 'move' | 'resize'
@@ -154,9 +188,9 @@ function RawFilePreview({ rawLines, headerRowIndex, onClose }) {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 12, color: 'var(--muted)' }}>⠿</span>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>Raw file</span>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{title}</span>
           <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-            header on line {headerRowIndex + 1} · drag to move · resize ↘
+            {headerRowIndex >= 0 ? `header on line ${headerRowIndex + 1} · ` : ''}drag to move · resize ↘
           </span>
         </div>
         <button
@@ -167,6 +201,17 @@ function RawFilePreview({ rawLines, headerRowIndex, onClose }) {
       </div>
 
       {/* Scrollable content */}
+      {note && (
+        <div style={{
+          padding: '8px 12px',
+          fontSize: 12,
+          color: '#f59e0b',
+          background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
+          borderBottom: '1px solid var(--border)',
+        }}>
+          {note}
+        </div>
+      )}
       <div style={{
         fontFamily: 'monospace', fontSize: 12,
         overflowY: 'auto', overflowX: 'auto',
@@ -174,9 +219,10 @@ function RawFilePreview({ rawLines, headerRowIndex, onClose }) {
         borderRadius: '0 0 10px 10px',
       }}>
         {rawLines.map((line, i) => {
-          const isHeader = i === headerRowIndex
-          const isData   = i > headerRowIndex && i <= headerRowIndex + 4
-          const dimmed   = !isHeader && !isData && i > headerRowIndex
+          const actualLineIndex = lineNumberOffset + i
+          const isHeader = actualLineIndex === headerRowIndex
+          const isData   = actualLineIndex > headerRowIndex && actualLineIndex <= headerRowIndex + 4
+          const dimmed   = !isHeader && !isData && actualLineIndex > headerRowIndex
           return (
             <div key={i} style={{
               display: 'flex', alignItems: 'baseline',
@@ -184,7 +230,7 @@ function RawFilePreview({ rawLines, headerRowIndex, onClose }) {
               borderBottom: '1px solid var(--border)',
               opacity: dimmed ? 0.25 : 1,
             }}>
-              <span style={{ minWidth: 32, padding: '3px 6px', textAlign: 'right', flexShrink: 0, fontSize: 10, color: 'var(--muted)', borderRight: '1px solid var(--border)', background: 'var(--surface2)', fontWeight: isHeader ? 600 : 400 }}>{i + 1}</span>
+              <span style={{ minWidth: 32, padding: '3px 6px', textAlign: 'right', flexShrink: 0, fontSize: 10, color: 'var(--muted)', borderRight: '1px solid var(--border)', background: 'var(--surface2)', fontWeight: isHeader ? 600 : 400 }}>{actualLineIndex + 1}</span>
               <span style={{ padding: '3px 10px', whiteSpace: 'pre', color: 'var(--text)', fontWeight: isHeader ? 600 : 400 }}>{line || ' '}</span>
               {isHeader && <span style={{ marginLeft: 'auto', padding: '3px 8px', flexShrink: 0, fontSize: 10, color: 'var(--accent2)', fontFamily: 'sans-serif', fontWeight: 600 }}>← header</span>}
             </div>
@@ -213,7 +259,7 @@ function RawFilePreview({ rawLines, headerRowIndex, onClose }) {
 //   Closed (account mode): "AccountName ···mask"
 //   Open list:             plain "AccountName" and plain "HeaderName" (no prefix)
 
-function AccountHandlingPicker({ headers, accounts, colAccount, accountId, isRequired, onChange }) {
+function AccountHandlingPicker({ headers, accounts, colAccount, accountId, singleAccountNew, isRequired, onChange }) {
   const [open, setOpen]   = useState(false)
   const wrapRef           = useRef(null)
   const listRef           = useRef(null)
@@ -250,6 +296,13 @@ function AccountHandlingPicker({ headers, accounts, colAccount, accountId, isReq
   } else if (selectedAccount) {
     closedLabel = (
       <span>{selectedAccount.name}{selectedAccount.mask ? ` ···${selectedAccount.mask}` : ''}</span>
+    )
+  } else if (singleAccountNew?.enabled) {
+    closedLabel = (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, letterSpacing: '0.03em' }}>＋ New</span>
+        <span>{singleAccountNew.name?.trim() || 'Create new account'}</span>
+      </span>
     )
   }
 
@@ -302,8 +355,8 @@ function AccountHandlingPicker({ headers, accounts, colAccount, accountId, isReq
           <div ref={listRef} style={listStyle}>
             {/* Clear option */}
             <div
-              style={itemStyle(!colAccount && !accountId)}
-              onMouseDown={e => { e.preventDefault(); onChange({ acct: '' }); setOpen(false) }}
+              style={itemStyle(!colAccount && !accountId && !singleAccountNew?.enabled)}
+              onMouseDown={e => { e.preventDefault(); onChange({ acct: '', createNew: false }); setOpen(false) }}
             >
               <span style={{ color: 'var(--muted)' }}>— Select account or column —</span>
             </div>
@@ -316,7 +369,7 @@ function AccountHandlingPicker({ headers, accounts, colAccount, accountId, isReq
                   <div
                     key={h}
                     style={itemStyle(colAccount === h)}
-                    onMouseDown={e => { e.preventDefault(); onChange({ col: h }); setOpen(false) }}
+                    onMouseDown={e => { e.preventDefault(); onChange({ col: h, createNew: false }); setOpen(false) }}
                   >
                     <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, flexShrink: 0 }}>↔</span>
                     <span>{h}</span>
@@ -334,12 +387,20 @@ function AccountHandlingPicker({ headers, accounts, colAccount, accountId, isReq
                   <div
                     key={a.id}
                     style={itemStyle(accountId === a.id)}
-                    onMouseDown={e => { e.preventDefault(); onChange({ acct: a.id }); setOpen(false) }}
+                    onMouseDown={e => { e.preventDefault(); onChange({ acct: a.id, createNew: false }); setOpen(false) }}
                   >
                     <span style={{ flex: 1 }}>{a.name}{a.mask ? ` ···${a.mask}` : ''}</span>
                     {accountId === a.id && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
                   </div>
                 ))}
+                <div
+                  style={itemStyle(!!singleAccountNew?.enabled)}
+                  onMouseDown={e => { e.preventDefault(); onChange({ acct: '', createNew: true }); setOpen(false) }}
+                >
+                  <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, flexShrink: 0 }}>＋</span>
+                  <span style={{ flex: 1 }}>Create new account…</span>
+                  {singleAccountNew?.enabled && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+                </div>
               </>
             )}
           </div>
@@ -389,6 +450,7 @@ function ImportTab() {
   const [preview, setPreview]       = useState(null)
   const [profiles, setProfiles]     = useState([])
   const [accounts, setAccounts]     = useState([])
+  const [categories, setCategories] = useState([])
   const [loading, setLoading]       = useState(false)
   const [batches, setBatches]       = useState([])
   const [undoTarget, setUndoTarget] = useState(null)
@@ -408,9 +470,14 @@ function ImportTab() {
   const [colCredit,  setColCredit]  = useState(null)
   const [colDir,     setColDir]     = useState(null)
   const [colDesc,    setColDesc]    = useState(null)
+  const [colCategory,setColCategory]= useState(null)
   const [colNotes,   setColNotes]   = useState(null)
   const [colAccount, setColAccount] = useState(null)
+  const [singleAccountNew, setSingleAccountNew] = useState({ enabled: false, name: '', type: 'depository' })
   const [accountMap, setAccountMap] = useState({})
+  const [categoryAssignments, setCategoryAssignments] = useState({})
+  const [categoryMappingRows, setCategoryMappingRows] = useState([])
+  const [categoryMappingSummary, setCategoryMappingSummary] = useState(null)
   const [importResult,      setImportResult]      = useState(null)
   const [dupAccountWarning, setDupAccountWarning] = useState([])
   const [showRaw,           setShowRaw]           = useState(false)
@@ -422,6 +489,7 @@ function ImportTab() {
   useEffect(() => {
     api.getImportProfiles().then(setProfiles)
     api.getAccounts().then(setAccounts)
+    api.getCategories().then(setCategories)
     api.listBatches().then(setBatches)
   }, [])
 
@@ -429,6 +497,8 @@ function ImportTab() {
     if (!colAccount || !preview?.column_distinct_values) return []
     return preview.column_distinct_values[colAccount] || []
   }, [colAccount, preview])
+  const categoryGroups = useMemo(() => categories.filter(c => !c.parent_id), [categories])
+  const leafCategories = useMemo(() => categories.filter(c => c.parent_id), [categories])
 
   useEffect(() => {
     setAccountMap(prev => {
@@ -449,6 +519,22 @@ function ImportTab() {
       return next
     })
   }, [distinctAccountValues, accounts])
+
+  const hasImportWorkToSave = !!(
+    colDate || colAmount || colDebit || colCredit || colDir || colDesc || colCategory || colNotes ||
+    colAccount || accountId || singleAccountNew.enabled || Object.keys(accountMap).length > 0 ||
+    Object.keys(categoryAssignments).length > 0 || skipRows > 0 || dateFormat !== '%m/%d/%Y' ||
+    amtConv !== 'single_signed' || !applyCat
+  )
+
+  useEffect(() => {
+    if (!preview || !hasImportWorkToSave) return
+    saveImportDraft(preview, buildImportSnapshot())
+  }, [
+    preview, hasImportWorkToSave, accountId, dateFormat, amtConv, skipRows, applyCat,
+    colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colAccount,
+    singleAccountNew, accountMap, categoryAssignments,
+  ])
 
   function computePreviewRows() {
     if (!preview?.rows) return []
@@ -478,6 +564,7 @@ function ImportTab() {
         i,
         rawDate:  colDate    ? String(row[colDate]    ?? '').trim() : null,
         rawDesc:  colDesc    ? String(row[colDesc]    ?? '').trim() : null,
+        rawCat:   colCategory ? String(row[colCategory] ?? '').trim() : null,
         rawAcct:  colAccount ? String(row[colAccount] ?? '').trim() : null,
         rawAmountStr,
         amount,
@@ -485,18 +572,62 @@ function ImportTab() {
     })
   }
   const previewRows = computePreviewRows()
+  const detectedHeaderOffset = preview?.header_row_index ?? 0
+  const displayedSkipRows = skipRows + detectedHeaderOffset
+  const showTrailingDataWarning = !!importResult?.trailing_non_transaction_suspected
+  const rawViewerLines = showTrailingDataWarning
+    ? (preview?.raw_tail_lines?.length ? preview.raw_tail_lines : preview?.raw_lines)
+    : preview?.raw_lines
+  const rawViewerOffset = showTrailingDataWarning && preview?.raw_tail_lines?.length
+    ? (preview.raw_tail_start_line ?? 0)
+    : 0
+  const rawViewerTitle = showTrailingDataWarning ? 'File tail' : 'Raw file'
+  const rawViewerNote = showTrailingDataWarning
+    ? (importResult?.trailing_non_transaction_message || 'There appears to be non-transaction data at the end of the file. Please verify the file tail.')
+    : null
+
+  function buildImportSnapshot() {
+    const cm = getColumnMap()
+    if (Object.keys(categoryAssignments).length > 0) cm.category_assignments = categoryAssignments
+    if (!colAccount && singleAccountNew.enabled && singleAccountNew.name.trim()) {
+      return {
+        column_map: { ...cm, single_account_new: { name: singleAccountNew.name.trim(), type: singleAccountNew.type || 'depository' } },
+        account_id: null,
+        single_account_new: { name: singleAccountNew.name.trim(), type: singleAccountNew.type || 'depository' },
+        date_format: dateFormat,
+        amount_convention: amtConv,
+        skip_rows: skipRows,
+        apply_categorization: applyCat,
+      }
+    }
+    return {
+      column_map: cm,
+      account_id: (!colAccount && accountId) ? accountId : null,
+      date_format: dateFormat,
+      amount_convention: amtConv,
+      skip_rows: skipRows,
+      apply_categorization: applyCat,
+    }
+  }
 
   function applyProfile(profileId) {
     setSelectedProfile(profileId)
     const p = profiles.find(x => x.id === profileId)
     if (!p) return
     const cm = p.column_map || {}
-    setAccountId(p.account_id || ''); setDateFormat(p.date_format || '%m/%d/%Y')
+    const existingSingleAccount = cm.single_account_new?.name
+      ? accounts.find(a => a.name.toLowerCase() === cm.single_account_new.name.toLowerCase())
+      : null
+    setAccountId(existingSingleAccount ? existingSingleAccount.id : (p.account_id || '')); setDateFormat(p.date_format || '%m/%d/%Y')
     setAmtConv(p.amount_convention || 'single_signed'); setSkipRows(p.skip_rows || 0)
     setApplyCat(!!p.apply_categorization)
     setColDate(cm.date || null); setColAmount(cm.amount || null); setColDebit(cm.debit || null)
     setColCredit(cm.credit || null); setColDir(cm.direction || null)
-    setColDesc(cm.description || null); setColNotes(cm.notes || null)
+    setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null)
+    setCategoryAssignments(cm.category_assignments || {})
+    setSingleAccountNew(cm.single_account_new && !existingSingleAccount
+      ? { enabled: true, name: cm.single_account_new.name || '', type: cm.single_account_new.type || 'depository' }
+      : { enabled: false, name: '', type: 'depository' })
     const newColAccount = cm.account || null
     setAccountMap({})  // always reset before restoring
     setColAccount(newColAccount)
@@ -540,12 +671,19 @@ function ImportTab() {
   function applySnapshot(snap) {
     if (!snap) return
     const cm = snap.column_map || {}
+    const existingSingleAccount = snap.single_account_new?.name
+      ? accounts.find(a => a.name.toLowerCase() === snap.single_account_new.name.toLowerCase())
+      : null
     setDateFormat(snap.date_format || '%m/%d/%Y'); setAmtConv(snap.amount_convention || 'single_signed')
     setSkipRows(snap.skip_rows || 0); setApplyCat(snap.apply_categorization !== false)
     setColDate(cm.date || null); setColAmount(cm.amount || null); setColDebit(cm.debit || null)
     setColCredit(cm.credit || null); setColDir(cm.direction || null)
-    setColDesc(cm.description || null); setColNotes(cm.notes || null); setColAccount(cm.account || null)
-    setAccountId(snap.account_id || '')
+    setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColAccount(cm.account || null)
+    setCategoryAssignments((snap.category_assignments || cm.category_assignments || {}))
+    setAccountId(existingSingleAccount ? existingSingleAccount.id : (snap.account_id || ''))
+    setSingleAccountNew(snap.single_account_new && !existingSingleAccount
+      ? { enabled: true, name: snap.single_account_new.name || '', type: snap.single_account_new.type || 'depository' }
+      : { enabled: false, name: '', type: 'depository' })
     if (snap.account_map || snap.skip_accounts) {
       const restored = {}
       const skips = new Set(snap.skip_accounts || [])
@@ -575,8 +713,16 @@ function ImportTab() {
     try {
       const result = await api.previewCsv(file)
       setPreview({ ...result, file }); setDupAccountWarning([]); setAccountMap({})
+      setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
+      setCategoryAssignments({})
+      setCategoryMappingRows([])
+      setCategoryMappingSummary(null)
       if (result.suggested_profile_id) applyProfile(result.suggested_profile_id)
       else if (result.config_snapshot) applySnapshot(result.config_snapshot)
+      else {
+        const savedDraft = loadSavedImportDraft(result)
+        if (savedDraft) applySnapshot(savedDraft)
+      }
       const prevImported = (result.previous_batch_accounts || []).filter(a => !a.was_skipped)
       if (prevImported.length > 0) setDupAccountWarning(prevImported)
       // If header wasn't on the first line, open advanced + raw file so user can see why
@@ -595,7 +741,7 @@ function ImportTab() {
 
   function getColumnMap() {
     return { date: colDate, amount: colAmount, debit: colDebit, credit: colCredit,
-             direction: colDir, description: colDesc, notes: colNotes, account: colAccount }
+             direction: colDir, description: colDesc, category: colCategory, notes: colNotes, account: colAccount }
   }
 
   function canImport() {
@@ -614,6 +760,12 @@ function ImportTab() {
         }
         return !!m.accountId
       })
+    }
+    if (singleAccountNew.enabled) {
+      const name = singleAccountNew.name.trim()
+      if (!name) return false
+      if (accounts.some(a => a.name.toLowerCase() === name.toLowerCase())) return false
+      return true
     }
     return !!accountId
   }
@@ -634,27 +786,53 @@ function ImportTab() {
           else if (m.createNew) newAccounts.push({ csv_value: v, name: m.newName, type: m.newType })
           else if (m.accountId) finalAccountMap[v] = m.accountId
         }
+      } else if (singleAccountNew.enabled) {
+        newAccounts = [{ csv_value: '__single_account__', name: singleAccountNew.name.trim(), type: singleAccountNew.type || 'depository' }]
       }
+      const columnMap = getColumnMap()
+      if (Object.keys(categoryAssignments).length > 0) columnMap.category_assignments = categoryAssignments
       const result = await api.runImport(preview.file, {
         profile_id:           selectedProfile || null,
         filename:             preview.filename,
-        account_id:           colAccount ? null : accountId,
+        account_id:           colAccount || singleAccountNew.enabled ? null : accountId,
+        single_account_new:   (!colAccount && singleAccountNew.enabled)
+          ? { name: singleAccountNew.name.trim(), type: singleAccountNew.type || 'depository' }
+          : null,
         account_map:          finalAccountMap,
         skip_accounts:        skipAccounts,
         new_accounts:         newAccounts?.length ? newAccounts : null,
         date_format:          dateFormat,
         amount_convention:    amtConv,
-        column_map:           getColumnMap(),
+        column_map:           columnMap,
         skip_rows:            skipRows,
         apply_categorization: applyCat,
       })
-      setImportResult(result); setStage('done')
+      setImportResult(result)
+      if (result.trailing_non_transaction_suspected) setShowRaw(true)
       refreshTaskBadge()
       const refreshedAccounts = await api.getAccounts()
       setAccounts(refreshedAccounts)
       api.listBatches().then(setBatches)
       if (selectedProfile) {
         await autoSaveProfile(refreshedAccounts).catch(() => {})
+      }
+      if (result.batch_id && colCategory) {
+        const mappingData = await api.getBatchCategoryMappings(result.batch_id)
+        if ((mappingData.values || []).length > 0 && mappingData.values.some(v => !v.saved_category_id)) {
+          setCategoryMappingRows((mappingData.values || []).map(v => ({
+            rawValue: v.raw_value,
+            rowCount: v.row_count,
+            accountId: v.saved_category_id || v.suggested_category_id || '',
+            createNew: false,
+            newName: v.raw_value,
+            parentId: '',
+          })))
+          setStage('category-mapping')
+        } else {
+          setStage('done')
+        }
+      } else {
+        setStage('done')
       }
     } catch (e) { alert('Import failed: ' + e.message) }
     finally { setLoading(false) }
@@ -663,6 +841,13 @@ function ImportTab() {
   // Build the profile body from current mapping state — shared by saveProfile and auto-save
   function buildProfileBody(name) {
     const cm = getColumnMap()
+    if (Object.keys(categoryAssignments).length > 0) cm.category_assignments = categoryAssignments
+    if (!colAccount && singleAccountNew.enabled && singleAccountNew.name.trim()) {
+      cm.single_account_new = {
+        name: singleAccountNew.name.trim(),
+        type: singleAccountNew.type || 'depository',
+      }
+    }
     if (colAccount && Object.keys(accountMap).length > 0) {
       const assignments = {}, skips = [], newAccts = {}
       for (const [csvVal, m] of Object.entries(accountMap)) {
@@ -683,7 +868,7 @@ function ImportTab() {
       filename_pattern:     preview.filename.replace(/[_\-\d.]+\.(csv)$/i, '').trim() || null,
       header_fingerprint:   preview.header_fingerprint || null,
       column_map:           cm,
-      account_id:           (!colAccount && accountId) ? accountId : null,
+      account_id:           (!colAccount && !singleAccountNew.enabled && accountId) ? accountId : null,
       date_format:          dateFormat,
       amount_convention:    amtConv,
       skip_rows:            skipRows,
@@ -731,6 +916,13 @@ function ImportTab() {
     const savedMap = accountMap
     // Build body using resolved map directly
     const cm = getColumnMap()
+    if (Object.keys(categoryAssignments).length > 0) cm.category_assignments = categoryAssignments
+    if (!colAccount && singleAccountNew.enabled && singleAccountNew.name.trim()) {
+      cm.single_account_new = {
+        name: singleAccountNew.name.trim(),
+        type: singleAccountNew.type || 'depository',
+      }
+    }
     const assignments = {}, skips = [], newAccts = {}
     for (const [csvVal, m] of Object.entries(resolvedMap)) {
       if (m.skip) {
@@ -750,7 +942,7 @@ function ImportTab() {
       filename_pattern:     preview.filename.replace(/[_\-\d.]+\.(csv)$/i, '').trim() || null,
       header_fingerprint:   preview.header_fingerprint || null,
       column_map:           cm,
-      account_id:           (!colAccount && accountId) ? accountId : null,
+      account_id:           (!colAccount && !singleAccountNew.enabled && accountId) ? accountId : null,
       date_format:          dateFormat,
       amount_convention:    amtConv,
       skip_rows:            skipRows,
@@ -766,6 +958,8 @@ function ImportTab() {
   function resetImport() {
     setStage('upload'); setPreview(null); setImportResult(null)
     setDupAccountWarning([]); setAccountMap({})
+    setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
+    setCategoryAssignments({}); setCategoryMappingRows([]); setCategoryMappingSummary(null)
     setShowRaw(false); setShowAdvanced(false); setShowSaveProfile(false)
     setSaveProfileName(''); setPrevBatchWarn(false)
   }
@@ -781,8 +975,56 @@ function ImportTab() {
     refreshTaskBadge()
   }
 
+  function canApplyCategoryMappings() {
+    return categoryMappingRows.every(row => {
+      if (row.createNew) return !!row.newName.trim() && !!row.parentId
+      return true
+    })
+  }
+
+  async function applyImportedCategoryMappings() {
+    if (!importResult?.batch_id || !canApplyCategoryMappings()) return
+    setLoading(true)
+    try {
+      const assignments = {}
+      for (const row of categoryMappingRows) {
+        if (row.createNew) {
+          const created = await api.createCategory({
+            parent_id: row.parentId,
+            name: row.newName.trim(),
+          })
+          assignments[row.rawValue] = created.id
+        } else if (row.accountId) {
+          assignments[row.rawValue] = row.accountId
+        }
+      }
+      const result = await api.applyBatchCategoryMappings(importResult.batch_id, assignments)
+      setCategoryAssignments(prev => ({ ...prev, ...assignments }))
+      setCategoryMappingSummary(result)
+      setCategories(await api.getCategories())
+      if (selectedProfile) api.getImportProfiles().then(setProfiles)
+      setImportResult(prev => ({ ...prev, category_mapping_result: result }))
+      setStage('done')
+    } catch (e) {
+      alert('Failed to apply imported category mappings: ' + e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <div>
+      {showRaw && preview && (
+        <RawFilePreview
+          rawLines={rawViewerLines}
+          headerRowIndex={preview.header_row_index ?? 0}
+          lineNumberOffset={rawViewerOffset}
+          title={rawViewerTitle}
+          note={rawViewerNote}
+          onClose={() => setShowRaw(false)}
+        />
+      )}
+
       {stage === 'upload' && (
         <>
           <div ref={dropRef} onDragOver={e => e.preventDefault()} onDrop={handleDrop}
@@ -802,16 +1044,6 @@ function ImportTab() {
 
       {stage === 'mapping' && preview && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-
-          {/* Floating raw file panel (rendered outside flow so it overlaps the form) */}
-          {showRaw && (
-            <RawFilePreview
-              rawLines={preview.raw_lines}
-              headerRowIndex={preview.header_row_index ?? 0}
-              onClose={() => setShowRaw(false)}
-            />
-          )}
-
           {dupAccountWarning.length > 0 && (
             <div style={{ background: 'color-mix(in srgb, #f59e0b 12%, var(--surface2))', border: '1px solid #f59e0b', borderRadius: 8, padding: '12px 16px' }}>
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>⚠️ Accounts already imported from this file</div>
@@ -911,8 +1143,11 @@ function ImportTab() {
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
                   Skip
-                  <input type="number" min={0} max={10} value={skipRows}
-                    onChange={e => setSkipRows(parseInt(e.target.value) || 0)}
+                  <input type="number" min={0} max={10} value={displayedSkipRows}
+                    onChange={e => {
+                      const next = parseInt(e.target.value) || 0
+                      setSkipRows(Math.max(0, next - detectedHeaderOffset))
+                    }}
                     style={{
                       background: 'var(--surface)', color: 'var(--text)',
                       border: '1px solid var(--border)', borderRadius: 6,
@@ -921,10 +1156,15 @@ function ImportTab() {
                   />
                   header rows
                 </label>
+                {detectedHeaderOffset > 0 && (
+                  <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                    Includes {detectedHeaderOffset} auto-detected row{detectedHeaderOffset !== 1 ? 's' : ''} before the header.
+                  </div>
+                )}
               </div>
             )}
 
-            {/* 3. Column mapping — row 1: Date | Amount | Notes, row 2: Description | Account handling */}
+            {/* 3. Column mapping — row 1: Date | Amount | Category, row 2: Description | Account handling */}
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Column mapping</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
               {/* Row 1 */}
@@ -934,7 +1174,7 @@ function ImportTab() {
               ) : (
                 <ColSelect label="Amount" headers={preview.headers} value={colAmount} onChange={setColAmount} required />
               )}
-              <ColSelect label="Notes" headers={preview.headers} value={colNotes} onChange={setColNotes} />
+              <ColSelect label="Category" headers={preview.headers} value={colCategory} onChange={setColCategory} />
 
               {/* Extra cells for two_column and single_unsigned — push into row 2 start */}
               {amtConv === 'two_column' && (
@@ -943,6 +1183,7 @@ function ImportTab() {
               {amtConv === 'single_unsigned' && (
                 <ColSelect label="Direction column" headers={preview.headers} value={colDir} onChange={setColDir} />
               )}
+              <ColSelect label="Notes" headers={preview.headers} value={colNotes} onChange={setColNotes} />
 
               {/* Row 2 (or continues from row 1 overflow) */}
               <ColSelect label="Description" headers={preview.headers} value={colDesc} onChange={setColDesc} required />
@@ -951,13 +1192,63 @@ function ImportTab() {
                 accounts={accounts}
                 colAccount={colAccount}
                 accountId={accountId}
-                isRequired={!colAccount && !accountId}
-                onChange={({ col, acct }) => {
-                  if (col !== undefined) { setColAccount(col); setAccountMap({}); setAccountId('') }
-                  else                  { setColAccount(null); setAccountMap({}); setAccountId(acct) }
+                singleAccountNew={singleAccountNew}
+                isRequired={!colAccount && !accountId && !singleAccountNew.enabled}
+                onChange={({ col, acct, createNew }) => {
+                  if (col !== undefined) {
+                    setColAccount(col)
+                    setAccountMap({})
+                    setAccountId('')
+                    setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
+                  } else {
+                    setColAccount(null)
+                    setAccountMap({})
+                    setAccountId(acct)
+                    setSingleAccountNew(createNew
+                      ? { enabled: true, name: preview.filename.replace(/[_\-\d.]+\.(csv)$/i, '').trim() || '', type: 'depository' }
+                      : { enabled: false, name: '', type: 'depository' })
+                  }
                 }}
               />
             </div>
+            {!colAccount && singleAccountNew.enabled && (
+              <div style={{
+                marginTop: -2, marginBottom: 14, padding: '10px 12px',
+                background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8,
+                display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center',
+              }}>
+                <input
+                  value={singleAccountNew.name}
+                  onChange={e => setSingleAccountNew(prev => ({ ...prev, name: e.target.value }))}
+                  placeholder="New account name"
+                  style={{
+                    flex: 1, minWidth: 180, background: 'var(--surface)', color: 'var(--text)',
+                    border: `1px solid ${accounts.some(a => a.name.toLowerCase() === singleAccountNew.name.trim().toLowerCase()) ? 'var(--danger)' : 'var(--accent)'}`,
+                    borderRadius: 6, padding: '5px 8px', fontSize: 13, outline: 'none',
+                  }}
+                />
+                <select
+                  value={singleAccountNew.type}
+                  onChange={e => setSingleAccountNew(prev => ({ ...prev, type: e.target.value }))}
+                  style={{
+                    background: 'var(--surface)', color: 'var(--text)',
+                    border: '1px solid var(--border)', borderRadius: 6,
+                    padding: '5px 8px', fontSize: 12,
+                  }}
+                >
+                  <option value="depository">Checking</option>
+                  <option value="credit">Credit</option>
+                  <option value="investment">Invest.</option>
+                  <option value="loan">Loan</option>
+                  <option value="other">Other</option>
+                </select>
+                {accounts.some(a => a.name.toLowerCase() === singleAccountNew.name.trim().toLowerCase()) && (
+                  <div style={{ width: '100%', fontSize: 11, color: 'var(--danger)' }}>
+                    Account name already exists. Select it from the list instead.
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Apply categorization + Save profile */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
@@ -969,9 +1260,12 @@ function ImportTab() {
                 <button
                   onClick={() => { setSaveProfileName(''); setShowSaveProfile(v => !v) }}
                   style={{
-                    background: 'none', border: '1px solid var(--border)',
+                    background: hasImportWorkToSave ? 'color-mix(in srgb, var(--accent) 16%, var(--surface2))' : 'none',
+                    border: `1px solid ${hasImportWorkToSave ? 'var(--accent)' : 'var(--border)'}`,
                     borderRadius: 6, padding: '5px 12px', fontSize: 12,
-                    cursor: 'pointer', color: 'var(--muted)',
+                    cursor: 'pointer', color: hasImportWorkToSave ? 'var(--accent2)' : 'var(--muted)',
+                    fontWeight: hasImportWorkToSave ? 600 : 400,
+                    boxShadow: hasImportWorkToSave ? '0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent)' : 'none',
                   }}
                 >
                   ＋ Create profile
@@ -1135,7 +1429,8 @@ function ImportTab() {
             <div style={{ padding: '10px 16px', fontSize: 13, fontWeight: 600, borderBottom: '1px solid var(--border)' }}>
               Data preview (first {previewRows.length} rows)
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: colAccount ? '110px 1fr 130px 100px' : '110px 1fr 100px', padding: '7px 16px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: `${colCategory ? '140px ' : ''}110px 1fr${colAccount ? ' 130px' : ''} 100px`, padding: '7px 16px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)' }}>
+              {colCategory && <span>Category</span>}
               <span>Date</span><span>Description</span>
               {colAccount && <span>Account</span>}
               <span style={{ textAlign: 'right' }}>Amount</span>
@@ -1143,7 +1438,8 @@ function ImportTab() {
             {previewRows.length === 0 ? (
               <div style={{ padding: '16px', fontSize: 13, color: 'var(--muted)', textAlign: 'center' }}>Map at least the date and description columns to see a preview</div>
             ) : previewRows.map(r => (
-              <div key={r.i} style={{ display: 'grid', gridTemplateColumns: colAccount ? '110px 1fr 130px 100px' : '110px 1fr 100px', padding: '8px 16px', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
+              <div key={r.i} style={{ display: 'grid', gridTemplateColumns: `${colCategory ? '140px ' : ''}110px 1fr${colAccount ? ' 130px' : ''} 100px`, padding: '8px 16px', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
+                {colCategory && <span style={{ fontSize: 12, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.rawCat || <span style={{ opacity: 0.4 }}>—</span>}</span>}
                 <span style={{ color: r.rawDate ? 'var(--text)' : 'var(--muted)', fontSize: 12 }}>{r.rawDate || <span style={{ opacity: 0.4 }}>—</span>}</span>
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.rawDesc || <span style={{ color: 'var(--muted)', opacity: 0.4 }}>—</span>}</span>
                 {colAccount && <span style={{ fontSize: 12, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.rawAcct || <span style={{ opacity: 0.4 }}>—</span>}</span>}
@@ -1164,6 +1460,94 @@ function ImportTab() {
               {loading ? 'Importing…' : `Import ${Math.max(0, preview.total_rows - skipRows)} rows`}
             </Button>
             <Button variant="ghost" onClick={resetImport}>Cancel</Button>
+          </div>
+        </div>
+      )}
+
+      {stage === 'category-mapping' && importResult && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <Card>
+            <div style={{ fontSize: 18, marginBottom: 8 }}>Map imported categories</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14 }}>
+              Review category values found in this CSV. These mappings will be reused for this import source next time.
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {categoryMappingRows.map((row, idx) => (
+                <div key={row.rawValue} style={{
+                  padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8,
+                  background: 'var(--surface2)',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{row.rawValue}</div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)' }}>{row.rowCount} row{row.rowCount !== 1 ? 's' : ''}</div>
+                  </div>
+                  {!row.createNew ? (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <select
+                        value={row.accountId}
+                        onChange={e => setCategoryMappingRows(prev => prev.map((item, i) => i === idx ? { ...item, accountId: e.target.value } : item))}
+                        style={{
+                          flex: 1, minWidth: 220, background: 'var(--surface)', color: 'var(--text)',
+                          border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', fontSize: 13,
+                        }}
+                      >
+                        <option value="">— Select category —</option>
+                        {leafCategories.map(cat => {
+                          const group = categories.find(c => c.id === cat.parent_id)
+                          return <option key={cat.id} value={cat.id}>{group ? `${group.name} / ` : ''}{cat.name}</option>
+                        })}
+                      </select>
+                      <button
+                        onClick={() => setCategoryMappingRows(prev => prev.map((item, i) => i === idx ? { ...item, createNew: true, parentId: categoryGroups[0]?.id || '' } : item))}
+                        style={{
+                          background: 'none', border: '1px solid var(--border)', borderRadius: 6,
+                          color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, padding: '5px 8px',
+                        }}
+                      >
+                        + New category
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input
+                        value={row.newName}
+                        onChange={e => setCategoryMappingRows(prev => prev.map((item, i) => i === idx ? { ...item, newName: e.target.value } : item))}
+                        placeholder="New category name"
+                        style={{
+                          flex: 1, minWidth: 180, background: 'var(--surface)', color: 'var(--text)',
+                          border: '1px solid var(--accent)', borderRadius: 6, padding: '5px 8px', fontSize: 13,
+                        }}
+                      />
+                      <select
+                        value={row.parentId}
+                        onChange={e => setCategoryMappingRows(prev => prev.map((item, i) => i === idx ? { ...item, parentId: e.target.value } : item))}
+                        style={{
+                          minWidth: 180, background: 'var(--surface)', color: 'var(--text)',
+                          border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', fontSize: 12,
+                        }}
+                      >
+                        <option value="">— Select group —</option>
+                        {categoryGroups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}
+                      </select>
+                      <button
+                        onClick={() => setCategoryMappingRows(prev => prev.map((item, i) => i === idx ? { ...item, createNew: false, accountId: '' } : item))}
+                        style={{
+                          background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 16, padding: '2px 4px',
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Card>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <Button onClick={applyImportedCategoryMappings} disabled={loading || !canApplyCategoryMappings()}>
+              {loading ? 'Applying…' : 'Apply category mappings'}
+            </Button>
+            <Button variant="ghost" onClick={() => setStage('done')}>Skip for now</Button>
           </div>
         </div>
       )}
@@ -1192,6 +1576,23 @@ function ImportTab() {
               Profile updated with current account mappings.
             </div>
           )}
+          {categoryMappingSummary && (
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
+              {categoryMappingSummary.applied_count} imported categor{categoryMappingSummary.applied_count === 1 ? 'y was' : 'ies were'} applied.
+              {categoryMappingSummary.categorized_by_rules > 0 && ` ${categoryMappingSummary.categorized_by_rules} remaining transaction${categoryMappingSummary.categorized_by_rules === 1 ? '' : 's'} were categorized by rules.`}
+            </div>
+          )}
+          {importResult.trailing_non_transaction_suspected && (
+            <div style={{
+              fontSize: 13, marginBottom: 16, padding: '8px 12px',
+              background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
+              border: '1px solid #f59e0b',
+              borderRadius: 8,
+            }}>
+              {importResult.trailing_non_transaction_message || 'There appears to be non-transaction data at the end of the file.'}{' '}
+              The file viewer has been opened so you can check the tail of the CSV.
+            </div>
+          )}
           {importResult.new_accounts_created > 0 && (
             <div style={{
               fontSize: 13, marginBottom: 16, padding: '8px 12px',
@@ -1200,15 +1601,11 @@ function ImportTab() {
               borderRadius: 8,
             }}>
               {importResult.new_accounts_created} new account{importResult.new_accounts_created > 1 ? 's were' : ' was'} created.
-              {importResult.owner_inferred
-                ? ' Owner was inferred from other accounts in this import.'
-                : ' These accounts have no owner assigned — visit '}
-              {!importResult.owner_inferred && (
-                <Link to="/settings" style={{ color: 'var(--accent2)', textDecoration: 'none' }}>
-                  Settings → Account ownership
-                </Link>
-              )}
-              {!importResult.owner_inferred && ' to assign one.'}
+              {' '}These accounts have no owner assigned — visit{' '}
+              <Link to="/settings" style={{ color: 'var(--accent2)', textDecoration: 'none' }}>
+                Settings → Account ownership
+              </Link>
+              {' '}to assign one.
             </div>
           )}
           {importResult.errors?.length > 0 && (
@@ -1324,11 +1721,6 @@ function ImportTab() {
 function ExportTab() {
   const { filters } = useFilters()
   const [selectedCols, setSelectedCols] = useState(new Set(DEFAULT_EXPORT_COLS))
-  const [restoreFile,  setRestoreFile]  = useState(null)
-  const [credsFile,    setCredsFile]    = useState(null)
-  const [restoring,    setRestoring]    = useState(false)
-  const [restoreMsg,   setRestoreMsg]   = useState(null)
-  const [includeTxns,  setIncludeTxns]  = useState(true)
 
   function toggleCol(key) {
     setSelectedCols(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
@@ -1349,23 +1741,6 @@ function ExportTab() {
     }), '_blank')
   }
 
-  async function handleRestore(file, type) {
-    const text = await file.text()
-    let data; try { data = JSON.parse(text) } catch { alert('Invalid JSON'); return }
-    if (type === 'credentials') {
-      if (!confirm('Replace Plaid credentials?')) return
-      setRestoring(true)
-      try { const r = await api.restoreCredentials(data); setRestoreMsg(`✅ Restored ${r.restored} credential(s).`) }
-      catch (e) { setRestoreMsg(`❌ ${e.message}`) }
-      setRestoring(false); return
-    }
-    if (!confirm('REPLACE all data with this backup? This cannot be undone.')) return
-    setRestoring(true)
-    try { await api.restoreBackup(data, includeTxns); setRestoreMsg('✅ Restored. Reload the page.') }
-    catch (e) { setRestoreMsg(`❌ ${e.message}`) }
-    setRestoring(false)
-  }
-
   return (
     <div>
       <SectionTitle>Export transactions as CSV</SectionTitle>
@@ -1383,35 +1758,230 @@ function ExportTab() {
           {filters.date || filters.selections.length > 0 ? 'Active filters will be applied' : 'All transactions'}
         </span>
       </Card>
+    </div>
+  )
+}
 
+function BackupRestoreTab() {
+  const [backupRecipients, setBackupRecipients] = useState([])
+  const [restoreFile,  setRestoreFile]  = useState(null)
+  const [credsFile,    setCredsFile]    = useState(null)
+  const [restoreInspection, setRestoreInspection] = useState(null)
+  const [inspectError, setInspectError] = useState('')
+  const [inspectingRestore, setInspectingRestore] = useState(false)
+  const [privateKeyFile, setPrivateKeyFile] = useState(null)
+  const [privateKeyPassphrase, setPrivateKeyPassphrase] = useState('')
+  const [restoring,    setRestoring]    = useState(false)
+  const [restoreMsg,   setRestoreMsg]   = useState(null)
+  const [restoreSuccess, setRestoreSuccess] = useState(null)
+  const [pendingConfirm, setPendingConfirm] = useState(null)
+  const enabledRecipients = backupRecipients.filter(r => r.enabled)
+
+  useEffect(() => {
+    api.getBackupRecipients().then(setBackupRecipients).catch(() => {})
+  }, [])
+
+  function startDownload(url) {
+    window.location.assign(url)
+  }
+
+  async function handleRestoreFileChange(file) {
+    setRestoreFile(file || null)
+    setRestoreInspection(null)
+    setInspectError('')
+    setPrivateKeyFile(null)
+    setPrivateKeyPassphrase('')
+    if (!file) return
+    setInspectingRestore(true)
+    try {
+      setRestoreInspection(await api.inspectBackupFile(file))
+    } catch (e) {
+      setInspectError(e.message || 'Unable to inspect backup file')
+    } finally {
+      setInspectingRestore(false)
+    }
+  }
+
+  async function performRestore(file, type) {
+    setPendingConfirm(null)
+    if (type === 'credentials') {
+      setRestoring(true)
+      try {
+        const r = await api.restoreCredentialsFile(file)
+        setRestoreMsg(null)
+        setRestoreSuccess(`Restored ${r.restored} credential(s).`)
+      }
+      catch (e) { setRestoreMsg(`❌ ${e.message}`) }
+      setRestoring(false); return
+    }
+    setRestoring(true)
+    try {
+      const result = await api.restoreBackupFile(file, privateKeyFile, privateKeyPassphrase)
+      const counts = result.restored_counts || {}
+      const pieces = [
+        `${counts.owners ?? 0} owner${counts.owners === 1 ? '' : 's'}`,
+        `${counts.accounts ?? 0} account${counts.accounts === 1 ? '' : 's'}`,
+        `${counts.categories ?? 0} categor${counts.categories === 1 ? 'y' : 'ies'}`,
+        `${counts.transactions ?? 0} transaction${counts.transactions === 1 ? '' : 's'}`,
+      ]
+      setRestoreMsg(null)
+      setRestoreSuccess(`Restore completed. Loaded ${pieces.join(', ')}.`)
+    }
+    catch (e) { setRestoreMsg(`❌ ${e.message}`) }
+    setRestoring(false)
+  }
+
+  function requestRestore(type) {
+    if (type === 'credentials') {
+      if (!credsFile || restoring) return
+      setPendingConfirm({
+        type,
+        title: 'Restore Plaid credentials?',
+        message: 'This will replace the Plaid credentials currently stored in FinTrack.',
+        confirmLabel: 'Restore credentials',
+        variant: 'warn',
+      })
+      return
+    }
+    if (!restoreFile || restoring || inspectingRestore || inspectError || (restoreInspection?.encrypted && !privateKeyFile)) return
+    setPendingConfirm({
+      type,
+      title: 'Replace all data with this backup?',
+      message: 'This will replace accounts, categories, rules, import settings, and transactions with the selected backup.',
+      confirmLabel: 'Restore data backup',
+      variant: 'danger',
+    })
+  }
+
+  return (
+    <div>
       <SectionTitle>Backup</SectionTitle>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Data backup</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>All categories, rules, owners, accounts, transactions. No Plaid tokens.</div>
-          <a href={api.exportBackup()} download="fintrack_backup.json"><Button>⬇ Download data backup</Button></a>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+            <Button onClick={() => startDownload(api.exportBackup(false))}>Generate backup</Button>
+            <Button variant="ghost" disabled={enabledRecipients.length === 0} onClick={() => startDownload(api.exportBackup(true))}>Generate encrypted backup</Button>
+          </div>
+          {enabledRecipients.length === 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+              Add an enabled backup recipient in Settings to create encrypted backups.
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+              Encrypted backups will be readable by: {enabledRecipients.map(r => r.label).join(', ')}.
+            </div>
+          )}
         </div>
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Credentials backup</div>
-          <div style={{ fontSize: 13, marginBottom: 10, background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))', border: '1px solid #f59e0b', borderRadius: 6, padding: '8px 12px' }}>
-            ⚠️ Contains Plaid access tokens — treat like a password.
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+            <a href={api.exportCredentials()} download="fintrack_credentials.zip"><Button>Generate credentials backup</Button></a>
+            <div style={{ display: 'inline-block', fontSize: 13, background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))', border: '1px solid #f59e0b', borderRadius: 6, padding: '8px 12px' }}>
+              ⚠️ Contains Plaid access tokens — treat like a password.
+            </div>
           </div>
-          <a href={api.exportCredentials()} download="fintrack_credentials.json"><Button variant="ghost">⬇ Download credentials backup</Button></a>
         </div>
       </Card>
 
       <SectionTitle>Restore</SectionTitle>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        {restoreMsg && <div style={{ padding: '10px 14px', borderRadius: 8, fontSize: 14, background: restoreMsg.startsWith('✅') ? 'color-mix(in srgb, var(--success) 12%, var(--surface2))' : 'color-mix(in srgb, var(--danger) 12%, var(--surface2))' }}>{restoreMsg}</div>}
+        {restoreMsg && (
+          <div
+            style={{
+              padding: '10px 14px',
+              borderRadius: 8,
+              fontSize: 14,
+              background: restoreMsg.startsWith('✅')
+                ? 'color-mix(in srgb, var(--success) 12%, var(--surface2))'
+                : 'color-mix(in srgb, var(--danger) 12%, var(--surface2))',
+              border: `1px solid ${restoreMsg.startsWith('✅') ? 'color-mix(in srgb, var(--success) 35%, var(--border))' : 'color-mix(in srgb, var(--danger) 35%, var(--border))'}`,
+              display: 'flex',
+              gap: 10,
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+            }}
+          >
+            <div>{restoreMsg}</div>
+          </div>
+        )}
         <div>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Restore from data backup</div>
-          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>Replaces all existing data. Plaid credentials not affected.</div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 10, cursor: 'pointer' }}>
-            <input type="checkbox" checked={includeTxns} onChange={e => setIncludeTxns(e.target.checked)} />Include transactions
-          </label>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            <input type="file" accept=".json" onChange={e => setRestoreFile(e.target.files[0])} style={{ fontSize: 13 }} />
-            <Button variant="danger" disabled={!restoreFile || restoring} onClick={() => handleRestore(restoreFile, 'data')}>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>Replaces all existing data from the selected backup. Plaid credentials are not affected. Encrypted backups require the matching RSA private key file.</div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input type="file" accept=".json,.zip,application/json,application/zip" onChange={e => handleRestoreFileChange(e.target.files[0])} style={{ fontSize: 13 }} />
+          </div>
+          {inspectingRestore && (
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+              Inspecting backup file...
+            </div>
+          )}
+          {inspectError && (
+            <div style={{ marginTop: 10, fontSize: 13, color: 'var(--danger)' }}>
+              {inspectError}
+            </div>
+          )}
+          {restoreInspection && !inspectError && (
+            <div style={{
+              marginTop: 12,
+              padding: '12px 14px',
+              borderRadius: 8,
+              background: restoreInspection.encrypted
+                ? 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))'
+                : 'var(--surface2)',
+              border: `1px solid ${restoreInspection.encrypted ? 'color-mix(in srgb, var(--accent2) 40%, var(--border))' : 'var(--border)'}`,
+              display: 'grid',
+              gap: 8,
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>
+                {restoreInspection.encrypted ? 'Encrypted backup detected' : 'Backup file looks valid'}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                {restoreInspection.encrypted
+                  ? `${restoreInspection.cipher || 'Encrypted'} backup for ${restoreInspection.recipient_count || 0} recipient${restoreInspection.recipient_count === 1 ? '' : 's'}.`
+                  : `Readable ${restoreInspection.container === 'zip' ? 'zipped' : 'plain JSON'} backup file.`}
+              </div>
+              {restoreInspection.encrypted && Array.isArray(restoreInspection.recipients) && restoreInspection.recipients.length > 0 && (
+                <div style={{ display: 'grid', gap: 6 }}>
+                  {restoreInspection.recipients.map((recipient, idx) => (
+                    <div key={`${recipient.recipient_id || recipient.fingerprint || recipient.label}-${idx}`} style={{ fontSize: 12, color: 'var(--muted)' }}>
+                      {recipient.label}
+                      {recipient.fingerprint ? ` (${recipient.fingerprint})` : ''}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {restoreInspection.encrypted && (
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <input type="file" onChange={e => setPrivateKeyFile(e.target.files[0])} style={{ fontSize: 13 }} />
+                  <input
+                    type="password"
+                    value={privateKeyPassphrase}
+                    onChange={e => setPrivateKeyPassphrase(e.target.value)}
+                    placeholder="Private key passphrase (optional)"
+                    style={{
+                      background: 'var(--surface2)', color: 'var(--text)',
+                      border: `1px solid ${privateKeyFile ? 'var(--border)' : 'color-mix(in srgb, var(--accent2) 60%, var(--border))'}`, borderRadius: 6,
+                      padding: '6px 10px', fontSize: 13, minWidth: 220,
+                    }}
+                  />
+                </div>
+              )}
+              {restoreInspection.encrypted && !privateKeyFile && (
+                <div style={{ fontSize: 12, color: 'var(--accent2)' }}>
+                  Select a matching RSA private key file before restoring this backup.
+                </div>
+              )}
+            </div>
+          )}
+          <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-start' }}>
+            <Button
+              variant="danger"
+              disabled={!restoreFile || restoring || inspectingRestore || !!inspectError || (restoreInspection?.encrypted && !privateKeyFile)}
+              onClick={() => requestRestore('data')}
+            >
               {restoring ? 'Restoring…' : 'Restore data'}
             </Button>
           </div>
@@ -1420,13 +1990,119 @@ function ExportTab() {
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Restore Plaid credentials</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>Only needed after restoring to a new machine.</div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            <input type="file" accept=".json" onChange={e => setCredsFile(e.target.files[0])} style={{ fontSize: 13 }} />
-            <Button variant="ghost" disabled={!credsFile || restoring} onClick={() => handleRestore(credsFile, 'credentials')}>
+            <input type="file" accept=".json,.zip,application/json,application/zip" onChange={e => setCredsFile(e.target.files[0])} style={{ fontSize: 13 }} />
+            <Button variant="ghost" disabled={!credsFile || restoring} onClick={() => requestRestore('credentials')}>
               {restoring ? 'Restoring…' : 'Restore credentials'}
             </Button>
           </div>
         </div>
       </Card>
+
+      {pendingConfirm && (
+        <div
+          onClick={() => setPendingConfirm(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+            zIndex: 1000,
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              width: 'min(520px, 100%)',
+              background: 'var(--surface)',
+              borderRadius: 14,
+              border: `1px solid ${pendingConfirm.variant === 'danger' ? 'color-mix(in srgb, var(--danger) 35%, var(--border))' : '#f59e0b'}`,
+              boxShadow: '0 24px 60px rgba(15, 23, 42, 0.28)',
+              padding: 20,
+              display: 'grid',
+              gap: 12,
+            }}
+          >
+            <div style={{ fontSize: 16, fontWeight: 600 }}>{pendingConfirm.title}</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>{pendingConfirm.message}</div>
+            <div style={{
+              fontSize: 12,
+              color: pendingConfirm.variant === 'danger' ? 'var(--danger)' : '#b45309',
+              background: pendingConfirm.variant === 'danger'
+                ? 'color-mix(in srgb, var(--danger) 10%, var(--surface2))'
+                : 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
+              borderRadius: 8,
+              padding: '8px 10px',
+              textAlign: 'center',
+            }}>
+              {pendingConfirm.variant === 'danger'
+                ? 'This action replaces existing data and cannot be undone.'
+                : 'You may need to reconnect accounts if these credentials do not match this FinTrack instance.'}
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <Button variant="ghost" onClick={() => setPendingConfirm(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant={pendingConfirm.variant === 'danger' ? 'danger' : 'primary'}
+                onClick={() => performRestore(pendingConfirm.type === 'credentials' ? credsFile : restoreFile, pendingConfirm.type)}
+              >
+                {pendingConfirm.confirmLabel}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {restoreSuccess && (
+        <div
+          onClick={() => setRestoreSuccess(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.38)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+            zIndex: 1000,
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              width: 'min(520px, 100%)',
+              background: 'var(--surface)',
+              borderRadius: 14,
+              border: '1px solid color-mix(in srgb, var(--success) 35%, var(--border))',
+              boxShadow: '0 24px 60px rgba(15, 23, 42, 0.24)',
+              padding: 20,
+              display: 'grid',
+              gap: 12,
+            }}
+          >
+            <div style={{ fontSize: 16, fontWeight: 600 }}>Restore completed</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>{restoreSuccess}</div>
+            <div style={{
+              fontSize: 12,
+              color: 'var(--success)',
+              background: 'color-mix(in srgb, var(--success) 10%, var(--surface2))',
+              borderRadius: 8,
+              padding: '8px 10px',
+              textAlign: 'center',
+            }}>
+              Reload the page to continue.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <Button small onClick={() => window.location.reload()}>
+                Reload now
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1440,12 +2116,13 @@ export default function ImportExport() {
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
         <div style={{ display: 'flex', marginBottom: 24, borderBottom: '1px solid var(--border)' }}>
-        {[['import', '⬆ Import'], ['export', '⬇ Export']].map(([id, label]) => (
+        {[['import', '⬆ Import'], ['export', '⬇ Export'], ['backup', '🗄 Backup / Restore']].map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)} style={{ padding: '8px 24px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, color: tab === id ? 'var(--text)' : 'var(--muted)', borderBottom: tab === id ? '2px solid var(--accent)' : '2px solid transparent', fontWeight: tab === id ? 500 : 400 }}>{label}</button>
         ))}
         </div>
         {tab === 'import' && <ImportErrorBoundary><ImportTab /></ImportErrorBoundary>}
         {tab === 'export' && <ExportTab />}
+        {tab === 'backup' && <BackupRestoreTab />}
       </div>
     </div>
   )

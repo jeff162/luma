@@ -321,9 +321,14 @@ function CompareRow({ label, color, icon, a, b, maxVal, onClick }) {
 function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onDrillGroup, onClearDrill, loading }) {
   if (loading) return <Spinner />
 
+  const normalizedRows = rows.filter(r =>
+    typeof r?.month === 'string' &&
+    /^\d{4}-\d{2}$/.test(r.month)
+  )
+
   const filteredRows = selectedYear === 'all'
-    ? rows
-    : rows.filter(r => r.month.startsWith(selectedYear))
+    ? normalizedRows
+    : normalizedRows.filter(r => r.month.startsWith(selectedYear))
 
   // Build a sorted list of all months present
   const allMonths = [...new Set(filteredRows.map(r => r.month))].sort()
@@ -375,7 +380,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
   }))
   const overallAvg = monthlyTotal.reduce((s, r) => s + r.total, 0) / (monthlyTotal.length || 1)
 
-  const availableYears = [...new Set(rows.map(r => r.month.slice(0, 4)))].sort().reverse()
+  const availableYears = [...new Set(normalizedRows.map(r => r.month.slice(0, 4)))].sort().reverse()
   const yearOptions = [
     { value: 'all', label: 'All time' },
     ...availableYears.map(y => ({ value: y, label: y })),
@@ -428,23 +433,27 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>
           Monthly spending{drillGroup ? ` · ${drillGroup.series_name}` : ' by group'}
         </div>
-        <ResponsiveContainer width="100%" height={260}>
-          <AreaChart data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-            <XAxis dataKey="month" tick={{ fill: 'var(--muted)', fontSize: 10 }}
-              interval={Math.floor(allMonths.length / 8)} />
-            <YAxis tickFormatter={v => `$${(v/1000).toFixed(0)}k`} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
-            <Tooltip formatter={(v, name) => {
-              const s = series.find(x => x.id === name)
-              return [formatCurrency(v), s ? `${s.icon} ${s.name}` : name]
-            }} contentStyle={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8 }} />
-            {series.map(s => (
-              <Area key={s.id} type="monotone" dataKey={s.id}
-                stroke={s.color} fill={s.color} fillOpacity={0.15}
-                strokeWidth={1.5} stackId="1" name={s.id} />
-            ))}
-          </AreaChart>
-        </ResponsiveContainer>
+        {allMonths.length === 0 ? (
+          <EmptyState message="No trend data for this selection" />
+        ) : (
+          <ResponsiveContainer width="100%" height={260}>
+            <AreaChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+              <XAxis dataKey="month" tick={{ fill: 'var(--muted)', fontSize: 10 }}
+                interval={Math.floor(allMonths.length / 8)} />
+              <YAxis tickFormatter={v => `$${(v/1000).toFixed(0)}k`} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
+              <Tooltip formatter={(v, name) => {
+                const s = series.find(x => x.id === name)
+                return [formatCurrency(v), s ? `${s.icon} ${s.name}` : name]
+              }} contentStyle={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8 }} />
+              {series.map(s => (
+                <Area key={s.id} type="monotone" dataKey={s.id}
+                  stroke={s.color} fill={s.color} fillOpacity={0.15}
+                  strokeWidth={1.5} stackId="1" name={s.id} />
+              ))}
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
       </Card>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>

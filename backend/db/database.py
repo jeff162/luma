@@ -110,7 +110,7 @@ def get_db(db_path: str | None = None):
 # Migrations run inside the same init_db() connection, so they can reference
 # any helper functions defined in this file.
 
-CURRENT_VERSION = 13
+CURRENT_VERSION = 15
 
 MIGRATIONS = {}
 
@@ -493,6 +493,31 @@ def m11_category_type(conn):
     ensure_leaf(transfers_group, "Bank Transfer", "#90A4AE", "🔄")
 
 
+@migration(14)
+def m14_txn_imported_category(conn):
+    """Persist raw category text imported from CSV files for post-import mapping."""
+    try:
+        conn.execute("ALTER TABLE txn ADD COLUMN imported_category TEXT")
+    except Exception:
+        pass
+
+
+@migration(15)
+def m15_backup_recipients(conn):
+    """Store optional public-key recipients for encrypted backups."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS backup_recipient (
+            id          TEXT PRIMARY KEY,
+            label       TEXT NOT NULL,
+            public_key  TEXT NOT NULL,
+            fingerprint TEXT NOT NULL UNIQUE,
+            algorithm   TEXT NOT NULL DEFAULT 'rsa-oaep-sha256',
+            enabled     INTEGER NOT NULL DEFAULT 1,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+
+
 @migration(12)
 def m12_category_sort_order(conn):
     """Add explicit ordering for categories and normalize top-level types."""
@@ -616,6 +641,7 @@ def init_db(db_path: str | None = None):
                 date                 TEXT NOT NULL,
                 is_pending           INTEGER NOT NULL DEFAULT 0,
                 category_overridden  INTEGER NOT NULL DEFAULT 0,
+                imported_category    TEXT,
                 notes                TEXT
             );
 
@@ -624,6 +650,16 @@ def init_db(db_path: str | None = None):
             CREATE INDEX IF NOT EXISTS idx_txn_category    ON txn(category_id);
             CREATE INDEX IF NOT EXISTS idx_rule_category   ON category_rule(category_id);
             CREATE INDEX IF NOT EXISTS idx_rule_keyword    ON category_rule(keyword);
+
+            CREATE TABLE IF NOT EXISTS backup_recipient (
+                id          TEXT PRIMARY KEY,
+                label       TEXT NOT NULL,
+                public_key  TEXT NOT NULL,
+                fingerprint TEXT NOT NULL UNIQUE,
+                algorithm   TEXT NOT NULL DEFAULT 'rsa-oaep-sha256',
+                enabled     INTEGER NOT NULL DEFAULT 1,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            );
         """)
 
         # Handle upgrades from old schema versions that predate the migration system
@@ -636,6 +672,10 @@ def init_db(db_path: str | None = None):
                 conn.execute(f"ALTER TABLE category_rule ADD COLUMN {col}")
             except Exception:
                 pass
+        try:
+            conn.execute("ALTER TABLE txn ADD COLUMN imported_category TEXT")
+        except Exception:
+            pass
 
         _seed_default_categories(conn)
         update_category_colors(conn)  # ensure fresh installs get correct colors

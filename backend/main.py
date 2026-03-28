@@ -1,5 +1,8 @@
+from pathlib import Path
+
 from dotenv import load_dotenv
-load_dotenv()
+
+load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env", override=True)
 
 import os
 from contextlib import asynccontextmanager
@@ -13,6 +16,29 @@ from starlette.middleware.sessions import SessionMiddleware
 from db.control_database import auth_required, get_local_mode_user, get_user_by_id, init_control_db
 from db.database import init_db, reset_current_db_path, set_current_db_path
 from routers import accounts, auth, transactions, categories, plaid, sync, rules, owners, import_export, tasks
+from runtime_config import runtime_config_status
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name, "") or "").strip()
+    try:
+        return int(raw) if raw else default
+    except ValueError:
+        return default
+
+
+def _cors_origins() -> list[str]:
+    configured = os.getenv("CORS_ORIGINS", "").strip()
+    if configured:
+        return [origin.strip() for origin in configured.split(",") if origin.strip()]
+    frontend_port = _env_int("FRONTEND_PORT", 5173)
+    frontend_docker_port = _env_int("FRONTEND_DOCKER_PORT", 3000)
+    origins = [
+        f"http://localhost:{frontend_port}",
+        f"http://localhost:{frontend_docker_port}",
+    ]
+    # Preserve order while removing duplicates.
+    return list(dict.fromkeys(origins))
 
 
 class TenantSessionMiddleware(BaseHTTPMiddleware):
@@ -20,6 +46,8 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
         public_paths = {
             "/api/health",
             "/api/auth/status",
+            "/api/auth/runtime-config",
+            "/api/auth/runtime-config/defaults",
             "/api/auth/bootstrap-status",
             "/api/auth/bootstrap",
             "/api/auth/enable",
@@ -67,16 +95,23 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI):
     init_db()
     init_control_db()
+    config_status = runtime_config_status()
+    if not config_status["ok"]:
+        print(f"[config] warning: {config_status['message']}")
     yield
 
 
 app = FastAPI(title="FinTrack", version="0.1.0", lifespan=lifespan)
 app.add_middleware(TenantSessionMiddleware)
-app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-session-secret-change-me"))
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.getenv("SESSION_SECRET", "dev-session-secret-change-me"),
+    session_cookie=os.getenv("SESSION_COOKIE_NAME", "session"),
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

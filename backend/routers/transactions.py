@@ -81,6 +81,7 @@ def list_transactions(
     category_ids: Optional[str] = Query(None, description="comma-separated category IDs"),
     owner_ids:    Optional[str] = Query(None, description="comma-separated owner IDs"),
     payees:       Optional[str] = Query(None, description="pipe-separated payee names"),
+    direction:    Optional[str] = Query(None, description="debit | credit"),
     search:       Optional[str] = Query(None),
     limit:        int           = Query(200, le=1000),
     offset:       int           = Query(0),
@@ -155,6 +156,10 @@ def list_transactions(
             placeholders = ','.join('?' * len(ids))
             clauses.append(f"t.owner_id IN ({placeholders})")
             params.extend(ids)
+    if direction == "debit":
+        clauses.append("t.amount > 0")
+    elif direction == "credit":
+        clauses.append("t.amount < 0")
     if search:
         clauses.append("(t.merchant_name LIKE ? OR t.raw_name LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%"])
@@ -471,6 +476,8 @@ def spending_by_category_in_group(
 def monthly_trend(
     category_id: Optional[str] = Query(None),
     payee:       Optional[str] = Query(None),
+    account_id:  Optional[str] = Query(None),
+    account_ids: Optional[str] = Query(None),
     months:      int            = Query(18, le=120),
     date_start:  Optional[str] = Query(None),
     date_end:    Optional[str] = Query(None),
@@ -480,20 +487,13 @@ def monthly_trend(
     (or all history if no date filter is set). Otherwise uses the months window."""
 
     if payee:
-        # Use explicit date range when set, otherwise return full history
         clauses = ["t.amount > 0", "t.is_pending = 0",
                    "(t.merchant_name = ? OR t.raw_name = ?)"]
         params  = [payee, payee]
-        if date_start:
-            clauses.append("t.date >= ?")
-            params.append(date_start)
-        if date_end:
-            clauses.append("t.date <= ?")
-            params.append(date_end)
     else:
         clauses = ["t.amount > 0", "t.is_pending = 0",
-                   "t.date >= date('now', ? || ' months')"]
-        params  = [f"-{months}"]
+                  ]
+        params  = []
         if category_id == "__uncategorized__":
             clauses.append("t.category_id IS NULL")
         elif category_id and category_id.startswith("__group__"):
@@ -503,6 +503,26 @@ def monthly_trend(
         elif category_id:
             clauses.append("t.category_id = ?")
             params.append(category_id)
+
+    if account_ids:
+        ids = [i.strip() for i in account_ids.split(',') if i.strip()]
+        placeholders = ','.join('?' * len(ids))
+        clauses.append(f"t.account_id IN ({placeholders})")
+        params.extend(ids)
+    elif account_id:
+        clauses.append("t.account_id = ?")
+        params.append(account_id)
+
+    if date_start:
+        clauses.append("t.date >= ?")
+        params.append(date_start)
+    if date_end:
+        clauses.append("t.date <= ?")
+        params.append(date_end)
+
+    if not date_start and not date_end and not payee and not account_id and not account_ids:
+        clauses.append("t.date >= date('now', ? || ' months')")
+        params.append(f"-{months}")
 
     where = "WHERE " + " AND ".join(clauses)
 
@@ -539,6 +559,7 @@ def monthly_by_group(
     clauses = [
         "t.is_pending = 0",
         "t.date >= date('now', ? || ' months')",
+        "strftime('%Y-%m', t.date) IS NOT NULL",
         "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0",
         """(
             CASE COALESCE(p.category_type, c.category_type)

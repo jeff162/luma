@@ -67,6 +67,12 @@ async function request(path, options = {}) {
 export const api = {
   // Auth
   getAuthStatus: () => request('/auth/status'),
+  getRuntimeConfigDefaults: () => request('/auth/runtime-config/defaults'),
+  saveRuntimeConfig: (data) =>
+    request('/auth/runtime-config', { method: 'POST', body: JSON.stringify(data) }),
+  getEnvironmentSettings: () => request('/auth/environment'),
+  saveEnvironmentSettings: (data) =>
+    request('/auth/environment', { method: 'POST', body: JSON.stringify(data) }),
   getBootstrapStatus: () => request('/auth/bootstrap-status'),
   getCurrentUser: () => request('/auth/me'),
   enableAuth: () => request('/auth/enable', { method: 'POST', body: JSON.stringify({ enabled: true }) }),
@@ -132,8 +138,14 @@ export const api = {
     const q = new URLSearchParams({ payee, ...(date_start ? { date_start } : {}), ...(date_end ? { date_end } : {}) })
     return request(`/transactions/summary/monthly-trend?${q}`)
   },
-  getMonthlyTrend: (months = 6, category_id) => {
-    const q = new URLSearchParams({ months, ...(category_id ? { category_id } : {}) })
+  getMonthlyTrend: (months = 6, category_id, account_id, date_start, date_end) => {
+    const q = new URLSearchParams({
+      months,
+      ...(category_id ? { category_id } : {}),
+      ...(account_id ? { account_id } : {}),
+      ...(date_start ? { date_start } : {}),
+      ...(date_end ? { date_end } : {}),
+    })
     return request(`/transactions/summary/monthly-trend?${q}`)
   },
   overrideCategory: (txnId, category_id, notes) =>
@@ -194,17 +206,37 @@ export const api = {
 
   // Import / Export
   previewCsv: (file) => {
-    const fd = new FormData(); fd.append('file', file)
-    return fetch('/api/import-export/preview', { method: 'POST', body: fd }).then(r => r.json())
+    const fd = new FormData()
+    fd.append('file', file)
+    return fetch('/api/import-export/preview', { method: 'POST', body: fd }).then(async res => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }))
+        const error = new Error(err.detail || 'Request failed')
+        error.status = res.status
+        throw error
+      }
+      return res.json()
+    })
   },
   runImport: (file, config) => {
     const fd = new FormData()
     fd.append('file', file)
     fd.append('config', JSON.stringify(config))
-    return fetch('/api/import-export/run', { method: 'POST', body: fd }).then(r => r.json())
+    return fetch('/api/import-export/run', { method: 'POST', body: fd }).then(async res => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }))
+        const error = new Error(err.detail || 'Request failed')
+        error.status = res.status
+        throw error
+      }
+      return res.json()
+    })
   },
   listBatches:      ()      => request('/import-export/batches'),
   getBatchEdited:   (id)    => request(`/import-export/batches/${id}/edited`),
+  getBatchCategoryMappings: (id) => request(`/import-export/batches/${id}/category-mappings`),
+  applyBatchCategoryMappings: (id, assignments) =>
+    request(`/import-export/batches/${id}/category-mappings`, { method: 'POST', body: JSON.stringify({ assignments }) }),
   undoBatch:        (id, force = false) =>
     request(`/import-export/batches/${id}${force ? '?force=true' : ''}`, { method: 'DELETE' }),
   getImportProfiles:    ()      => request('/import-export/profiles'),
@@ -215,10 +247,48 @@ export const api = {
     const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))
     return `/api/import-export/transactions.csv?${q}`  // returns URL for direct download
   },
-  exportBackup:      ()  => '/api/import-export/backup',
+  getBackupRecipients: () => request('/import-export/backup/recipients'),
+  createBackupRecipient: (data) => request('/import-export/backup/recipients', { method: 'POST', body: JSON.stringify(data) }),
+  updateBackupRecipient: (id, data) => request(`/import-export/backup/recipients/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteBackupRecipient: (id) => request(`/import-export/backup/recipients/${id}`, { method: 'DELETE' }),
+  exportBackup:      (encrypted = false)  => `/api/import-export/backup${encrypted ? '?encrypted=true' : ''}`,
   exportCredentials: ()  => '/api/import-export/backup/credentials',
-  restoreBackup:     (data, includeTransactions = true) =>
-    request('/import-export/restore', { method: 'POST', body: JSON.stringify({ data, include_transactions: includeTransactions }) }),
-  restoreCredentials: (data) =>
-    request('/import-export/restore/credentials', { method: 'POST', body: JSON.stringify({ data }) }),
+  inspectBackupFile: async (file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await fetch('/api/import-export/restore-file/inspect', { method: 'POST', body: fd })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      const error = new Error(err.detail || 'Request failed')
+      error.status = res.status
+      throw error
+    }
+    return res.json()
+  },
+  restoreBackupFile: async (file, privateKeyFile = null, privateKeyPassphrase = '') => {
+    const fd = new FormData()
+    fd.append('file', file)
+    if (privateKeyFile) fd.append('private_key_file', privateKeyFile)
+    if (privateKeyPassphrase) fd.append('private_key_passphrase', privateKeyPassphrase)
+    const res = await fetch('/api/import-export/restore-file', { method: 'POST', body: fd })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      const error = new Error(err.detail || 'Request failed')
+      error.status = res.status
+      throw error
+    }
+    return res.json()
+  },
+  restoreCredentialsFile: async (file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await fetch('/api/import-export/restore/credentials-file', { method: 'POST', body: fd })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      const error = new Error(err.detail || 'Request failed')
+      error.status = res.status
+      throw error
+    }
+    return res.json()
+  },
 }

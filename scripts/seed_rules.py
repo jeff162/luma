@@ -13,4 +13,4 @@ init_db()
 with get_db() as conn:
     seed_default_rules(conn)
     count = conn.execute("SELECT COUNT(*) FROM category_rule").fetchone()[0]
-    print(f"Done — {count} rules in database.")
+    print(f"Done - {count} rules in database.")

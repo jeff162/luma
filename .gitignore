@@ -10,6 +10,10 @@
 *.db-journal
 data/
 
+# ── Database Backups ──────────────────────────────────────────────────────────
+# Your personal financial data — never commit these
+fintrack_backup.json
+
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]

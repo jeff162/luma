@@ -39,12 +39,18 @@ import hashlib
 import io
 import json
 import uuid
+import zipfile
+import os
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import datetime, date
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from db.database import get_db
 from services.categorizer import categorize_transaction
@@ -62,6 +68,7 @@ class ColumnMap(BaseModel):
     credit:       Optional[str] = None
     direction:    Optional[str] = None   # column that says "debit"/"credit"
     description:  str
+    category:     Optional[str] = None
     notes:        Optional[str] = None
     account:      Optional[str] = None   # CSV column containing account name/id
 
@@ -103,6 +110,21 @@ class ProfileUpdate(BaseModel):
     skip_rows:            Optional[int] = None
     apply_categorization: Optional[bool] = None
     notes:                Optional[str] = None
+
+
+class BatchCategoryMappingApplyRequest(BaseModel):
+    assignments: dict[str, str]
+
+
+class BackupRecipientCreate(BaseModel):
+    label: str
+    public_key: str
+    enabled: bool = True
+
+
+class BackupRecipientUpdate(BaseModel):
+    label: Optional[str] = None
+    enabled: Optional[bool] = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -194,6 +216,254 @@ def _detect_header_row_index(text: str) -> int:
     return header_row_index
 
 
+def _summarize_tail_lines(all_lines: list[str], count: int = 20) -> tuple[list[str], int]:
+    """Return the last `count` lines plus the 0-based line offset they start at."""
+    if not all_lines:
+        return [], 0
+    start = max(0, len(all_lines) - count)
+    return all_lines[start:], start
+
+
+def normalize_import_category(value: str) -> str:
+    return " ".join((value or "").strip().lower().split())
+
+
+def _zip_json_bytes(filename: str, payload: dict) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(filename, json.dumps(payload, indent=2, default=str))
+    return buf.getvalue()
+
+
+def _zip_members_bytes(members: dict[str, bytes]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, content in members.items():
+            zf.writestr(name, content)
+    return buf.getvalue()
+
+
+def _load_public_key(public_key_text: str):
+    key_text = (public_key_text or "").strip().encode("utf-8")
+    loaders = [serialization.load_ssh_public_key, serialization.load_pem_public_key]
+    last_error = None
+    for loader in loaders:
+        try:
+            return loader(key_text)
+        except Exception as exc:
+            last_error = exc
+    raise HTTPException(status_code=400, detail=f"Invalid public key: {last_error}")
+
+
+def _load_private_key(private_key_bytes: bytes, passphrase: Optional[str]):
+    password = passphrase.encode("utf-8") if passphrase else None
+    loaders = [serialization.load_ssh_private_key, serialization.load_pem_private_key]
+    last_error = None
+    for loader in loaders:
+        try:
+            return loader(private_key_bytes, password=password)
+        except TypeError:
+            try:
+                return loader(private_key_bytes, password)
+            except Exception as exc:
+                last_error = exc
+        except Exception as exc:
+            last_error = exc
+    raise HTTPException(status_code=400, detail=f"Invalid private key or passphrase: {last_error}")
+
+
+def _rsa_fingerprint(public_key) -> str:
+    der = public_key.public_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    digest = hashes.Hash(hashes.SHA256())
+    digest.update(der)
+    fp = urlsafe_b64encode(digest.finalize()).decode("ascii").rstrip("=")
+    return f"SHA256:{fp}"
+
+
+def _validate_backup_recipient_key(public_key_text: str):
+    public_key = _load_public_key(public_key_text)
+    if not isinstance(public_key, rsa.RSAPublicKey):
+        raise HTTPException(status_code=400, detail="Only RSA public keys are supported for encrypted backups")
+    return public_key, _rsa_fingerprint(public_key)
+
+
+def _b64url_decode(value: str) -> bytes:
+    value = (value or "").strip()
+    if not value:
+        raise HTTPException(status_code=400, detail="Encrypted backup metadata is missing required key material")
+    padding_needed = (-len(value)) % 4
+    return urlsafe_b64decode(value + ("=" * padding_needed))
+
+
+def _build_encrypted_backup_bytes(payload_bytes: bytes, recipients: list[dict]) -> bytes:
+    content_key = AESGCM.generate_key(bit_length=256)
+    aesgcm = AESGCM(content_key)
+    nonce = os.urandom(12)
+    encrypted_payload = aesgcm.encrypt(nonce, payload_bytes, None)
+
+    manifest = {
+        "format": "fintrack-encrypted-backup",
+        "version": 1,
+        "cipher": "AES-256-GCM",
+        "wrapped_keys": [],
+        "nonce": urlsafe_b64encode(nonce).decode("ascii"),
+    }
+    for recipient in recipients:
+        public_key, fingerprint = _validate_backup_recipient_key(recipient["public_key"])
+        wrapped_key = public_key.encrypt(
+            content_key,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None,
+            ),
+        )
+        manifest["wrapped_keys"].append({
+            "recipient_id": recipient["id"],
+            "label": recipient["label"],
+            "fingerprint": fingerprint,
+            "algorithm": "rsa-oaep-sha256",
+            "wrapped_key": urlsafe_b64encode(wrapped_key).decode("ascii"),
+        })
+
+    return _zip_members_bytes({
+        "manifest.json": json.dumps(manifest, indent=2).encode("utf-8"),
+        "payload.bin": encrypted_payload,
+    })
+
+
+def _inspect_backup_upload(content: bytes, upload_name: str, expected_member_prefix: str) -> dict:
+    lower_name = (upload_name or "").lower()
+    if not lower_name.endswith(".zip"):
+        payload = _load_json_or_zip_payload(content, upload_name, expected_member_prefix)
+        return {
+            "encrypted": False,
+            "container": "json",
+            "version": payload.get("version"),
+        }
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            members = [name for name in zf.namelist() if not name.endswith("/")]
+            member_set = set(members)
+            has_manifest = "manifest.json" in member_set
+            has_payload = "payload.bin" in member_set
+            if has_manifest or has_payload:
+                if not (has_manifest and has_payload):
+                    raise HTTPException(status_code=400, detail="Encrypted backup ZIP must include both manifest.json and payload.bin")
+                manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+                if manifest.get("format") != "fintrack-encrypted-backup":
+                    raise HTTPException(status_code=400, detail="Unsupported encrypted backup format")
+                wrapped_keys = manifest.get("wrapped_keys")
+                if not isinstance(wrapped_keys, list) or not wrapped_keys:
+                    raise HTTPException(status_code=400, detail="Encrypted backup does not contain any wrapped recipient keys")
+                recipients = []
+                for wrapped in wrapped_keys:
+                    if not isinstance(wrapped, dict):
+                        continue
+                    recipients.append({
+                        "recipient_id": wrapped.get("recipient_id"),
+                        "label": wrapped.get("label") or "Unnamed recipient",
+                        "fingerprint": wrapped.get("fingerprint"),
+                        "algorithm": wrapped.get("algorithm"),
+                    })
+                return {
+                    "encrypted": True,
+                    "container": "zip",
+                    "version": manifest.get("version"),
+                    "cipher": manifest.get("cipher"),
+                    "recipient_count": len(recipients),
+                    "recipients": recipients,
+                }
+
+        payload = _load_json_or_zip_payload(content, upload_name, expected_member_prefix)
+        return {
+            "encrypted": False,
+            "container": "zip",
+            "version": payload.get("version"),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid ZIP backup: {exc}")
+
+
+def _load_json_or_zip_payload(content: bytes, upload_name: str, expected_member_prefix: str) -> dict:
+    lower_name = (upload_name or "").lower()
+    if lower_name.endswith(".zip"):
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                members = [name for name in zf.namelist() if not name.endswith("/")]
+                if len(members) != 1:
+                    raise HTTPException(status_code=400, detail="ZIP backup must contain exactly one file")
+                member = members[0]
+                if not member.lower().endswith(".json"):
+                    raise HTTPException(status_code=400, detail="ZIP backup must contain a JSON file")
+                if expected_member_prefix and expected_member_prefix not in member.lower():
+                    raise HTTPException(status_code=400, detail="Unexpected backup file inside ZIP")
+                return json.loads(zf.read(member).decode("utf-8"))
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid ZIP backup: {exc}")
+    try:
+        return json.loads(content.decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON backup: {exc}")
+
+
+def _load_backup_payload_from_upload(
+    content: bytes,
+    upload_name: str,
+    expected_member_prefix: str,
+    private_key_bytes: Optional[bytes] = None,
+    private_key_passphrase: Optional[str] = None,
+) -> dict:
+    inspection = _inspect_backup_upload(content, upload_name, expected_member_prefix)
+    if not inspection.get("encrypted"):
+        return _load_json_or_zip_payload(content, upload_name, expected_member_prefix)
+
+    if not private_key_bytes:
+        raise HTTPException(status_code=400, detail="Encrypted backup requires a private key file for restore")
+
+    private_key = _load_private_key(private_key_bytes, private_key_passphrase)
+    if not isinstance(private_key, rsa.RSAPrivateKey):
+        raise HTTPException(status_code=400, detail="Only RSA private keys are supported for encrypted backups")
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+            content_key = None
+            for wrapped in manifest.get("wrapped_keys", []):
+                wrapped_key = wrapped.get("wrapped_key")
+                if not wrapped_key:
+                    continue
+                try:
+                    content_key = private_key.decrypt(
+                        _b64url_decode(wrapped_key),
+                        padding.OAEP(
+                            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                            algorithm=hashes.SHA256(),
+                            label=None,
+                        ),
+                    )
+                    break
+                except Exception:
+                    continue
+            if not content_key:
+                raise HTTPException(status_code=400, detail="Private key does not match any recipient in this backup")
+            nonce = _b64url_decode(manifest.get("nonce"))
+            payload_bytes = AESGCM(content_key).decrypt(nonce, zf.read("payload.bin"), None)
+            return _load_json_or_zip_payload(payload_bytes, "payload.zip", expected_member_prefix)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Unable to decrypt encrypted backup: {exc}")
+
+
 # ── Profile CRUD ──────────────────────────────────────────────────────────────
 
 @router.get("/profiles")
@@ -265,6 +535,75 @@ def delete_profile(profile_id: str):
     return {"ok": True}
 
 
+@router.get("/backup/recipients")
+def list_backup_recipients():
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT id, label, public_key, fingerprint, algorithm, enabled, created_at
+            FROM   backup_recipient
+            ORDER  BY created_at DESC, label
+        """).fetchall()
+    return [dict(row) for row in rows]
+
+
+@router.post("/backup/recipients")
+def create_backup_recipient(body: BackupRecipientCreate):
+    public_key, fingerprint = _validate_backup_recipient_key(body.public_key)
+    rid = str(uuid.uuid4())
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM backup_recipient WHERE fingerprint = ?",
+            (fingerprint,),
+        ).fetchone()
+        if existing:
+            raise HTTPException(status_code=400, detail="That public key is already saved")
+        conn.execute("""
+            INSERT INTO backup_recipient (id, label, public_key, fingerprint, algorithm, enabled)
+            VALUES (?, ?, ?, ?, 'rsa-oaep-sha256', ?)
+        """, (rid, body.label.strip(), body.public_key.strip(), fingerprint, 1 if body.enabled else 0))
+    return {
+        "id": rid,
+        "label": body.label.strip(),
+        "public_key": body.public_key.strip(),
+        "fingerprint": fingerprint,
+        "algorithm": "rsa-oaep-sha256",
+        "enabled": 1 if body.enabled else 0,
+    }
+
+
+@router.patch("/backup/recipients/{recipient_id}")
+def update_backup_recipient(recipient_id: str, body: BackupRecipientUpdate):
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM backup_recipient WHERE id = ?",
+            (recipient_id,),
+        ).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Recipient not found")
+        fields, params = [], []
+        if body.label is not None:
+            fields.append("label = ?")
+            params.append(body.label.strip())
+        if body.enabled is not None:
+            fields.append("enabled = ?")
+            params.append(1 if body.enabled else 0)
+        if fields:
+            params.append(recipient_id)
+            conn.execute(f"UPDATE backup_recipient SET {', '.join(fields)} WHERE id = ?", params)
+        row = conn.execute("""
+            SELECT id, label, public_key, fingerprint, algorithm, enabled, created_at
+            FROM backup_recipient WHERE id = ?
+        """, (recipient_id,)).fetchone()
+    return dict(row)
+
+
+@router.delete("/backup/recipients/{recipient_id}")
+def delete_backup_recipient(recipient_id: str):
+    with get_db() as conn:
+        conn.execute("DELETE FROM backup_recipient WHERE id = ?", (recipient_id,))
+    return {"ok": True}
+
+
 # ── Preview (parse uploaded CSV, auto-detect profile) ─────────────────────────
 
 @router.post("/preview")
@@ -292,6 +631,7 @@ async def preview_csv(file: UploadFile = File(...)):
         # Capture raw lines for the file preview panel
         all_lines = text.splitlines()
         raw_lines  = all_lines[:20]
+        raw_tail_lines, raw_tail_start_line = _summarize_tail_lines(all_lines)
 
         header_row_index = _detect_header_row_index(text)
         data_text = "\n".join(all_lines[header_row_index:])
@@ -375,6 +715,8 @@ async def preview_csv(file: UploadFile = File(...)):
 
     return {
         "raw_lines":              raw_lines,
+        "raw_tail_lines":         raw_tail_lines,
+        "raw_tail_start_line":    raw_tail_start_line,
         "header_row_index":       header_row_index,
         "headers":                headers,
         "rows":                   rows,
@@ -434,6 +776,7 @@ async def run_import(
         credit      = cm_dict.get("credit"),
         direction   = cm_dict.get("direction"),
         description = cm_dict.get("description", ""),
+        category    = cm_dict.get("category"),
         notes       = cm_dict.get("notes"),
         account     = cm_dict.get("account"),
     )
@@ -442,6 +785,8 @@ async def run_import(
     amount_convention = cfg.get("amount_convention", "single_signed")
     apply_cat         = bool(cfg.get("apply_categorization", True))
     account_id        = cfg.get("account_id") or None
+    single_account_new = cfg.get("single_account_new") or None
+    category_assignments_cfg = cm_dict.get("category_assignments") or {}
     account_map_cfg   = cfg.get("account_map") or {}
     skip_accounts_cfg = cfg.get("skip_accounts") or []
     new_accounts_cfg  = cfg.get("new_accounts") or []
@@ -454,25 +799,30 @@ async def run_import(
     skipped  = 0
     deduped  = 0
     errors   = []
+    row_results = []
+    imported_category_counts: dict[str, int] = {}
     skip_set = set(skip_accounts_cfg)
 
     with get_db() as conn:
-        # Create new accounts, inferring owner from existing mapped accounts
-        # Collect owner_ids from already-mapped accounts to find a consensus owner
-        existing_owner_ids = set()
-        for aid in account_map_cfg.values():
-            if aid:
-                row = conn.execute("SELECT owner_id FROM account WHERE id = ?", (aid,)).fetchone()
-                if row and row["owner_id"]:
-                    existing_owner_ids.add(row["owner_id"])
-        if account_id:
-            row = conn.execute("SELECT owner_id FROM account WHERE id = ?", (account_id,)).fetchone()
-            if row and row["owner_id"]:
-                existing_owner_ids.add(row["owner_id"])
-        # Use the consensus owner only if all mapped accounts agree on one
-        inferred_owner_id = existing_owner_ids.pop() if len(existing_owner_ids) == 1 else None
-
         created_account_ids = {}
+        if single_account_new:
+            single_name = str(single_account_new.get("name", "")).strip()
+            single_type = single_account_new.get("type", "depository")
+            if single_name:
+                existing = conn.execute(
+                    "SELECT id FROM account WHERE LOWER(name) = LOWER(?)", (single_name,)
+                ).fetchone()
+                if existing:
+                    created_account_ids["__single_account__"] = existing["id"]
+                else:
+                    new_acc_id = str(uuid.uuid4())
+                    conn.execute("""
+                        INSERT INTO account
+                          (id, plaid_account_id, plaid_item_id, name, type, subtype, owner_id)
+                        VALUES (?, ?, 'csv_import', ?, ?, ?, ?)
+                    """, (new_acc_id, f"csv_{new_acc_id}", single_name, single_type, "checking",
+                          None))
+                    created_account_ids["__single_account__"] = new_acc_id
         for na in new_accounts_cfg:
             csv_val  = na.get("csv_value", "")
             acc_name = na.get("name", csv_val).strip()
@@ -493,7 +843,7 @@ async def run_import(
                   (id, plaid_account_id, plaid_item_id, name, type, subtype, owner_id)
                 VALUES (?, ?, 'csv_import', ?, ?, ?, ?)
             """, (new_acc_id, f"csv_{new_acc_id}", acc_name, acc_type, "checking",
-                  inferred_owner_id))
+                  None))
             created_account_ids[csv_val] = new_acc_id
 
         effective_map = {}
@@ -507,6 +857,11 @@ async def run_import(
             ).fetchone()
             if not fallback_acc:
                 raise HTTPException(status_code=400, detail="Account not found")
+        elif created_account_ids.get("__single_account__"):
+            fallback_acc = conn.execute(
+                "SELECT id, owner_id FROM account WHERE id = ?",
+                (created_account_ids["__single_account__"],)
+            ).fetchone()
 
         account_cache: dict = {}
         def get_account(aid):
@@ -538,6 +893,7 @@ async def run_import(
 
         config_snap = json.dumps({
             "column_map":          cm_dict,
+            "category_assignments": category_assignments_cfg,
             "account_map":         account_map_cfg,
             "skip_accounts":       list(skip_set),
             "date_format":         date_format,
@@ -545,6 +901,7 @@ async def run_import(
             "skip_rows":           skip_rows,
             "apply_categorization":apply_cat,
             "account_id":          account_id,
+            "single_account_new":  single_account_new,
         })
         conn.execute("""
             INSERT INTO import_batch
@@ -560,18 +917,20 @@ async def run_import(
         account_deduped: dict = {}  # account_id → dedup count
 
         for i, row in enumerate(data_rows):
-            row_num = i + skip_rows + 2
+            row_num = header_row_index + skip_rows + i + 2
 
             if use_account_col:
                 csv_val = str(row.get(col.account, "")).strip()
                 if csv_val in skip_set:
                     skipped += 1
                     skip_counts[csv_val] = skip_counts.get(csv_val, 0) + 1
+                    row_results.append({"row": row_num, "status": "skipped_account"})
                     continue
                 row_account_id = effective_map.get(csv_val)
                 if not row_account_id:
                     errors.append({"row": row_num, "reason": f"No account mapped for '{csv_val}'"})
                     skipped += 1
+                    row_results.append({"row": row_num, "status": "error", "reason": f"No account mapped for '{csv_val}'"})
                     continue
                 acc = get_account(row_account_id)
             elif fallback_acc:
@@ -580,11 +939,13 @@ async def run_import(
             else:
                 errors.append({"row": row_num, "reason": "No account configured"})
                 skipped += 1
+                row_results.append({"row": row_num, "status": "error", "reason": "No account configured"})
                 continue
 
             if not acc:
                 errors.append({"row": row_num, "reason": "Account not found"})
                 skipped += 1
+                row_results.append({"row": row_num, "status": "error", "reason": "Account not found"})
                 continue
 
             raw_date = str(row.get(col.date, "")).strip()
@@ -592,28 +953,38 @@ async def run_import(
             if not parsed_date:
                 errors.append({"row": row_num, "reason": f"Invalid date: {raw_date!r}"})
                 skipped += 1
+                row_results.append({"row": row_num, "status": "error", "reason": f"Invalid date: {raw_date!r}"})
                 continue
 
             amount = parse_amount(row, amount_convention, col)
             if amount is None:
                 errors.append({"row": row_num, "reason": "Invalid amount"})
                 skipped += 1
+                row_results.append({"row": row_num, "status": "error", "reason": "Invalid amount"})
                 continue
             if amount == 0:
                 skipped += 1
+                row_results.append({"row": row_num, "status": "zero_amount"})
                 continue
 
             raw_desc     = str(row.get(col.description, "")).strip()
+            raw_imported_category = str(row.get(col.category, "")).strip() if col.category else ""
             notes_val    = str(row.get(col.notes, "")).strip() if col.notes else None
             content_hash = make_hash(parsed_date, amount, raw_desc)
 
             if (acc["id"], content_hash) in existing_hashes:
                 deduped += 1
                 account_deduped[acc["id"]] = account_deduped.get(acc["id"], 0) + 1
+                row_results.append({"row": row_num, "status": "deduped"})
                 continue
 
+            if raw_imported_category:
+                imported_category_counts[raw_imported_category] = imported_category_counts.get(raw_imported_category, 0) + 1
+
             cat_id = None
-            if apply_cat:
+            if raw_imported_category:
+                cat_id = category_assignments_cfg.get(raw_imported_category)
+            elif apply_cat and not col.category:
                 cat_id = categorize_transaction(
                     raw_desc, raw_desc, abs(amount), conn, owner_id=acc["owner_id"]
                 )
@@ -622,11 +993,13 @@ async def run_import(
             conn.execute("""
                 INSERT INTO txn
                   (id, account_id, owner_id, category_id, amount, merchant_name,
-                   raw_name, date, is_pending, content_hash, import_batch_id, notes)
-                VALUES (?,?,?,?,?,?,?,?,0,?,?,?)
+                   raw_name, date, is_pending, content_hash, import_batch_id, imported_category, notes, category_overridden)
+                VALUES (?,?,?,?,?,?,?,?,0,?,?,?,?,?)
             """, (txn_id, acc["id"], acc["owner_id"], cat_id, amount,
-                  raw_desc, raw_desc, parsed_date, content_hash, batch_id, notes_val or None))
+                  raw_desc, raw_desc, parsed_date, content_hash, batch_id,
+                  raw_imported_category or None, notes_val or None, 1 if cat_id and raw_imported_category else 0))
             imported += 1
+            row_results.append({"row": row_num, "status": "imported"})
 
             aid = acc["id"]
             if aid not in account_counts:
@@ -660,6 +1033,23 @@ async def run_import(
 
         account_skipped = sum(skip_counts.values())
 
+    trailing_errors = []
+    for result in reversed(row_results):
+        if result["status"] != "error":
+            break
+        trailing_errors.append(result)
+    trailing_errors.reverse()
+
+    trailing_non_transaction_suspected = bool(
+        trailing_errors and any(result["status"] != "error" for result in row_results[:-len(trailing_errors)])
+    )
+    trailing_non_transaction_message = None
+    if trailing_non_transaction_suspected:
+        start_row = trailing_errors[0]["row"]
+        trailing_non_transaction_message = (
+            f"Rows {start_row} onward could be footer or other non-transaction text at the end of the file."
+        )
+
     return {
         "batch_id":             batch_id,
         "imported":             imported,
@@ -667,7 +1057,12 @@ async def run_import(
         "deduped":              deduped,
         "account_skipped":      account_skipped,
         "new_accounts_created": len(created_account_ids),
-        "owner_inferred":       inferred_owner_id is not None,
+        "has_imported_categories": bool(imported_category_counts),
+        "imported_category_value_count": len(imported_category_counts),
+        "trailing_non_transaction_suspected": trailing_non_transaction_suspected,
+        "trailing_non_transaction_message": trailing_non_transaction_message,
+        "trailing_error_start_row": trailing_errors[0]["row"] if trailing_errors else None,
+        "trailing_error_count": len(trailing_errors),
         "errors":               errors[:20],
     }
 
@@ -721,6 +1116,163 @@ def get_edited_transactions(batch_id: str):
             ORDER  BY t.date DESC
         """, (batch_id,)).fetchall()
     return [dict(r) for r in rows]
+
+
+@router.get("/batches/{batch_id}/category-mappings")
+def get_batch_category_mappings(batch_id: str):
+    with get_db() as conn:
+        batch = conn.execute(
+            "SELECT id, profile_id, config_snapshot FROM import_batch WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+
+        snapshot = {}
+        if batch["config_snapshot"]:
+            try:
+                snapshot = json.loads(batch["config_snapshot"])
+            except Exception:
+                snapshot = {}
+
+        saved_assignments = (snapshot.get("category_assignments") or
+                             (snapshot.get("column_map") or {}).get("category_assignments") or {})
+
+        category_rows = conn.execute("""
+            SELECT t.imported_category AS raw_value,
+                   COUNT(*) AS row_count
+            FROM   txn t
+            WHERE  t.import_batch_id = ?
+              AND  t.imported_category IS NOT NULL
+              AND  TRIM(t.imported_category) <> ''
+            GROUP  BY t.imported_category
+            ORDER  BY COUNT(*) DESC, t.imported_category
+        """, (batch_id,)).fetchall()
+
+        existing_categories = conn.execute("""
+            SELECT c.id, c.name, c.parent_id, p.name AS group_name
+            FROM   category c
+            LEFT JOIN category p ON p.id = c.parent_id
+            WHERE  c.parent_id IS NOT NULL
+            ORDER  BY p.name, c.name
+        """).fetchall()
+        by_normalized_name = {
+            normalize_import_category(row["name"]): row["id"]
+            for row in existing_categories
+        }
+
+        values = []
+        for row in category_rows:
+            raw_value = row["raw_value"]
+            saved_id = saved_assignments.get(raw_value)
+            suggested_id = saved_id or by_normalized_name.get(normalize_import_category(raw_value))
+            values.append({
+                "raw_value": raw_value,
+                "row_count": row["row_count"],
+                "saved_category_id": saved_id,
+                "suggested_category_id": suggested_id,
+            })
+
+    return {
+        "values": values,
+        "saved_assignments": saved_assignments,
+        "unmapped_count": sum(1 for value in values if not value["saved_category_id"]),
+    }
+
+
+@router.post("/batches/{batch_id}/category-mappings")
+def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApplyRequest):
+    with get_db() as conn:
+        batch = conn.execute(
+            "SELECT id, profile_id, config_snapshot FROM import_batch WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+
+        snapshot = {}
+        if batch["config_snapshot"]:
+            try:
+                snapshot = json.loads(batch["config_snapshot"])
+            except Exception:
+                snapshot = {}
+
+        current_assignments = (snapshot.get("category_assignments") or
+                               (snapshot.get("column_map") or {}).get("category_assignments") or {})
+        merged_assignments = {**current_assignments, **body.assignments}
+
+        applied = 0
+        for raw_value, category_id in body.assignments.items():
+            result = conn.execute("""
+                UPDATE txn
+                SET    category_id = ?, category_overridden = 1
+                WHERE  import_batch_id = ?
+                  AND  imported_category = ?
+            """, (category_id, batch_id, raw_value))
+            applied += result.rowcount or 0
+
+        snapshot["category_assignments"] = merged_assignments
+        column_map = dict(snapshot.get("column_map") or {})
+        column_map["category_assignments"] = merged_assignments
+        snapshot["column_map"] = column_map
+        config_snapshot = json.dumps(snapshot)
+        conn.execute(
+            "UPDATE import_batch SET config_snapshot = ? WHERE id = ?",
+            (config_snapshot, batch_id),
+        )
+
+        saved_to_profile = False
+        if batch["profile_id"]:
+            profile = conn.execute(
+                "SELECT column_map FROM csv_import_profile WHERE id = ?",
+                (batch["profile_id"],),
+            ).fetchone()
+            if profile:
+                try:
+                    profile_map = json.loads(profile["column_map"] or "{}")
+                except Exception:
+                    profile_map = {}
+                profile_map["category_assignments"] = {
+                    **(profile_map.get("category_assignments") or {}),
+                    **body.assignments,
+                }
+                conn.execute(
+                    "UPDATE csv_import_profile SET column_map = ? WHERE id = ?",
+                    (json.dumps(profile_map), batch["profile_id"]),
+                )
+                saved_to_profile = True
+
+        categorized_by_rules = 0
+        if snapshot.get("apply_categorization", True):
+            uncategorized_rows = conn.execute("""
+                SELECT id, owner_id, amount, merchant_name, raw_name
+                FROM   txn
+                WHERE  import_batch_id = ?
+                  AND  category_id IS NULL
+                  AND  category_overridden = 0
+            """, (batch_id,)).fetchall()
+            for row in uncategorized_rows:
+                cat_id = categorize_transaction(
+                    row["merchant_name"] or row["raw_name"] or "",
+                    row["raw_name"] or row["merchant_name"] or "",
+                    abs(row["amount"]),
+                    conn,
+                    owner_id=row["owner_id"],
+                )
+                if cat_id:
+                    conn.execute(
+                        "UPDATE txn SET category_id = ? WHERE id = ?",
+                        (cat_id, row["id"]),
+                    )
+                    categorized_by_rules += 1
+
+    return {
+        "ok": True,
+        "applied_count": applied,
+        "categorized_by_rules": categorized_by_rules,
+        "saved_to_profile": saved_to_profile,
+        "saved_mapping_count": len(body.assignments),
+    }
 
 
 @router.delete("/batches/{batch_id}")
@@ -855,7 +1407,7 @@ def export_transactions_csv(
 # ── JSON Backup / Restore ─────────────────────────────────────────────────────
 
 @router.get("/backup")
-def export_backup():
+def export_backup(encrypted: bool = Query(False)):
     """Export all non-sensitive data as a JSON backup."""
     with get_db() as conn:
         def dump(table, query=None):
@@ -874,18 +1426,37 @@ def export_backup():
             "merchant_renames": dump("merchant_rename"),
             "csv_profiles":   dump("csv_import_profile"),
             "import_batches": dump("import_batch"),
+            "import_batch_accounts": dump("import_batch_account"),
             "transactions":   dump("txn",
                                    "SELECT id, plaid_transaction_id, account_id, owner_id, "
                                    "category_id, amount, merchant_name, raw_name, date, "
-                                   "is_pending, category_overridden, notes, content_hash, "
+                                   "is_pending, category_overridden, imported_category, notes, content_hash, "
                                    "import_batch_id FROM txn ORDER BY date DESC"),
         }
+        recipients = []
+        if encrypted:
+            recipients = [dict(r) for r in conn.execute("""
+                SELECT id, label, public_key
+                FROM   backup_recipient
+                WHERE  enabled = 1
+                ORDER  BY created_at DESC, label
+            """).fetchall()]
 
-    content = json.dumps(payload, indent=2, default=str)
+    if encrypted:
+        if not recipients:
+            raise HTTPException(status_code=400, detail="No enabled backup recipients are configured")
+        content = _build_encrypted_backup_bytes(
+            _zip_json_bytes("fintrack_backup.json", payload),
+            recipients,
+        )
+        filename = "fintrack_backup.encrypted.zip"
+    else:
+        content = _zip_json_bytes("fintrack_backup.json", payload)
+        filename = "fintrack_backup.zip"
     return StreamingResponse(
         iter([content]),
-        media_type="application/json",
-        headers={"Content-Disposition": 'attachment; filename="fintrack_backup.json"'},
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -912,17 +1483,16 @@ def export_credentials(request: Request):
         "warning":     "This file contains sensitive Plaid access tokens. Store securely.",
         "plaid_items": exported_items,
     }
-    content = json.dumps(payload, indent=2)
+    content = _zip_json_bytes("fintrack_credentials.json", payload)
     return StreamingResponse(
         iter([content]),
-        media_type="application/json",
-        headers={"Content-Disposition": 'attachment; filename="fintrack_credentials.json"'},
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="fintrack_credentials.zip"'},
     )
 
 
 class RestoreRequest(BaseModel):
     data:             dict
-    include_transactions: bool = True
 
 
 @router.post("/restore")
@@ -935,11 +1505,66 @@ def restore_backup(body: RestoreRequest):
     if d.get("version") not in (1, 2):
         raise HTTPException(status_code=400, detail="Unrecognised backup version")
 
+    owners = [dict(row) for row in d.get("owners", [])]
+    accounts = [dict(row) for row in d.get("accounts", [])]
+    categories = [dict(row) for row in d.get("categories", [])]
+    category_rules = [dict(row) for row in d.get("category_rules", [])]
+    merchant_renames = [dict(row) for row in d.get("merchant_renames", [])]
+    csv_profiles = [dict(row) for row in d.get("csv_profiles", [])]
+    import_batches = [dict(row) for row in d.get("import_batches", [])]
+    import_batch_accounts = [dict(row) for row in d.get("import_batch_accounts", [])]
+    transactions = [dict(row) for row in d.get("transactions", [])]
+
+    owner_ids = {row.get("id") for row in owners if row.get("id")}
+    account_ids = {row.get("id") for row in accounts if row.get("id")}
+    category_ids = {row.get("id") for row in categories if row.get("id")}
+    csv_profile_ids = {row.get("id") for row in csv_profiles if row.get("id")}
+    import_batch_ids = {row.get("id") for row in import_batches if row.get("id")}
+
+    def normalize_nullable_fk(rows, key, valid_ids):
+        for row in rows:
+            value = row.get(key)
+            if value and value not in valid_ids:
+                row[key] = None
+
+    normalize_nullable_fk(accounts, "owner_id", owner_ids)
+    normalize_nullable_fk(categories, "owner_id", owner_ids)
+    normalize_nullable_fk(csv_profiles, "account_id", account_ids)
+    normalize_nullable_fk(import_batches, "profile_id", csv_profile_ids)
+
+    for row in categories:
+        parent_id = row.get("parent_id")
+        if parent_id and parent_id not in category_ids:
+            row["parent_id"] = None
+
+    category_rules = [
+        row for row in category_rules
+        if row.get("category_id") in category_ids
+    ]
+
+    normalize_nullable_fk(transactions, "owner_id", owner_ids)
+    normalize_nullable_fk(transactions, "category_id", category_ids)
+    normalize_nullable_fk(transactions, "import_batch_id", import_batch_ids)
+    transactions = [
+        row for row in transactions
+        if row.get("account_id") in account_ids
+    ]
+
+    import_batch_accounts = [
+        row for row in import_batch_accounts
+        if row.get("batch_id") in import_batch_ids
+        and (not row.get("account_id") or row.get("account_id") in account_ids)
+    ]
+
+    # Categories are a two-level hierarchy; insert groups before leaves so
+    # self-referential parent_id constraints are satisfied during restore.
+    categories.sort(key=lambda row: (0 if not row.get("parent_id") else 1, row.get("sort_order", 0), row.get("name", "")))
+
     with get_db() as conn:
         # Wipe in dependency order (children before parents)
-        if body.include_transactions:
-            conn.execute("DELETE FROM txn")
-            conn.execute("DELETE FROM import_batch")
+        conn.execute("DELETE FROM txn")
+        conn.execute("DELETE FROM import_batch_account")
+        conn.execute("DELETE FROM import_batch")
         conn.execute("DELETE FROM category_rule")
         conn.execute("DELETE FROM merchant_rename")
         conn.execute("DELETE FROM csv_import_profile")
@@ -960,21 +1585,41 @@ def restore_backup(body: RestoreRequest):
                     vals
                 )
 
-        insert_rows("owner",            d.get("owners",           []))
-        insert_rows("account",          d.get("accounts",         []))
-        insert_rows("category",         d.get("categories",       []))
-        insert_rows("category_rule",    d.get("category_rules",   []))
-        insert_rows("merchant_rename",  d.get("merchant_renames", []))
-        insert_rows("csv_import_profile", d.get("csv_profiles",   []))
-        if body.include_transactions:
-            insert_rows("import_batch", d.get("import_batches",   []))
-            insert_rows("txn",          d.get("transactions",     []))
+        insert_rows("owner",            owners)
+        insert_rows("account",          accounts)
+        insert_rows("category",         categories)
+        insert_rows("category_rule",    category_rules)
+        insert_rows("merchant_rename",  merchant_renames)
+        insert_rows("csv_import_profile", csv_profiles)
+        insert_rows("import_batch", import_batches)
+        insert_rows("import_batch_account", import_batch_accounts)
+        insert_rows("txn",          transactions)
 
-    return {"ok": True, "restored_at": datetime.utcnow().isoformat()}
+    return {
+        "ok": True,
+        "restored_at": datetime.utcnow().isoformat(),
+        "restored_counts": {
+            "owners": len(owners),
+            "accounts": len(accounts),
+            "categories": len(categories),
+            "category_rules": len(category_rules),
+            "merchant_renames": len(merchant_renames),
+            "csv_profiles": len(csv_profiles),
+            "import_batches": len(import_batches),
+            "import_batch_accounts": len(import_batch_accounts),
+            "transactions": len(transactions),
+        },
+    }
 
 
 class CredentialsRestoreRequest(BaseModel):
     data: dict
+
+
+@router.post("/restore-file/inspect")
+async def inspect_backup_file(file: UploadFile = File(...)):
+    content = await file.read()
+    return _inspect_backup_upload(content, file.filename or "", "backup")
 
 
 @router.post("/restore/credentials")
@@ -998,3 +1643,28 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
                 (item["item_id"], access_token, access_token_enc)
             )
     return {"ok": True, "restored": len(items)}
+
+
+@router.post("/restore-file")
+async def restore_backup_file(
+    file: UploadFile = File(...),
+    private_key_file: UploadFile | None = File(None),
+    private_key_passphrase: str | None = Form(None),
+):
+    content = await file.read()
+    private_key_bytes = await private_key_file.read() if private_key_file else None
+    payload = _load_backup_payload_from_upload(
+        content,
+        file.filename or "",
+        "backup",
+        private_key_bytes=private_key_bytes,
+        private_key_passphrase=private_key_passphrase,
+    )
+    return restore_backup(RestoreRequest(data=payload))
+
+
+@router.post("/restore/credentials-file")
+async def restore_credentials_file(request: Request, file: UploadFile = File(...)):
+    content = await file.read()
+    payload = _load_json_or_zip_payload(content, file.filename or "", "credentials")
+    return restore_credentials(CredentialsRestoreRequest(data=payload), request)

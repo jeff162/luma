@@ -3,6 +3,7 @@ import { Routes, Route, NavLink } from 'react-router-dom'
 import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
+import RuntimeConfigScreen from './components/RuntimeConfigScreen.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import Transactions from './pages/Transactions.jsx'
 import Categories from './pages/Categories.jsx'
@@ -82,6 +83,7 @@ export default function App() {
   const [needsBootstrap, setNeedsBootstrap] = useState(false)
   const [currentUser, setCurrentUser] = useState(null)
   const [authError, setAuthError] = useState(null)
+  const [runtimeConfig, setRuntimeConfig] = useState({ ok: true })
 
   useEffect(() => {
     let cancelled = false
@@ -90,6 +92,7 @@ export default function App() {
       try {
         const status = await api.getAuthStatus()
         if (cancelled) return
+        setRuntimeConfig(status.runtime_config || { ok: true })
         setAuthEnabled(!!status.auth_enabled)
         setNeedsBootstrap(!!status.needs_bootstrap)
 
@@ -123,6 +126,7 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    if (runtimeConfig && runtimeConfig.ok === false) return
     if (authEnabled && !currentUser) return
 
     function fetchTasks() {
@@ -134,7 +138,7 @@ export default function App() {
     fetchTasks()
     window.addEventListener('fintrack:refresh-tasks', fetchTasks)
     return () => window.removeEventListener('fintrack:refresh-tasks', fetchTasks)
-  }, [authEnabled, currentUser])
+  }, [authEnabled, currentUser, runtimeConfig])
 
   async function handleLogout() {
     await api.logout().catch(() => {})
@@ -152,6 +156,10 @@ export default function App() {
 
   if (authError) {
     throw authError
+  }
+
+  if (runtimeConfig && runtimeConfig.ok === false) {
+    return <RuntimeConfigScreen runtimeConfig={runtimeConfig} />
   }
 
   if (authEnabled && !currentUser) {

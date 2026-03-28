@@ -12,8 +12,8 @@
  *
  * MerchantCell
  *   Renders the merchant name with two interactions:
- *   - Click the name (+ ↗) → opens TransactionDetail panel (payee history)
- *   - Click the ✎ → inline text edit that calls api.updateMerchant() on commit
+ *   - Click the name → inline text edit that calls api.updateMerchant() on commit
+ *   - Click the ↗ icon → opens TransactionDetail panel (payee history)
  *   The parent passes onOpenDetail(txn) and onRename(id, name) callbacks so
  *   each page can update its own local state optimistically.
  *
@@ -49,7 +49,7 @@
  * - Any place transactions are displayed (Transactions page, Dashboard drill-down,
  *   TransactionDetail month list) should use these components for consistency.
  *   Do not inline merchant name or category editing directly in a page.
- * - MerchantCell handles: display name, click-to-open-detail (↗), inline rename (✎).
+ * - MerchantCell handles: display name, click-to-edit, detail-open via ↗.
  *   Renaming calls the API immediately and updates local state via onRename callback.
  * - CategoryCell handles: badge display, click-to-edit via InlineCategorySelect.
  *   Saving calls the API and updates local state via onSave callback.
@@ -72,6 +72,22 @@ import { api } from '../lib/api.js'
 import { Badge } from './ui.jsx'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+const detailButtonStyle = {
+  background: 'none',
+  border: 'none',
+  color: 'var(--accent2)',
+  cursor: 'pointer',
+  fontSize: 11,
+  padding: '3px 5px',
+  opacity: 0.75,
+  lineHeight: 1,
+  flexShrink: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: 6,
+}
 
 export function buildGroups(flatCats) {
   const groups = flatCats.filter(c => !c.parent_id)
@@ -348,22 +364,19 @@ export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
       <span
-        onClick={e => { e.stopPropagation(); onOpenDetail?.(txn) }}
+        onClick={startEdit}
         style={{ fontWeight: 500, cursor: 'pointer' }}
-        title="Click to view spending history"
+        title="Click to rename merchant"
       >
         {name}
-        <span style={{ fontSize: 10, color: 'var(--accent2)', opacity: 0.7, marginLeft: 4 }}>↗</span>
       </span>
-      <button
-        onClick={startEdit}
-        title="Rename"
-        style={{
-          background: 'none', border: 'none', color: 'var(--muted)',
-          cursor: 'pointer', fontSize: 11, padding: '0 2px', opacity: 0.5,
-          lineHeight: 1,
-        }}
-      >✎</button>
+      {onOpenDetail && (
+        <button
+          onClick={e => { e.stopPropagation(); onOpenDetail(txn) }}
+          title="View spending history"
+          style={detailButtonStyle}
+        >↗</button>
+      )}
       {!!txn.is_pending && (
         <span style={{ fontSize: 11, color: 'var(--muted)' }}>Pending</span>
       )}
@@ -686,14 +699,13 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
         ) : (
           <span style={{ color: 'var(--muted)', fontSize: 13 }}>Uncategorized</span>
         )}
-        {!!txn.category_overridden && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✎</span>}
       </div>
       {onOpenDetail && txn.category_name && (
-        <span
+        <button
           onClick={e => { e.stopPropagation(); onOpenDetail() }}
           title="View category spending history"
-          style={{ fontSize: 10, color: 'var(--accent2)', opacity: 0.7, cursor: 'pointer', lineHeight: 1 }}
-        >↗</span>
+          style={detailButtonStyle}
+        >↗</button>
       )}
     </div>
   )

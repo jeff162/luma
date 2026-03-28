@@ -1,6 +1,13 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from runtime_config import (
+    read_environment_settings,
+    runtime_config_defaults,
+    runtime_config_status,
+    write_environment_settings,
+    write_runtime_env,
+)
 from db.control_database import (
     authenticate_user,
     begin_totp_setup,
@@ -56,11 +63,40 @@ class EnableAuthRequest(BaseModel):
     enabled: bool = True
 
 
+class RuntimeConfigRequest(BaseModel):
+    session_secret: str | None = None
+    app_master_key: str | None = None
+    session_cookie_name: str | None = None
+
+
+class EnvironmentSettingsRequest(BaseModel):
+    plaid_client_id: str | None = None
+    plaid_secret: str | None = None
+    plaid_env: str | None = None
+    fintrack_use_log_files: bool | None = None
+
+
 def _require_admin(request: Request):
     user = getattr(request.state, "user", None)
     if not user or user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
+
+
+def _ensure_runtime_config_ok():
+    status = runtime_config_status()
+    if not status["ok"]:
+        raise HTTPException(status_code=503, detail=status["message"])
+    return status
+
+
+def _require_admin_or_local(request: Request):
+    if not auth_required():
+        user = getattr(request.state, "user", None)
+        if not user:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        return user
+    return _require_admin(request)
 
 
 def _session_payload(user: dict) -> dict:
@@ -82,6 +118,7 @@ def _auth_status_payload(request: Request | None = None) -> dict:
     payload = {
         "auth_enabled": enabled,
         "needs_bootstrap": enabled and bootstrap_required(),
+        "runtime_config": runtime_config_status(),
     }
     if request and enabled:
         user_id = request.session.get("user_id")
@@ -106,8 +143,51 @@ def auth_status(request: Request):
     return _auth_status_payload(request)
 
 
+@router.post("/runtime-config")
+def configure_runtime_config(body: RuntimeConfigRequest):
+    if runtime_config_status()["ok"]:
+        raise HTTPException(status_code=403, detail="Runtime config is already initialized")
+    try:
+        result = write_runtime_env(
+            session_secret=body.session_secret,
+            app_master_key=body.app_master_key,
+            session_cookie_name=body.session_cookie_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return result
+
+
+@router.get("/runtime-config/defaults")
+def get_runtime_config_defaults():
+    if runtime_config_status()["ok"]:
+        raise HTTPException(status_code=403, detail="Runtime config is already initialized")
+    return runtime_config_defaults()
+
+
+@router.get("/environment")
+def get_environment_settings(request: Request):
+    _require_admin_or_local(request)
+    return read_environment_settings()
+
+
+@router.post("/environment")
+def save_environment_settings(body: EnvironmentSettingsRequest, request: Request):
+    _require_admin_or_local(request)
+    try:
+        return write_environment_settings(
+            plaid_client_id=body.plaid_client_id,
+            plaid_secret=body.plaid_secret,
+            plaid_env=body.plaid_env,
+            fintrack_use_log_files=body.fintrack_use_log_files,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/enable")
 def enable_auth(body: EnableAuthRequest):
+    _ensure_runtime_config_ok()
     if not body.enabled:
         raise HTTPException(status_code=400, detail="Disabling auth is not supported here")
     if auth_required():
@@ -118,6 +198,7 @@ def enable_auth(body: EnableAuthRequest):
 
 @router.post("/bootstrap")
 def bootstrap(body: BootstrapRequest, request: Request):
+    _ensure_runtime_config_ok()
     if not auth_required():
         raise HTTPException(status_code=400, detail="Auth is not enabled for this instance")
     try:
@@ -132,6 +213,7 @@ def bootstrap(body: BootstrapRequest, request: Request):
 
 @router.post("/login")
 def login(body: LoginRequest, request: Request):
+    _ensure_runtime_config_ok()
     if not auth_required():
         local_user = get_local_mode_user()
         user = authenticate_user(body.username, body.password)
@@ -161,6 +243,7 @@ def logout(request: Request):
 
 @router.post("/2fa/verify")
 def verify_2fa(body: TotpVerifyRequest, request: Request):
+    _ensure_runtime_config_ok()
     if not auth_required():
         raise HTTPException(status_code=400, detail="Auth is not enabled for this instance")
     pending_user_id = request.session.get("pending_user_id")

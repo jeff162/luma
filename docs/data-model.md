@@ -1,0 +1,153 @@
+# Data Model
+
+This is the working model FinTrack is built around.
+
+## Core hierarchy
+
+The main relationship chain is:
+
+`Owner -> Account -> Transaction -> Category (leaf) -> Category Group`
+
+In practice:
+
+- an **owner** represents a person or household bucket
+- an **account** belongs to one owner
+- a **transaction** belongs to one account
+- a **transaction** may be assigned to one leaf category
+- a **leaf category** belongs to a top-level category group
+
+## Owners
+
+Owners represent household members or shared buckets such as:
+
+- Alice
+- Bob
+- Shared
+
+They are used for:
+
+- assigning accounts
+- scoping some rules
+- splitting dashboard views
+- surfacing ownership-related tasks
+
+Transactions also carry `owner_id`, denormalized from the account, so owner-based
+filtering is cheaper in summary queries.
+
+## Accounts
+
+Accounts represent bank or credit accounts, typically imported from Plaid or
+created during CSV import.
+
+Important fields/behavior:
+
+- each account belongs to an owner or is temporarily unassigned
+- transactions reference `account_id`
+- account ownership affects owner-based reporting and tasks
+
+## Transactions
+
+Transactions are the central fact table.
+
+Important conventions:
+
+- `amount > 0` means money out
+- `amount < 0` means money in
+- `category_overridden = 1` means the user manually chose the category
+- pending transactions are visible in lists but usually excluded from summary totals
+
+Transactions may carry both:
+
+- `raw_name`
+- `merchant_name`
+
+`merchant_name` is the cleaned display name when available.
+
+## Categories
+
+Categories are intentionally limited to **two levels**:
+
+- top-level **groups**
+- child **leaf categories**
+
+Examples:
+
+- Group: `Food & Drink`
+- Leaf: `Groceries`
+- Leaf: `Dining Out`
+
+Important invariant:
+
+- transactions should be assigned to leaf categories, not groups
+
+Groups also carry important reporting behavior:
+
+- `category_type`
+  typically `expense` or `income`
+- `exclude_from_totals`
+  removes that group and all descendants from charts and totals
+
+This is used for things like transfers and credit-card-payment categories.
+
+## Rules
+
+Rules are keyword-based categorization rules.
+
+They can include:
+
+- merchant keyword
+- amount conditions
+- owner scope
+- account scope
+- category assignment
+- merchant rename (`clean_name`)
+
+Important behavior:
+
+- rule priority is automatic, not manually curated
+- more specific rules beat more general ones
+- amount comparisons use absolute values
+- owner-scoped rules beat global rules when otherwise similar
+
+## Import batches and profiles
+
+CSV import creates supporting records for workflow and recovery:
+
+- **import profiles**
+  saved mapping/setup templates for recurring CSV formats
+- **import batches**
+  one record per import run so imported transactions can be undone
+
+Imports also use content hashing for duplicate detection.
+
+## Backups
+
+Backup/restore deals with two different classes of data:
+
+- regular app data
+- credentials/secrets such as Plaid-linked credentials
+
+Those are intentionally separated so normal backups can stay safer and simpler.
+
+## Schema evolution
+
+The SQLite schema is versioned and migrated automatically on startup.
+
+If you change the schema:
+
+- add a migration in `backend/db/database.py`
+- bump the current schema version
+- keep migrations idempotent when practical
+
+## Reporting assumptions
+
+A few behavior rules matter across the whole app:
+
+- income groups match money-in transactions
+- expense groups match money-out transactions
+- `exclude_from_totals` must be honored consistently across summaries and charts
+- category grouping is only two levels deep
+
+If any of these assumptions change, both backend queries and frontend UI logic
+will likely need coordinated updates.
+

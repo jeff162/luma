@@ -8,51 +8,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
-- Categorization rule suggestion toast — after manually categorizing a transaction,
-  a non-intrusive toast appears offering to create a rule for that payee. Dismisses
-  automatically after 8 seconds; clicking "Create rule" opens the full rule editor
-  pre-filled with the merchant name and chosen category.
-- Rule editor redesign — rules now use a two-section "If / Then" layout with
-  expandable condition chips (merchant name, amount, owner, account). Amount
-  conditions support `>=`, `>`, `<=`, `<`, and equals operators with separate
-  lower/upper bounds and a debit/credit/both selector.
-- Rules list plain-text descriptions — each rule row shows its conditions and
-  action as natural language ("amount >= $10 → Groceries") instead of separate
-  columns, making complex rules easier to read at a glance.
-- Merchant rename folded into rules — the "Rename merchant to" action is now
-  part of the categorization rule rather than a separate Merchant Renames tab.
-  Rules with a `clean_name` set will rename the merchant display name when they
-  fire during sync or re-categorization.
-- Income / Expense super-groups on Categories page — groups are now separated
-  into Expense and Income sections. A Type toggle (Expense / Income) in the
-  group detail panel controls which section a group appears in and whether it
-  contributes to income or spending totals.
-- Automatic rule specificity ordering — rules are evaluated most-specific first
-  (longer keyword beats shorter, more conditions beat fewer, owner-scoped beats
-  global) with no manual priority number needed.
-- Rule list sort order — rules are listed alphabetically by keyword; within the
-  same keyword, less-specific rules appear first (general → specific top-to-bottom,
-  matching reverse evaluation order so overrides are visible at the bottom).
-- Match preview when editing rules — after setting keyword or amount conditions,
-  the form shows a live count of uncategorized transactions that match, with an
-  optional checkbox to apply the rule to those transactions immediately on save.
-- Sticky filter bar on Rules page — the keyword filter and rule count stay pinned
-  while the rule list scrolls.
+- Cross-platform launcher and setup helpers for Windows and Unix-like systems,
+  including first-run environment bootstrap and a runtime repair screen for
+  missing required settings.
+- Import/export upgrades, including smarter CSV preview and recent-setting reuse,
+  account creation during import, post-import category mapping from CSV text,
+  and zipped backup/restore with optional RSA encryption for cloud-safe storage.
+- Rule-system upgrades, including the post-categorization rule suggestion toast,
+  the redesigned "If / Then" rule editor, natural-language rule descriptions,
+  live match previews, and merchant renaming folded into categorization rules.
+- Category and detail-view upgrades, including income/expense super-groups and
+  new category/account detail panels alongside the existing payee detail view.
 
 ### Changed
-- `categorizer.py` — `categorize_transaction()` now returns a dict
-  `{"category_id": ..., "clean_name": ...}` instead of a bare string, enabling
-  rules to carry rename instructions. `recategorize_all()` applies clean names
-  to existing transactions when re-running rules.
-- `sync.py` — merchant display name is set from the matched rule's `clean_name`
-  during sync, replacing the separate merchant_rename pre-pass.
-- Rule evaluation order changed from `priority DESC` to computed specificity
-  (keyword length DESC, condition count DESC, owner-scoped first).
-- Rules page list changed from multi-column grid to two-column layout
-  (keyword + plain-text description).
-- "New rule" button renamed to "Add rule".
-- Rule priority field removed from the UI (stored in DB for compatibility but
-  no longer surfaced or used for ordering).
+- The setup flow is now organized around launcher scripts and a simpler `.env`
+  story, with advanced overrides documented separately.
+- Rule evaluation now uses computed specificity instead of manual priority, and
+  the Rules page is organized around readable descriptions rather than grid-style
+  editing.
+- Detail panels now share common shell/chart/paging behavior, use incremental
+  transaction loading, stay open until explicitly closed, and remember floating
+  placement between openings.
+- Backup restore is more resilient across exported instances, including restore
+  handling for category/account relationship ordering.
 
 ### Removed
 - Merchant Renames tab from the Rules page — functionality merged into rules.

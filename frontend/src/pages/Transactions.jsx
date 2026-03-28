@@ -320,17 +320,28 @@ export default function Transactions() {
         return (
           <span
             title={accountStr}
-            onClick={e => {
-              e.stopPropagation()
-              setDetailAccount({ id: txn.account_id, name: txn.account_name, mask: txn.account_mask })
-            }}
             style={{
               color: 'var(--muted)', fontSize: 13,
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              cursor: 'pointer', display: 'block',
+              display: 'inline-flex', alignItems: 'center', gap: 4,
             }}
           >
-            {accountStr}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {accountStr}
+            </span>
+            <button
+              onClick={e => {
+                e.stopPropagation()
+                setDetailAccount({ id: txn.account_id, name: txn.account_name, mask: txn.account_mask })
+              }}
+              title="View account detail"
+              style={{
+                background: 'none', border: 'none', color: 'var(--accent2)',
+                cursor: 'pointer', fontSize: 11, padding: '3px 5px', opacity: 0.75,
+                lineHeight: 1, flexShrink: 0, display: 'inline-flex', alignItems: 'center',
+                justifyContent: 'center', borderRadius: 6,
+              }}
+            >↗</button>
           </span>
         )
       }
@@ -492,6 +503,7 @@ export default function Transactions() {
         {detailCategory && (
           <CategoryDetail
             category={detailCategory}
+            categories={categories}
             onClose={() => setDetailCategory(null)}
           />
         )}
@@ -500,6 +512,7 @@ export default function Transactions() {
         {detailAccount && (
           <AccountDetail
             account={detailAccount}
+            categories={categories}
             onClose={() => setDetailAccount(null)}
           />
         )}

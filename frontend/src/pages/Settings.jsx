@@ -1261,16 +1261,305 @@ function StickySection({ title, description, actions, children }) {
   )
 }
 
+function BackupRecipientsSection() {
+  const [recipients, setRecipients] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [error, setError] = useState('')
+  const [form, setForm] = useState({ label: '', public_key: '' })
+
+  async function load() {
+    setLoading(true)
+    try {
+      setRecipients(await api.getBackupRecipients())
+      setError('')
+    } catch (err) {
+      setError(err.message || 'Failed to load backup recipients')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  async function loadPublicKeyFile(file) {
+    if (!file) return
+    try {
+      const text = await file.text()
+      setForm(prev => ({
+        label: prev.label || file.name.replace(/\.[^.]+$/, ''),
+        public_key: text,
+      }))
+      setError('')
+    } catch {
+      setError('Failed to read public key file')
+    }
+  }
+
+  async function handleCreate(e) {
+    e.preventDefault()
+    setCreating(true)
+    setError('')
+    try {
+      const created = await api.createBackupRecipient(form)
+      setRecipients(prev => [created, ...prev])
+      setForm({ label: '', public_key: '' })
+    } catch (err) {
+      setError(err.message || 'Failed to save backup recipient')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function toggleRecipient(recipient) {
+    try {
+      const updated = await api.updateBackupRecipient(recipient.id, { enabled: !recipient.enabled })
+      setRecipients(prev => prev.map(item => item.id === recipient.id ? updated : item))
+    } catch (err) {
+      setError(err.message || 'Failed to update recipient')
+    }
+  }
+
+  async function removeRecipient(recipient) {
+    if (!confirm(`Delete backup recipient "${recipient.label}"?`)) return
+    try {
+      await api.deleteBackupRecipient(recipient.id)
+      setRecipients(prev => prev.filter(item => item.id !== recipient.id))
+    } catch (err) {
+      setError(err.message || 'Failed to delete recipient')
+    }
+  }
+
+  const inputStyle = {
+    background: 'var(--surface)', color: 'var(--text)',
+    border: '1px solid var(--border)', borderRadius: 6,
+    padding: '7px 10px', fontSize: 13, width: '100%', outline: 'none',
+  }
+
+  return (
+    <Card style={{ padding: 0, overflow: 'hidden' }}>
+      <form onSubmit={handleCreate} style={{ display: 'grid', gap: 10, padding: 16, borderBottom: '1px solid var(--border)' }}>
+        <input
+          value={form.label}
+          onChange={e => setForm(prev => ({ ...prev, label: e.target.value }))}
+          placeholder="Recipient label (e.g. Jeff laptop)"
+          style={inputStyle}
+        />
+        <textarea
+          value={form.public_key}
+          onChange={e => setForm(prev => ({ ...prev, public_key: e.target.value }))}
+          placeholder="Paste RSA public key"
+          rows={4}
+          style={{ ...inputStyle, resize: 'vertical', fontFamily: 'monospace' }}
+        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <input
+            type="file"
+            accept=".pub,.pem,.txt,.key"
+            onChange={e => loadPublicKeyFile(e.target.files?.[0])}
+            style={{ fontSize: 13 }}
+          />
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+            Or choose an RSA public key file to fill this in.
+          </div>
+        </div>
+        <div>
+          <Button small type="submit" disabled={creating || !form.label.trim() || !form.public_key.trim()}>
+            {creating ? 'Saving...' : 'Add recipient'}
+          </Button>
+        </div>
+      </form>
+
+      {error && <div style={{ padding: '10px 16px', color: '#ef4444', fontSize: 13, borderBottom: '1px solid var(--border)' }}>{error}</div>}
+      {loading ? <Spinner /> : recipients.length === 0 ? (
+        <div style={{ padding: '18px 16px', color: 'var(--muted)', fontSize: 13 }}>
+          No backup recipients yet. Add an RSA public key here to enable encrypted backups for cloud storage.
+        </div>
+      ) : (
+        recipients.map(recipient => (
+          <div key={recipient.id} style={{ display: 'grid', gridTemplateColumns: '1fr 120px 90px', gap: 10, padding: '12px 16px', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{recipient.label}</div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'monospace', wordBreak: 'break-all' }}>{recipient.fingerprint}</div>
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={!!recipient.enabled} onChange={() => toggleRecipient(recipient)} />
+              Enabled
+            </label>
+            <Button small variant="ghost" onClick={() => removeRecipient(recipient)}>Delete</Button>
+          </div>
+        ))
+      )}
+    </Card>
+  )
+}
+
+function EnvironmentSection({ authEnabled, currentUser }) {
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState(false)
+  const [settings, setSettings] = useState({
+    plaid_client_id: '',
+    plaid_secret: '',
+    plaid_env: 'sandbox',
+    fintrack_use_log_files: false,
+    env_file_path: '',
+    env_file_present: false,
+  })
+
+  const canManage = !authEnabled || currentUser?.role === 'admin'
+
+  useEffect(() => {
+    if (!canManage) {
+      setLoading(false)
+      return
+    }
+
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      try {
+        const resp = await api.getEnvironmentSettings()
+        if (!cancelled) {
+          setSettings({
+            plaid_client_id: resp.plaid_client_id || '',
+            plaid_secret: resp.plaid_secret || '',
+            plaid_env: resp.plaid_env || 'sandbox',
+            fintrack_use_log_files: !!resp.fintrack_use_log_files,
+            env_file_path: resp.env_file_path || '',
+            env_file_present: !!resp.env_file_present,
+          })
+          setError('')
+        }
+      } catch (err) {
+        if (!cancelled) setError(err.message || 'Failed to load environment settings')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    load()
+    return () => { cancelled = true }
+  }, [canManage])
+
+  if (!canManage) return null
+
+  const inputStyle = {
+    background: 'var(--surface)', color: 'var(--text)',
+    border: '1px solid var(--border)', borderRadius: 6,
+    padding: '7px 10px', fontSize: 13, width: '100%', outline: 'none',
+  }
+
+  async function handleSave(e) {
+    e.preventDefault()
+    setSaving(true)
+    setSaved(false)
+    setError('')
+    try {
+      const resp = await api.saveEnvironmentSettings({
+        plaid_client_id: settings.plaid_client_id,
+        plaid_secret: settings.plaid_secret,
+        plaid_env: settings.plaid_env,
+        fintrack_use_log_files: settings.fintrack_use_log_files,
+      })
+      setSettings(prev => ({
+        ...prev,
+        ...(resp.settings || {}),
+      }))
+      setSaved(true)
+    } catch (err) {
+      setError(err.message || 'Failed to save environment settings')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card style={{ padding: 0, overflow: 'hidden' }}>
+      {loading ? <Spinner /> : (
+        <form onSubmit={handleSave} style={{ display: 'grid', gap: 14, padding: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 160px', gap: 10 }}>
+            <div>
+              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Plaid client ID</label>
+              <input
+                value={settings.plaid_client_id}
+                onChange={e => setSettings(prev => ({ ...prev, plaid_client_id: e.target.value }))}
+                placeholder="Optional"
+                style={inputStyle}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Plaid secret</label>
+              <input
+                type="password"
+                value={settings.plaid_secret}
+                onChange={e => setSettings(prev => ({ ...prev, plaid_secret: e.target.value }))}
+                placeholder="Optional"
+                style={inputStyle}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Plaid environment</label>
+              <select
+                value={settings.plaid_env}
+                onChange={e => setSettings(prev => ({ ...prev, plaid_env: e.target.value }))}
+                style={{ ...inputStyle, cursor: 'pointer' }}
+              >
+                <option value="sandbox">sandbox</option>
+                <option value="development">development</option>
+                <option value="production">production</option>
+              </select>
+            </div>
+          </div>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={settings.fintrack_use_log_files}
+              onChange={e => setSettings(prev => ({ ...prev, fintrack_use_log_files: e.target.checked }))}
+            />
+            Write fresh launcher logs to <code>scripts/backend.log</code> and <code>scripts/frontend.log</code>
+          </label>
+
+          <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
+            These values are stored in <code>{settings.env_file_path || '.env'}</code>. Restart the backend after saving for changes to take effect.
+          </div>
+
+          {saved && (
+            <div style={{ fontSize: 13, color: '#16a34a' }}>
+              Saved. Restart the backend to apply the updated environment settings.
+            </div>
+          )}
+          {error && (
+            <div style={{ fontSize: 13, color: '#ef4444' }}>
+              {error}
+            </div>
+          )}
+
+          <div>
+            <Button small type="submit" disabled={saving}>
+              {saving ? 'Saving...' : 'Save environment settings'}
+            </Button>
+          </div>
+        </form>
+      )}
+    </Card>
+  )
+}
+
 export default function Settings() {
   const [owners, setOwners]   = useState([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
   const [authEnabled, setAuthEnabled] = useState(false)
+  const [currentUser, setCurrentUser] = useState(null)
 
   useEffect(() => {
     Promise.all([api.getOwners(), api.getAuthStatus()]).then(([o, status]) => {
       setOwners(o)
       setAuthEnabled(!!status.auth_enabled)
+      setCurrentUser(status.user || null)
       setLoading(false)
     })
   }, [])
@@ -1292,6 +1581,8 @@ export default function Settings() {
     setOwners(prev => prev.filter(o => o.id !== id))
   }
 
+  const canManageEnvironment = !authEnabled || currentUser?.role === 'admin'
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
@@ -1305,6 +1596,20 @@ export default function Settings() {
       {authEnabled && <SecuritySection />}
 
       {authEnabled && <UserAdminSection />}
+
+      {canManageEnvironment && (
+        <StickySection
+          title="Environment"
+          description={
+            <>
+            Update Plaid credentials and launcher logging without editing <code>.env</code> by hand.
+            Restart the backend after saving changes here.
+            </>
+          }
+        >
+          <EnvironmentSection authEnabled={authEnabled} currentUser={currentUser} />
+        </StickySection>
+      )}
 
       {/* ── Section 1: Owners ── */}
       <StickySection
@@ -1397,6 +1702,18 @@ export default function Settings() {
         }
       >
         <ImportProfilesSection />
+      </StickySection>
+
+      <StickySection
+        title="Backup recipients"
+        description={
+          <>
+          Optional RSA public keys used to encrypt backup files for storage outside this app.
+          The app stores only public keys. You will need a matching private key file when restoring an encrypted backup.
+          </>
+        }
+      >
+        <BackupRecipientsSection />
       </StickySection>
       </div>
     </div>
