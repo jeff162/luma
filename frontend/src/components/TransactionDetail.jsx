@@ -46,7 +46,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
 import { formatCurrency, formatDate, monthLabel } from '../lib/utils.js'
 import { Spinner, Badge } from './ui.jsx'
-import { MerchantCell } from './TransactionRow.jsx'
+import { MerchantCell, CategoryCell, getTxnMerchantLabel } from './TransactionRow.jsx'
+import CategoryDisplay from './CategoryDisplay.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
 import {
@@ -57,79 +58,6 @@ import {
   useDetailPanelChrome,
   usePagedMonthTransactions,
 } from './detailShared.jsx'
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function buildGroups(flatCats) {
-  const groups = flatCats.filter(c => !c.parent_id)
-  return groups.map(g => ({
-    value: g.id, label: g.name, icon: g.icon,
-    options: flatCats.filter(c => c.parent_id === g.id)
-      .map(c => ({ value: c.id, label: c.name, icon: c.icon })),
-  })).filter(g => g.options.length > 0)
-}
-
-// ── Inline category editor for detail rows ────────────────────────────────────
-
-function InlineCatEdit({ t, categories, onSaved, onRulePrompt }) {
-  const [editing, setEditing] = useState(false)
-  const groups = buildGroups(categories)
-
-  async function handleChange(e) {
-    const catId = e.target.value
-    setEditing(false)
-    await api.overrideCategory(t.id, catId)
-    const cat = categories.find(c => c.id === catId)
-    onSaved(t.id, cat)
-    if (cat && onRulePrompt) {
-      const merchantName = t.merchant_name || t.raw_name
-      if (merchantName) {
-        onRulePrompt({
-          merchantName,
-          categoryId:    cat.id,
-          categoryName:  cat.name,
-          categoryColor: cat.color,
-          categoryIcon:  cat.icon,
-        })
-      }
-    }
-  }
-
-  if (editing) {
-    return (
-      <select
-        autoFocus
-        defaultValue={t.category_id || ''}
-        onChange={handleChange}
-        onBlur={() => setEditing(false)}
-        style={{
-          background: 'var(--surface2)', color: 'var(--text)',
-          border: '1px solid var(--accent)', borderRadius: 6,
-          padding: '3px 6px', fontSize: 12, cursor: 'pointer', outline: 'none',
-        }}
-      >
-        <option value="">— Uncategorized —</option>
-        {groups.map(g => (
-          <optgroup key={g.value} label={`${g.icon} ${g.label}`}>
-            {g.options.map(o => (
-              <option key={o.value} value={o.value}>{o.icon} {o.label}</option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
-    )
-  }
-
-  return (
-    <div onClick={() => setEditing(true)} style={{ cursor: 'pointer' }}>
-      {t.category_name ? (
-        <Badge label={t.category_name} color={t.category_color} icon={t.category_icon} />
-      ) : (
-        <span style={{ color: 'var(--muted)', fontSize: 12 }}>Uncategorized</span>
-      )}
-    </div>
-  )
-}
 
 const inputStyle = {
   background: 'var(--surface2)', color: 'var(--text)',
@@ -147,12 +75,20 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
   const [trend, setTrend]               = useState([])
   const [editingName, setEditingName]   = useState(false)
   const [nameDraft, setNameDraft]       = useState('')
-  const [displayName, setDisplayName]   = useState(txn.merchant_name || txn.raw_name)
+  const [displayName, setDisplayName]   = useState(getTxnMerchantLabel(txn))
   const [selectedMonth, setSelectedMonth] = useState(null)
   const [trendLoading, setTrendLoading] = useState(true)
   const [rulePrompt, setRulePrompt]     = useState(null)
+  const [detailCategories, setDetailCategories] = useState(categories)
 
-  const payee    = txn.merchant_name || txn.raw_name
+  const payee    = getTxnMerchantLabel(txn)
+  useEffect(() => {
+    setDetailCategories(categories)
+  }, [categories])
+
+  useEffect(() => {
+    if (!editingName) setDisplayName(getTxnMerchantLabel(txn))
+  }, [txn.display_name, txn.merchant_name, txn.raw_name, editingName])
   const loadMonthPage = useCallback((month, offset, limit) => (
     api.getTransactions({
       month,
@@ -202,6 +138,16 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
         category_overridden: 1,
       }
     ))
+  }
+
+  function handleAddCategory(cat) {
+    setDetailCategories(prev => prev.some(existing => existing.id === cat.id) ? prev : [...prev, cat])
+  }
+
+  async function handleOverrideCategory(txnId, catId, catObj) {
+    await api.overrideCategory(txnId, catId)
+    const resolvedCat = catObj || detailCategories.find(c => c.id === catId)
+    handleCatSaved(txnId, resolvedCat || null)
   }
 
   const selectedMonthRow = trend.find(r => r.month === selectedMonth)
@@ -315,17 +261,18 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
                         <MerchantCell
                           txn={t}
                           onRename={(id, name) => setMonthTxns(prev =>
-                            prev.map(x => x.id === id ? { ...x, merchant_name: name } : x)
+                            prev.map(x => x.id === id ? { ...x, display_name: name } : x)
                           )}
                         />
                         <span style={{ color: 'var(--muted)', fontSize: 12,
                           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {t.account_name}{t.account_mask ? ` ···${t.account_mask}` : ''}
                         </span>
-                        <InlineCatEdit
-                          t={t}
-                          categories={categories}
-                          onSaved={handleCatSaved}
+                        <CategoryCell
+                          txn={t}
+                          categories={detailCategories}
+                          onSave={handleOverrideCategory}
+                          onAddCategory={handleAddCategory}
                           onRulePrompt={p => {
                             setRulePrompt(p)
                             externalRulePrompt?.(p)
@@ -357,6 +304,17 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
       {rulePrompt && (
         <RuleSuggestionToast
           prompt={rulePrompt}
+          onSaved={({ applyToExisting }) => {
+            if (applyToExisting) {
+              api.getTransactions({
+                month: selectedMonth,
+                payees: payee,
+                direction: 'debit',
+                limit: monthTxns.length || 100,
+                offset: 0,
+              }).then(d => setMonthTxns(d.transactions))
+            }
+          }}
           onDismiss={() => setRulePrompt(null)}
         />
       )}

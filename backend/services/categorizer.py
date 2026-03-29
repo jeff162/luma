@@ -64,41 +64,48 @@ def _amount_matches(amount: float, amount_min, amount_max) -> bool:
 def categorize_transaction(
     merchant_name: str | None,
     raw_name: str | None,
+    display_name: str | None,
     amount: float,
     conn: sqlite3.Connection,
     owner_id: str | None = None,
-) -> str | None:
+    account_id: str | None = None,
+) -> dict | None:
     """
-    Return the best matching category_id, or None.
+    Return the best matching rule as {"category_id": ..., "clean_name": ...}, or None.
 
-    Rule matching order (highest priority first):
-    1. Owner-specific rules (rule.owner_id = txn owner_id) that match keyword + amount
-    2. Global rules (rule.owner_id IS NULL) that match keyword + amount
-
-    This means an owner-scoped rule always beats a generic rule at the same priority,
-    so you can override the default categorization for one person without affecting the other.
+    Rule evaluation order favors owner-scoped and more-specific matches first.
     """
-    text = " ".join(filter(None, [merchant_name, raw_name])).lower()
+    text = " ".join(filter(None, [display_name, merchant_name, raw_name])).lower()
     if not text:
         return None
 
     rules = conn.execute(
-        """SELECT category_id, keyword, priority, amount_min, amount_max, owner_id
+        """SELECT category_id, keyword, amount_min, amount_max, owner_id, account_id, clean_name
            FROM   category_rule
            ORDER  BY
                CASE WHEN owner_id IS NOT NULL THEN 1 ELSE 0 END DESC,
-               priority DESC"""
+               CASE WHEN account_id IS NOT NULL THEN 1 ELSE 0 END DESC,
+               LENGTH(keyword) DESC,
+               (CASE WHEN amount_min IS NOT NULL THEN 1 ELSE 0 END +
+                CASE WHEN amount_max IS NOT NULL THEN 1 ELSE 0 END +
+                CASE WHEN owner_id   IS NOT NULL THEN 1 ELSE 0 END +
+                CASE WHEN account_id IS NOT NULL THEN 1 ELSE 0 END) DESC"""
     ).fetchall()
 
     for rule in rules:
         # Skip owner-scoped rules that don't match this transaction's owner
         if rule["owner_id"] is not None and rule["owner_id"] != owner_id:
             continue
+        if rule["account_id"] is not None and rule["account_id"] != account_id:
+            continue
         if rule["keyword"].lower() not in text:
             continue
         if not _amount_matches(amount, rule["amount_min"], rule["amount_max"]):
             continue
-        return rule["category_id"]
+        return {
+            "category_id": rule["category_id"],
+            "clean_name": rule["clean_name"],
+        }
 
     return None
 
@@ -109,20 +116,25 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
     manually overridden. Returns the number of transactions updated.
     """
     txns = conn.execute(
-        """SELECT id, merchant_name, raw_name, amount, owner_id
+        """SELECT id, merchant_name, display_name, raw_name, amount, owner_id, account_id
            FROM   txn
            WHERE  category_overridden = 0"""
     ).fetchall()
 
     updated = 0
     for txn in txns:
-        cat_id = categorize_transaction(
-            txn["merchant_name"], txn["raw_name"], txn["amount"], conn,
+        result = categorize_transaction(
+            txn["merchant_name"], txn["raw_name"], txn["display_name"], txn["amount"], conn,
             owner_id=txn["owner_id"],
+            account_id=txn["account_id"],
         )
+        cat_id = result["category_id"] if isinstance(result, dict) else result
+        display_name = (
+            result.get("clean_name") if isinstance(result, dict) else None
+        ) or txn["merchant_name"] or txn["raw_name"]
         conn.execute(
-            "UPDATE txn SET category_id = ? WHERE id = ?",
-            (cat_id, txn["id"]),
+            "UPDATE txn SET category_id = ?, display_name = ? WHERE id = ?",
+            (cat_id, display_name, txn["id"]),
         )
         updated += 1
 

@@ -28,26 +28,53 @@ function RuleModal({ prompt, onSave, onCancel }) {
   const [categories, setCategories] = useState([])
   const [owners,     setOwners]     = useState([])
   const [accounts,   setAccounts]   = useState([])
+  const [existingRule, setExistingRule] = useState(null)
   const [loading,    setLoading]    = useState(true)
 
   useEffect(() => {
+    let cancelled = false
+
     Promise.all([
       api.getCategories(),
       api.getOwners(),
       api.getAccounts(),
-    ]).then(([cats, own, acc]) => {
+      prompt.transactionId ? api.getMatchingRuleForTransaction(prompt.transactionId) : Promise.resolve({ rule_id: null }),
+    ]).then(async ([cats, own, acc, match]) => {
+      if (cancelled) return
       setCategories(cats)
       setOwners(own)
       setAccounts(acc)
-      setLoading(false)
+
+      if (match?.rule_id) {
+        const rules = await api.getRules()
+        if (cancelled) return
+        setExistingRule(rules.find(rule => rule.id === match.rule_id) || null)
+      }
+
+      if (!cancelled) setLoading(false)
+    }).catch(() => {
+      if (!cancelled) setLoading(false)
     })
-  }, [])
+
+    return () => { cancelled = true }
+  }, [prompt.transactionId])
 
   async function handleSave(data) {
     const { applyToExisting, ...ruleData } = data
-    await api.createRule(ruleData)
-    if (applyToExisting) await api.recategorize()
-    onSave()
+    if (existingRule) {
+      await api.updateRule(existingRule.id, ruleData)
+      if (applyToExisting) {
+        await api.recategorize()
+      }
+      onSave({ applyToExisting, ruleData, ruleId: existingRule.id, updatedExisting: true })
+      return
+    }
+
+    const created = await api.createRule(ruleData)
+    if (applyToExisting) {
+      await api.applyRule(created.id)
+    }
+    onSave({ applyToExisting, ruleData, ruleId: created.id, updatedExisting: false })
   }
 
   return (
@@ -82,16 +109,20 @@ function RuleModal({ prompt, onSave, onCancel }) {
         ) : (
           <RuleForm
             initialValues={{
-              keyword:   (prompt.merchantName || '').toLowerCase().trim(),
-              cleanName: prompt.merchantName || '',
-              catId:     prompt.categoryId,
+              keyword: existingRule?.keyword ?? (prompt.keywordSource || prompt.merchantName || '').toLowerCase().trim(),
+              amount_min: existingRule?.amount_min ?? null,
+              amount_max: existingRule?.amount_max ?? null,
+              owner_id: existingRule?.owner_id || '',
+              account_id: existingRule?.account_id || '',
+              cleanName: existingRule?.clean_name || '',
+              catId: prompt.categoryId || existingRule?.category_id || '',
             }}
             categories={categories}
             owners={owners}
             accounts={accounts}
             onSave={handleSave}
             onCancel={onCancel}
-            saveLabel="Save rule"
+            saveLabel={existingRule ? 'Save changes' : 'Save rule'}
             transactionData={prompt.transactionData}
           />
         )}
@@ -102,10 +133,12 @@ function RuleModal({ prompt, onSave, onCancel }) {
 
 // ── RuleSuggestionToast ───────────────────────────────────────────────────────
 
-export default function RuleSuggestionToast({ prompt, onDismiss }) {
+export default function RuleSuggestionToast({ prompt, onDismiss, onSaved }) {
   const [showModal, setShowModal] = useState(false)
   const [progress,  setProgress]  = useState(100)
   const [saved,     setSaved]     = useState(false)
+  const [appliedExisting, setAppliedExisting] = useState(false)
+  const [updatedExistingRule, setUpdatedExistingRule] = useState(false)
   const timerRef    = useRef(null)
   const intervalRef = useRef(null)
   const startRef    = useRef(Date.now())
@@ -131,9 +164,12 @@ export default function RuleSuggestionToast({ prompt, onDismiss }) {
     }
   }, [showModal])
 
-  function handleSaved() {
+  function handleSaved(result) {
     setSaved(true)
+    setAppliedExisting(!!result?.applyToExisting)
+    setUpdatedExistingRule(!!result?.updatedExisting)
     setShowModal(false)
+    onSaved?.(result)
     setTimeout(onDismiss, 1800)
   }
 
@@ -177,7 +213,13 @@ export default function RuleSuggestionToast({ prompt, onDismiss }) {
               <div>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>Rule created!</div>
                 <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-                  Future {merchantDisplay} transactions will be auto-categorized
+                  {updatedExistingRule
+                    ? (appliedExisting
+                        ? `The existing ${merchantDisplay} rule was updated and reapplied`
+                        : `The existing ${merchantDisplay} rule was updated`)
+                    : (appliedExisting
+                        ? `Matching existing ${merchantDisplay} transactions were updated too`
+                        : `Future ${merchantDisplay} transactions will be updated automatically`)}
                 </div>
               </div>
             </div>

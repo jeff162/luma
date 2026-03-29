@@ -1802,7 +1802,7 @@ function ImportTab() {
                     {undoEdited.map(t => (
                       <div key={t.id} style={{ display: 'grid', gridTemplateColumns: '90px 1fr 80px', fontSize: 12, padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
                         <span style={{ color: 'var(--muted)' }}>{t.date}</span>
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.merchant_name}</span>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.display_name || t.merchant_name || t.raw_name}</span>
                         <span style={{ textAlign: 'right' }}>{formatCurrency(Math.abs(t.amount))}</span>
                       </div>
                     ))}

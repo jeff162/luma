@@ -3,12 +3,13 @@ import { useLocation } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { refreshTaskBadge } from '../App.jsx'
 import { formatCurrency, formatDate } from '../lib/utils.js'
-import { Card, PageHeader, Spinner, EmptyState } from '../components/ui.jsx'
+import { Card, PageHeader, Spinner, EmptyState, Input } from '../components/ui.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
-import { buildGroups, InlineCategorySelect, MerchantCell, CategoryCell, ContextMenu, useContextMenu, NotePopover } from '../components/TransactionRow.jsx'
+import { MerchantCell, CategoryCell, ContextMenu, useContextMenu, NotePopover, getTxnMerchantLabel } from '../components/TransactionRow.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
+import RuleForm from '../components/RuleForm.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 
 const NEW_CATEGORY_SENTINEL = '__new__'
@@ -51,6 +52,122 @@ function buildGridTemplate(cols) {
   return cols.map(c => `${c.width}px`).join(' ')
 }
 
+function RuleActionModal({ state, onClose, onSaved }) {
+  const [categories, setCategories] = useState([])
+  const [owners, setOwners] = useState([])
+  const [accounts, setAccounts] = useState([])
+  const [rule, setRule] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!state) return
+    let cancelled = false
+    async function loadModalData() {
+      try {
+        const [cats, own, acc, rules] = await Promise.all([
+          api.getCategories(),
+          api.getOwners(),
+          api.getAccounts(),
+          state.mode === 'edit' ? api.getRules() : Promise.resolve([]),
+        ])
+        if (cancelled) return
+        setCategories(cats)
+        setOwners(own)
+        setAccounts(acc)
+        setRule(state.mode === 'edit' ? rules.find(item => item.id === state.ruleId) || null : null)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    loadModalData()
+    return () => { cancelled = true }
+  }, [state])
+
+  if (!state) return null
+
+  async function handleSave(data) {
+    const { applyToExisting, ...ruleData } = data
+    if (state.mode === 'edit') {
+      await api.updateRule(state.ruleId, ruleData)
+      if (applyToExisting) await api.recategorize()
+      onSaved?.({ applyToExisting, mode: 'edit', ruleId: state.ruleId })
+      onClose()
+      return
+    }
+
+    const created = await api.createRule(ruleData)
+    if (applyToExisting) {
+      await api.applyRule(created.id)
+    }
+    onSaved?.({ applyToExisting, mode: 'create', ruleId: created.id })
+    onClose()
+  }
+
+  const initialValues = state.mode === 'edit'
+    ? (rule ? {
+        keyword: rule.keyword,
+        amount_min: rule.amount_min ?? null,
+        amount_max: rule.amount_max ?? null,
+        owner_id: rule.owner_id || '',
+        account_id: rule.account_id || '',
+        catId: rule.category_id,
+        cleanName: rule.clean_name || '',
+      } : null)
+    : {
+        keyword: (state.keywordSource || '').toLowerCase().trim(),
+        cleanName: '',
+        catId: state.categoryId || '',
+      }
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 950,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'rgba(10, 15, 26, 0.32)',
+      backdropFilter: 'blur(2px)',
+      padding: 24,
+    }}>
+      <div style={{
+        background: 'var(--surface)', border: '1px solid var(--border)',
+        borderRadius: 14, width: 640, maxWidth: '94vw', maxHeight: '90vh',
+        overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.28)',
+      }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '14px 20px', borderBottom: '1px solid var(--border)',
+          background: 'var(--surface2)',
+        }}>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>
+            {state.mode === 'edit' ? 'Edit matching rule' : 'Create rule'}
+          </div>
+          <button onClick={onClose} style={{
+            background: 'none', border: 'none', color: 'var(--muted)',
+            cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: 2,
+          }}>×</button>
+        </div>
+        <div style={{ maxHeight: 'calc(90vh - 56px)', overflowY: 'auto' }}>
+          {loading || !initialValues ? (
+            <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
+              {state.mode === 'edit' ? 'Loading rule…' : 'Loading…'}
+            </div>
+          ) : (
+            <RuleForm
+              initialValues={initialValues}
+              categories={categories}
+              owners={owners}
+              accounts={accounts}
+              onSave={handleSave}
+              onCancel={onClose}
+              saveLabel={state.mode === 'edit' ? 'Save changes' : 'Save rule'}
+              transactionData={state.mode === 'create' ? state.transactionData : null}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Transactions page ─────────────────────────────────────────────────────────
 
 export default function Transactions() {
@@ -66,6 +183,9 @@ export default function Transactions() {
   const { menu, onContextMenu, close: closeMenu } = useContextMenu()
   const [noteTarget, setNoteTarget] = useState(null)
   const [rulePrompt, setRulePrompt] = useState(null)
+  const [merchantSearch, setMerchantSearch] = useState('')
+  const [contextRuleMatch, setContextRuleMatch] = useState({ txnId: null, loading: false, ruleId: null })
+  const [ruleModalState, setRuleModalState] = useState(null)
   const isFirstLoad = useRef(true)
   const dragColKey = useRef(null)
   const resizeState = useRef(null)
@@ -117,6 +237,7 @@ export default function Transactions() {
       limit: 500,
     }).then(d => {
       setData(d)
+      setDetailTxn(prev => prev ? d.transactions.find(t => t.id === prev.id) || prev : prev)
       setInitialLoading(false)
       isFirstLoad.current = false
     })
@@ -126,6 +247,25 @@ export default function Transactions() {
     isFirstLoad.current = true
     load()
   }, [load])
+
+  useEffect(() => {
+    if (!menu?.txn?.id) {
+      setContextRuleMatch({ txnId: null, loading: false, ruleId: null })
+      return
+    }
+    let cancelled = false
+    setContextRuleMatch({ txnId: menu.txn.id, loading: true, ruleId: null })
+    api.getMatchingRuleForTransaction(menu.txn.id)
+      .then(result => {
+        if (cancelled) return
+        setContextRuleMatch({ txnId: menu.txn.id, loading: false, ruleId: result.rule_id || null })
+      })
+      .catch(() => {
+        if (cancelled) return
+        setContextRuleMatch({ txnId: menu.txn.id, loading: false, ruleId: null })
+      })
+    return () => { cancelled = true }
+  }, [menu?.txn?.id])
 
   function saveCategory(txnId, catId, catObj) {
     const cat = catObj || categories.find(c => c.id === catId)
@@ -217,6 +357,12 @@ export default function Transactions() {
     }
   }
 
+  const displayedTransactions = merchantSearch.trim()
+    ? data.transactions.filter(txn =>
+        getTxnMerchantLabel(txn).toLowerCase().includes(merchantSearch.trim().toLowerCase())
+      )
+    : data.transactions
+
   // ── Cell renderers keyed by column ────────────────────────────────────────
 
   function renderCell(col, txn) {
@@ -234,7 +380,7 @@ export default function Transactions() {
             onOpenDetail={setDetailTxn}
             onRename={(id, name) => setData(prev => ({
               ...prev,
-              transactions: prev.transactions.map(t => t.id === id ? { ...t, merchant_name: name } : t),
+              transactions: prev.transactions.map(t => t.id === id ? { ...t, display_name: name } : t),
             }))}
             onUpdateNote={updateNote}
           />
@@ -304,6 +450,27 @@ export default function Transactions() {
     }
   }
 
+  function openRuleFromTransaction(txn) {
+    if (contextRuleMatch.loading && contextRuleMatch.txnId === txn.id) return
+    const matchedRuleId = contextRuleMatch.txnId === txn.id ? contextRuleMatch.ruleId : null
+    const merchantName = getTxnMerchantLabel(txn)
+    const keywordSource = txn.merchant_name || txn.raw_name || merchantName
+    closeMenu()
+    if (matchedRuleId) {
+      setRuleModalState({ mode: 'edit', ruleId: matchedRuleId, txnId: txn.id })
+      return
+    }
+    setRuleModalState({
+      mode: 'create',
+      txnId: txn.id,
+      categoryId: txn.category_id || '',
+      keywordSource,
+      transactionData: {
+        amount: txn.amount,
+      },
+    })
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -326,13 +493,37 @@ export default function Transactions() {
               {uncategorizedOnly ? '✕ Uncategorized only' : 'Uncategorized only'}
             </button>
             <span style={{ fontSize: 13, color: 'var(--muted)' }}>
-              {data.total} transactions
+              {displayedTransactions.length}{displayedTransactions.length !== data.total ? ` of ${data.total}` : ''} transactions
             </span>
           </div>
         </PageHeader>
       </div>
 
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+        <div style={{ padding: '0 0 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Input
+            value={merchantSearch}
+            onChange={setMerchantSearch}
+            placeholder="Filter merchants by name…"
+            style={{ width: 320 }}
+          />
+          {merchantSearch.trim() && (
+            <button
+              onClick={() => setMerchantSearch('')}
+              style={{
+                background: 'none',
+                border: '1px solid var(--border)',
+                color: 'var(--muted)',
+                borderRadius: 8,
+                padding: '6px 10px',
+                fontSize: 13,
+                cursor: 'pointer',
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
 
         <Card style={{ padding: 0, overflow: 'hidden' }}>
           {/* Header row */}
@@ -392,10 +583,10 @@ export default function Transactions() {
             })}
           </div>
 
-          {initialLoading ? <Spinner /> : data.transactions.length === 0 ? (
-            <EmptyState message="No transactions found" />
+          {initialLoading ? <Spinner /> : displayedTransactions.length === 0 ? (
+            <EmptyState message={merchantSearch.trim() ? 'No merchants match that filter' : 'No transactions found'} />
           ) : (
-            data.transactions.map(txn => (
+            displayedTransactions.map(txn => (
               <div
                 key={txn.id}
                 onContextMenu={e => onContextMenu(e, txn)}
@@ -434,6 +625,14 @@ export default function Transactions() {
             onClose={closeMenu}
             onOpenDetail={txn => { setDetailTxn(txn); closeMenu() }}
             onEditNote={txn => { setNoteTarget(txn); closeMenu() }}
+            onOpenRule={openRuleFromTransaction}
+            ruleActionLabel={
+              contextRuleMatch.loading
+                ? '⚙ Loading rule…'
+                : contextRuleMatch.ruleId
+                  ? '⚙ Open matching rule'
+                  : '⚙ Create rule'
+            }
           />
         )}
 
@@ -488,7 +687,26 @@ export default function Transactions() {
         {rulePrompt && (
           <RuleSuggestionToast
             prompt={rulePrompt}
+            onSaved={({ applyToExisting }) => {
+              if (applyToExisting) {
+                isFirstLoad.current = true
+                load()
+              }
+            }}
             onDismiss={() => setRulePrompt(null)}
+          />
+        )}
+
+        {ruleModalState && (
+          <RuleActionModal
+            state={ruleModalState}
+            onClose={() => setRuleModalState(null)}
+            onSaved={({ applyToExisting }) => {
+              if (applyToExisting) {
+                isFirstLoad.current = true
+                load()
+              }
+            }}
           />
         )}
       </div>

@@ -1028,18 +1028,21 @@ async def run_import(
             if raw_imported_category:
                 cat_id = category_assignments_cfg.get(raw_imported_category)
             elif apply_cat and not col.category:
-                cat_id = categorize_transaction(
-                    raw_desc, raw_desc, abs(amount), conn, owner_id=acc["owner_id"]
+                result = categorize_transaction(
+                    raw_desc, raw_desc, raw_desc, abs(amount), conn,
+                    owner_id=acc["owner_id"],
+                    account_id=acc["id"],
                 )
+                cat_id = result["category_id"] if isinstance(result, dict) else result
 
             txn_id = str(uuid.uuid4())
             conn.execute("""
                 INSERT INTO txn
                   (id, account_id, owner_id, category_id, amount, merchant_name,
-                   raw_name, date, is_pending, content_hash, import_batch_id, imported_category, notes, category_overridden)
-                VALUES (?,?,?,?,?,?,?,?,0,?,?,?,?,?)
+                   display_name, raw_name, date, is_pending, content_hash, import_batch_id, imported_category, notes, category_overridden)
+                VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)
             """, (txn_id, acc["id"], acc["owner_id"], cat_id, amount,
-                  raw_desc, raw_desc, parsed_date, content_hash, batch_id,
+                  raw_desc, raw_desc, raw_desc, parsed_date, content_hash, batch_id,
                   raw_imported_category or None, notes_val or None, 1 if cat_id and raw_imported_category else 0))
             imported += 1
             row_results.append({"row": row_num, "status": "imported"})
@@ -1163,7 +1166,7 @@ def get_edited_transactions(batch_id: str):
     """
     with get_db() as conn:
         rows = conn.execute("""
-            SELECT t.id, t.date, t.merchant_name, t.amount,
+            SELECT t.id, t.date, COALESCE(t.display_name, t.merchant_name, t.raw_name) AS merchant_name, t.amount,
                    c.name AS category_name
             FROM   txn t
             LEFT JOIN category c ON c.id = t.category_id
@@ -1301,20 +1304,23 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
         categorized_by_rules = 0
         if snapshot.get("apply_categorization", True):
             uncategorized_rows = conn.execute("""
-                SELECT id, owner_id, amount, merchant_name, raw_name
+                SELECT id, owner_id, account_id, amount, merchant_name, display_name, raw_name
                 FROM   txn
                 WHERE  import_batch_id = ?
                   AND  category_id IS NULL
                   AND  category_overridden = 0
             """, (batch_id,)).fetchall()
             for row in uncategorized_rows:
-                cat_id = categorize_transaction(
+                result = categorize_transaction(
                     row["merchant_name"] or row["raw_name"] or "",
                     row["raw_name"] or row["merchant_name"] or "",
+                    row["display_name"] or row["merchant_name"] or row["raw_name"] or "",
                     abs(row["amount"]),
                     conn,
                     owner_id=row["owner_id"],
+                    account_id=row["account_id"],
                 )
+                cat_id = result["category_id"] if isinstance(result, dict) else result
                 if cat_id:
                     conn.execute(
                         "UPDATE txn SET category_id = ? WHERE id = ?",
@@ -1348,7 +1354,7 @@ def undo_batch(batch_id: str, force: bool = Query(False)):
 
         if not force:
             edited = conn.execute("""
-                SELECT t.id, t.date, t.merchant_name, t.amount,
+                SELECT t.id, t.date, COALESCE(t.display_name, t.merchant_name, t.raw_name) AS merchant_name, t.amount,
                        c.name AS category_name
                 FROM   txn t
                 LEFT JOIN category c ON c.id = t.category_id
@@ -1373,7 +1379,7 @@ def undo_batch(batch_id: str, force: bool = Query(False)):
 
 EXPORT_COLUMNS = {
     "date":          ("t.date",            "Date"),
-    "merchant_name": ("t.merchant_name",   "Merchant"),
+    "merchant_name": ("COALESCE(t.display_name, t.merchant_name, t.raw_name)",   "Merchant"),
     "raw_name":      ("t.raw_name",        "Raw description"),
     "amount":        ("t.amount",          "Amount"),
     "account":       ("a.name",            "Account"),
@@ -1427,8 +1433,8 @@ def export_transactions_csv(
         ids = [i.strip() for i in category_ids.split(",") if i.strip()]
         clauses.append(f"t.category_id IN ({','.join('?'*len(ids))})"); params.extend(ids)
     if search:
-        clauses.append("(t.merchant_name LIKE ? OR t.raw_name LIKE ?)")
-        params.extend([f"%{search}%", f"%{search}%"])
+        clauses.append("(t.display_name LIKE ? OR t.merchant_name LIKE ? OR t.raw_name LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
@@ -1485,7 +1491,7 @@ def export_backup(encrypted: bool = Query(False)):
             "import_batch_accounts": dump("import_batch_account"),
             "transactions":   dump("txn",
                                    "SELECT id, plaid_transaction_id, account_id, owner_id, "
-                                   "category_id, amount, merchant_name, raw_name, date, "
+                                   "category_id, amount, merchant_name, display_name, raw_name, date, "
                                    "is_pending, category_overridden, imported_category, notes, content_hash, "
                                    "import_batch_id FROM txn ORDER BY date DESC"),
         }

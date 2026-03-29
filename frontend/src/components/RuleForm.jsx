@@ -40,6 +40,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
+import CategoryPicker from './CategoryPicker.jsx'
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
 const sectionHeadStyle = {
@@ -47,7 +48,6 @@ const sectionHeadStyle = {
   textTransform: 'uppercase', letterSpacing: '0.07em',
   marginBottom: 12,
 }
-const CAT_ICONS = ['📦','🛒','🍽️','☕','🏠','🚗','💊','🎬','✈️','💰','🏋️','👕','💻','🐾','🎁','🔧','📱','🏥','🎨','🌿']
 
 // ── Amount summary for chip header ────────────────────────────────────────────
 export function amountConditionSummary(low, lowOp, high, highOp, side) {
@@ -225,127 +225,6 @@ function ConditionChip({ label, summary, active, onActivate, onClear, children }
   )
 }
 
-
-// ── CategoryPicker ────────────────────────────────────────────────────────────
-
-function NewCategoryForm({ groups, mode, defaultGroupId, onSave, onCancel }) {
-  const [name,    setName]    = useState('')
-  const [groupId, setGroupId] = useState(defaultGroupId || (groups[0]?.id ?? ''))
-  const [icon,    setIcon]    = useState('📦')
-  const [saving,  setSaving]  = useState(false)
-  const inputRef = useRef(null)
-  useEffect(() => { inputRef.current?.focus() }, [])
-
-  async function handleSave() {
-    if (!name.trim()) return
-    if (mode === 'leaf' && !groupId) return
-    setSaving(true)
-    const body = mode === 'group' ? { name: name.trim(), icon, parent_id: null } : { name: name.trim(), icon, parent_id: groupId }
-    const created = await api.createCategory(body)
-    await onSave(created)
-    setSaving(false)
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }} onMouseDown={e => e.stopPropagation()}>
-      {mode === 'leaf' && groups.length > 1 && (
-        <select value={groupId} onChange={e => setGroupId(e.target.value)} style={{ background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', fontSize: 12 }}>
-          {groups.map(g => <option key={g.id} value={g.id}>{g.icon} {g.name}</option>)}
-        </select>
-      )}
-      <input ref={inputRef} value={name} onChange={e => setName(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') onCancel() }}
-        placeholder={mode === 'group' ? 'Group name…' : 'Category name…'}
-        style={{ background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 8px', fontSize: 13, outline: 'none' }} />
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-        {CAT_ICONS.map(ic => (
-          <button key={ic} onClick={() => setIcon(ic)} style={{ fontSize: 14, padding: '2px 4px', borderRadius: 4, cursor: 'pointer', border: ic === icon ? '1px solid var(--accent)' : '1px solid transparent', background: ic === icon ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))' : 'none' }}>{ic}</button>
-        ))}
-      </div>
-      <div style={{ display: 'flex', gap: 6 }}>
-        <button onClick={handleSave} disabled={saving || !name.trim()} style={{ flex: 1, background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 0', fontSize: 12, cursor: saving || !name.trim() ? 'not-allowed' : 'pointer', opacity: saving || !name.trim() ? 0.5 : 1 }}>{saving ? 'Saving…' : 'Create'}</button>
-        <button onClick={onCancel} style={{ background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
-      </div>
-    </div>
-  )
-}
-
-function CategoryPicker({ value, categories, onChange, onCategoryCreated }) {
-  const [open, setOpen]         = useState(false)
-  const [creating, setCreating] = useState(null)
-  const ref = useRef(null)
-  const groups   = categories.filter(c => !c.parent_id)
-  const leaves   = categories.filter(c =>  c.parent_id)
-  const selected = categories.find(c => c.id === value)
-
-  useEffect(() => {
-    if (!open) return
-    function h(e) { if (ref.current && !ref.current.contains(e.target)) { setOpen(false); setCreating(null) } }
-    document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [open])
-
-  async function handleCreated(created) { await onCategoryCreated(); onChange(created.id); setCreating(null); setOpen(false) }
-
-  return (
-    <div ref={ref} style={{ position: 'relative', flex: 1 }}>
-      <div onClick={() => { setOpen(v => !v); setCreating(null) }} style={{ background: 'var(--surface)', color: 'var(--text)', border: open ? '1px solid var(--accent)' : '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, userSelect: 'none', minHeight: 38 }}>
-        {selected ? (
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {selected.icon} {selected.name}
-            {selected.parent_id && <span style={{ fontSize: 11, color: 'var(--muted)' }}>({groups.find(g => g.id === selected.parent_id)?.name})</span>}
-          </span>
-        ) : <span style={{ color: 'var(--muted)' }}>— Select category —</span>}
-        <span style={{ color: 'var(--muted)', fontSize: 11 }}>{open ? '▴' : '▾'}</span>
-      </div>
-      {open && (
-        <div style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 300, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.25)', maxHeight: 300, overflowY: 'auto' }}>
-          {creating === 'group' ? (
-            <div style={{ padding: 10 }}><NewCategoryForm groups={groups} mode="group" defaultGroupId={null} onSave={handleCreated} onCancel={() => setCreating(null)} /></div>
-          ) : (
-            <>
-              {groups.map(g => {
-                const kids = leaves.filter(c => c.parent_id === g.id)
-                const creatingHere = creating?.type === 'leaf' && creating.groupId === g.id
-                return (
-                  <div key={g.id}>
-                    <div style={{ padding: '6px 12px 2px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{g.icon} {g.name}</div>
-                    {kids.map(c => (
-                      <div key={c.id} onMouseDown={() => { onChange(c.id); setOpen(false); setCreating(null) }}
-                        style={{ padding: '7px 12px 7px 28px', fontSize: 13, cursor: 'pointer', background: value === c.id ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))' : 'transparent', display: 'flex', alignItems: 'center', gap: 7 }}
-                        onMouseEnter={e => e.currentTarget.style.background = 'var(--surface2)'}
-                        onMouseLeave={e => e.currentTarget.style.background = value === c.id ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))' : 'transparent'}
-                      >
-                        {c.icon} {c.name}
-                        {value === c.id && <span style={{ marginLeft: 'auto', color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
-                      </div>
-                    ))}
-                    {creatingHere ? (
-                      <div style={{ padding: '6px 12px 8px 20px' }}><NewCategoryForm groups={groups} mode="leaf" defaultGroupId={g.id} onSave={handleCreated} onCancel={() => setCreating(null)} /></div>
-                    ) : (
-                      <div onMouseDown={e => { e.stopPropagation(); setCreating({ type: 'leaf', groupId: g.id }) }}
-                        style={{ padding: '5px 12px 6px 28px', fontSize: 12, color: 'var(--accent2)', cursor: 'pointer', opacity: 0.8 }}
-                        onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-                        onMouseLeave={e => e.currentTarget.style.opacity = '0.8'}
-                      >＋ New category in {g.name}</div>
-                    )}
-                  </div>
-                )
-              })}
-              <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
-              <div onMouseDown={e => { e.stopPropagation(); setCreating('group') }}
-                style={{ padding: '7px 12px', fontSize: 12, fontWeight: 500, color: 'var(--accent2)', cursor: 'pointer', opacity: 0.8 }}
-                onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-                onMouseLeave={e => e.currentTarget.style.opacity = '0.8'}
-              >＋ New group</div>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
 // ── MatchPreview ──────────────────────────────────────────────────────────────
 
 function MatchPreview({ keyword, amtLow, amtHigh, ownerId, accountId, onCountChange }) {
@@ -364,7 +243,7 @@ function MatchPreview({ keyword, amtLow, amtHigh, ownerId, accountId, onCountCha
       setLoading(true)
       try {
         const resp = await api.getTransactions({
-          category_id: '__uncategorized__', limit: 500,
+          limit: 500,
           ...(hasKeyword ? { search:      keyword.trim() } : {}),
           ...(ownerId    ? { owner_ids:   ownerId }        : {}),
           ...(accountId  ? { account_ids: accountId }      : {}),
@@ -384,9 +263,9 @@ function MatchPreview({ keyword, amtLow, amtHigh, ownerId, accountId, onCountCha
   }, [keyword, amtLow, amtHigh, ownerId, accountId, canSearch])
 
   if (!canSearch || (!loading && count === 0)) return null
-  if (loading) return <div style={{ fontSize: 12, color: 'var(--muted)', padding: '4px 0' }}>Checking for matching transactions…</div>
+  if (loading) return <div style={{ fontSize: 12, color: 'var(--muted)', padding: '4px 0' }}>Checking which existing transactions this rule would update…</div>
   if (count === null) return null
-  return <div style={{ fontSize: 12, color: 'var(--muted)', padding: '4px 0' }}>{count} uncategorized transaction{count !== 1 ? 's' : ''} match{count === 1 ? 'es' : ''} this rule</div>
+  return <div style={{ fontSize: 12, color: 'var(--muted)', padding: '4px 0' }}>{count} existing transaction{count !== 1 ? 's' : ''} match{count === 1 ? 'es' : ''} this rule</div>
 }
 
 
@@ -414,11 +293,13 @@ export default function RuleForm({
   }
 
   const getInitialAmountState = () => {
-    if (initialValues.amount_min != null || initialValues.amount_max != null) {
+    const initialAmountMin = initialValues.amount_min ?? initialValues.amtMin ?? null
+    const initialAmountMax = initialValues.amount_max ?? initialValues.amtMax ?? null
+    if (initialAmountMin != null || initialAmountMax != null) {
       return {
-        amtLow: initialValues.amount_min ?? null,
+        amtLow: initialAmountMin,
         amtLowOp: initialValues.amount_min_op ?? '>=',
-        amtHigh: initialValues.amount_max ?? null,
+        amtHigh: initialAmountMax,
         amtHighOp: initialValues.amount_max_op ?? '<=',
         amtSide: initialValues.debit_credit ?? 'both',
       }
@@ -441,13 +322,13 @@ export default function RuleForm({
   const [amtHigh, setAmtHigh] = useState(initialAmount.amtHigh)
   const [amtHighOp, setAmtHighOp] = useState(initialAmount.amtHighOp)
   const [amtSide, setAmtSide] = useState(initialAmount.amtSide)
-  const [ownerId, setOwnerId] = useState(initialValues.ownerId ?? '')
-  const [accountId, setAccountId] = useState(initialValues.accountId ?? '')
+  const [ownerId, setOwnerId] = useState(initialValues.ownerId ?? initialValues.owner_id ?? '')
+  const [accountId, setAccountId] = useState(initialValues.accountId ?? initialValues.account_id ?? '')
 
   const [kwOpen, setKwOpen] = useState(!!initialValues.keyword)
   const [amtOpen, setAmtOpen] = useState(!!(initialAmount.amtLow != null || initialAmount.amtHigh != null))
-  const [ownOpen, setOwnOpen] = useState(!!initialValues.ownerId)
-  const [accOpen, setAccOpen] = useState(!!initialValues.accountId)
+  const [ownOpen, setOwnOpen] = useState(!!(initialValues.ownerId ?? initialValues.owner_id))
+  const [accOpen, setAccOpen] = useState(!!(initialValues.accountId ?? initialValues.account_id))
 
   const [catId, setCatId] = useState(initialValues.catId ?? '')
   const [cleanName, setCleanName] = useState(initialValues.cleanName ?? '')
@@ -495,10 +376,12 @@ export default function RuleForm({
         amount_max: amtHigh,
         clean_name: cleanName.trim() || null,
         owner_id: ownerId || null,
+        account_id: accountId || null,
         clear_amount_min: amtLow === null,
         clear_amount_max: amtHigh === null,
         clear_clean_name: !cleanName.trim(),
         clear_owner: !ownerId,
+        clear_account: !accountId,
         applyToExisting,
       })
     } catch (e) {
@@ -585,7 +468,7 @@ export default function RuleForm({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div>
             <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>
-              Assign category <span style={{ color: '#ef4444', fontWeight: 400 }}>required</span>
+              Assign category
             </div>
             <div style={{ display: 'flex' }}>
               <CategoryPicker value={catId} categories={categories} onChange={setCatId} onCategoryCreated={() => api.getCategories()} />
@@ -610,16 +493,18 @@ export default function RuleForm({
       </div>
 
       <div style={{ padding: '12px 20px', background: 'var(--surface2)' }}>
-        <MatchPreview
-          keyword={keyword} amtLow={amtLow} amtHigh={amtHigh}
-          ownerId={ownerId} accountId={accountId}
-          onCountChange={n => { setMatchCount(n); if (n === 0) setApplyToExisting(false) }}
-        />
+        <div style={{ minHeight: 40 }}>
+          <MatchPreview
+            keyword={keyword} amtLow={amtLow} amtHigh={amtHigh}
+            ownerId={ownerId} accountId={accountId}
+            onCountChange={n => { setMatchCount(n); if (n === 0) setApplyToExisting(false) }}
+          />
+        </div>
         {matchCount > 0 && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 13, cursor: 'pointer', userSelect: 'none' }}>
             <input type="checkbox" checked={applyToExisting} onChange={e => setApplyToExisting(e.target.checked)}
               style={{ width: 15, height: 15, accentColor: 'var(--accent)', cursor: 'pointer' }} />
-            Apply to {matchCount} existing transaction{matchCount !== 1 ? 's' : ''} when saving
+            Apply this rule now to {matchCount} matching existing transaction{matchCount !== 1 ? 's' : ''}
           </label>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>

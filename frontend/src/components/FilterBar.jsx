@@ -40,6 +40,7 @@ import { format, subDays, subMonths, subYears, startOfMonth, endOfMonth,
          startOfYear, endOfYear } from 'date-fns'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { api } from '../lib/api.js'
+import { getTxnMerchantLabel } from './TransactionRow.jsx'
 
 const fmt   = d => format(d, 'yyyy-MM-dd')
 const today = new Date()
@@ -176,7 +177,7 @@ function FilterPopover({ onClose }) {
       const seen = new Set()
       const s = []
       for (const t of d.transactions) {
-        const name = t.merchant_name || t.raw_name
+        const name = getTxnMerchantLabel(t)
         if (name && !seen.has(name)) {
           seen.add(name)
           s.push({ type: 'payee', id: `payee:${name}`, label: name })

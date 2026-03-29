@@ -110,7 +110,7 @@ def get_db(db_path: str | None = None):
 # Migrations run inside the same init_db() connection, so they can reference
 # any helper functions defined in this file.
 
-CURRENT_VERSION = 15
+CURRENT_VERSION = 17
 
 MIGRATIONS = {}
 
@@ -518,6 +518,36 @@ def m15_backup_recipients(conn):
     """)
 
 
+@migration(16)
+def m16_txn_display_name(conn):
+    """Preserve original merchant_name while storing a separate UI display name."""
+    try:
+        conn.execute("ALTER TABLE txn ADD COLUMN display_name TEXT")
+    except Exception:
+        pass
+
+    conn.execute("""
+        UPDATE txn
+        SET    display_name = COALESCE(display_name, merchant_name, raw_name)
+        WHERE  display_name IS NULL
+    """)
+
+
+@migration(17)
+def m17_category_rule_account(conn):
+    """Allow category rules to target a specific account."""
+    try:
+        conn.execute(
+            "ALTER TABLE category_rule ADD COLUMN account_id TEXT REFERENCES account(id) ON DELETE SET NULL"
+        )
+    except Exception:
+        pass
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_rule_account ON category_rule(account_id)"
+    )
+
+
 @migration(12)
 def m12_category_sort_order(conn):
     """Add explicit ordering for categories and normalize top-level types."""
@@ -612,7 +642,8 @@ def init_db(db_path: str | None = None):
                 priority    INTEGER NOT NULL DEFAULT 5,
                 amount_min  REAL,
                 amount_max  REAL,
-                clean_name  TEXT
+                clean_name  TEXT,
+                account_id  TEXT REFERENCES account(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS account (
@@ -627,7 +658,8 @@ def init_db(db_path: str | None = None):
             );
 
             -- Core transaction table. `txn` not `transaction` (SQLite reserved word).
-            -- merchant_name is the cleaned display name (may be updated by rename rules or user).
+            -- merchant_name is the preserved canonical/original merchant value.
+            -- display_name is the user-facing label (may be updated by rules or user edits).
             -- raw_name is the original string from Plaid, never modified.
             -- category_overridden=1 means user manually set category; auto-categorizer skips these.
             CREATE TABLE IF NOT EXISTS txn (
@@ -637,6 +669,7 @@ def init_db(db_path: str | None = None):
                 category_id          TEXT REFERENCES category(id) ON DELETE SET NULL,
                 amount               REAL NOT NULL,
                 merchant_name        TEXT,
+                display_name         TEXT,
                 raw_name             TEXT,
                 date                 TEXT NOT NULL,
                 is_pending           INTEGER NOT NULL DEFAULT 0,
@@ -673,9 +706,27 @@ def init_db(db_path: str | None = None):
             except Exception:
                 pass
         try:
+            conn.execute(
+                "ALTER TABLE category_rule ADD COLUMN account_id TEXT REFERENCES account(id) ON DELETE SET NULL"
+            )
+        except Exception:
+            pass
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rule_account ON category_rule(account_id)"
+        )
+        try:
             conn.execute("ALTER TABLE txn ADD COLUMN imported_category TEXT")
         except Exception:
             pass
+        try:
+            conn.execute("ALTER TABLE txn ADD COLUMN display_name TEXT")
+        except Exception:
+            pass
+        conn.execute("""
+            UPDATE txn
+            SET    display_name = COALESCE(display_name, merchant_name, raw_name)
+            WHERE  display_name IS NULL
+        """)
 
         _seed_default_categories(conn)
         update_category_colors(conn)  # ensure fresh installs get correct colors

@@ -70,6 +70,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { api } from '../lib/api.js'
 import { Badge } from './ui.jsx'
+import CategoryDisplay from './CategoryDisplay.jsx'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -98,6 +99,10 @@ export function buildGroups(flatCats) {
     options: flatCats.filter(c => c.parent_id === g.id)
       .map(c => ({ value: c.id, label: c.name, icon: c.icon })),
   })).filter(g => g.options.length > 0)
+}
+
+export function getTxnMerchantLabel(txn) {
+  return txn.display_name || txn.merchant_name || txn.raw_name || '—'
 }
 
 // ── NotePopover — inline note editor ─────────────────────────────────────────
@@ -255,7 +260,7 @@ export function useContextMenu() {
   return { menu, onContextMenu, close }
 }
 
-export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote }) {
+export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onOpenRule, ruleActionLabel = 'Rule…' }) {
   const ref = useRef(null)
 
   useEffect(() => {
@@ -296,6 +301,7 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote }) {
       }}
     >
       {item('↗ Open detail', () => onOpenDetail(menu.txn))}
+      {item(ruleActionLabel, () => onOpenRule(menu.txn))}
       <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
       {item(
         menu.txn.notes ? '📝 Edit note' : '📝 Add note',
@@ -311,9 +317,17 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote }) {
 export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
   const [editing, setEditing]   = useState(false)
   const [draft, setDraft]       = useState('')
-  const [name, setName]         = useState(txn.merchant_name || txn.raw_name || '—')
+  const [name, setName]         = useState(getTxnMerchantLabel(txn))
   const [showNote, setShowNote] = useState(false)
   const [localNotes, setLocalNotes] = useState(txn.notes || null)
+
+  useEffect(() => {
+    if (!editing) setName(getTxnMerchantLabel(txn))
+  }, [txn.display_name, txn.merchant_name, txn.raw_name, editing])
+
+  useEffect(() => {
+    setLocalNotes(txn.notes || null)
+  }, [txn.notes])
 
   function startEdit(e) {
     e.stopPropagation()
@@ -660,13 +674,15 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
 
   function fireRulePrompt(catId, catObj) {
     if (!onRulePrompt) return
-    // Only prompt if there's a merchant name to build a rule from
-    const merchantName = txn.merchant_name || txn.raw_name
-    if (!merchantName) return
+    const merchantName = getTxnMerchantLabel(txn)
+    const keywordSource = txn.merchant_name || txn.raw_name || merchantName
+    if (!keywordSource && !merchantName) return
     const cat = catObj || categories.find(c => c.id === catId)
     if (!cat) return
     onRulePrompt({
       merchantName,
+      keywordSource,
+      transactionId:  txn.id,
       categoryId:    cat.id,
       categoryName:  cat.name,
       categoryColor: cat.color,
@@ -709,11 +725,11 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
         style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
         title="Click to change category"
       >
-        {txn.category_name ? (
-          <Badge label={txn.category_name} color={txn.category_color} icon={txn.category_icon} />
-        ) : (
-          <span style={{ color: 'var(--muted)', fontSize: 13 }}>Uncategorized</span>
-        )}
+        <CategoryDisplay
+          name={txn.category_name}
+          color={txn.category_color}
+          icon={txn.category_icon}
+        />
       </div>
       {onOpenDetail && txn.category_name && (
         <button

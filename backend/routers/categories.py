@@ -7,6 +7,27 @@ from db.database import get_db
 router = APIRouter()
 
 
+def _get_affected_category_ids(conn, category_id: str) -> list[str]:
+    return [
+        row["id"]
+        for row in conn.execute(
+            """
+            WITH RECURSIVE category_descendants(id) AS (
+                SELECT id
+                FROM category
+                WHERE id = ?
+                UNION ALL
+                SELECT c.id
+                FROM category c
+                JOIN category_descendants d ON c.parent_id = d.id
+            )
+            SELECT id FROM category_descendants
+            """,
+            (category_id,),
+        ).fetchall()
+    ]
+
+
 class CategoryCreate(BaseModel):
     name:          str
     color:         str = "#888888"
@@ -14,6 +35,10 @@ class CategoryCreate(BaseModel):
     parent_id:     Optional[str] = None
     category_type: Optional[str] = None
     sort_order:    Optional[int] = None
+
+
+class CategoryDelete(BaseModel):
+    replacement_category_id: Optional[str] = None
 
 
 @router.get("")
@@ -139,42 +164,67 @@ def create_category(body: CategoryCreate):
     }
 
 
-@router.delete("/{category_id}")
-def delete_category(category_id: str):
+@router.get("/{category_id}/delete-preview")
+def delete_category_preview(category_id: str):
     with get_db() as conn:
         cat = conn.execute(
-            "SELECT id FROM category WHERE id = ?", (category_id,)
+            "SELECT id, name FROM category WHERE id = ?", (category_id,)
         ).fetchone()
         if not cat:
             raise HTTPException(status_code=404, detail="Not found")
-        affected_ids = [
-            row["id"]
-            for row in conn.execute(
-                """
-                WITH RECURSIVE category_descendants(id) AS (
-                    SELECT id
-                    FROM category
-                    WHERE id = ?
-                    UNION ALL
-                    SELECT c.id
-                    FROM category c
-                    JOIN category_descendants d ON c.parent_id = d.id
-                )
-                SELECT id FROM category_descendants
-                """,
-                (category_id,),
-            ).fetchall()
-        ]
+        affected_ids = _get_affected_category_ids(conn, category_id)
         placeholders = ",".join("?" for _ in affected_ids)
-        conn.execute(
-            f"""
-            UPDATE txn
-            SET category_id = NULL,
-                category_overridden = 0
-            WHERE category_id IN ({placeholders})
-            """,
+        row = conn.execute(
+            f"SELECT COUNT(*) AS txn_count FROM txn WHERE category_id IN ({placeholders})",
             affected_ids,
-        )
+        ).fetchone()
+    return {
+        "category_id": cat["id"],
+        "category_name": cat["name"],
+        "txn_count": row["txn_count"] if row else 0,
+        "affected_category_ids": affected_ids,
+    }
+
+
+@router.delete("/{category_id}")
+def delete_category(category_id: str, body: CategoryDelete | None = None):
+    with get_db() as conn:
+        cat = conn.execute(
+            "SELECT id, parent_id FROM category WHERE id = ?", (category_id,)
+        ).fetchone()
+        if not cat:
+            raise HTTPException(status_code=404, detail="Not found")
+        affected_ids = _get_affected_category_ids(conn, category_id)
+        placeholders = ",".join("?" for _ in affected_ids)
+        replacement_category_id = body.replacement_category_id if body else None
+        if replacement_category_id:
+            replacement = conn.execute(
+                "SELECT id FROM category WHERE id = ?",
+                (replacement_category_id,),
+            ).fetchone()
+            if not replacement:
+                raise HTTPException(status_code=404, detail="Replacement category not found")
+            if replacement_category_id in affected_ids:
+                raise HTTPException(status_code=400, detail="Replacement category cannot be deleted in the same operation")
+            conn.execute(
+                f"""
+                UPDATE txn
+                SET category_id = ?,
+                    category_overridden = 0
+                WHERE category_id IN ({placeholders})
+                """,
+                [replacement_category_id, *affected_ids],
+            )
+        else:
+            conn.execute(
+                f"""
+                UPDATE txn
+                SET category_id = NULL,
+                    category_overridden = 0
+                WHERE category_id IN ({placeholders})
+                """,
+                affected_ids,
+            )
         # Re-parent children to the deleted category's parent
         conn.execute(
             """UPDATE category SET parent_id = (

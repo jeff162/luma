@@ -169,7 +169,8 @@ export const api = {
   getCategoryTree: () => request('/categories'),
   getCategories: () => request('/categories/flat'),
   createCategory: (data) => request('/categories', { method: 'POST', body: JSON.stringify(data) }),
-  deleteCategory: (id) => request(`/categories/${id}`, { method: 'DELETE' }),
+  getCategoryDeletePreview: (id) => request(`/categories/${id}/delete-preview`),
+  deleteCategory: (id, data = {}) => request(`/categories/${id}`, { method: 'DELETE', body: JSON.stringify(data) }),
   updateCategory: (id, data) =>
     request(`/categories/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
@@ -185,14 +186,17 @@ export const api = {
 
   updateMerchant:      (id, name)   => request(`/transactions/${id}/merchant`, { method: 'PATCH', body: JSON.stringify({ merchant_name: name }) }),
   updateNotes:         (id, notes)  => request(`/transactions/${id}/notes`,    { method: 'PATCH', body: JSON.stringify({ notes }) }),
+  clearOverride:       (id)         => request(`/transactions/${id}/uncategorize`, { method: 'PATCH' }),
 
   // Rules
   getRules: (search) => {
     const q = search ? '?' + new URLSearchParams({ search }) : ''
     return request(`/rules${q}`)
   },
+  getMatchingRuleForTransaction: (txnId) => request(`/rules/match/transaction/${txnId}`),
   createRule: (data) => request('/rules', { method: 'POST', body: JSON.stringify(data) }),
   updateRule: (id, data) => request(`/rules/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  applyRule: (id) => request(`/rules/${id}/apply`, { method: 'POST' }),
   deleteRule: (id) => request(`/rules/${id}`, { method: 'DELETE' }),
 
   // Sync

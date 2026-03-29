@@ -144,6 +144,24 @@ export default function App() {
     return () => window.removeEventListener('fintrack:refresh-tasks', fetchTasks)
   }, [authEnabled, currentUser, runtimeConfig])
 
+  useEffect(() => {
+    function isEditableTarget(target) {
+      if (!(target instanceof HTMLElement)) return false
+      if (target.isContentEditable) return true
+      const tag = target.tagName
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+    }
+
+    function handleKeyDown(e) {
+      if (e.key !== 'Backspace') return
+      if (isEditableTarget(e.target)) return
+      e.preventDefault()
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
   async function handleLogout() {
     await api.logout().catch(() => {})
     setCurrentUser(null)

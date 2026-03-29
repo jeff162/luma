@@ -136,11 +136,11 @@ def list_transactions(
     if payees:
         names = [n.strip() for n in payees.split('|') if n.strip()]
         or_clauses = ' OR '.join(
-            ['(t.merchant_name = ? OR t.raw_name = ?)'] * len(names)
+            ['(t.display_name = ? OR t.merchant_name = ? OR t.raw_name = ?)'] * len(names)
         )
         clauses.append(f"({or_clauses})")
         for n in names:
-            params.extend([n, n])
+            params.extend([n, n, n])
     if owner_ids:
         ids = [i.strip() for i in owner_ids.split(',') if i.strip()]
         # Support 'unassigned' sentinel for transactions with no owner
@@ -161,8 +161,8 @@ def list_transactions(
     elif direction == "credit":
         clauses.append("t.amount < 0")
     if search:
-        clauses.append("(t.merchant_name LIKE ? OR t.raw_name LIKE ?)")
-        params.extend([f"%{search}%", f"%{search}%"])
+        clauses.append("(t.display_name LIKE ? OR t.merchant_name LIKE ? OR t.raw_name LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
@@ -174,7 +174,7 @@ def list_transactions(
         rows = conn.execute(
             f"""
             SELECT
-                t.id, t.date, t.amount, t.merchant_name, t.raw_name,
+                t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
                 t.is_pending, t.category_overridden, t.notes,
                 t.account_id,
                 t.owner_id,
@@ -229,13 +229,13 @@ def override_category(txn_id: str, body: CategoryOverride):
 
 @router.patch("/{txn_id}/merchant")
 def update_merchant(txn_id: str, body: dict):
-    """Manually set the merchant name on a transaction."""
+    """Manually set the display merchant name on a transaction."""
     name = body.get("merchant_name", "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="merchant_name required")
     with get_db() as conn:
         conn.execute(
-            "UPDATE txn SET merchant_name = ? WHERE id = ?",
+            "UPDATE txn SET display_name = ? WHERE id = ?",
             (name, txn_id),
         )
     return {"ok": True}
@@ -488,8 +488,8 @@ def monthly_trend(
 
     if payee:
         clauses = ["t.amount > 0", "t.is_pending = 0",
-                   "(t.merchant_name = ? OR t.raw_name = ?)"]
-        params  = [payee, payee]
+                   "(t.display_name = ? OR t.merchant_name = ? OR t.raw_name = ?)"]
+        params  = [payee, payee, payee]
     else:
         clauses = ["t.amount > 0", "t.is_pending = 0",
                   ]

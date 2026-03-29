@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { api } from '../lib/api.js'
 import { PageHeader, Spinner, EmptyState } from '../components/ui.jsx'
+import CategoryPicker from '../components/CategoryPicker.jsx'
 
 const SECTION_META = {
   income: { label: 'Income', hint: 'Groups for salary, refunds, investments, and other inflows.' },
@@ -81,6 +82,134 @@ function DeleteConfirm({ label, onConfirm, onCancel }) {
       >
         Cancel
       </button>
+    </div>
+  )
+}
+
+function DeleteCategoryDialog({ category, preview, categories, replacementId, onReplacementChange, mode, onModeChange, onConfirm, onCancel, saving }) {
+  const ref = useRef(null)
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) onCancel()
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [onCancel])
+
+  const canConfirm = mode === 'unassigned' || !!replacementId
+
+  return (
+    <div style={{
+      position: 'fixed',
+      inset: 0,
+      zIndex: 900,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 24,
+      background: 'rgba(15, 23, 42, 0.28)',
+      backdropFilter: 'blur(2px)',
+    }}>
+      <div
+        ref={ref}
+        style={{
+          width: 'min(560px, 100%)',
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 14,
+          boxShadow: '0 16px 40px rgba(0,0,0,0.2)',
+          overflow: 'hidden',
+        }}
+      >
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>Delete category</div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
+            "{category?.name}" is assigned to {preview?.txn_count} transaction{preview?.txn_count === 1 ? '' : 's'}.
+          </div>
+        </div>
+
+        <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+            Choose where those transactions should go before deleting this category.
+          </div>
+
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
+            <input
+              type="radio"
+              checked={mode === 'replace'}
+              onChange={() => onModeChange('replace')}
+              style={{ marginTop: 2, accentColor: 'var(--accent)' }}
+            />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Move transactions to another category</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
+                Pick the category that should replace this one.
+              </div>
+            </div>
+          </label>
+
+          {mode === 'replace' ? (
+            <div style={{ paddingLeft: 24 }}>
+              <CategoryPicker
+                value={replacementId}
+                categories={categories}
+                onChange={onReplacementChange}
+                placeholder="Choose replacement category…"
+              />
+            </div>
+          ) : null}
+
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
+            <input
+              type="radio"
+              checked={mode === 'unassigned'}
+              onChange={() => onModeChange('unassigned')}
+              style={{ marginTop: 2, accentColor: 'var(--accent)' }}
+            />
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Mark transactions as unassigned</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
+                Remove the category from those transactions.
+              </div>
+            </div>
+          </label>
+        </div>
+
+        <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button
+            onClick={onCancel}
+            style={{
+              background: 'transparent',
+              color: 'var(--muted)',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              padding: '8px 14px',
+              fontSize: 13,
+              cursor: 'pointer',
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={!canConfirm || saving}
+            style={{
+              background: canConfirm && !saving ? 'color-mix(in srgb, var(--accent) 88%, #ffffff 12%)' : 'var(--surface)',
+              color: canConfirm && !saving ? '#fff' : 'var(--muted)',
+              border: canConfirm && !saving ? 'none' : '1px solid var(--border)',
+              borderRadius: 8,
+              padding: '8px 16px',
+              fontSize: 13,
+              fontWeight: 500,
+              cursor: !canConfirm || saving ? 'not-allowed' : 'pointer',
+              opacity: !canConfirm || saving ? 0.6 : 1,
+            }}
+          >
+            {saving ? 'Deleting…' : 'Delete category'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -570,6 +699,10 @@ export default function Categories() {
   const [collapseStateLoaded, setCollapseStateLoaded] = useState(false)
   const [listScrollState, setListScrollState] = useState({ top: false, bottom: false })
   const [detailScrollState, setDetailScrollState] = useState({ top: false, bottom: false })
+  const [deleteDialog, setDeleteDialog] = useState(null)
+  const [deleteMode, setDeleteMode] = useState('replace')
+  const [deleteReplacementId, setDeleteReplacementId] = useState('')
+  const [deleteSaving, setDeleteSaving] = useState(false)
 
   const listRef = useRef(null)
   const detailRef = useRef(null)
@@ -785,9 +918,41 @@ export default function Categories() {
   }
 
   async function handleDelete(id) {
-    await api.deleteCategory(id)
-    if (selected?.id === id) setSelected(null)
-    await loadCategories()
+    const category = flatCats.find(cat => cat.id === id)
+    const preview = await api.getCategoryDeletePreview(id)
+    if (!preview.txn_count) {
+      await api.deleteCategory(id)
+      if (preview.affected_category_ids.includes(selected?.id)) setSelected(null)
+      await loadCategories()
+      return
+    }
+    setDeleteDialog({ category, preview })
+    setDeleteMode('replace')
+    setDeleteReplacementId('')
+  }
+
+  async function confirmDeleteDialog() {
+    if (!deleteDialog) return
+    if (deleteMode === 'replace' && !deleteReplacementId) return
+    setDeleteSaving(true)
+    try {
+      await api.deleteCategory(deleteDialog.category.id, {
+        replacement_category_id: deleteMode === 'replace' ? deleteReplacementId : null,
+      })
+      if (deleteDialog.preview.affected_category_ids.includes(selected?.id)) setSelected(null)
+      setDeleteDialog(null)
+      setDeleteReplacementId('')
+      await loadCategories()
+    } finally {
+      setDeleteSaving(false)
+    }
+  }
+
+  function closeDeleteDialog() {
+    if (deleteSaving) return
+    setDeleteDialog(null)
+    setDeleteReplacementId('')
+    setDeleteMode('replace')
   }
 
   function selectCategory(cat) {
@@ -881,6 +1046,9 @@ export default function Categories() {
   const parentCategory = selected?.parent_id ? flatCats.find(cat => cat.id === selected.parent_id) : null
   const selectedGroupType = normalizeType(selected?.category_type)
   const categoryOwners = owners.filter(owner => owner.name.toLowerCase() !== 'shared')
+  const deleteReplacementCategories = deleteDialog
+    ? flatCats.filter(cat => !deleteDialog.preview.affected_category_ids.includes(cat.id))
+    : flatCats
 
   return (
     <div style={{ padding: 32, display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
@@ -1208,6 +1376,21 @@ export default function Categories() {
           }}
           onAddGroup={target => openGroupFormNear(target.sectionType, target.groupId || null, target.insertPosition || 'after')}
           onClose={() => setContextMenu(null)}
+        />
+      ) : null}
+
+      {deleteDialog ? (
+        <DeleteCategoryDialog
+          category={deleteDialog.category}
+          preview={deleteDialog.preview}
+          categories={deleteReplacementCategories}
+          replacementId={deleteReplacementId}
+          onReplacementChange={setDeleteReplacementId}
+          mode={deleteMode}
+          onModeChange={setDeleteMode}
+          onConfirm={confirmDeleteDialog}
+          onCancel={closeDeleteDialog}
+          saving={deleteSaving}
         />
       ) : null}
     </div>

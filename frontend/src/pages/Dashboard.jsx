@@ -1106,7 +1106,7 @@ export default function Dashboard() {
                               txn={txn}
                               onOpenDetail={setDetailTxn}
                               onRename={(id, name) => setTxnData(prev =>
-                                prev.map(x => x.id === id ? { ...x, merchant_name: name } : x)
+                                prev.map(x => x.id === id ? { ...x, display_name: name } : x)
                               )}
                             />
                             <span style={{ color: 'var(--muted)', fontSize: 13 }}>{txn.account_name}{txn.account_mask ? ` ···${txn.account_mask}` : ''}</span>
@@ -1186,7 +1186,7 @@ export default function Dashboard() {
                           txn={t}
                           onOpenDetail={setDetailTxn}
                           onRename={(id, name) => setGroupTxnData(prev =>
-                            prev.map(x => x.id === id ? { ...x, merchant_name: name } : x)
+                            prev.map(x => x.id === id ? { ...x, display_name: name } : x)
                           )}
                         />
                         <span style={{ color: 'var(--muted)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

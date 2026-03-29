@@ -93,18 +93,21 @@ def run_sync(days: int = 30, request: Request = None):
 
                 # Auto-categorize — pass owner_id so owner-scoped rules fire correctly
                 result = categorize_transaction(
-                    t["merchant_name"], t["raw_name"], t["amount"], conn,
+                    t["merchant_name"], t["raw_name"], t["merchant_name"], t["amount"], conn,
                     owner_id=acc["owner_id"],
+                    account_id=acc["id"],
                 )
-                cat_id     = result["category_id"] if isinstance(result, dict) else result
-                clean_name = result.get("clean_name") if isinstance(result, dict) else None
+                cat_id       = result["category_id"] if isinstance(result, dict) else result
+                display_name = (
+                    result.get("clean_name") if isinstance(result, dict) else None
+                ) or t["merchant_name"] or t["raw_name"]
 
                 conn.execute(
                     """
                     INSERT INTO txn
                         (id, plaid_transaction_id, account_id, owner_id, category_id,
-                         amount, merchant_name, raw_name, date, is_pending)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                         amount, merchant_name, display_name, raw_name, date, is_pending)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         str(uuid.uuid4()),
@@ -113,7 +116,8 @@ def run_sync(days: int = 30, request: Request = None):
                         acc["owner_id"],
                         cat_id,
                         t["amount"],
-                        clean_name or t["merchant_name"],
+                        t["merchant_name"],
+                        display_name,
                         t["raw_name"],
                         t["date"],
                         1 if t["is_pending"] else 0,
