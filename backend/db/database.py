@@ -3,8 +3,8 @@ database.py — SQLite schema, migrations, and seed data
 
 SCHEMA OVERVIEW:
   category        — Two-level hierarchy: groups (parent_id=NULL) and leaf categories.
-                    Color and icon are stored per-category. Groups have their own
-                    color used as a fallback, but leaves should have distinct colors.
+                    Color remains in schema for compatibility, but seeded
+                    categories no longer require a separately-maintained color map.
   category_rule   — Keyword rules for auto-categorization. Matched case-insensitively
                     as substrings of merchant_name+raw_name. Higher priority wins.
                     Optional amount_min/amount_max for amount-based routing.
@@ -30,8 +30,8 @@ MIGRATION SYSTEM:
   Migrations are idempotent by convention — use CREATE TABLE IF NOT EXISTS,
   ALTER TABLE wrapped in try/except, and UPDATE ... WHERE to avoid re-applying.
 
-  init_db() also calls helper functions directly (e.g. update_category_colors)
-  for fresh installs where the migration version baseline doesn't exist yet.
+  init_db() also calls a few helper functions directly for fresh installs where
+  the migration version baseline doesn't exist yet.
 
 SEEDING:
   _seed_default_categories() uses upsert_cat() which INSERT OR IGNOREs, so it's
@@ -61,6 +61,7 @@ DESIGN PRINCIPLES:
 
 import os
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -110,7 +111,7 @@ def get_db(db_path: str | None = None):
 # Migrations run inside the same init_db() connection, so they can reference
 # any helper functions defined in this file.
 
-CURRENT_VERSION = 17
+CURRENT_VERSION = 20
 
 MIGRATIONS = {}
 
@@ -141,6 +142,24 @@ def set_db_version(conn, version: int):
     )
 
 
+def get_db_instance_id(conn) -> str:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS db_meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    row = conn.execute("SELECT value FROM db_meta WHERE key = 'instance_id'").fetchone()
+    if row and row["value"]:
+        return row["value"]
+    instance_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('instance_id', ?)",
+        (instance_id,),
+    )
+    return instance_id
+
+
 def run_migrations(conn):
     """Apply any pending migrations in order, updating the version after each."""
     current = get_db_version(conn)
@@ -152,6 +171,97 @@ def run_migrations(conn):
             MIGRATIONS[version](conn)
             set_db_version(conn, version)
     print(f"[db] database is now at version {CURRENT_VERSION}")
+
+
+def _table_sql_contains(conn, table_name: str, needle: str) -> bool:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    sql = row["sql"] if row and row["sql"] else ""
+    return needle.lower() in sql.lower()
+
+
+def _rebuild_category_foreign_key_tables(conn):
+    """Repair tables whose FKs still point at category_old after the category rebuild."""
+    needs_rule_rebuild = _table_sql_contains(conn, "category_rule", "category_old")
+    needs_txn_rebuild = _table_sql_contains(conn, "txn", "category_old")
+
+    if not needs_rule_rebuild and not needs_txn_rebuild:
+        return
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        if needs_rule_rebuild:
+            conn.execute("ALTER TABLE category_rule RENAME TO category_rule_old")
+            conn.execute("""
+                CREATE TABLE category_rule (
+                    id          TEXT PRIMARY KEY,
+                    category_id TEXT NOT NULL REFERENCES category(id) ON DELETE CASCADE,
+                    keyword     TEXT NOT NULL,
+                    priority    INTEGER NOT NULL DEFAULT 5,
+                    amount_min  REAL,
+                    amount_max  REAL,
+                    clean_name  TEXT,
+                    owner_id    TEXT REFERENCES owner(id) ON DELETE SET NULL,
+                    account_id  TEXT REFERENCES account(id) ON DELETE SET NULL
+                )
+            """)
+            conn.execute("""
+                INSERT INTO category_rule (id, category_id, keyword, priority, amount_min, amount_max, clean_name, owner_id, account_id)
+                SELECT id, category_id, keyword, priority, amount_min, amount_max, clean_name, owner_id, account_id
+                FROM category_rule_old
+            """)
+            conn.execute("DROP TABLE category_rule_old")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_category ON category_rule(category_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_keyword ON category_rule(keyword)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_account ON category_rule(account_id)")
+
+        if needs_txn_rebuild:
+            conn.execute("ALTER TABLE txn RENAME TO txn_old")
+            conn.execute("""
+                CREATE TABLE txn (
+                    id                   TEXT PRIMARY KEY,
+                    plaid_transaction_id TEXT UNIQUE,
+                    account_id           TEXT NOT NULL REFERENCES account(id),
+                    category_id          TEXT REFERENCES category(id) ON DELETE SET NULL,
+                    amount               REAL NOT NULL,
+                    merchant_name        TEXT,
+                    display_name         TEXT,
+                    raw_name             TEXT,
+                    date                 TEXT NOT NULL,
+                    is_pending           INTEGER NOT NULL DEFAULT 0,
+                    category_overridden  INTEGER NOT NULL DEFAULT 0,
+                    imported_category    TEXT,
+                    notes                TEXT,
+                    owner_id             TEXT REFERENCES owner(id) ON DELETE SET NULL,
+                    content_hash         TEXT,
+                    import_batch_id      TEXT REFERENCES import_batch(id) ON DELETE SET NULL
+                )
+            """)
+            conn.execute("""
+                INSERT INTO txn (
+                    id, plaid_transaction_id, account_id, category_id, amount,
+                    merchant_name, display_name, raw_name, date, is_pending,
+                    category_overridden, imported_category, notes, owner_id,
+                    content_hash, import_batch_id
+                )
+                SELECT
+                    id, plaid_transaction_id, account_id, category_id, amount,
+                    merchant_name, display_name, raw_name, date, is_pending,
+                    category_overridden, imported_category, notes, owner_id,
+                    content_hash, import_batch_id
+                FROM txn_old
+            """)
+            conn.execute("DROP TABLE txn_old")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_date ON txn(date)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_account ON txn(account_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_category ON txn(category_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_owner ON txn(owner_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_batch ON txn(import_batch_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_hash ON txn(content_hash)")
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
 
 
 # ── Migrations ────────────────────────────────────────────────────────────────
@@ -170,8 +280,8 @@ def m2_merchant_renames(conn):
 
 @migration(3)
 def m3_subcategory_colors(conn):
-    """Give each seeded subcategory a distinct color within its parent group."""
-    update_category_colors(conn)
+    """Legacy no-op: seeded category colors are no longer maintained separately."""
+    pass
 
 
 @migration(4)
@@ -276,12 +386,16 @@ def m5_import_export(conn):
             id            TEXT PRIMARY KEY,
             profile_id    TEXT REFERENCES csv_import_profile(id) ON DELETE SET NULL,
             filename      TEXT NOT NULL,
+            file_content_hash TEXT,
             imported_at   TEXT NOT NULL DEFAULT (datetime('now')),
             row_count     INTEGER NOT NULL DEFAULT 0,
             skipped_count INTEGER NOT NULL DEFAULT 0,
             status        TEXT NOT NULL DEFAULT 'completed'
         )
     """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_import_batch_file_hash ON import_batch(file_content_hash)"
+    )
 
     try:
         conn.execute("ALTER TABLE txn ADD COLUMN content_hash TEXT")
@@ -432,7 +546,7 @@ def m11_category_type(conn):
     except Exception:
         pass
 
-    def upsert_group(name, color, icon, cat_type=None, exclude=0):
+    def upsert_group(name, color, cat_type=None, exclude=0):
         row = conn.execute(
             "SELECT id FROM category WHERE name = ? AND parent_id IS NULL",
             (name,),
@@ -446,14 +560,14 @@ def m11_category_type(conn):
         new_id = str(uuid.uuid4())
         conn.execute(
             """
-            INSERT INTO category (id, parent_id, name, color, icon, category_type, exclude_from_totals)
-            VALUES (?, NULL, ?, ?, ?, ?, ?)
+            INSERT INTO category (id, parent_id, name, color, category_type, exclude_from_totals)
+            VALUES (?, NULL, ?, ?, ?, ?)
             """,
-            (new_id, name, color, icon, cat_type, exclude),
+            (new_id, name, color, cat_type, exclude),
         )
         return new_id
 
-    def ensure_leaf(parent_id, name, color, icon):
+    def ensure_leaf(parent_id, name, color):
         row = conn.execute(
             "SELECT id FROM category WHERE name = ? AND parent_id = ?",
             (name, parent_id),
@@ -462,13 +576,13 @@ def m11_category_type(conn):
             return row["id"]
         new_id = str(uuid.uuid4())
         conn.execute(
-            "INSERT INTO category (id, parent_id, name, color, icon) VALUES (?, ?, ?, ?, ?)",
-            (new_id, parent_id, name, color, icon),
+            "INSERT INTO category (id, parent_id, name, color) VALUES (?, ?, ?, ?)",
+            (new_id, parent_id, name, color),
         )
         return new_id
 
-    income_group = upsert_group("Income", "#22c55e", "💵", cat_type="income", exclude=0)
-    transfers_group = upsert_group("Transfers", "#78909C", "🔄", cat_type=None, exclude=1)
+    income_group = upsert_group("Income", "#22c55e", cat_type="income", exclude=0)
+    transfers_group = upsert_group("Transfers", "#78909C", cat_type=None, exclude=1)
 
     finance = conn.execute(
         "SELECT id FROM category WHERE name = ? AND parent_id IS NULL",
@@ -484,13 +598,13 @@ def m11_category_type(conn):
             (transfers_group, "Transfer", finance["id"]),
         )
 
-    ensure_leaf(income_group, "Salary", "#22c55e", "💼")
-    ensure_leaf(income_group, "Freelance", "#16a34a", "🧑‍💻")
-    ensure_leaf(income_group, "Investment", "#15803d", "📈")
-    ensure_leaf(income_group, "Refund", "#4ade80", "↩️")
-    ensure_leaf(income_group, "Other Income", "#86efac", "💵")
-    ensure_leaf(transfers_group, "Credit Card Pay", "#78909C", "💳")
-    ensure_leaf(transfers_group, "Bank Transfer", "#90A4AE", "🔄")
+    ensure_leaf(income_group, "Salary", "#22c55e")
+    ensure_leaf(income_group, "Freelance", "#16a34a")
+    ensure_leaf(income_group, "Investment", "#15803d")
+    ensure_leaf(income_group, "Refund", "#4ade80")
+    ensure_leaf(income_group, "Other Income", "#86efac")
+    ensure_leaf(transfers_group, "Credit Card Payment", "#78909C")
+    ensure_leaf(transfers_group, "Bank Transfer", "#90A4AE")
 
 
 @migration(14)
@@ -545,6 +659,57 @@ def m17_category_rule_account(conn):
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_rule_account ON category_rule(account_id)"
+    )
+
+
+@migration(18)
+def m18_remove_category_icons(conn):
+    """Drop the legacy category.icon column and rebuild the table without it."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(category)").fetchall()}
+    if "icon" not in cols:
+        return
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("ALTER TABLE category RENAME TO category_old")
+        conn.execute("""
+            CREATE TABLE category (
+                id                  TEXT PRIMARY KEY,
+                parent_id           TEXT REFERENCES category(id) ON DELETE SET NULL,
+                name                TEXT NOT NULL,
+                color               TEXT NOT NULL DEFAULT '#9E9E9E',
+                category_type       TEXT,
+                sort_order          INTEGER NOT NULL DEFAULT 0,
+                exclude_from_totals INTEGER NOT NULL DEFAULT 0,
+                owner_id            TEXT REFERENCES owner(id) ON DELETE SET NULL
+            )
+        """)
+        conn.execute("""
+            INSERT INTO category (id, parent_id, name, color, category_type, sort_order, exclude_from_totals, owner_id)
+            SELECT id, parent_id, name, color, category_type, sort_order, COALESCE(exclude_from_totals, 0), owner_id
+            FROM category_old
+        """)
+        conn.execute("DROP TABLE category_old")
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+
+    _rebuild_category_foreign_key_tables(conn)
+
+
+@migration(19)
+def m19_repair_category_fk_targets(conn):
+    """Repair any tables whose category foreign keys still point at category_old."""
+    _rebuild_category_foreign_key_tables(conn)
+
+
+@migration(20)
+def m20_import_batch_file_hash(conn):
+    try:
+        conn.execute("ALTER TABLE import_batch ADD COLUMN file_content_hash TEXT")
+    except Exception:
+        pass
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_import_batch_file_hash ON import_batch(file_content_hash)"
     )
 
 
@@ -625,7 +790,6 @@ def init_db(db_path: str | None = None):
                 parent_id TEXT REFERENCES category(id) ON DELETE SET NULL,
                 name      TEXT NOT NULL,
                 color     TEXT NOT NULL DEFAULT '#9E9E9E',
-                icon      TEXT NOT NULL DEFAULT '📦',
                 category_type TEXT,
                 sort_order INTEGER NOT NULL DEFAULT 0
             );
@@ -729,14 +893,13 @@ def init_db(db_path: str | None = None):
         """)
 
         _seed_default_categories(conn)
-        update_category_colors(conn)  # ensure fresh installs get correct colors
+
+        run_migrations(conn)
 
         rule_count = conn.execute("SELECT COUNT(*) FROM category_rule").fetchone()[0]
         if rule_count == 0:
             from services.categorizer import seed_default_rules
             seed_default_rules(conn)
-
-        run_migrations(conn)
 
 
 # ── Category seed data ────────────────────────────────────────────────────────
@@ -745,74 +908,83 @@ def _seed_default_categories(conn: sqlite3.Connection):
     """
     Insert the default group/category tree if it doesn't exist yet.
     Uses upsert-by-name so re-running is safe (idempotent).
-    Groups and their children are defined here; colors are set by
-    update_category_colors() so they can be updated via migration without
-    wiping user customizations to other categories.
+    Groups and their children are defined here directly. Seeded categories now
+    use the schema default color unless a color is explicitly chosen elsewhere.
     """
     import uuid
 
-    def upsert_cat(name, color, icon, parent_id=None):
+    def upsert_cat(name, parent_id=None):
         row = conn.execute("SELECT id FROM category WHERE name = ?", (name,)).fetchone()
         if row:
             return row["id"]
         new_id = str(uuid.uuid4())
         conn.execute(
-            "INSERT INTO category (id, parent_id, name, color, icon) VALUES (?,?,?,?,?)",
-            (new_id, parent_id, name, color, icon),
+            "INSERT INTO category (id, parent_id, name) VALUES (?,?,?)",
+            (new_id, parent_id, name),
         )
         return new_id
 
     # Top-level groups
-    health        = upsert_cat("Health & Fitness",  "#E53935", "🏥")
-    food          = upsert_cat("Food & Drink",       "#FB8C00", "🍽️")
-    home          = upsert_cat("Home",               "#8E24AA", "🏠")
-    transport     = upsert_cat("Transportation",     "#1E88E5", "🚗")
-    shopping      = upsert_cat("Shopping",           "#00ACC1", "🛍️")
-    entertainment = upsert_cat("Entertainment",      "#F4511E", "🎬")
-    finance       = upsert_cat("Finance",            "#7CB342", "💰")
-    travel        = upsert_cat("Travel",             "#546E7A", "✈️")
-    other         = upsert_cat("Other",              "#795548", "📦")
+    finance       = upsert_cat("Finance")
+    food          = upsert_cat("Food & Drink")
+    gifts         = upsert_cat("Gifts & Donations")
+    health        = upsert_cat("Health & Fitness")
+    household     = upsert_cat("Household")
+    income_group  = upsert_cat("Income")
+    other         = upsert_cat("Other")
+    shopping      = upsert_cat("Shopping")
+    entertainment = upsert_cat("Entertainment")
+    transport     = upsert_cat("Transportation")
+    travel        = upsert_cat("Travel")
 
-    # Health & Fitness children — red family, varied
-    upsert_cat("Doctor & Medical",  "#E53935", "👨‍⚕️", health)
-    upsert_cat("Pharmacy",          "#F06292", "💊", health)
-    upsert_cat("Gym & Fitness",     "#FF7043", "🏋️", health)
-    upsert_cat("Vision & Dental",   "#AB47BC", "🦷", health)
+    upsert_cat("Dental", health)
+    upsert_cat("Doctor & Medical", health)
+    upsert_cat("Gym & Fitness", health)
+    upsert_cat("Pharmacy", health)
+    upsert_cat("Vision", health)
 
-    # Food & Drink children — orange/amber family
-    upsert_cat("Groceries",         "#FB8C00", "🛒", food)
-    upsert_cat("Dining Out",        "#F4511E", "🍴", food)
-    upsert_cat("Coffee & Drinks",   "#FFCA28", "☕", food)
-    upsert_cat("Alcohol",           "#EF5350", "🍷", food)
+    upsert_cat("Alcohol", food)
+    upsert_cat("Coffee & Drinks", food)
+    upsert_cat("Dining Out", food)
+    upsert_cat("Groceries", food)
 
-    # Home children — purple family
-    upsert_cat("Rent & Mortgage",   "#8E24AA", "🏡", home)
-    upsert_cat("Utilities",         "#5E35B1", "💡", home)
-    upsert_cat("Internet & Phone",  "#3949AB", "📡", home)
-    upsert_cat("Home Improvement",  "#00897B", "🔧", home)
+    upsert_cat("Electricity", household)
+    upsert_cat("Gas", household)
+    upsert_cat("Home Improvement", household)
+    upsert_cat("Home Insurance", household)
+    upsert_cat("Home Repairs", household)
+    upsert_cat("Internet", household)
+    upsert_cat("Phone", household)
+    upsert_cat("Property Tax", household)
+    upsert_cat("Rent & Mortgage", household)
+    upsert_cat("Water", household)
 
-    # Transportation children — blue family
-    upsert_cat("Gas",               "#1E88E5", "⛽", transport)
-    upsert_cat("Parking & Tolls",   "#039BE5", "🅿️", transport)
-    upsert_cat("Rideshare",         "#00ACC1", "🚕", transport)
-    upsert_cat("Public Transit",    "#43A047", "🚌", transport)
-    upsert_cat("Auto Insurance",    "#1565C0", "🚙", transport)
+    upsert_cat("Auto Insurance", transport)
+    upsert_cat("Gas", transport)
+    upsert_cat("Parking & Tolls", transport)
+    upsert_cat("Public Transit", transport)
+    upsert_cat("Rideshare", transport)
 
-    # Shopping children — teal family
-    upsert_cat("Clothing",          "#00ACC1", "👕", shopping)
-    upsert_cat("Electronics",       "#0097A7", "💻", shopping)
-    upsert_cat("Online Shopping",   "#00838F", "📦", shopping)
+    upsert_cat("Clothing", shopping)
+    upsert_cat("Electronics", shopping)
+    upsert_cat("Online Shopping", shopping)
 
-    # Entertainment children — deep orange family
-    upsert_cat("Subscriptions",     "#F4511E", "📺", entertainment)
-    upsert_cat("Movies & Events",   "#E91E63", "🎟️", entertainment)
-    upsert_cat("Hobbies",           "#9C27B0", "🎨", entertainment)
+    upsert_cat("Hobbies", entertainment)
+    upsert_cat("Movies & Events", entertainment)
+    upsert_cat("Subscriptions", entertainment)
 
-    # Finance children
-    upsert_cat("Income",            "#7CB342", "💵", finance)
-    upsert_cat("Transfer",          "#78909C", "🔄", finance)
-    upsert_cat("Savings",           "#26A69A", "🏦", finance)
-    upsert_cat("Fees & Charges",    "#EF5350", "💸", finance)
+    upsert_cat("Fees & Charges", finance)
+    upsert_cat("Savings", finance)
+    upsert_cat("Transfer", finance)
+
+    upsert_cat("Charity", gifts)
+    upsert_cat("Charity (not deductible)", gifts)
+    upsert_cat("Gifts", gifts)
+
+    upsert_cat("Gifts", income_group)
+    upsert_cat("Interest", income_group)
+    upsert_cat("Investment Income", income_group)
+    upsert_cat("Paycheck", income_group)
 
 
 # ── Helper functions called by migrations ─────────────────────────────────────
@@ -835,51 +1007,3 @@ def init_merchant_renames(conn: sqlite3.Connection):
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_rename_pattern ON merchant_rename(raw_pattern)
     """)
-
-
-def update_category_colors(conn: sqlite3.Connection):
-    """
-    Set distinct colors for seeded subcategories.
-    Called on startup so existing databases get updated colors when this list changes.
-    Only updates categories that match by name — user-created categories are unaffected.
-    To change a seeded color in future: update the list here and add a new migration
-    that calls this function, so existing installs pick up the change on next startup.
-    """
-    updates = [
-        # Health & Fitness
-        ("Doctor & Medical",  "#E53935"),
-        ("Pharmacy",          "#F06292"),
-        ("Gym & Fitness",     "#FF7043"),
-        ("Vision & Dental",   "#AB47BC"),
-        # Food & Drink
-        ("Groceries",         "#FB8C00"),
-        ("Dining Out",        "#F4511E"),
-        ("Coffee & Drinks",   "#FFCA28"),
-        ("Alcohol",           "#EF5350"),
-        # Home
-        ("Rent & Mortgage",   "#8E24AA"),
-        ("Utilities",         "#5E35B1"),
-        ("Internet & Phone",  "#3949AB"),
-        ("Home Improvement",  "#00897B"),
-        # Transportation
-        ("Gas",               "#1E88E5"),
-        ("Parking & Tolls",   "#039BE5"),
-        ("Rideshare",         "#00ACC1"),
-        ("Public Transit",    "#43A047"),
-        ("Auto Insurance",    "#1565C0"),
-        # Shopping
-        ("Clothing",          "#00ACC1"),
-        ("Electronics",       "#0097A7"),
-        ("Online Shopping",   "#00838F"),
-        # Entertainment
-        ("Subscriptions",     "#F4511E"),
-        ("Movies & Events",   "#E91E63"),
-        ("Hobbies",           "#9C27B0"),
-        # Finance
-        ("Income",            "#7CB342"),
-        ("Transfer",          "#78909C"),
-        ("Savings",           "#26A69A"),
-        ("Fees & Charges",    "#EF5350"),
-    ]
-    for name, color in updates:
-        conn.execute("UPDATE category SET color = ? WHERE name = ?", (color, name))

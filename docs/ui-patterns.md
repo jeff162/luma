@@ -4,6 +4,32 @@ This is a working guide for keeping FinTrack pages visually and behaviorally
 consistent. It is not a rigid design system; it is a practical set of patterns
 the app already uses and should continue to prefer.
 
+## Product intent
+
+FinTrack should feel polished, quiet, and immediately useful. The UI should
+stay out of the user's way and let them manipulate their data from wherever
+they already are, rather than forcing them through a separate admin or
+settings workflow for routine actions.
+
+That means polish is part of the feature, not a later cleanup step. When adding
+interactive controls, assume the finished behavior includes the usual edge-case
+handling:
+
+- overlays should open in the correct place on first paint
+- menus and popovers should respect viewport edges and scroll containers
+- controls should not jump, reflow, or visibly correct themselves after opening
+- selectors and dialogs should render above surrounding content
+- inline edit states should preserve layout stability whenever possible
+
+If a user can already see the data they want to change, prefer enabling the
+change right there unless there is a strong reason to route them elsewhere.
+
+Shared controls should be treated as finished product surfaces, not just reused
+snippets. If a picker, menu, overlay, inline editor, or other control appears
+in more than one place, its viewport behavior, scroll behavior, first-paint
+placement, and general polish should be handled up front as part of the change,
+not left for follow-up cleanup after page-specific issues are discovered.
+
 ## General principles
 
 - Keep layouts compact. Avoid large empty regions, oversized cards, and controls
@@ -15,6 +41,13 @@ the app already uses and should continue to prefer.
   controls on Settings.
 - Favor consistency over novelty. When a control already exists elsewhere in the
   app, reuse the same interaction and styling unless there is a strong reason not to.
+- Keep look and feel consistent across pages. Similar data structures should use
+  the same spacing, controls, and interaction patterns so the app feels like one
+  coherent tool rather than a set of isolated screens.
+- Treat repeated UI elements as shared product language. Trees, pills, menus,
+  inline editors, overlays, tables, selectors, and other controls that appear
+  on more than one page should keep the same look, spacing, and behavior unless
+  there is a very strong reason to diverge.
 - Keep advanced and less-common settings below everyday workflows.
 - Use inline editing for lightweight data changes; reserve dedicated forms or
   modals for multi-step or higher-risk actions.
@@ -22,6 +55,11 @@ the app already uses and should continue to prefer.
   includes things like panel placement, list scrolling, filtering, and other
   layout choices that improve usability without turning the app into a fully
   user-designed interface.
+- Remember a user's working UI state across pages when it materially helps them
+  resume work. Things like panel open/closed state, table layout, and similar
+  view preferences should use the shared per-user/profile preference model with
+  local cache plus best-effort backend sync, rather than one-off page-specific
+  persistence.
 - Prefer user control over hidden inference when the choice affects meaning.
   For example, ownership, mapping, and destructive actions should be explicit
   when there is more than one reasonable interpretation.
@@ -38,6 +76,17 @@ Most pages should follow this shape:
 
 Prefer page-local scrolling for long lists like accounts, with the header or
 controls remaining visually stable above the list.
+
+## Tree views
+
+Tree views should use the same visual grammar wherever they appear.
+
+- Each child level should begin under the first letter of the label above it.
+- The hierarchy should read primarily through label alignment rather than heavy
+  guide lines or decorative chrome.
+- Controls that belong to a row may sit to the left of that label start, but
+  the text alignment should define the structure of the tree.
+- Expand/collapse controls should stay close to the label they affect.
 
 ## Section toggles
 
@@ -125,7 +174,7 @@ CSV import has a few special rules:
 
 Ownership should be managed where it is most relevant:
 
-- Account owners are defined in Settings but assigned on the Accounts page.
+- Account owners are created, assigned, renamed, and deleted on the Accounts page.
 - Category and group ownership is managed on the Categories page.
 - Avoid duplicate ownership editors in multiple places.
 

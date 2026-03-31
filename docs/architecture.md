@@ -121,6 +121,50 @@ They share:
 
 Those shared mechanics live in `frontend/src/components/detailShared.jsx`.
 
+### Preferences and local profiles
+
+FinTrack now uses a small hybrid preference model:
+
+- the backend stores per-user preferences as the durable source of truth
+- the browser keeps a local cached copy for fast startup and smooth UI updates
+- preference writes are optimistic: the UI and browser cache update immediately,
+  and the backend save is best-effort
+
+In authenticated mode, preferences are keyed to the signed-in FinTrack user.
+
+In local access mode, preferences are keyed to a lightweight **layout profile**
+instead of a security identity. These profiles:
+
+- are selected from the browser-facing profile picker in `frontend/src/App.jsx`
+- are remembered per browser and per database instance when browser storage is available
+- exist only to separate layout/view preferences for different people sharing one database
+
+The current preference-backed UI areas include:
+
+- transaction table column layout
+- category-tree collapsed/expanded state
+- detail-panel floating position
+
+The backend pieces for this live in:
+
+- `backend/db/control_database.py`
+  local profile records plus stored preference values
+- `backend/routers/auth.py`
+  preference/profile API endpoints
+
+The frontend pieces live in:
+
+- `frontend/src/App.jsx`
+  local access profile picker/switcher
+- `frontend/src/lib/api.js`
+  preference/profile API client and active local-profile header
+
+When changing this system, prefer keeping the backend model simple:
+
+- backend preference data should stay small and JSON-friendly
+- browser storage should remain a cache, not the only durable store
+- local access profiles should not be treated as authentication or authorization
+
 ## Cross-platform approach
 
 FinTrack is intended to run on:
@@ -145,4 +189,3 @@ differences clearly in `README.md`.
   update `detailShared.jsx`
 - User-facing setup or behavior changes:
   update `README.md` and possibly `CHANGELOG.md`
-

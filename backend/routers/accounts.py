@@ -19,6 +19,20 @@ class AccountUpdate(BaseModel):
     type:     Optional[str] = None
 
 
+def resolve_default_owner_id(conn, owner_id: Optional[str]) -> Optional[str]:
+    explicit_owner_id = owner_id.strip() if owner_id else None
+    if explicit_owner_id:
+        owner = conn.execute("SELECT id FROM owner WHERE id = ?", (explicit_owner_id,)).fetchone()
+        if not owner:
+            raise HTTPException(status_code=404, detail="Owner not found")
+        return explicit_owner_id
+
+    owners = conn.execute("SELECT id FROM owner ORDER BY name").fetchall()
+    if len(owners) == 1:
+        return owners[0]["id"]
+    return None
+
+
 @router.get("")
 def list_accounts():
     with get_db() as conn:
@@ -39,13 +53,8 @@ def create_account(body: AccountCreate):
         raise HTTPException(status_code=400, detail="Account name is required")
 
     account_type = (body.type or "other").strip() or "other"
-    owner_id = body.owner_id.strip() if body.owner_id else None
-
     with get_db() as conn:
-        if owner_id:
-            owner = conn.execute("SELECT id FROM owner WHERE id = ?", (owner_id,)).fetchone()
-            if not owner:
-                raise HTTPException(status_code=404, detail="Owner not found")
+        owner_id = resolve_default_owner_id(conn, body.owner_id)
 
         account_id = str(uuid.uuid4())
         conn.execute(

@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from db.database import get_db
 from services import plaid_service, crypto_service
+from routers.accounts import resolve_default_owner_id
 
 router = APIRouter()
 
@@ -37,6 +38,7 @@ def exchange_token(body: PublicTokenExchange, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
     with get_db() as conn:
+        default_owner_id = resolve_default_owner_id(conn, None)
         # Store access token on the item (we reuse the item table via account rows)
         for acc in accounts:
             existing = conn.execute(
@@ -47,8 +49,8 @@ def exchange_token(body: PublicTokenExchange, request: Request):
                 conn.execute(
                     """
                     INSERT INTO account
-                        (id, plaid_account_id, plaid_item_id, name, institution, type, subtype, mask)
-                    VALUES (?,?,?,?,?,?,?,?)
+                        (id, plaid_account_id, plaid_item_id, name, institution, type, subtype, mask, owner_id)
+                    VALUES (?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         str(uuid.uuid4()),
@@ -59,6 +61,7 @@ def exchange_token(body: PublicTokenExchange, request: Request):
                         acc["type"],
                         acc["subtype"],
                         acc["mask"],
+                        default_owner_id,
                     ),
                 )
 

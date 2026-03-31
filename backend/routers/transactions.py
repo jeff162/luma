@@ -183,7 +183,6 @@ def list_transactions(
                 t.category_id,
                 c.name        AS category_name,
                 c.color       AS category_color,
-                c.icon        AS category_icon,
                 o.name        AS owner_name,
                 o.color       AS owner_color
             FROM   txn t
@@ -289,7 +288,6 @@ def spending_by_category(
                 COALESCE(c.id,    'uncategorized') AS category_id,
                 COALESCE(c.name,  'Uncategorized') AS category_name,
                 COALESCE(c.color, '#9E9E9E')       AS category_color,
-                COALESCE(c.icon,  '📦')             AS category_icon,
                 SUM(t.amount)                       AS total,
                 COUNT(*)                            AS count
             FROM   txn t
@@ -378,7 +376,6 @@ def spending_by_group(
                 COALESCE(p.id,              c.id,              'uncategorized') AS group_id,
                 COALESCE(p.name,            c.name,            'Uncategorized') AS group_name,
                 COALESCE(p.color,           c.color,           '#9E9E9E')       AS group_color,
-                COALESCE(p.icon,            c.icon,            '📦')             AS group_icon,
                 COALESCE(p.owner_id,        c.owner_id)                          AS group_owner_id,
                 COALESCE(p.category_type,   c.category_type)                     AS category_type,
                 ABS(SUM(t.amount))                                               AS total,
@@ -458,7 +455,6 @@ def spending_by_category_in_group(
                 COALESCE(c.id,    'uncategorized') AS category_id,
                 COALESCE(c.name,  'Uncategorized') AS category_name,
                 COALESCE(c.color, '#9E9E9E')       AS category_color,
-                COALESCE(c.icon,  '📦')             AS category_icon,
                 SUM(t.amount)                       AS total,
                 COUNT(*)                            AS count
             FROM   txn t
@@ -554,7 +550,7 @@ def monthly_by_group(
     """
     Monthly spending totals for the last N months, broken down by group
     (or by category within a group if group_id supplied).
-    Returns rows of { month, group_id/category_id, name, color, icon, total }.
+    Returns rows of { month, group_id/category_id, name, color, total }.
     """
     clauses = [
         "t.is_pending = 0",
@@ -589,14 +585,12 @@ def monthly_by_group(
         select_id   = "COALESCE(c.id,    'uncategorized') AS series_id"
         select_name = "COALESCE(c.name,  'Uncategorized') AS series_name"
         select_col  = "COALESCE(c.color, '#9E9E9E')       AS series_color"
-        select_icon = "COALESCE(c.icon,  '📦')             AS series_icon"
         select_type = "NULL                                AS series_category_type"
         join        = "LEFT JOIN category c ON c.id = t.category_id"
     else:
         select_id   = "COALESCE(p.id,    c.id,    'uncategorized') AS series_id"
         select_name = "COALESCE(p.name,  c.name,  'Uncategorized') AS series_name"
         select_col  = "COALESCE(p.color, c.color, '#9E9E9E')       AS series_color"
-        select_icon = "COALESCE(p.icon,  c.icon,  '📦')             AS series_icon"
         select_type = "COALESCE(p.category_type, c.category_type)  AS series_category_type"
         join        = "LEFT JOIN category c ON c.id = t.category_id LEFT JOIN category p ON p.id = c.parent_id"
 
@@ -608,7 +602,6 @@ def monthly_by_group(
                 {select_id},
                 {select_name},
                 {select_col},
-                {select_icon},
                 {select_type},
                 ABS(SUM(t.amount)) AS total
             FROM   txn t

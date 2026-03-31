@@ -53,6 +53,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from db.database import get_db
+from routers.accounts import resolve_default_owner_id
 from services.categorizer import categorize_transaction
 from services import crypto_service
 
@@ -67,6 +68,7 @@ class ColumnMap(BaseModel):
     debit:        Optional[str] = None
     credit:       Optional[str] = None
     direction:    Optional[str] = None   # column that says "debit"/"credit"
+    pending:      Optional[str] = None
     description:  str
     category:     Optional[str] = None
     notes:        Optional[str] = None
@@ -134,6 +136,13 @@ def make_hash(date_str: str, amount: float, description: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def make_import_file_hash(text: str) -> str:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = normalized.lstrip("\ufeff")
+    normalized = normalized.rstrip("\n")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def parse_amount(row: dict, convention: str, col_map: ColumnMap) -> Optional[float]:
     """
     Parse an amount cell and return a signed float.
@@ -191,12 +200,26 @@ def parse_amount(row: dict, convention: str, col_map: ColumnMap) -> Optional[flo
 def parse_date(val: str, fmt: str) -> Optional[str]:
     """Parse a date string and return YYYY-MM-DD or None."""
     val = val.strip()
-    for f in [fmt, "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y", "%b-%d-%Y", "%b %d, %Y"]:
+    for f in [fmt, "%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y", "%d-%m-%Y", "%b-%d-%Y", "%b %d, %Y"]:
         try:
             return datetime.strptime(val, f).strftime("%Y-%m-%d")
         except ValueError:
             continue
     return None
+
+
+def parse_pending_flag(row: dict, col_map: ColumnMap) -> bool:
+    """Parse an optional pending/status column. Unknown values default to False."""
+    if not getattr(col_map, "pending", None):
+        return False
+    raw = str(row.get(col_map.pending, "") or "").strip().lower()
+    if not raw:
+        return False
+    if raw in {"pending", "p", "true", "yes", "y", "1", "hold", "held", "authorized", "authorised"}:
+        return True
+    if raw in {"posted", "cleared", "complete", "completed", "final", "finalized", "finalised", "false", "no", "n", "0"}:
+        return False
+    return "pend" in raw or "auth" in raw
 
 
 def _detect_header_row_index(text: str) -> int:
@@ -652,6 +675,7 @@ async def preview_csv(file: UploadFile = File(...)):
 
     filename  = file.filename or ""
     header_fp = "|".join(headers)
+    file_content_hash = make_import_file_hash(text)
 
     # Collect distinct values per column across full file
     column_distinct_values: dict = {}
@@ -683,13 +707,15 @@ async def preview_csv(file: UploadFile = File(...)):
                         suggested_profile_id = p["id"]
                         break
 
-            # Find most recent completed batch for this filename
+            # Find most recent completed batch for this exact file content first.
+            # Older databases may have imports without a stored file hash, in
+            # which case there simply won't be a match.
             previous_batch = conn.execute("""
                 SELECT id, imported_at, row_count, status, config_snapshot
                 FROM   import_batch
-                WHERE  filename = ? AND status = 'completed'
+                WHERE  file_content_hash = ? AND status = 'completed'
                 ORDER  BY imported_at DESC LIMIT 1
-            """, (filename,)).fetchone()
+            """, (file_content_hash,)).fetchone()
 
             previous_batch_accounts = []
             config_snapshot         = None
@@ -722,6 +748,7 @@ async def preview_csv(file: UploadFile = File(...)):
         "rows":                   rows,
         "total_rows":             total_rows,
         "filename":               filename,
+        "file_content_hash":      file_content_hash,
         "header_fingerprint":     header_fp,
         "suggested_profile_id":   suggested_profile_id,
         "previous_batch":         dict(previous_batch) if previous_batch else None,
@@ -754,6 +781,7 @@ async def run_import(
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError:
         text = content.decode("latin-1")
+    file_content_hash = make_import_file_hash(text)
     all_lines = text.splitlines()
 
     header_row_index = _detect_header_row_index(text)
@@ -809,6 +837,16 @@ async def run_import(
     skip_set = set(skip_accounts_cfg)
 
     with get_db() as conn:
+        default_owner_id = resolve_default_owner_id(conn, None)
+        valid_category_ids = {
+            row["id"] for row in conn.execute("SELECT id FROM category").fetchall()
+        }
+        category_assignments_cfg = {
+            raw_value: category_id
+            for raw_value, category_id in category_assignments_cfg.items()
+            if category_id in valid_category_ids
+        }
+
         created_account_ids = {}
         if single_account_new:
             single_name = str(single_account_new.get("name", "")).strip()
@@ -826,7 +864,7 @@ async def run_import(
                           (id, plaid_account_id, plaid_item_id, name, type, subtype, owner_id)
                         VALUES (?, ?, 'csv_import', ?, ?, ?, ?)
                     """, (new_acc_id, f"csv_{new_acc_id}", single_name, single_type, "checking",
-                          None))
+                          default_owner_id))
                     created_account_ids["__single_account__"] = new_acc_id
         for na in new_accounts_cfg:
             csv_val  = na.get("csv_value", "")
@@ -848,8 +886,19 @@ async def run_import(
                   (id, plaid_account_id, plaid_item_id, name, type, subtype, owner_id)
                 VALUES (?, ?, 'csv_import', ?, ?, ?, ?)
             """, (new_acc_id, f"csv_{new_acc_id}", acc_name, acc_type, "checking",
-                  None))
+                  default_owner_id))
             created_account_ids[csv_val] = new_acc_id
+
+        created_account_owner_map = {}
+        if created_account_ids:
+            placeholders = ",".join("?" * len(set(created_account_ids.values())))
+            owner_rows = conn.execute(
+                f"SELECT id, owner_id FROM account WHERE id IN ({placeholders})",
+                list(set(created_account_ids.values())),
+            ).fetchall()
+            created_account_owner_map = {
+                row["id"]: row["owner_id"] for row in owner_rows
+            }
 
         effective_map = {}
         effective_map.update(account_map_cfg)
@@ -883,14 +932,20 @@ async def run_import(
             if aid:
                 relevant_account_ids.add(aid)
         existing_hashes: set = set()
+        existing_pending_rows: dict = {}
         if relevant_account_ids:
             ph = ",".join("?" * len(relevant_account_ids))
             rows_db = conn.execute(
-                f"SELECT account_id, content_hash FROM txn "
+                f"SELECT id, account_id, content_hash, date, raw_name, is_pending FROM txn "
                 f"WHERE account_id IN ({ph}) AND content_hash IS NOT NULL",
                 list(relevant_account_ids)
             ).fetchall()
             existing_hashes = {(r["account_id"], r["content_hash"]) for r in rows_db}
+            for r in rows_db:
+                if not r["is_pending"]:
+                    continue
+                key = (r["account_id"], r["date"], (r["raw_name"] or "").strip().lower())
+                existing_pending_rows[key] = {"id": r["id"], "content_hash": r["content_hash"]}
 
         if replace_batch_id:
             conn.execute("DELETE FROM txn WHERE import_batch_id = ?", (replace_batch_id,))
@@ -910,9 +965,9 @@ async def run_import(
         })
         conn.execute("""
             INSERT INTO import_batch
-              (id, profile_id, filename, row_count, skipped_count, deduped_count, config_snapshot)
-            VALUES (?, ?, ?, 0, 0, 0, ?)
-        """, (batch_id, profile_id, filename, config_snap))
+              (id, profile_id, filename, file_content_hash, row_count, skipped_count, deduped_count, config_snapshot)
+            VALUES (?, ?, ?, ?, 0, 0, 0, ?)
+        """, (batch_id, profile_id, filename, file_content_hash, config_snap))
 
         # Use account column whenever it's mapped — effective_map may be empty
         # at this point if all entries are createNew (populated in created_account_ids)
@@ -1012,7 +1067,15 @@ async def run_import(
             raw_desc     = str(row.get(col.description, "")).strip()
             raw_imported_category = str(row.get(col.category, "")).strip() if col.category else ""
             notes_val    = str(row.get(col.notes, "")).strip() if col.notes else None
+            is_pending = parse_pending_flag(row, col)
             content_hash = make_hash(parsed_date, amount, raw_desc)
+
+            pending_match_key = (acc["id"], parsed_date, raw_desc.lower())
+            pending_match = existing_pending_rows.get(pending_match_key)
+            if pending_match and not is_pending:
+                conn.execute("DELETE FROM txn WHERE id = ?", (pending_match["id"],))
+                existing_hashes.discard((acc["id"], pending_match["content_hash"]))
+                existing_pending_rows.pop(pending_match_key, None)
 
             if (acc["id"], content_hash) in existing_hashes:
                 deduped += 1
@@ -1040,10 +1103,13 @@ async def run_import(
                 INSERT INTO txn
                   (id, account_id, owner_id, category_id, amount, merchant_name,
                    display_name, raw_name, date, is_pending, content_hash, import_batch_id, imported_category, notes, category_overridden)
-                VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (txn_id, acc["id"], acc["owner_id"], cat_id, amount,
-                  raw_desc, raw_desc, raw_desc, parsed_date, content_hash, batch_id,
+                  raw_desc, raw_desc, raw_desc, parsed_date, 1 if is_pending else 0, content_hash, batch_id,
                   raw_imported_category or None, notes_val or None, 1 if cat_id and raw_imported_category else 0))
+            existing_hashes.add((acc["id"], content_hash))
+            if is_pending:
+                existing_pending_rows[pending_match_key] = {"id": txn_id, "content_hash": content_hash}
             imported += 1
             row_results.append({"row": row_num, "status": "imported"})
             reset_footer_detection()
@@ -1112,6 +1178,10 @@ async def run_import(
         "deduped":              deduped,
         "account_skipped":      account_skipped,
         "new_accounts_created": len(created_account_ids),
+        "new_accounts_without_owner": sum(
+            1 for aid in set(created_account_ids.values())
+            if not created_account_owner_map.get(aid)
+        ),
         "has_imported_categories": bool(imported_category_counts),
         "imported_category_value_count": len(imported_category_counts),
         "trailing_non_transaction_suspected": trailing_non_transaction_suspected,
@@ -1256,12 +1326,25 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
             except Exception:
                 snapshot = {}
 
+        valid_category_ids = {
+            row["id"] for row in conn.execute("SELECT id FROM category").fetchall()
+        }
         current_assignments = (snapshot.get("category_assignments") or
                                (snapshot.get("column_map") or {}).get("category_assignments") or {})
-        merged_assignments = {**current_assignments, **body.assignments}
+        current_assignments = {
+            raw_value: category_id
+            for raw_value, category_id in current_assignments.items()
+            if category_id in valid_category_ids
+        }
+        incoming_assignments = {
+            raw_value: category_id
+            for raw_value, category_id in body.assignments.items()
+            if category_id in valid_category_ids
+        }
+        merged_assignments = {**current_assignments, **incoming_assignments}
 
         applied = 0
-        for raw_value, category_id in body.assignments.items():
+        for raw_value, category_id in incoming_assignments.items():
             result = conn.execute("""
                 UPDATE txn
                 SET    category_id = ?, category_overridden = 1
@@ -1293,7 +1376,7 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
                     profile_map = {}
                 profile_map["category_assignments"] = {
                     **(profile_map.get("category_assignments") or {}),
-                    **body.assignments,
+                    **incoming_assignments,
                 }
                 conn.execute(
                     "UPDATE csv_import_profile SET column_map = ? WHERE id = ?",
@@ -1333,7 +1416,7 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
         "applied_count": applied,
         "categorized_by_rules": categorized_by_rules,
         "saved_to_profile": saved_to_profile,
-        "saved_mapping_count": len(body.assignments),
+        "saved_mapping_count": len(incoming_assignments),
     }
 
 

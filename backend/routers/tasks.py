@@ -5,7 +5,7 @@ Tasks are computed fresh from the database on every request — no storage neede
 They self-resolve automatically as the user completes the work.
 
 Current tasks:
-  unowned_accounts   — accounts with owner_id IS NULL when more than one owner
+  unowned_accounts   — accounts with owner_id IS NULL when at least one owner
                        exists. Links to Accounts.
   uncategorized_txns — non-pending transactions with no category. Links to Transactions
                        with the __uncategorized__ filter active.
@@ -38,7 +38,7 @@ def get_tasks():
             SELECT COUNT(*) AS n FROM owner
         """).fetchone()["n"]
 
-        if owner_count > 1:
+        if owner_count > 0:
             unowned = conn.execute("""
                 SELECT COUNT(*) AS n FROM account WHERE owner_id IS NULL
             """).fetchone()["n"]

@@ -1,3 +1,4 @@
+import json
 import os
 
 from fastapi import APIRouter, HTTPException, Request
@@ -16,17 +17,24 @@ from db.control_database import (
     bootstrap_required,
     enable_auth_mode,
     auth_required,
+    create_local_preference_profile,
+    delete_local_preference_profile,
     consume_recovery_code,
     create_user,
     create_initial_user,
     disable_totp,
     delete_user,
     enable_totp,
+    get_local_preference_profile,
+    get_local_preferences,
+    get_user_preferences,
     get_password_policy,
     get_local_mode_user,
     get_security_profile,
     get_user_by_id,
+    list_local_preference_profiles,
     list_users,
+    set_local_preference,
     password_policy_label,
     recovery_code_count,
     security_profile_guidance,
@@ -34,11 +42,13 @@ from db.control_database import (
     replace_recovery_codes,
     set_security_profile,
     set_password_policy,
+    set_user_preference,
+    update_local_preference_profile,
     update_user,
     update_user_secret_material,
     verify_totp_code,
 )
-from db.database import get_db
+from db.database import get_db, get_db_instance_id
 from services.crypto_service import reencrypt_plaid_items
 
 
@@ -114,6 +124,19 @@ class SecurityProfileRequest(BaseModel):
     profile: str
 
 
+class UserPreferenceRequest(BaseModel):
+    key: str
+    value: object
+
+
+class LocalPreferenceProfileCreateRequest(BaseModel):
+    name: str
+
+
+class LocalPreferenceProfileUpdateRequest(BaseModel):
+    name: str
+
+
 def _require_admin(request: Request):
     user = getattr(request.state, "user", None)
     if not user or user.get("role") != "admin":
@@ -137,6 +160,29 @@ def _require_admin_or_local(request: Request):
     return _require_admin(request)
 
 
+def _require_current_user(request: Request):
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+def _require_local_mode():
+    if auth_required():
+        raise HTTPException(status_code=400, detail="Local preference profiles are only available in local access mode")
+
+
+def _require_local_preference_profile(request: Request):
+    _require_local_mode()
+    profile_id = (request.headers.get("X-Fintrack-Preference-Profile") or "").strip()
+    if not profile_id:
+        raise HTTPException(status_code=400, detail="Preference profile is required")
+    profile = get_local_preference_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Preference profile not found")
+    return profile
+
+
 def _session_payload(user: dict) -> dict:
     return {
         "id": user["id"],
@@ -156,6 +202,8 @@ def _auth_status_payload(request: Request | None = None) -> dict:
     password_policy = get_password_policy()
     security_profile = get_security_profile()
     security_guidance = security_profile_guidance(security_profile)
+    with get_db() as conn:
+        db_instance_id = get_db_instance_id(conn)
     experimental_security_settings = _truthy_env(
         os.getenv("FINTRACK_EXPERIMENTAL_SECURITY_SETTINGS"),
         default=False,
@@ -172,6 +220,7 @@ def _auth_status_payload(request: Request | None = None) -> dict:
         "security_profile_recommended_auth": security_guidance["recommended_auth"],
         "security_profile_suggested_password_policy": security_guidance["suggested_password_policy"],
         "experimental_security_settings": experimental_security_settings,
+        "db_instance_id": db_instance_id,
     }
     if request and enabled:
         user_id = request.session.get("user_id")
@@ -183,6 +232,15 @@ def _auth_status_payload(request: Request | None = None) -> dict:
         user = get_local_mode_user()
         if user:
             payload["user"] = _session_payload(user)
+        if request:
+            profile_id = (request.headers.get("X-Fintrack-Preference-Profile") or "").strip()
+            if profile_id:
+                profile = get_local_preference_profile(profile_id)
+                if profile:
+                    payload["preference_profile"] = {
+                        "id": profile["id"],
+                        "name": profile["name"],
+                    }
     return payload
 
 
@@ -194,6 +252,79 @@ def bootstrap_status():
 @router.get("/status")
 def auth_status(request: Request):
     return _auth_status_payload(request)
+
+
+@router.get("/preferences")
+def auth_preferences(request: Request):
+    if auth_required():
+        user = _require_current_user(request)
+        prefs = get_user_preferences(user["id"])
+    else:
+        profile = _require_local_preference_profile(request)
+        prefs = get_local_preferences(profile["id"])
+    parsed = {}
+    for key, value in prefs.items():
+        try:
+            parsed[key] = json.loads(value)
+        except Exception:
+            parsed[key] = value
+    return {"preferences": parsed}
+
+
+@router.post("/preferences")
+def save_auth_preference(body: UserPreferenceRequest, request: Request):
+    key = (body.key or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="Preference key is required")
+    if auth_required():
+        user = _require_current_user(request)
+        set_user_preference(user["id"], key, json.dumps(body.value))
+    else:
+        profile = _require_local_preference_profile(request)
+        set_local_preference(profile["id"], key, json.dumps(body.value))
+    return {"ok": True}
+
+
+@router.get("/local-preference-profiles")
+def local_preference_profiles():
+    _require_local_mode()
+    return {"profiles": list_local_preference_profiles()}
+
+
+@router.post("/local-preference-profiles")
+def create_local_profile(body: LocalPreferenceProfileCreateRequest):
+    _require_local_mode()
+    try:
+        profile = create_local_preference_profile(body.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"profile": profile}
+
+
+@router.patch("/local-preference-profiles/{profile_id}")
+def update_local_profile(profile_id: str, body: LocalPreferenceProfileUpdateRequest):
+    _require_local_mode()
+    try:
+        profile = update_local_preference_profile(profile_id, body.name)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "Preference profile not found":
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=400, detail=detail)
+    return {"profile": profile}
+
+
+@router.delete("/local-preference-profiles/{profile_id}")
+def delete_local_profile(profile_id: str):
+    _require_local_mode()
+    try:
+        delete_local_preference_profile(profile_id)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "Preference profile not found":
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=400, detail=detail)
+    return {"ok": True}
 
 
 @router.post("/runtime-config")
