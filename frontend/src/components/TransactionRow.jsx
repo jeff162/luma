@@ -69,7 +69,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { api } from '../lib/api.js'
-import { Badge } from './ui.jsx'
+import { CategoryMarker } from './ui.jsx'
 import CategoryDisplay from './CategoryDisplay.jsx'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -95,9 +95,8 @@ export function buildGroups(flatCats) {
   return groups.map(g => ({
     value:   g.id,
     label:   g.name,
-    icon:    g.icon,
     options: flatCats.filter(c => c.parent_id === g.id)
-      .map(c => ({ value: c.id, label: c.name, icon: c.icon })),
+      .map(c => ({ value: c.id, label: c.name })),
   })).filter(g => g.options.length > 0)
 }
 
@@ -401,9 +400,6 @@ export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
           style={{ ...detailButtonStyle, flexShrink: 0 }}
         >↗</button>
       )}
-      {!!txn.is_pending && (
-        <span style={{ fontSize: 11, color: 'var(--muted)' }}>Pending</span>
-      )}
       {/* Note icon — always rendered, visible only when note exists */}
       {localNotes && (
         <div style={{ position: 'relative', display: 'inline-flex' }}>
@@ -503,7 +499,7 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
 
   async function handleNewSave() {
     if (!newName.trim()) return
-    const cat = await api.createCategory({ name: newName.trim(), icon: '📦', parent_id: newParent || null })
+    const cat = await api.createCategory({ name: newName.trim(), parent_id: newParent || null })
     onAddCategory?.(cat)
     onSaveNew?.(cat)
     onClose?.()
@@ -520,7 +516,7 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
 
   async function handleNewGroupSave() {
     if (!newGroupName.trim()) return
-    const grp = await api.createCategory({ name: newGroupName.trim(), icon: '📁', parent_id: null })
+    const grp = await api.createCategory({ name: newGroupName.trim(), parent_id: null })
     // Add to categories list without assigning to transaction
     onAddCategory?.(grp)
     setNewParent(grp.id)
@@ -600,7 +596,7 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
                 <select value={newParent} onChange={e => handleParentChange(e.target.value)}
                   style={{ background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', fontSize: 13 }}>
                   <option value="">— Top-level group —</option>
-                  {topGrps.map(g => <option key={g.id} value={g.id}>{g.icon} {g.name}</option>)}
+                  {topGrps.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
                   <option value="__new_group__">＋ New group…</option>
                 </select>
               )}
@@ -624,7 +620,8 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
                   onMouseDown={e => { e.preventDefault(); pick(cat) }}
                   onMouseEnter={() => setCursor(i)}
                   style={{ padding: '7px 12px', cursor: 'pointer', fontSize: 13, background: i === cursor ? 'var(--surface2)' : 'transparent', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span>{cat.icon} {cat.name}</span>
+                  <CategoryMarker kind="category" />
+                  <span>{cat.name}</span>
                   {parentName(cat) && <span style={{ fontSize: 11, color: 'var(--muted)', marginLeft: 'auto' }}>{parentName(cat)}</span>}
                 </div>
               ))}
@@ -632,8 +629,9 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
           ) : (
             groups.map(g => (
               <div key={g.value}>
-                <div style={{ padding: '6px 12px 4px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)' }}>
-                  {g.icon} {g.label}
+                <div style={{ padding: '6px 12px 4px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <CategoryMarker kind="group" />
+                  <span>{g.label}</span>
                 </div>
                 {g.options.map(o => {
                   const globalIdx = leaves.findIndex(l => l.id === o.value)
@@ -642,7 +640,8 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
                       onMouseDown={e => { e.preventDefault(); pick(leaves.find(l => l.id === o.value)) }}
                       onMouseEnter={() => setCursor(globalIdx)}
                       style={{ padding: '7px 12px 7px 20px', cursor: 'pointer', fontSize: 13, background: globalIdx === cursor ? 'var(--surface2)' : 'transparent', display: 'flex', alignItems: 'center', gap: 8 }}>
-                      {o.icon} {o.label}
+                      <CategoryMarker kind="category" />
+                      {o.label}
                     </div>
                   )
                 })}
@@ -667,7 +666,7 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
 // onSave receives (txnId, catId, catObj) — catObj is the full category object
 // if a brand new category was just created, or undefined if selecting existing.
 // The parent should optimistically update its local transaction data with the
-// new category fields (id, name, color, icon) so the UI updates without reload.
+// new category fields (id, name, color) so the UI updates without reload.
 
 export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePrompt, onOpenDetail }) {
   const [editId, setEditId] = useState(null)
@@ -686,7 +685,6 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
       categoryId:    cat.id,
       categoryName:  cat.name,
       categoryColor: cat.color,
-      categoryIcon:  cat.icon,
       transactionData: {  // NEW: pass transaction for amount/debit-credit defaults
         amount: txn.amount,
       },
@@ -726,9 +724,8 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
         title="Click to change category"
       >
         <CategoryDisplay
+          id={txn.category_id}
           name={txn.category_name}
-          color={txn.category_color}
-          icon={txn.category_icon}
         />
       </div>
       {onOpenDetail && txn.category_name && (

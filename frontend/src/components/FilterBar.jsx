@@ -41,6 +41,7 @@ import { format, subDays, subMonths, subYears, startOfMonth, endOfMonth,
 import { useFilters } from '../lib/FilterContext.jsx'
 import { api } from '../lib/api.js'
 import { getTxnMerchantLabel } from './TransactionRow.jsx'
+import { CategoryMarker } from './ui.jsx'
 
 const fmt   = d => format(d, 'yyyy-MM-dd')
 const today = new Date()
@@ -238,7 +239,7 @@ function FilterPopover({ onClose }) {
 
         {/* Groups */}
         {tab === 'groups' && groups.map(g => {
-          const sel = { type: 'group', id: g.id, label: `${g.icon} ${g.name}` }
+          const sel = { type: 'group', id: g.id, label: g.name }
           return (
             <div key={g.id} onClick={() => toggle(sel)} style={{
               ...rowStyle,
@@ -246,7 +247,8 @@ function FilterPopover({ onClose }) {
               justifyContent: 'space-between',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13 }}>{g.icon} {g.name}</span>
+                <CategoryMarker kind="group" />
+                <span style={{ fontSize: 13 }}>{g.name}</span>
               </div>
               {isSelected(g.id) && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
             </div>
@@ -257,11 +259,12 @@ function FilterPopover({ onClose }) {
         {tab === 'categories' && groups.map(g => (
           <div key={g.id}>
             <div style={{ padding: '6px 16px 2px', fontSize: 11, fontWeight: 600,
-              color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              {g.icon} {g.name}
+              color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <CategoryMarker kind="group" />
+              <span>{g.name}</span>
             </div>
             {leaves.filter(c => c.parent_id === g.id).map(c => {
-              const sel = { type: 'category', id: c.id, label: `${c.icon} ${c.name}` }
+              const sel = { type: 'category', id: c.id, label: c.name }
               return (
                 <div key={c.id} onClick={() => toggle(sel)} style={{
                   ...rowStyle, paddingLeft: 28,
@@ -269,7 +272,8 @@ function FilterPopover({ onClose }) {
                   justifyContent: 'space-between',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 13 }}>{c.icon} {c.name}</span>
+                    <CategoryMarker kind="category" />
+                    <span style={{ fontSize: 13 }}>{c.name}</span>
                   </div>
                   {isSelected(c.id) && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
                 </div>

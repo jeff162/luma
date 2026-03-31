@@ -1,13 +1,9 @@
 /**
- * Settings.jsx — Owner and category ownership management
+ * Settings.jsx — App settings and category ownership management
  *
  * Two sections on one page:
  *
- * 1. OWNERS — Create / rename / recolor / delete named owners (e.g. Alice, Bob, Shared).
- *    Deleting an owner NULLs out owner_id on all related accounts, categories, and
- *    transactions (handled server-side via ON DELETE SET NULL).
- *
- * 2. CATEGORY GROUPS → OWNER — Tag each spending group (Food & Drink, Transportation,
+ * 1. CATEGORY GROUPS → OWNER — Tag each spending group (Food & Drink, Transportation,
  *    etc.) with an owner to indicate whose domain it belongs to. This drives the
  *    Dashboard split-by-owner view: "Shared" groups appear in both columns, personal
  *    groups appear only in that person's column.
@@ -20,132 +16,8 @@ import { Card, PageHeader, Button, Spinner, EmptyState } from '../components/ui.
 import { PASSWORD_POLICIES, passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import { SECURITY_PROFILES, getSecurityProfile } from '../lib/securityProfiles.js'
 
-// ── Small reusable owner badge ────────────────────────────────────────────────
-
-function OwnerDot({ name }) {
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-      {name && <span style={{ fontSize: 13, color: 'var(--text)' }}>{name}</span>}
-    </span>
-  )
-}
-
-// ── Owner CRUD ────────────────────────────────────────────────────────────────
-
-function OwnerRow({ owner, onSave, onDelete }) {
-  const [editing, setEditing] = useState(false)
-  const [name, setName]       = useState(owner.name)
-
-  async function save() {
-    if (!name.trim()) return
-    await onSave(owner.id, { name: name.trim() })
-    setEditing(false)
-  }
-
-  function cancel() {
-    setName(owner.name)
-    setEditing(false)
-  }
-
-  if (!editing) {
-    return (
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 12,
-        padding: '10px 16px', borderBottom: '1px solid var(--border)',
-      }}>
-        <button
-          type="button"
-          onClick={() => setEditing(true)}
-          style={{
-            background: 'none',
-            border: 'none',
-            padding: 0,
-            margin: 0,
-            cursor: 'text',
-            font: 'inherit',
-            color: 'inherit',
-            textAlign: 'left',
-            flex: 1,
-          }}
-        >
-          <span style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            padding: '4px 10px',
-            borderRadius: 999,
-            border: '1px solid var(--border)',
-            background: 'var(--surface2)',
-            fontSize: 13,
-            lineHeight: 1.2,
-          }}>
-            {owner.name}
-          </span>
-        </button>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button onClick={() => onDelete(owner.id)} style={{
-            background: 'none', color: 'var(--danger)',
-            cursor: 'pointer', fontSize: 13, padding: '2px 8px',
-            borderRadius: 4, border: '1px solid transparent',
-          }}>×</button>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div style={{
-      padding: '12px 16px', borderBottom: '1px solid var(--border)',
-      background: 'var(--surface2)', display: 'flex', gap: 10, alignItems: 'center',
-    }}>
-      <input
-        value={name}
-        onChange={e => setName(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel() }}
-        autoFocus
-        style={{
-          flex: 1, background: 'var(--surface)', color: 'var(--text)',
-          border: '1px solid var(--accent)', borderRadius: 6,
-          padding: '7px 10px', fontSize: 13, outline: 'none',
-        }}
-      />
-      <Button small onClick={save} disabled={!name.trim()}>Save</Button>
-      <Button small variant="ghost" onClick={cancel}>Cancel</Button>
-    </div>
-  )
-}
-
-function AddOwnerForm({ onAdd, onCancel }) {
-  const [name, setName]   = useState('')
-
-  async function handleAdd() {
-    if (!name.trim()) return
-    await onAdd({ name: name.trim() })
-    setName('')
-  }
-
-  return (
-    <div style={{
-      padding: '12px 16px', background: 'var(--surface2)',
-      borderBottom: '2px solid var(--border)',
-      display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
-    }}>
-      <input
-        value={name}
-        onChange={e => setName(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter') handleAdd() }}
-        autoFocus
-        placeholder="Owner name (e.g. Alice, Bob, Shared)"
-        style={{
-          flex: 1, minWidth: 160, background: 'var(--surface)', color: 'var(--text)',
-          border: '1px solid var(--accent)', borderRadius: 6,
-          padding: '7px 10px', fontSize: 13, outline: 'none',
-        }}
-      />
-      <Button small onClick={handleAdd} disabled={!name.trim()}>Add owner</Button>
-      <Button small variant="ghost" onClick={onCancel}>Cancel</Button>
-    </div>
-  )
-}
+const SETTINGS_SECTIONS_PREF_KEY = 'ui.settings.stickySections'
+const SETTINGS_SECTIONS_STORAGE_KEY_PREFIX = 'fintrack.settings.stickySections'
 
 // ── Import profiles section ───────────────────────────────────────────────────
 
@@ -1175,9 +1047,11 @@ function PlaidTokenProtectionSection({ embedded = false }) {
   )
 }
 
-function StickySection({ title, description, actions, children, defaultCollapsed = true, scrollContainerRef = null }) {
-  const [open, setOpen] = useState(!defaultCollapsed)
+function StickySection({ title, description, actions, children, defaultCollapsed = true, scrollContainerRef = null, open: controlledOpen, onOpenChange }) {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(!defaultCollapsed)
   const sectionRef = useRef(null)
+  const open = controlledOpen ?? uncontrolledOpen
+  const setOpen = onOpenChange ?? setUncontrolledOpen
 
   useEffect(() => {
     if (!open) return
@@ -1719,43 +1593,74 @@ function EnvironmentSection({ authEnabled, currentUser }) {
 }
 
 export default function Settings() {
-  const [owners, setOwners]   = useState([])
-  const [loading, setLoading] = useState(true)
-  const [showAdd, setShowAdd] = useState(false)
   const [authEnabled, setAuthEnabled] = useState(false)
   const [currentUser, setCurrentUser] = useState(null)
   const [passwordPolicy, setPasswordPolicy] = useState('min_8')
   const [securityProfile, setSecurityProfile] = useState('local_private')
   const [experimentalSecuritySettings, setExperimentalSecuritySettings] = useState(false)
+  const [dbInstanceId, setDbInstanceId] = useState('')
+  const [userId, setUserId] = useState('')
+  const [sectionOpenState, setSectionOpenState] = useState({})
+  const [sectionStateLoaded, setSectionStateLoaded] = useState(false)
   const settingsScrollRef = useRef(null)
 
   useEffect(() => {
-    Promise.all([api.getOwners(), api.getAuthStatus()]).then(([o, status]) => {
-      setOwners(o)
+    Promise.all([
+      api.getAuthStatus(),
+      api.getUserPreferences().catch(() => ({ preferences: {} })),
+    ]).then(([status, prefResp]) => {
       setAuthEnabled(!!status.auth_enabled)
       setCurrentUser(status.user || null)
       setPasswordPolicy(status.password_policy || 'min_8')
       setSecurityProfile(status.security_profile || 'local_private')
       setExperimentalSecuritySettings(!!status.experimental_security_settings)
-      setLoading(false)
+      const nextDbInstanceId = status?.db_instance_id || ''
+      const nextUserId = status?.selected_local_profile_id || status?.user?.id || status?.user_id || ''
+      setDbInstanceId(nextDbInstanceId)
+      setUserId(nextUserId)
+
+      const prefValue = prefResp?.preferences?.[SETTINGS_SECTIONS_PREF_KEY]
+      if (prefValue && typeof prefValue === 'object') {
+        setSectionOpenState(prefValue)
+      } else {
+        const storageKey = nextDbInstanceId && nextUserId
+          ? `${SETTINGS_SECTIONS_STORAGE_KEY_PREFIX}.${nextDbInstanceId}.${nextUserId}`
+          : ''
+        if (storageKey) {
+          try {
+            const raw = window.localStorage.getItem(storageKey)
+            const parsed = raw ? JSON.parse(raw) : null
+            if (parsed && typeof parsed === 'object') setSectionOpenState(parsed)
+          } catch {
+            // Ignore storage failures in restricted environments.
+          }
+        }
+      }
+      setSectionStateLoaded(true)
     })
   }, [])
 
-  async function handleAdd(data) {
-    const owner = await api.createOwner(data)
-    setOwners(prev => [...prev, owner])
-    setShowAdd(false)
-  }
+  useEffect(() => {
+    if (!sectionStateLoaded) return
+    const storageKey = dbInstanceId && userId
+      ? `${SETTINGS_SECTIONS_STORAGE_KEY_PREFIX}.${dbInstanceId}.${userId}`
+      : ''
+    if (storageKey) {
+      try {
+        window.localStorage.setItem(storageKey, JSON.stringify(sectionOpenState))
+      } catch {
+        // Ignore storage failures in restricted environments.
+      }
+    }
+    api.saveUserPreference(SETTINGS_SECTIONS_PREF_KEY, sectionOpenState).catch(() => {})
+  }, [dbInstanceId, userId, sectionOpenState, sectionStateLoaded])
 
-  async function handleSave(id, data) {
-    await api.updateOwner(id, data)
-    setOwners(prev => prev.map(o => o.id === id ? { ...o, ...data } : o))
-  }
-
-  async function handleDelete(id) {
-    if (!confirm('Delete this owner? Their accounts and categories will become unassigned.')) return
-    await api.deleteOwner(id)
-    setOwners(prev => prev.filter(o => o.id !== id))
+  function bindSection(sectionKey, defaultCollapsed = true) {
+    const isOpen = sectionOpenState[sectionKey] ?? !defaultCollapsed
+    return {
+      open: isOpen,
+      onOpenChange: value => setSectionOpenState(prev => ({ ...prev, [sectionKey]: value })),
+    }
   }
 
   const canManageEnvironment = !authEnabled || currentUser?.role === 'admin'
@@ -1772,6 +1677,7 @@ export default function Settings() {
       <StickySection
         title="CSV Import Profiles"
         scrollContainerRef={settingsScrollRef}
+        {...bindSection('importProfiles')}
       >
         <ImportProfilesSection />
       </StickySection>
@@ -1784,43 +1690,16 @@ export default function Settings() {
           </>
         }
         scrollContainerRef={settingsScrollRef}
+        {...bindSection('backupRecipients')}
       >
         <BackupRecipientsSection />
-      </StickySection>
-
-      {/* ── Section 1: Owners ── */}
-      <StickySection
-        title="Account Owners"
-        actions={owners.length > 0 ? (
-          <Button small onClick={() => setShowAdd(v => !v)}>
-            {showAdd ? 'Cancel' : '+ New account owner'}
-          </Button>
-        ) : null}
-        scrollContainerRef={settingsScrollRef}
-      >
-        <Card style={{ padding: 0, overflow: 'hidden' }}>
-          {showAdd && (
-            <AddOwnerForm onAdd={handleAdd} onCancel={() => setShowAdd(false)} />
-          )}
-          {loading ? <Spinner /> : owners.length === 0 && !showAdd ? (
-            <div style={{ padding: '16px', textAlign: 'left', color: 'var(--muted)', fontSize: 13 }}>
-              <div style={{ marginBottom: 10 }}>None.</div>
-              <Button small onClick={() => setShowAdd(true)}>
-                + New account owner
-              </Button>
-            </div>
-          ) : (
-            owners.map(o => (
-              <OwnerRow key={o.id} owner={o} onSave={handleSave} onDelete={handleDelete} />
-            ))
-          )}
-        </Card>
       </StickySection>
 
       {canManageEnvironment && (
         <StickySection
           title="Environment variables (.env)"
           scrollContainerRef={settingsScrollRef}
+          {...bindSection('environment')}
         >
           <EnvironmentSection authEnabled={authEnabled} currentUser={currentUser} />
         </StickySection>
@@ -1831,6 +1710,7 @@ export default function Settings() {
           title="Security model"
           description="Match FinTrack's sign-in posture to how this instance is deployed and who can reach it."
           scrollContainerRef={settingsScrollRef}
+          {...bindSection('securityModel')}
         >
           <SecurityProfileSection
             authEnabled={authEnabled}
@@ -1848,6 +1728,7 @@ export default function Settings() {
           title="Sign-in protection"
           description="Enable login when you want passwords, 2FA, or multiple sign-in accounts for the same installation."
           scrollContainerRef={settingsScrollRef}
+          {...bindSection('signInProtection')}
         >
           <AuthModeSection
             authEnabled={authEnabled}
@@ -1866,6 +1747,7 @@ export default function Settings() {
           title="Account security"
           description="Manage password requirements and authenticator-based sign-in protection."
           scrollContainerRef={settingsScrollRef}
+          {...bindSection('accountSecurity')}
         >
           <AccountSecuritySection passwordPolicy={passwordPolicy} onPasswordPolicyChange={setPasswordPolicy} embedded />
         </StickySection>
@@ -1876,6 +1758,7 @@ export default function Settings() {
           title="Plaid token protection"
           description="Control how Plaid access tokens are protected on disk for this account."
           scrollContainerRef={settingsScrollRef}
+          {...bindSection('plaidTokenProtection')}
         >
           <PlaidTokenProtectionSection embedded />
         </StickySection>
@@ -1886,6 +1769,7 @@ export default function Settings() {
           title="User management"
           description="Manage who can sign in to this shared FinTrack installation."
           scrollContainerRef={settingsScrollRef}
+          {...bindSection('userManagement')}
         >
           <UserAdminSection passwordPolicy={passwordPolicy} embedded />
         </StickySection>

@@ -51,37 +51,32 @@ function RuleRow({ rule, owners, accounts, onSave, onDelete }) {
 
   return (
     <div style={{
-      display: 'grid', gridTemplateColumns: '200px 1fr 80px',
+      display: 'grid', gridTemplateColumns: '360px 1fr 80px',
       padding: '10px 16px', alignItems: 'center',
       borderBottom: '1px solid var(--border)', gap: 12,
     }}>
-      {/* Keyword */}
-      <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 500 }}>
-        {rule.keyword}
-      </span>
-
-      {/* Conditions + actions in plain text */}
-      <div style={{ fontSize: 13, lineHeight: 1.5, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' }}>
-        {/* Conditions */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, overflow: 'hidden' }}>
+        <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 500, flexShrink: 0, whiteSpace: 'nowrap' }}>
+          {rule.keyword}
+        </span>
         {hasConditions && (
-          <span style={{ color: 'var(--muted)' }}>
+          <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--muted)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {conditions.map((c, i) => (
               <span key={i}>
-                {i > 0 && <span style={{ color: 'var(--border)', margin: '0 2px' }}>&</span>}
+                {i > 0 && <span style={{ color: 'var(--border)', margin: '0 4px' }}>&</span>}
                 {c}
               </span>
             ))}
-          </span>
+          </div>
         )}
+      </div>
 
-        {/* Arrow */}
+      {/* Actions */}
+      <div style={{ fontSize: 13, lineHeight: 1.5, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' }}>
         <span style={{ color: 'var(--muted)', opacity: 0.4, margin: '0 2px' }}>→</span>
-
-        {/* Category */}
         <Badge
           label={rule.category_name}
-          color={rule.category_color}
-          icon={rule.category_icon}
+          toneKey={rule.category_id || rule.category_name}
         />
 
         {/* Rename */}
@@ -352,14 +347,14 @@ export default function Rules() {
         <Card style={{ padding: 0, overflow: 'hidden' }}>
           {/* Column headers */}
           <div style={{
-            display: 'grid', gridTemplateColumns: '200px 1fr 80px',
+            display: 'grid', gridTemplateColumns: '360px 1fr 80px',
             padding: '8px 16px', gap: 12,
             fontSize: 11, fontWeight: 600, color: 'var(--muted)',
             textTransform: 'uppercase', letterSpacing: '0.05em',
             borderBottom: '1px solid var(--border)',
           }}>
-            <span>Keyword</span>
-            <span>Conditions → Action</span>
+            <span>Keyword + Condition</span>
+            <span style={{ paddingLeft: 28 }}>Action</span>
             <span />
           </div>
 

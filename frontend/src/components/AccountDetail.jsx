@@ -15,6 +15,7 @@ import { api } from '../lib/api.js'
 import { formatCurrency, formatDate, monthLabel } from '../lib/utils.js'
 import { Spinner } from './ui.jsx'
 import { CategoryCell, MerchantCell } from './TransactionRow.jsx'
+import AmountDisplay from './AmountDisplay.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import {
   DETAIL_LIST_MAX_HEIGHT,
@@ -64,7 +65,6 @@ export default function AccountDetail({ account, categories = [], onClose }) {
         category_id: catId,
         category_name: cat?.name ?? null,
         category_color: cat?.color ?? null,
-        category_icon: cat?.icon ?? null,
         category_overridden: 1,
       } : t
     )))
@@ -161,12 +161,7 @@ export default function AccountDetail({ account, categories = [], onClose }) {
                           categories={categories}
                           onSave={saveCategory}
                         />
-                        <span style={{
-                          textAlign: 'right', fontWeight: 600,
-                          color: t.amount < 0 ? 'var(--success)' : 'var(--text)',
-                        }}>
-                          {t.amount < 0 ? '+' : null}{formatCurrency(t.amount)}
-                        </span>
+                        <AmountDisplay amount={t.amount} isPending={!!t.is_pending} />
                       </div>
                     ))}
                   </div>

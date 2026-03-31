@@ -34,6 +34,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, LabelList,
 } from 'recharts'
+import { api } from '../lib/api.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
 
 export const DETAIL_PAGE_SIZE = 100
@@ -44,7 +45,12 @@ export const DETAIL_WINDOW_MONTHS = 18
 export const DETAIL_TOP_PADDING = '120px'
 export const DETAIL_MAX_VISIBLE_ROWS = 7
 const DETAIL_SECTION_OVERHEAD = 108
-const DETAIL_POSITION_STORAGE_KEY = 'fintrack.detailPanelPosition'
+const DETAIL_POSITION_STORAGE_KEY_PREFIX = 'fintrack.detailPanelPosition'
+const DETAIL_POSITION_PREF_KEY = 'ui.detailPanel.position'
+
+function getDetailPositionStorageKey(instanceId, userId) {
+  return instanceId && userId ? `${DETAIL_POSITION_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
+}
 
 function clampStoredAnchor(anchor) {
   if (!anchor) return null
@@ -74,24 +80,50 @@ function clampPanelPosition(pos) {
 }
 
 export function useDetailPanelChrome(onClose) {
+  const [dbInstanceId, setDbInstanceId] = useState('')
+  const [userId, setUserId] = useState('')
   const savedAnchorRef = useRef(null)
   const anchoredModeRef = useRef(false)
-  const [pos, setPos] = useState(() => {
-    if (typeof window === 'undefined') return null
-    try {
-      const raw = window.localStorage.getItem(DETAIL_POSITION_STORAGE_KEY)
-      if (!raw) return null
-      savedAnchorRef.current = clampStoredAnchor(JSON.parse(raw))
-      anchoredModeRef.current = !!savedAnchorRef.current
-      return null
-    } catch {
-      return null
-    }
-  })
+  const [pos, setPos] = useState(null)
   const [dragging, setDragging] = useState(false)
   const panelRef = useRef(null)
   const dragOffset = useRef({ x: 0, y: 0 })
   const hasDragged = useRef(false)
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      api.getAuthStatus().catch(() => null),
+      api.getUserPreferences().catch(() => ({ preferences: {} })),
+    ]).then(([status, prefResp]) => {
+      if (cancelled) return
+      const nextDbInstanceId = status?.db_instance_id || ''
+      const nextUserId = status?.preference_profile?.id || status?.user?.id || ''
+      setDbInstanceId(nextDbInstanceId)
+      setUserId(nextUserId)
+      const storageKey = getDetailPositionStorageKey(nextDbInstanceId, nextUserId)
+      savedAnchorRef.current = null
+      anchoredModeRef.current = false
+      setPos(null)
+      const prefValue = prefResp?.preferences?.[DETAIL_POSITION_PREF_KEY]
+      if (prefValue) {
+        savedAnchorRef.current = clampStoredAnchor(prefValue)
+        anchoredModeRef.current = !!savedAnchorRef.current
+        return
+      }
+      if (!storageKey) return
+      try {
+        const raw = window.localStorage.getItem(storageKey)
+        if (!raw) return
+        savedAnchorRef.current = clampStoredAnchor(JSON.parse(raw))
+        anchoredModeRef.current = !!savedAnchorRef.current
+      } catch {
+        savedAnchorRef.current = null
+        anchoredModeRef.current = false
+      }
+    })
+    return () => { cancelled = true }
+  }, [])
 
   function onDragStart(e) {
     if (!panelRef.current) return
@@ -170,17 +202,20 @@ export function useDetailPanelChrome(onClose) {
   useEffect(() => {
     if (typeof window === 'undefined') return
     if (!pos) return
+    const storageKey = getDetailPositionStorageKey(dbInstanceId, userId)
+    if (!storageKey) return
     try {
       const rect = panelRef.current?.getBoundingClientRect()
       const anchor = clampStoredAnchor({
         x: pos.x,
         bottom: rect ? window.innerHeight - pos.y - rect.height : 0,
       })
-      window.localStorage.setItem(DETAIL_POSITION_STORAGE_KEY, JSON.stringify(anchor))
+      window.localStorage.setItem(storageKey, JSON.stringify(anchor))
+      api.saveUserPreference(DETAIL_POSITION_PREF_KEY, anchor).catch(() => {})
     } catch {
       // Ignore storage failures; panel still works for the current session.
     }
-  }, [pos])
+  }, [dbInstanceId, userId, pos])
 
   useEffect(() => {
     function handleResize() {
@@ -254,6 +289,73 @@ export function usePagedMonthTransactions({ selectedMonth, loadPage }) {
     onScroll()
     return () => el.removeEventListener('scroll', onScroll)
   }, [selectedMonth, offset, hasMore, loading, loadingMore, loadPage])
+
+  return {
+    rows,
+    setRows,
+    loading,
+    loadingMore,
+    listRef,
+  }
+}
+
+export function usePagedTransactions({ activeKey, loadPage }) {
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [offset, setOffset] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const listRef = useRef(null)
+
+  useEffect(() => {
+    if (!activeKey) {
+      setRows([])
+      setOffset(0)
+      setHasMore(false)
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    setOffset(0)
+    loadPage(0, DETAIL_PAGE_SIZE).then(result => {
+      if (cancelled) return
+      const nextRows = result?.transactions || []
+      const total = result?.total || 0
+      setRows(nextRows)
+      setOffset(nextRows.length)
+      setHasMore(nextRows.length < total)
+      setLoading(false)
+    }).catch(() => {
+      if (cancelled) return
+      setRows([])
+      setOffset(0)
+      setHasMore(false)
+      setLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [activeKey, loadPage])
+
+  useEffect(() => {
+    if (!activeKey || !listRef.current) return
+    function onScroll() {
+      const el = listRef.current
+      if (!el || loading || loadingMore || !hasMore) return
+      if (el.scrollHeight - el.scrollTop - el.clientHeight > 240) return
+      setLoadingMore(true)
+      loadPage(offset, DETAIL_PAGE_SIZE).then(result => {
+        const nextRows = result?.transactions || []
+        const total = result?.total || 0
+        setRows(prev => [...prev, ...nextRows])
+        setOffset(prev => prev + nextRows.length)
+        setHasMore(offset + nextRows.length < total)
+      }).finally(() => setLoadingMore(false))
+    }
+    const el = listRef.current
+    el.addEventListener('scroll', onScroll)
+    onScroll()
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [activeKey, offset, hasMore, loading, loadingMore, loadPage])
 
   return {
     rows,

@@ -1,4 +1,62 @@
+import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
+
 // Shared UI primitives
+
+export function CategoryMarker({ kind = 'category', size, style }) {
+  const markerSize = size ?? (kind === 'group' ? 9 : 7)
+  const isGroup = kind === 'group'
+  if (isGroup) {
+    return (
+      <span
+        aria-hidden="true"
+        style={{
+          width: markerSize,
+          height: markerSize + 1,
+          flexShrink: 0,
+          marginRight: -1,
+          display: 'inline-block',
+          position: 'relative',
+          boxSizing: 'border-box',
+          borderRadius: '50%',
+          border: '1px solid currentColor',
+          opacity: 0.72,
+          transform: 'translateY(1px)',
+          ...style,
+        }}
+      >
+        <span
+          style={{
+            position: 'absolute',
+            left: markerSize * 0.15,
+            bottom: -1,
+            width: Math.max(3, Math.round(markerSize * 0.26)),
+            height: Math.max(3, Math.round(markerSize * 0.2)),
+            borderLeft: '1px solid currentColor',
+            borderBottom: '1px solid currentColor',
+            borderBottomLeftRadius: Math.max(2, Math.round(markerSize * 0.18)),
+            transform: 'skewX(-20deg)',
+            boxSizing: 'border-box',
+          }}
+        />
+      </span>
+    )
+  }
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        width: markerSize,
+        height: markerSize,
+        flexShrink: 0,
+        display: 'inline-block',
+        background: 'currentColor',
+        borderRadius: '50%',
+        opacity: 0.78,
+        ...style,
+      }}
+    />
+  )
+}
 
 export function Card({ children, style }) {
   return (
@@ -75,17 +133,18 @@ export function Input({ value, onChange, placeholder, style }) {
   )
 }
 
-export function Badge({ label, icon }) {
+export function Badge({ label, toneKey, markerKind = 'category' }) {
+  const theme = getCategoryBadgeTheme(toneKey || label || 'badge')
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 4,
-      background: 'var(--surface2)',
-      color: 'var(--text)',
-      border: '1px solid var(--border)',
+      background: theme.bg,
+      color: theme.text,
+      border: `1px solid ${theme.border}`,
       borderRadius: 99, padding: '2px 8px', fontSize: 12, fontWeight: 500,
       whiteSpace: 'nowrap',
     }}>
-      {icon && <span style={{ fontSize: 11 }}>{icon}</span>}
+      <CategoryMarker kind={markerKind} />
       {label}
     </span>
   )
@@ -114,7 +173,7 @@ export function EmptyState({ message }) {
 }
 
 export function GroupedSelect({ value, onChange, groups, extra = [], style }) {
-  // groups: [{ label, color, icon, options: [{ value, label, icon }] }]
+  // groups: [{ label, color, options: [{ value, label }] }]
   // extra:  flat options appended after the groups (e.g. "+ New category...")
   return (
     <select
@@ -127,9 +186,9 @@ export function GroupedSelect({ value, onChange, groups, extra = [], style }) {
       }}
     >
       {groups.map(g => (
-        <optgroup key={g.value || g.label} label={`${g.icon || ''} ${g.label}`}>
+        <optgroup key={g.value || g.label} label={g.label}>
           {(g.options || []).map(o => (
-            <option key={o.value} value={o.value}>{o.icon} {o.label}</option>
+            <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </optgroup>
       ))}

@@ -1,15 +1,29 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { PageHeader, Spinner, EmptyState } from '../components/ui.jsx'
+import { PageHeader, Spinner, EmptyState, CategoryMarker } from '../components/ui.jsx'
 import CategoryPicker from '../components/CategoryPicker.jsx'
+import { useFilters } from '../lib/FilterContext.jsx'
+import TransactionListTable from '../components/TransactionListTable.jsx'
+import { usePagedTransactions } from '../components/detailShared.jsx'
 
 const SECTION_META = {
-  income: { label: 'Income', hint: 'Groups for salary, refunds, investments, and other inflows.' },
-  expense: { label: 'Expense', hint: 'Groups for spending, transfers, and everything else.' },
+  income: { label: 'Income' },
+  expense: { label: 'Expense' },
 }
 
-const SECTION_STORAGE_KEY = 'fintrack.categories.collapsedSections'
-const GROUP_STORAGE_KEY = 'fintrack.categories.collapsedGroups'
+const SECTION_STORAGE_KEY_PREFIX = 'fintrack.categories.collapsedSections'
+const GROUP_STORAGE_KEY_PREFIX = 'fintrack.categories.collapsedGroups'
+const SECTION_PREF_KEY = 'ui.categories.collapsedSections'
+const GROUP_PREF_KEY = 'ui.categories.collapsedGroups'
+
+function getSectionStorageKey(instanceId, userId) {
+  return instanceId && userId ? `${SECTION_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
+}
+
+function getGroupStorageKey(instanceId, userId) {
+  return instanceId && userId ? `${GROUP_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
+}
 
 function normalizeType(value) {
   return value === 'income' ? 'income' : 'expense'
@@ -214,7 +228,7 @@ function DeleteCategoryDialog({ category, preview, categories, replacementId, on
   )
 }
 
-function EditableName({ value, isSelected, onSave, onFirstClick }) {
+function EditableName({ value, isSelected, onSave, onFirstClick, disabled = false }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
   const inputRef = useRef(null)
@@ -224,6 +238,11 @@ function EditableName({ value, isSelected, onSave, onFirstClick }) {
   }, [isSelected])
 
   function handleClick(e) {
+    if (disabled) {
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
     e.stopPropagation()
     if (!isSelected) {
       onFirstClick()
@@ -275,8 +294,8 @@ function EditableName({ value, isSelected, onSave, onFirstClick }) {
   return (
     <span
       onClick={handleClick}
-      title={isSelected ? 'Click to rename' : 'Click to select'}
-      style={{ cursor: isSelected ? 'text' : 'default', flex: 1 }}
+      title={disabled ? undefined : isSelected ? 'Click to rename' : 'Click to select'}
+      style={{ cursor: disabled ? 'default' : isSelected ? 'text' : 'default', flex: 1 }}
     >
       {value}
     </span>
@@ -285,33 +304,121 @@ function EditableName({ value, isSelected, onSave, onFirstClick }) {
 
 let dragItem = null
 
+function BulkMoveToast({ move, onUndo, onDismiss }) {
+  const timerRef = useRef(null)
+  const intervalRef = useRef(null)
+  const startRef = useRef(Date.now())
+  const [progress, setProgress] = useState(100)
+
+  useEffect(() => {
+    startRef.current = Date.now()
+    intervalRef.current = setInterval(() => {
+      const pct = Math.max(0, 100 - ((Date.now() - startRef.current) / 6000) * 100)
+      setProgress(pct)
+    }, 50)
+    timerRef.current = setTimeout(onDismiss, 6000)
+    return () => {
+      clearTimeout(timerRef.current)
+      clearInterval(intervalRef.current)
+    }
+  }, [onDismiss])
+
+  return (
+    <div style={{
+      position: 'fixed',
+      right: 24,
+      bottom: 24,
+      zIndex: 850,
+      width: 320,
+      background: 'var(--surface)',
+      border: '1px solid var(--border)',
+      borderRadius: 12,
+      boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+      overflow: 'hidden',
+    }}>
+      <div style={{ height: 3, background: 'var(--surface2)' }}>
+        <div style={{ height: '100%', width: `${progress}%`, background: 'var(--accent)', transition: 'width 0.1s linear' }} />
+      </div>
+      <div style={{ padding: '14px 16px' }}>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+          Moved {move.count} categor{move.count === 1 ? 'y' : 'ies'}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+          Added to {move.targetGroupName}
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={onUndo}
+            style={{
+              flex: 1,
+              background: 'var(--accent)',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 7,
+              padding: '7px 0',
+              fontSize: 13,
+              fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
+            Undo
+          </button>
+          <button
+            onClick={onDismiss}
+            style={{
+              background: 'var(--surface2)',
+              color: 'var(--muted)',
+              border: '1px solid var(--border)',
+              borderRadius: 7,
+              padding: '7px 11px',
+              fontSize: 12,
+              cursor: 'pointer',
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function CategoryRow({
   cat,
   isChild,
   isSelected,
+  bulkMoveMode = false,
+  bulkChecked = false,
   isCollapsed = false,
   canCollapse = false,
   onToggleCollapse,
   onSelect,
   onRename,
   onDelete,
+  onToggleBulkChecked,
   onDropRow,
   onOpenContextMenu,
+  onDragStartRow,
 }) {
   const [dragOver, setDragOver] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   function canAcceptDrop() {
     if (!dragItem || dragItem.id === cat.id) return false
+    if (dragItem.childIds?.includes(cat.id)) return false
     if (isChild && dragItem.isGroup) return false
     return true
   }
 
   return (
     <div
-      draggable
+      draggable={!bulkMoveMode}
       onDragStart={e => {
-        dragItem = {
+        if (bulkMoveMode) {
+          e.preventDefault()
+          return
+        }
+        dragItem = onDragStartRow?.(cat) ?? {
           id: cat.id,
           parentId: cat.parent_id,
           isGroup: !cat.parent_id,
@@ -337,8 +444,9 @@ function CategoryRow({
         onDropRow(dragItem, cat, dropPosition)
         dragItem = null
       }}
-      onClick={() => {
-        if (!confirmDelete) onSelect(cat)
+      onClick={e => {
+        if (bulkMoveMode) return
+        if (!confirmDelete) onSelect(cat, e)
       }}
       onContextMenu={e => {
         e.preventDefault()
@@ -349,8 +457,8 @@ function CategoryRow({
         position: 'relative',
         display: 'flex',
         alignItems: 'center',
-        gap: 6,
-        padding: isChild ? '4px 10px 4px 26px' : '6px 10px',
+        gap: isChild ? 5 : 2,
+        padding: isChild ? '2px 9px 2px 46px' : '4px 9px 4px 11px',
         cursor: 'grab',
         userSelect: 'none',
         borderBottom: '1px solid var(--border)',
@@ -360,7 +468,7 @@ function CategoryRow({
             ? 'color-mix(in srgb, var(--accent) 12%, var(--surface))'
             : 'transparent',
         fontWeight: isChild ? 400 : 600,
-        fontSize: 13,
+        fontSize: 12,
         transition: 'background 0.1s',
       }}
     >
@@ -376,32 +484,62 @@ function CategoryRow({
             border: '1px solid var(--border)',
             color: 'var(--muted)',
             cursor: 'pointer',
-            fontSize: 13,
-            width: 22,
-            height: 22,
+            fontSize: 12,
+            width: 19,
+            height: 19,
             padding: 0,
             flexShrink: 0,
-            borderRadius: 6,
+            borderRadius: 5,
             display: 'grid',
             placeItems: 'center',
             lineHeight: 1,
             backgroundColor: 'var(--surface2)',
+            marginLeft: 29,
           }}
         >
           {isCollapsed ? '+' : '-'}
         </button>
       ) : (
-        <span style={{ width: 22, flexShrink: 0 }} />
+        <span style={{ width: 19, flexShrink: 0 }} />
       )}
-      <span style={{ color: 'var(--border)', fontSize: 11, flexShrink: 0 }}>...</span>
-      <span style={{ fontSize: 12, marginRight: 1 }}>{cat.icon}</span>
+      {bulkMoveMode ? (
+        <button
+          onClick={e => {
+            e.stopPropagation()
+            onToggleBulkChecked?.(cat)
+          }}
+          title={isChild ? (bulkChecked ? 'Deselect category' : 'Select category') : (bulkChecked ? 'Deselect group categories' : 'Select group categories')}
+          style={{
+            width: 17,
+            height: 17,
+            flexShrink: 0,
+            borderRadius: 4,
+            border: `1px solid ${bulkChecked ? 'var(--accent)' : 'var(--border)'}`,
+            background: bulkChecked ? 'var(--accent)' : 'var(--surface)',
+            color: bulkChecked ? '#fff' : 'transparent',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 11,
+            lineHeight: 1,
+            cursor: 'pointer',
+            padding: 0,
+          }}
+        >
+          {bulkChecked ? '✓' : ''}
+        </button>
+      ) : null}
+      <span style={{ color: 'var(--border)', fontSize: 10, flexShrink: 0, marginLeft: isChild ? 0 : -2 }}>...</span>
+      <span style={{ display: 'inline-flex', alignItems: 'center', marginRight: isChild ? 0 : 2 }}>
+        <CategoryMarker kind={isChild ? 'category' : 'group'} />
+      </span>
       <EditableName
         value={cat.name}
         isSelected={isSelected}
         onSave={name => onRename(cat.id, name)}
         onFirstClick={() => onSelect(cat)}
+        disabled={bulkMoveMode}
       />
-      {!confirmDelete ? (
+      {bulkMoveMode ? null : !confirmDelete ? (
         <button
           onClick={e => {
             e.stopPropagation()
@@ -413,8 +551,8 @@ function CategoryRow({
             border: 'none',
             color: 'var(--muted)',
             cursor: 'pointer',
-            fontSize: 13,
-            padding: '1px 3px',
+            fontSize: 12,
+            padding: '1px 2px',
             borderRadius: 4,
             flexShrink: 0,
             lineHeight: 1,
@@ -509,8 +647,25 @@ function SectionEndDropZone({ sectionType, onDropEnd }) {
   )
 }
 
-function ContextMenu({ x, y, target, onAddCategory, onAddGroup, onClose }) {
+function ContextMenu({
+  x,
+  y,
+  target,
+  bulkMoveMode,
+  canMoveHere,
+  onAddCategory,
+  onAddGroup,
+  onExpandAll,
+  onCollapseAll,
+  onAlphabetize,
+  onAddRule,
+  onStartBulkMove,
+  onMoveHere,
+  onCancelBulkMove,
+  onClose,
+}) {
   const ref = useRef(null)
+  const [menuHeight, setMenuHeight] = useState(0)
 
   useEffect(() => {
     function handleClick(e) {
@@ -520,12 +675,21 @@ function ContextMenu({ x, y, target, onAddCategory, onAddGroup, onClose }) {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [onClose])
 
+  useLayoutEffect(() => {
+    if (!ref.current) return
+    setMenuHeight(ref.current.getBoundingClientRect().height || 0)
+  }, [target])
+
   const menuW = 220
-  const left = Math.min(x, window.innerWidth - menuW - 8)
-  const top = Math.min(y, window.innerHeight - 100)
+  const viewportPadding = 8
+  const left = Math.max(viewportPadding, Math.min(x, window.innerWidth - menuW - viewportPadding))
+  const wouldOverflowBottom = menuHeight > 0 && y + menuHeight + viewportPadding > window.innerHeight
+  const top = wouldOverflowBottom
+    ? Math.max(viewportPadding, y - menuHeight)
+    : Math.max(viewportPadding, Math.min(y, window.innerHeight - menuHeight - viewportPadding))
   const itemStyle = {
-    padding: '8px 14px',
-    fontSize: 13,
+    padding: '6px 14px',
+    fontSize: 12,
     cursor: 'pointer',
     borderRadius: 6,
     display: 'block',
@@ -544,15 +708,45 @@ function ContextMenu({ x, y, target, onAddCategory, onAddGroup, onClose }) {
         left,
         top,
         zIndex: 500,
+        visibility: menuHeight ? 'visible' : 'hidden',
         background: 'var(--surface)',
         border: '1px solid var(--border)',
         borderRadius: 10,
-        padding: 4,
+        padding: 3,
         boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
         minWidth: menuW,
       }}
     >
-      {target.groupId ? (
+      {bulkMoveMode && canMoveHere ? (
+        <>
+          <button
+            style={itemStyle}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+            onMouseDown={e => {
+              e.preventDefault()
+              onMoveHere(target)
+            }}
+          >
+            Move here
+          </button>
+          <button
+            style={itemStyle}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+            onMouseDown={e => {
+              e.preventDefault()
+              onCancelBulkMove()
+            }}
+          >
+            Cancel bulk move
+          </button>
+        </>
+      ) : bulkMoveMode ? (
+        <div style={{ ...itemStyle, color: 'var(--muted)', cursor: 'default', opacity: 0.7 }}>
+          Select categories, then choose a destination group
+        </div>
+      ) : target.groupId ? (
         <button
           style={itemStyle}
           onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
@@ -569,17 +763,94 @@ function ContextMenu({ x, y, target, onAddCategory, onAddGroup, onClose }) {
           + Add category (right-click a group)
         </div>
       )}
+      {!bulkMoveMode ? (
+        <button
+          style={itemStyle}
+          onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+          onMouseDown={e => {
+            e.preventDefault()
+            onAddGroup(target)
+          }}
+        >
+          + New {SECTION_META[target.sectionType].label.toLowerCase()} group
+        </button>
+      ) : null}
+      {!bulkMoveMode ? (
+        target.categoryId ? (
+          <button
+            style={itemStyle}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+          onMouseDown={e => {
+            e.preventDefault()
+            onAddRule(target)
+          }}
+        >
+          Add categorization rule
+        </button>
+        ) : null
+      ) : null}
+      <div style={{ height: 1, background: 'var(--border)', margin: '3px 0' }} />
       <button
         style={itemStyle}
         onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
         onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
         onMouseDown={e => {
           e.preventDefault()
-          onAddGroup(target)
+          onExpandAll(target)
         }}
       >
-        + New {SECTION_META[target.sectionType].label.toLowerCase()} group
+        Expand all
       </button>
+      <button
+        style={itemStyle}
+        onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+        onMouseDown={e => {
+          e.preventDefault()
+          onCollapseAll(target)
+        }}
+      >
+        Collapse all
+      </button>
+      <div style={{ height: 1, background: 'var(--border)', margin: '3px 0' }} />
+      <button
+        style={itemStyle}
+        onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+        onMouseDown={e => {
+          e.preventDefault()
+          onAlphabetize(target)
+        }}
+      >
+        Alphabetize
+      </button>
+      {!bulkMoveMode ? (
+        <button
+          style={itemStyle}
+          onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+          onMouseDown={e => {
+            e.preventDefault()
+            onStartBulkMove(target)
+          }}
+        >
+          Bulk move
+        </button>
+      ) : !canMoveHere ? (
+        <button
+          style={itemStyle}
+          onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+          onMouseDown={e => {
+            e.preventDefault()
+            onCancelBulkMove()
+          }}
+        >
+          Cancel bulk move
+        </button>
+      ) : null}
     </div>
   )
 }
@@ -686,10 +957,16 @@ function ScrollFade({ top, bottom }) {
 }
 
 export default function Categories() {
+  const navigate = useNavigate()
+  const { filters } = useFilters()
+  const [dbInstanceId, setDbInstanceId] = useState('')
+  const [userId, setUserId] = useState('')
   const [tree, setTree] = useState([])
   const [flatCats, setFlatCats] = useState([])
   const [owners, setOwners] = useState([])
+  const [matchingTxnsTotal, setMatchingTxnsTotal] = useState(0)
   const [selected, setSelected] = useState(null)
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState([])
   const [loading, setLoading] = useState(true)
   const [newName, setNewName] = useState('')
   const [contextMenu, setContextMenu] = useState(null)
@@ -698,14 +975,14 @@ export default function Categories() {
   const [collapsedGroups, setCollapsedGroups] = useState({})
   const [collapseStateLoaded, setCollapseStateLoaded] = useState(false)
   const [listScrollState, setListScrollState] = useState({ top: false, bottom: false })
-  const [detailScrollState, setDetailScrollState] = useState({ top: false, bottom: false })
   const [deleteDialog, setDeleteDialog] = useState(null)
   const [deleteMode, setDeleteMode] = useState('replace')
   const [deleteReplacementId, setDeleteReplacementId] = useState('')
   const [deleteSaving, setDeleteSaving] = useState(false)
+  const [bulkMoveToast, setBulkMoveToast] = useState(null)
+  const [bulkMoveMode, setBulkMoveMode] = useState(false)
 
   const listRef = useRef(null)
-  const detailRef = useRef(null)
   const dragScrollRef = useRef(null)
   const selectedRef = useRef(null)
 
@@ -714,16 +991,39 @@ export default function Categories() {
   }, [selected])
 
   useEffect(() => {
-    try {
-      const savedSections = JSON.parse(window.localStorage.getItem(SECTION_STORAGE_KEY) || 'null')
-      const savedGroups = JSON.parse(window.localStorage.getItem(GROUP_STORAGE_KEY) || 'null')
-      if (savedSections && typeof savedSections === 'object') setCollapsedSections(savedSections)
-      if (savedGroups && typeof savedGroups === 'object') setCollapsedGroups(savedGroups)
-    } catch {
-      // Ignore malformed saved UI state and fall back to defaults.
-    } finally {
+    let cancelled = false
+    Promise.all([
+      api.getAuthStatus().catch(() => null),
+      api.getUserPreferences().catch(() => ({ preferences: {} })),
+    ]).then(([status, prefResp]) => {
+      if (cancelled) return
+      const nextDbInstanceId = status?.db_instance_id || ''
+      const nextUserId = status?.preference_profile?.id || status?.user?.id || ''
+      setDbInstanceId(nextDbInstanceId)
+      setUserId(nextUserId)
+      const sectionPrefs = prefResp?.preferences?.[SECTION_PREF_KEY]
+      const groupPrefs = prefResp?.preferences?.[GROUP_PREF_KEY]
+      if (sectionPrefs && typeof sectionPrefs === 'object') setCollapsedSections(sectionPrefs)
+      if (groupPrefs && typeof groupPrefs === 'object') setCollapsedGroups(groupPrefs)
+      const sectionStorageKey = getSectionStorageKey(nextDbInstanceId, nextUserId)
+      const groupStorageKey = getGroupStorageKey(nextDbInstanceId, nextUserId)
+      if (!sectionPrefs && sectionStorageKey) {
+        const savedSections = JSON.parse(window.localStorage.getItem(sectionStorageKey) || 'null')
+        if (savedSections && typeof savedSections === 'object') setCollapsedSections(savedSections)
+      }
+      if (!groupPrefs && groupStorageKey) {
+        const savedGroups = JSON.parse(window.localStorage.getItem(groupStorageKey) || 'null')
+        if (savedGroups && typeof savedGroups === 'object') setCollapsedGroups(savedGroups)
+      }
       setCollapseStateLoaded(true)
-    }
+    })
+    .catch(() => {
+      if (cancelled) return
+      setDbInstanceId('')
+      setUserId('')
+      setCollapseStateLoaded(true)
+    })
+    return () => { cancelled = true }
   }, [])
 
   const loadCategories = useCallback(async (selectedId = selectedRef.current?.id) => {
@@ -735,48 +1035,63 @@ export default function Categories() {
     setFlatCats(nextFlat)
     setLoading(false)
     if (selectedId) setSelected(nextFlat.find(cat => cat.id === selectedId) || null)
+    setSelectedCategoryIds(prev => prev.filter(id => nextFlat.some(cat => cat.id === id && cat.parent_id)))
   }, [])
 
   useEffect(() => { loadCategories() }, [loadCategories])
   useEffect(() => { api.getOwners().then(setOwners) }, [])
   useEffect(() => {
     if (!collapseStateLoaded) return
+    const storageKey = getSectionStorageKey(dbInstanceId, userId)
+    if (!storageKey) return
     try {
-      window.localStorage.setItem(SECTION_STORAGE_KEY, JSON.stringify(collapsedSections))
+      window.localStorage.setItem(storageKey, JSON.stringify(collapsedSections))
     } catch {
       // Ignore storage failures in environments that block localStorage.
     }
-  }, [collapsedSections, collapseStateLoaded])
+    api.saveUserPreference(SECTION_PREF_KEY, collapsedSections).catch(() => {})
+  }, [dbInstanceId, userId, collapsedSections, collapseStateLoaded])
   useEffect(() => {
     if (!collapseStateLoaded) return
+    const storageKey = getGroupStorageKey(dbInstanceId, userId)
+    if (!storageKey) return
     try {
-      window.localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify(collapsedGroups))
+      window.localStorage.setItem(storageKey, JSON.stringify(collapsedGroups))
     } catch {
       // Ignore storage failures in environments that block localStorage.
     }
-  }, [collapsedGroups, collapseStateLoaded])
+    api.saveUserPreference(GROUP_PREF_KEY, collapsedGroups).catch(() => {})
+  }, [dbInstanceId, userId, collapsedGroups, collapseStateLoaded])
 
   const groupsBySection = {
     income: tree.filter(group => normalizeType(group.category_type) === 'income'),
     expense: tree.filter(group => normalizeType(group.category_type) === 'expense'),
   }
 
+  const visibleChildIds = ['income', 'expense'].flatMap(sectionType => {
+    if (collapsedSections[sectionType]) return []
+    return groupsBySection[sectionType].flatMap(group => (
+      collapsedGroups[group.id] ? [] : (group.children || []).map(child => child.id)
+    ))
+  })
+
   useEffect(() => {
     if (!tree.length || !collapseStateLoaded) return
+    const sectionStorageKey = getSectionStorageKey(dbInstanceId, userId)
+    const groupStorageKey = getGroupStorageKey(dbInstanceId, userId)
     setCollapsedSections(prev => {
-      if (window.localStorage.getItem(SECTION_STORAGE_KEY) !== null) return prev
+      if (sectionStorageKey && window.localStorage.getItem(sectionStorageKey) !== null) return prev
       return { income: true, expense: true }
     })
     setCollapsedGroups(prev => {
-      if (window.localStorage.getItem(GROUP_STORAGE_KEY) !== null) return prev
+      if (groupStorageKey && window.localStorage.getItem(groupStorageKey) !== null) return prev
       const next = {}
       tree.forEach(group => { next[group.id] = true })
       return next
     })
-  }, [tree, collapseStateLoaded])
+  }, [dbInstanceId, userId, tree, collapseStateLoaded])
   useEffect(() => {
     updateScrollState(listRef, setListScrollState)
-    updateScrollState(detailRef, setDetailScrollState)
   }, [tree, selected, loading, inlineForm, collapsedSections, collapsedGroups])
 
   function childrenForGroup(groupId) {
@@ -838,6 +1153,15 @@ export default function Categories() {
     )
   }
 
+  async function persistChildrenState(parentId, ids) {
+    await Promise.all(
+      ids.map((id, index) => api.updateCategory(id, {
+        parent_id: parentId,
+        sort_order: index,
+      }))
+    )
+  }
+
   async function moveGroup(dragged, sectionType, targetIndex = null) {
     const fromSection = normalizeType(dragged.categoryType)
     const targetIds = groupsBySection[sectionType].map(group => group.id).filter(id => id !== dragged.id)
@@ -864,8 +1188,58 @@ export default function Categories() {
     await loadCategories(dragged.id)
   }
 
+  async function moveChildrenBatch(childIds, targetParentId) {
+    const orderedChildIds = visibleChildIds.filter(id => childIds.includes(id))
+    if (!orderedChildIds.length) return
+
+    const parentSnapshots = {}
+    const sourceParentIds = [...new Set(
+      orderedChildIds
+        .map(id => flatCats.find(cat => cat.id === id)?.parent_id)
+        .filter(Boolean)
+    )]
+    const affectedParentIds = [...new Set([...sourceParentIds, targetParentId])]
+
+    affectedParentIds.forEach(parentId => {
+      parentSnapshots[parentId] = childrenForGroup(parentId).map(cat => cat.id)
+    })
+
+    const targetIds = childrenForGroup(targetParentId)
+      .map(cat => cat.id)
+      .filter(id => !orderedChildIds.includes(id))
+      .concat(orderedChildIds)
+
+    for (const parentId of sourceParentIds) {
+      if (parentId === targetParentId) continue
+      const remainingIds = childrenForGroup(parentId)
+        .map(cat => cat.id)
+        .filter(id => !orderedChildIds.includes(id))
+      await persistChildrenState(parentId, remainingIds)
+    }
+
+    await persistChildrenState(targetParentId, targetIds)
+
+    const targetGroup = flatCats.find(cat => cat.id === targetParentId)
+    setBulkMoveToast({
+      count: orderedChildIds.length,
+      targetGroupName: targetGroup?.name || 'group',
+      snapshots: parentSnapshots,
+      selectedIds: orderedChildIds,
+    })
+
+    await loadCategories(orderedChildIds[0])
+    setSelectedCategoryIds(orderedChildIds)
+    setBulkMoveMode(false)
+  }
+
   async function handleDropRow(dragged, targetCat, dropPosition = 'after') {
     cancelAnimationFrame(dragScrollRef.current)
+    if (dragged.childIds?.length > 1) {
+      const targetParentId = targetCat.parent_id || targetCat.id
+      if (!targetParentId) return
+      await moveChildrenBatch(dragged.childIds, targetParentId)
+      return
+    }
     if (dragged.id === targetCat.id) return
     if (dragged.isGroup) {
       const targetGroup = targetCat.parent_id
@@ -890,6 +1264,10 @@ export default function Categories() {
 
   async function handleGroupDropEnd(dragged, group) {
     cancelAnimationFrame(dragScrollRef.current)
+    if (dragged.childIds?.length > 1) {
+      await moveChildrenBatch(dragged.childIds, group.id)
+      return
+    }
     if (dragged.isGroup) return
     await moveChild(dragged, group.id)
   }
@@ -923,6 +1301,7 @@ export default function Categories() {
     if (!preview.txn_count) {
       await api.deleteCategory(id)
       if (preview.affected_category_ids.includes(selected?.id)) setSelected(null)
+      setSelectedCategoryIds(prev => prev.filter(catId => !preview.affected_category_ids.includes(catId)))
       await loadCategories()
       return
     }
@@ -940,6 +1319,7 @@ export default function Categories() {
         replacement_category_id: deleteMode === 'replace' ? deleteReplacementId : null,
       })
       if (deleteDialog.preview.affected_category_ids.includes(selected?.id)) setSelected(null)
+      setSelectedCategoryIds(prev => prev.filter(catId => !deleteDialog.preview.affected_category_ids.includes(catId)))
       setDeleteDialog(null)
       setDeleteReplacementId('')
       await loadCategories()
@@ -955,9 +1335,48 @@ export default function Categories() {
     setDeleteMode('replace')
   }
 
-  function selectCategory(cat) {
+  function selectCategory(cat, event) {
+    if (bulkMoveMode) {
+      setSelected(cat)
+      return
+    }
     setSelected(cat)
     setInlineForm(null)
+
+    if (!cat.parent_id) {
+      setSelectedCategoryIds([])
+      return
+    }
+
+    setSelectedCategoryIds([cat.id])
+  }
+
+  function getDragPayload(cat) {
+    if (bulkMoveMode) return null
+    if (!cat.parent_id) {
+      return {
+        id: cat.id,
+        parentId: cat.parent_id,
+        isGroup: true,
+        categoryType: normalizeType(cat.category_type),
+      }
+    }
+    const multiSelected = selectedCategoryIds.includes(cat.id) && selectedCategoryIds.length > 1
+    if (multiSelected) {
+      return {
+        id: cat.id,
+        childIds: selectedCategoryIds.slice(),
+        parentId: cat.parent_id,
+        isGroup: false,
+        categoryType: normalizeType(cat.category_type),
+      }
+    }
+    return {
+      id: cat.id,
+      parentId: cat.parent_id,
+      isGroup: false,
+      categoryType: normalizeType(cat.category_type),
+    }
   }
 
   function toggleSection(sectionType) {
@@ -968,23 +1387,65 @@ export default function Categories() {
     setCollapsedGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }))
   }
 
+  function expandAll(target) {
+    const nextGroups = {}
+    tree.forEach(group => { nextGroups[group.id] = false })
+    setCollapsedSections({ income: false, expense: false })
+    setCollapsedGroups(nextGroups)
+    setContextMenu(null)
+  }
+
+  function collapseAll(target) {
+    const nextGroups = {}
+    tree.forEach(group => { nextGroups[group.id] = true })
+    setCollapsedGroups(nextGroups)
+    setCollapsedSections({ income: true, expense: true })
+    setContextMenu(null)
+  }
+
+  async function alphabetize(target) {
+    const sectionGroups = groupsBySection[target.sectionType] || []
+    const allGroupsCollapsedInSection = sectionGroups.length > 0 && sectionGroups.every(group => !!collapsedGroups[group.id])
+
+    if (target.groupId && !allGroupsCollapsedInSection) {
+      const siblings = childrenForGroup(target.groupId)
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+      await persistChildOrder(target.groupId, siblings.map(cat => cat.id), null)
+      await loadCategories(target.groupId)
+    } else {
+      const groups = groupsBySection[target.sectionType]
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+      await persistGroupOrder(target.sectionType, groups.map(group => group.id))
+      await loadCategories()
+    }
+    setContextMenu(null)
+  }
+
   function openGroupForm(sectionType) {
     setContextMenu(null)
+    setBulkMoveMode(false)
     setSelected(null)
+    setSelectedCategoryIds([])
     setNewName('')
     setInlineForm({ mode: 'group', sectionType, anchorGroupId: null, insertPosition: 'after' })
   }
 
   function openGroupFormNear(sectionType, anchorGroupId = null, insertPosition = 'after') {
     setContextMenu(null)
+    setBulkMoveMode(false)
     setSelected(null)
+    setSelectedCategoryIds([])
     setNewName('')
     setInlineForm({ mode: 'group', sectionType, anchorGroupId, insertPosition })
   }
 
   function openCategoryForm(group) {
     setContextMenu(null)
+    setBulkMoveMode(false)
     setSelected(group)
+    setSelectedCategoryIds([])
     setNewName('')
     setInlineForm({
       mode: 'category',
@@ -999,7 +1460,6 @@ export default function Categories() {
     if (inlineForm.mode === 'group') {
       const created = await api.createCategory({
         name: newName.trim(),
-        icon: '📦',
         category_type: inlineForm.sectionType,
         sort_order: groupsBySection[inlineForm.sectionType].length,
       })
@@ -1017,7 +1477,6 @@ export default function Categories() {
     } else {
       await api.createCategory({
         name: newName.trim(),
-        icon: '📦',
         parent_id: inlineForm.parentId,
         sort_order: childrenForGroup(inlineForm.parentId).length,
       })
@@ -1026,6 +1485,18 @@ export default function Categories() {
     setNewName('')
     setInlineForm(null)
     await loadCategories(keepSelectedId)
+  }
+
+  async function undoBulkMove() {
+    if (!bulkMoveToast) return
+    const entries = Object.entries(bulkMoveToast.snapshots)
+    for (const [parentId, ids] of entries) {
+      await persistChildrenState(parentId, ids)
+    }
+    const restoreId = bulkMoveToast.selectedIds?.[0] || null
+    setBulkMoveToast(null)
+    await loadCategories(restoreId)
+    setSelectedCategoryIds(bulkMoveToast.selectedIds || [])
   }
 
   function openContextMenu(e, cat, sectionTypeOverride = null) {
@@ -1039,16 +1510,165 @@ export default function Categories() {
       sectionType,
       groupId: group?.id || null,
       groupName: group?.name || '',
+      categoryId: cat?.parent_id ? cat.id : null,
+      categoryName: cat?.parent_id ? cat.name : '',
+      scope: group?.id ? 'group' : 'section',
       insertPosition,
     })
   }
 
+  function openRuleCreator(target) {
+    setContextMenu(null)
+    navigate('/rules', {
+      state: {
+        openRuleCreator: {
+          initialValues: {
+            catId: target.categoryId,
+          },
+        },
+      },
+    })
+  }
+
+  function startBulkMove(target) {
+    setContextMenu(null)
+    setInlineForm(null)
+    setBulkMoveMode(true)
+    if (!selected?.parent_id && target.groupId) {
+      const group = flatCats.find(cat => cat.id === target.groupId)
+      if (group) setSelected(group)
+    }
+    setSelectedCategoryIds([])
+  }
+
+  function cancelBulkMove() {
+    setContextMenu(null)
+    setBulkMoveMode(false)
+    setSelectedCategoryIds([])
+  }
+
+  function toggleBulkChecked(cat) {
+    if (!bulkMoveMode) return
+    if (cat.parent_id) {
+      setSelected(cat)
+      setSelectedCategoryIds(prev => (
+        prev.includes(cat.id)
+          ? prev.filter(id => id !== cat.id)
+          : [...prev, cat.id]
+      ))
+      return
+    }
+
+    const childIds = (cat.children || []).map(child => child.id)
+    const allChecked = childIds.length > 0 && childIds.every(id => selectedCategoryIds.includes(id))
+    setSelected(cat)
+    setSelectedCategoryIds(prev => {
+      const base = prev.filter(id => !childIds.includes(id))
+      return allChecked ? base : [...base, ...childIds]
+    })
+  }
+
+  async function moveSelectedCategoriesHere(target) {
+    const targetParentId = target.groupId
+    if (!targetParentId || selectedCategoryIds.length === 0) {
+      setContextMenu(null)
+      return
+    }
+    setContextMenu(null)
+    await moveChildrenBatch(selectedCategoryIds, targetParentId)
+  }
+
   const parentCategory = selected?.parent_id ? flatCats.find(cat => cat.id === selected.parent_id) : null
   const selectedGroupType = normalizeType(selected?.category_type)
+  const selectedCategories = selectedCategoryIds
+    .map(id => flatCats.find(cat => cat.id === id))
+    .filter(Boolean)
+  const isMultiCategorySelection = selectedCategories.length > 1
+  const multiSelectionGroupIds = [...new Set(selectedCategories.map(cat => cat.parent_id).filter(Boolean))]
+  const multiSelectionGroups = multiSelectionGroupIds
+    .map(id => flatCats.find(cat => cat.id === id))
+    .filter(Boolean)
+  const selectedCategoryIdSet = new Set(selectedCategoryIds)
   const categoryOwners = owners.filter(owner => owner.name.toLowerCase() !== 'shared')
   const deleteReplacementCategories = deleteDialog
     ? flatCats.filter(cat => !deleteDialog.preview.affected_category_ids.includes(cat.id))
     : flatCats
+  const selectedCategoryFilter = isMultiCategorySelection
+    ? null
+    : selected
+      ? (selected.parent_id ? selected.id : `__group__${selected.id}`)
+      : null
+  const selectedCategoryIdsFilter = isMultiCategorySelection
+    ? selectedCategories.map(cat => cat.id).join(',')
+    : null
+  const matchingTxnsKey = selectedCategoryFilter
+    ? `${selectedCategoryFilter}|${filters.date?.start || ''}|${filters.date?.end || ''}`
+    : selectedCategoryIdsFilter
+      ? `${selectedCategoryIdsFilter}|${filters.date?.start || ''}|${filters.date?.end || ''}`
+      : null
+
+  const loadMatchingTxnPage = useCallback((offset, limit) => (
+    api.getTransactions({
+      category_id: selectedCategoryFilter,
+      category_ids: selectedCategoryIdsFilter || undefined,
+      date_start: filters.date?.start || undefined,
+      date_end: filters.date?.end || undefined,
+      limit,
+      offset,
+    })
+  ), [selectedCategoryFilter, selectedCategoryIdsFilter, filters.date?.start, filters.date?.end])
+
+  const {
+    rows: pagedMatchingTxns,
+    setRows: setPagedMatchingTxns,
+    loading: matchingTxnsLoading,
+    loadingMore: matchingTxnsLoadingMore,
+    listRef: matchingTxnsListRef,
+  } = usePagedTransactions({
+    activeKey: matchingTxnsKey,
+    loadPage: loadMatchingTxnPage,
+  })
+
+  function addMatchingCategory(cat) {
+    setFlatCats(prev => prev.find(existing => existing.id === cat.id) ? prev : [...prev, cat])
+  }
+
+  async function saveMatchingTxnCategory(txnId, catId, catObj) {
+    await api.overrideCategory(txnId, catId)
+    const cat = catObj || flatCats.find(c => c.id === catId)
+    setPagedMatchingTxns(prev => prev.map(txn =>
+      txn.id === txnId ? {
+        ...txn,
+        category_id: catId,
+        category_name: cat?.name ?? null,
+        category_color: cat?.color ?? null,
+        category_overridden: 1,
+      } : txn
+    ))
+  }
+
+  useEffect(() => {
+    if (!matchingTxnsKey) {
+      setMatchingTxnsTotal(0)
+      return
+    }
+    let cancelled = false
+    api.getTransactions({
+      category_id: selectedCategoryFilter,
+      category_ids: selectedCategoryIdsFilter || undefined,
+      date_start: filters.date?.start || undefined,
+      date_end: filters.date?.end || undefined,
+      limit: 1,
+      offset: 0,
+    }).then(result => {
+      if (cancelled) return
+      setMatchingTxnsTotal(result.total || 0)
+    }).catch(() => {
+      if (cancelled) return
+      setMatchingTxnsTotal(0)
+    })
+    return () => { cancelled = true }
+  }, [matchingTxnsKey, selectedCategoryFilter, selectedCategoryIdsFilter, filters.date?.start, filters.date?.end])
 
   return (
     <div style={{ padding: 32, display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
@@ -1073,6 +1693,39 @@ export default function Categories() {
                 scrollbarColor: 'color-mix(in srgb, var(--border) 85%, transparent) transparent',
               }}
             >
+            {!loading && bulkMoveMode ? (
+              <div style={{
+                position: 'sticky',
+                top: 0,
+                zIndex: 2,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                padding: '8px 11px',
+                background: 'color-mix(in srgb, var(--accent) 10%, var(--surface))',
+                borderBottom: '1px solid var(--border)',
+              }}>
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                  Select categories to move, then right-click a group and choose <strong>Move here</strong>.
+                </div>
+                <button
+                  onClick={cancelBulkMove}
+                  style={{
+                    background: 'none',
+                    border: '1px solid var(--border)',
+                    color: 'var(--muted)',
+                    borderRadius: 999,
+                    padding: '4px 10px',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    flexShrink: 0,
+                  }}
+                >
+                  Done
+                </button>
+              </div>
+            ) : null}
             {loading ? <Spinner /> : ['income', 'expense'].map(sectionType => {
               const sectionGroups = groupsBySection[sectionType]
               const sectionMeta = SECTION_META[sectionType]
@@ -1093,7 +1746,7 @@ export default function Categories() {
                 >
                   <div
                     style={{
-                      padding: '12px 12px 10px',
+                      padding: '5px 11px 4px',
                       background: 'color-mix(in srgb, var(--surface2) 70%, transparent)',
                       borderBottom: '1px solid var(--border)',
                       display: 'flex',
@@ -1114,13 +1767,13 @@ export default function Categories() {
                         border: '1px solid var(--border)',
                         color: 'var(--muted)',
                         cursor: 'pointer',
-                        fontSize: 13,
-                        width: 24,
-                        height: 24,
+                        fontSize: 12,
+                        width: 21,
+                        height: 21,
                         padding: 0,
                         marginTop: 1,
                         flexShrink: 0,
-                        borderRadius: 6,
+                        borderRadius: 5,
                         display: 'grid',
                         placeItems: 'center',
                         lineHeight: 1,
@@ -1129,11 +1782,8 @@ export default function Categories() {
                       {sectionCollapsed ? '+' : '-'}
                     </button>
                     <div>
-                      <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.1 }}>
                         {sectionMeta.label}
-                      </div>
-                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
-                        {sectionMeta.hint}
                       </div>
                     </div>
                   </div>
@@ -1171,26 +1821,34 @@ export default function Categories() {
                         cat={group}
                         isChild={false}
                         isSelected={selected?.id === group.id}
+                        bulkMoveMode={bulkMoveMode}
+                        bulkChecked={(group.children || []).length > 0 && (group.children || []).every(child => selectedCategoryIdSet.has(child.id))}
                         isCollapsed={groupCollapsed}
                         canCollapse={true}
                         onToggleCollapse={toggleGroup}
                         onSelect={selectCategory}
                         onRename={handleRename}
                         onDelete={handleDelete}
+                        onToggleBulkChecked={toggleBulkChecked}
                         onDropRow={handleDropRow}
                         onOpenContextMenu={openContextMenu}
+                        onDragStartRow={getDragPayload}
                       />
                       {!groupCollapsed ? (group.children || []).map(child => (
                         <CategoryRow
                           key={child.id}
                           cat={child}
                           isChild={true}
-                          isSelected={selected?.id === child.id}
+                          isSelected={selectedCategoryIds.includes(child.id)}
+                          bulkMoveMode={bulkMoveMode}
+                          bulkChecked={selectedCategoryIdSet.has(child.id)}
                           onSelect={selectCategory}
                           onRename={handleRename}
                           onDelete={handleDelete}
+                          onToggleBulkChecked={toggleBulkChecked}
                           onDropRow={handleDropRow}
                           onOpenContextMenu={openContextMenu}
+                          onDragStartRow={getDragPayload}
                         />
                       )) : null}
 
@@ -1236,19 +1894,16 @@ export default function Categories() {
             <ScrollFade top={listScrollState.top} bottom={listScrollState.bottom} />
           </div>
 
-          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5, padding: '0 2px' }}>
-            Right-click inside Income or Expense to add a group. Right-click a group to add a category. Drag groups to reorder or move them between sections.
-          </div>
         </div>
 
         <div style={{ position: 'relative', minHeight: 0 }}>
           <div
-            ref={detailRef}
-            onScroll={() => updateScrollState(detailRef, setDetailScrollState)}
             style={{
-              overflowY: 'auto',
+              overflow: 'hidden',
               minHeight: 0,
               height: '100%',
+              display: 'flex',
+              flexDirection: 'column',
               border: '1px solid var(--border)',
               borderRadius: 10,
               background: 'var(--surface)',
@@ -1260,22 +1915,61 @@ export default function Categories() {
           {!selected ? (
             <EmptyState message="Select a category or group to view details" />
           ) : (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                <h2 style={{ fontSize: 16, fontWeight: 600 }}>{selected.icon} {selected.name}</h2>
-              </div>
-
-              {selected.parent_id ? (
-                <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
-                  Subcategory of {parentCategory?.name || '-'}
-                  {parentCategory?.exclude_from_totals ? ' (excluded from totals)' : ''}
-                </div>
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+              {isMultiCategorySelection ? (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                    <CategoryMarker kind="category" size={8} />
+                    <h2 style={{ fontSize: 16, fontWeight: 600 }}>{selectedCategories.length} selected categories</h2>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                    {selectedCategories.map(cat => (
+                      <span
+                        key={cat.id}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 5,
+                          padding: '2px 8px',
+                          borderRadius: 999,
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface2)',
+                          fontSize: 12,
+                        }}
+                      >
+                        <CategoryMarker kind="category" />
+                        {cat.name}
+                      </span>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
+                    {multiSelectionGroups.length === 1
+                      ? `Subcategories of ${multiSelectionGroups[0]?.name || '-'}`
+                      : `${multiSelectionGroups.length} groups represented`}
+                  </div>
+                </>
               ) : (
-                <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
-                  {SECTION_META[selectedGroupType].label} group - {(tree.find(group => group.id === selected.id)?.children || []).length} subcategories
-                </div>
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                    <CategoryMarker kind={selected.parent_id ? 'category' : 'group'} size={selected.parent_id ? 8 : 10} />
+                    <h2 style={{ fontSize: 16, fontWeight: 600 }}>{selected.name}</h2>
+                  </div>
+
+                  {selected.parent_id ? (
+                    <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
+                      Subcategory of {parentCategory?.name || '-'}
+                      {parentCategory?.exclude_from_totals ? ' (excluded from totals)' : ''}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
+                      {SECTION_META[selectedGroupType].label} group - {(tree.find(group => group.id === selected.id)?.children || []).length} subcategories
+                    </div>
+                  )}
+                </>
               )}
 
+              {!isMultiCategorySelection && (
+              <>
               <div
                 style={{
                   display: 'flex',
@@ -1338,30 +2032,50 @@ export default function Categories() {
                 ) : null}
               </div>
 
-              {!selected.parent_id && inlineForm?.mode !== 'category' ? (
-                <button
-                  onClick={() => openCategoryForm(selected)}
-                  style={{
-                    background: 'none',
-                    border: '1px solid var(--border)',
-                    color: 'var(--muted)',
-                    borderRadius: 6,
-                    padding: '5px 12px',
-                    fontSize: 12,
-                    cursor: 'pointer',
-                  }}
-                >
-                  + Add subcategory
-                </button>
-              ) : null}
+              </>
+              )}
 
-              <p style={{ fontSize: 13, color: 'var(--muted)', marginTop: 16, lineHeight: 1.6 }}>
-                To set up automatic classification rules for this category, use the <strong>Rules</strong> page.
-              </p>
-            </>
+              <div style={{ marginTop: 22, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>
+                    Matching transactions
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                    {matchingTxnsTotal} total{matchingTxnsTotal > pagedMatchingTxns.length ? ` · showing ${pagedMatchingTxns.length}` : ''}
+                  </div>
+                </div>
+
+                {matchingTxnsLoading ? <Spinner /> : pagedMatchingTxns.length === 0 ? (
+                  <div style={{
+                    padding: '14px 16px',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: 'var(--surface2)',
+                    fontSize: 13,
+                    color: 'var(--muted)',
+                  }}>
+                    No transactions currently match this {selected.parent_id ? 'category' : 'group'}.
+                  </div>
+                ) : (
+                  <TransactionListTable
+                    rows={pagedMatchingTxns}
+                    categories={flatCats}
+                    onCategorySave={saveMatchingTxnCategory}
+                    onAddCategory={addMatchingCategory}
+                    onRowsChange={setPagedMatchingTxns}
+                    scrollRef={matchingTxnsListRef}
+                    fillHeight={true}
+                  />
+                )}
+                {matchingTxnsLoadingMore ? (
+                  <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+                    Loading more transactions…
+                  </div>
+                ) : null}
+              </div>
+            </div>
           )}
           </div>
-          <ScrollFade top={detailScrollState.top} bottom={detailScrollState.bottom} />
         </div>
       </div>
 
@@ -1370,12 +2084,29 @@ export default function Categories() {
           x={contextMenu.x}
           y={contextMenu.y}
           target={contextMenu}
+          bulkMoveMode={bulkMoveMode}
+          canMoveHere={!!contextMenu.groupId && selectedCategoryIds.length > 0}
           onAddCategory={target => {
             const group = flatCats.find(cat => cat.id === target.groupId)
             if (group) openCategoryForm(group)
           }}
           onAddGroup={target => openGroupFormNear(target.sectionType, target.groupId || null, target.insertPosition || 'after')}
+          onExpandAll={expandAll}
+          onCollapseAll={collapseAll}
+          onAlphabetize={alphabetize}
+          onAddRule={openRuleCreator}
+          onStartBulkMove={startBulkMove}
+          onMoveHere={moveSelectedCategoriesHere}
+          onCancelBulkMove={cancelBulkMove}
           onClose={() => setContextMenu(null)}
+        />
+      ) : null}
+
+      {bulkMoveToast ? (
+        <BulkMoveToast
+          move={bulkMoveToast}
+          onUndo={undoBulkMove}
+          onDismiss={() => setBulkMoveToast(null)}
         />
       ) : null}
 

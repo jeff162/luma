@@ -29,10 +29,9 @@
  *   date_start/date_end or the legacy month param.
  *
  * COLOR ASSIGNMENT (assignColors):
- *   When drilling into a group, subcategories may share a color (especially
- *   user-created ones). assignColors() detects this and substitutes a
- *   predefined 20-color palette so pie slices and list dots are always distinct.
- *   The palette is applied to the chart only — DB colors are not modified.
+ *   Charts use a display-local palette so the currently visible slices/bars
+ *   always have strong contrast. This is presentation-only and does not depend
+ *   on any stored category color in the database.
  *
  * ACCOUNT FILTERING:
  *   accountId is derived from global filter selections of type 'account'.
@@ -48,12 +47,13 @@ import {
 } from 'recharts'
 import { api } from '../lib/api.js'
 import { MerchantCell, CategoryCell } from '../components/TransactionRow.jsx'
+import AmountDisplay from '../components/AmountDisplay.jsx'
 import { Link } from 'react-router-dom'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import { useFilters, resolveDateMonths } from '../lib/FilterContext.jsx'
 import { currentMonth, formatCurrency, formatDate, monthLabel, lastNMonths } from '../lib/utils.js'
-import { Card, PageHeader, Select, Spinner, EmptyState } from '../components/ui.jsx'
+import { Card, PageHeader, Select, Spinner, EmptyState, CategoryMarker } from '../components/ui.jsx'
 import { format, subMonths, subYears, startOfYear, endOfYear, startOfMonth, endOfMonth } from 'date-fns'
 
 // ── Period helpers ────────────────────────────────────────────────────────────
@@ -253,7 +253,7 @@ function PeriodPicker({ label, value, onChange }) {
 }
 
 
-// Distinct color palette for charts — used when categories share a color
+// Distinct color palette for charts — assigned from the currently displayed rows
 const CHART_PALETTE = [
   '#6366f1','#ec4899','#f97316','#eab308','#22c55e',
   '#14b8a6','#3b82f6','#a855f7','#ef4444','#64748b',
@@ -271,7 +271,7 @@ function assignColors(rows, colorKey) {
 
 // ── Comparison row ─────────────────────────────────────────────────────────────
 
-function CompareRow({ label, color, icon, a, b, maxVal, onClick }) {
+function CompareRow({ label, color, kind = 'category', a, b, maxVal, onClick }) {
   const diff    = a - b
   const diffPct = b > 0 ? ((a - b) / b) * 100 : null
   return (
@@ -284,7 +284,10 @@ function CompareRow({ label, color, icon, a, b, maxVal, onClick }) {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
-        <span style={{ fontSize: 13, flex: 1 }}>{icon} {label}</span>
+        <span style={{ fontSize: 13, flex: 1, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <CategoryMarker kind={kind} />
+          <span>{label}</span>
+        </span>
         {diffPct !== null && (
           <span style={{
             fontSize: 11, fontWeight: 600, padding: '1px 6px', borderRadius: 99,
@@ -337,7 +340,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
   const seriesMap = {}
   for (const r of filteredRows) {
     if (!seriesMap[r.series_id]) {
-      seriesMap[r.series_id] = { id: r.series_id, name: r.series_name, color: r.series_color, icon: r.series_icon, category_type: r.series_category_type }
+      seriesMap[r.series_id] = { id: r.series_id, name: r.series_name, color: r.series_color, category_type: r.series_category_type }
     }
   }
   const series = Object.values(seriesMap).filter(s => s.category_type !== 'income')
@@ -388,7 +391,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
 
   const groupOptions = [
     { value: '', label: 'All groups' },
-    ...groups.map(g => ({ value: g.group_id, label: `${g.group_icon} ${g.group_name}` })),
+    ...groups.map(g => ({ value: g.group_id, label: g.group_name })),
   ]
 
   return (
@@ -411,7 +414,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
           onChange={e => {
             if (!e.target.value) { onClearDrill(); return }
             const g = groups.find(x => x.group_id === e.target.value)
-            if (g) onDrillGroup({ series_id: g.group_id, series_name: g.group_name, series_color: g.group_color, series_icon: g.group_icon })
+            if (g) onDrillGroup({ series_id: g.group_id, series_name: g.group_name, series_color: g.group_color })
           }}
           style={{
             background: 'var(--surface2)', color: 'var(--text)',
@@ -423,7 +426,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
         </select>
         {drillGroup && (
           <span style={{ fontSize: 13, color: 'var(--muted)' }}>
-            Showing: {drillGroup.series_icon} {drillGroup.series_name}
+            Showing: {drillGroup.series_name}
           </span>
         )}
       </div>
@@ -444,7 +447,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
               <YAxis tickFormatter={v => `$${(v/1000).toFixed(0)}k`} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
               <Tooltip formatter={(v, name) => {
                 const s = series.find(x => x.id === name)
-                return [formatCurrency(v), s ? `${s.icon} ${s.name}` : name]
+                return [formatCurrency(v), s ? s.name : name]
               }} contentStyle={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8 }} />
               {series.map(s => (
                 <Area key={s.id} type="monotone" dataKey={s.id}
@@ -526,7 +529,8 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: s.color, flexShrink: 0 }} />
-                <span>{s.icon} {s.name}</span>
+                <CategoryMarker kind={drillGroup ? 'category' : 'group'} />
+                <span>{s.name}</span>
               </div>
               <span style={{ textAlign: 'right', fontWeight: 600 }}>{formatCurrency(s.avg)}</span>
               <span style={{ textAlign: 'right', color: 'var(--muted)' }}>{formatCurrency(s.total)}</span>
@@ -636,7 +640,8 @@ function OwnerSplitPanel({ owners, ownerSplitData, onDrill }) {
               onClick={() => onDrill(anyRow)}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13 }}>{anyRow.group_icon} {anyRow.group_name}</span>
+                <CategoryMarker kind="group" />
+                <span style={{ fontSize: 13 }}>{anyRow.group_name}</span>
                 {shared && (
                   <span style={{ fontSize: 10, color: 'var(--muted)', opacity: 0.7 }}>shared</span>
                 )}
@@ -1036,7 +1041,10 @@ export default function Dashboard() {
                             padding: '8px 0', borderBottom: '1px solid var(--border)', cursor: 'pointer',
                           }}>
                             <span style={{ width: 10, height: 10, borderRadius: '50%', background: g.group_color, flexShrink: 0 }} />
-                            <span style={{ fontSize: 14, flex: 1 }}>{g.group_icon} {g.group_name}</span>
+                            <span style={{ fontSize: 14, flex: 1, display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <CategoryMarker kind="group" />
+                              <span>{g.group_name}</span>
+                            </span>
                             <SpendBar value={g.total} total={totalSpend} color={g.group_color} />
                             <span style={{ fontSize: 13, fontWeight: 600, minWidth: 70, textAlign: 'right' }}>{formatCurrency(g.total)}</span>
                             <span style={{ color: 'var(--muted)', fontSize: 16 }}>›</span>
@@ -1049,7 +1057,10 @@ export default function Dashboard() {
                   {level === 'categories' && selectedGroup && (
                     <>
                       <Card>
-                        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>{selectedGroup.group_icon} {selectedGroup.group_name}</div>
+                        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <CategoryMarker kind="group" />
+                          <span>{selectedGroup.group_name}</span>
+                        </div>
                         <ResponsiveContainer width="100%" height={220}>
                           <PieChart>
                             <Pie data={coloredCatRows} dataKey="total" nameKey="category_name"
@@ -1072,7 +1083,10 @@ export default function Dashboard() {
                             padding: '8px 0', borderBottom: '1px solid var(--border)', cursor: 'pointer',
                           }}>
                             <span style={{ width: 10, height: 10, borderRadius: '50%', background: c.category_color, flexShrink: 0 }} />
-                            <span style={{ fontSize: 14, flex: 1 }}>{c.category_icon} {c.category_name}</span>
+                            <span style={{ fontSize: 14, flex: 1, display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <CategoryMarker kind="category" />
+                              <span>{c.category_name}</span>
+                            </span>
                             <SpendBar value={c.total} total={catRows.reduce((s,r)=>s+r.total,0)} color={c.category_color} />
                             <span style={{ fontSize: 12, color: 'var(--muted)', minWidth: 52, textAlign: 'right' }}>{c.count} txns</span>
                             <span style={{ fontSize: 13, fontWeight: 600, minWidth: 70, textAlign: 'right' }}>{formatCurrency(c.total)}</span>
@@ -1119,16 +1133,13 @@ export default function Dashboard() {
                                   ...x, category_id: catId,
                                   category_name: cat?.name ?? null,
                                   category_color: cat?.color ?? null,
-                                  category_icon: cat?.icon ?? null,
                                   category_overridden: 1,
                                 } : x))
                                 api.overrideCategory(txnId, catId)
                               }}
                               onRulePrompt={setRulePrompt}
                             />
-                            <span style={{ textAlign: 'right', fontWeight: 600, color: txn.amount < 0 ? 'var(--success)' : 'var(--text)' }}>
-                              {txn.amount < 0 ? '+' : null}{formatCurrency(txn.amount)}
-                            </span>
+                            <AmountDisplay amount={txn.amount} isPending={!!txn.is_pending} />
                           </div>
                         ))}
                       </Card>
@@ -1160,7 +1171,7 @@ export default function Dashboard() {
                     padding: '12px 16px', fontSize: 14, fontWeight: 600,
                     borderBottom: '1px solid var(--border)',
                   }}>
-                    {selectedGroup.group_icon} {selectedGroup.group_name} · {groupTxnData.length} transactions
+                    {selectedGroup.group_name} · {groupTxnData.length} transactions
                     <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--muted)', marginLeft: 8 }}>
                       Click a category above to filter
                     </span>
@@ -1202,19 +1213,13 @@ export default function Dashboard() {
                               category_id: catId,
                               category_name: cat?.name ?? null,
                               category_color: cat?.color ?? null,
-                              category_icon: cat?.icon ?? null,
                               category_overridden: 1,
                             } : x))
                             api.overrideCategory(txnId, catId)
                           }}
                           onRulePrompt={setRulePrompt}
                         />
-                        <span style={{
-                          textAlign: 'right', fontWeight: 600,
-                          color: t.amount < 0 ? 'var(--success)' : 'var(--text)',
-                        }}>
-                          {t.amount < 0 ? '+' : null}{formatCurrency(t.amount)}
-                        </span>
+                        <AmountDisplay amount={t.amount} isPending={!!t.is_pending} />
                       </div>
                     ))}
                   </div>
@@ -1271,7 +1276,7 @@ export default function Dashboard() {
                 <Card>
                   <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 12, alignItems: 'center' }}>
                     <span style={{ color: 'var(--text)', fontWeight: 600 }}>
-                      {cmpLevel === 'groups' ? 'By group' : `${cmpGroup?.group_icon} ${cmpGroup?.group_name}`}
+                      {cmpLevel === 'groups' ? 'By group' : cmpGroup?.group_name}
                     </span>
                     <div style={{ display: 'flex', gap: 12, marginLeft: 'auto', fontSize: 11 }}>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -1288,7 +1293,7 @@ export default function Dashboard() {
                   {cmpLevel === 'groups' && coloredCmpGroups.map(g => (
                     <CompareRow
                       key={g.group_id}
-                      label={g.group_name} color={g.group_color} icon={g.group_icon}
+                      label={g.group_name} color={g.group_color} kind="group"
                       a={g.totalA} b={g.totalB} maxVal={cmpMaxGroup}
                       onClick={() => cmpDrillToCategories(g)}
                     />
@@ -1297,7 +1302,7 @@ export default function Dashboard() {
                   {cmpLevel === 'categories' && coloredCmpCats.map(c => (
                     <CompareRow
                       key={c.category_id}
-                      label={c.category_name} color={c.category_color} icon={c.category_icon}
+                      label={c.category_name} color={c.category_color} kind="category"
                       a={c.totalA} b={c.totalB} maxVal={cmpMaxCat}
                       onClick={null}
                     />

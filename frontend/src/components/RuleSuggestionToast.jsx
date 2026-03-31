@@ -235,8 +235,7 @@ export default function RuleSuggestionToast({ prompt, onDismiss, onSaved }) {
                     transactions as{' '}
                     <Badge
                       label={prompt.categoryName}
-                      color={prompt.categoryColor}
-                      icon={prompt.categoryIcon}
+                      toneKey={prompt.categoryId || prompt.categoryName}
                     />
                   </div>
                 </div>

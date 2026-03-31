@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { refreshTaskBadge } from '../App.jsx'
-import { formatCurrency, formatDate } from '../lib/utils.js'
+import { formatDate } from '../lib/utils.js'
+import AmountDisplay from '../components/AmountDisplay.jsx'
 import { Card, PageHeader, Spinner, EmptyState, Input } from '../components/ui.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
@@ -34,18 +35,34 @@ const COLUMN_DEFS = [
 ]
 
 const DEFAULT_ORDER = ['date', 'merchant', 'category', 'account', 'amount']
-const STORAGE_KEY   = 'fintrack:txn-columns'
+const TXN_COLUMNS_STORAGE_KEY_PREFIX = 'fintrack:txn-columns'
+const TXN_COLUMNS_PREF_KEY = 'ui.transactions.columns'
 
-function loadColumnConfig() {
+function getTxnColumnsStorageKey(instanceId, userId) {
+  return instanceId && userId ? `${TXN_COLUMNS_STORAGE_KEY_PREFIX}:${instanceId}:${userId}` : null
+}
+
+function defaultColumnConfig() {
+  return DEFAULT_ORDER.map(key => {
+    const def = COLUMN_DEFS.find(d => d.key === key)
+    return { key, width: def.defaultWidth }
+  })
+}
+
+function loadColumnConfig(instanceId, userId) {
+  const storageKey = getTxnColumnsStorageKey(instanceId, userId)
+  if (!storageKey) return null
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(storageKey)
     if (!raw) return null
     return JSON.parse(raw)
   } catch { return null }
 }
 
-function saveColumnConfig(cfg) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg)) } catch {}
+function saveColumnConfig(instanceId, userId, cfg) {
+  const storageKey = getTxnColumnsStorageKey(instanceId, userId)
+  if (!storageKey) return
+  try { localStorage.setItem(storageKey, JSON.stringify(cfg)) } catch {}
 }
 
 function buildGridTemplate(cols) {
@@ -173,11 +190,13 @@ function RuleActionModal({ state, onClose, onSaved }) {
 export default function Transactions() {
   const { filters } = useFilters()
   const location = useLocation()
+  const [dbInstanceId, setDbInstanceId] = useState('')
+  const [userId, setUserId] = useState('')
   const [categories, setCategories] = useState([])
   const [data, setData]             = useState({ transactions: [], total: 0 })
   const [initialLoading, setInitialLoading] = useState(true)
   const [detailTxn, setDetailTxn]   = useState(null)
-  const [detailCategory, setDetailCategory] = useState(null)  // { id, name, color, icon }
+  const [detailCategory, setDetailCategory] = useState(null)  // { id, name, color }
   const [detailAccount, setDetailAccount]   = useState(null)  // { id, name, mask }
   const [editId, setEditId]         = useState(null)
   const { menu, onContextMenu, close: closeMenu } = useContextMenu()
@@ -192,18 +211,12 @@ export default function Transactions() {
 
   // ── Column config (persisted) ──────────────────────────────────────────────
 
-  const [cols, setCols] = useState(() => {
-    const saved = loadColumnConfig()
-    if (saved && Array.isArray(saved) && saved.length === DEFAULT_ORDER.length) return saved
-    return DEFAULT_ORDER.map(key => {
-      const def = COLUMN_DEFS.find(d => d.key === key)
-      return { key, width: def.defaultWidth }
-    })
-  })
+  const [cols, setCols] = useState(() => defaultColumnConfig())
 
   function handleColUpdate(newCols) {
     setCols(newCols)
-    saveColumnConfig(newCols)
+    saveColumnConfig(dbInstanceId, userId, newCols)
+    api.saveUserPreference(TXN_COLUMNS_PREF_KEY, newCols).catch(() => {})
   }
 
   const gridTemplate = buildGridTemplate(cols)
@@ -213,6 +226,30 @@ export default function Transactions() {
   const [uncategorizedOnly, setUncategorizedOnly] = useState(
     () => new URLSearchParams(location.search).get('uncategorized') === '1'
   )
+
+  useEffect(() => {
+    Promise.all([
+      api.getAuthStatus().catch(() => null),
+      api.getUserPreferences().catch(() => ({ preferences: {} })),
+    ]).then(([status, prefResp]) => {
+      const nextDbInstanceId = status?.db_instance_id || ''
+      const nextUserId = status?.preference_profile?.id || status?.user?.id || ''
+      setDbInstanceId(nextDbInstanceId)
+      setUserId(nextUserId)
+      const saved = prefResp?.preferences?.[TXN_COLUMNS_PREF_KEY]
+      if (saved && Array.isArray(saved) && saved.length === DEFAULT_ORDER.length) {
+        setCols(saved)
+        saveColumnConfig(nextDbInstanceId, nextUserId, saved)
+        return
+      }
+      const local = loadColumnConfig(nextDbInstanceId, nextUserId)
+      if (local && Array.isArray(local) && local.length === DEFAULT_ORDER.length) {
+        setCols(local)
+        return
+      }
+      setCols(defaultColumnConfig())
+    })
+  }, [])
 
   useEffect(() => {
     api.getCategories().then(setCategories)
@@ -288,7 +325,6 @@ export default function Transactions() {
             category_id:         catId,
             category_name:       cat?.name  ?? null,
             category_color:      cat?.color ?? null,
-            category_icon:       cat?.icon  ?? null,
             category_overridden: 1,
           } : t
         ),
@@ -400,7 +436,6 @@ export default function Transactions() {
               id:    txn.category_id,
               name:  txn.category_name,
               color: txn.category_color,
-              icon:  txn.category_icon,
             }) : undefined}
           />
         )
@@ -437,13 +472,7 @@ export default function Transactions() {
       }
       case 'amount':
         return (
-          <span style={{
-            textAlign: 'right', fontWeight: 600,
-            color: txn.amount < 0 ? 'var(--success)' : 'var(--text)',
-            display: 'block',
-          }}>
-            {txn.amount < 0 ? '+' : null}{formatCurrency(txn.amount)}
-          </span>
+          <AmountDisplay amount={txn.amount} isPending={!!txn.is_pending} style={{ display: 'flex' }} />
         )
       default:
         return null
@@ -476,8 +505,36 @@ export default function Transactions() {
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
-        <PageHeader title="Transactions">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <PageHeader title="Transactions" />
+      </div>
+
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+        <div style={{ padding: '0 0 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Input
+              value={merchantSearch}
+              onChange={setMerchantSearch}
+              placeholder="Filter merchants by name…"
+              style={{ width: 320 }}
+            />
+            {merchantSearch.trim() && (
+              <button
+                onClick={() => setMerchantSearch('')}
+                style={{
+                  background: 'none',
+                  border: '1px solid var(--border)',
+                  color: 'var(--muted)',
+                  borderRadius: 8,
+                  padding: '6px 10px',
+                  fontSize: 13,
+                  cursor: 'pointer',
+                }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
             <button
               onClick={() => { setUncategorizedOnly(v => !v); isFirstLoad.current = true }}
               style={{
@@ -496,33 +553,6 @@ export default function Transactions() {
               {displayedTransactions.length}{displayedTransactions.length !== data.total ? ` of ${data.total}` : ''} transactions
             </span>
           </div>
-        </PageHeader>
-      </div>
-
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
-        <div style={{ padding: '0 0 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
-          <Input
-            value={merchantSearch}
-            onChange={setMerchantSearch}
-            placeholder="Filter merchants by name…"
-            style={{ width: 320 }}
-          />
-          {merchantSearch.trim() && (
-            <button
-              onClick={() => setMerchantSearch('')}
-              style={{
-                background: 'none',
-                border: '1px solid var(--border)',
-                color: 'var(--muted)',
-                borderRadius: 8,
-                padding: '6px 10px',
-                fontSize: 13,
-                cursor: 'pointer',
-              }}
-            >
-              Clear
-            </button>
-          )}
         </div>
 
         <Card style={{ padding: 0, overflow: 'hidden' }}>

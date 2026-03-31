@@ -31,8 +31,10 @@ const AMOUNT_CONVENTIONS = [
 const DATE_FORMATS = [
   { value: '%m/%d/%Y',  label: 'MM/DD/YYYY  (e.g. 01/31/2024)' },
   { value: '%Y-%m-%d',  label: 'YYYY-MM-DD  (e.g. 2024-01-31)' },
+  { value: '%Y/%m/%d',  label: 'YYYY/MM/DD  (e.g. 2024/01/31)' },
   { value: '%d/%m/%Y',  label: 'DD/MM/YYYY  (e.g. 31/01/2024)' },
   { value: '%m-%d-%Y',  label: 'MM-DD-YYYY  (e.g. 01-31-2024)' },
+  { value: '%d-%m-%Y',  label: 'DD-MM-YYYY  (e.g. 31-01-2024)' },
   { value: '%b %d, %Y', label: 'Mon DD, YYYY  (e.g. Jan 31, 2024)' },
   { value: '%b-%d-%Y', label: 'MMM-DD-YYYY  (e.g. Mar-23-2026)' },
 ]
@@ -51,7 +53,7 @@ const EXPORT_COLUMNS = [
   { key: 'import_batch',  label: 'Import batch ID' },
 ]
 const DEFAULT_EXPORT_COLS = ['date', 'merchant_name', 'amount', 'account', 'category']
-const IMPORT_DRAFTS_STORAGE_KEY = 'fintrack.importDrafts.v1'
+const IMPORT_CONFIG_MAX_WIDTH = 'min(900px, 100%)'
 
 function SectionTitle({ children }) {
   return <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6, marginTop: 28 }}>{children}</div>
@@ -66,9 +68,15 @@ function deriveImportSourceHints(previewLike) {
   }
 }
 
-function loadSavedImportDraft(previewLike) {
+function getImportDraftsStorageKey(instanceId, subjectId) {
+  return instanceId && subjectId ? `fintrack.importDrafts.v1.${instanceId}.${subjectId}` : null
+}
+
+function loadSavedImportDraft(previewLike, instanceId, subjectId) {
+  const storageKey = getImportDraftsStorageKey(instanceId, subjectId)
+  if (!storageKey) return null
   try {
-    const raw = window.localStorage.getItem(IMPORT_DRAFTS_STORAGE_KEY)
+    const raw = window.localStorage.getItem(storageKey)
     if (!raw) return null
     const drafts = JSON.parse(raw)
     const { headerFingerprint, filenamePattern } = deriveImportSourceHints(previewLike)
@@ -78,44 +86,544 @@ function loadSavedImportDraft(previewLike) {
   }
 }
 
-function saveImportDraft(previewLike, snapshot) {
+function saveImportDraft(previewLike, snapshot, instanceId, subjectId) {
+  const storageKey = getImportDraftsStorageKey(instanceId, subjectId)
+  if (!storageKey) return
   try {
-    const raw = window.localStorage.getItem(IMPORT_DRAFTS_STORAGE_KEY)
+    const raw = window.localStorage.getItem(storageKey)
     const drafts = raw ? JSON.parse(raw) : {}
     const { headerFingerprint, filenamePattern } = deriveImportSourceHints(previewLike)
     if (headerFingerprint) drafts[headerFingerprint] = snapshot
     if (filenamePattern) drafts[filenamePattern] = snapshot
     drafts.__last__ = snapshot
-    window.localStorage.setItem(IMPORT_DRAFTS_STORAGE_KEY, JSON.stringify(drafts))
+    window.localStorage.setItem(storageKey, JSON.stringify(drafts))
   } catch {}
 }
 
 function SelectInput({ value, onChange, options, style }) {
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef(null)
+  const listRef = useRef(null)
+  const [openUp, setOpenUp] = useState(false)
+  const selectedOption = options.find(o => o.value === value) || options[0] || null
+
+  useEffect(() => {
+    if (!open) return
+    function handler(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  useEffect(() => {
+    if (!open || !listRef.current || !wrapRef.current) return
+    const wrapRect = wrapRef.current.getBoundingClientRect()
+    const listHeight = listRef.current.offsetHeight
+    setOpenUp(wrapRect.bottom + listHeight > window.innerHeight - 8)
+  }, [open, options.length])
+
   return (
-    <select value={value} onChange={e => onChange(e.target.value)} style={{
-      background: 'var(--surface2)', color: 'var(--text)',
-      border: '1px solid var(--border)', borderRadius: 6,
-      padding: '6px 10px', fontSize: 13, cursor: 'pointer', ...style,
-    }}>
-      {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-    </select>
+    <div ref={wrapRef} style={{ position: 'relative', ...style }}>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          background: 'var(--surface2)',
+          color: 'var(--text)',
+          border: '1px solid var(--border)',
+          borderRadius: 6,
+          padding: '6px 10px',
+          fontSize: 13,
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+      >
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {selectedOption?.label || ''}
+        </span>
+        <span style={{ fontSize: 10, color: 'var(--muted)', flexShrink: 0 }}>▾</span>
+      </button>
+
+      {open && (
+        <div
+          ref={listRef}
+          role="listbox"
+          style={{
+            position: 'absolute',
+            zIndex: 600,
+            left: 0,
+            right: 0,
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+            maxHeight: 320,
+            overflowY: 'auto',
+            ...(openUp ? { bottom: 'calc(100% + 4px)' } : { top: 'calc(100% + 4px)' }),
+          }}
+        >
+          {options.map(o => {
+            const active = o.value === value
+            return (
+              <button
+                key={o.value}
+                type="button"
+                role="option"
+                aria-selected={active}
+                onMouseDown={e => {
+                  e.preventDefault()
+                  onChange(o.value)
+                  setOpen(false)
+                }}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '8px 12px',
+                  border: 'none',
+                  background: active
+                    ? 'color-mix(in srgb, var(--accent2) 14%, var(--surface2))'
+                    : 'transparent',
+                  color: 'var(--text)',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  textAlign: 'left',
+                }}
+              >
+                <span style={{ flex: 1 }}>{o.label}</span>
+                {active && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 
-function ColSelect({ label, headers, value, onChange, required }) {
+function normalizeImportHeaderName(header) {
+  return String(header || '').trim().toLowerCase()
+}
+
+function parseIntegerWithinRange(value, min, max) {
+  if (!/^\d{1,4}$/.test(value)) return null
+  const parsed = Number(value)
+  return parsed >= min && parsed <= max ? parsed : null
+}
+
+function getDateCandidatesFromSample(value) {
+  const sample = String(value || '').trim()
+  if (!sample) return []
+
+  let match = sample.match(/^(\d{4})([/-])(\d{1,2})\2(\d{1,2})$/)
+  if (match) {
+    const month = parseIntegerWithinRange(match[3], 1, 12)
+    const day = parseIntegerWithinRange(match[4], 1, 31)
+    if (month && day) {
+      return [match[2] === '-' ? '%Y-%m-%d' : '%Y/%m/%d']
+    }
+  }
+
+  match = sample.match(/^(\d{1,2})([/-])(\d{1,2})\2(\d{4})$/)
+  if (match) {
+    const first = parseIntegerWithinRange(match[1], 1, 31)
+    const second = parseIntegerWithinRange(match[3], 1, 31)
+    const sep = match[2]
+    if (!first || !second) return []
+    const monthFirstFormat = sep === '-' ? '%m-%d-%Y' : '%m/%d/%Y'
+    const dayFirstFormat = sep === '-' ? '%d-%m-%Y' : '%d/%m/%Y'
+    if (first > 12 && second <= 12) return [dayFirstFormat]
+    if (second > 12 && first <= 12) return [monthFirstFormat]
+    const candidates = []
+    if (first <= 12) candidates.push(monthFirstFormat)
+    if (second <= 12) candidates.push(dayFirstFormat)
+    return candidates
+  }
+
+  if (/^[A-Za-z]{3}\s+\d{1,2},\s*\d{4}$/.test(sample)) return ['%b %d, %Y']
+  if (/^[A-Za-z]{3}-\d{1,2}-\d{4}$/.test(sample)) return ['%b-%d-%Y']
+  return []
+}
+
+function analyzeDateSamples(values) {
+  const scores = new Map()
+  let matchedCount = 0
+  let decisiveCount = 0
+
+  values.forEach(value => {
+    const candidates = getDateCandidatesFromSample(value)
+    if (!candidates.length) return
+    matchedCount += 1
+    if (candidates.length === 1) decisiveCount += 1
+    candidates.forEach(candidate => scores.set(candidate, (scores.get(candidate) || 0) + 1))
+  })
+
+  const rankedFormats = [...scores.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([format]) => format)
+
+  return {
+    matchedCount,
+    decisiveCount,
+    rankedFormats,
+    guessedFormat: rankedFormats[0] || null,
+  }
+}
+
+function looksLikeAmountSample(value) {
+  const sample = String(value || '').trim()
+  if (!sample) return false
+  const compact = sample.replace(/\s+/g, '')
+  return /^(\(\$?\d[\d,]*(\.\d+)?\)|[+-]?\$?\d[\d,]*(\.\d+)?(?:CR|DR)?)$/i.test(compact)
+}
+
+function analyzeAmountSamples(values) {
+  const styles = {
+    accounting: 0,
+    currency: 0,
+    trailingCode: 0,
+    signed: 0,
+    plain: 0,
+  }
+
+  values.forEach(value => {
+    const sample = String(value || '').trim()
+    if (!looksLikeAmountSample(sample)) return
+    if (/^\(\$?\d[\d,]*(\.\d+)?\)$/i.test(sample)) styles.accounting += 1
+    else if (/(CR|DR)$/i.test(sample)) styles.trailingCode += 1
+    else if (/^[+-]/.test(sample)) styles.signed += 1
+    else if (sample.includes('$')) styles.currency += 1
+    else styles.plain += 1
+  })
+
+  const ranked = Object.entries(styles).sort((a, b) => b[1] - a[1])
+  const [topStyle, topCount] = ranked[0] || [null, 0]
+  const labels = {
+    accounting: 'Detected accounting-style negatives.',
+    currency: 'Detected currency amounts.',
+    trailingCode: 'Detected trailing CR/DR amounts.',
+    signed: 'Detected signed amounts.',
+    plain: 'Detected plain numeric amounts.',
+  }
+
+  return {
+    guessedStyle: topCount > 0 ? topStyle : null,
+    guessedLabel: topCount > 0 ? labels[topStyle] : null,
+  }
+}
+
+function looksLikeDirectionSample(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  return ['credit', 'debit', 'cr', 'dr', 'deposit', 'withdrawal', 'payment', 'incoming', 'outgoing'].includes(normalized)
+}
+
+function looksLikePendingSample(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  return ['pending', 'posted', 'cleared', 'complete', 'completed', 'final', 'finalized', 'finalised', 'true', 'false', 'yes', 'no', 'y', 'n', '1', '0', 'p'].includes(normalized)
+}
+
+function scoreHeaderName(header, type) {
+  const normalized = normalizeImportHeaderName(header)
+  if (!normalized) return 0
+
+  const tests = {
+    date: ['date', 'posted', 'trans date', 'transaction date', 'post date'],
+    amount: ['amount', 'amt', 'value'],
+    debit: ['debit', 'withdrawal', 'outflow', 'payment', 'charge'],
+    credit: ['credit', 'deposit', 'inflow', 'refund'],
+    direction: ['type', 'direction', 'dr/cr', 'transaction type'],
+    pending: ['pending', 'status', 'posted', 'cleared'],
+  }
+
+  return (tests[type] || []).reduce((score, token) => score + (normalized.includes(token) ? 1 : 0), 0)
+}
+
+function withCurrentOption(options, currentValue) {
+  const merged = [...options]
+  if (currentValue && !merged.includes(currentValue)) merged.unshift(currentValue)
+  return [...new Set(merged)]
+}
+
+function formatLikelyMatchLabel(count) {
+  if (!count) return ''
+  return `${count} likely ${count === 1 ? 'match' : 'matches'}`
+}
+
+function ColSelect({
+  label,
+  headers,
+  allHeaders = headers,
+  value,
+  onChange,
+  required,
+  hint,
+  tone = 'muted',
+  showAll = false,
+  onToggleShowAll,
+}) {
+  const borderColor = required && !value ? 'var(--danger)' : 'var(--border)'
+  const hintColor = tone === 'danger' ? 'var(--danger)' : 'var(--muted)'
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef(null)
+  const listRef = useRef(null)
+  const [openUp, setOpenUp] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    function handler(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  useEffect(() => {
+    if (!open || !listRef.current || !wrapRef.current) return
+    const wrapRect = wrapRef.current.getBoundingClientRect()
+    const listHeight = listRef.current.offsetHeight
+    setOpenUp(wrapRect.bottom + listHeight > window.innerHeight - 8)
+  }, [open, headers.length, allHeaders.length])
+
+  const hasDetectedSuggestions = !!onToggleShowAll && headers.length > 0
+  const suggestedHeaders = withCurrentOption(headers, value)
+  const remainingHeaders = allHeaders.filter(h => !suggestedHeaders.includes(h))
+  const suggestedHeading = suggestedHeaders.length === 1 ? 'Suggested match' : 'Suggested matches'
+  const showSuggestedSection = hasDetectedSuggestions && suggestedHeaders.length > 0
+  const directHeaders = !onToggleShowAll ? suggestedHeaders : []
+  const selectedLabel = value
+    ? value
+    : <span style={{ color: 'var(--muted)' }}>Not mapped</span>
+
+  const triggerStyle = {
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    background: 'var(--surface2)',
+    color: 'var(--text)',
+    border: `1px solid ${borderColor}`,
+    borderRadius: 6,
+    padding: '6px 8px',
+    fontSize: 13,
+    cursor: 'pointer',
+    textAlign: 'left',
+  }
+
+  const listStyle = {
+    position: 'absolute',
+    zIndex: 600,
+    left: 0,
+    right: 0,
+    background: 'var(--surface)',
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+    boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+    maxHeight: 320,
+    overflowY: 'auto',
+    ...(openUp ? { bottom: 'calc(100% + 4px)' } : { top: 'calc(100% + 4px)' }),
+  }
+
+  const menuItemStyle = (active, subtle = false) => ({
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: subtle ? '7px 12px' : '8px 12px',
+    border: 'none',
+    background: active
+      ? 'color-mix(in srgb, var(--accent2) 14%, var(--surface2))'
+      : subtle
+        ? 'color-mix(in srgb, var(--surface2) 75%, transparent)'
+        : 'transparent',
+    color: subtle ? 'var(--muted)' : 'var(--text)',
+    cursor: 'pointer',
+    fontSize: 13,
+    textAlign: 'left',
+  })
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
       <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
         {label}{required && <span style={{ color: 'var(--danger)' }}> *</span>}
       </label>
-      <select value={value || ''} onChange={e => onChange(e.target.value || null)} style={{
-        background: 'var(--surface2)', color: 'var(--text)',
-        border: `1px solid ${required && !value ? 'var(--danger)' : 'var(--border)'}`,
-        borderRadius: 6, padding: '6px 8px', fontSize: 13,
-      }}>
-        <option value="">— not mapped —</option>
-        {headers.map(h => <option key={h} value={h}>{h}</option>)}
-      </select>
+      <div ref={wrapRef} style={{ position: 'relative' }}>
+        <button
+          type="button"
+          onClick={() => setOpen(v => !v)}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          style={triggerStyle}
+        >
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {selectedLabel}
+          </span>
+          {!value && hint ? (
+            <span style={{
+              flexShrink: 0,
+              fontSize: 11,
+              color: hintColor,
+              background: 'color-mix(in srgb, var(--surface) 60%, transparent)',
+              border: '1px solid var(--border)',
+              borderRadius: 999,
+              padding: '2px 7px',
+            }}>
+              {hint}
+            </span>
+          ) : null}
+          <span style={{ fontSize: 10, color: 'var(--muted)', flexShrink: 0 }}>▾</span>
+        </button>
+
+        {open && (
+          <div ref={listRef} style={listStyle} role="listbox" aria-label={`${label} column options`}>
+            <button
+              type="button"
+              role="option"
+              aria-selected={!value}
+              style={menuItemStyle(!value, true)}
+              onMouseDown={e => {
+                e.preventDefault()
+                onChange(null)
+                setOpen(false)
+              }}
+            >
+              <span style={{ flex: 1 }}>Not mapped</span>
+              {!value && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+            </button>
+
+            {showSuggestedSection && (
+              <>
+                <div style={{
+                  padding: '6px 12px 4px',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: 'var(--muted)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.08em',
+                  borderTop: '1px solid var(--border)',
+                }}>
+                  {suggestedHeading}
+                </div>
+                {suggestedHeaders.map(h => (
+                  <button
+                    key={h}
+                    type="button"
+                    role="option"
+                    aria-selected={value === h}
+                    style={menuItemStyle(value === h)}
+                    onMouseDown={e => {
+                      e.preventDefault()
+                      onChange(h)
+                      setOpen(false)
+                    }}
+                  >
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {h}
+                    </span>
+                    {value === h && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+                  </button>
+                ))}
+              </>
+            )}
+
+            {directHeaders.length > 0 && (
+              <>
+                {directHeaders.map(h => (
+                  <button
+                    key={h}
+                    type="button"
+                    role="option"
+                    aria-selected={value === h}
+                    style={menuItemStyle(value === h)}
+                    onMouseDown={e => {
+                      e.preventDefault()
+                      onChange(h)
+                      setOpen(false)
+                    }}
+                  >
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {h}
+                    </span>
+                    {value === h && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+                  </button>
+                ))}
+              </>
+            )}
+
+            {onToggleShowAll && remainingHeaders.length > 0 && (
+              <>
+                <div style={{
+                  padding: '6px 12px',
+                  borderTop: showSuggestedSection ? '1px solid var(--border)' : 'none',
+                  background: 'color-mix(in srgb, var(--surface2) 55%, transparent)',
+                }}>
+                  <button
+                    type="button"
+                    onMouseDown={e => {
+                      e.preventDefault()
+                      onToggleShowAll()
+                    }}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      fontSize: 12,
+                      color: 'var(--accent2)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {showAll ? 'Show fewer suggestions' : `Show all columns (${remainingHeaders.length})`}
+                  </button>
+                </div>
+
+                {showAll && (
+                  <>
+                    <div style={{
+                      padding: '6px 12px 4px',
+                      fontSize: 10,
+                      fontWeight: 700,
+                      color: 'var(--muted)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.08em',
+                      borderTop: showSuggestedSection ? '1px solid var(--border)' : 'none',
+                    }}>
+                      {showSuggestedSection ? 'Other columns' : 'All columns'}
+                    </div>
+                    {remainingHeaders.map(h => (
+                      <button
+                        key={h}
+                        type="button"
+                        role="option"
+                        aria-selected={value === h}
+                        style={menuItemStyle(value === h)}
+                        onMouseDown={e => {
+                          e.preventDefault()
+                          onChange(h)
+                          setOpen(false)
+                        }}
+                      >
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {h}
+                        </span>
+                        {value === h && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+                      </button>
+                    ))}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -381,35 +889,30 @@ function AccountHandlingPicker({ headers, accounts, colAccount, accountId, singl
             )}
 
             {/* Account options */}
-            {accounts.length > 0 && (
-              <>
-                <div style={{ ...groupLabel, borderTop: '1px solid var(--border)' }}>Assign all rows to one account</div>
-                {accounts.map(a => (
-                  <div
-                    key={a.id}
-                    style={itemStyle(accountId === a.id)}
-                    onMouseDown={e => { e.preventDefault(); onChange({ acct: a.id, createNew: false }); setOpen(false) }}
-                  >
-                    <span style={{ flex: 1 }}>{a.name}{a.mask ? ` ···${a.mask}` : ''}</span>
-                    {accountId === a.id && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
-                  </div>
-                ))}
+            <>
+              <div style={{ ...groupLabel, borderTop: '1px solid var(--border)' }}>Assign all rows to one account</div>
+              {accounts.map(a => (
                 <div
-                  style={itemStyle(!!singleAccountNew?.enabled)}
-                  onMouseDown={e => { e.preventDefault(); onChange({ acct: '', createNew: true }); setOpen(false) }}
+                  key={a.id}
+                  style={itemStyle(accountId === a.id)}
+                  onMouseDown={e => { e.preventDefault(); onChange({ acct: a.id, createNew: false }); setOpen(false) }}
                 >
-                  <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, flexShrink: 0 }}>＋</span>
-                  <span style={{ flex: 1 }}>Create new account…</span>
-                  {singleAccountNew?.enabled && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+                  <span style={{ flex: 1 }}>{a.name}{a.mask ? ` ···${a.mask}` : ''}</span>
+                  {accountId === a.id && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
                 </div>
-              </>
-            )}
+              ))}
+              <div
+                style={itemStyle(!!singleAccountNew?.enabled)}
+                onMouseDown={e => { e.preventDefault(); onChange({ acct: '', createNew: true }); setOpen(false) }}
+              >
+                <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, flexShrink: 0 }}>＋</span>
+                <span style={{ flex: 1 }}>Create new account…</span>
+                {singleAccountNew?.enabled && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+              </div>
+            </>
           </div>
         )}
       </div>
-      {colAccount && (
-        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>per-account mapping below ↓</div>
-      )}
     </div>
   )
 }
@@ -447,6 +950,8 @@ class ImportErrorBoundary extends React.Component {
 }
 
 function ImportTab() {
+  const [dbInstanceId, setDbInstanceId] = useState('')
+  const [preferenceSubjectId, setPreferenceSubjectId] = useState('')
   const [stage, setStage]           = useState('upload')
   const [preview, setPreview]       = useState(null)
   const [profiles, setProfiles]     = useState([])
@@ -473,6 +978,7 @@ function ImportTab() {
   const [colDesc,    setColDesc]    = useState(null)
   const [colCategory,setColCategory]= useState(null)
   const [colNotes,   setColNotes]   = useState(null)
+  const [colPending, setColPending] = useState(null)
   const [colAccount, setColAccount] = useState(null)
   const [singleAccountNew, setSingleAccountNew] = useState({ enabled: false, name: '', type: 'depository' })
   const [accountMap, setAccountMap] = useState({})
@@ -486,18 +992,193 @@ function ImportTab() {
   const [showSaveProfile,   setShowSaveProfile]   = useState(false)
   const [saveProfileName,   setSaveProfileName]   = useState('')
   const [prevBatchWarn,     setPrevBatchWarn]     = useState(false)
+  const [dateFormatLocked,  setDateFormatLocked]  = useState(false)
+  const [expandedColumnPools, setExpandedColumnPools] = useState({})
 
   useEffect(() => {
-    api.getImportProfiles().then(setProfiles)
-    api.getAccounts().then(setAccounts)
-    api.getCategories().then(setCategories)
-    api.listBatches().then(setBatches)
+    Promise.all([
+      api.getImportProfiles(),
+      api.getAccounts(),
+      api.getCategories(),
+      api.listBatches(),
+      api.getAuthStatus(),
+    ]).then(([p, a, c, b, status]) => {
+      setProfiles(p)
+      setAccounts(a)
+      setCategories(c)
+      setBatches(b)
+      setDbInstanceId(status?.db_instance_id || '')
+      setPreferenceSubjectId(status?.preference_profile?.id || status?.user?.id || '')
+    })
   }, [])
 
   const distinctAccountValues = useMemo(() => {
     if (!colAccount || !preview?.column_distinct_values) return []
     return preview.column_distinct_values[colAccount] || []
   }, [colAccount, preview])
+
+  const duplicateImportSummary = useMemo(() => {
+    if (!dupAccountWarning.length) {
+      return {
+        imported: [],
+        remaining: [],
+        allImported: false,
+      }
+    }
+
+    const importedByCsvValue = new Map(
+      dupAccountWarning
+        .filter(a => a.csv_value)
+        .map(a => [a.csv_value, a])
+    )
+
+    const imported = []
+    const remaining = []
+
+    if (distinctAccountValues.length > 0) {
+      distinctAccountValues.forEach(value => {
+        const prior = importedByCsvValue.get(value)
+        if (prior) imported.push(prior)
+        else remaining.push(value)
+      })
+    } else {
+      imported.push(...dupAccountWarning)
+    }
+
+    return {
+      imported,
+      remaining,
+      allImported: distinctAccountValues.length > 0 && remaining.length === 0,
+    }
+  }, [dupAccountWarning, distinctAccountValues])
+
+  const columnSamples = useMemo(() => {
+    if (!preview?.headers?.length || !preview?.rows?.length) return {}
+    const rows = preview.rows.slice(skipRows)
+    return preview.headers.reduce((acc, header) => {
+      acc[header] = rows
+        .map(row => String(row?.[header] ?? '').trim())
+        .filter(Boolean)
+      return acc
+    }, {})
+  }, [preview, skipRows])
+
+  const columnAnalysis = useMemo(() => {
+    if (!preview?.headers?.length) {
+      return {
+        dateCandidates: [],
+        amountCandidates: [],
+        debitCandidates: [],
+        creditCandidates: [],
+        directionCandidates: [],
+        pendingCandidates: [],
+        dateAnalysisByHeader: {},
+        amountAnalysisByHeader: {},
+      }
+    }
+
+    const analyses = {
+      dateCandidates: [],
+      amountCandidates: [],
+      debitCandidates: [],
+      creditCandidates: [],
+      directionCandidates: [],
+      pendingCandidates: [],
+      dateAnalysisByHeader: {},
+      amountAnalysisByHeader: {},
+    }
+
+    preview.headers.forEach(header => {
+      const samples = columnSamples[header] || []
+      const sampleCount = samples.length
+      const headerBoostDate = scoreHeaderName(header, 'date')
+      const dateAnalysis = analyzeDateSamples(samples)
+      const dateScore = dateAnalysis.matchedCount + dateAnalysis.decisiveCount + (headerBoostDate * 2)
+      analyses.dateAnalysisByHeader[header] = { ...dateAnalysis, sampleCount, score: dateScore }
+      if ((sampleCount > 0 && dateAnalysis.matchedCount >= Math.max(2, Math.ceil(sampleCount * 0.6))) || headerBoostDate > 0) {
+        analyses.dateCandidates.push({ header, score: dateScore })
+      }
+
+      const amountMatches = samples.filter(looksLikeAmountSample).length
+      const amountRatio = sampleCount ? amountMatches / sampleCount : 0
+      const amountBoost = scoreHeaderName(header, 'amount')
+      const amountScore = amountMatches + (amountBoost * 2)
+      const amountFormat = analyzeAmountSamples(samples)
+      analyses.amountAnalysisByHeader[header] = { sampleCount, amountMatches, amountRatio, score: amountScore, ...amountFormat }
+      if ((sampleCount > 0 && amountRatio >= 0.7) || amountBoost > 0) {
+        analyses.amountCandidates.push({ header, score: amountScore })
+      }
+
+      const debitBoost = scoreHeaderName(header, 'debit')
+      const debitScore = amountMatches + (debitBoost * 3)
+      if ((sampleCount > 0 && amountRatio >= 0.7 && debitBoost > 0) || debitBoost > 0) {
+        analyses.debitCandidates.push({ header, score: debitScore })
+      }
+
+      const creditBoost = scoreHeaderName(header, 'credit')
+      const creditScore = amountMatches + (creditBoost * 3)
+      if ((sampleCount > 0 && amountRatio >= 0.7 && creditBoost > 0) || creditBoost > 0) {
+        analyses.creditCandidates.push({ header, score: creditScore })
+      }
+
+      const directionMatches = samples.filter(looksLikeDirectionSample).length
+      const directionRatio = sampleCount ? directionMatches / sampleCount : 0
+      const directionBoost = scoreHeaderName(header, 'direction')
+      const directionScore = directionMatches + (directionBoost * 2)
+      if ((sampleCount > 0 && directionRatio >= 0.6) || directionBoost > 0) {
+        analyses.directionCandidates.push({ header, score: directionScore })
+      }
+
+      const pendingMatches = samples.filter(looksLikePendingSample).length
+      const pendingRatio = sampleCount ? pendingMatches / sampleCount : 0
+      const pendingBoost = scoreHeaderName(header, 'pending')
+      const pendingScore = pendingMatches + (pendingBoost * 2)
+      if ((sampleCount > 0 && pendingRatio >= 0.6) || pendingBoost > 0) {
+        analyses.pendingCandidates.push({ header, score: pendingScore })
+      }
+    })
+
+    for (const key of ['dateCandidates', 'amountCandidates', 'debitCandidates', 'creditCandidates', 'directionCandidates', 'pendingCandidates']) {
+      analyses[key].sort((a, b) => b.score - a.score || a.header.localeCompare(b.header))
+      analyses[key] = analyses[key].map(entry => entry.header)
+    }
+
+    return analyses
+  }, [columnSamples, preview])
+
+  const selectedDateAnalysis = colDate ? columnAnalysis.dateAnalysisByHeader[colDate] : null
+  const selectedAmountAnalysis = colAmount ? columnAnalysis.amountAnalysisByHeader[colAmount] : null
+
+  const dateSelectHint = selectedDateAnalysis
+    ? selectedDateAnalysis.guessedFormat
+      ? `Detected ${DATE_FORMATS.find(option => option.value === selectedDateAnalysis.guessedFormat)?.label.split('  ')[0] || selectedDateAnalysis.guessedFormat}.`
+      : selectedDateAnalysis.sampleCount
+        ? 'Sample values in this column do not strongly look like dates.'
+        : ''
+    : columnAnalysis.dateCandidates.length > 0
+      ? formatLikelyMatchLabel(columnAnalysis.dateCandidates.length)
+      : ''
+
+  const amountSelectHint = amtConv === 'two_column'
+    ? null
+    : selectedAmountAnalysis
+      ? selectedAmountAnalysis.amountMatches > 0
+        ? (selectedAmountAnalysis.guessedLabel || `${selectedAmountAnalysis.amountMatches}/${selectedAmountAnalysis.sampleCount || 0} sample value${selectedAmountAnalysis.amountMatches === 1 ? '' : 's'} look like amounts.`)
+        : selectedAmountAnalysis.sampleCount
+          ? 'Sample values in this column do not strongly look like amounts.'
+          : ''
+      : columnAnalysis.amountCandidates.length > 0
+        ? formatLikelyMatchLabel(columnAnalysis.amountCandidates.length)
+        : ''
+
+  function toggleColumnPool(field) {
+    setExpandedColumnPools(prev => ({ ...prev, [field]: !prev[field] }))
+  }
+
+  function handleDateColumnChange(nextValue) {
+    setDateFormatLocked(false)
+    setColDate(nextValue)
+  }
   useEffect(() => {
     setAccountMap(prev => {
       const next = { ...prev }
@@ -514,12 +1195,45 @@ function ImportTab() {
           }
         }
       }
+      for (const [csvVal, entry] of Object.entries(next)) {
+        const stillExists = entry.accountId
+          ? accounts.find(a => a.id === entry.accountId)
+          : null
+        if (entry.accountId && !stillExists) {
+          const byName = accounts.find(a => a.name.toLowerCase() === csvVal.toLowerCase())
+          next[csvVal] = byName
+            ? {
+                ...entry,
+                accountId: byName.id,
+                createNew: false,
+                newName: byName.name,
+                newType: byName.type || entry.newType || 'depository',
+                skip: false,
+              }
+            : {
+                accountId: '',
+                createNew: false,
+                newName: csvVal,
+                newType: entry.newType || 'depository',
+                skip: false,
+              }
+        }
+        if (entry.createNew && entry.newName && !accounts.some(a => a.name.toLowerCase() === entry.newName.trim().toLowerCase()) && entry.newName !== csvVal) {
+          next[csvVal] = {
+                accountId: '',
+                createNew: false,
+                newName: csvVal,
+                newType: entry.newType || 'depository',
+                skip: false,
+              }
+        }
+      }
       return next
     })
   }, [distinctAccountValues, accounts])
 
   const hasImportWorkToSave = !!(
-    colDate || colAmount || colDebit || colCredit || colDir || colDesc || colCategory || colNotes ||
+    colDate || colAmount || colDebit || colCredit || colDir || colDesc || colCategory || colNotes || colPending ||
     colAccount || accountId || singleAccountNew.enabled || Object.keys(accountMap).length > 0 ||
     Object.keys(categoryAssignments).length > 0 || skipRows > 0 || dateFormat !== '%m/%d/%Y' ||
     amtConv !== 'single_signed' || !applyCat
@@ -527,12 +1241,21 @@ function ImportTab() {
 
   useEffect(() => {
     if (!preview || !hasImportWorkToSave) return
-    saveImportDraft(preview, buildImportSnapshot())
+    saveImportDraft(preview, buildImportSnapshot(), dbInstanceId, preferenceSubjectId)
   }, [
+    dbInstanceId, preferenceSubjectId,
     preview, hasImportWorkToSave, accountId, dateFormat, amtConv, skipRows, applyCat,
-    colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colAccount,
+    colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount,
     singleAccountNew, accountMap, categoryAssignments,
   ])
+
+  useEffect(() => {
+    if (!colDate || dateFormatLocked) return
+    const guessedFormat = columnAnalysis.dateAnalysisByHeader[colDate]?.guessedFormat
+    if (guessedFormat && guessedFormat !== dateFormat) {
+      setDateFormat(guessedFormat)
+    }
+  }, [colDate, columnAnalysis.dateAnalysisByHeader, dateFormat, dateFormatLocked])
 
   function computePreviewRows() {
     if (!preview?.rows) return []
@@ -627,12 +1350,16 @@ function ImportTab() {
     const existingSingleAccount = cm.single_account_new?.name
       ? accounts.find(a => a.name.toLowerCase() === cm.single_account_new.name.toLowerCase())
       : null
-    setAccountId(existingSingleAccount ? existingSingleAccount.id : (p.account_id || '')); setDateFormat(p.date_format || '%m/%d/%Y')
+    const existingAssignedAccount = p.account_id
+      ? accounts.find(a => a.id === p.account_id)
+      : null
+    setAccountId(existingSingleAccount ? existingSingleAccount.id : (existingAssignedAccount?.id || '')); setDateFormat(p.date_format || '%m/%d/%Y')
+    setDateFormatLocked(true)
     setAmtConv(p.amount_convention || 'single_signed'); setSkipRows(p.skip_rows || 0)
     setApplyCat(!!p.apply_categorization)
     setColDate(cm.date || null); setColAmount(cm.amount || null); setColDebit(cm.debit || null)
     setColCredit(cm.credit || null); setColDir(cm.direction || null)
-    setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null)
+    setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColPending(cm.pending || null)
     setCategoryAssignments(cm.category_assignments || {})
     setSingleAccountNew(cm.single_account_new && !existingSingleAccount
       ? { enabled: true, name: cm.single_account_new.name || '', type: cm.single_account_new.type || 'depository' }
@@ -657,8 +1384,7 @@ function ImportTab() {
           if (byName) {
             restored[csvVal] = { accountId: byName.id, createNew: false, newName: byName.name, newType: byName.type || 'depository', skip: false }
           } else {
-            // No match at all — surface as createNew so user sees it needs attention
-            restored[csvVal] = { accountId: '', createNew: true, newName: csvVal, newType: 'depository', skip: false }
+            restored[csvVal] = { accountId: '', createNew: false, newName: csvVal, newType: 'depository', skip: false }
           }
         }
       }
@@ -670,7 +1396,7 @@ function ImportTab() {
         if (existing) {
           restored[csvVal] = { accountId: existing.id, createNew: false, newName: info.name, newType: info.type, skip: false }
         } else {
-          restored[csvVal] = { accountId: '', createNew: true, newName: info.name, newType: info.type, skip: false }
+          restored[csvVal] = { accountId: '', createNew: false, newName: csvVal, newType: info.type, skip: false }
         }
       }
       setAccountMap(restored)
@@ -683,13 +1409,16 @@ function ImportTab() {
     const existingSingleAccount = snap.single_account_new?.name
       ? accounts.find(a => a.name.toLowerCase() === snap.single_account_new.name.toLowerCase())
       : null
-    setDateFormat(snap.date_format || '%m/%d/%Y'); setAmtConv(snap.amount_convention || 'single_signed')
+    const existingAssignedAccount = snap.account_id
+      ? accounts.find(a => a.id === snap.account_id)
+      : null
+    setDateFormat(snap.date_format || '%m/%d/%Y'); setDateFormatLocked(true); setAmtConv(snap.amount_convention || 'single_signed')
     setSkipRows(snap.skip_rows || 0); setApplyCat(snap.apply_categorization !== false)
     setColDate(cm.date || null); setColAmount(cm.amount || null); setColDebit(cm.debit || null)
     setColCredit(cm.credit || null); setColDir(cm.direction || null)
-    setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColAccount(cm.account || null)
+    setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColPending(cm.pending || null); setColAccount(cm.account || null)
     setCategoryAssignments((snap.category_assignments || cm.category_assignments || {}))
-    setAccountId(existingSingleAccount ? existingSingleAccount.id : (snap.account_id || ''))
+    setAccountId(existingSingleAccount ? existingSingleAccount.id : (existingAssignedAccount?.id || ''))
     setSingleAccountNew(snap.single_account_new && !existingSingleAccount
       ? { enabled: true, name: snap.single_account_new.name || '', type: snap.single_account_new.type || 'depository' }
       : { enabled: false, name: '', type: 'depository' })
@@ -705,7 +1434,7 @@ function ImportTab() {
           if (byName) {
             restored[val] = { accountId: byName.id, createNew: false, newName: byName.name, newType: byName.type || 'depository', skip: false }
           } else {
-            restored[val] = { accountId: '', createNew: true, newName: val, newType: 'depository', skip: false }
+            restored[val] = { accountId: '', createNew: false, newName: val, newType: 'depository', skip: false }
           }
         }
       }
@@ -720,6 +1449,8 @@ function ImportTab() {
     if (!file) return
     setLoading(true)
     try {
+      setDateFormatLocked(false)
+      setExpandedColumnPools({})
       const result = await api.previewCsv(file)
       setPreview({ ...result, file }); setDupAccountWarning([]); setAccountMap({})
       setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
@@ -727,9 +1458,12 @@ function ImportTab() {
       setCategoryMappingRows([])
       setCategoryMappingSummary(null)
       if (result.suggested_profile_id) applyProfile(result.suggested_profile_id)
-      else if (result.config_snapshot) applySnapshot(result.config_snapshot)
+      else if (result.config_snapshot) applySnapshot({
+        ...result.config_snapshot,
+        skip_accounts: [],
+      })
       else {
-        const savedDraft = loadSavedImportDraft(result)
+        const savedDraft = loadSavedImportDraft(result, dbInstanceId, preferenceSubjectId)
         if (savedDraft) applySnapshot(savedDraft)
       }
       const prevImported = (result.previous_batch_accounts || []).filter(a => !a.was_skipped)
@@ -750,7 +1484,7 @@ function ImportTab() {
 
   function getColumnMap() {
     return { date: colDate, amount: colAmount, debit: colDebit, credit: colCredit,
-             direction: colDir, description: colDesc, category: colCategory, notes: colNotes, account: colAccount }
+             direction: colDir, description: colDesc, category: colCategory, notes: colNotes, pending: colPending, account: colAccount }
   }
 
   function canImport() {
@@ -777,6 +1511,72 @@ function ImportTab() {
       return true
     }
     return !!accountId
+  }
+
+  function getImportDisabledReason() {
+    const missingRequiredColumns = []
+    if (!colDate) missingRequiredColumns.push('date')
+    if (!colDesc) missingRequiredColumns.push('merchant')
+    if (amtConv === 'two_column') {
+      if (!colDebit) missingRequiredColumns.push('debit')
+      if (!colCredit) missingRequiredColumns.push('credit')
+    } else if (!colAmount) {
+      missingRequiredColumns.push('amount')
+    }
+
+    const issues = []
+    if (missingRequiredColumns.length === 1) {
+      issues.push(`Map the ${missingRequiredColumns[0]} column.`)
+    } else if (missingRequiredColumns.length > 1) {
+      issues.push('Map required columns.')
+    }
+
+    if (colAccount) {
+      let unresolvedCount = 0
+      let singleMessage = ''
+      for (const value of distinctAccountValues) {
+        const mapping = accountMap[value]
+        if (!mapping) {
+          unresolvedCount += 1
+          singleMessage = `Choose an account for "${value}".`
+          continue
+        }
+        if (mapping.skip) continue
+        if (mapping.createNew) {
+          const name = mapping.newName.trim()
+          if (!name) {
+            unresolvedCount += 1
+            singleMessage = `Enter a new account name for "${value}".`
+            continue
+          }
+          if (accounts.some(a => a.name.toLowerCase() === name.toLowerCase())) {
+            unresolvedCount += 1
+            singleMessage = `Select the existing account "${name}" instead of creating a duplicate.`
+          }
+          continue
+        }
+        if (!mapping.accountId) {
+          unresolvedCount += 1
+          singleMessage = `Choose an account for "${value}".`
+        }
+      }
+      if (unresolvedCount === 1) issues.push(singleMessage)
+      else if (unresolvedCount > 1) issues.push('Resolve unmapped accounts.')
+    }
+
+    if (singleAccountNew.enabled) {
+      const name = singleAccountNew.name.trim()
+      if (!name) issues.push('Enter a name for the new account.')
+      if (accounts.some(a => a.name.toLowerCase() === name.toLowerCase())) {
+        issues.push(`Select the existing account "${name}" instead of creating a duplicate.`)
+      }
+    }
+
+    if (!colAccount && !singleAccountNew.enabled && !accountId) {
+      issues.push('Choose the account to import into.')
+    }
+
+    return issues.join(' ')
   }
 
   async function runImport() {
@@ -966,6 +1766,7 @@ function ImportTab() {
   function resetImport() {
     setStage('upload'); setPreview(null); setImportResult(null)
     setDupAccountWarning([]); setAccountMap({})
+    setColPending(null)
     setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
     setCategoryAssignments({}); setCategoryMappingRows([]); setCategoryMappingSummary(null)
     setShowRaw(false); setShowAdvanced(false); setShowSaveProfile(false)
@@ -1018,7 +1819,7 @@ function ImportTab() {
   }
 
   return (
-    <div>
+    <div style={{ width: '100%', maxWidth: IMPORT_CONFIG_MAX_WIDTH }}>
       {showRaw && preview && (
         <RawFilePreview
           rawLines={rawViewerLines}
@@ -1032,39 +1833,59 @@ function ImportTab() {
 
       {stage === 'upload' && (
         <>
-          <div ref={dropRef} onDragOver={e => e.preventDefault()} onDrop={handleDrop}
-            onClick={() => document.getElementById('csv-file-input').click()}
-            style={{ border: '2px dashed var(--border)', borderRadius: 12, padding: '48px 32px', textAlign: 'center', cursor: 'pointer', background: 'var(--surface2)', marginBottom: 24 }}
-            onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent)'}
-            onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}
-          >
-            <div style={{ fontSize: 32, marginBottom: 12 }}>📂</div>
-            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Drop a CSV file here, or click to browse</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)' }}>Supports CSV exports from any bank. Manage import profiles in Settings.</div>
-            <input id="csv-file-input" type="file" accept=".csv" style={{ display: 'none' }} onChange={e => handleFile(e.target.files[0])} />
+          <div style={{ width: '100%' }}>
+            <div ref={dropRef} onDragOver={e => e.preventDefault()} onDrop={handleDrop}
+              onClick={() => document.getElementById('csv-file-input').click()}
+              style={{ border: '2px dashed var(--border)', borderRadius: 12, padding: '48px 32px', textAlign: 'center', cursor: 'pointer', background: 'var(--surface2)', marginBottom: 24 }}
+              onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent)'}
+              onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}
+            >
+              <div style={{ fontSize: 32, marginBottom: 12 }}>📂</div>
+              <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Drop a CSV file here, or click to browse</div>
+              <div style={{ fontSize: 13, color: 'var(--muted)' }}>Supports CSV exports from any bank. Manage import profiles in Settings.</div>
+              <input id="csv-file-input" type="file" accept=".csv" style={{ display: 'none' }} onChange={e => handleFile(e.target.files[0])} />
+            </div>
           </div>
           {loading && <Spinner />}
         </>
       )}
 
       {stage === 'mapping' && preview && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20, alignItems: 'flex-start' }}>
           {dupAccountWarning.length > 0 && (
-            <div style={{ background: 'color-mix(in srgb, #f59e0b 12%, var(--surface2))', border: '1px solid #f59e0b', borderRadius: 8, padding: '12px 16px' }}>
-              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>⚠️ Accounts already imported from this file</div>
+            <div style={{ width: IMPORT_CONFIG_MAX_WIDTH, background: 'color-mix(in srgb, #f59e0b 12%, var(--surface2))', border: '1px solid #f59e0b', borderRadius: 8, padding: '12px 16px' }}>
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>⚠️ This file has been imported before</div>
               <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
                 The following accounts were imported on{' '}
                 {preview.previous_batch?.imported_at?.slice(0,16).replace('T',' ')}.
                 Duplicate rows (same date, amount, description) will be skipped automatically.
                 To replace those transactions, undo the previous import first.
               </div>
-              {dupAccountWarning.map(a => (
+              {duplicateImportSummary.imported.map(a => (
                 <div key={a.account_id} style={{ fontSize: 13, marginBottom: 2 }}>• <strong>{a.account_name}</strong> — {a.row_count} transactions</div>
               ))}
+              {duplicateImportSummary.remaining.length > 0 ? (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>
+                    Not previously imported from this file
+                  </div>
+                  {duplicateImportSummary.remaining.map(value => (
+                    <div key={value} style={{ fontSize: 13, marginBottom: 2 }}>
+                      • <strong>{value}</strong>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {duplicateImportSummary.allImported ? (
+                <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 10 }}>
+                  All accounts in this file were already imported, so there is nothing left to import.
+                </div>
+              ) : null}
             </div>
           )}
 
-          <Card>
+          {!duplicateImportSummary.allImported ? (
+          <Card style={{ width: IMPORT_CONFIG_MAX_WIDTH }}>
             {/* 1. Filename + row count */}
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>
               {preview.filename}
@@ -1128,7 +1949,7 @@ function ImportTab() {
               }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
                   Date format
-                  <select value={dateFormat} onChange={e => setDateFormat(e.target.value)} style={{
+                  <select value={dateFormat} onChange={e => { setDateFormatLocked(true); setDateFormat(e.target.value) }} style={{
                     background: 'var(--surface)', color: 'var(--text)',
                     border: '1px solid var(--border)', borderRadius: 6,
                     padding: '3px 6px', fontSize: 12, cursor: 'pointer',
@@ -1169,29 +1990,119 @@ function ImportTab() {
               </div>
             )}
 
-            {/* 3. Column mapping — row 1: Date | Amount | Category, row 2: Description | Account handling */}
+            {/* 3. Column mapping — row 1: Date | Amount | Category, row 2: Merchant | Account handling */}
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Column mapping</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              gap: '24px 30px',
+              marginBottom: 14,
+            }}>
               {/* Row 1 */}
-              <ColSelect label="Date"  headers={preview.headers} value={colDate}   onChange={setColDate}   required />
+              <ColSelect
+                label="Date"
+                headers={columnAnalysis.dateCandidates}
+                allHeaders={preview.headers}
+                value={colDate}
+                onChange={handleDateColumnChange}
+                required
+                hint={dateSelectHint}
+                tone={selectedDateAnalysis && !selectedDateAnalysis.guessedFormat && selectedDateAnalysis.sampleCount ? 'danger' : 'muted'}
+                showAll={!!expandedColumnPools.date}
+                onToggleShowAll={
+                  columnAnalysis.dateCandidates.length > 0 && columnAnalysis.dateCandidates.length < (preview.headers?.length || 0)
+                    ? () => toggleColumnPool('date')
+                    : null
+                }
+              />
               {amtConv === 'two_column' ? (
-                <ColSelect label="Debit column"  headers={preview.headers} value={colDebit}  onChange={setColDebit}  required />
+                <ColSelect
+                  label="Debit column"
+                  headers={columnAnalysis.debitCandidates}
+                  allHeaders={preview.headers}
+                  value={colDebit}
+                  onChange={setColDebit}
+                  required
+                  hint={columnAnalysis.debitCandidates.length > 0 && !colDebit ? formatLikelyMatchLabel(columnAnalysis.debitCandidates.length) : ''}
+                  showAll={!!expandedColumnPools.debit}
+                  onToggleShowAll={
+                    columnAnalysis.debitCandidates.length > 0 && columnAnalysis.debitCandidates.length < (preview.headers?.length || 0)
+                      ? () => toggleColumnPool('debit')
+                      : null
+                  }
+                />
               ) : (
-                <ColSelect label="Amount" headers={preview.headers} value={colAmount} onChange={setColAmount} required />
+                <ColSelect
+                  label="Amount"
+                  headers={columnAnalysis.amountCandidates}
+                  allHeaders={preview.headers}
+                  value={colAmount}
+                  onChange={setColAmount}
+                  required
+                  hint={amountSelectHint}
+                  tone={selectedAmountAnalysis && selectedAmountAnalysis.sampleCount > 0 && selectedAmountAnalysis.amountMatches === 0 ? 'danger' : 'muted'}
+                  showAll={!!expandedColumnPools.amount}
+                  onToggleShowAll={
+                    columnAnalysis.amountCandidates.length > 0 && columnAnalysis.amountCandidates.length < (preview.headers?.length || 0)
+                      ? () => toggleColumnPool('amount')
+                    : null
+                  }
+                />
               )}
-              <ColSelect label="Category" headers={preview.headers} value={colCategory} onChange={setColCategory} />
+              <ColSelect
+                label="Pending"
+                headers={columnAnalysis.pendingCandidates}
+                allHeaders={preview.headers}
+                value={colPending}
+                onChange={setColPending}
+                hint={columnAnalysis.pendingCandidates.length > 0 && !colPending ? formatLikelyMatchLabel(columnAnalysis.pendingCandidates.length) : ''}
+                showAll={!!expandedColumnPools.pending}
+                onToggleShowAll={
+                  columnAnalysis.pendingCandidates.length > 0 && columnAnalysis.pendingCandidates.length < (preview.headers?.length || 0)
+                    ? () => toggleColumnPool('pending')
+                    : null
+                }
+              />
 
               {/* Extra cells for two_column and single_unsigned — push into row 2 start */}
               {amtConv === 'two_column' && (
-                <ColSelect label="Credit column" headers={preview.headers} value={colCredit} onChange={setColCredit} required />
+                <ColSelect
+                  label="Credit column"
+                  headers={columnAnalysis.creditCandidates}
+                  allHeaders={preview.headers}
+                  value={colCredit}
+                  onChange={setColCredit}
+                  required
+                  hint={columnAnalysis.creditCandidates.length > 0 && !colCredit ? formatLikelyMatchLabel(columnAnalysis.creditCandidates.length) : ''}
+                  showAll={!!expandedColumnPools.credit}
+                  onToggleShowAll={
+                    columnAnalysis.creditCandidates.length > 0 && columnAnalysis.creditCandidates.length < (preview.headers?.length || 0)
+                      ? () => toggleColumnPool('credit')
+                      : null
+                  }
+                />
               )}
               {amtConv === 'single_unsigned' && (
-                <ColSelect label="Direction column" headers={preview.headers} value={colDir} onChange={setColDir} />
+                <ColSelect
+                  label="Direction column"
+                  headers={columnAnalysis.directionCandidates}
+                  allHeaders={preview.headers}
+                  value={colDir}
+                  onChange={setColDir}
+                  hint={columnAnalysis.directionCandidates.length > 0 && !colDir ? formatLikelyMatchLabel(columnAnalysis.directionCandidates.length) : ''}
+                  showAll={!!expandedColumnPools.direction}
+                  onToggleShowAll={
+                    columnAnalysis.directionCandidates.length > 0 && columnAnalysis.directionCandidates.length < (preview.headers?.length || 0)
+                      ? () => toggleColumnPool('direction')
+                    : null
+                  }
+                />
               )}
-              <ColSelect label="Notes" headers={preview.headers} value={colNotes} onChange={setColNotes} />
+              <ColSelect label="Merchant" headers={preview.headers} value={colDesc} onChange={setColDesc} required />
+              <ColSelect label="Category" headers={preview.headers} value={colCategory} onChange={setColCategory} />
 
               {/* Row 2 (or continues from row 1 overflow) */}
-              <ColSelect label="Description" headers={preview.headers} value={colDesc} onChange={setColDesc} required />
+              <ColSelect label="Notes" headers={preview.headers} value={colNotes} onChange={setColNotes} />
               <AccountHandlingPicker
                 headers={preview.headers}
                 accounts={accounts}
@@ -1210,7 +2121,7 @@ function ImportTab() {
                     setAccountMap({})
                     setAccountId(acct)
                     setSingleAccountNew(createNew
-                      ? { enabled: true, name: preview.filename.replace(/[_\-\d.]+\.(csv)$/i, '').trim() || '', type: 'depository' }
+                      ? { enabled: true, name: '', type: 'depository' }
                       : { enabled: false, name: '', type: 'depository' })
                   }
                 }}
@@ -1218,27 +2129,31 @@ function ImportTab() {
             </div>
             {!colAccount && singleAccountNew.enabled && (
               <div style={{
-                marginTop: -2, marginBottom: 14, padding: '10px 12px',
-                background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8,
-                display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center',
+                marginTop: -7, marginBottom: 14, marginLeft: 42, padding: '8px 10px',
+                background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))',
+                border: '1px solid color-mix(in srgb, var(--border) 55%, transparent)', borderRadius: 999,
+                display: 'inline-flex', gap: 8, flexWrap: 'wrap', alignItems: 'center',
+                maxWidth: '100%',
+                boxShadow: '0 1px 1px rgba(0,0,0,0.04)',
               }}>
                 <input
                   value={singleAccountNew.name}
                   onChange={e => setSingleAccountNew(prev => ({ ...prev, name: e.target.value }))}
                   placeholder="New account name"
                   style={{
-                    flex: 1, minWidth: 180, background: 'var(--surface)', color: 'var(--text)',
+                    width: 200, maxWidth: '100%', background: 'var(--surface)', color: 'var(--text)',
                     border: `1px solid ${accounts.some(a => a.name.toLowerCase() === singleAccountNew.name.trim().toLowerCase()) ? 'var(--danger)' : 'var(--accent)'}`,
-                    borderRadius: 6, padding: '5px 8px', fontSize: 13, outline: 'none',
+                    borderRadius: 999, padding: '4px 8px', fontSize: 12, outline: 'none',
                   }}
                 />
                 <select
                   value={singleAccountNew.type}
                   onChange={e => setSingleAccountNew(prev => ({ ...prev, type: e.target.value }))}
                   style={{
+                    width: 96,
                     background: 'var(--surface)', color: 'var(--text)',
-                    border: '1px solid var(--border)', borderRadius: 6,
-                    padding: '5px 8px', fontSize: 12,
+                    border: '1px solid var(--border)', borderRadius: 999,
+                    padding: '4px 8px', fontSize: 11,
                   }}
                 >
                   <option value="depository">Checking</option>
@@ -1320,21 +2235,21 @@ function ImportTab() {
               </div>
             )}
           </Card>
+          ) : null}
 
           {colAccount && distinctAccountValues.length > 0 && (
-            <Card style={{ padding: 0, overflow: 'hidden' }}>
+            <Card style={{ padding: 0, overflow: 'hidden', width: IMPORT_CONFIG_MAX_WIDTH }}>
               {/* Column headers: Input file | → | Maps to | Skip */}
               <div style={{
-                display: 'grid', gridTemplateColumns: '1fr 16px 1fr 40px',
-                padding: '6px 14px', gap: 10,
+                display: 'grid', gridTemplateColumns: '1fr 16px 240px 52px',
+                padding: '6px 14px', gap: 12,
                 fontSize: 11, fontWeight: 600, color: 'var(--muted)',
-                textTransform: 'uppercase', letterSpacing: '0.05em',
                 borderBottom: '1px solid var(--border)',
                 background: 'var(--surface2)',
               }}>
-                <span>Input file</span>
+                <span>Account from file</span>
                 <span></span>
-                <span>Maps to</span>
+                <span>Maps To</span>
                 <span style={{ textAlign: 'center' }}>Skip</span>
               </div>
               {distinctAccountValues.map(csvVal => {
@@ -1347,23 +2262,29 @@ function ImportTab() {
                 const alreadyImported = dupAccountWarning.find(a => a.csv_value === csvVal)
                 return (
                   <div key={csvVal} style={{
-                    display: 'grid', gridTemplateColumns: '1fr 16px 1fr 40px',
-                    gap: 10, padding: '7px 14px', alignItems: 'center',
+                    display: 'grid', gridTemplateColumns: '1fr 16px 240px 52px',
+                    gap: 12, padding: '7px 14px', alignItems: 'center',
                     borderBottom: '1px solid var(--border)',
-                    opacity: m.skip ? 0.45 : 1,
+                    opacity: alreadyImported ? 0.5 : (m.skip ? 0.45 : 1),
                   }}>
                     {/* Input file value */}
                     <div>
                       <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={csvVal}>{csvVal}</div>
                       {alreadyImported && (
-                        <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 1 }}>⚠ {alreadyImported.row_count} rows already imported</div>
+                        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>
+                          Already imported · {alreadyImported.row_count} rows
+                        </div>
                       )}
                     </div>
 
                     <span style={{ color: 'var(--muted)', textAlign: 'center', fontSize: 11 }}>→</span>
 
                     {/* Maps to */}
-                    {m.skip ? (
+                    {alreadyImported ? (
+                      <span style={{ fontSize: 12, color: 'var(--muted)', fontStyle: 'italic' }}>
+                        already imported
+                      </span>
+                    ) : m.skip ? (
                       <span style={{ fontSize: 12, color: 'var(--muted)', fontStyle: 'italic' }}>skipped</span>
                     ) : !m.createNew ? (
                       <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
@@ -1371,7 +2292,7 @@ function ImportTab() {
                           value={m.accountId}
                           onChange={e => update({ accountId: e.target.value })}
                           style={{
-                            flex: 1, minWidth: 0, background: 'var(--surface2)', color: 'var(--text)',
+                            width: 170, maxWidth: '100%', background: 'var(--surface2)', color: 'var(--text)',
                             border: '1px solid var(--border)', borderRadius: 6,
                             padding: '5px 6px', fontSize: 12,
                           }}
@@ -1394,7 +2315,7 @@ function ImportTab() {
                             ×
                           </button>
                         ) : (
-                          <button onClick={() => update({ createNew: true })} style={{
+                          <button onClick={() => update({ createNew: true, newName: csvVal })} style={{
                             flexShrink: 0, background: 'none', border: '1px solid var(--border)',
                             borderRadius: 6, color: 'var(--accent2)', cursor: 'pointer',
                             fontSize: 11, padding: '4px 7px', whiteSpace: 'nowrap',
@@ -1402,8 +2323,8 @@ function ImportTab() {
                         )}
                       </div>
                     ) : (
-                      <div style={{ display: 'flex', gap: 4, alignItems: 'center', minWidth: 0, flexWrap: 'wrap' }}>
-                        <div style={{ flex: 1, minWidth: 60 }}>
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center', minWidth: 0, flexWrap: 'nowrap' }}>
+                        <div style={{ width: 132, maxWidth: '100%' }}>
                           <input value={m.newName} onChange={e => update({ newName: e.target.value })}
                             placeholder="Name" style={{
                               width: '100%', background: 'var(--surface2)', color: 'var(--text)',
@@ -1417,7 +2338,7 @@ function ImportTab() {
                           )}
                         </div>
                         <select value={m.newType} onChange={e => update({ newType: e.target.value })}
-                          style={{ background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 5px', fontSize: 11 }}>
+                          style={{ width: 76, background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 5px', fontSize: 11 }}>
                           <option value="depository">Checking</option>
                           <option value="credit">Credit</option>
                           <option value="investment">Invest.</option>
@@ -1431,12 +2352,16 @@ function ImportTab() {
 
                     {/* Skip checkbox — right edge */}
                     <div style={{ display: 'flex', justifyContent: 'center' }}>
-                      <input
-                        type="checkbox"
-                        checked={!!m.skip}
-                        onChange={e => update({ skip: e.target.checked })}
-                        style={{ width: 15, height: 15, cursor: 'pointer', accentColor: 'var(--accent)' }}
-                      />
+                      {alreadyImported ? (
+                        <span style={{ fontSize: 11, color: 'var(--muted)' }}>—</span>
+                      ) : (
+                        <input
+                          type="checkbox"
+                          checked={!!m.skip}
+                          onChange={e => update({ skip: e.target.checked })}
+                          style={{ width: 15, height: 15, cursor: 'pointer', accentColor: 'var(--accent)' }}
+                        />
+                      )}
                     </div>
                   </div>
                 )
@@ -1444,13 +2369,13 @@ function ImportTab() {
             </Card>
           )}
 
-          <Card style={{ padding: 0, overflow: 'hidden' }}>
+          <Card style={{ padding: 0, overflow: 'hidden', width: IMPORT_CONFIG_MAX_WIDTH }}>
             <div style={{ padding: '10px 16px', fontSize: 13, fontWeight: 600, borderBottom: '1px solid var(--border)' }}>
-              Data preview (first {previewRows.length} rows)
+              First {previewRows.length} transactions from file
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: `${colCategory ? '140px ' : ''}110px 1fr${colAccount ? ' 130px' : ''} 100px`, padding: '7px 16px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)' }}>
               {colCategory && <span>Category</span>}
-              <span>Date</span><span>Description</span>
+              <span>Date</span><span>Merchant</span>
               {colAccount && <span>Account</span>}
               <span style={{ textAlign: 'right' }}>Amount</span>
             </div>
@@ -1475,9 +2400,11 @@ function ImportTab() {
           </Card>
 
           <div style={{ display: 'flex', gap: 10 }}>
-            <Button onClick={runImport} disabled={!canImport() || loading}>
-              {loading ? 'Importing…' : `Import ${Math.max(0, preview.total_rows - skipRows)} rows`}
-            </Button>
+            <span title={!canImport() && !loading ? getImportDisabledReason() : ''}>
+              <Button onClick={runImport} disabled={!canImport() || loading}>
+                {loading ? 'Importing…' : `Import ${Math.max(0, preview.total_rows - skipRows)} rows`}
+              </Button>
+            </span>
             <Button variant="ghost" onClick={resetImport}>Cancel</Button>
           </div>
         </div>
@@ -1519,7 +2446,7 @@ function ImportTab() {
                 <div>
                   <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 6 }}>Map imported categories</div>
                   <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-                    Mappings will be saved as part of the import profile.
+                    Mappings are saved with the import profile
                   </div>
                 </div>
               </div>
@@ -1576,6 +2503,8 @@ function ImportTab() {
                         onAddCategory={cat => setCategories(prev => prev.find(c => c.id === cat.id) ? prev : [...prev, cat])}
                         initialQuery={row.chooserQuery || ''}
                         openToken={row.chooserToken || 0}
+                        showSelectedBadge
+                        emptyBadgeLabel="not mapped"
                         compact
                         style={{ width: '100%', maxWidth: 280, minWidth: 0 }}
                       />
@@ -1595,10 +2524,10 @@ function ImportTab() {
               justifyContent: 'flex-end',
               background: 'var(--surface)',
             }}>
+              <Button variant="ghost" onClick={() => setStage('done')}>Close without mapping</Button>
               <Button onClick={applyImportedCategoryMappings} disabled={loading || !canApplyCategoryMappings()}>
                 {loading ? 'Applying…' : 'Apply category mappings'}
               </Button>
-              <Button variant="ghost" onClick={() => setStage('done')}>Skip for now</Button>
             </div>
           </div>
         </div>
@@ -1701,17 +2630,17 @@ function ImportTab() {
               {categoryMappingSummary.categorized_by_rules > 0 && ` ${categoryMappingSummary.categorized_by_rules} remaining transaction${categoryMappingSummary.categorized_by_rules === 1 ? '' : 's'} were categorized by rules.`}
             </div>
           )}
-          {importResult.new_accounts_created > 0 && (
+          {importResult.new_accounts_without_owner > 0 && (
             <div style={{
               fontSize: 13, marginBottom: 16, padding: '8px 12px',
               background: 'color-mix(in srgb, var(--accent2) 8%, var(--surface2))',
               border: '1px solid color-mix(in srgb, var(--accent2) 30%, var(--border))',
               borderRadius: 8,
             }}>
-              {importResult.new_accounts_created} new account{importResult.new_accounts_created > 1 ? 's were' : ' was'} created.
+              {importResult.new_accounts_without_owner} new account{importResult.new_accounts_without_owner > 1 ? 's were' : ' was'} created without an owner.
               {' '}These accounts have no owner assigned — visit{' '}
-              <Link to="/settings" style={{ color: 'var(--accent2)', textDecoration: 'none' }}>
-                Settings → Account ownership
+              <Link to="/accounts" style={{ color: 'var(--accent2)', textDecoration: 'none' }}>
+                Accounts
               </Link>
               {' '}to assign one.
             </div>
@@ -1727,7 +2656,7 @@ function ImportTab() {
       )}
 
       <SectionTitle>Recent imports</SectionTitle>
-      <Card style={{ padding: 0, overflow: 'hidden' }}>
+      <Card style={{ padding: 0, overflow: 'hidden', width: '100%' }}>
         {batches.length === 0 ? <EmptyState message="No imports yet" /> : (
           <>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 70px 70px 80px', padding: '8px 16px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)' }}>
@@ -2224,7 +3153,7 @@ export default function ImportExport() {
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
         <div style={{ display: 'flex', marginBottom: 24, borderBottom: '1px solid var(--border)' }}>
-        {[['import', '⬆ Import'], ['export', '⬇ Export'], ['backup', '🗄 Backup / Restore']].map(([id, label]) => (
+        {[['import', 'Import'], ['export', 'Export'], ['backup', 'Backup / Restore']].map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)} style={{ padding: '8px 24px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, color: tab === id ? 'var(--text)' : 'var(--muted)', borderBottom: tab === id ? '2px solid var(--accent)' : '2px solid transparent', fontWeight: tab === id ? 500 : 400 }}>{label}</button>
         ))}
         </div>

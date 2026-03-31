@@ -47,6 +47,7 @@ import { api } from '../lib/api.js'
 import { formatCurrency, formatDate, monthLabel } from '../lib/utils.js'
 import { Spinner, Badge } from './ui.jsx'
 import { MerchantCell, CategoryCell, getTxnMerchantLabel } from './TransactionRow.jsx'
+import AmountDisplay from './AmountDisplay.jsx'
 import CategoryDisplay from './CategoryDisplay.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
@@ -134,7 +135,6 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
         category_id:    cat?.id    ?? null,
         category_name:  cat?.name  ?? null,
         category_color: cat?.color ?? null,
-        category_icon:  cat?.icon  ?? null,
         category_overridden: 1,
       }
     ))
@@ -278,12 +278,7 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
                             externalRulePrompt?.(p)
                           }}
                         />
-                        <span style={{
-                          textAlign: 'right', fontWeight: 600,
-                          color: t.amount < 0 ? 'var(--success)' : 'var(--text)',
-                        }}>
-                          {t.amount < 0 ? '+' : null}{formatCurrency(t.amount)}
-                        </span>
+                        <AmountDisplay amount={t.amount} isPending={!!t.is_pending} />
                       </div>
                     ))}
                   </div>

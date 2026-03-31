@@ -49,10 +49,19 @@
  */
 
 const BASE = '/api'
+let localPreferenceProfileId = ''
+
+export function setLocalPreferenceProfileId(profileId) {
+  localPreferenceProfileId = profileId || ''
+}
 
 async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(localPreferenceProfileId ? { 'X-Fintrack-Preference-Profile': localPreferenceProfileId } : {}),
+      ...options.headers,
+    },
     ...options,
   })
   if (!res.ok) {
@@ -67,6 +76,16 @@ async function request(path, options = {}) {
 export const api = {
   // Auth
   getAuthStatus: () => request('/auth/status'),
+  getUserPreferences: () => request('/auth/preferences'),
+  saveUserPreference: (key, value) =>
+    request('/auth/preferences', { method: 'POST', body: JSON.stringify({ key, value }) }),
+  getLocalPreferenceProfiles: () => request('/auth/local-preference-profiles'),
+  createLocalPreferenceProfile: (name) =>
+    request('/auth/local-preference-profiles', { method: 'POST', body: JSON.stringify({ name }) }),
+  updateLocalPreferenceProfile: (id, name) =>
+    request(`/auth/local-preference-profiles/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+  deleteLocalPreferenceProfile: (id) =>
+    request(`/auth/local-preference-profiles/${id}`, { method: 'DELETE' }),
   getRuntimeConfigDefaults: () => request('/auth/runtime-config/defaults'),
   saveRuntimeConfig: (data) =>
     request('/auth/runtime-config', { method: 'POST', body: JSON.stringify(data) }),
