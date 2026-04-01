@@ -28,6 +28,20 @@ function getSectionStorageKey(instanceId, userId) {
   return instanceId && userId ? `${SECTION_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
 }
 
+// ---------------------------------------------------------------------------
+// Owner helpers — categories use a different ownership model from accounts:
+//   owner_id = NULL  →  "Shared" (defaults to sole owner when only one exists)
+//   owner_id = <id>  →  explicitly owned by that personal owner
+// "Shared" is never stored as an explicit owner_id on a category.
+// ---------------------------------------------------------------------------
+function isSharedOwner(owner) {
+  return !!owner?.is_shared || (owner?.name || '').trim().toLowerCase() === 'shared'
+}
+
+function getPersonalOwners(owners) {
+  return owners.filter(owner => !isSharedOwner(owner))
+}
+
 function getGroupStorageKey(instanceId, userId) {
   return instanceId && userId ? `${GROUP_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
 }
@@ -908,9 +922,15 @@ export default function Categories() {
   }
 
   async function handleOwnerChange(groupId, ownerId) {
-    await api.updateCategory(groupId, { owner_id: ownerId || null })
+    // 'shared' sentinel means "no specific owner" — store NULL via clear_owner
+    // so that if the second-to-last owner is deleted, the category automatically
+    // resolves to the sole remaining owner rather than staying pinned to Shared.
+    const patch = ownerId === 'shared' || !ownerId
+      ? { clear_owner: true }
+      : { owner_id: ownerId }
+    await api.updateCategory(groupId, patch)
     const leaves = childrenForGroup(groupId)
-    await Promise.all(leaves.map(cat => api.updateCategory(cat.id, { owner_id: ownerId || null })))
+    await Promise.all(leaves.map(cat => api.updateCategory(cat.id, patch)))
     await loadCategories(groupId)
   }
 
@@ -1632,12 +1652,12 @@ export default function Categories() {
                   border: '1px solid var(--border)',
                 }}
               >
-                {owners.length > 0 ? (
+                {getPersonalOwners(owners).length > 1 ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '1 1 160px' }}>
                     <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Owner</span>
                     <select
-                      value={selected.owner_id || ''}
-                      onChange={e => handleOwnerChange(selected.id, e.target.value || null)}
+                      value={selected.owner_id || 'shared'}
+                      onChange={e => handleOwnerChange(selected.id, e.target.value)}
                       style={{
                         flex: 1,
                         background: 'var(--surface)',
@@ -1649,8 +1669,8 @@ export default function Categories() {
                         cursor: 'pointer',
                       }}
                     >
-                      <option value="">- Unassigned -</option>
-                      {owners.map(owner => (
+                      <option value="shared">Shared</option>
+                      {getPersonalOwners(owners).map(owner => (
                         <option key={owner.id} value={owner.id}>{owner.name}</option>
                       ))}
                     </select>
