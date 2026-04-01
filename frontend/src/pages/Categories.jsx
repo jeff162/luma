@@ -29,10 +29,11 @@ function getSectionStorageKey(instanceId, userId) {
 }
 
 // ---------------------------------------------------------------------------
-// Owner helpers — categories use a different ownership model from accounts:
-//   owner_id = NULL  →  "Shared" (defaults to sole owner when only one exists)
-//   owner_id = <id>  →  explicitly owned by that personal owner
-// "Shared" is never stored as an explicit owner_id on a category.
+// Owner helpers — category groups and categories resolve ownership differently:
+//   group.owner_id = NULL     → shared when multiple personal owners exist,
+//                               otherwise the sole personal owner
+//   category.owner_id = NULL  → inherit the parent group's effective owner
+//   owner_id = <id>           → explicitly owned by that personal owner
 // ---------------------------------------------------------------------------
 function isSharedOwner(owner) {
   return !!owner?.is_shared || (owner?.name || '').trim().toLowerCase() === 'shared'
@@ -40,6 +41,32 @@ function isSharedOwner(owner) {
 
 function getPersonalOwners(owners) {
   return owners.filter(owner => !isSharedOwner(owner))
+}
+
+function getSharedOwner(owners) {
+  return owners.find(isSharedOwner) || null
+}
+
+function getEffectiveGroupOwnerId(group, owners) {
+  if (!group) return ''
+  if (group.owner_id) return group.owner_id
+  const personalOwners = getPersonalOwners(owners)
+  if (personalOwners.length === 1) return personalOwners[0].id
+  if (personalOwners.length > 1) return getSharedOwner(owners)?.id || ''
+  return ''
+}
+
+function getEffectiveCategoryOwnerId(category, flatCats, owners) {
+  if (!category) return ''
+  if (!category.parent_id) return getEffectiveGroupOwnerId(category, owners)
+  if (category.owner_id) return category.owner_id
+  const parentGroup = flatCats.find(cat => cat.id === category.parent_id)
+  return getEffectiveGroupOwnerId(parentGroup, owners)
+}
+
+function getFullCategoryRecord(cat, flatCats) {
+  if (!cat) return null
+  return flatCats.find(item => item.id === cat.id) || cat
 }
 
 function getGroupStorageKey(instanceId, userId) {
@@ -921,17 +948,26 @@ export default function Categories() {
     await loadCategories(id)
   }
 
-  async function handleOwnerChange(groupId, ownerId) {
-    // 'shared' sentinel means "no specific owner" — store NULL via clear_owner
-    // so that if the second-to-last owner is deleted, the category automatically
-    // resolves to the sole remaining owner rather than staying pinned to Shared.
-    const patch = ownerId === 'shared' || !ownerId
-      ? { clear_owner: true }
-      : { owner_id: ownerId }
-    await api.updateCategory(groupId, patch)
-    const leaves = childrenForGroup(groupId)
-    await Promise.all(leaves.map(cat => api.updateCategory(cat.id, patch)))
-    await loadCategories(groupId)
+  async function handleOwnerChange(categoryId, ownerId) {
+    const target = flatCats.find(cat => cat.id === categoryId)
+    if (!target) return
+    const effectiveGroupOwnerId = target.parent_id
+      ? getEffectiveGroupOwnerId(flatCats.find(cat => cat.id === target.parent_id), owners)
+      : getEffectiveGroupOwnerId(target, owners)
+
+    let patch
+    if (target.parent_id) {
+      patch = ownerId === '__inherit__' || !ownerId
+        ? { clear_owner: true }
+        : { owner_id: ownerId }
+    } else {
+      patch = !ownerId || ownerId === effectiveGroupOwnerId
+        ? { clear_owner: true }
+        : { owner_id: ownerId }
+    }
+
+    await api.updateCategory(categoryId, patch)
+    await loadCategories(categoryId)
   }
 
   async function handleExcludeChange(groupId, exclude) {
@@ -980,19 +1016,21 @@ export default function Categories() {
   }
 
   function selectCategory(cat, event) {
+    const fullCat = getFullCategoryRecord(cat, flatCats)
+    if (!fullCat) return
     if (bulkMoveMode) {
-      setSelected(cat)
+      setSelected(fullCat)
       return
     }
-    setSelected(cat)
+    setSelected(fullCat)
     setInlineForm(null)
 
-    if (!cat.parent_id) {
+    if (!fullCat.parent_id) {
       setSelectedCategoryIds([])
       return
     }
 
-    setSelectedCategoryIds([cat.id])
+    setSelectedCategoryIds([fullCat.id])
   }
 
   function getDragPayload(cat) {
@@ -1159,14 +1197,15 @@ export default function Categories() {
   }
 
   function openContextMenu(e, cat, sectionTypeOverride = null) {
-    const group = cat?.parent_id ? flatCats.find(item => item.id === cat.parent_id) : cat
+    const fullCat = getFullCategoryRecord(cat, flatCats)
+    const group = fullCat?.parent_id ? flatCats.find(item => item.id === fullCat.parent_id) : fullCat
     const sectionType = sectionTypeOverride || normalizeCategoryType(group?.category_type)
     const rect = e.currentTarget?.getBoundingClientRect?.()
     const insertPosition = rect && e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
-    const usageSummary = cat ? getUsageSummaryForNode(cat) : null
-    if (cat) {
-      setSelected(cat)
-      setSelectedCategoryIds(cat.parent_id ? [cat.id] : [])
+    const usageSummary = fullCat ? getUsageSummaryForNode(fullCat) : null
+    if (fullCat) {
+      setSelected(fullCat)
+      setSelectedCategoryIds(fullCat.parent_id ? [fullCat.id] : [])
     }
     setContextMenu({
       x: e.clientX,
@@ -1174,9 +1213,9 @@ export default function Categories() {
       sectionType,
       groupId: group?.id || null,
       groupName: group?.name || '',
-      categoryId: cat?.parent_id ? cat.id : null,
-      categoryName: cat?.parent_id ? cat.name : '',
-      removableId: cat?.id || null,
+      categoryId: fullCat?.parent_id ? fullCat.id : null,
+      categoryName: fullCat?.parent_id ? fullCat.name : '',
+      removableId: fullCat?.id || null,
       removeInUse: !!usageSummary?.is_in_use,
       scope: group?.id ? 'group' : 'section',
       insertPosition,
@@ -1245,6 +1284,12 @@ export default function Categories() {
   }
 
   const parentCategory = selected?.parent_id ? flatCats.find(cat => cat.id === selected.parent_id) : null
+  const personalOwners = getPersonalOwners(owners)
+  const sharedOwner = getSharedOwner(owners)
+  const effectiveSelectedOwnerId = getEffectiveCategoryOwnerId(selected, flatCats, owners)
+  const inheritedOwnerLabel = parentCategory
+    ? (owners.find(owner => owner.id === getEffectiveGroupOwnerId(parentCategory, owners))?.name || 'group owner')
+    : ''
   const selectedGroupType = normalizeCategoryType(selected?.category_type)
   const selectedCategories = selectedCategoryIds
     .map(id => flatCats.find(cat => cat.id === id))
@@ -1652,28 +1697,81 @@ export default function Categories() {
                   border: '1px solid var(--border)',
                 }}
               >
-                {getPersonalOwners(owners).length > 1 ? (
+                {personalOwners.length > 1 ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '1 1 160px' }}>
                     <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Owner</span>
-                    <select
-                      value={selected.owner_id || 'shared'}
-                      onChange={e => handleOwnerChange(selected.id, e.target.value)}
-                      style={{
-                        flex: 1,
-                        background: 'var(--surface)',
-                        color: 'var(--text)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 6,
-                        padding: '4px 8px',
-                        fontSize: 12,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <option value="shared">Shared</option>
-                      {getPersonalOwners(owners).map(owner => (
-                        <option key={owner.id} value={owner.id}>{owner.name}</option>
-                      ))}
-                    </select>
+                    <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                      <select
+                        value={selected.parent_id ? (selected.owner_id || '__inherit__') : effectiveSelectedOwnerId}
+                        onChange={e => handleOwnerChange(selected.id, e.target.value)}
+                        style={{
+                          width: '100%',
+                          background: 'var(--surface)',
+                          color: 'var(--text)',
+                          border: '1px solid var(--border)',
+                          borderRadius: 6,
+                          padding: '4px 28px 4px 8px',
+                          fontSize: 12,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {selected.parent_id ? (
+                          <option value="__inherit__">{inheritedOwnerLabel}</option>
+                        ) : sharedOwner ? (
+                          <option value={sharedOwner.id}>{sharedOwner.name}</option>
+                        ) : null}
+                        {personalOwners.map(owner => (
+                          <option key={owner.id} value={owner.id}>{owner.name}</option>
+                        ))}
+                      </select>
+                      {selected.parent_id && !selected.owner_id ? (
+                        <span
+                          style={{
+                            position: 'absolute',
+                            left: 8,
+                            top: '50%',
+                            transform: 'translateY(-50%)',
+                            right: 28,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            minWidth: 0,
+                            paddingRight: 4,
+                            background: 'var(--surface)',
+                            pointerEvents: 'none',
+                          }}
+                        >
+                          <span
+                            style={{
+                              minWidth: 0,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              color: 'var(--text)',
+                              fontSize: 12,
+                            }}
+                          >
+                            {inheritedOwnerLabel}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 9.5,
+                              color: 'color-mix(in srgb, var(--text) 66%, var(--muted))',
+                              padding: '1px 6px',
+                              borderRadius: 999,
+                              border: '1px solid color-mix(in srgb, var(--border) 92%, transparent)',
+                              background: 'color-mix(in srgb, var(--surface2) 92%, var(--surface))',
+                              whiteSpace: 'nowrap',
+                              fontStyle: 'italic',
+                              lineHeight: 1.15,
+                              flexShrink: 0,
+                            }}
+                          >
+                            inherited
+                          </span>
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                 ) : null}
 

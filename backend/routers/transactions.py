@@ -365,7 +365,7 @@ def spending_by_group(
             placeholders = ','.join('?' * len(filter_ids))
             clauses.append(
                 f"(COALESCE(p.id, c.id) IS NULL OR "
-                f"COALESCE(p.owner_id, c.owner_id) IN ({placeholders}))"
+                f"COALESCE(c.owner_id, p.owner_id) IN ({placeholders}))"
             )
             params.extend(filter_ids)
 
@@ -376,7 +376,7 @@ def spending_by_group(
                 COALESCE(p.id,              c.id,              'uncategorized') AS group_id,
                 COALESCE(p.name,            c.name,            'Uncategorized') AS group_name,
                 COALESCE(p.color,           c.color,           '#9E9E9E')       AS group_color,
-                COALESCE(p.owner_id,        c.owner_id)                          AS group_owner_id,
+                COALESCE(c.owner_id,        p.owner_id)                          AS group_owner_id,
                 COALESCE(p.category_type,   c.category_type)                     AS category_type,
                 ABS(SUM(t.amount))                                               AS total,
                 COUNT(*)                                                         AS count
