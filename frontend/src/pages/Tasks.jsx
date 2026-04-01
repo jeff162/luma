@@ -76,11 +76,11 @@ export default function Tasks() {
   }, [])
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', maxWidth: 640, flexShrink: 0 }}>
         <PageHeader title="Tasks" />
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
         <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 24, maxWidth: 640 }}>
           Things that need your attention. Items clear automatically when resolved.
         </div>

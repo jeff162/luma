@@ -491,6 +491,19 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
+  useEffect(() => {
+    function handleContextMenu(e) {
+      const target = e.target
+      if (!(target instanceof HTMLElement)) return
+      const passThrough = target.closest('[data-browser-context-passthrough="true"]')
+      if (passThrough && passThrough === target) return
+      e.preventDefault()
+    }
+
+    document.addEventListener('contextmenu', handleContextMenu, true)
+    return () => document.removeEventListener('contextmenu', handleContextMenu, true)
+  }, [])
+
   async function handleLogout() {
     await api.logout().catch(() => {})
     setCurrentUser(null)

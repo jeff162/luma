@@ -3,6 +3,13 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { PageHeader, Spinner, EmptyState, CategoryMarker } from '../components/ui.jsx'
 import CategoryPicker from '../components/CategoryPicker.jsx'
+import {
+  BulkMoveToast,
+  CategoryTreeRow,
+  GroupEndDropZone,
+  SectionEndDropZone,
+  normalizeCategoryType,
+} from '../components/CategoryTreePrimitives.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import { usePagedTransactions } from '../components/detailShared.jsx'
@@ -23,81 +30,6 @@ function getSectionStorageKey(instanceId, userId) {
 
 function getGroupStorageKey(instanceId, userId) {
   return instanceId && userId ? `${GROUP_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
-}
-
-function normalizeType(value) {
-  return value === 'income' ? 'income' : 'expense'
-}
-
-function DeleteConfirm({ label, onConfirm, onCancel }) {
-  const ref = useRef(null)
-
-  useEffect(() => {
-    function handleClick(e) {
-      if (ref.current && !ref.current.contains(e.target)) onCancel()
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [onCancel])
-
-  return (
-    <div
-      ref={ref}
-      style={{
-        position: 'absolute',
-        right: 0,
-        top: '50%',
-        transform: 'translateY(-50%)',
-        zIndex: 100,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        background: 'var(--surface)',
-        border: '1px solid var(--border)',
-        borderRadius: 8,
-        padding: '5px 8px',
-        boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
-        whiteSpace: 'nowrap',
-      }}
-    >
-      <span style={{ fontSize: 12, color: 'var(--muted)' }}>{label}</span>
-      <button
-        onMouseDown={e => {
-          e.stopPropagation()
-          onConfirm()
-        }}
-        style={{
-          background: '#ef4444',
-          color: '#fff',
-          border: 'none',
-          borderRadius: 5,
-          padding: '3px 9px',
-          fontSize: 12,
-          cursor: 'pointer',
-          fontWeight: 600,
-        }}
-      >
-        Delete
-      </button>
-      <button
-        onMouseDown={e => {
-          e.stopPropagation()
-          onCancel()
-        }}
-        style={{
-          background: 'none',
-          border: '1px solid var(--border)',
-          color: 'var(--muted)',
-          borderRadius: 5,
-          padding: '3px 8px',
-          fontSize: 12,
-          cursor: 'pointer',
-        }}
-      >
-        Cancel
-      </button>
-    </div>
-  )
 }
 
 function DeleteCategoryDialog({ category, preview, categories, replacementId, onReplacementChange, mode, onModeChange, onConfirm, onCancel, saving }) {
@@ -228,425 +160,6 @@ function DeleteCategoryDialog({ category, preview, categories, replacementId, on
   )
 }
 
-function EditableName({ value, isSelected, onSave, onFirstClick, disabled = false }) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(value)
-  const inputRef = useRef(null)
-
-  useEffect(() => {
-    if (!isSelected) setEditing(false)
-  }, [isSelected])
-
-  function handleClick(e) {
-    if (disabled) {
-      e.preventDefault()
-      e.stopPropagation()
-      return
-    }
-    e.stopPropagation()
-    if (!isSelected) {
-      onFirstClick()
-      return
-    }
-    if (!editing) {
-      setDraft(value)
-      setEditing(true)
-      setTimeout(() => inputRef.current?.select(), 0)
-    }
-  }
-
-  function commit() {
-    setEditing(false)
-    if (draft.trim() && draft.trim() !== value) onSave(draft.trim())
-  }
-
-  if (editing) {
-    return (
-      <input
-        ref={inputRef}
-        value={draft}
-        onChange={e => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={e => {
-          if (e.key === 'Enter') {
-            e.preventDefault()
-            commit()
-          }
-          if (e.key === 'Escape') setEditing(false)
-          e.stopPropagation()
-        }}
-        onClick={e => e.stopPropagation()}
-        style={{
-          background: 'var(--bg)',
-          color: 'var(--text)',
-          border: '1px solid var(--accent)',
-          borderRadius: 4,
-          padding: '1px 6px',
-          fontSize: 'inherit',
-          fontWeight: 'inherit',
-          width: Math.max(80, draft.length * 8 + 16),
-          outline: 'none',
-        }}
-      />
-    )
-  }
-
-  return (
-    <span
-      onClick={handleClick}
-      title={disabled ? undefined : isSelected ? 'Click to rename' : 'Click to select'}
-      style={{ cursor: disabled ? 'default' : isSelected ? 'text' : 'default', flex: 1 }}
-    >
-      {value}
-    </span>
-  )
-}
-
-let dragItem = null
-
-function BulkMoveToast({ move, onUndo, onDismiss }) {
-  const timerRef = useRef(null)
-  const intervalRef = useRef(null)
-  const startRef = useRef(Date.now())
-  const [progress, setProgress] = useState(100)
-
-  useEffect(() => {
-    startRef.current = Date.now()
-    intervalRef.current = setInterval(() => {
-      const pct = Math.max(0, 100 - ((Date.now() - startRef.current) / 6000) * 100)
-      setProgress(pct)
-    }, 50)
-    timerRef.current = setTimeout(onDismiss, 6000)
-    return () => {
-      clearTimeout(timerRef.current)
-      clearInterval(intervalRef.current)
-    }
-  }, [onDismiss])
-
-  return (
-    <div style={{
-      position: 'fixed',
-      right: 24,
-      bottom: 24,
-      zIndex: 850,
-      width: 320,
-      background: 'var(--surface)',
-      border: '1px solid var(--border)',
-      borderRadius: 12,
-      boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-      overflow: 'hidden',
-    }}>
-      <div style={{ height: 3, background: 'var(--surface2)' }}>
-        <div style={{ height: '100%', width: `${progress}%`, background: 'var(--accent)', transition: 'width 0.1s linear' }} />
-      </div>
-      <div style={{ padding: '14px 16px' }}>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
-          Moved {move.count} categor{move.count === 1 ? 'y' : 'ies'}
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-          Added to {move.targetGroupName}
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            onClick={onUndo}
-            style={{
-              flex: 1,
-              background: 'var(--accent)',
-              color: '#fff',
-              border: 'none',
-              borderRadius: 7,
-              padding: '7px 0',
-              fontSize: 13,
-              fontWeight: 500,
-              cursor: 'pointer',
-            }}
-          >
-            Undo
-          </button>
-          <button
-            onClick={onDismiss}
-            style={{
-              background: 'var(--surface2)',
-              color: 'var(--muted)',
-              border: '1px solid var(--border)',
-              borderRadius: 7,
-              padding: '7px 11px',
-              fontSize: 12,
-              cursor: 'pointer',
-            }}
-          >
-            Dismiss
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function CategoryRow({
-  cat,
-  isChild,
-  isSelected,
-  bulkMoveMode = false,
-  bulkChecked = false,
-  isCollapsed = false,
-  canCollapse = false,
-  onToggleCollapse,
-  onSelect,
-  onRename,
-  onDelete,
-  onToggleBulkChecked,
-  onDropRow,
-  onOpenContextMenu,
-  onDragStartRow,
-}) {
-  const [dragOver, setDragOver] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState(false)
-
-  function canAcceptDrop() {
-    if (!dragItem || dragItem.id === cat.id) return false
-    if (dragItem.childIds?.includes(cat.id)) return false
-    if (isChild && dragItem.isGroup) return false
-    return true
-  }
-
-  return (
-    <div
-      draggable={!bulkMoveMode}
-      onDragStart={e => {
-        if (bulkMoveMode) {
-          e.preventDefault()
-          return
-        }
-        dragItem = onDragStartRow?.(cat) ?? {
-          id: cat.id,
-          parentId: cat.parent_id,
-          isGroup: !cat.parent_id,
-          categoryType: normalizeType(cat.category_type),
-        }
-        e.dataTransfer.effectAllowed = 'move'
-      }}
-      onDragOver={e => {
-        if (!canAcceptDrop()) return
-        e.preventDefault()
-        setDragOver(true)
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={e => {
-        e.preventDefault()
-        setDragOver(false)
-        if (!canAcceptDrop()) {
-          dragItem = null
-          return
-        }
-        const rect = e.currentTarget.getBoundingClientRect()
-        const dropPosition = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
-        onDropRow(dragItem, cat, dropPosition)
-        dragItem = null
-      }}
-      onClick={e => {
-        if (bulkMoveMode) return
-        if (!confirmDelete) onSelect(cat, e)
-      }}
-      onContextMenu={e => {
-        e.preventDefault()
-        e.stopPropagation()
-        onOpenContextMenu(e, cat)
-      }}
-      style={{
-        position: 'relative',
-        display: 'flex',
-        alignItems: 'center',
-        gap: isChild ? 5 : 2,
-        padding: isChild ? '2px 9px 2px 46px' : '4px 9px 4px 11px',
-        cursor: 'grab',
-        userSelect: 'none',
-        borderBottom: '1px solid var(--border)',
-        background: dragOver
-          ? 'var(--surface2)'
-          : isSelected
-            ? 'color-mix(in srgb, var(--accent) 12%, var(--surface))'
-            : 'transparent',
-        fontWeight: isChild ? 400 : 600,
-        fontSize: 12,
-        transition: 'background 0.1s',
-      }}
-    >
-      {canCollapse ? (
-        <button
-          onClick={e => {
-            e.stopPropagation()
-            onToggleCollapse?.(cat.id)
-          }}
-          title={isCollapsed ? 'Expand group' : 'Collapse group'}
-          style={{
-            background: 'none',
-            border: '1px solid var(--border)',
-            color: 'var(--muted)',
-            cursor: 'pointer',
-            fontSize: 12,
-            width: 19,
-            height: 19,
-            padding: 0,
-            flexShrink: 0,
-            borderRadius: 5,
-            display: 'grid',
-            placeItems: 'center',
-            lineHeight: 1,
-            backgroundColor: 'var(--surface2)',
-            marginLeft: 29,
-          }}
-        >
-          {isCollapsed ? '+' : '-'}
-        </button>
-      ) : (
-        <span style={{ width: 19, flexShrink: 0 }} />
-      )}
-      {bulkMoveMode ? (
-        <button
-          onClick={e => {
-            e.stopPropagation()
-            onToggleBulkChecked?.(cat)
-          }}
-          title={isChild ? (bulkChecked ? 'Deselect category' : 'Select category') : (bulkChecked ? 'Deselect group categories' : 'Select group categories')}
-          style={{
-            width: 17,
-            height: 17,
-            flexShrink: 0,
-            borderRadius: 4,
-            border: `1px solid ${bulkChecked ? 'var(--accent)' : 'var(--border)'}`,
-            background: bulkChecked ? 'var(--accent)' : 'var(--surface)',
-            color: bulkChecked ? '#fff' : 'transparent',
-            display: 'grid',
-            placeItems: 'center',
-            fontSize: 11,
-            lineHeight: 1,
-            cursor: 'pointer',
-            padding: 0,
-          }}
-        >
-          {bulkChecked ? '✓' : ''}
-        </button>
-      ) : null}
-      <span style={{ color: 'var(--border)', fontSize: 10, flexShrink: 0, marginLeft: isChild ? 0 : -2 }}>...</span>
-      <span style={{ display: 'inline-flex', alignItems: 'center', marginRight: isChild ? 0 : 2 }}>
-        <CategoryMarker kind={isChild ? 'category' : 'group'} />
-      </span>
-      <EditableName
-        value={cat.name}
-        isSelected={isSelected}
-        onSave={name => onRename(cat.id, name)}
-        onFirstClick={() => onSelect(cat)}
-        disabled={bulkMoveMode}
-      />
-      {bulkMoveMode ? null : !confirmDelete ? (
-        <button
-          onClick={e => {
-            e.stopPropagation()
-            setConfirmDelete(true)
-          }}
-          title="Delete"
-          style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--muted)',
-            cursor: 'pointer',
-            fontSize: 12,
-            padding: '1px 2px',
-            borderRadius: 4,
-            flexShrink: 0,
-            lineHeight: 1,
-          }}
-        >
-          x
-        </button>
-      ) : (
-        <DeleteConfirm
-          label={`Delete "${cat.name}"?`}
-          onConfirm={() => {
-            setConfirmDelete(false)
-            onDelete(cat.id)
-          }}
-          onCancel={() => setConfirmDelete(false)}
-        />
-      )}
-    </div>
-  )
-}
-
-function DropLane({ label, active, onDragOver, onDragLeave, onDrop }) {
-  return (
-    <div
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-      style={{
-        height: active ? 24 : 3,
-        margin: active ? '2px 8px' : '0 8px',
-        borderRadius: 4,
-        border: active ? '1px dashed var(--accent)' : 'none',
-        background: active ? 'color-mix(in srgb, var(--accent) 20%, transparent)' : 'transparent',
-        color: 'var(--accent)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        fontSize: 11,
-        transition: 'all 0.15s',
-      }}
-    >
-      {active ? label : ''}
-    </div>
-  )
-}
-
-function GroupEndDropZone({ group, onDropEnd }) {
-  const [dragOver, setDragOver] = useState(false)
-
-  return (
-    <DropLane
-      label={`Move to ${group.name}`}
-      active={dragOver}
-      onDragOver={e => {
-        if (!dragItem || dragItem.isGroup) return
-        e.preventDefault()
-        setDragOver(true)
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={e => {
-        e.preventDefault()
-        setDragOver(false)
-        if (!dragItem || dragItem.isGroup) return
-        onDropEnd(dragItem, group)
-        dragItem = null
-      }}
-    />
-  )
-}
-
-function SectionEndDropZone({ sectionType, onDropEnd }) {
-  const [dragOver, setDragOver] = useState(false)
-
-  return (
-    <DropLane
-      label={`Move group to end of ${SECTION_META[sectionType].label}`}
-      active={dragOver}
-      onDragOver={e => {
-        if (!dragItem || !dragItem.isGroup) return
-        e.preventDefault()
-        setDragOver(true)
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={e => {
-        e.preventDefault()
-        setDragOver(false)
-        if (!dragItem || !dragItem.isGroup) return
-        onDropEnd(dragItem, sectionType)
-        dragItem = null
-      }}
-    />
-  )
-}
-
 function ContextMenu({
   x,
   y,
@@ -662,6 +175,7 @@ function ContextMenu({
   onStartBulkMove,
   onMoveHere,
   onCancelBulkMove,
+  onDelete,
   onClose,
 }) {
   const ref = useRef(null)
@@ -688,10 +202,10 @@ function ContextMenu({
     ? Math.max(viewportPadding, y - menuHeight)
     : Math.max(viewportPadding, Math.min(y, window.innerHeight - menuHeight - viewportPadding))
   const itemStyle = {
-    padding: '6px 14px',
+    padding: '4px 11px',
     fontSize: 12,
     cursor: 'pointer',
-    borderRadius: 6,
+    borderRadius: 5,
     display: 'block',
     width: '100%',
     textAlign: 'left',
@@ -699,6 +213,7 @@ function ContextMenu({
     border: 'none',
     color: 'var(--text)',
   }
+  const divider = <div style={{ height: 1, background: 'var(--border)', margin: '2px 0' }} />
 
   return (
     <div
@@ -717,18 +232,93 @@ function ContextMenu({
         minWidth: menuW,
       }}
     >
-      {bulkMoveMode && canMoveHere ? (
+      {bulkMoveMode ? (
+        canMoveHere ? (
+          <>
+            <button
+              style={itemStyle}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+              onMouseDown={e => {
+                e.preventDefault()
+                onMoveHere(target)
+              }}
+            >
+              Move here
+            </button>
+            <button
+              style={itemStyle}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+              onMouseDown={e => {
+                e.preventDefault()
+                onCancelBulkMove()
+              }}
+            >
+              Cancel bulk move
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={{ ...itemStyle, color: 'var(--muted)', cursor: 'default', opacity: 0.7 }}>
+              Select categories, then choose a destination group
+            </div>
+            {divider}
+            <button
+              style={itemStyle}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+              onMouseDown={e => {
+                e.preventDefault()
+                onCancelBulkMove()
+              }}
+            >
+              Cancel bulk move
+            </button>
+          </>
+        )
+      ) : (
         <>
+          {target.groupId ? (
+            <button
+              style={itemStyle}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+              onMouseDown={e => {
+                e.preventDefault()
+                onAddCategory(target)
+              }}
+            >
+              + Add category to "{target.groupName}"
+            </button>
+          ) : (
+            <div style={{ ...itemStyle, color: 'var(--muted)', cursor: 'default', opacity: 0.55 }}>
+              + Add category (right-click a group)
+            </div>
+          )}
           <button
             style={itemStyle}
             onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
             onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
             onMouseDown={e => {
               e.preventDefault()
-              onMoveHere(target)
+              onAddGroup(target)
             }}
           >
-            Move here
+            + New {SECTION_META[target.sectionType].label.toLowerCase()} group
+          </button>
+
+          {divider}
+          <button
+            style={itemStyle}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+            onMouseDown={e => {
+              e.preventDefault()
+              onExpandAll(target)
+            }}
+          >
+            Expand
           </button>
           <button
             style={itemStyle}
@@ -736,188 +326,190 @@ function ContextMenu({
             onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
             onMouseDown={e => {
               e.preventDefault()
-              onCancelBulkMove()
+              onCollapseAll(target)
             }}
           >
-            Cancel bulk move
+            Collapse
+          </button>
+          <button
+            style={itemStyle}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+            onMouseDown={e => {
+              e.preventDefault()
+              onAlphabetize(target)
+            }}
+          >
+            Alphabetize
+          </button>
+          {target.categoryId ? (
+            <button
+              style={itemStyle}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+              onMouseDown={e => {
+                e.preventDefault()
+                onAddRule(target)
+              }}
+            >
+              Add categorization rule
+            </button>
+          ) : null}
+          {target.removableId ? (
+            <button
+              style={{ ...itemStyle, color: target.removeInUse ? 'var(--danger)' : 'var(--text)' }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+              onMouseDown={e => {
+                e.preventDefault()
+                onDelete(target)
+              }}
+            >
+              Remove
+            </button>
+          ) : null}
+
+          {divider}
+          <button
+            style={itemStyle}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+            onMouseDown={e => {
+              e.preventDefault()
+              onStartBulkMove(target)
+            }}
+          >
+            Bulk move
           </button>
         </>
-      ) : bulkMoveMode ? (
-        <div style={{ ...itemStyle, color: 'var(--muted)', cursor: 'default', opacity: 0.7 }}>
-          Select categories, then choose a destination group
-        </div>
-      ) : target.groupId ? (
-        <button
-          style={itemStyle}
-          onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-          onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-          onMouseDown={e => {
-            e.preventDefault()
-            onAddCategory(target)
-          }}
-        >
-          + Add category to "{target.groupName}"
-        </button>
-      ) : (
-        <div style={{ ...itemStyle, color: 'var(--muted)', cursor: 'default', opacity: 0.55 }}>
-          + Add category (right-click a group)
-        </div>
       )}
-      {!bulkMoveMode ? (
-        <button
-          style={itemStyle}
-          onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-          onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-          onMouseDown={e => {
-            e.preventDefault()
-            onAddGroup(target)
-          }}
-        >
-          + New {SECTION_META[target.sectionType].label.toLowerCase()} group
-        </button>
-      ) : null}
-      {!bulkMoveMode ? (
-        target.categoryId ? (
-          <button
-            style={itemStyle}
-            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-          onMouseDown={e => {
-            e.preventDefault()
-            onAddRule(target)
-          }}
-        >
-          Add categorization rule
-        </button>
-        ) : null
-      ) : null}
-      <div style={{ height: 1, background: 'var(--border)', margin: '3px 0' }} />
-      <button
-        style={itemStyle}
-        onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-        onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-        onMouseDown={e => {
-          e.preventDefault()
-          onExpandAll(target)
-        }}
-      >
-        Expand all
-      </button>
-      <button
-        style={itemStyle}
-        onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-        onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-        onMouseDown={e => {
-          e.preventDefault()
-          onCollapseAll(target)
-        }}
-      >
-        Collapse all
-      </button>
-      <div style={{ height: 1, background: 'var(--border)', margin: '3px 0' }} />
-      <button
-        style={itemStyle}
-        onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-        onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-        onMouseDown={e => {
-          e.preventDefault()
-          onAlphabetize(target)
-        }}
-      >
-        Alphabetize
-      </button>
-      {!bulkMoveMode ? (
-        <button
-          style={itemStyle}
-          onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-          onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-          onMouseDown={e => {
-            e.preventDefault()
-            onStartBulkMove(target)
-          }}
-        >
-          Bulk move
-        </button>
-      ) : !canMoveHere ? (
-        <button
-          style={itemStyle}
-          onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-          onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-          onMouseDown={e => {
-            e.preventDefault()
-            onCancelBulkMove()
-          }}
-        >
-          Cancel bulk move
-        </button>
-      ) : null}
     </div>
   )
 }
 
-function InlineAddForm({ label, value, onNameChange, onSubmit, onCancel }) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 6,
-        alignItems: 'center',
-        padding: '8px 10px 8px 38px',
-        borderTop: '1px solid var(--border)',
-        flexWrap: 'wrap',
-        background: 'var(--surface2)',
-      }}
-    >
-      <input
-        autoFocus
-        value={value}
-        onChange={e => onNameChange(e.target.value)}
-        onKeyDown={e => {
-          if (e.key === 'Enter') onSubmit()
-          if (e.key === 'Escape') onCancel()
-        }}
-        placeholder={label}
-        style={{
-          flex: 1,
-          background: 'var(--surface)',
-          color: 'var(--text)',
-          border: '1px solid var(--border)',
-          borderRadius: 999,
-          padding: '6px 12px',
-          fontSize: 13,
-          outline: 'none',
-        }}
+function InlineAddForm({ label, value, onNameChange, onSubmit, onCancel, indent = 'category' }) {
+  if (indent === 'category') {
+    return (
+      <InlineCategoryDraftRow
+        onSubmit={onSubmit}
+        onCancel={onCancel}
       />
-      <button
-        onClick={onSubmit}
-        style={{
-          background: 'var(--accent)',
-          color: '#fff',
-          border: 'none',
-          borderRadius: 999,
-          padding: '6px 12px',
-          fontSize: 12,
-          cursor: 'pointer',
-        }}
-      >
-        Add
-      </button>
-      <button
-        onClick={onCancel}
-        style={{
-          background: 'none',
-          border: 'none',
-          color: 'var(--muted)',
-          cursor: 'pointer',
-          fontSize: 14,
-          width: 28,
-          height: 28,
-          borderRadius: 999,
-        }}
-      >
-        x
-      </button>
-    </div>
+    )
+  }
+
+  return (
+    <InlineGroupDraftRow
+      onSubmit={onSubmit}
+      onCancel={onCancel}
+    />
+  )
+}
+
+function InlineGroupDraftRow({ onSubmit, onCancel }) {
+  const draftGroup = {
+    id: '__new-group__',
+    name: '',
+    parent_id: null,
+    category_type: 'expense',
+    children: [],
+  }
+  return (
+    <CategoryTreeRow
+      cat={draftGroup}
+      isChild={false}
+      isSelected={true}
+      draggable={false}
+      renameDisabled={false}
+      showDelete={false}
+      canCollapse={false}
+      isCollapsed={false}
+      autoEditToken={1}
+      autoEditPlaceholder="Group name"
+      onAutoEditConsumed={() => {}}
+      onToggleCollapse={() => {}}
+      onSelect={() => {}}
+      onRename={(_, name) => onSubmit(name)}
+      onDelete={() => {}}
+      trailingContent={
+        <button
+          onMouseDown={e => {
+            e.preventDefault()
+            e.stopPropagation()
+          }}
+          onClick={e => {
+            e.preventDefault()
+            e.stopPropagation()
+            onCancel()
+          }}
+          title="Cancel"
+          style={{
+            background: 'none',
+            border: 'none',
+            color: 'var(--muted)',
+            cursor: 'pointer',
+            fontSize: 12,
+            padding: '1px 2px',
+            borderRadius: 4,
+            flexShrink: 0,
+            lineHeight: 1,
+          }}
+        >
+          x
+        </button>
+      }
+    />
+  )
+}
+
+function InlineCategoryDraftRow({ onSubmit, onCancel }) {
+  const draftCategory = {
+    id: '__new-category__',
+    name: '',
+    parent_id: '__draft-parent__',
+    category_type: 'expense',
+  }
+  return (
+    <CategoryTreeRow
+      cat={draftCategory}
+      isChild={true}
+      isSelected={true}
+      draggable={false}
+      renameDisabled={false}
+      showDelete={false}
+      autoEditToken={1}
+      autoEditPlaceholder="category name"
+      onAutoEditConsumed={() => {}}
+      onSelect={() => {}}
+      onRename={(_, name) => onSubmit(name)}
+      onDelete={() => {}}
+      trailingContent={
+        <button
+          onMouseDown={e => {
+            e.preventDefault()
+            e.stopPropagation()
+          }}
+          onClick={e => {
+            e.preventDefault()
+            e.stopPropagation()
+            onCancel()
+          }}
+          title="Cancel"
+          style={{
+            background: 'none',
+            border: 'none',
+            color: 'var(--muted)',
+            cursor: 'pointer',
+            fontSize: 12,
+            padding: '1px 2px',
+            borderRadius: 4,
+            flexShrink: 0,
+            lineHeight: 1,
+          }}
+        >
+          x
+        </button>
+      }
+    />
   )
 }
 
@@ -964,6 +556,7 @@ export default function Categories() {
   const [tree, setTree] = useState([])
   const [flatCats, setFlatCats] = useState([])
   const [owners, setOwners] = useState([])
+  const [categoryUsage, setCategoryUsage] = useState({})
   const [matchingTxnsTotal, setMatchingTxnsTotal] = useState(0)
   const [selected, setSelected] = useState(null)
   const [selectedCategoryIds, setSelectedCategoryIds] = useState([])
@@ -1027,12 +620,14 @@ export default function Categories() {
   }, [])
 
   const loadCategories = useCallback(async (selectedId = selectedRef.current?.id) => {
-    const [nextTree, nextFlat] = await Promise.all([
+    const [nextTree, nextFlat, nextUsage] = await Promise.all([
       api.getCategoryTree(),
       api.getCategories(),
+      api.getCategoryUsageSummary(),
     ])
     setTree(nextTree)
     setFlatCats(nextFlat)
+    setCategoryUsage(nextUsage || {})
     setLoading(false)
     if (selectedId) setSelected(nextFlat.find(cat => cat.id === selectedId) || null)
     setSelectedCategoryIds(prev => prev.filter(id => nextFlat.some(cat => cat.id === id && cat.parent_id)))
@@ -1064,8 +659,37 @@ export default function Categories() {
   }, [dbInstanceId, userId, collapsedGroups, collapseStateLoaded])
 
   const groupsBySection = {
-    income: tree.filter(group => normalizeType(group.category_type) === 'income'),
-    expense: tree.filter(group => normalizeType(group.category_type) === 'expense'),
+    income: tree.filter(group => normalizeCategoryType(group.category_type) === 'income'),
+    expense: tree.filter(group => normalizeCategoryType(group.category_type) === 'expense'),
+  }
+
+  function getUsageSummaryForNode(cat) {
+    if (!cat) {
+      return { txn_count: 0, rule_count: 0, profile_mapping_count: 0, batch_mapping_count: 0, is_in_use: false }
+    }
+    const direct = categoryUsage?.[cat.id] || { txn_count: 0, rule_count: 0, profile_mapping_count: 0, batch_mapping_count: 0, is_in_use: false }
+    if (cat.parent_id) return direct
+    const aggregate = {
+      txn_count: direct.txn_count || 0,
+      rule_count: direct.rule_count || 0,
+      profile_mapping_count: direct.profile_mapping_count || 0,
+      batch_mapping_count: direct.batch_mapping_count || 0,
+      is_in_use: !!direct.is_in_use,
+    }
+    for (const child of cat.children || []) {
+      const childUsage = categoryUsage?.[child.id] || {}
+      aggregate.txn_count += childUsage.txn_count || 0
+      aggregate.rule_count += childUsage.rule_count || 0
+      aggregate.profile_mapping_count += childUsage.profile_mapping_count || 0
+      aggregate.batch_mapping_count += childUsage.batch_mapping_count || 0
+    }
+    aggregate.is_in_use = !!(
+      aggregate.txn_count ||
+      aggregate.rule_count ||
+      aggregate.profile_mapping_count ||
+      aggregate.batch_mapping_count
+    )
+    return aggregate
   }
 
   const visibleChildIds = ['income', 'expense'].flatMap(sectionType => {
@@ -1163,7 +787,7 @@ export default function Categories() {
   }
 
   async function moveGroup(dragged, sectionType, targetIndex = null) {
-    const fromSection = normalizeType(dragged.categoryType)
+    const fromSection = normalizeCategoryType(dragged.categoryType)
     const targetIds = groupsBySection[sectionType].map(group => group.id).filter(id => id !== dragged.id)
     const insertAt = targetIndex == null ? targetIds.length : targetIndex
     targetIds.splice(insertAt, 0, dragged.id)
@@ -1246,7 +870,7 @@ export default function Categories() {
         ? flatCats.find(cat => cat.id === targetCat.parent_id)
         : targetCat
       if (!targetGroup) return
-      const sectionType = normalizeType(targetGroup.category_type)
+      const sectionType = normalizeCategoryType(targetGroup.category_type)
       const baseIndex = groupsBySection[sectionType].findIndex(group => group.id === targetGroup.id)
       const targetIndex = dropPosition === 'before' ? baseIndex : baseIndex + 1
       await moveGroup(dragged, sectionType, targetIndex)
@@ -1358,7 +982,7 @@ export default function Categories() {
         id: cat.id,
         parentId: cat.parent_id,
         isGroup: true,
-        categoryType: normalizeType(cat.category_type),
+        categoryType: normalizeCategoryType(cat.category_type),
       }
     }
     const multiSelected = selectedCategoryIds.includes(cat.id) && selectedCategoryIds.length > 1
@@ -1368,14 +992,14 @@ export default function Categories() {
         childIds: selectedCategoryIds.slice(),
         parentId: cat.parent_id,
         isGroup: false,
-        categoryType: normalizeType(cat.category_type),
+        categoryType: normalizeCategoryType(cat.category_type),
       }
     }
     return {
       id: cat.id,
       parentId: cat.parent_id,
       isGroup: false,
-      categoryType: normalizeType(cat.category_type),
+      categoryType: normalizeCategoryType(cat.category_type),
     }
   }
 
@@ -1388,26 +1012,31 @@ export default function Categories() {
   }
 
   function expandAll(target) {
-    const nextGroups = {}
-    tree.forEach(group => { nextGroups[group.id] = false })
-    setCollapsedSections({ income: false, expense: false })
-    setCollapsedGroups(nextGroups)
+    if (target.groupId) {
+      setCollapsedGroups(prev => ({ ...prev, [target.groupId]: false }))
+    } else {
+      const nextGroups = { ...collapsedGroups }
+      ;(groupsBySection[target.sectionType] || []).forEach(group => { nextGroups[group.id] = false })
+      setCollapsedGroups(nextGroups)
+      setCollapsedSections(prev => ({ ...prev, [target.sectionType]: false }))
+    }
     setContextMenu(null)
   }
 
   function collapseAll(target) {
-    const nextGroups = {}
-    tree.forEach(group => { nextGroups[group.id] = true })
-    setCollapsedGroups(nextGroups)
-    setCollapsedSections({ income: true, expense: true })
+    if (target.groupId) {
+      setCollapsedGroups(prev => ({ ...prev, [target.groupId]: true }))
+    } else {
+      const nextGroups = { ...collapsedGroups }
+      ;(groupsBySection[target.sectionType] || []).forEach(group => { nextGroups[group.id] = true })
+      setCollapsedGroups(nextGroups)
+      setCollapsedSections(prev => ({ ...prev, [target.sectionType]: true }))
+    }
     setContextMenu(null)
   }
 
   async function alphabetize(target) {
-    const sectionGroups = groupsBySection[target.sectionType] || []
-    const allGroupsCollapsedInSection = sectionGroups.length > 0 && sectionGroups.every(group => !!collapsedGroups[group.id])
-
-    if (target.groupId && !allGroupsCollapsedInSection) {
+    if (target.groupId) {
       const siblings = childrenForGroup(target.groupId)
         .slice()
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
@@ -1444,47 +1073,57 @@ export default function Categories() {
   function openCategoryForm(group) {
     setContextMenu(null)
     setBulkMoveMode(false)
-    setSelected(group)
+    setSelected(null)
     setSelectedCategoryIds([])
     setNewName('')
     setInlineForm({
       mode: 'category',
-      sectionType: normalizeType(group.category_type),
+      sectionType: normalizeCategoryType(group.category_type),
       parentId: group.id,
       groupName: group.name,
     })
   }
 
-  async function submitInlineForm() {
-    if (!inlineForm || !newName.trim()) return
-    if (inlineForm.mode === 'group') {
+  async function submitInlineForm(overrideName = null) {
+    if (!inlineForm) return
+    const activeInlineForm = inlineForm
+    const trimmedName = String(overrideName ?? newName).trim()
+    if (!trimmedName) return
+    let nextSelectedId = null
+    if (activeInlineForm.mode === 'group') {
       const created = await api.createCategory({
-        name: newName.trim(),
-        category_type: inlineForm.sectionType,
-        sort_order: groupsBySection[inlineForm.sectionType].length,
+        name: trimmedName,
+        category_type: activeInlineForm.sectionType,
+        sort_order: groupsBySection[activeInlineForm.sectionType].length,
       })
-      const nextIds = groupsBySection[inlineForm.sectionType].map(group => group.id)
-      const anchorIndex = inlineForm.anchorGroupId
-        ? nextIds.findIndex(id => id === inlineForm.anchorGroupId)
+      nextSelectedId = created.id
+      const nextIds = groupsBySection[activeInlineForm.sectionType].map(group => group.id)
+      const anchorIndex = activeInlineForm.anchorGroupId
+        ? nextIds.findIndex(id => id === activeInlineForm.anchorGroupId)
         : -1
       const insertAt = anchorIndex === -1
         ? nextIds.length
-        : inlineForm.insertPosition === 'before'
+        : activeInlineForm.insertPosition === 'before'
           ? anchorIndex
           : anchorIndex + 1
       nextIds.splice(insertAt, 0, created.id)
-      await persistGroupOrder(inlineForm.sectionType, nextIds)
+      await persistGroupOrder(activeInlineForm.sectionType, nextIds)
     } else {
-      await api.createCategory({
-        name: newName.trim(),
-        parent_id: inlineForm.parentId,
-        sort_order: childrenForGroup(inlineForm.parentId).length,
+      const created = await api.createCategory({
+        name: trimmedName,
+        parent_id: activeInlineForm.parentId,
+        sort_order: childrenForGroup(activeInlineForm.parentId).length,
       })
+      nextSelectedId = created.id
     }
-    const keepSelectedId = inlineForm.mode === 'category' ? inlineForm.parentId : null
+    await loadCategories(nextSelectedId)
     setNewName('')
     setInlineForm(null)
-    await loadCategories(keepSelectedId)
+    if (activeInlineForm.mode === 'category' && nextSelectedId) {
+      setSelectedCategoryIds([nextSelectedId])
+    } else {
+      setSelectedCategoryIds([])
+    }
   }
 
   async function undoBulkMove() {
@@ -1501,9 +1140,14 @@ export default function Categories() {
 
   function openContextMenu(e, cat, sectionTypeOverride = null) {
     const group = cat?.parent_id ? flatCats.find(item => item.id === cat.parent_id) : cat
-    const sectionType = sectionTypeOverride || normalizeType(group?.category_type)
+    const sectionType = sectionTypeOverride || normalizeCategoryType(group?.category_type)
     const rect = e.currentTarget?.getBoundingClientRect?.()
     const insertPosition = rect && e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    const usageSummary = cat ? getUsageSummaryForNode(cat) : null
+    if (cat) {
+      setSelected(cat)
+      setSelectedCategoryIds(cat.parent_id ? [cat.id] : [])
+    }
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
@@ -1512,6 +1156,8 @@ export default function Categories() {
       groupName: group?.name || '',
       categoryId: cat?.parent_id ? cat.id : null,
       categoryName: cat?.parent_id ? cat.name : '',
+      removableId: cat?.id || null,
+      removeInUse: !!usageSummary?.is_in_use,
       scope: group?.id ? 'group' : 'section',
       insertPosition,
     })
@@ -1579,7 +1225,7 @@ export default function Categories() {
   }
 
   const parentCategory = selected?.parent_id ? flatCats.find(cat => cat.id === selected.parent_id) : null
-  const selectedGroupType = normalizeType(selected?.category_type)
+  const selectedGroupType = normalizeCategoryType(selected?.category_type)
   const selectedCategories = selectedCategoryIds
     .map(id => flatCats.find(cat => cat.id === id))
     .filter(Boolean)
@@ -1589,7 +1235,6 @@ export default function Categories() {
     .map(id => flatCats.find(cat => cat.id === id))
     .filter(Boolean)
   const selectedCategoryIdSet = new Set(selectedCategoryIds)
-  const categoryOwners = owners.filter(owner => owner.name.toLowerCase() !== 'shared')
   const deleteReplacementCategories = deleteDialog
     ? flatCats.filter(cat => !deleteDialog.preview.affected_category_ids.includes(cat.id))
     : flatCats
@@ -1671,7 +1316,7 @@ export default function Categories() {
   }, [matchingTxnsKey, selectedCategoryFilter, selectedCategoryIdsFilter, filters.date?.start, filters.date?.end])
 
   return (
-    <div style={{ padding: 32, display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
+    <div data-browser-context-passthrough="true" style={{ padding: 32, display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
       <PageHeader title="Categories" />
       <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 20, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -1808,23 +1453,24 @@ export default function Categories() {
                       inlineForm.insertPosition !== 'before'
                     return (
                     <div key={group.id}>
-                      {showGroupFormBefore ? (
-                        <InlineAddForm
-                          label={`${sectionMeta.label} group name`}
-                          value={newName}
-                          onNameChange={setNewName}
-                          onSubmit={submitInlineForm}
-                          onCancel={() => setInlineForm(null)}
-                        />
-                      ) : null}
-                      <CategoryRow
+                        {showGroupFormBefore ? (
+                          <InlineAddForm
+                            label={`${sectionMeta.label} group name`}
+                            value={newName}
+                            onNameChange={setNewName}
+                            onSubmit={submitInlineForm}
+                            onCancel={() => setInlineForm(null)}
+                            indent="group"
+                          />
+                        ) : null}
+                      <CategoryTreeRow
                         cat={group}
                         isChild={false}
                         isSelected={selected?.id === group.id}
                         bulkMoveMode={bulkMoveMode}
                         bulkChecked={(group.children || []).length > 0 && (group.children || []).every(child => selectedCategoryIdSet.has(child.id))}
                         isCollapsed={groupCollapsed}
-                        canCollapse={true}
+                        canCollapse={(group.children || []).length > 0}
                         onToggleCollapse={toggleGroup}
                         onSelect={selectCategory}
                         onRename={handleRename}
@@ -1835,7 +1481,7 @@ export default function Categories() {
                         onDragStartRow={getDragPayload}
                       />
                       {!groupCollapsed ? (group.children || []).map(child => (
-                        <CategoryRow
+                        <CategoryTreeRow
                           key={child.id}
                           cat={child}
                           isChild={true}
@@ -1852,41 +1498,44 @@ export default function Categories() {
                         />
                       )) : null}
 
-                      {!groupCollapsed && inlineForm?.mode === 'category' && inlineForm.parentId === group.id ? (
-                        <InlineAddForm
-                          label={`New category in ${group.name}`}
-                          value={newName}
-                          onNameChange={setNewName}
-                          onSubmit={submitInlineForm}
-                          onCancel={() => setInlineForm(null)}
-                        />
-                      ) : null}
+                        {!groupCollapsed && inlineForm?.mode === 'category' && inlineForm.parentId === group.id ? (
+                          <InlineAddForm
+                            label={`New category in ${group.name}`}
+                            value={newName}
+                            onNameChange={setNewName}
+                            onSubmit={submitInlineForm}
+                            onCancel={() => setInlineForm(null)}
+                            indent="category"
+                          />
+                        ) : null}
 
                       <GroupEndDropZone group={group} onDropEnd={handleGroupDropEnd} />
-                      {showGroupFormAfter ? (
-                        <InlineAddForm
-                          label={`${sectionMeta.label} group name`}
-                          value={newName}
-                          onNameChange={setNewName}
-                          onSubmit={submitInlineForm}
-                          onCancel={() => setInlineForm(null)}
-                        />
-                      ) : null}
+                        {showGroupFormAfter ? (
+                          <InlineAddForm
+                            label={`${sectionMeta.label} group name`}
+                            value={newName}
+                            onNameChange={setNewName}
+                            onSubmit={submitInlineForm}
+                            onCancel={() => setInlineForm(null)}
+                            indent="group"
+                          />
+                        ) : null}
                     </div>
                     )
                   }) : null}
 
-                  {!sectionCollapsed && showSectionForm ? (
-                    <InlineAddForm
-                      label={`${sectionMeta.label} group name`}
-                      value={newName}
-                      onNameChange={setNewName}
-                      onSubmit={submitInlineForm}
-                      onCancel={() => setInlineForm(null)}
-                    />
-                  ) : null}
+                    {!sectionCollapsed && showSectionForm ? (
+                      <InlineAddForm
+                        label={`${sectionMeta.label} group name`}
+                        value={newName}
+                        onNameChange={setNewName}
+                        onSubmit={submitInlineForm}
+                        onCancel={() => setInlineForm(null)}
+                        indent="group"
+                      />
+                    ) : null}
 
-                  {!sectionCollapsed ? <SectionEndDropZone sectionType={sectionType} onDropEnd={handleSectionDropEnd} /> : null}
+                  {!sectionCollapsed ? <SectionEndDropZone sectionMeta={SECTION_META} sectionType={sectionType} onDropEnd={handleSectionDropEnd} /> : null}
                 </div>
               )
             })}
@@ -2000,8 +1649,8 @@ export default function Categories() {
                         cursor: 'pointer',
                       }}
                     >
-                      <option value="">- Shared -</option>
-                      {categoryOwners.map(owner => (
+                      <option value="">- Unassigned -</option>
+                      {owners.map(owner => (
                         <option key={owner.id} value={owner.id}>{owner.name}</option>
                       ))}
                     </select>
@@ -2098,6 +1747,11 @@ export default function Categories() {
           onStartBulkMove={startBulkMove}
           onMoveHere={moveSelectedCategoriesHere}
           onCancelBulkMove={cancelBulkMove}
+          onDelete={target => {
+            const id = target.categoryId || target.groupId
+            if (id) handleDelete(id)
+            setContextMenu(null)
+          }}
           onClose={() => setContextMenu(null)}
         />
       ) : null}

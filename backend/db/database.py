@@ -68,6 +68,9 @@ from pathlib import Path
 
 DB_PATH = os.getenv("DB_PATH", "fintrack.db")
 _current_db_path: ContextVar[str | None] = ContextVar("fintrack_current_db_path", default=None)
+SHARED_OWNER_ID = "shared-owner"
+SHARED_OWNER_NAME = "shared"
+SHARED_OWNER_COLOR = "#6366f1"
 
 
 def _normalize_db_path(db_path: str | None = None) -> str:
@@ -81,6 +84,40 @@ def set_current_db_path(db_path: str):
 
 def reset_current_db_path(token):
     _current_db_path.reset(token)
+
+
+def get_shared_owner_row(conn: sqlite3.Connection):
+    return conn.execute(
+        """
+        SELECT id, name, color
+        FROM owner
+        WHERE LOWER(name) = LOWER(?)
+        ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, name
+        LIMIT 1
+        """,
+        (SHARED_OWNER_NAME, SHARED_OWNER_ID),
+    ).fetchone()
+
+
+def get_shared_owner_id(conn: sqlite3.Connection) -> str | None:
+    row = get_shared_owner_row(conn)
+    return row["id"] if row else None
+
+
+def ensure_shared_owner(conn: sqlite3.Connection) -> str:
+    row = get_shared_owner_row(conn)
+    if row:
+        if row["name"] != SHARED_OWNER_NAME or row["id"] != SHARED_OWNER_ID:
+            conn.execute(
+                "UPDATE owner SET name = ?, color = ? WHERE id = ?",
+                (SHARED_OWNER_NAME, SHARED_OWNER_COLOR, row["id"]),
+            )
+        return row["id"]
+    conn.execute(
+        "INSERT INTO owner (id, name, color) VALUES (?, ?, ?)",
+        (SHARED_OWNER_ID, SHARED_OWNER_NAME, SHARED_OWNER_COLOR),
+    )
+    return SHARED_OWNER_ID
 
 
 @contextmanager
@@ -103,15 +140,20 @@ def get_db(db_path: str | None = None):
 # HOW TO ADD A MIGRATION:
 #   1. Write a function that makes the change idempotently (use IF NOT EXISTS,
 #      try/except on ALTER TABLE, etc.)
-#   2. Decorate it with @migration(N) where N = CURRENT_VERSION + 1
-#   3. Bump CURRENT_VERSION to N
-#   4. On next startup, run_migrations() will detect the version mismatch and
+#   2. Update init_db() so fresh databases are created directly in the new
+#      schema shape instead of relying on the migration chain.
+#   3. Decorate the upgrade step with @migration(N) where N = CURRENT_VERSION + 1
+#   4. Bump CURRENT_VERSION to N
+#   5. If migration coverage is needed, add/update a historical test DB creator
+#      under backend/db/test_fixtures/ that can build a database at the
+#      pre-migration version for upgrade testing.
+#   6. On next startup, run_migrations() will detect the version mismatch and
 #      apply all pending migrations in order.
 #
 # Migrations run inside the same init_db() connection, so they can reference
 # any helper functions defined in this file.
 
-CURRENT_VERSION = 20
+CURRENT_VERSION = 1
 
 MIGRATIONS = {}
 
@@ -173,599 +215,12 @@ def run_migrations(conn):
     print(f"[db] database is now at version {CURRENT_VERSION}")
 
 
-def _table_sql_contains(conn, table_name: str, needle: str) -> bool:
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
-        (table_name,),
-    ).fetchone()
-    sql = row["sql"] if row and row["sql"] else ""
-    return needle.lower() in sql.lower()
-
-
-def _rebuild_category_foreign_key_tables(conn):
-    """Repair tables whose FKs still point at category_old after the category rebuild."""
-    needs_rule_rebuild = _table_sql_contains(conn, "category_rule", "category_old")
-    needs_txn_rebuild = _table_sql_contains(conn, "txn", "category_old")
-
-    if not needs_rule_rebuild and not needs_txn_rebuild:
-        return
-
-    conn.execute("PRAGMA foreign_keys=OFF")
-    try:
-        if needs_rule_rebuild:
-            conn.execute("ALTER TABLE category_rule RENAME TO category_rule_old")
-            conn.execute("""
-                CREATE TABLE category_rule (
-                    id          TEXT PRIMARY KEY,
-                    category_id TEXT NOT NULL REFERENCES category(id) ON DELETE CASCADE,
-                    keyword     TEXT NOT NULL,
-                    priority    INTEGER NOT NULL DEFAULT 5,
-                    amount_min  REAL,
-                    amount_max  REAL,
-                    clean_name  TEXT,
-                    owner_id    TEXT REFERENCES owner(id) ON DELETE SET NULL,
-                    account_id  TEXT REFERENCES account(id) ON DELETE SET NULL
-                )
-            """)
-            conn.execute("""
-                INSERT INTO category_rule (id, category_id, keyword, priority, amount_min, amount_max, clean_name, owner_id, account_id)
-                SELECT id, category_id, keyword, priority, amount_min, amount_max, clean_name, owner_id, account_id
-                FROM category_rule_old
-            """)
-            conn.execute("DROP TABLE category_rule_old")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_category ON category_rule(category_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_keyword ON category_rule(keyword)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_account ON category_rule(account_id)")
-
-        if needs_txn_rebuild:
-            conn.execute("ALTER TABLE txn RENAME TO txn_old")
-            conn.execute("""
-                CREATE TABLE txn (
-                    id                   TEXT PRIMARY KEY,
-                    plaid_transaction_id TEXT UNIQUE,
-                    account_id           TEXT NOT NULL REFERENCES account(id),
-                    category_id          TEXT REFERENCES category(id) ON DELETE SET NULL,
-                    amount               REAL NOT NULL,
-                    merchant_name        TEXT,
-                    display_name         TEXT,
-                    raw_name             TEXT,
-                    date                 TEXT NOT NULL,
-                    is_pending           INTEGER NOT NULL DEFAULT 0,
-                    category_overridden  INTEGER NOT NULL DEFAULT 0,
-                    imported_category    TEXT,
-                    notes                TEXT,
-                    owner_id             TEXT REFERENCES owner(id) ON DELETE SET NULL,
-                    content_hash         TEXT,
-                    import_batch_id      TEXT REFERENCES import_batch(id) ON DELETE SET NULL
-                )
-            """)
-            conn.execute("""
-                INSERT INTO txn (
-                    id, plaid_transaction_id, account_id, category_id, amount,
-                    merchant_name, display_name, raw_name, date, is_pending,
-                    category_overridden, imported_category, notes, owner_id,
-                    content_hash, import_batch_id
-                )
-                SELECT
-                    id, plaid_transaction_id, account_id, category_id, amount,
-                    merchant_name, display_name, raw_name, date, is_pending,
-                    category_overridden, imported_category, notes, owner_id,
-                    content_hash, import_batch_id
-                FROM txn_old
-            """)
-            conn.execute("DROP TABLE txn_old")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_date ON txn(date)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_account ON txn(account_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_category ON txn(category_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_owner ON txn(owner_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_batch ON txn(import_batch_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_hash ON txn(content_hash)")
-    finally:
-        conn.execute("PRAGMA foreign_keys=ON")
-
-
 # ── Migrations ────────────────────────────────────────────────────────────────
 
 @migration(1)
-def m1_initial(conn):
-    """Baseline — tables already created by init_db for new installs."""
+def m1_baseline(conn):
+    """Baseline schema version for the current direct-bootstrap database."""
     pass
-
-
-@migration(2)
-def m2_merchant_renames(conn):
-    """Add merchant_rename table for normalizing messy Plaid merchant names."""
-    init_merchant_renames(conn)
-
-
-@migration(3)
-def m3_subcategory_colors(conn):
-    """Legacy no-op: seeded category colors are no longer maintained separately."""
-    pass
-
-
-@migration(4)
-def m4_owners(conn):
-    """
-    Add multi-owner support.
-    - owner table: named owners (e.g. Alice, Bob, Shared)
-    - account.owner_id: which owner an account belongs to
-    - category.owner_id: which owner a category group belongs to (leaves inherit)
-    - category_rule.owner_id: scope a rule to a specific owner (NULL = applies to all)
-    - txn.owner_id: denormalized from account for fast filtering; backfilled here
-    """
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS owner (
-            id    TEXT PRIMARY KEY,
-            name  TEXT NOT NULL UNIQUE,
-            color TEXT NOT NULL DEFAULT '#6366f1'
-        )
-    """)
-
-    # Add owner_id to account (ON DELETE SET NULL so deleting an owner
-    # gracefully disassociates rather than cascading deletes)
-    try:
-        conn.execute(
-            "ALTER TABLE account ADD COLUMN owner_id TEXT REFERENCES owner(id) ON DELETE SET NULL"
-        )
-    except Exception:
-        pass
-
-    # Add owner_id to category (groups use it; leaves store it too for future use)
-    try:
-        conn.execute(
-            "ALTER TABLE category ADD COLUMN owner_id TEXT REFERENCES owner(id) ON DELETE SET NULL"
-        )
-    except Exception:
-        pass
-
-    # Add owner_id to category_rule (NULL = applies regardless of owner)
-    try:
-        conn.execute(
-            "ALTER TABLE category_rule ADD COLUMN owner_id TEXT REFERENCES owner(id) ON DELETE SET NULL"
-        )
-    except Exception:
-        pass
-
-    # Add owner_id to txn (denormalized from account; NULL = unassigned)
-    try:
-        conn.execute(
-            "ALTER TABLE txn ADD COLUMN owner_id TEXT REFERENCES owner(id) ON DELETE SET NULL"
-        )
-    except Exception:
-        pass
-
-    # Backfill txn.owner_id from account.owner_id for existing transactions
-    conn.execute("""
-        UPDATE txn
-        SET    owner_id = (
-            SELECT a.owner_id
-            FROM   account a
-            WHERE  a.id = txn.account_id
-        )
-        WHERE  owner_id IS NULL
-    """)
-
-    # Index for fast owner-filtered queries
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_txn_owner ON txn(owner_id)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_account_owner ON account(owner_id)"
-    )
-
-
-@migration(5)
-def m5_import_export(conn):
-    """
-    Add CSV import infrastructure:
-    - csv_import_profile: saved column-mapping rules per source (Chase, Riverstone, etc.)
-    - import_batch: one record per import run, enables undo
-    - txn.content_hash: hash of (date+amount+description) for duplicate detection
-    - txn.import_batch_id: links transaction to the batch that created it (NULL = Plaid)
-    """
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS csv_import_profile (
-            id                  TEXT PRIMARY KEY,
-            name                TEXT NOT NULL,
-            filename_pattern    TEXT,
-            header_fingerprint  TEXT,
-            column_map          TEXT NOT NULL DEFAULT '{}',
-            account_id          TEXT REFERENCES account(id) ON DELETE SET NULL,
-            date_format         TEXT NOT NULL DEFAULT '%Y-%m-%d',
-            amount_convention   TEXT NOT NULL DEFAULT 'single_signed',
-            skip_rows           INTEGER NOT NULL DEFAULT 0,
-            apply_categorization INTEGER NOT NULL DEFAULT 1,
-            notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-    """)
-
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS import_batch (
-            id            TEXT PRIMARY KEY,
-            profile_id    TEXT REFERENCES csv_import_profile(id) ON DELETE SET NULL,
-            filename      TEXT NOT NULL,
-            file_content_hash TEXT,
-            imported_at   TEXT NOT NULL DEFAULT (datetime('now')),
-            row_count     INTEGER NOT NULL DEFAULT 0,
-            skipped_count INTEGER NOT NULL DEFAULT 0,
-            status        TEXT NOT NULL DEFAULT 'completed'
-        )
-    """)
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_import_batch_file_hash ON import_batch(file_content_hash)"
-    )
-
-    try:
-        conn.execute("ALTER TABLE txn ADD COLUMN content_hash TEXT")
-    except Exception:
-        pass
-
-    try:
-        conn.execute(
-            "ALTER TABLE txn ADD COLUMN import_batch_id TEXT "
-            "REFERENCES import_batch(id) ON DELETE SET NULL"
-        )
-    except Exception:
-        pass
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_txn_batch  ON txn(import_batch_id)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_txn_hash   ON txn(content_hash)"
-    )
-
-
-@migration(6)
-def m6_import_batch_accounts(conn):
-    """
-    Extend import tracking:
-    - import_batch_account: which accounts were imported (or skipped) per batch.
-      Enables duplicate detection — "has account X from file Y already been imported?"
-    - import_batch.config_snapshot: full JSON of the import settings used, so
-      re-importing the same file can restore all column and account mappings.
-    """
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS import_batch_account (
-            batch_id    TEXT NOT NULL REFERENCES import_batch(id) ON DELETE CASCADE,
-            account_id  TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
-            csv_value   TEXT NOT NULL,
-            row_count   INTEGER NOT NULL DEFAULT 0,
-            was_skipped INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (batch_id, account_id)
-        )
-    """)
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_iba_account ON import_batch_account(account_id)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_iba_batch   ON import_batch_account(batch_id)"
-    )
-    try:
-        conn.execute("ALTER TABLE import_batch ADD COLUMN config_snapshot TEXT")
-    except Exception:
-        pass
-
-
-@migration(7)
-def m7_import_batch_account_nullable(conn):
-    """
-    Rebuild import_batch_account with:
-    - account_id nullable (skipped accounts may not have a FinTrack account mapped)
-    - PRIMARY KEY (batch_id, csv_value) instead of (batch_id, account_id) so
-      skipped-only entries can be stored without a real account reference
-    """
-    # Rename old table, create new one, migrate data, drop old
-    try:
-        conn.execute(
-            "ALTER TABLE import_batch_account RENAME TO import_batch_account_old"
-        )
-    except Exception:
-        return  # already migrated or doesn't exist
-
-    conn.execute("""
-        CREATE TABLE import_batch_account (
-            batch_id    TEXT NOT NULL REFERENCES import_batch(id) ON DELETE CASCADE,
-            csv_value   TEXT NOT NULL,
-            account_id  TEXT REFERENCES account(id) ON DELETE SET NULL,
-            row_count   INTEGER NOT NULL DEFAULT 0,
-            was_skipped INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (batch_id, csv_value)
-        )
-    """)
-    # Migrate existing data
-    conn.execute("""
-        INSERT OR IGNORE INTO import_batch_account
-            (batch_id, csv_value, account_id, row_count, was_skipped)
-        SELECT batch_id, csv_value, account_id, row_count, was_skipped
-        FROM   import_batch_account_old
-    """)
-    conn.execute("DROP TABLE import_batch_account_old")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_iba_account ON import_batch_account(account_id)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_iba_batch ON import_batch_account(batch_id)"
-    )
-
-
-@migration(8)
-def m8_import_batch_deduped_count(conn):
-    """
-    Add deduped_count to import_batch so the Recent Imports list can show
-    how many duplicate rows were skipped separately from account-skipped rows.
-    Existing rows default to 0 (unknown — they predate this column).
-    """
-    try:
-        conn.execute(
-            "ALTER TABLE import_batch ADD COLUMN deduped_count INTEGER NOT NULL DEFAULT 0"
-        )
-    except Exception:
-        pass  # column already exists
-
-
-@migration(9)
-def m9_category_exclude_from_totals(conn):
-    """
-    Add exclude_from_totals flag to category.
-    When set on a top-level group, all transactions in that group are omitted
-    from spending summaries, totals, and charts. Intended for groups like
-    Transfers and Credit Card Payments that should not appear in reports.
-    Defaults to 0 (included) for all existing categories.
-    """
-    try:
-        conn.execute(
-            "ALTER TABLE category ADD COLUMN exclude_from_totals INTEGER NOT NULL DEFAULT 0"
-        )
-    except Exception:
-        pass  # column already exists
-
-
-@migration(10)
-def m10_plaid_item_access_token_enc(conn):
-    """Add encrypted companion column for Plaid access tokens."""
-    try:
-        conn.execute("ALTER TABLE plaid_item ADD COLUMN access_token_enc TEXT")
-    except Exception:
-        pass
-
-
-@migration(11)
-def m11_category_type(conn):
-    """
-    Add category_type support for income-aware summaries.
-    Also creates top-level Income and Transfers groups if needed and reparents
-    the legacy Finance > Income / Transfer leaves under those groups.
-    """
-    import uuid
-
-    try:
-        conn.execute("ALTER TABLE category ADD COLUMN category_type TEXT")
-    except Exception:
-        pass
-
-    def upsert_group(name, color, cat_type=None, exclude=0):
-        row = conn.execute(
-            "SELECT id FROM category WHERE name = ? AND parent_id IS NULL",
-            (name,),
-        ).fetchone()
-        if row:
-            conn.execute(
-                "UPDATE category SET category_type = ?, exclude_from_totals = ? WHERE id = ?",
-                (cat_type, exclude, row["id"]),
-            )
-            return row["id"]
-        new_id = str(uuid.uuid4())
-        conn.execute(
-            """
-            INSERT INTO category (id, parent_id, name, color, category_type, exclude_from_totals)
-            VALUES (?, NULL, ?, ?, ?, ?)
-            """,
-            (new_id, name, color, cat_type, exclude),
-        )
-        return new_id
-
-    def ensure_leaf(parent_id, name, color):
-        row = conn.execute(
-            "SELECT id FROM category WHERE name = ? AND parent_id = ?",
-            (name, parent_id),
-        ).fetchone()
-        if row:
-            return row["id"]
-        new_id = str(uuid.uuid4())
-        conn.execute(
-            "INSERT INTO category (id, parent_id, name, color) VALUES (?, ?, ?, ?)",
-            (new_id, parent_id, name, color),
-        )
-        return new_id
-
-    income_group = upsert_group("Income", "#22c55e", cat_type="income", exclude=0)
-    transfers_group = upsert_group("Transfers", "#78909C", cat_type=None, exclude=1)
-
-    finance = conn.execute(
-        "SELECT id FROM category WHERE name = ? AND parent_id IS NULL",
-        ("Finance",),
-    ).fetchone()
-    if finance:
-        conn.execute(
-            "UPDATE category SET parent_id = ? WHERE name = ? AND parent_id = ?",
-            (income_group, "Income", finance["id"]),
-        )
-        conn.execute(
-            "UPDATE category SET parent_id = ? WHERE name = ? AND parent_id = ?",
-            (transfers_group, "Transfer", finance["id"]),
-        )
-
-    ensure_leaf(income_group, "Salary", "#22c55e")
-    ensure_leaf(income_group, "Freelance", "#16a34a")
-    ensure_leaf(income_group, "Investment", "#15803d")
-    ensure_leaf(income_group, "Refund", "#4ade80")
-    ensure_leaf(income_group, "Other Income", "#86efac")
-    ensure_leaf(transfers_group, "Credit Card Payment", "#78909C")
-    ensure_leaf(transfers_group, "Bank Transfer", "#90A4AE")
-
-
-@migration(14)
-def m14_txn_imported_category(conn):
-    """Persist raw category text imported from CSV files for post-import mapping."""
-    try:
-        conn.execute("ALTER TABLE txn ADD COLUMN imported_category TEXT")
-    except Exception:
-        pass
-
-
-@migration(15)
-def m15_backup_recipients(conn):
-    """Store optional public-key recipients for encrypted backups."""
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS backup_recipient (
-            id          TEXT PRIMARY KEY,
-            label       TEXT NOT NULL,
-            public_key  TEXT NOT NULL,
-            fingerprint TEXT NOT NULL UNIQUE,
-            algorithm   TEXT NOT NULL DEFAULT 'rsa-oaep-sha256',
-            enabled     INTEGER NOT NULL DEFAULT 1,
-            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-    """)
-
-
-@migration(16)
-def m16_txn_display_name(conn):
-    """Preserve original merchant_name while storing a separate UI display name."""
-    try:
-        conn.execute("ALTER TABLE txn ADD COLUMN display_name TEXT")
-    except Exception:
-        pass
-
-    conn.execute("""
-        UPDATE txn
-        SET    display_name = COALESCE(display_name, merchant_name, raw_name)
-        WHERE  display_name IS NULL
-    """)
-
-
-@migration(17)
-def m17_category_rule_account(conn):
-    """Allow category rules to target a specific account."""
-    try:
-        conn.execute(
-            "ALTER TABLE category_rule ADD COLUMN account_id TEXT REFERENCES account(id) ON DELETE SET NULL"
-        )
-    except Exception:
-        pass
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_rule_account ON category_rule(account_id)"
-    )
-
-
-@migration(18)
-def m18_remove_category_icons(conn):
-    """Drop the legacy category.icon column and rebuild the table without it."""
-    cols = {row["name"] for row in conn.execute("PRAGMA table_info(category)").fetchall()}
-    if "icon" not in cols:
-        return
-
-    conn.execute("PRAGMA foreign_keys=OFF")
-    try:
-        conn.execute("ALTER TABLE category RENAME TO category_old")
-        conn.execute("""
-            CREATE TABLE category (
-                id                  TEXT PRIMARY KEY,
-                parent_id           TEXT REFERENCES category(id) ON DELETE SET NULL,
-                name                TEXT NOT NULL,
-                color               TEXT NOT NULL DEFAULT '#9E9E9E',
-                category_type       TEXT,
-                sort_order          INTEGER NOT NULL DEFAULT 0,
-                exclude_from_totals INTEGER NOT NULL DEFAULT 0,
-                owner_id            TEXT REFERENCES owner(id) ON DELETE SET NULL
-            )
-        """)
-        conn.execute("""
-            INSERT INTO category (id, parent_id, name, color, category_type, sort_order, exclude_from_totals, owner_id)
-            SELECT id, parent_id, name, color, category_type, sort_order, COALESCE(exclude_from_totals, 0), owner_id
-            FROM category_old
-        """)
-        conn.execute("DROP TABLE category_old")
-    finally:
-        conn.execute("PRAGMA foreign_keys=ON")
-
-    _rebuild_category_foreign_key_tables(conn)
-
-
-@migration(19)
-def m19_repair_category_fk_targets(conn):
-    """Repair any tables whose category foreign keys still point at category_old."""
-    _rebuild_category_foreign_key_tables(conn)
-
-
-@migration(20)
-def m20_import_batch_file_hash(conn):
-    try:
-        conn.execute("ALTER TABLE import_batch ADD COLUMN file_content_hash TEXT")
-    except Exception:
-        pass
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_import_batch_file_hash ON import_batch(file_content_hash)"
-    )
-
-
-@migration(12)
-def m12_category_sort_order(conn):
-    """Add explicit ordering for categories and normalize top-level types."""
-    try:
-        conn.execute("ALTER TABLE category ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
-    except Exception:
-        pass
-
-    top_level_rows = conn.execute(
-        """
-        SELECT id, name, COALESCE(category_type, 'expense') AS category_type
-        FROM category
-        WHERE parent_id IS NULL
-        ORDER BY
-            CASE COALESCE(category_type, 'expense')
-                WHEN 'income' THEN 0
-                ELSE 1
-            END,
-            sort_order,
-            name
-        """
-    ).fetchall()
-    for index, row in enumerate(top_level_rows):
-        conn.execute(
-            "UPDATE category SET sort_order = ?, category_type = ? WHERE id = ?",
-            (index, row["category_type"], row["id"]),
-        )
-
-    child_rows = conn.execute(
-        """
-        SELECT id, parent_id
-        FROM category
-        WHERE parent_id IS NOT NULL
-        ORDER BY parent_id, sort_order, name
-        """
-    ).fetchall()
-    order_by_parent = {}
-    for row in child_rows:
-        next_order = order_by_parent.get(row["parent_id"], 0)
-        conn.execute(
-            "UPDATE category SET sort_order = ? WHERE id = ?",
-            (next_order, row["id"]),
-        )
-        order_by_parent[row["parent_id"]] = next_order + 1
-
-
-@migration(13)
-def m13_category_rule_clean_name(conn):
-    """Add optional clean_name to category rules for payee normalization hints."""
-    try:
-        conn.execute("ALTER TABLE category_rule ADD COLUMN clean_name TEXT")
-    except Exception:
-        pass
 
 
 # ── Schema creation ───────────────────────────────────────────────────────────
@@ -786,12 +241,14 @@ def init_db(db_path: str | None = None):
             -- Two-level category hierarchy: groups (parent_id NULL) and leaves.
             -- Transactions are assigned to leaves only.
             CREATE TABLE IF NOT EXISTS category (
-                id        TEXT PRIMARY KEY,
-                parent_id TEXT REFERENCES category(id) ON DELETE SET NULL,
-                name      TEXT NOT NULL,
-                color     TEXT NOT NULL DEFAULT '#9E9E9E',
-                category_type TEXT,
-                sort_order INTEGER NOT NULL DEFAULT 0
+                id                  TEXT PRIMARY KEY,
+                parent_id           TEXT REFERENCES category(id) ON DELETE SET NULL,
+                name                TEXT NOT NULL,
+                color               TEXT NOT NULL DEFAULT '#9E9E9E',
+                category_type       TEXT,
+                sort_order          INTEGER NOT NULL DEFAULT 0,
+                exclude_from_totals INTEGER NOT NULL DEFAULT 0,
+                owner_id            TEXT REFERENCES owner(id) ON DELETE SET NULL
             );
 
             -- Keyword-based auto-categorization rules.
@@ -807,18 +264,26 @@ def init_db(db_path: str | None = None):
                 amount_min  REAL,
                 amount_max  REAL,
                 clean_name  TEXT,
+                owner_id    TEXT REFERENCES owner(id) ON DELETE SET NULL,
                 account_id  TEXT REFERENCES account(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS owner (
+                id    TEXT PRIMARY KEY,
+                name  TEXT NOT NULL UNIQUE,
+                color TEXT NOT NULL DEFAULT '#6366f1'
+            );
+
             CREATE TABLE IF NOT EXISTS account (
-                id              TEXT PRIMARY KEY,
+                id               TEXT PRIMARY KEY,
                 plaid_account_id TEXT UNIQUE,
                 plaid_item_id    TEXT NOT NULL,
                 name             TEXT NOT NULL,
                 institution      TEXT,
                 type             TEXT,
                 subtype          TEXT,
-                mask             TEXT
+                mask             TEXT,
+                owner_id         TEXT REFERENCES owner(id) ON DELETE SET NULL
             );
 
             -- Core transaction table. `txn` not `transaction` (SQLite reserved word).
@@ -839,14 +304,62 @@ def init_db(db_path: str | None = None):
                 is_pending           INTEGER NOT NULL DEFAULT 0,
                 category_overridden  INTEGER NOT NULL DEFAULT 0,
                 imported_category    TEXT,
-                notes                TEXT
+                notes                TEXT,
+                owner_id             TEXT REFERENCES owner(id) ON DELETE SET NULL,
+                content_hash         TEXT,
+                import_batch_id      TEXT REFERENCES import_batch(id) ON DELETE SET NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_txn_date        ON txn(date);
             CREATE INDEX IF NOT EXISTS idx_txn_account     ON txn(account_id);
             CREATE INDEX IF NOT EXISTS idx_txn_category    ON txn(category_id);
+            CREATE INDEX IF NOT EXISTS idx_txn_owner       ON txn(owner_id);
+            CREATE INDEX IF NOT EXISTS idx_txn_batch       ON txn(import_batch_id);
+            CREATE INDEX IF NOT EXISTS idx_txn_hash        ON txn(content_hash);
             CREATE INDEX IF NOT EXISTS idx_rule_category   ON category_rule(category_id);
             CREATE INDEX IF NOT EXISTS idx_rule_keyword    ON category_rule(keyword);
+            CREATE INDEX IF NOT EXISTS idx_rule_account    ON category_rule(account_id);
+            CREATE INDEX IF NOT EXISTS idx_account_owner   ON account(owner_id);
+
+            CREATE TABLE IF NOT EXISTS csv_import_profile (
+                id                   TEXT PRIMARY KEY,
+                name                 TEXT NOT NULL,
+                filename_pattern     TEXT,
+                header_fingerprint   TEXT,
+                column_map           TEXT NOT NULL DEFAULT '{}',
+                account_id           TEXT REFERENCES account(id) ON DELETE SET NULL,
+                date_format          TEXT NOT NULL DEFAULT '%Y-%m-%d',
+                amount_convention    TEXT NOT NULL DEFAULT 'single_signed',
+                skip_rows            INTEGER NOT NULL DEFAULT 0,
+                apply_categorization INTEGER NOT NULL DEFAULT 1,
+                notes                TEXT,
+                created_at           TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS import_batch (
+                id               TEXT PRIMARY KEY,
+                profile_id       TEXT REFERENCES csv_import_profile(id) ON DELETE SET NULL,
+                filename         TEXT NOT NULL,
+                file_content_hash TEXT,
+                imported_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                row_count        INTEGER NOT NULL DEFAULT 0,
+                skipped_count    INTEGER NOT NULL DEFAULT 0,
+                deduped_count    INTEGER NOT NULL DEFAULT 0,
+                status           TEXT NOT NULL DEFAULT 'completed',
+                config_snapshot  TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_import_batch_file_hash ON import_batch(file_content_hash);
+
+            CREATE TABLE IF NOT EXISTS import_batch_account (
+                batch_id    TEXT NOT NULL REFERENCES import_batch(id) ON DELETE CASCADE,
+                csv_value   TEXT NOT NULL,
+                account_id  TEXT REFERENCES account(id) ON DELETE SET NULL,
+                row_count   INTEGER NOT NULL DEFAULT 0,
+                was_skipped INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (batch_id, csv_value)
+            );
+            CREATE INDEX IF NOT EXISTS idx_iba_account ON import_batch_account(account_id);
+            CREATE INDEX IF NOT EXISTS idx_iba_batch   ON import_batch_account(batch_id);
 
             CREATE TABLE IF NOT EXISTS backup_recipient (
                 id          TEXT PRIMARY KEY,
@@ -858,43 +371,12 @@ def init_db(db_path: str | None = None):
                 created_at  TEXT NOT NULL DEFAULT (datetime('now'))
             );
         """)
-
-        # Handle upgrades from old schema versions that predate the migration system
-        try:
-            conn.execute("ALTER TABLE category ADD COLUMN parent_id TEXT REFERENCES category(id) ON DELETE SET NULL")
-        except Exception:
-            pass
-        for col in ["amount_min REAL", "amount_max REAL", "clean_name TEXT"]:
-            try:
-                conn.execute(f"ALTER TABLE category_rule ADD COLUMN {col}")
-            except Exception:
-                pass
-        try:
-            conn.execute(
-                "ALTER TABLE category_rule ADD COLUMN account_id TEXT REFERENCES account(id) ON DELETE SET NULL"
-            )
-        except Exception:
-            pass
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_rule_account ON category_rule(account_id)"
-        )
-        try:
-            conn.execute("ALTER TABLE txn ADD COLUMN imported_category TEXT")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE txn ADD COLUMN display_name TEXT")
-        except Exception:
-            pass
-        conn.execute("""
-            UPDATE txn
-            SET    display_name = COALESCE(display_name, merchant_name, raw_name)
-            WHERE  display_name IS NULL
-        """)
+        init_merchant_renames(conn)
 
         _seed_default_categories(conn)
 
         run_migrations(conn)
+        ensure_shared_owner(conn)
 
         rule_count = conn.execute("SELECT COUNT(*) FROM category_rule").fetchone()[0]
         if rule_count == 0:
@@ -913,29 +395,51 @@ def _seed_default_categories(conn: sqlite3.Connection):
     """
     import uuid
 
-    def upsert_cat(name, parent_id=None):
-        row = conn.execute("SELECT id FROM category WHERE name = ?", (name,)).fetchone()
+    def upsert_cat(name, parent_id=None, category_type=None, exclude_from_totals=0):
+        if parent_id is None:
+            row = conn.execute(
+                "SELECT id FROM category WHERE name = ? AND parent_id IS NULL",
+                (name,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id FROM category WHERE name = ? AND parent_id = ?",
+                (name, parent_id),
+            ).fetchone()
         if row:
+            conn.execute(
+                """
+                UPDATE category
+                SET category_type = COALESCE(?, category_type),
+                    exclude_from_totals = COALESCE(?, exclude_from_totals)
+                WHERE id = ?
+                """,
+                (category_type, exclude_from_totals, row["id"]),
+            )
             return row["id"]
         new_id = str(uuid.uuid4())
         conn.execute(
-            "INSERT INTO category (id, parent_id, name) VALUES (?,?,?)",
-            (new_id, parent_id, name),
+            """
+            INSERT INTO category (id, parent_id, name, category_type, exclude_from_totals)
+            VALUES (?,?,?,?,?)
+            """,
+            (new_id, parent_id, name, category_type, exclude_from_totals),
         )
         return new_id
 
     # Top-level groups
-    finance       = upsert_cat("Finance")
-    food          = upsert_cat("Food & Drink")
-    gifts         = upsert_cat("Gifts & Donations")
-    health        = upsert_cat("Health & Fitness")
-    household     = upsert_cat("Household")
-    income_group  = upsert_cat("Income")
-    other         = upsert_cat("Other")
-    shopping      = upsert_cat("Shopping")
-    entertainment = upsert_cat("Entertainment")
-    transport     = upsert_cat("Transportation")
-    travel        = upsert_cat("Travel")
+    income_group  = upsert_cat("Income", category_type="income")
+    finance       = upsert_cat("Finance", category_type="expense")
+    food          = upsert_cat("Food & Drink", category_type="expense")
+    gifts         = upsert_cat("Gifts & Donations", category_type="expense")
+    health        = upsert_cat("Health & Fitness", category_type="expense")
+    household     = upsert_cat("Household", category_type="expense")
+    other         = upsert_cat("Other", category_type="expense")
+    shopping      = upsert_cat("Shopping", category_type="expense")
+    entertainment = upsert_cat("Entertainment", category_type="expense")
+    transport     = upsert_cat("Transportation", category_type="expense")
+    travel        = upsert_cat("Travel", category_type="expense")
+    transfers     = upsert_cat("Transfers", category_type="expense", exclude_from_totals=1)
 
     upsert_cat("Dental", health)
     upsert_cat("Doctor & Medical", health)
@@ -975,16 +479,18 @@ def _seed_default_categories(conn: sqlite3.Connection):
 
     upsert_cat("Fees & Charges", finance)
     upsert_cat("Savings", finance)
-    upsert_cat("Transfer", finance)
+    upsert_cat("Credit Card Payment", transfers)
+    upsert_cat("Bank Transfer", transfers)
 
     upsert_cat("Charity", gifts)
     upsert_cat("Charity (not deductible)", gifts)
     upsert_cat("Gifts", gifts)
 
-    upsert_cat("Gifts", income_group)
-    upsert_cat("Interest", income_group)
-    upsert_cat("Investment Income", income_group)
-    upsert_cat("Paycheck", income_group)
+    upsert_cat("Salary", income_group)
+    upsert_cat("Freelance", income_group)
+    upsert_cat("Investment", income_group)
+    upsert_cat("Refund", income_group)
+    upsert_cat("Other Income", income_group)
 
 
 # ── Helper functions called by migrations ─────────────────────────────────────

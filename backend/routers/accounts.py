@@ -2,7 +2,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from db.database import get_db
+from db.database import SHARED_OWNER_NAME, get_db
 
 router = APIRouter()
 
@@ -27,7 +27,10 @@ def resolve_default_owner_id(conn, owner_id: Optional[str]) -> Optional[str]:
             raise HTTPException(status_code=404, detail="Owner not found")
         return explicit_owner_id
 
-    owners = conn.execute("SELECT id FROM owner ORDER BY name").fetchall()
+    owners = conn.execute(
+        "SELECT id FROM owner WHERE LOWER(name) <> LOWER(?) ORDER BY name",
+        (SHARED_OWNER_NAME,),
+    ).fetchall()
     if len(owners) == 1:
         return owners[0]["id"]
     return None

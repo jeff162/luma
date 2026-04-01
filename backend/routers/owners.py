@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 import uuid
-from db.database import get_db
+from db.database import SHARED_OWNER_NAME, ensure_shared_owner, get_db, get_shared_owner_id
 
 router = APIRouter()
 
@@ -37,14 +37,23 @@ class OwnerUpdate(BaseModel):
 @router.get("")
 def list_owners():
     with get_db() as conn:
+        ensure_shared_owner(conn)
         rows = conn.execute(
-            "SELECT id, name, color FROM owner ORDER BY name"
+            """
+            SELECT id, name, color,
+                   CASE WHEN LOWER(name) = LOWER(?) THEN 1 ELSE 0 END AS is_shared
+            FROM owner
+            ORDER BY CASE WHEN LOWER(name) = LOWER(?) THEN 0 ELSE 1 END, name
+            """,
+            (SHARED_OWNER_NAME, SHARED_OWNER_NAME),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
 @router.post("")
 def create_owner(body: OwnerCreate):
+    if body.name.strip().lower() == SHARED_OWNER_NAME.lower():
+        raise HTTPException(status_code=400, detail="Shared is a built-in owner")
     new_id = str(uuid.uuid4())
     with get_db() as conn:
         conn.execute(
@@ -57,10 +66,14 @@ def create_owner(body: OwnerCreate):
 @router.patch("/{owner_id}")
 def update_owner(owner_id: str, body: OwnerUpdate):
     with get_db() as conn:
-        row = conn.execute("SELECT id FROM owner WHERE id = ?", (owner_id,)).fetchone()
+        row = conn.execute("SELECT id, name FROM owner WHERE id = ?", (owner_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Owner not found")
+        if row["name"].strip().lower() == SHARED_OWNER_NAME.lower():
+            raise HTTPException(status_code=400, detail="Shared is a built-in owner")
         if body.name is not None:
+            if body.name.strip().lower() == SHARED_OWNER_NAME.lower():
+                raise HTTPException(status_code=400, detail="Shared is a built-in owner")
             conn.execute("UPDATE owner SET name = ? WHERE id = ?", (body.name.strip(), owner_id))
         if body.color is not None:
             conn.execute("UPDATE owner SET color = ? WHERE id = ?", (body.color, owner_id))
@@ -70,10 +83,22 @@ def update_owner(owner_id: str, body: OwnerUpdate):
 @router.delete("/{owner_id}")
 def delete_owner(owner_id: str):
     with get_db() as conn:
-        row = conn.execute("SELECT id FROM owner WHERE id = ?", (owner_id,)).fetchone()
+        row = conn.execute("SELECT id, name FROM owner WHERE id = ?", (owner_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Owner not found")
+        if row["name"].strip().lower() == SHARED_OWNER_NAME.lower():
+            raise HTTPException(status_code=400, detail="Shared is a built-in owner")
         conn.execute("DELETE FROM owner WHERE id = ?", (owner_id,))
+        shared_owner_id = get_shared_owner_id(conn)
+        remaining_personal_owner_count = conn.execute(
+            "SELECT COUNT(*) FROM owner WHERE LOWER(name) <> LOWER(?)",
+            (SHARED_OWNER_NAME,),
+        ).fetchone()[0]
+        if shared_owner_id and remaining_personal_owner_count <= 1:
+            conn.execute("UPDATE account SET owner_id = NULL WHERE owner_id = ?", (shared_owner_id,))
+            conn.execute("UPDATE txn SET owner_id = NULL WHERE owner_id = ?", (shared_owner_id,))
+            conn.execute("UPDATE category SET owner_id = NULL WHERE owner_id = ?", (shared_owner_id,))
+            conn.execute("UPDATE category_rule SET owner_id = NULL WHERE owner_id = ?", (shared_owner_id,))
     return {"ok": True}
 
 

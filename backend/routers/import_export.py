@@ -59,6 +59,8 @@ from services import crypto_service
 
 router = APIRouter()
 
+MAX_DISTINCT_VALUES_PER_COLUMN = 500
+
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
@@ -684,8 +686,17 @@ async def preview_csv(file: UploadFile = File(...)):
             v = str(val or "").strip()
             if v:
                 column_distinct_values.setdefault(col, set()).add(v)
+    column_distinct_meta = {
+        col: {
+            "total_count": len(vals),
+            "displayed_count": min(len(vals), MAX_DISTINCT_VALUES_PER_COLUMN),
+            "truncated": len(vals) > MAX_DISTINCT_VALUES_PER_COLUMN,
+            "limit": MAX_DISTINCT_VALUES_PER_COLUMN,
+        }
+        for col, vals in column_distinct_values.items()
+    }
     column_distinct_values = {
-        col: sorted(vals)[:50]
+        col: sorted(vals)[:MAX_DISTINCT_VALUES_PER_COLUMN]
         for col, vals in column_distinct_values.items()
     }
 
@@ -698,12 +709,16 @@ async def preview_csv(file: UploadFile = File(...)):
 
             suggested_profile_id = None
             for p in profiles:
-                if p["filename_pattern"] and p["filename_pattern"].lower() in filename.lower():
+                if p["header_fingerprint"] and p["header_fingerprint"] == header_fp:
                     suggested_profile_id = p["id"]
                     break
             if not suggested_profile_id:
                 for p in profiles:
-                    if p["header_fingerprint"] and p["header_fingerprint"] == header_fp:
+                    if (
+                        p["filename_pattern"]
+                        and p["filename_pattern"].lower() in filename.lower()
+                        and not p["header_fingerprint"]
+                    ):
                         suggested_profile_id = p["id"]
                         break
 
@@ -755,6 +770,7 @@ async def preview_csv(file: UploadFile = File(...)):
         "previous_batch_accounts":previous_batch_accounts,
         "config_snapshot":        config_snapshot,
         "column_distinct_values": column_distinct_values,
+        "column_distinct_meta":   column_distinct_meta,
     }
 
 

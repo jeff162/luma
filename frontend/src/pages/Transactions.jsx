@@ -49,13 +49,32 @@ function defaultColumnConfig() {
   })
 }
 
+function normalizeColumnConfig(cfg) {
+  if (!Array.isArray(cfg)) return null
+  const byKey = new Map(cfg.map(col => [col.key, col]))
+  const allPresent = DEFAULT_ORDER.every(key => byKey.has(key))
+  if (!allPresent || byKey.size !== DEFAULT_ORDER.length) return null
+
+  const ordered = cfg.map(col => ({ ...col }))
+  const merchantIndex = ordered.findIndex(col => col.key === 'merchant')
+  const categoryIndex = ordered.findIndex(col => col.key === 'category')
+
+  if (merchantIndex === -1 || categoryIndex === -1) return null
+  if (categoryIndex === merchantIndex + 1) return ordered
+
+  const [categoryCol] = ordered.splice(categoryIndex, 1)
+  const nextMerchantIndex = ordered.findIndex(col => col.key === 'merchant')
+  ordered.splice(nextMerchantIndex + 1, 0, categoryCol)
+  return ordered
+}
+
 function loadColumnConfig(instanceId, userId) {
   const storageKey = getTxnColumnsStorageKey(instanceId, userId)
   if (!storageKey) return null
   try {
     const raw = localStorage.getItem(storageKey)
     if (!raw) return null
-    return JSON.parse(raw)
+    return normalizeColumnConfig(JSON.parse(raw))
   } catch { return null }
 }
 
@@ -237,13 +256,14 @@ export default function Transactions() {
       setDbInstanceId(nextDbInstanceId)
       setUserId(nextUserId)
       const saved = prefResp?.preferences?.[TXN_COLUMNS_PREF_KEY]
-      if (saved && Array.isArray(saved) && saved.length === DEFAULT_ORDER.length) {
-        setCols(saved)
-        saveColumnConfig(nextDbInstanceId, nextUserId, saved)
+      const normalizedSaved = normalizeColumnConfig(saved)
+      if (normalizedSaved) {
+        setCols(normalizedSaved)
+        saveColumnConfig(nextDbInstanceId, nextUserId, normalizedSaved)
         return
       }
       const local = loadColumnConfig(nextDbInstanceId, nextUserId)
-      if (local && Array.isArray(local) && local.length === DEFAULT_ORDER.length) {
+      if (local) {
         setCols(local)
         return
       }
@@ -503,12 +523,12 @@ export default function Transactions() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
         <PageHeader title="Transactions" />
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
         <div style={{ padding: '0 0 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <Input

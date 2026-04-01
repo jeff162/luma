@@ -172,4 +172,4 @@ cd "$BACKEND_DIR"
 echo "Checking/installing backend dependencies. This can take a minute on first run..."
 "$VENV_PYTHON" -m pip install -r requirements.txt
 echo "Starting backend on port $BACKEND_PORT"
-exec "$VENV_PYTHON" -m uvicorn main:app --reload --host 0.0.0.0 --port "$BACKEND_PORT"
+exec "$VENV_PYTHON" -m uvicorn main:app --reload --reload-exclude "db/test_fixtures" --host 0.0.0.0 --port "$BACKEND_PORT"

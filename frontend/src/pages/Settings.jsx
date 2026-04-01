@@ -1667,12 +1667,12 @@ export default function Settings() {
   const showPreAuthSecuritySettings = experimentalSecuritySettings || authEnabled
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
         <PageHeader title="Settings" />
       </div>
 
-      <div ref={settingsScrollRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+      <div data-browser-context-passthrough="true" ref={settingsScrollRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
 
       <StickySection
         title="CSV Import Profiles"

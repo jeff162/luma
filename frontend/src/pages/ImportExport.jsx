@@ -21,6 +21,8 @@ import { refreshTaskBadge } from '../App.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { Card, PageHeader, Button, Spinner, EmptyState } from '../components/ui.jsx'
 import CategoryPicker from '../components/CategoryPicker.jsx'
+import ImportCategoryMappingWorkspace from '../components/ImportCategoryMappingWorkspaceBuckets.jsx'
+import { cloneImportCategoryMappingSnapshot, createImportCategoryMappingDraftState } from '../lib/importCategoryMappingState.js'
 import { formatCurrency } from '../lib/utils.js'
 
 const AMOUNT_CONVENTIONS = [
@@ -55,6 +57,90 @@ const EXPORT_COLUMNS = [
 const DEFAULT_EXPORT_COLS = ['date', 'merchant_name', 'amount', 'account', 'category']
 const IMPORT_CONFIG_MAX_WIDTH = 'min(900px, 100%)'
 
+function CategoryWorkspaceApplyDialog({
+  summary,
+  replacementId,
+  onReplacementChange,
+  replacementOptions,
+  onConfirm,
+  onCancel,
+  saving,
+}) {
+  const requiresReplacement = (summary?.txn_count || 0) > 0
+  const canConfirm = !requiresReplacement || !!replacementId
+  if (!summary) return null
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(15, 23, 42, 0.34)', backdropFilter: 'blur(2px)' }}>
+      <div style={{ width: 'min(620px, 100%)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14, boxShadow: '0 20px 48px rgba(0,0,0,0.26)', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>Apply category changes?</div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
+            Importing this mapping will remove {summary.delete_count} existing categor{summary.delete_count === 1 ? 'y' : 'ies'} from the live category list.
+          </div>
+        </div>
+        <div style={{ padding: 20, display: 'grid', gap: 14 }}>
+          <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+            The following live data is affected by categories removed from the draft:
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
+            {[
+              { label: 'transactions', value: summary.txn_count || 0 },
+              { label: 'rules', value: summary.rule_count || 0 },
+              { label: 'profile mappings', value: summary.profile_mapping_count || 0 },
+              { label: 'import mappings', value: summary.batch_mapping_count || 0 },
+            ].map(item => (
+              <div key={item.label} style={{ padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))' }}>
+                <div style={{ fontSize: 20, fontWeight: 700 }}>{item.value}</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{item.label}</div>
+              </div>
+            ))}
+          </div>
+          {requiresReplacement ? (
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Move affected transactions to</div>
+              <CategoryPicker
+                value={replacementId}
+                categories={replacementOptions}
+                onChange={onReplacementChange}
+                placeholder="Choose replacement category…"
+              />
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>
+                Rules and saved import mappings pointing at deleted categories will also be redirected there where possible.
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+              No transactions are currently assigned to the deleted categories. Rules and saved import mappings will be removed or redirected automatically as needed.
+            </div>
+          )}
+        </div>
+        <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onCancel} style={{ background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 14px', fontSize: 13, cursor: 'pointer' }}>
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={!canConfirm || saving}
+            style={{
+              background: canConfirm && !saving ? 'color-mix(in srgb, var(--accent) 88%, #ffffff 12%)' : 'var(--surface)',
+              color: canConfirm && !saving ? '#fff' : 'var(--muted)',
+              border: canConfirm && !saving ? 'none' : '1px solid var(--border)',
+              borderRadius: 8,
+              padding: '8px 16px',
+              fontSize: 13,
+              fontWeight: 500,
+              cursor: !canConfirm || saving ? 'not-allowed' : 'pointer',
+              opacity: !canConfirm || saving ? 0.6 : 1,
+            }}
+          >
+            {saving ? 'Applying…' : 'Apply changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function SectionTitle({ children }) {
   return <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6, marginTop: 28 }}>{children}</div>
 }
@@ -63,6 +149,7 @@ function deriveImportSourceHints(previewLike) {
   const filename = previewLike?.filename || ''
   const filenamePattern = filename.replace(/[_\-\d.]+\.(csv)$/i, '').trim().toLowerCase()
   return {
+    fileContentHash: previewLike?.file_content_hash || '',
     headerFingerprint: previewLike?.header_fingerprint || '',
     filenamePattern,
   }
@@ -79,8 +166,8 @@ function loadSavedImportDraft(previewLike, instanceId, subjectId) {
     const raw = window.localStorage.getItem(storageKey)
     if (!raw) return null
     const drafts = JSON.parse(raw)
-    const { headerFingerprint, filenamePattern } = deriveImportSourceHints(previewLike)
-    return drafts[headerFingerprint] || drafts[filenamePattern] || drafts.__last__ || null
+    const { fileContentHash } = deriveImportSourceHints(previewLike)
+    return fileContentHash ? (drafts[fileContentHash] || null) : null
   } catch {
     return null
   }
@@ -92,12 +179,54 @@ function saveImportDraft(previewLike, snapshot, instanceId, subjectId) {
   try {
     const raw = window.localStorage.getItem(storageKey)
     const drafts = raw ? JSON.parse(raw) : {}
-    const { headerFingerprint, filenamePattern } = deriveImportSourceHints(previewLike)
-    if (headerFingerprint) drafts[headerFingerprint] = snapshot
-    if (filenamePattern) drafts[filenamePattern] = snapshot
-    drafts.__last__ = snapshot
+    const { fileContentHash } = deriveImportSourceHints(previewLike)
+    if (fileContentHash) drafts[fileContentHash] = snapshot
     window.localStorage.setItem(storageKey, JSON.stringify(drafts))
   } catch {}
+}
+
+function clonePersistedCategoryWorkspaceDraft(draft) {
+  if (!draft?.snapshot) return null
+  return {
+    snapshot: cloneImportCategoryMappingSnapshot(draft.snapshot),
+    undoStack: (draft.undoStack || []).map(cloneImportCategoryMappingSnapshot),
+    redoStack: (draft.redoStack || []).map(cloneImportCategoryMappingSnapshot),
+    selectionAnchor: draft.selectionAnchor || null,
+    selectedBucketCategoryIds: [...(draft.selectedBucketCategoryIds || [])],
+    bucketSelectionAnchor: draft.bucketSelectionAnchor || null,
+    activeSection: draft.activeSection === 'income' ? 'income' : 'expense',
+  }
+}
+
+function buildAccountImportStateSnapshot(accountMap) {
+  const accountAssignments = {}
+  const accountNew = {}
+  const skipAccounts = []
+
+  for (const [csvVal, mapping] of Object.entries(accountMap || {})) {
+    if (mapping?.skip) {
+      skipAccounts.push(csvVal)
+    } else if (mapping?.createNew && mapping?.newName?.trim()) {
+      accountNew[csvVal] = {
+        name: mapping.newName.trim(),
+        type: mapping.newType || 'depository',
+      }
+    } else if (mapping?.accountId) {
+      accountAssignments[csvVal] = mapping.accountId
+    }
+  }
+
+  return {
+    account_map: accountAssignments,
+    skip_accounts: skipAccounts,
+    account_new: accountNew,
+  }
+}
+
+function profileHeaderClearlyMismatches(profile, previewLike) {
+  const profileHeader = String(profile?.header_fingerprint || '').trim()
+  const previewHeader = String(previewLike?.header_fingerprint || '').trim()
+  return !!profileHeader && !!previewHeader && profileHeader !== previewHeader
 }
 
 function SelectInput({ value, onChange, options, style }) {
@@ -338,6 +467,7 @@ function scoreHeaderName(header, type) {
   const tests = {
     date: ['date', 'posted', 'trans date', 'transaction date', 'post date'],
     amount: ['amount', 'amt', 'value'],
+    category: ['category', 'cat', 'classification', 'type'],
     debit: ['debit', 'withdrawal', 'outflow', 'payment', 'charge'],
     credit: ['credit', 'deposit', 'inflow', 'refund'],
     direction: ['type', 'direction', 'dr/cr', 'transaction type'],
@@ -345,12 +475,6 @@ function scoreHeaderName(header, type) {
   }
 
   return (tests[type] || []).reduce((score, token) => score + (normalized.includes(token) ? 1 : 0), 0)
-}
-
-function withCurrentOption(options, currentValue) {
-  const merged = [...options]
-  if (currentValue && !merged.includes(currentValue)) merged.unshift(currentValue)
-  return [...new Set(merged)]
 }
 
 function formatLikelyMatchLabel(count) {
@@ -367,8 +491,6 @@ function ColSelect({
   required,
   hint,
   tone = 'muted',
-  showAll = false,
-  onToggleShowAll,
 }) {
   const borderColor = required && !value ? 'var(--danger)' : 'var(--border)'
   const hintColor = tone === 'danger' ? 'var(--danger)' : 'var(--muted)'
@@ -393,12 +515,11 @@ function ColSelect({
     setOpenUp(wrapRect.bottom + listHeight > window.innerHeight - 8)
   }, [open, headers.length, allHeaders.length])
 
-  const hasDetectedSuggestions = !!onToggleShowAll && headers.length > 0
-  const suggestedHeaders = withCurrentOption(headers, value)
+  const hasDetectedSuggestions = headers.length > 0 && headers.length < allHeaders.length
+  const suggestedHeaders = headers
   const remainingHeaders = allHeaders.filter(h => !suggestedHeaders.includes(h))
-  const suggestedHeading = suggestedHeaders.length === 1 ? 'Suggested match' : 'Suggested matches'
   const showSuggestedSection = hasDetectedSuggestions && suggestedHeaders.length > 0
-  const directHeaders = !onToggleShowAll ? suggestedHeaders : []
+  const directHeaders = showSuggestedSection ? remainingHeaders : suggestedHeaders
   const selectedLabel = value
     ? value
     : <span style={{ color: 'var(--muted)' }}>Not mapped</span>
@@ -451,9 +572,22 @@ function ColSelect({
     textAlign: 'left',
   })
 
+  const suggestedPillStyle = {
+    flexShrink: 0,
+    fontSize: 10,
+    fontWeight: 700,
+    color: 'var(--accent2)',
+    background: 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
+    border: '1px solid color-mix(in srgb, var(--accent2) 35%, var(--border))',
+    borderRadius: 999,
+    padding: '2px 7px',
+    letterSpacing: '0.02em',
+    lineHeight: 1.1,
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+      <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>
         {label}{required && <span style={{ color: 'var(--danger)' }}> *</span>}
       </label>
       <div ref={wrapRef} style={{ position: 'relative' }}>
@@ -489,30 +623,19 @@ function ColSelect({
               type="button"
               role="option"
               aria-selected={!value}
-              style={menuItemStyle(!value, true)}
+              style={menuItemStyle(!value)}
               onMouseDown={e => {
                 e.preventDefault()
                 onChange(null)
                 setOpen(false)
               }}
             >
-              <span style={{ flex: 1 }}>Not mapped</span>
+              <span style={{ flex: 1, color: 'var(--muted)' }}>Not mapped</span>
               {!value && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
             </button>
 
             {showSuggestedSection && (
               <>
-                <div style={{
-                  padding: '6px 12px 4px',
-                  fontSize: 10,
-                  fontWeight: 700,
-                  color: 'var(--muted)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.08em',
-                  borderTop: '1px solid var(--border)',
-                }}>
-                  {suggestedHeading}
-                </div>
                 {suggestedHeaders.map(h => (
                   <button
                     key={h}
@@ -529,7 +652,10 @@ function ColSelect({
                     <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {h}
                     </span>
-                    {value === h && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexShrink: 0, minWidth: 98 }}>
+                      <span style={suggestedPillStyle}>Suggested</span>
+                      <span style={{ width: 12, textAlign: 'center', fontSize: 11, color: 'var(--accent2)', visibility: value === h ? 'visible' : 'hidden' }}>✓</span>
+                    </div>
                   </button>
                 ))}
               </>
@@ -537,6 +663,15 @@ function ColSelect({
 
             {directHeaders.length > 0 && (
               <>
+                {showSuggestedSection ? (
+                  <div
+                    style={{
+                      height: 1,
+                      background: 'var(--border)',
+                      margin: '3px 0',
+                    }}
+                  />
+                ) : null}
                 {directHeaders.map(h => (
                   <button
                     key={h}
@@ -556,69 +691,6 @@ function ColSelect({
                     {value === h && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
                   </button>
                 ))}
-              </>
-            )}
-
-            {onToggleShowAll && remainingHeaders.length > 0 && (
-              <>
-                <div style={{
-                  padding: '6px 12px',
-                  borderTop: showSuggestedSection ? '1px solid var(--border)' : 'none',
-                  background: 'color-mix(in srgb, var(--surface2) 55%, transparent)',
-                }}>
-                  <button
-                    type="button"
-                    onMouseDown={e => {
-                      e.preventDefault()
-                      onToggleShowAll()
-                    }}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      padding: 0,
-                      fontSize: 12,
-                      color: 'var(--accent2)',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {showAll ? 'Show fewer suggestions' : `Show all columns (${remainingHeaders.length})`}
-                  </button>
-                </div>
-
-                {showAll && (
-                  <>
-                    <div style={{
-                      padding: '6px 12px 4px',
-                      fontSize: 10,
-                      fontWeight: 700,
-                      color: 'var(--muted)',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.08em',
-                      borderTop: showSuggestedSection ? '1px solid var(--border)' : 'none',
-                    }}>
-                      {showSuggestedSection ? 'Other columns' : 'All columns'}
-                    </div>
-                    {remainingHeaders.map(h => (
-                      <button
-                        key={h}
-                        type="button"
-                        role="option"
-                        aria-selected={value === h}
-                        style={menuItemStyle(value === h)}
-                        onMouseDown={e => {
-                          e.preventDefault()
-                          onChange(h)
-                          setOpen(false)
-                        }}
-                      >
-                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {h}
-                        </span>
-                        {value === h && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
-                      </button>
-                    ))}
-                  </>
-                )}
               </>
             )}
           </div>
@@ -985,6 +1057,10 @@ function ImportTab() {
   const [categoryAssignments, setCategoryAssignments] = useState({})
   const [categoryMappingRows, setCategoryMappingRows] = useState([])
   const [categoryMappingSummary, setCategoryMappingSummary] = useState(null)
+  const [showCategoryWorkspace, setShowCategoryWorkspace] = useState(false)
+  const [importCategoryDraft, setImportCategoryDraft] = useState(null)
+  const [pendingCategoryApply, setPendingCategoryApply] = useState(null)
+  const [pendingCategoryReplacementId, setPendingCategoryReplacementId] = useState('')
   const [importResult,      setImportResult]      = useState(null)
   const [dupAccountWarning, setDupAccountWarning] = useState([])
   const [showRaw,           setShowRaw]           = useState(false)
@@ -993,7 +1069,6 @@ function ImportTab() {
   const [saveProfileName,   setSaveProfileName]   = useState('')
   const [prevBatchWarn,     setPrevBatchWarn]     = useState(false)
   const [dateFormatLocked,  setDateFormatLocked]  = useState(false)
-  const [expandedColumnPools, setExpandedColumnPools] = useState({})
 
   useEffect(() => {
     Promise.all([
@@ -1068,6 +1143,7 @@ function ImportTab() {
       return {
         dateCandidates: [],
         amountCandidates: [],
+        categoryCandidates: [],
         debitCandidates: [],
         creditCandidates: [],
         directionCandidates: [],
@@ -1080,6 +1156,7 @@ function ImportTab() {
     const analyses = {
       dateCandidates: [],
       amountCandidates: [],
+      categoryCandidates: [],
       debitCandidates: [],
       creditCandidates: [],
       directionCandidates: [],
@@ -1107,6 +1184,11 @@ function ImportTab() {
       analyses.amountAnalysisByHeader[header] = { sampleCount, amountMatches, amountRatio, score: amountScore, ...amountFormat }
       if ((sampleCount > 0 && amountRatio >= 0.7) || amountBoost > 0) {
         analyses.amountCandidates.push({ header, score: amountScore })
+      }
+
+      const categoryBoost = scoreHeaderName(header, 'category')
+      if (categoryBoost > 0) {
+        analyses.categoryCandidates.push({ header, score: categoryBoost })
       }
 
       const debitBoost = scoreHeaderName(header, 'debit')
@@ -1138,7 +1220,7 @@ function ImportTab() {
       }
     })
 
-    for (const key of ['dateCandidates', 'amountCandidates', 'debitCandidates', 'creditCandidates', 'directionCandidates', 'pendingCandidates']) {
+    for (const key of ['dateCandidates', 'amountCandidates', 'categoryCandidates', 'debitCandidates', 'creditCandidates', 'directionCandidates', 'pendingCandidates']) {
       analyses[key].sort((a, b) => b.score - a.score || a.header.localeCompare(b.header))
       analyses[key] = analyses[key].map(entry => entry.header)
     }
@@ -1148,6 +1230,30 @@ function ImportTab() {
 
   const selectedDateAnalysis = colDate ? columnAnalysis.dateAnalysisByHeader[colDate] : null
   const selectedAmountAnalysis = colAmount ? columnAnalysis.amountAnalysisByHeader[colAmount] : null
+  const sourceCategoryValues = useMemo(() => {
+    if (!colCategory || !preview?.column_distinct_values) return []
+    return (preview.column_distinct_values[colCategory] || []).filter(Boolean)
+  }, [colCategory, preview])
+  const sourceCategoryMeta = useMemo(() => {
+    if (!colCategory || !preview?.column_distinct_meta) return null
+    return preview.column_distinct_meta[colCategory] || null
+  }, [colCategory, preview])
+  const preparedCategoryCount = useMemo(
+    () => sourceCategoryValues.filter(value => !!categoryAssignments[value]).length,
+    [categoryAssignments, sourceCategoryValues],
+  )
+  const activeDraftCategoryCount = importCategoryDraft?.snapshot?.sourceOrder?.length
+  const processedCategoryCount = importCategoryDraft
+    ? Math.max(0, sourceCategoryValues.length - (activeDraftCategoryCount || 0))
+    : preparedCategoryCount
+  const remainingCategoryCount = importCategoryDraft
+    ? Math.max(0, activeDraftCategoryCount || 0)
+    : Math.max(0, sourceCategoryValues.length - preparedCategoryCount)
+  const pendingDeleteReplacementCategories = useMemo(() => {
+    if (!pendingCategoryApply?.draft) return categories
+    const deleteIds = new Set(getDraftDeleteTargets(pendingCategoryApply.draft))
+    return categories.filter(cat => cat.parent_id && !deleteIds.has(cat.id))
+  }, [categories, pendingCategoryApply])
 
   const dateSelectHint = selectedDateAnalysis
     ? selectedDateAnalysis.guessedFormat
@@ -1171,13 +1277,19 @@ function ImportTab() {
         ? formatLikelyMatchLabel(columnAnalysis.amountCandidates.length)
         : ''
 
-  function toggleColumnPool(field) {
-    setExpandedColumnPools(prev => ({ ...prev, [field]: !prev[field] }))
-  }
+  const categorySelectHint = columnAnalysis.categoryCandidates.length > 0 && !colCategory
+    ? formatLikelyMatchLabel(columnAnalysis.categoryCandidates.length)
+    : ''
 
   function handleDateColumnChange(nextValue) {
     setDateFormatLocked(false)
     setColDate(nextValue)
+  }
+
+  function handleCategoryColumnChange(nextValue) {
+    setShowCategoryWorkspace(false)
+    setImportCategoryDraft(null)
+    setColCategory(nextValue)
   }
   useEffect(() => {
     setAccountMap(prev => {
@@ -1246,7 +1358,7 @@ function ImportTab() {
     dbInstanceId, preferenceSubjectId,
     preview, hasImportWorkToSave, accountId, dateFormat, amtConv, skipRows, applyCat,
     colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount,
-    singleAccountNew, accountMap, categoryAssignments,
+    singleAccountNew, accountMap, categoryAssignments, importCategoryDraft,
   ])
 
   useEffect(() => {
@@ -1321,8 +1433,10 @@ function ImportTab() {
   function buildImportSnapshot() {
     const cm = getColumnMap()
     if (Object.keys(categoryAssignments).length > 0) cm.category_assignments = categoryAssignments
+    const categoryWorkspaceDraft = clonePersistedCategoryWorkspaceDraft(importCategoryDraft)
+    const accountImportState = buildAccountImportStateSnapshot(accountMap)
     if (!colAccount && singleAccountNew.enabled && singleAccountNew.name.trim()) {
-      return {
+      const snapshot = {
         column_map: { ...cm, single_account_new: { name: singleAccountNew.name.trim(), type: singleAccountNew.type || 'depository' } },
         account_id: null,
         single_account_new: { name: singleAccountNew.name.trim(), type: singleAccountNew.type || 'depository' },
@@ -1330,22 +1444,86 @@ function ImportTab() {
         amount_convention: amtConv,
         skip_rows: skipRows,
         apply_categorization: applyCat,
+        ...accountImportState,
       }
+      if (categoryWorkspaceDraft) snapshot.category_workspace_draft = categoryWorkspaceDraft
+      return snapshot
     }
-    return {
+    const snapshot = {
       column_map: cm,
       account_id: (!colAccount && accountId) ? accountId : null,
       date_format: dateFormat,
       amount_convention: amtConv,
       skip_rows: skipRows,
       apply_categorization: applyCat,
+      ...accountImportState,
     }
+    if (categoryWorkspaceDraft) snapshot.category_workspace_draft = categoryWorkspaceDraft
+    return snapshot
   }
 
-  function applyProfile(profileId) {
-    setSelectedProfile(profileId)
+  function resetToManualImportMapping() {
+    setSelectedProfile('')
+    setShowCategoryWorkspace(false)
+    applySnapshot({
+      column_map: {},
+      category_assignments: {},
+      account_map: {},
+      skip_accounts: [],
+      account_new: {},
+      account_id: null,
+      single_account_new: null,
+      date_format: '%m/%d/%Y',
+      amount_convention: 'single_signed',
+      skip_rows: 0,
+      apply_categorization: true,
+      category_workspace_draft: null,
+    })
+    setDateFormatLocked(false)
+  }
+
+  function resetImportMappingState() {
+    setSelectedProfile('')
+    setAccountId('')
+    setDateFormat('%m/%d/%Y')
+    setDateFormatLocked(false)
+    setAmtConv('single_signed')
+    setSkipRows(0)
+    setApplyCat(true)
+    setColDate(null)
+    setColAmount(null)
+    setColDebit(null)
+    setColCredit(null)
+    setColDir(null)
+    setColDesc(null)
+    setColCategory(null)
+    setColNotes(null)
+    setColPending(null)
+    setColAccount(null)
+    setAccountMap({})
+    setCategoryAssignments({})
+    setCategoryMappingRows([])
+    setCategoryMappingSummary(null)
+    setImportCategoryDraft(null)
+    setShowCategoryWorkspace(false)
+    setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
+  }
+
+  function applyProfile(profileId, options = {}) {
+    const { bypassMismatchWarning = false } = options
     const p = profiles.find(x => x.id === profileId)
-    if (!p) return
+    if (!p) {
+      if (!profileId) resetToManualImportMapping()
+      else setSelectedProfile(profileId)
+      return
+    }
+    if (!bypassMismatchWarning && profileHeaderClearlyMismatches(p, preview)) {
+      const proceed = window.confirm(
+        `This import profile was saved for a different CSV header and may not match this file.\n\nUse "${p.name}" anyway?`
+      )
+      if (!proceed) return
+    }
+    setSelectedProfile(profileId)
     const cm = p.column_map || {}
     const existingSingleAccount = cm.single_account_new?.name
       ? accounts.find(a => a.name.toLowerCase() === cm.single_account_new.name.toLowerCase())
@@ -1406,6 +1584,7 @@ function ImportTab() {
   function applySnapshot(snap) {
     if (!snap) return
     const cm = snap.column_map || {}
+    const restoredCategoryDraft = clonePersistedCategoryWorkspaceDraft(snap.category_workspace_draft)
     const existingSingleAccount = snap.single_account_new?.name
       ? accounts.find(a => a.name.toLowerCase() === snap.single_account_new.name.toLowerCase())
       : null
@@ -1418,11 +1597,12 @@ function ImportTab() {
     setColCredit(cm.credit || null); setColDir(cm.direction || null)
     setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColPending(cm.pending || null); setColAccount(cm.account || null)
     setCategoryAssignments((snap.category_assignments || cm.category_assignments || {}))
+    setImportCategoryDraft(restoredCategoryDraft)
     setAccountId(existingSingleAccount ? existingSingleAccount.id : (existingAssignedAccount?.id || ''))
     setSingleAccountNew(snap.single_account_new && !existingSingleAccount
       ? { enabled: true, name: snap.single_account_new.name || '', type: snap.single_account_new.type || 'depository' }
       : { enabled: false, name: '', type: 'depository' })
-    if (snap.account_map || snap.skip_accounts) {
+    if (snap.account_map || snap.skip_accounts || snap.account_new) {
       const restored = {}
       const skips = new Set(snap.skip_accounts || [])
       for (const [val, aid] of Object.entries(snap.account_map || {})) {
@@ -1441,6 +1621,14 @@ function ImportTab() {
       for (const val of skips) {
         restored[val] = { accountId: '', createNew: false, newName: val, newType: 'depository', skip: true }
       }
+      for (const [val, info] of Object.entries(snap.account_new || {})) {
+        const existing = accounts.find(a => a.name.toLowerCase() === String(info?.name || '').toLowerCase())
+        if (existing) {
+          restored[val] = { accountId: existing.id, createNew: false, newName: existing.name, newType: existing.type || info?.type || 'depository', skip: false }
+        } else {
+          restored[val] = { accountId: '', createNew: true, newName: info?.name || val, newType: info?.type || 'depository', skip: false }
+        }
+      }
       setAccountMap(restored)
     }
   }
@@ -1449,22 +1637,24 @@ function ImportTab() {
     if (!file) return
     setLoading(true)
     try {
-      setDateFormatLocked(false)
-      setExpandedColumnPools({})
+      resetImportMappingState()
       const result = await api.previewCsv(file)
       setPreview({ ...result, file }); setDupAccountWarning([]); setAccountMap({})
       setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
       setCategoryAssignments({})
       setCategoryMappingRows([])
       setCategoryMappingSummary(null)
-      if (result.suggested_profile_id) applyProfile(result.suggested_profile_id)
-      else if (result.config_snapshot) applySnapshot({
-        ...result.config_snapshot,
-        skip_accounts: [],
-      })
-      else {
-        const savedDraft = loadSavedImportDraft(result, dbInstanceId, preferenceSubjectId)
-        if (savedDraft) applySnapshot(savedDraft)
+      const savedDraft = loadSavedImportDraft(result, dbInstanceId, preferenceSubjectId)
+      if (savedDraft) {
+        setSelectedProfile(result.suggested_profile_id || '')
+        applySnapshot(savedDraft)
+      } else if (result.suggested_profile_id) {
+        applyProfile(result.suggested_profile_id)
+      } else if (result.config_snapshot) {
+        applySnapshot({
+          ...result.config_snapshot,
+          skip_accounts: [],
+        })
       }
       const prevImported = (result.previous_batch_accounts || []).filter(a => !a.was_skipped)
       if (prevImported.length > 0) setDupAccountWarning(prevImported)
@@ -1635,7 +1825,7 @@ function ImportTab() {
             chooserQuery: '',
             chooserToken: 0,
           })))
-          setStage(result.trailing_non_transaction_suspected ? 'review-data' : 'category-mapping')
+          setStage(result.trailing_non_transaction_suspected ? 'review-data' : 'done')
         } else {
           setStage(result.trailing_non_transaction_suspected ? 'review-data' : 'done')
         }
@@ -1741,9 +1931,33 @@ function ImportTab() {
         assignments[csvVal] = m.accountId
       }
     }
-    if (Object.keys(assignments).length > 0) cm.account_assignments = assignments
-    if (skips.length > 0)                    cm.account_skips       = skips
-    if (Object.keys(newAccts).length > 0)    cm.account_new         = newAccts
+    const currentFileValues = new Set(distinctAccountValues)
+    const existingProfileMap = p.column_map || {}
+    const mergedAssignments = { ...(existingProfileMap.account_assignments || {}) }
+    const mergedNewAccounts = { ...(existingProfileMap.account_new || {}) }
+    const mergedSkipSet = new Set(existingProfileMap.account_skips || [])
+
+    for (const csvVal of currentFileValues) {
+      delete mergedAssignments[csvVal]
+      delete mergedNewAccounts[csvVal]
+      mergedSkipSet.delete(csvVal)
+    }
+    for (const [csvVal, accountId] of Object.entries(assignments)) {
+      mergedAssignments[csvVal] = accountId
+    }
+    for (const [csvVal, info] of Object.entries(newAccts)) {
+      mergedNewAccounts[csvVal] = info
+    }
+    for (const csvVal of skips) {
+      mergedSkipSet.add(csvVal)
+    }
+
+    if (Object.keys(mergedAssignments).length > 0) cm.account_assignments = mergedAssignments
+    else delete cm.account_assignments
+    if (mergedSkipSet.size > 0) cm.account_skips = Array.from(mergedSkipSet).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+    else delete cm.account_skips
+    if (Object.keys(mergedNewAccounts).length > 0) cm.account_new = mergedNewAccounts
+    else delete cm.account_new
 
     const body = {
       name:                 p.name,
@@ -1769,6 +1983,8 @@ function ImportTab() {
     setColPending(null)
     setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
     setCategoryAssignments({}); setCategoryMappingRows([]); setCategoryMappingSummary(null)
+    setShowCategoryWorkspace(false)
+    setImportCategoryDraft(null)
     setShowRaw(false); setShowAdvanced(false); setShowSaveProfile(false)
     setSaveProfileName(''); setPrevBatchWarn(false)
   }
@@ -1788,12 +2004,12 @@ function ImportTab() {
     return categoryMappingRows.some(row => !!row.categoryId)
   }
 
+  function getCategoryWorkspaceSnapshot(draft) {
+    return draft?.snapshot || draft
+  }
+
   function advancePastDataReview() {
-    if (categoryMappingRows.length > 0) {
-      setStage('category-mapping')
-    } else {
-      setStage('done')
-    }
+    setStage('done')
   }
 
   async function applyImportedCategoryMappings() {
@@ -1818,8 +2034,191 @@ function ImportTab() {
     }
   }
 
+  function getDraftRetainedIds(draft) {
+    const snapshot = getCategoryWorkspaceSnapshot(draft)
+    const retained = new Set()
+    for (const sectionType of ['income', 'expense']) {
+      for (const group of snapshot.tree[sectionType] || []) {
+        if (!group.isNew) retained.add(group.id)
+        for (const child of group.children || []) {
+          if (!child.isNew) retained.add(child.id)
+        }
+      }
+    }
+    return retained
+  }
+
+  function getDraftDeleteTargets(draft) {
+    const snapshot = getCategoryWorkspaceSnapshot(draft)
+    const retainedIds = getDraftRetainedIds(draft)
+    const groups = categories.filter(cat => !cat.parent_id)
+    const children = categories.filter(cat => !!cat.parent_id)
+    const deleteIds = []
+    for (const group of groups) {
+      if (!retainedIds.has(group.id)) {
+        deleteIds.push(group.id)
+      }
+    }
+    const deletedGroupIds = new Set(deleteIds)
+    for (const child of children) {
+      if (deletedGroupIds.has(child.parent_id)) continue
+      if (!retainedIds.has(child.id)) deleteIds.push(child.id)
+    }
+    return deleteIds
+  }
+
+  async function computeDraftDeleteSummary(deleteIds) {
+    if (!deleteIds.length) return null
+    const previews = await Promise.all(deleteIds.map(id => api.getCategoryDeletePreview(id)))
+    return previews.reduce((acc, preview) => {
+      acc.delete_count += 1
+      acc.txn_count += preview.txn_count || 0
+      acc.rule_count += preview.rule_count || 0
+      acc.profile_mapping_count += preview.profile_mapping_count || 0
+      acc.batch_mapping_count += preview.batch_mapping_count || 0
+      return acc
+    }, {
+      delete_count: 0,
+      txn_count: 0,
+      rule_count: 0,
+      profile_mapping_count: 0,
+      batch_mapping_count: 0,
+    })
+  }
+
+  async function executeCategoryWorkspaceDraftApply(draft, replacementCategoryId = null) {
+    setLoading(true)
+    try {
+      const snapshot = getCategoryWorkspaceSnapshot(draft)
+      const existingById = new Map(categories.map(cat => [cat.id, cat]))
+      const deleteIds = getDraftDeleteTargets(draft)
+      for (const categoryId of deleteIds) {
+        await api.deleteCategory(categoryId, {
+          replacement_category_id: replacementCategoryId || null,
+        })
+      }
+
+      const createdIdMap = {}
+
+      for (const sectionType of ['income', 'expense']) {
+        for (const group of snapshot.tree[sectionType] || []) {
+          if (group.isNew) {
+            const created = await api.createCategory({
+              name: group.name,
+              category_type: group.categoryType,
+            })
+            createdIdMap[group.id] = created.id
+          } else {
+            const existing = existingById.get(group.id)
+            if (existing && existing.name !== group.name) {
+              await api.updateCategory(group.id, { name: group.name })
+            }
+          }
+        }
+      }
+
+      for (const sectionType of ['income', 'expense']) {
+        for (const group of snapshot.tree[sectionType] || []) {
+          const resolvedGroupId = createdIdMap[group.id] || group.id
+          for (const child of group.children || []) {
+            if (child.isNew) {
+              const created = await api.createCategory({
+                name: child.name,
+                parent_id: resolvedGroupId,
+              })
+              createdIdMap[child.id] = created.id
+            } else {
+              const existing = existingById.get(child.id)
+              if (existing && existing.name !== child.name) {
+                await api.updateCategory(child.id, { name: child.name })
+              }
+              if (existing && existing.parent_id !== resolvedGroupId) {
+                await api.updateCategory(child.id, { parent_id: resolvedGroupId })
+              }
+            }
+          }
+        }
+      }
+
+      const nextAssignments = {}
+      for (const [rawValue, mapping] of Object.entries(snapshot.mappings || {})) {
+        nextAssignments[rawValue] = createdIdMap[mapping.targetId] || mapping.targetId
+      }
+
+      setCategoryAssignments(prev => ({ ...prev, ...nextAssignments }))
+      const refreshedCategories = await api.getCategories()
+      setCategories(refreshedCategories)
+      const rebuiltDraft = createImportCategoryMappingDraftState(refreshedCategories, sourceCategoryValues, {
+        ...categoryAssignments,
+        ...nextAssignments,
+      })
+      rebuiltDraft.snapshot = {
+        ...cloneImportCategoryMappingSnapshot(rebuiltDraft.snapshot),
+        sourceOrder: [...(snapshot?.sourceOrder || [])],
+        setAsideOrder: [...(snapshot?.setAsideOrder || [])],
+        selectedSourceIds: [],
+        selectedNodeId: null,
+        collapsedGroups: { ...(snapshot?.collapsedGroups || {}) },
+      }
+      rebuiltDraft.activeSection = draft?.activeSection || 'expense'
+      setImportCategoryDraft(rebuiltDraft)
+      setShowCategoryWorkspace(false)
+      setPendingCategoryApply(null)
+      setPendingCategoryReplacementId('')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function applyCategoryWorkspaceDraft(draft) {
+    const deleteIds = getDraftDeleteTargets(draft)
+    const summary = await computeDraftDeleteSummary(deleteIds)
+    if (summary?.delete_count && (summary.txn_count || summary.rule_count || summary.profile_mapping_count || summary.batch_mapping_count)) {
+      setPendingCategoryApply({ draft, summary })
+      setPendingCategoryReplacementId('')
+      return
+    }
+    await executeCategoryWorkspaceDraftApply(draft, null)
+  }
+
   return (
     <div style={{ width: '100%', maxWidth: IMPORT_CONFIG_MAX_WIDTH }}>
+      {pendingCategoryApply ? (
+        <CategoryWorkspaceApplyDialog
+          summary={pendingCategoryApply.summary}
+          replacementId={pendingCategoryReplacementId}
+          onReplacementChange={setPendingCategoryReplacementId}
+          replacementOptions={pendingDeleteReplacementCategories}
+          saving={loading}
+          onCancel={() => {
+            setPendingCategoryApply(null)
+            setPendingCategoryReplacementId('')
+          }}
+          onConfirm={async () => {
+            try {
+              await executeCategoryWorkspaceDraftApply(
+                pendingCategoryApply.draft,
+                pendingCategoryReplacementId || null,
+              )
+            } catch (e) {
+              alert('Failed to apply category changes: ' + e.message)
+            }
+          }}
+        />
+      ) : null}
+      {showCategoryWorkspace && preview ? (
+        <ImportCategoryMappingWorkspace
+          sourceValues={sourceCategoryValues}
+          sourceMeta={sourceCategoryMeta}
+          existingCategories={categories}
+          initialAssignments={categoryAssignments}
+          initialDraftState={importCategoryDraft}
+          onDraftStateChange={setImportCategoryDraft}
+          onApply={applyCategoryWorkspaceDraft}
+          onClose={() => setShowCategoryWorkspace(false)}
+        />
+      ) : null}
+
       {showRaw && preview && (
         <RawFilePreview
           rawLines={rawViewerLines}
@@ -2008,12 +2407,6 @@ function ImportTab() {
                 required
                 hint={dateSelectHint}
                 tone={selectedDateAnalysis && !selectedDateAnalysis.guessedFormat && selectedDateAnalysis.sampleCount ? 'danger' : 'muted'}
-                showAll={!!expandedColumnPools.date}
-                onToggleShowAll={
-                  columnAnalysis.dateCandidates.length > 0 && columnAnalysis.dateCandidates.length < (preview.headers?.length || 0)
-                    ? () => toggleColumnPool('date')
-                    : null
-                }
               />
               {amtConv === 'two_column' ? (
                 <ColSelect
@@ -2024,12 +2417,6 @@ function ImportTab() {
                   onChange={setColDebit}
                   required
                   hint={columnAnalysis.debitCandidates.length > 0 && !colDebit ? formatLikelyMatchLabel(columnAnalysis.debitCandidates.length) : ''}
-                  showAll={!!expandedColumnPools.debit}
-                  onToggleShowAll={
-                    columnAnalysis.debitCandidates.length > 0 && columnAnalysis.debitCandidates.length < (preview.headers?.length || 0)
-                      ? () => toggleColumnPool('debit')
-                      : null
-                  }
                 />
               ) : (
                 <ColSelect
@@ -2041,12 +2428,6 @@ function ImportTab() {
                   required
                   hint={amountSelectHint}
                   tone={selectedAmountAnalysis && selectedAmountAnalysis.sampleCount > 0 && selectedAmountAnalysis.amountMatches === 0 ? 'danger' : 'muted'}
-                  showAll={!!expandedColumnPools.amount}
-                  onToggleShowAll={
-                    columnAnalysis.amountCandidates.length > 0 && columnAnalysis.amountCandidates.length < (preview.headers?.length || 0)
-                      ? () => toggleColumnPool('amount')
-                    : null
-                  }
                 />
               )}
               <ColSelect
@@ -2056,12 +2437,6 @@ function ImportTab() {
                 value={colPending}
                 onChange={setColPending}
                 hint={columnAnalysis.pendingCandidates.length > 0 && !colPending ? formatLikelyMatchLabel(columnAnalysis.pendingCandidates.length) : ''}
-                showAll={!!expandedColumnPools.pending}
-                onToggleShowAll={
-                  columnAnalysis.pendingCandidates.length > 0 && columnAnalysis.pendingCandidates.length < (preview.headers?.length || 0)
-                    ? () => toggleColumnPool('pending')
-                    : null
-                }
               />
 
               {/* Extra cells for two_column and single_unsigned — push into row 2 start */}
@@ -2074,12 +2449,6 @@ function ImportTab() {
                   onChange={setColCredit}
                   required
                   hint={columnAnalysis.creditCandidates.length > 0 && !colCredit ? formatLikelyMatchLabel(columnAnalysis.creditCandidates.length) : ''}
-                  showAll={!!expandedColumnPools.credit}
-                  onToggleShowAll={
-                    columnAnalysis.creditCandidates.length > 0 && columnAnalysis.creditCandidates.length < (preview.headers?.length || 0)
-                      ? () => toggleColumnPool('credit')
-                      : null
-                  }
                 />
               )}
               {amtConv === 'single_unsigned' && (
@@ -2090,16 +2459,68 @@ function ImportTab() {
                   value={colDir}
                   onChange={setColDir}
                   hint={columnAnalysis.directionCandidates.length > 0 && !colDir ? formatLikelyMatchLabel(columnAnalysis.directionCandidates.length) : ''}
-                  showAll={!!expandedColumnPools.direction}
-                  onToggleShowAll={
-                    columnAnalysis.directionCandidates.length > 0 && columnAnalysis.directionCandidates.length < (preview.headers?.length || 0)
-                      ? () => toggleColumnPool('direction')
-                    : null
-                  }
                 />
               )}
               <ColSelect label="Merchant" headers={preview.headers} value={colDesc} onChange={setColDesc} required />
-              <ColSelect label="Category" headers={preview.headers} value={colCategory} onChange={setColCategory} />
+              <div style={{ position: 'relative' }}>
+                <ColSelect
+                  label="Category"
+                  headers={columnAnalysis.categoryCandidates}
+                  allHeaders={preview.headers}
+                  value={colCategory}
+                  onChange={handleCategoryColumnChange}
+                  hint={categorySelectHint}
+                />
+                {colCategory && sourceCategoryValues.length > 0 ? (
+                  <div style={{ position: 'absolute', width: 'calc(100% - 28px)', right: 0, top: 'calc(100% + 4px)', display: 'grid', justifyItems: remainingCategoryCount > 0 ? 'stretch' : 'end', gap: 6, zIndex: 1 }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setImportCategoryDraft(prev => prev || createImportCategoryMappingDraftState(categories, sourceCategoryValues, categoryAssignments))
+                        setShowCategoryWorkspace(true)
+                      }}
+                      style={{
+                        width: remainingCategoryCount > 0 ? '100%' : 'auto',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: remainingCategoryCount > 0 ? 'space-between' : 'center',
+                        gap: 10,
+                        background: remainingCategoryCount > 0
+                          ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
+                          : 'color-mix(in srgb, var(--surface2) 80%, var(--surface))',
+                        color: remainingCategoryCount > 0 ? 'var(--accent2)' : 'var(--muted)',
+                        border: `1px solid ${remainingCategoryCount > 0 ? 'color-mix(in srgb, var(--accent) 34%, var(--border))' : 'var(--border)'}`,
+                        borderRadius: 999,
+                        padding: '5px 10px',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        boxShadow: remainingCategoryCount > 0 ? '0 1px 1px rgba(0,0,0,0.04)' : 'none',
+                      }}
+                    >
+                      <span>{remainingCategoryCount > 0 ? 'map categories' : 'view category mappings'}</span>
+                      {remainingCategoryCount > 0 ? (
+                        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.01em' }}>
+                          {remainingCategoryCount} awaiting processing
+                        </span>
+                      ) : null}
+                    </button>
+                    {sourceCategoryMeta?.truncated ? (
+                      <div style={{
+                        padding: '7px 10px',
+                        borderRadius: 12,
+                        border: '1px solid color-mix(in srgb, #f59e0b 34%, var(--border))',
+                        background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
+                        color: 'color-mix(in srgb, #f59e0b 72%, var(--text))',
+                        fontSize: 10.5,
+                        lineHeight: 1.4,
+                      }}>
+                        This column has {sourceCategoryMeta.total_count} unique values. Showing the first {sourceCategoryMeta.limit}.
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
 
               {/* Row 2 (or continues from row 1 overflow) */}
               <ColSelect label="Notes" headers={preview.headers} value={colNotes} onChange={setColNotes} />
@@ -2177,63 +2598,90 @@ function ImportTab() {
                 Apply categorization rules on import
               </label>
               {!selectedProfile && (
-                <button
-                  onClick={() => { setSaveProfileName(''); setShowSaveProfile(v => !v) }}
-                  style={{
-                    background: hasImportWorkToSave ? 'color-mix(in srgb, var(--accent) 16%, var(--surface2))' : 'none',
-                    border: `1px solid ${hasImportWorkToSave ? 'var(--accent)' : 'var(--border)'}`,
-                    borderRadius: 6, padding: '5px 12px', fontSize: 12,
-                    cursor: 'pointer', color: hasImportWorkToSave ? 'var(--accent2)' : 'var(--muted)',
-                    fontWeight: hasImportWorkToSave ? 600 : 400,
-                    boxShadow: hasImportWorkToSave ? '0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent)' : 'none',
-                  }}
-                >
-                  ＋ Create profile
-                </button>
+                showSaveProfile ? (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    flexWrap: 'wrap',
+                    justifyContent: 'flex-end',
+                  }}>
+                    <input
+                      autoFocus
+                      value={saveProfileName}
+                      onChange={e => setSaveProfileName(e.target.value)}
+                      placeholder="Profile name"
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && saveProfileName.trim()) saveProfile(saveProfileName)
+                        if (e.key === 'Escape') {
+                          setSaveProfileName('')
+                          setShowSaveProfile(false)
+                        }
+                      }}
+                      style={{
+                        width: 220,
+                        maxWidth: '100%',
+                        background: 'var(--surface)',
+                        color: 'var(--text)',
+                        border: '1px solid var(--accent)',
+                        borderRadius: 999,
+                        padding: '6px 12px',
+                        fontSize: 13,
+                        outline: 'none',
+                      }}
+                    />
+                    <button
+                      onClick={() => saveProfileName.trim() && saveProfile(saveProfileName)}
+                      disabled={!saveProfileName.trim()}
+                      style={{
+                        background: 'var(--accent)',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 999,
+                        padding: '6px 14px',
+                        fontSize: 12,
+                        cursor: saveProfileName.trim() ? 'pointer' : 'not-allowed',
+                        opacity: saveProfileName.trim() ? 1 : 0.5,
+                        fontWeight: 600,
+                      }}
+                    >
+                      Add
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSaveProfileName('')
+                        setShowSaveProfile(false)
+                      }}
+                      style={{
+                        background: 'none',
+                        border: '1px solid var(--border)',
+                        borderRadius: 999,
+                        padding: '6px 12px',
+                        fontSize: 12,
+                        color: 'var(--muted)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => { setSaveProfileName(''); setShowSaveProfile(true) }}
+                    style={{
+                      background: hasImportWorkToSave ? 'color-mix(in srgb, var(--accent) 16%, var(--surface2))' : 'none',
+                      border: `1px solid ${hasImportWorkToSave ? 'var(--accent)' : 'var(--border)'}`,
+                      borderRadius: 6, padding: '5px 12px', fontSize: 12,
+                      cursor: 'pointer', color: hasImportWorkToSave ? 'var(--accent2)' : 'var(--muted)',
+                      fontWeight: hasImportWorkToSave ? 600 : 400,
+                      boxShadow: hasImportWorkToSave ? '0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent)' : 'none',
+                    }}
+                  >
+                    ＋ Create profile
+                  </button>
+                )
               )}
             </div>
-
-            {/* Inline create-profile form — only shown when no profile active */}
-            {!selectedProfile && showSaveProfile && (
-              <div style={{
-                marginTop: 12, padding: '10px 14px',
-                background: 'var(--surface2)', borderRadius: 8,
-                border: '1px solid var(--border)',
-                display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
-              }}>
-                <input
-                  autoFocus
-                  value={saveProfileName}
-                  onChange={e => setSaveProfileName(e.target.value)}
-                  placeholder="Profile name (e.g. Chase Checking)"
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && saveProfileName.trim()) saveProfile(saveProfileName)
-                    if (e.key === 'Escape') setShowSaveProfile(false)
-                  }}
-                  style={{
-                    flex: 1, minWidth: 180, background: 'var(--surface)', color: 'var(--text)',
-                    border: '1px solid var(--accent)', borderRadius: 6,
-                    padding: '5px 8px', fontSize: 13, outline: 'none',
-                  }}
-                />
-                <button
-                  onClick={() => saveProfileName.trim() && saveProfile(saveProfileName)}
-                  disabled={!saveProfileName.trim()}
-                  style={{
-                    background: 'var(--accent)', color: '#fff', border: 'none',
-                    borderRadius: 6, padding: '5px 14px', fontSize: 13,
-                    cursor: saveProfileName.trim() ? 'pointer' : 'not-allowed',
-                    opacity: saveProfileName.trim() ? 1 : 0.5,
-                  }}
-                >
-                  Create
-                </button>
-                <button onClick={() => setShowSaveProfile(false)} style={{
-                  background: 'none', border: 'none', color: 'var(--muted)',
-                  cursor: 'pointer', fontSize: 18, padding: '2px 4px', lineHeight: 1,
-                }}>×</button>
-              </div>
-            )}
           </Card>
           ) : null}
 
@@ -2373,19 +2821,19 @@ function ImportTab() {
             <div style={{ padding: '10px 16px', fontSize: 13, fontWeight: 600, borderBottom: '1px solid var(--border)' }}>
               First {previewRows.length} transactions from file
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: `${colCategory ? '140px ' : ''}110px 1fr${colAccount ? ' 130px' : ''} 100px`, padding: '7px 16px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)' }}>
-              {colCategory && <span>Category</span>}
+            <div style={{ display: 'grid', gridTemplateColumns: `110px 1fr${colCategory ? ' 140px' : ''}${colAccount ? ' 130px' : ''} 100px`, padding: '7px 16px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)' }}>
               <span>Date</span><span>Merchant</span>
+              {colCategory && <span>Category</span>}
               {colAccount && <span>Account</span>}
               <span style={{ textAlign: 'right' }}>Amount</span>
             </div>
             {previewRows.length === 0 ? (
               <div style={{ padding: '16px', fontSize: 13, color: 'var(--muted)', textAlign: 'center' }}>Map at least the date and description columns to see a preview</div>
             ) : previewRows.map(r => (
-              <div key={r.i} style={{ display: 'grid', gridTemplateColumns: `${colCategory ? '140px ' : ''}110px 1fr${colAccount ? ' 130px' : ''} 100px`, padding: '8px 16px', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
-                {colCategory && <span style={{ fontSize: 12, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.rawCat || <span style={{ opacity: 0.4 }}>—</span>}</span>}
+              <div key={r.i} style={{ display: 'grid', gridTemplateColumns: `110px 1fr${colCategory ? ' 140px' : ''}${colAccount ? ' 130px' : ''} 100px`, padding: '8px 16px', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
                 <span style={{ color: r.rawDate ? 'var(--text)' : 'var(--muted)', fontSize: 12 }}>{r.rawDate || <span style={{ opacity: 0.4 }}>—</span>}</span>
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.rawDesc || <span style={{ color: 'var(--muted)', opacity: 0.4 }}>—</span>}</span>
+                {colCategory && <span style={{ fontSize: 12, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.rawCat || <span style={{ opacity: 0.4 }}>—</span>}</span>}
                 {colAccount && <span style={{ fontSize: 12, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.rawAcct || <span style={{ opacity: 0.4 }}>—</span>}</span>}
                 <span style={{ textAlign: 'right', fontWeight: 600, color: r.amount !== null ? (r.amount < 0 ? 'var(--success)' : 'var(--text)') : 'var(--danger)', fontSize: r.amount !== null ? 13 : 11 }}>
                   {r.amount !== null
@@ -3147,11 +3595,11 @@ function BackupRestoreTab() {
 export default function ImportExport() {
   const [tab, setTab] = useState('import')
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
         <PageHeader title="Import / Export" />
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
         <div style={{ display: 'flex', marginBottom: 24, borderBottom: '1px solid var(--border)' }}>
         {[['import', 'Import'], ['export', 'Export'], ['backup', 'Backup / Restore']].map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)} style={{ padding: '8px 24px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, color: tab === id ? 'var(--text)' : 'var(--muted)', borderBottom: tab === id ? '2px solid var(--accent)' : '2px solid transparent', fontWeight: tab === id ? 500 : 400 }}>{label}</button>

@@ -1,4 +1,6 @@
 import uuid
+import json
+from collections import Counter
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -26,6 +28,101 @@ def _get_affected_category_ids(conn, category_id: str) -> list[str]:
             (category_id,),
         ).fetchall()
     ]
+
+
+def _safe_json_object(raw_value: str | None) -> dict:
+    if not raw_value:
+        return {}
+    try:
+        parsed = json.loads(raw_value)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _extract_category_assignments(payload: dict) -> dict[str, str]:
+    if not isinstance(payload, dict):
+        return {}
+    assignments = payload.get("category_assignments")
+    if not isinstance(assignments, dict):
+        column_map = payload.get("column_map")
+        if isinstance(column_map, dict):
+            assignments = column_map.get("category_assignments")
+    if not isinstance(assignments, dict):
+        return {}
+    return {
+        str(raw_value): str(category_id)
+        for raw_value, category_id in assignments.items()
+        if raw_value is not None and category_id
+    }
+
+
+def _collect_mapping_counts(conn, table: str, json_column: str) -> Counter:
+    counts: Counter = Counter()
+    rows = conn.execute(
+        f"SELECT {json_column} AS payload_json FROM {table}"
+    ).fetchall()
+    for row in rows:
+        payload = _safe_json_object(row["payload_json"])
+        for category_id in _extract_category_assignments(payload).values():
+            counts[category_id] += 1
+    return counts
+
+
+def _rewrite_category_assignments_in_payload(payload: dict, affected_ids: set[str], replacement_category_id: str | None) -> tuple[dict, bool]:
+    if not isinstance(payload, dict):
+        return payload, False
+
+    changed = False
+
+    def rewrite(assignments: dict | None) -> dict | None:
+        nonlocal changed
+        if not isinstance(assignments, dict):
+            return assignments
+        next_assignments = {}
+        for raw_value, category_id in assignments.items():
+            category_id_str = str(category_id) if category_id is not None else None
+            if category_id_str and category_id_str in affected_ids:
+                changed = True
+                if replacement_category_id:
+                    next_assignments[raw_value] = replacement_category_id
+                continue
+            next_assignments[raw_value] = category_id
+        return next_assignments
+
+    if "category_assignments" in payload:
+        payload["category_assignments"] = rewrite(payload.get("category_assignments"))
+
+    column_map = payload.get("column_map")
+    if isinstance(column_map, dict) and "category_assignments" in column_map:
+        column_map = dict(column_map)
+        column_map["category_assignments"] = rewrite(column_map.get("category_assignments"))
+        payload["column_map"] = column_map
+
+    return payload, changed
+
+
+def _collect_delete_impact(conn, affected_ids: list[str]) -> dict:
+    placeholders = ",".join("?" for _ in affected_ids)
+    txn_row = conn.execute(
+        f"SELECT COUNT(*) AS txn_count FROM txn WHERE category_id IN ({placeholders})",
+        affected_ids,
+    ).fetchone()
+    rule_row = conn.execute(
+        f"SELECT COUNT(*) AS rule_count FROM category_rule WHERE category_id IN ({placeholders})",
+        affected_ids,
+    ).fetchone()
+    profile_mapping_count = sum(_collect_mapping_counts(conn, "csv_import_profile", "column_map").get(category_id, 0) for category_id in affected_ids)
+    batch_mapping_count = sum(_collect_mapping_counts(conn, "import_batch", "config_snapshot").get(category_id, 0) for category_id in affected_ids)
+    txn_count = int(txn_row["txn_count"] if txn_row else 0)
+    rule_count = int(rule_row["rule_count"] if rule_row else 0)
+    return {
+        "txn_count": txn_count,
+        "rule_count": rule_count,
+        "profile_mapping_count": int(profile_mapping_count),
+        "batch_mapping_count": int(batch_mapping_count),
+        "is_in_use": any([txn_count, rule_count, profile_mapping_count, batch_mapping_count]),
+    }
 
 
 class CategoryCreate(BaseModel):
@@ -112,6 +209,59 @@ def list_categories_flat():
     return [dict(r) for r in rows]
 
 
+@router.get("/usage-summary")
+def get_category_usage_summary():
+    with get_db() as conn:
+        category_ids = [
+            row["id"]
+            for row in conn.execute("SELECT id FROM category").fetchall()
+        ]
+
+        txn_counts = {
+            row["category_id"]: row["txn_count"]
+            for row in conn.execute(
+                """
+                SELECT category_id, COUNT(*) AS txn_count
+                FROM txn
+                WHERE category_id IS NOT NULL
+                GROUP BY category_id
+                """
+            ).fetchall()
+        }
+        rule_counts = {
+            row["category_id"]: row["rule_count"]
+            for row in conn.execute(
+                """
+                SELECT category_id, COUNT(*) AS rule_count
+                FROM category_rule
+                GROUP BY category_id
+                """
+            ).fetchall()
+        }
+        profile_mapping_counts = _collect_mapping_counts(conn, "csv_import_profile", "column_map")
+        batch_mapping_counts = _collect_mapping_counts(conn, "import_batch", "config_snapshot")
+
+    summary = {}
+    for category_id in category_ids:
+        txn_count = int(txn_counts.get(category_id, 0) or 0)
+        rule_count = int(rule_counts.get(category_id, 0) or 0)
+        profile_mapping_count = int(profile_mapping_counts.get(category_id, 0) or 0)
+        batch_mapping_count = int(batch_mapping_counts.get(category_id, 0) or 0)
+        summary[category_id] = {
+            "txn_count": txn_count,
+            "rule_count": rule_count,
+            "profile_mapping_count": profile_mapping_count,
+            "batch_mapping_count": batch_mapping_count,
+            "is_in_use": any([
+                txn_count,
+                rule_count,
+                profile_mapping_count,
+                batch_mapping_count,
+            ]),
+        }
+    return summary
+
+
 @router.post("")
 def create_category(body: CategoryCreate):
     cid = str(uuid.uuid4())
@@ -170,15 +320,11 @@ def delete_category_preview(category_id: str):
         if not cat:
             raise HTTPException(status_code=404, detail="Not found")
         affected_ids = _get_affected_category_ids(conn, category_id)
-        placeholders = ",".join("?" for _ in affected_ids)
-        row = conn.execute(
-            f"SELECT COUNT(*) AS txn_count FROM txn WHERE category_id IN ({placeholders})",
-            affected_ids,
-        ).fetchone()
+        impact = _collect_delete_impact(conn, affected_ids)
     return {
         "category_id": cat["id"],
         "category_name": cat["name"],
-        "txn_count": row["txn_count"] if row else 0,
+        **impact,
         "affected_category_ids": affected_ids,
     }
 
@@ -222,6 +368,38 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
                 """,
                 affected_ids,
             )
+
+        affected_id_set = set(affected_ids)
+        profile_rows = conn.execute(
+            "SELECT id, column_map FROM csv_import_profile"
+        ).fetchall()
+        for row in profile_rows:
+            payload, changed = _rewrite_category_assignments_in_payload(
+                _safe_json_object(row["column_map"]),
+                affected_id_set,
+                replacement_category_id,
+            )
+            if changed:
+                conn.execute(
+                    "UPDATE csv_import_profile SET column_map = ? WHERE id = ?",
+                    (json.dumps(payload), row["id"]),
+                )
+
+        batch_rows = conn.execute(
+            "SELECT id, config_snapshot FROM import_batch"
+        ).fetchall()
+        for row in batch_rows:
+            payload, changed = _rewrite_category_assignments_in_payload(
+                _safe_json_object(row["config_snapshot"]),
+                affected_id_set,
+                replacement_category_id,
+            )
+            if changed:
+                conn.execute(
+                    "UPDATE import_batch SET config_snapshot = ? WHERE id = ?",
+                    (json.dumps(payload), row["id"]),
+                )
+
         # Re-parent children to the deleted category's parent
         conn.execute(
             """UPDATE category SET parent_id = (

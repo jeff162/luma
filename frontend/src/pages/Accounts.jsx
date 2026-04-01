@@ -20,6 +20,21 @@ function accountTypeIcon(type) {
   return map[type] || '🏦'
 }
 
+function isSharedOwner(owner) {
+  return !!owner?.is_shared || (owner?.name || '').trim().toLowerCase() === 'shared'
+}
+
+function getPersonalOwners(owners) {
+  return owners.filter(owner => !isSharedOwner(owner))
+}
+
+function getAssignableOwners(owners) {
+  const personalOwners = getPersonalOwners(owners)
+  if (personalOwners.length <= 1) return personalOwners
+  const sharedOwner = owners.find(isSharedOwner)
+  return sharedOwner ? [...personalOwners, sharedOwner] : personalOwners
+}
+
 function HeaderPill({ children, style }) {
   return (
     <span style={{
@@ -215,22 +230,24 @@ function DraftAccountRow({ owners, onCreate, onCancel, creating }) {
   const [ownerId, setOwnerId] = useState('')
   const [ownerError, setOwnerError] = useState('')
   const nameRef = useRef(null)
+  const personalOwners = getPersonalOwners(owners)
+  const assignableOwners = getAssignableOwners(owners)
 
   useEffect(() => {
     nameRef.current?.focus()
   }, [])
 
   useEffect(() => {
-    if (owners.length === 1) {
-      setOwnerId(owners[0].id)
+    if (personalOwners.length === 1) {
+      setOwnerId(personalOwners[0].id)
       setOwnerError('')
     }
-  }, [owners])
+  }, [personalOwners])
 
   async function submit() {
     const trimmed = name.trim()
     if (!trimmed || creating) return
-    if (owners.length > 1 && !ownerId) {
+    if (personalOwners.length > 1 && !ownerId) {
       setOwnerError('Select an owner before creating this account.')
       return
     }
@@ -238,7 +255,7 @@ function DraftAccountRow({ owners, onCreate, onCancel, creating }) {
     await onCreate({ name: trimmed, type, owner_id: ownerId || null })
     setName('')
     setType('depository')
-    setOwnerId(owners.length === 1 ? owners[0]?.id || '' : '')
+    setOwnerId(personalOwners.length === 1 ? personalOwners[0]?.id || '' : '')
   }
 
   return (
@@ -291,8 +308,8 @@ function DraftAccountRow({ owners, onCreate, onCancel, creating }) {
         <div style={{ display: 'flex', justifyContent: 'center', minWidth: 0 }}>
           <PillSelect
             value={ownerId}
-            placeholder={owners.length > 1 ? 'Owner required' : 'Owner'}
-            options={owners.map(o => ({ value: o.id, label: o.name }))}
+            placeholder={personalOwners.length > 1 ? 'Owner required' : 'Owner'}
+            options={assignableOwners.map(o => ({ value: o.id, label: o.name }))}
             onChange={value => {
               setOwnerId(value)
               setOwnerError('')
@@ -333,6 +350,7 @@ function DraftAccountRow({ owners, onCreate, onCancel, creating }) {
 }
 
 function OwnerPill({ owner, editing, draft, onDraftChange, onStartEdit, onCommitEdit, onCancelEdit, onContextMenu }) {
+  const shared = isSharedOwner(owner)
   if (editing) {
     return (
       <input
@@ -362,7 +380,7 @@ function OwnerPill({ owner, editing, draft, onDraftChange, onStartEdit, onCommit
     <button
       type="button"
       onClick={onStartEdit}
-      onContextMenu={onContextMenu}
+      onContextMenu={shared ? (e => e.preventDefault()) : onContextMenu}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -374,10 +392,13 @@ function OwnerPill({ owner, editing, draft, onDraftChange, onStartEdit, onCommit
         background: 'var(--surface2)',
         color: 'var(--text)',
         fontSize: 12,
-        cursor: 'text',
+        fontStyle: shared ? 'italic' : 'normal',
+        cursor: shared ? 'default' : 'text',
         whiteSpace: 'nowrap',
+        opacity: shared ? 0.86 : 1,
       }}
-      title="Click to rename"
+      title={shared ? 'Built-in shared owner' : 'Click to rename'}
+      disabled={shared}
     >
       {owner.name}
     </button>
@@ -390,6 +411,7 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabl
   const [creatingOwner, setCreatingOwner] = useState(false)
   const [newOwnerDraft, setNewOwnerDraft] = useState('')
   const [ownerMenu, setOwnerMenu] = useState(null)
+  const newOwnerInputRef = useRef(null)
 
   useEffect(() => {
     if (disabled) {
@@ -414,6 +436,15 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabl
       window.removeEventListener('blur', handleClose)
     }
   }, [ownerMenu])
+
+  useLayoutEffect(() => {
+    if (!creatingOwner) return
+    const id = requestAnimationFrame(() => {
+      newOwnerInputRef.current?.focus()
+      newOwnerInputRef.current?.select?.()
+    })
+    return () => cancelAnimationFrame(id)
+  }, [creatingOwner])
 
   async function commitEdit() {
     const trimmed = ownerDraft.trim()
@@ -508,7 +539,7 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabl
                   background: 'color-mix(in srgb, var(--surface2) 74%, var(--surface))',
                 }}>
                   <input
-                    autoFocus
+                    ref={newOwnerInputRef}
                     value={newOwnerDraft}
                     onChange={e => setNewOwnerDraft(e.target.value)}
                     onKeyDown={e => {
@@ -564,7 +595,7 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabl
           ) : creatingOwner ? (
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <input
-                autoFocus
+                ref={newOwnerInputRef}
                 value={newOwnerDraft}
                 onChange={e => setNewOwnerDraft(e.target.value)}
                 onKeyDown={e => {
@@ -625,6 +656,10 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabl
             >
               <button
                 onClick={() => {
+                  if (isSharedOwner(ownerMenu.owner)) {
+                    setOwnerMenu(null)
+                    return
+                  }
                   setOwnerMenu(null)
                   setCreatingOwner(false)
                   setEditingOwnerId(ownerMenu.owner.id)
@@ -642,6 +677,7 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabl
                 onClick={async () => {
                   const owner = ownerMenu.owner
                   setOwnerMenu(null)
+                  if (isSharedOwner(owner)) return
                   await onDeleteOwner(owner)
                 }}
                 style={{
@@ -700,7 +736,10 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
         top: rect.top + rect.height / 2,
       })
     }
-    ownerInputRef.current?.focus()
+    const focusId = requestAnimationFrame(() => {
+      ownerInputRef.current?.focus()
+      ownerInputRef.current?.select?.()
+    })
     function handleClose(e) {
       if (ownerCreateRef.current?.contains(e.target)) return
       setShowOwnerCreate(false)
@@ -719,6 +758,7 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
     window.addEventListener('resize', updatePosition)
     window.addEventListener('scroll', updatePosition, true)
     return () => {
+      cancelAnimationFrame(focusId)
       document.removeEventListener('mousedown', handleClose)
       window.removeEventListener('resize', updatePosition)
       window.removeEventListener('scroll', updatePosition, true)
@@ -786,6 +826,7 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
   async function handleRenameOwner() {
     if (!account.owner_id) return
     const current = owners.find(o => o.id === account.owner_id)
+    if (isSharedOwner(current)) return
     const next = window.prompt('Rename owner', current?.name || account.owner_name || '')
     setOwnerMenu(null)
     if (!next || !next.trim()) return
@@ -796,12 +837,15 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
   async function handleDeleteOwner() {
     if (!account.owner_id) return
     const current = owners.find(o => o.id === account.owner_id)
+    if (isSharedOwner(current)) return
     setOwnerMenu(null)
     if (!window.confirm(`Delete owner "${current?.name || account.owner_name || 'owner'}"? Their accounts and categories will become unassigned.`)) return
     await onDeleteOwner(current || { id: account.owner_id, name: account.owner_name || 'owner' })
   }
 
   const displayOwnerId = account.owner_id || ''
+  const personalOwners = getPersonalOwners(owners)
+  const assignableOwners = getAssignableOwners(owners)
 
   return (
     <div ref={rowRef} style={{ position: 'relative', borderBottom: '1px solid var(--border)' }}>
@@ -909,11 +953,11 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
         />
 
         <div ref={ownerAnchorRef} style={{ display: 'flex', justifyContent: 'center', minWidth: 0, position: 'relative' }}>
-          {owners.length > 0 ? (
+          {assignableOwners.length > 0 ? (
             <PillSelect
               value={displayOwnerId}
               placeholder="Assign owner"
-              options={owners.map(o => ({ value: o.id, label: o.name }))}
+              options={assignableOwners.map(o => ({ value: o.id, label: o.name }))}
               onChange={changeOwner}
               minOpenWidth={138}
               createLabel="Create owner..."
@@ -921,7 +965,7 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
                 setOwnerDraft('')
                 setShowOwnerCreate(true)
               }}
-              onContextMenu={account.owner_id ? (e => {
+              onContextMenu={account.owner_id && !isSharedOwner(owners.find(o => o.id === account.owner_id)) ? (e => {
                 e.preventDefault()
                 setOwnerMenu({ x: e.clientX, y: e.clientY })
               }) : null}
@@ -1340,12 +1384,7 @@ export default function Accounts() {
   async function deleteOwner(owner) {
     if (!confirm(`Delete owner "${owner.name}"? Their accounts and categories will become unassigned.`)) return
     await api.deleteOwner(owner.id)
-    setOwners(prev => prev.filter(o => o.id !== owner.id))
-    setAccounts(prev => prev.map(account => (
-      account.owner_id === owner.id
-        ? { ...account, owner_id: null, owner_name: null, owner_color: null }
-        : account
-    )))
+    loadData()
     refreshTaskBadge()
   }
 
@@ -1372,7 +1411,7 @@ export default function Accounts() {
   const hasPlaidConnected = accounts.some(a => a.plaid_item_id && a.plaid_item_id !== 'csv_import' && a.plaid_item_id !== 'manual')
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
         <div style={{
           display: 'flex',
@@ -1386,7 +1425,7 @@ export default function Accounts() {
         </div>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
         <div
           onContextMenu={e => {
             if (showCreateAccount) return

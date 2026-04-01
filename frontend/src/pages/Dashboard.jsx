@@ -40,7 +40,7 @@
  *   passing account_ids to the summary endpoints and aggregating server-side.
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
   BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Legend, ReferenceLine,
@@ -545,7 +545,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
 
 // ── Owner Split Panel ─────────────────────────────────────────────────────────
 
-function OwnerSplitPanel({ owners, ownerSplitData, onDrill }) {
+function OwnerSplitPanel({ owners, sharedOwnerId, ownerSplitData, onDrill }) {
   const activeOwners = owners.filter(o => ownerSplitData[o.id]?.length > 0)
   if (activeOwners.length === 0) {
     return (
@@ -562,9 +562,8 @@ function OwnerSplitPanel({ owners, ownerSplitData, onDrill }) {
     Object.values(ownerSplitData).flatMap(rows => rows.map(r => r.group_id))
   )]
 
-  // A group is "shared" when its owner_id is null.
   function isSharedGroup(anyRow) {
-    return anyRow.group_owner_id === null
+    return !!sharedOwnerId && anyRow.group_owner_id === sharedOwnerId
   }
 
   return (
@@ -684,6 +683,8 @@ export default function Dashboard() {
   const [splitByOwner, setSplitByOwner] = useState(false)
   const [owners, setOwners]             = useState([])
   const [ownerSplitData, setOwnerSplitData] = useState({}) // { ownerId: groupRows }
+  const personalOwners = useMemo(() => owners.filter(owner => !owner.is_shared), [owners])
+  const sharedOwnerId = useMemo(() => owners.find(owner => owner.is_shared)?.id || null, [owners])
 
   // Single mode
   const [groupRows,  setGroupRows]  = useState([])
@@ -756,23 +757,23 @@ export default function Dashboard() {
 
   // ── Owner split data load ───────────────────────────────────────────────────
   // Fetches all groups once (no owner filter), then the frontend splits them
-  // by group_owner_id. Shared groups (null owner) appear in every column.
+  // by group_owner_id. Explicit Shared groups appear in every personal-owner column.
   useEffect(() => {
-    if (mode !== 'single' || !splitByOwner || owners.length === 0) return
+    if (mode !== 'single' || !splitByOwner || personalOwners.length === 0) return
     api.getGroupTotals(null, accountId || undefined, dateStart, dateEnd)
       .then(allRows => {
         const filtered = allRows.filter(r => r.category_type !== 'income')
-        // Build per-owner buckets: each owner gets their own groups + shared groups
+        // Build per-owner buckets: each personal owner gets their own groups + shared groups
         const byOwner = {}
-        for (const owner of owners) {
+        for (const owner of personalOwners) {
           byOwner[owner.id] = filtered.filter(r =>
             r.group_owner_id === owner.id ||
-            r.group_owner_id === null
+            (sharedOwnerId && r.group_owner_id === sharedOwnerId)
           )
         }
         setOwnerSplitData(byOwner)
       })
-  }, [mode, splitByOwner, owners, accountId, dateStart, dateEnd, filters])
+  }, [mode, splitByOwner, personalOwners, sharedOwnerId, accountId, dateStart, dateEnd, filters])
 
   // ── Compare mode load ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -918,11 +919,11 @@ export default function Dashboard() {
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
       <PageHeader title="Dashboard">
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {mode === 'single' && owners.length > 0 && (
+          {mode === 'single' && personalOwners.length > 0 && (
             <button
               onClick={() => setSplitByOwner(v => !v)}
               style={{
@@ -957,7 +958,7 @@ export default function Dashboard() {
       </PageHeader>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
 
       {mode === 'compare' && (
         <div style={{ display: 'flex', gap: 20, marginBottom: 24, flexWrap: 'wrap' }}>
@@ -1007,7 +1008,8 @@ export default function Dashboard() {
               {/* ── Owner split view ── */}
               {splitByOwner && level === 'groups' && (
                 <OwnerSplitPanel
-                  owners={owners}
+                  owners={personalOwners}
+                  sharedOwnerId={sharedOwnerId}
                   ownerSplitData={ownerSplitData}
                   onDrill={drillToCategories}
                 />

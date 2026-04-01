@@ -296,7 +296,7 @@ export default function Rules() {
   }, [location.pathname, location.state, navigate])
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
 
       {/* Page header */}
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
@@ -322,7 +322,7 @@ export default function Rules() {
       </div>
 
       {/* Scrollable content */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 32px 32px' }}>
+      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 32px 32px' }}>
 
         {/* Add rule form */}
         {showCreateForm && (

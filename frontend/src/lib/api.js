@@ -187,6 +187,7 @@ export const api = {
   // Categories
   getCategoryTree: () => request('/categories'),
   getCategories: () => request('/categories/flat'),
+  getCategoryUsageSummary: () => request('/categories/usage-summary'),
   createCategory: (data) => request('/categories', { method: 'POST', body: JSON.stringify(data) }),
   getCategoryDeletePreview: (id) => request(`/categories/${id}/delete-preview`),
   deleteCategory: (id, data = {}) => request(`/categories/${id}`, { method: 'DELETE', body: JSON.stringify(data) }),

@@ -59,7 +59,7 @@ DESIGN PRINCIPLES:
 from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from db.database import get_db
+from db.database import get_db, get_shared_owner_id
 
 router = APIRouter()
 
@@ -355,21 +355,21 @@ def spending_by_group(
             clauses.append(f"t.owner_id IN ({placeholders})")
             params.extend(ids)
 
-    # Category-owner filter (used by Dashboard — filters on the group's owner_id)
-    # NULL category owner is treated as Shared and always included when filtering
-    if category_owner_ids:
-        ids = [i.strip() for i in category_owner_ids.split(',') if i.strip()]
-        placeholders = ','.join('?' * len(ids))
-        clauses.append(
-            f"(COALESCE(p.id, c.id) IS NULL OR "
-            f"COALESCE(p.owner_id, c.owner_id) IS NULL OR "
-            f"COALESCE(p.owner_id, c.owner_id) IN ({placeholders}))"
-        )
-        params.extend(ids)
-
-    where = "WHERE " + " AND ".join(clauses)
-
     with get_db() as conn:
+        if category_owner_ids:
+            ids = [i.strip() for i in category_owner_ids.split(',') if i.strip()]
+            shared_owner_id = get_shared_owner_id(conn)
+            filter_ids = list(ids)
+            if shared_owner_id and shared_owner_id not in filter_ids:
+                filter_ids.append(shared_owner_id)
+            placeholders = ','.join('?' * len(filter_ids))
+            clauses.append(
+                f"(COALESCE(p.id, c.id) IS NULL OR "
+                f"COALESCE(p.owner_id, c.owner_id) IN ({placeholders}))"
+            )
+            params.extend(filter_ids)
+
+        where = "WHERE " + " AND ".join(clauses)
         rows = conn.execute(
             f"""
             SELECT

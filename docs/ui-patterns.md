@@ -48,6 +48,14 @@ not left for follow-up cleanup after page-specific issues are discovered.
   inline editors, overlays, tables, selectors, and other controls that appear
   on more than one page should keep the same look, spacing, and behavior unless
   there is a very strong reason to diverge.
+- When a UI behavior is meant to be shared, implement the shared behavior first.
+  Do not land a one-sided or page-specific version and plan to “sync it up”
+  later unless the narrower scope is intentional and explicitly documented.
+- Before changing a UI interaction, decide whether it is:
+  1. page-specific behavior
+  2. shared product language
+  If it is shared product language, the implementation and review standard
+  should assume parity across all affected surfaces from the start.
 - Keep advanced and less-common settings below everyday workflows.
 - Use inline editing for lightweight data changes; reserve dedicated forms or
   modals for multi-step or higher-risk actions.
