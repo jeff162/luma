@@ -178,6 +178,27 @@ CSV import has a few special rules:
   everything into the initial import form.
 - Mapping screens should allow partial completion when that is a valid workflow.
 
+### Import mapping persistence
+
+Import mapping persistence has two layers, with different responsibilities:
+
+- The import profile/filter is the source of truth for provider-level reusable
+  mapping behavior.
+- A local draft exists only as a fallback for the no-profile/manual case.
+
+When a profile matches, it should carry the reusable import workspace state,
+including:
+
+- column mapping
+- account mapping and skips
+- category mappings
+- category mapping workspace state such as `Set Aside`
+- collapsed/open bucket state
+
+The local draft must not override a matched profile. It is only there so a
+manual/no-profile import session can resume later if the next file still looks
+compatible.
+
 ## Ownership rules
 
 Ownership should be managed where it is most relevant:
@@ -185,6 +206,15 @@ Ownership should be managed where it is most relevant:
 - Account owners are created, assigned, renamed, and deleted on the Accounts page.
 - Category and group ownership is managed on the Categories page.
 - Avoid duplicate ownership editors in multiple places.
+
+Category ownership semantics are different from account ownership and should be
+kept explicit:
+
+- Accounts use explicit ownership only.
+- Category groups can resolve to shared ownership when more than one personal
+  owner exists.
+- Child categories with `owner_id = NULL` inherit from their group.
+- Explicitly owned child categories must not be rewritten when the group owner changes.
 
 ## When to document a new pattern
 

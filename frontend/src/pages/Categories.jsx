@@ -34,6 +34,8 @@ function getSectionStorageKey(instanceId, userId) {
 //                               otherwise the sole personal owner
 //   category.owner_id = NULL  → inherit the parent group's effective owner
 //   owner_id = <id>           → explicitly owned by that personal owner
+// Important: changing a group owner must not rewrite explicitly owned children.
+// Only children with owner_id = NULL should track future group-owner changes.
 // ---------------------------------------------------------------------------
 function isSharedOwner(owner) {
   return !!owner?.is_shared || (owner?.name || '').trim().toLowerCase() === 'shared'

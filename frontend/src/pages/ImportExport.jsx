@@ -154,6 +154,15 @@ function deriveImportSourceHints(previewLike) {
   }
 }
 
+// Import persistence model:
+// - If a matching profile exists, the profile is the source of truth for reusable
+//   import state (column mapping, account mapping, category mapping workspace,
+//   set-aside list, collapsed bucket state, etc.).
+// - Local draft storage is only the "last manual import draft" fallback for the
+//   no-profile case. It should never override a matched profile.
+// - The local draft is header-compatible rather than file-specific, so manual
+//   mapping work can carry forward only when the next file still looks like the
+//   same provider shape.
 function getImportDraftStorageKey(instanceId, subjectId) {
   return instanceId && subjectId ? `fintrack.importDraft.v2.${instanceId}.${subjectId}` : null
 }
@@ -1656,6 +1665,12 @@ function ImportTab() {
       setCategoryMappingRows([])
       setCategoryMappingSummary(null)
       const savedDraft = loadSavedImportDraft(result, dbInstanceId, preferenceSubjectId)
+      // Restore precedence matters here:
+      // 1. matched profile/filter
+      // 2. last manual import draft
+      // 3. previous batch snapshot
+      // This keeps provider-level reusable behavior with the profile while still
+      // allowing a no-profile/manual session to resume cleanly.
       if (result.suggested_profile_id) {
         applyProfile(result.suggested_profile_id)
       } else if (savedDraft) {

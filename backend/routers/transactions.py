@@ -363,6 +363,8 @@ def spending_by_group(
             if shared_owner_id and shared_owner_id not in filter_ids:
                 filter_ids.append(shared_owner_id)
             placeholders = ','.join('?' * len(filter_ids))
+            # Explicit category ownership must win over the parent/group owner.
+            # Only unowned child categories inherit from the group.
             clauses.append(
                 f"(COALESCE(p.id, c.id) IS NULL OR "
                 f"COALESCE(c.owner_id, p.owner_id) IN ({placeholders}))"
@@ -376,6 +378,7 @@ def spending_by_group(
                 COALESCE(p.id,              c.id,              'uncategorized') AS group_id,
                 COALESCE(p.name,            c.name,            'Uncategorized') AS group_name,
                 COALESCE(p.color,           c.color,           '#9E9E9E')       AS group_color,
+                -- Child owner_id takes precedence; only NULL children inherit the group owner.
                 COALESCE(c.owner_id,        p.owner_id)                          AS group_owner_id,
                 COALESCE(p.category_type,   c.category_type)                     AS category_type,
                 ABS(SUM(t.amount))                                               AS total,

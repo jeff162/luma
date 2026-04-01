@@ -87,6 +87,9 @@ function sanitizeSnapshotForPersistence(snapshot) {
     if (mapping?.targetId && removedIds.has(mapping.targetId)) delete next.mappings[rawValue]
   }
 
+  // setAsideOrder is part of the reusable mapping workspace state. It is not
+  // transient UI chrome and should stay separate from sourceOrder so provider-
+  // level "set aside" decisions can survive save/restore with the import profile.
   if (removedSourceValues.length) {
     const existing = new Set([...(next.sourceOrder || []), ...(next.setAsideOrder || [])])
     next.sourceOrder = Array.from(new Set([...(next.sourceOrder || []), ...removedSourceValues.filter(value => !existing.has(value) || (next.sourceOrder || []).includes(value))]))
