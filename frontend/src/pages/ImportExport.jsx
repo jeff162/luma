@@ -21,7 +21,7 @@ import { refreshTaskBadge } from '../App.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { Card, PageHeader, Button, Spinner, EmptyState } from '../components/ui.jsx'
 import CategoryPicker from '../components/CategoryPicker.jsx'
-import ImportCategoryMappingWorkspace from '../components/ImportCategoryMappingWorkspaceBuckets.jsx'
+import ImportCategoryMappingWorkspace from '../components/ImportCategoryMappingWorkspace.jsx'
 import { cloneImportCategoryMappingSnapshot, createImportCategoryMappingDraftState } from '../lib/importCategoryMappingState.js'
 import { formatCurrency } from '../lib/utils.js'
 
@@ -149,39 +149,49 @@ function deriveImportSourceHints(previewLike) {
   const filename = previewLike?.filename || ''
   const filenamePattern = filename.replace(/[_\-\d.]+\.(csv)$/i, '').trim().toLowerCase()
   return {
-    fileContentHash: previewLike?.file_content_hash || '',
     headerFingerprint: previewLike?.header_fingerprint || '',
     filenamePattern,
   }
 }
 
-function getImportDraftsStorageKey(instanceId, subjectId) {
-  return instanceId && subjectId ? `fintrack.importDrafts.v1.${instanceId}.${subjectId}` : null
+function getImportDraftStorageKey(instanceId, subjectId) {
+  return instanceId && subjectId ? `fintrack.importDraft.v2.${instanceId}.${subjectId}` : null
 }
 
 function loadSavedImportDraft(previewLike, instanceId, subjectId) {
-  const storageKey = getImportDraftsStorageKey(instanceId, subjectId)
+  const storageKey = getImportDraftStorageKey(instanceId, subjectId)
   if (!storageKey) return null
   try {
     const raw = window.localStorage.getItem(storageKey)
     if (!raw) return null
-    const drafts = JSON.parse(raw)
-    const { fileContentHash } = deriveImportSourceHints(previewLike)
-    return fileContentHash ? (drafts[fileContentHash] || null) : null
+    const saved = JSON.parse(raw)
+    const { headerFingerprint } = deriveImportSourceHints(previewLike)
+    if (!saved?.snapshot) return null
+    if (saved.headerFingerprint && headerFingerprint && saved.headerFingerprint !== headerFingerprint) return null
+    return saved.snapshot
   } catch {
     return null
   }
 }
 
 function saveImportDraft(previewLike, snapshot, instanceId, subjectId) {
-  const storageKey = getImportDraftsStorageKey(instanceId, subjectId)
+  const storageKey = getImportDraftStorageKey(instanceId, subjectId)
   if (!storageKey) return
   try {
-    const raw = window.localStorage.getItem(storageKey)
-    const drafts = raw ? JSON.parse(raw) : {}
-    const { fileContentHash } = deriveImportSourceHints(previewLike)
-    if (fileContentHash) drafts[fileContentHash] = snapshot
-    window.localStorage.setItem(storageKey, JSON.stringify(drafts))
+    const { headerFingerprint, filenamePattern } = deriveImportSourceHints(previewLike)
+    window.localStorage.setItem(storageKey, JSON.stringify({
+      headerFingerprint,
+      filenamePattern,
+      snapshot,
+    }))
+  } catch {}
+}
+
+function clearSavedImportDraft(instanceId, subjectId) {
+  const storageKey = getImportDraftStorageKey(instanceId, subjectId)
+  if (!storageKey) return
+  try {
+    window.localStorage.removeItem(storageKey)
   } catch {}
 }
 
@@ -1352,11 +1362,11 @@ function ImportTab() {
   )
 
   useEffect(() => {
-    if (!preview || !hasImportWorkToSave) return
+    if (!preview || !hasImportWorkToSave || selectedProfile) return
     saveImportDraft(preview, buildImportSnapshot(), dbInstanceId, preferenceSubjectId)
   }, [
     dbInstanceId, preferenceSubjectId,
-    preview, hasImportWorkToSave, accountId, dateFormat, amtConv, skipRows, applyCat,
+    preview, hasImportWorkToSave, selectedProfile, accountId, dateFormat, amtConv, skipRows, applyCat,
     colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount,
     singleAccountNew, accountMap, categoryAssignments, importCategoryDraft,
   ])
@@ -1539,6 +1549,7 @@ function ImportTab() {
     setColCredit(cm.credit || null); setColDir(cm.direction || null)
     setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColPending(cm.pending || null)
     setCategoryAssignments(cm.category_assignments || {})
+    setImportCategoryDraft(clonePersistedCategoryWorkspaceDraft(cm.category_workspace_draft))
     setSingleAccountNew(cm.single_account_new && !existingSingleAccount
       ? { enabled: true, name: cm.single_account_new.name || '', type: cm.single_account_new.type || 'depository' }
       : { enabled: false, name: '', type: 'depository' })
@@ -1645,11 +1656,11 @@ function ImportTab() {
       setCategoryMappingRows([])
       setCategoryMappingSummary(null)
       const savedDraft = loadSavedImportDraft(result, dbInstanceId, preferenceSubjectId)
-      if (savedDraft) {
-        setSelectedProfile(result.suggested_profile_id || '')
-        applySnapshot(savedDraft)
-      } else if (result.suggested_profile_id) {
+      if (result.suggested_profile_id) {
         applyProfile(result.suggested_profile_id)
+      } else if (savedDraft) {
+        setSelectedProfile('')
+        applySnapshot(savedDraft)
       } else if (result.config_snapshot) {
         applySnapshot({
           ...result.config_snapshot,
@@ -1840,6 +1851,8 @@ function ImportTab() {
   function buildProfileBody(name) {
     const cm = getColumnMap()
     if (Object.keys(categoryAssignments).length > 0) cm.category_assignments = categoryAssignments
+    const categoryWorkspaceDraft = clonePersistedCategoryWorkspaceDraft(importCategoryDraft)
+    if (categoryWorkspaceDraft) cm.category_workspace_draft = categoryWorkspaceDraft
     if (!colAccount && singleAccountNew.enabled && singleAccountNew.name.trim()) {
       cm.single_account_new = {
         name: singleAccountNew.name.trim(),
@@ -1886,6 +1899,7 @@ function ImportTab() {
         setSelectedProfile(r.id)
       })
     }
+    clearSavedImportDraft(dbInstanceId, preferenceSubjectId)
     setShowSaveProfile(false)
     setSaveProfileName('')
   }
@@ -1915,6 +1929,8 @@ function ImportTab() {
     // Build body using resolved map directly
     const cm = getColumnMap()
     if (Object.keys(categoryAssignments).length > 0) cm.category_assignments = categoryAssignments
+    const categoryWorkspaceDraft = clonePersistedCategoryWorkspaceDraft(importCategoryDraft)
+    if (categoryWorkspaceDraft) cm.category_workspace_draft = categoryWorkspaceDraft
     if (!colAccount && singleAccountNew.enabled && singleAccountNew.name.trim()) {
       cm.single_account_new = {
         name: singleAccountNew.name.trim(),
@@ -1971,6 +1987,7 @@ function ImportTab() {
       apply_categorization: applyCat,
     }
     await api.updateImportProfile(selectedProfile, body)
+    clearSavedImportDraft(dbInstanceId, preferenceSubjectId)
     // Await the profiles refresh so state is up to date before the user
     // can cancel and re-upload — prevents stale profile being applied
     const updated = await api.getImportProfiles()
