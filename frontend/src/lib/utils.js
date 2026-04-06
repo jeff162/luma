@@ -1,11 +1,11 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { format, parseISO, startOfMonth, subMonths } from 'date-fns'
+import { formatMoneyMagnitude } from './moneyDisplay.js'
 
 export function formatCurrency(amount) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-  }).format(Math.abs(amount))
+  return formatMoneyMagnitude(amount)
 }
 
 export function formatDate(dateStr) {

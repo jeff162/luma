@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /**
  * api.js — All API calls to the FastAPI backend
  *
@@ -79,9 +82,11 @@ export const api = {
   getUserPreferences: () => request('/auth/preferences'),
   saveUserPreference: (key, value) =>
     request('/auth/preferences', { method: 'POST', body: JSON.stringify({ key, value }) }),
+  clearUserPreferences: () => request('/auth/preferences', { method: 'DELETE' }),
   getLocalPreferenceProfiles: () => request('/auth/local-preference-profiles'),
   createLocalPreferenceProfile: (name) =>
     request('/auth/local-preference-profiles', { method: 'POST', body: JSON.stringify({ name }) }),
+  clearLocalPreferenceProfiles: () => request('/auth/local-preference-profiles', { method: 'DELETE' }),
   updateLocalPreferenceProfile: (id, name) =>
     request(`/auth/local-preference-profiles/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
   deleteLocalPreferenceProfile: (id) =>
@@ -266,6 +271,22 @@ export const api = {
   listBatches:      ()      => request('/import-export/batches'),
   getBatchEdited:   (id)    => request(`/import-export/batches/${id}/edited`),
   getBatchCategoryMappings: (id) => request(`/import-export/batches/${id}/category-mappings`),
+  getBatchRuleSuggestions: (id, ownerIds = []) => {
+    const q = new URLSearchParams()
+    if (ownerIds?.length) q.set('owner_ids', ownerIds.join(','))
+    const suffix = q.toString() ? `?${q}` : ''
+    return request(`/import-export/batches/${id}/rule-suggestions${suffix}`)
+  },
+  getBatchRuleSuggestionMatches: (id, payload) =>
+    request(`/import-export/batches/${id}/rule-suggestions/matches`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateBatchRuleSuggestionReview: (id, payload) =>
+    request(`/import-export/batches/${id}/rule-suggestions/review`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   applyBatchCategoryMappings: (id, assignments) =>
     request(`/import-export/batches/${id}/category-mappings`, { method: 'POST', body: JSON.stringify({ assignments }) }),
   undoBatch:        (id, force = false) =>
@@ -274,6 +295,7 @@ export const api = {
   createImportProfile:  (data)  => request('/import-export/profiles', { method: 'POST', body: JSON.stringify(data) }),
   updateImportProfile:  (id, data) => request(`/import-export/profiles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteImportProfile:  (id)    => request(`/import-export/profiles/${id}`, { method: 'DELETE' }),
+  clearImportMemory:    ()      => request('/import-export/developer/import-memory', { method: 'DELETE' }),
   exportTransactionsCsv: (params = {}) => {
     const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))
     return `/api/import-export/transactions.csv?${q}`  // returns URL for direct download

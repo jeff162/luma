@@ -1,6 +1,22 @@
+<!-- SPDX-FileCopyrightText: 2026 Jeffrey Orlin -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Data Model
 
 This is the working model FinTrack is built around.
+
+## Contents
+
+- [Core hierarchy](#core-hierarchy)
+- [Owners](#owners)
+- [Accounts](#accounts)
+- [Transactions](#transactions)
+- [Categories](#categories)
+- [Rules](#rules)
+- [Import batches and profiles](#import-batches-and-profiles)
+- [Backups](#backups)
+- [Schema evolution](#schema-evolution)
+- [Reporting assumptions](#reporting-assumptions)
 
 ## Core hierarchy
 
@@ -39,7 +55,7 @@ filtering is cheaper in summary queries.
 Accounts represent bank or credit accounts, typically imported from Plaid or
 created during CSV import.
 
-Important fields/behavior:
+Important behavior:
 
 - each account belongs to an owner or is temporarily unassigned
 - transactions reference `account_id`
@@ -56,12 +72,10 @@ Important conventions:
 - `category_overridden = 1` means the user manually chose the category
 - pending transactions are visible in lists but usually excluded from summary totals
 
-Transactions may carry both:
+Name fields:
 
-- `raw_name`
-- `merchant_name`
-
-`merchant_name` is the cleaned display name when available.
+- **`raw_name`:** imported or provider-supplied name
+- **`merchant_name`:** cleaned display name when available
 
 ## Categories
 
@@ -82,10 +96,9 @@ Important invariant:
 
 Groups also carry important reporting behavior:
 
-- `category_type`
-  typically `expense` or `income`
-- `exclude_from_totals`
-  removes that group and all descendants from charts and totals
+- **`category_type`:** typically `expense` or `income`
+- **`exclude_from_totals`:** removes that group and all descendants from charts
+  and totals
 
 This is used for things like transfers and credit-card-payment categories.
 
@@ -113,10 +126,9 @@ Important behavior:
 
 CSV import creates supporting records for workflow and recovery:
 
-- **import profiles**
-  saved mapping/setup templates for recurring CSV formats
-- **import batches**
-  one record per import run so imported transactions can be undone
+- **Import profiles:** saved mapping/setup templates for recurring CSV formats
+- **Import batches:** one record per import run so imported transactions can be
+  undone
 
 Imports also use content hashing for duplicate detection.
 
@@ -133,7 +145,7 @@ Those are intentionally separated so normal backups can stay safer and simpler.
 
 The SQLite schema is versioned and migrated automatically on startup.
 
-If you change the schema:
+If the schema changes:
 
 - add a migration in `backend/db/database.py`
 - bump the current schema version
@@ -150,4 +162,3 @@ A few behavior rules matter across the whole app:
 
 If any of these assumptions change, both backend queries and frontend UI logic
 will likely need coordinated updates.
-

@@ -1,5 +1,10 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { useEffect, useRef, useState } from 'react'
 import { CategoryMarker } from './ui.jsx'
+import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
+import TransientTextInput from './TransientTextInput.jsx'
 
 let dragItem = null
 
@@ -21,14 +26,11 @@ export function normalizeCategoryType(value) {
 
 function DeleteConfirm({ label, onConfirm, onCancel }) {
   const ref = useRef(null)
-
-  useEffect(() => {
-    function handleClick(e) {
-      if (ref.current && !ref.current.contains(e.target)) onCancel()
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [onCancel])
+  useDismissibleLayer({
+    open: true,
+    onClose: onCancel,
+    refs: [ref],
+  })
 
   return (
     <div
@@ -99,25 +101,32 @@ export function EditableName({
   autoEditToken = 0,
   autoEditPlaceholder = '',
   onAutoEditConsumed,
+  onCancelEdit,
 }) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(value)
+  const {
+    editing,
+    setEditing,
+    draft,
+    setDraft,
+    beginEdit,
+    cancelEdit,
+    commitEdit,
+  } = useTransientTextEdit(value, { onCommit: onSave })
   const inputRef = useRef(null)
 
   useEffect(() => {
-    if (!isSelected) setEditing(false)
-  }, [isSelected])
+    if (!isSelected) cancelEdit()
+  }, [cancelEdit, isSelected])
 
   useEffect(() => {
     if (!autoEditToken || disabled || !isSelected) return
-    setDraft(autoEditPlaceholder ? '' : value)
-    setEditing(true)
+    beginEdit(autoEditPlaceholder ? '' : value)
     setTimeout(() => {
       inputRef.current?.focus()
       inputRef.current?.select()
       onAutoEditConsumed?.()
     }, 0)
-  }, [autoEditToken, disabled, isSelected, onAutoEditConsumed, value])
+  }, [autoEditPlaceholder, autoEditToken, beginEdit, disabled, isSelected, onAutoEditConsumed, value])
 
   function handleClick(e) {
     if (disabled) {
@@ -131,33 +140,25 @@ export function EditableName({
       return
     }
     if (!editing) {
-      setDraft(value)
-      setEditing(true)
+      beginEdit(value)
       setTimeout(() => inputRef.current?.select(), 0)
     }
   }
 
-  function commit() {
-    setEditing(false)
-    if (draft.trim() && draft.trim() !== value) onSave(draft.trim())
-  }
-
   if (editing) {
     return (
-      <input
+      <TransientTextInput
         ref={inputRef}
         value={draft}
         placeholder={autoEditPlaceholder || undefined}
-        onChange={e => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={e => {
-          if (e.key === 'Enter') {
-            e.preventDefault()
-            commit()
-          }
-          if (e.key === 'Escape') setEditing(false)
-          e.stopPropagation()
+        onChange={setDraft}
+        onCommit={commitEdit}
+        onCancel={() => {
+          cancelEdit()
+          onCancelEdit?.()
         }}
+        restoreOnEscape
+        onKeyDown={e => e.stopPropagation()}
         onClick={e => e.stopPropagation()}
         style={{
           background: 'var(--bg)',
@@ -282,6 +283,7 @@ export function CategoryTreeRow({
   autoEditToken = 0,
   autoEditPlaceholder = '',
   onAutoEditConsumed,
+  onCancelEdit,
   onToggleCollapse,
   onSelect,
   onRename,
@@ -436,6 +438,7 @@ export function CategoryTreeRow({
         autoEditToken={autoEditToken}
         autoEditPlaceholder={autoEditPlaceholder}
         onAutoEditConsumed={onAutoEditConsumed}
+        onCancelEdit={onCancelEdit}
       />
       {trailingContent ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>{trailingContent}</span> : null}
       {bulkMoveMode || !showDelete ? null : !confirmDelete ? (

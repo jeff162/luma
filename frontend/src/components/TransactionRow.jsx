@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /**
  * TransactionRow — Shared transaction display components
  *
@@ -71,6 +74,8 @@ import { useState, useRef, useEffect } from 'react'
 import { api } from '../lib/api.js'
 import { CategoryMarker } from './ui.jsx'
 import CategoryDisplay from './CategoryDisplay.jsx'
+import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
+import TransientTextInput from './TransientTextInput.jsx'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -117,15 +122,11 @@ export function NotePopover({ txn, onSave, onClose }) {
     textareaRef.current?.select()
   }, [])
 
-  useEffect(() => {
-    function handler(e) {
-      if (ref.current && !ref.current.contains(e.target)) {
-        onClose()
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [onClose])
+  useDismissibleLayer({
+    open: true,
+    onClose,
+    refs: [ref],
+  })
 
   function commit() {
     const val = draft.trim() || null
@@ -261,14 +262,11 @@ export function useContextMenu() {
 
 export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onOpenRule, ruleActionLabel = 'Rule…' }) {
   const ref = useRef(null)
-
-  useEffect(() => {
-    function handler(e) {
-      if (ref.current && !ref.current.contains(e.target)) onClose()
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [onClose])
+  useDismissibleLayer({
+    open: !!menu,
+    onClose,
+    refs: [ref],
+  })
 
   // Adjust position so menu doesn't go off-screen
   const x = Math.min(menu.x, window.innerWidth  - 180)
@@ -314,11 +312,24 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onOpenRul
 // ── MerchantCell ──────────────────────────────────────────────────────────────
 
 export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
-  const [editing, setEditing]   = useState(false)
-  const [draft, setDraft]       = useState('')
   const [name, setName]         = useState(getTxnMerchantLabel(txn))
   const [showNote, setShowNote] = useState(false)
   const [localNotes, setLocalNotes] = useState(txn.notes || null)
+
+  const {
+    editing,
+    draft,
+    setDraft,
+    beginEdit,
+    cancelEdit,
+    commitEdit,
+  } = useTransientTextEdit(name, {
+    onCommit: async nextName => {
+      setName(nextName)
+      await api.updateMerchant(txn.id, nextName)
+      onRename?.(txn.id, nextName)
+    },
+  })
 
   useEffect(() => {
     if (!editing) setName(getTxnMerchantLabel(txn))
@@ -327,21 +338,6 @@ export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
   useEffect(() => {
     setLocalNotes(txn.notes || null)
   }, [txn.notes])
-
-  function startEdit(e) {
-    e.stopPropagation()
-    setDraft(name)
-    setEditing(true)
-  }
-
-  async function commit() {
-    const trimmed = draft.trim()
-    setEditing(false)
-    if (!trimmed || trimmed === name) return
-    setName(trimmed)
-    await api.updateMerchant(txn.id, trimmed)
-    onRename?.(txn.id, trimmed)
-  }
 
   async function handleNoteSave(val) {
     await api.updateNotes(txn.id, val)
@@ -352,16 +348,13 @@ export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
   if (editing) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <input
-          autoFocus
+        <TransientTextInput
           value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={e => {
-            if (e.key === 'Enter') commit()
-            if (e.key === 'Escape') setEditing(false)
-            e.stopPropagation()
-          }}
+          onChange={setDraft}
+          onCommit={commitEdit}
+          onCancel={cancelEdit}
+          restoreOnEscape
+          onKeyDown={e => e.stopPropagation()}
           onClick={e => e.stopPropagation()}
           style={{
             background: 'var(--surface2)', color: 'var(--text)',
@@ -377,7 +370,10 @@ export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0, maxWidth: '100%' }}>
       <span
-        onClick={startEdit}
+        onClick={e => {
+          e.stopPropagation()
+          beginEdit(name)
+        }}
         style={{
           fontWeight: 500,
           cursor: 'pointer',
@@ -565,22 +561,24 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
           {showNew ? (
             <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>New category</div>
-              <input autoFocus value={newName} onChange={e => setNewName(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleNewSave(); if (e.key === 'Escape') setShowNew(false) }}
+              <TransientTextInput value={newName} onChange={setNewName}
+                onCommit={handleNewSave}
+                onCancel={() => { setShowNew(false); setNewName('') }}
+                restoreOnEscape
+                onBlurCommit={false}
                 placeholder="Name"
                 style={{ background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', fontSize: 13, outline: 'none' }}
               />
               {creatingGroup ? (
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <input
-                    autoFocus
+                  <TransientTextInput
                     value={newGroupName}
-                    onChange={e => setNewGroupName(e.target.value)}
+                    onChange={setNewGroupName}
                     placeholder="New group name"
-                    onKeyDown={e => {
-                      if (e.key === 'Enter') { e.preventDefault(); handleNewGroupSave() }
-                      if (e.key === 'Escape') { setCreatingGroup(false); setNewParent('') }
-                    }}
+                    onCommit={handleNewGroupSave}
+                    onCancel={() => { setCreatingGroup(false); setNewParent(''); setNewGroupName('') }}
+                    restoreOnEscape
+                    onBlurCommit={false}
                     style={{ flex: 1, background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--accent)', borderRadius: 6, padding: '5px 8px', fontSize: 13, outline: 'none' }}
                   />
                   <button onMouseDown={e => { e.preventDefault(); handleNewGroupSave() }}

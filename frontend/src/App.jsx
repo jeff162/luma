@@ -1,5 +1,8 @@
-import { useState, useEffect, Component } from 'react'
-import { Routes, Route, NavLink } from 'react-router-dom'
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { useState, useEffect, useRef, Component } from 'react'
+import { Routes, Route, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
@@ -11,8 +14,12 @@ import Rules from './pages/Rules.jsx'
 import Accounts from './pages/Accounts.jsx'
 import Settings from './pages/Settings.jsx'
 import ImportExport from './pages/ImportExport.jsx'
+import ImportRuleSuggestions from './pages/ImportRuleSuggestions.jsx'
 import Tasks from './pages/Tasks.jsx'
 import { api, setLocalPreferenceProfileId } from './lib/api.js'
+import { UserPreferencesProvider } from './lib/UserPreferencesContext.jsx'
+import { useDismissibleLayer } from './lib/uiInteractions.js'
+import TransientTextInput from './components/TransientTextInput.jsx'
 
 class AppErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null } }
@@ -20,14 +27,22 @@ class AppErrorBoundary extends Component {
   render() {
     if (this.state.error) {
       return (
-        <div style={{ padding: 40, fontFamily: 'sans-serif' }}>
+        <div data-browser-context-passthrough="true" style={{ padding: 40, fontFamily: 'sans-serif' }}>
           <h2 style={{ color: '#ef4444', marginBottom: 12 }}>Something went wrong</h2>
-          <pre style={{ fontSize: 13, color: '#666', marginBottom: 20, whiteSpace: 'pre-wrap' }}>
+          <pre data-browser-context-passthrough="true" style={{ fontSize: 13, color: '#666', marginBottom: 20, whiteSpace: 'pre-wrap' }}>
             {this.state.error?.message}
           </pre>
           <button
             onClick={() => this.setState({ error: null })}
-            style={{ padding: '8px 18px', cursor: 'pointer', borderRadius: 6, border: '1px solid #ccc' }}
+            style={{
+              padding: '8px 18px',
+              cursor: 'pointer',
+              borderRadius: 6,
+              border: '1px solid color-mix(in srgb, var(--accent) 32%, var(--border))',
+              background: 'color-mix(in srgb, var(--surface2) 78%, var(--surface))',
+              color: 'var(--text)',
+              fontWeight: 600,
+            }}
           >
             Try again
           </button>
@@ -73,6 +88,37 @@ const NAV_LINKS = [
 ]
 
 const LOCAL_PROFILE_STORAGE_KEY_PREFIX = 'fintrack.localPreferenceProfile'
+const STARTUP_ROUTE_PREFERENCE_KEY = 'ui.startupRoute'
+const GLOBAL_SCROLLBAR_STYLES = `
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--border) 82%, var(--muted) 18%) color-mix(in srgb, var(--surface2) 52%, transparent);
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: color-mix(in srgb, var(--surface2) 44%, transparent);
+    border-radius: 999px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--border) 82%, var(--muted) 18%);
+    border: 2px solid color-mix(in srgb, var(--surface2) 44%, transparent);
+    border-radius: 999px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--text) 18%, var(--border) 82%);
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+`
 
 function getLocalProfileStorageKey(dbInstanceId) {
   return dbInstanceId ? `${LOCAL_PROFILE_STORAGE_KEY_PREFIX}.${dbInstanceId}` : null
@@ -85,6 +131,8 @@ function LocalPreferenceProfileScreen({
   onRename,
   onDelete,
   creating,
+  error,
+  onClearError,
   showModePill,
   showCancel = false,
   onCancel,
@@ -93,17 +141,15 @@ function LocalPreferenceProfileScreen({
   const [editingId, setEditingId] = useState(null)
   const [editingName, setEditingName] = useState('')
   const [menu, setMenu] = useState(null)
+  const menuRef = useRef(null)
 
   const hasProfiles = profiles.length > 0
 
-  useEffect(() => {
-    if (!menu) return
-    function handleClick() {
-      setMenu(null)
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [menu])
+  useDismissibleLayer({
+    open: !!menu,
+    onClose: () => setMenu(null),
+    refs: [menuRef],
+  })
 
   return (
     <div style={{
@@ -170,26 +216,18 @@ function LocalPreferenceProfileScreen({
                 }}
               >
                 {editingId === profile.id ? (
-                  <input
-                    autoFocus
+                  <TransientTextInput
                     value={editingName}
-                    onChange={e => setEditingName(e.target.value)}
-                    onBlur={() => {
+                    onChange={setEditingName}
+                    restoreOnEscape
+                    onCommit={() => {
                       const next = editingName.trim()
                       setEditingId(null)
                       if (next && next !== profile.name) onRename(profile.id, next)
                     }}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        const next = editingName.trim()
-                        setEditingId(null)
-                        if (next && next !== profile.name) onRename(profile.id, next)
-                      }
-                      if (e.key === 'Escape') {
-                        setEditingId(null)
-                        setEditingName(profile.name)
-                      }
+                    onCancel={() => {
+                      setEditingId(null)
+                      setEditingName(profile.name)
                     }}
                     style={{
                       background: 'var(--surface)',
@@ -247,12 +285,18 @@ function LocalPreferenceProfileScreen({
           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
             {hasProfiles ? 'New profile' : 'Add the first user'}
           </div>
-          <input
+          <TransientTextInput
             value={name}
-            onChange={e => setName(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && name.trim() && !creating) onCreate(name.trim(), () => setName(''))
+            onChange={value => {
+              setName(value)
+              if (error) onClearError?.()
             }}
+            restoreOnEscape
+            onCommit={() => {
+              if (name.trim() && !creating) onCreate(name.trim(), () => setName(''))
+            }}
+            onCancel={() => {}}
+            onBlurCommit={false}
             placeholder="user name"
             style={{
               background: 'var(--surface)',
@@ -299,10 +343,27 @@ function LocalPreferenceProfileScreen({
               </button>
             ) : null}
           </div>
+          {error ? (
+            <div
+              style={{
+                marginTop: 2,
+                padding: '10px 12px',
+                borderRadius: 10,
+                border: '1px solid color-mix(in srgb, var(--danger) 34%, var(--border))',
+                background: 'color-mix(in srgb, var(--danger) 8%, var(--surface))',
+                color: 'var(--text)',
+                fontSize: 12,
+                lineHeight: 1.45,
+              }}
+            >
+              {error}
+            </div>
+          ) : null}
         </div>
       </div>
       {menu ? (
         <div
+          ref={menuRef}
           onMouseDown={e => e.stopPropagation()}
           style={{
             position: 'fixed',
@@ -369,6 +430,8 @@ export function refreshTaskBadge() {
 }
 
 export default function App() {
+  const location = useLocation()
+  const navigate = useNavigate()
   const [taskCount, setTaskCount] = useState(0)
   const [authChecked, setAuthChecked] = useState(false)
   const [authEnabled, setAuthEnabled] = useState(false)
@@ -385,18 +448,35 @@ export default function App() {
   const [previousLocalProfile, setPreviousLocalProfile] = useState(null)
   const [localProfilePickerDismissible, setLocalProfilePickerDismissible] = useState(false)
   const [creatingLocalProfile, setCreatingLocalProfile] = useState(false)
+  const [localProfileError, setLocalProfileError] = useState('')
   const [navProfileMenu, setNavProfileMenu] = useState(null)
   const [navProfileEditing, setNavProfileEditing] = useState(false)
   const [navProfileDraft, setNavProfileDraft] = useState('')
+  const [startupRouteApplied, setStartupRouteApplied] = useState(false)
+  const navProfileMenuRef = useRef(null)
 
-  useEffect(() => {
-    if (!navProfileMenu) return
-    function handleClick() {
-      setNavProfileMenu(null)
+  async function hydrateStartupRoute(profileId = '', options = {}) {
+    const { forceFromRoot = false } = options
+    try {
+      if (profileId) setLocalPreferenceProfileId(profileId)
+      const prefResp = await api.getUserPreferences().catch(() => ({ preferences: {} }))
+      const startupRoute = String(prefResp?.preferences?.[STARTUP_ROUTE_PREFERENCE_KEY] || '').trim()
+      const validStartupRoute = startupRoute && startupRoute.startsWith('/') ? startupRoute : ''
+      if (forceFromRoot) {
+        navigate(validStartupRoute || '/', { replace: true })
+      } else if (location.pathname === '/' && validStartupRoute && validStartupRoute !== location.pathname) {
+        navigate(validStartupRoute, { replace: true })
+      }
+    } finally {
+      setStartupRouteApplied(true)
     }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [navProfileMenu])
+  }
+
+  useDismissibleLayer({
+    open: !!navProfileMenu,
+    onClose: () => setNavProfileMenu(null),
+    refs: [navProfileMenuRef],
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -422,12 +502,18 @@ export default function App() {
           const storageKey = getLocalProfileStorageKey(status.db_instance_id || '')
           const rememberedId = storageKey ? window.localStorage.getItem(storageKey) : ''
           const remembered = profiles.find(profile => profile.id === rememberedId) || null
-          if (remembered) {
-            setLocalPreferenceProfileId(remembered.id)
-            setActiveLocalProfile(remembered)
+          const autoSelected = remembered || (profiles.length === 1 ? profiles[0] : null)
+          if (autoSelected) {
+            setLocalPreferenceProfileId(autoSelected.id)
+            setActiveLocalProfile(autoSelected)
+            if (storageKey) {
+              try { window.localStorage.setItem(storageKey, autoSelected.id) } catch {}
+            }
+            await hydrateStartupRoute(autoSelected.id)
           } else {
             setLocalPreferenceProfileId('')
             setActiveLocalProfile(null)
+            setStartupRouteApplied(true)
           }
           setPreviousLocalProfile(null)
           setLocalProfilePickerDismissible(false)
@@ -442,6 +528,7 @@ export default function App() {
         }
 
         setCurrentUser(status.user || null)
+        await hydrateStartupRoute('')
         setAuthChecked(true)
       } catch (err) {
         if (cancelled) return
@@ -457,6 +544,21 @@ export default function App() {
     loadAuth()
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    if (!startupRouteApplied) return
+    if (authEnabled && !currentUser) return
+    if (!authEnabled && !activeLocalProfile) return
+    const route = `${location.pathname}${location.search || ''}`
+    api.saveUserPreference(STARTUP_ROUTE_PREFERENCE_KEY, route).catch(() => {})
+  }, [
+    startupRouteApplied,
+    authEnabled,
+    currentUser,
+    activeLocalProfile,
+    location.pathname,
+    location.search,
+  ])
 
   useEffect(() => {
     if (runtimeConfig && runtimeConfig.ok === false) return
@@ -496,7 +598,7 @@ export default function App() {
       const target = e.target
       if (!(target instanceof HTMLElement)) return
       const passThrough = target.closest('[data-browser-context-passthrough="true"]')
-      if (passThrough && passThrough === target) return
+      if (passThrough) return
       e.preventDefault()
     }
 
@@ -517,7 +619,10 @@ export default function App() {
     setLocalPreferenceProfileId('')
   }
 
-  function activateLocalProfile(profile) {
+  function activateLocalProfile(profile, options = {}) {
+    const { forceStartupRoute = false } = options
+    setLocalProfileError('')
+    setStartupRouteApplied(false)
     setActiveLocalProfile(profile)
     setPreviousLocalProfile(null)
     setLocalProfilePickerDismissible(false)
@@ -530,9 +635,11 @@ export default function App() {
         if (profile?.id) window.localStorage.setItem(storageKey, profile.id)
       } catch {}
     }
+    hydrateStartupRoute(profile?.id || '', { forceFromRoot: forceStartupRoute }).catch(() => setStartupRouteApplied(true))
   }
 
   async function handleCreateLocalProfile(name, clearForm) {
+    setLocalProfileError('')
     setCreatingLocalProfile(true)
     try {
       const resp = await api.createLocalPreferenceProfile(name)
@@ -542,8 +649,14 @@ export default function App() {
         const exists = prev.find(item => item.id === profile.id)
         return exists ? prev : [...prev, profile].sort((a, b) => a.name.localeCompare(b.name))
       })
-      activateLocalProfile(profile)
+      activateLocalProfile(profile, { forceStartupRoute: !localProfilePickerDismissible })
       clearForm?.()
+    } catch (err) {
+      setLocalProfileError(
+        err?.message === 'Failed to fetch'
+          ? 'Server unreachable. Start or restart FinTrack and try again.'
+          : (err?.message || 'Could not create the user profile.')
+      )
     } finally {
       setCreatingLocalProfile(false)
     }
@@ -582,6 +695,7 @@ export default function App() {
   }
 
   function cancelLocalProfilePicker() {
+    setLocalProfileError('')
     if (!previousLocalProfile) return
     activateLocalProfile(previousLocalProfile)
   }
@@ -621,9 +735,11 @@ export default function App() {
           passwordPolicy={passwordPolicy}
           securityProfile={securityProfile}
           onAuthenticated={user => {
+            setStartupRouteApplied(false)
             setCurrentUser(user)
             setAuthEnabled(true)
             setNeedsBootstrap(false)
+            hydrateStartupRoute('', { forceFromRoot: true }).catch(() => setStartupRouteApplied(true))
           }}
         />
       </AppErrorBoundary>
@@ -636,7 +752,9 @@ export default function App() {
         <LocalPreferenceProfileScreen
           profiles={localProfiles}
           creating={creatingLocalProfile}
-          onSelect={activateLocalProfile}
+          error={localProfileError}
+          onClearError={() => setLocalProfileError('')}
+          onSelect={profile => activateLocalProfile(profile, { forceStartupRoute: !localProfilePickerDismissible })}
           onCreate={handleCreateLocalProfile}
           onRename={handleRenameLocalProfile}
           onDelete={handleDeleteLocalProfile}
@@ -650,7 +768,9 @@ export default function App() {
 
   return (
     <AppErrorBoundary>
-      <FilterProvider>
+      <UserPreferencesProvider key={authEnabled ? `user:${currentUser?.id || currentUser?.username || ''}` : `local:${activeLocalProfile?.id || ''}`}>
+        <FilterProvider>
+        <style>{GLOBAL_SCROLLBAR_STYLES}</style>
         <div style={s.shell}>
           <nav style={s.nav}>
             <div style={s.logo}>FinTrack</div>
@@ -683,21 +803,15 @@ export default function App() {
                   </span>
                 ) : (
                   navProfileEditing && activeLocalProfile ? (
-                    <input
-                      autoFocus
+                    <TransientTextInput
                       value={navProfileDraft}
-                      onChange={e => setNavProfileDraft(e.target.value)}
-                      onBlur={commitNavProfileRename}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault()
-                          commitNavProfileRename()
-                        }
-                        if (e.key === 'Escape') {
-                          setNavProfileEditing(false)
-                          setNavProfileDraft(activeLocalProfile.name)
-                        }
+                      onChange={setNavProfileDraft}
+                      onCommit={commitNavProfileRename}
+                      onCancel={() => {
+                        setNavProfileEditing(false)
+                        setNavProfileDraft(activeLocalProfile.name)
                       }}
+                      restoreOnEscape
                       style={{
                         display: 'inline-flex',
                         alignItems: 'center',
@@ -772,6 +886,7 @@ export default function App() {
                 <Route path="/categories" element={<Categories />} />
                 <Route path="/rules" element={<Rules />} />
                 <Route path="/accounts" element={<Accounts />} />
+                <Route path="/import-export/batches/:batchId/rule-suggestions" element={<ImportRuleSuggestions />} />
                 <Route path="/import-export" element={<ImportExport />} />
                 <Route path="/tasks" element={<Tasks />} />
                 <Route path="/settings" element={<Settings />} />
@@ -781,6 +896,7 @@ export default function App() {
         </div>
         {navProfileMenu && activeLocalProfile && (
           <div
+            ref={navProfileMenuRef}
             onMouseDown={e => e.stopPropagation()}
             style={{
               position: 'fixed',
@@ -818,7 +934,8 @@ export default function App() {
             </button>
           </div>
         )}
-      </FilterProvider>
+        </FilterProvider>
+      </UserPreferencesProvider>
     </AppErrorBoundary>
   )
 }

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 import uuid
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel

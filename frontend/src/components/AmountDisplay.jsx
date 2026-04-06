@@ -1,5 +1,8 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import React from 'react'
-import { formatCurrency } from '../lib/utils.js'
+import { formatTransactionAmount, getTransactionAmountColor } from '../lib/moneyDisplay.js'
 
 export default function AmountDisplay({ amount, isPending = false, align = 'right', style = {} }) {
   return (
@@ -7,7 +10,7 @@ export default function AmountDisplay({ amount, isPending = false, align = 'righ
       style={{
         textAlign: align,
         fontWeight: 600,
-        color: amount < 0 ? 'var(--success)' : 'var(--text)',
+        color: getTransactionAmountColor(amount),
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
@@ -36,7 +39,7 @@ export default function AmountDisplay({ amount, isPending = false, align = 'righ
           P
         </span>
       )}
-      <span>{amount < 0 ? '+' : null}{formatCurrency(amount)}</span>
+      <span>{formatTransactionAmount(amount)}</span>
     </span>
   )
 }

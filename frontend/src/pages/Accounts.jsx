@@ -1,8 +1,13 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { refreshTaskBadge } from '../App.jsx'
 import { Card, Button, Spinner, EmptyState } from '../components/ui.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
+import { useDismissibleLayer, useDismissiblePopup, useTransientTextEdit } from '../lib/uiInteractions.js'
+import TransientTextInput from '../components/TransientTextInput.jsx'
 
 const ACCOUNT_OWNERS_PREF_KEY = 'ui.accounts.accountOwnersExpanded'
 const ACCOUNT_OWNERS_STORAGE_KEY_PREFIX = 'fintrack.accounts.accountOwnersExpanded'
@@ -76,36 +81,27 @@ function PillSelect({ value, options, onChange, placeholder = '—', minOpenWidt
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
   const listRef = useRef(null)
-  const [openUp, setOpenUp] = useState(false)
   const [menuPos, setMenuPos] = useState({ left: 0, top: 0, width: minOpenWidth })
   const selectedLabel = options.find(o => o.value === (value || ''))?.label || placeholder
 
-  useEffect(() => {
-    if (disabled) setOpen(false)
-  }, [disabled])
-
-  useEffect(() => {
-    if (!open) return
-    function handleClose(e) {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
-        setOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClose)
-    return () => document.removeEventListener('mousedown', handleClose)
-  }, [open])
+  const { openUp } = useDismissiblePopup({
+    open,
+    setOpen,
+    anchorRef: wrapRef,
+    popupRef: listRef,
+    placementDeps: [options.length],
+    disabled,
+  })
 
   useEffect(() => {
     if (!open || !listRef.current || !wrapRef.current) return
     const rect = wrapRef.current.getBoundingClientRect()
-    const listHeight = listRef.current.offsetHeight
     setMenuPos({
       left: rect.left,
       top: rect.bottom + 4,
       width: Math.max(minOpenWidth, rect.width),
     })
-    setOpenUp(rect.bottom + listHeight > window.innerHeight - 8)
-  }, [open, options.length])
+  }, [minOpenWidth, open, options.length])
 
   return (
     <div ref={wrapRef} style={{ position: 'relative', display: 'inline-flex', width: 'fit-content', maxWidth: '100%', zIndex: open ? 250 : 1 }}>
@@ -279,14 +275,14 @@ function DraftAccountRow({ owners, onCreate, onCancel, creating }) {
         </div>
 
         <div style={{ minWidth: 0 }}>
-          <input
+          <TransientTextInput
             ref={nameRef}
             value={name}
-            onChange={e => setName(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') submit()
-              if (e.key === 'Escape') onCancel()
-            }}
+            onChange={setName}
+            onCommit={submit}
+            onCancel={onCancel}
+            restoreOnEscape
+            onBlurCommit={false}
             placeholder="Account name"
             style={controlStyle({
               minWidth: 0,
@@ -353,15 +349,12 @@ function OwnerPill({ owner, editing, draft, onDraftChange, onStartEdit, onCommit
   const shared = isSharedOwner(owner)
   if (editing) {
     return (
-      <input
-        autoFocus
+      <TransientTextInput
         value={draft}
-        onChange={e => onDraftChange(e.target.value)}
-        onBlur={onCommitEdit}
-        onKeyDown={e => {
-          if (e.key === 'Enter') onCommitEdit()
-          if (e.key === 'Escape') onCancelEdit()
-        }}
+        onChange={onDraftChange}
+        onCommit={onCommitEdit}
+        onCancel={onCancelEdit}
+        restoreOnEscape
         style={controlStyle({
           width: Math.max(78, draft.length * 8 + 28),
           minWidth: 78,
@@ -406,12 +399,14 @@ function OwnerPill({ owner, editing, draft, onDraftChange, onStartEdit, onCommit
 }
 
 function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabled = false, width, expanded, onExpandedChange }) {
+  const visibleOwners = getPersonalOwners(owners)
   const [editingOwnerId, setEditingOwnerId] = useState(null)
   const [ownerDraft, setOwnerDraft] = useState('')
   const [creatingOwner, setCreatingOwner] = useState(false)
   const [newOwnerDraft, setNewOwnerDraft] = useState('')
   const [ownerMenu, setOwnerMenu] = useState(null)
   const newOwnerInputRef = useRef(null)
+  const ownerMenuRef = useRef(null)
 
   useEffect(() => {
     if (disabled) {
@@ -424,18 +419,12 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabl
     }
   }, [disabled])
 
-  useEffect(() => {
-    if (!ownerMenu) return
-    function handleClose() {
-      setOwnerMenu(null)
-    }
-    window.addEventListener('mousedown', handleClose)
-    window.addEventListener('blur', handleClose)
-    return () => {
-      window.removeEventListener('mousedown', handleClose)
-      window.removeEventListener('blur', handleClose)
-    }
-  }, [ownerMenu])
+  useDismissibleLayer({
+    open: !!ownerMenu,
+    onClose: () => setOwnerMenu(null),
+    refs: [ownerMenuRef],
+    closeOnBlur: true,
+  })
 
   useLayoutEffect(() => {
     if (!creatingOwner) return
@@ -502,9 +491,9 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabl
       </button>
       {expanded ? (
         <div style={{ marginTop: 12, paddingLeft: 20 }}>
-          {owners.length > 0 ? (
+          {visibleOwners.length > 0 ? (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-              {owners.map(owner => (
+              {visibleOwners.map(owner => (
                 <OwnerPill
                   key={owner.id}
                   owner={owner}
@@ -538,17 +527,17 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabl
                   border: '1px solid var(--border)',
                   background: 'color-mix(in srgb, var(--surface2) 74%, var(--surface))',
                 }}>
-                  <input
+                  <TransientTextInput
                     ref={newOwnerInputRef}
                     value={newOwnerDraft}
-                    onChange={e => setNewOwnerDraft(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter') submitNewOwner()
-                      if (e.key === 'Escape') {
-                        setCreatingOwner(false)
-                        setNewOwnerDraft('')
-                      }
+                    onChange={setNewOwnerDraft}
+                    onCommit={submitNewOwner}
+                    onCancel={() => {
+                      setCreatingOwner(false)
+                      setNewOwnerDraft('')
                     }}
+                    restoreOnEscape
+                    onBlurCommit={false}
                     placeholder="name"
                     style={controlStyle({
                       width: 104,
@@ -594,17 +583,17 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabl
             </div>
           ) : creatingOwner ? (
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <input
+              <TransientTextInput
                 ref={newOwnerInputRef}
                 value={newOwnerDraft}
-                onChange={e => setNewOwnerDraft(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') submitNewOwner()
-                  if (e.key === 'Escape') {
-                    setCreatingOwner(false)
-                    setNewOwnerDraft('')
-                  }
+                onChange={setNewOwnerDraft}
+                onCommit={submitNewOwner}
+                onCancel={() => {
+                  setCreatingOwner(false)
+                  setNewOwnerDraft('')
                 }}
+                restoreOnEscape
+                onBlurCommit={false}
                 placeholder="name"
                 style={controlStyle({
                   width: 104,
@@ -640,6 +629,7 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabl
           )}
           {ownerMenu ? (
             <div
+              ref={ownerMenuRef}
               onMouseDown={e => e.stopPropagation()}
               style={{
                 position: 'fixed',
@@ -697,8 +687,6 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabl
 }
 
 function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete, onCancelDelete, onOpenDetail, onCreateOwnerForAccount, onRenameOwner, onDeleteOwner, interactionDisabled = false }) {
-  const [nameDraft, setNameDraft] = useState(account.name || '')
-  const [editingName, setEditingName] = useState(false)
   const [savingName, setSavingName] = useState(false)
   const [creatingOwner, setCreatingOwner] = useState(false)
   const [ownerDraft, setOwnerDraft] = useState('')
@@ -709,11 +697,25 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
   const ownerCreateRef = useRef(null)
   const ownerInputRef = useRef(null)
   const ownerAnchorRef = useRef(null)
-
-  useEffect(() => {
-    setNameDraft(account.name || '')
-    setEditingName(false)
-  }, [account.id, account.name])
+  const ownerMenuRef = useRef(null)
+  const {
+    editing: editingName,
+    setEditing: setEditingName,
+    draft: nameDraft,
+    setDraft: setNameDraft,
+    beginEdit: beginEditingName,
+    cancelEdit: cancelEditingName,
+    commitEdit: commitName,
+  } = useTransientTextEdit(account.name || '', {
+    onCommit: async nextName => {
+      setSavingName(true)
+      try {
+        await savePatch({ name: nextName })
+      } finally {
+        setSavingName(false)
+      }
+    },
+  })
 
   useEffect(() => {
     if (interactionDisabled) setEditingName(false)
@@ -740,12 +742,6 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
       ownerInputRef.current?.focus()
       ownerInputRef.current?.select?.()
     })
-    function handleClose(e) {
-      if (ownerCreateRef.current?.contains(e.target)) return
-      setShowOwnerCreate(false)
-      setOwnerDraft('')
-      setOwnerCreatePos(null)
-    }
     function updatePosition() {
       if (!ownerAnchorRef.current) return
       const rect = ownerAnchorRef.current.getBoundingClientRect()
@@ -754,49 +750,36 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
         top: rect.top + rect.height / 2,
       })
     }
-    document.addEventListener('mousedown', handleClose)
     window.addEventListener('resize', updatePosition)
     window.addEventListener('scroll', updatePosition, true)
     return () => {
       cancelAnimationFrame(focusId)
-      document.removeEventListener('mousedown', handleClose)
       window.removeEventListener('resize', updatePosition)
       window.removeEventListener('scroll', updatePosition, true)
     }
   }, [showOwnerCreate])
 
-  useEffect(() => {
-    if (!ownerMenu) return
-    function handleClose() {
-      setOwnerMenu(null)
-    }
-    window.addEventListener('mousedown', handleClose)
-    window.addEventListener('blur', handleClose)
-    return () => {
-      window.removeEventListener('mousedown', handleClose)
-      window.removeEventListener('blur', handleClose)
-    }
-  }, [ownerMenu])
+  useDismissibleLayer({
+    open: showOwnerCreate,
+    onClose: () => {
+      setShowOwnerCreate(false)
+      setOwnerDraft('')
+      setOwnerCreatePos(null)
+    },
+    refs: [ownerCreateRef, ownerAnchorRef],
+  })
+
+  useDismissibleLayer({
+    open: !!ownerMenu,
+    onClose: () => setOwnerMenu(null),
+    refs: [ownerMenuRef],
+    closeOnBlur: true,
+  })
 
   const typeValue = account.type || 'other'
 
   async function savePatch(patch) {
     await onSave(account.id, patch)
-  }
-
-  async function commitName() {
-    const trimmed = nameDraft.trim()
-    if (!trimmed || trimmed === account.name) {
-      setEditingName(false)
-      return
-    }
-    setSavingName(true)
-    try {
-      await savePatch({ name: trimmed })
-    } finally {
-      setSavingName(false)
-      setEditingName(false)
-    }
   }
 
   async function changeType(type) {
@@ -860,18 +843,12 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
 
         <div style={{ minWidth: 0 }}>
           {editingName ? (
-            <input
-              autoFocus
+            <TransientTextInput
               value={nameDraft}
-              onChange={e => setNameDraft(e.target.value)}
-              onBlur={commitName}
-              onKeyDown={e => {
-                if (e.key === 'Enter') commitName()
-                if (e.key === 'Escape') {
-                  setNameDraft(account.name || '')
-                  setEditingName(false)
-                }
-              }}
+              onChange={setNameDraft}
+              onCommit={commitName}
+              onCancel={cancelEditingName}
+              restoreOnEscape
               style={controlStyle({
                 minWidth: 0,
                 padding: '0 9px',
@@ -885,7 +862,7 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
               type="button"
               onClick={() => {
                 if (interactionDisabled) return
-                setEditingName(true)
+                beginEditingName(account.name || '')
               }}
               title={interactionDisabled ? undefined : 'Click to edit name'}
               style={{
@@ -1024,17 +1001,17 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
                 visibility: ownerCreatePos ? 'visible' : 'hidden',
               }}
             >
-              <input
+              <TransientTextInput
                 ref={ownerInputRef}
                 value={ownerDraft}
-                onChange={e => setOwnerDraft(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') submitCreateOwner()
-                  if (e.key === 'Escape') {
-                    setShowOwnerCreate(false)
-                    setOwnerDraft('')
-                  }
+                onChange={setOwnerDraft}
+                onCommit={submitCreateOwner}
+                onCancel={() => {
+                  setShowOwnerCreate(false)
+                  setOwnerDraft('')
                 }}
+                restoreOnEscape
+                onBlurCommit={false}
                 placeholder="name"
                 style={controlStyle({
                   width: 104,
@@ -1071,6 +1048,7 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
           ) : null}
           {ownerMenu ? (
             <div
+              ref={ownerMenuRef}
               onMouseDown={e => e.stopPropagation()}
               style={{
                 position: 'fixed',

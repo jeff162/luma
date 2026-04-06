@@ -1,6 +1,56 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { Badge, CategoryMarker } from './ui.jsx'
+import { useDismissibleLayer } from '../lib/uiInteractions.js'
+import TransientTextInput from './TransientTextInput.jsx'
+
+function renderHighlightedCategoryName(name, query) {
+  if (!query) return name
+
+  const label = String(name || '')
+  const normalizedLabel = label.toLowerCase()
+  const normalizedQuery = String(query || '').toLowerCase()
+  if (!normalizedQuery) return label
+
+  const parts = []
+  let searchFrom = 0
+  let key = 0
+
+  while (searchFrom < label.length) {
+    const matchIndex = normalizedLabel.indexOf(normalizedQuery, searchFrom)
+    if (matchIndex === -1) {
+      parts.push(label.slice(searchFrom))
+      break
+    }
+
+    if (matchIndex > searchFrom) {
+      parts.push(label.slice(searchFrom, matchIndex))
+    }
+
+    parts.push(
+      <span
+        key={`match-${key}`}
+        style={{
+          background: 'color-mix(in srgb, var(--accent) 16%, var(--surface2))',
+          boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--accent) 36%, transparent)',
+          borderRadius: 4,
+          padding: '0 2px',
+          fontWeight: 600,
+        }}
+      >
+        {label.slice(matchIndex, matchIndex + normalizedQuery.length)}
+      </span>,
+    )
+
+    searchFrom = matchIndex + normalizedQuery.length
+    key += 1
+  }
+
+  return parts
+}
 
 function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSave, onCreateGroup, onCancel }) {
   const [name, setName] = useState(defaultName)
@@ -71,11 +121,14 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
         creatingNewGroup ? (
           <>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <input
+              <TransientTextInput
                 ref={groupNameInputRef}
                 value={newGroupName}
-                onChange={e => setNewGroupName(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') onCancel() }}
+                onChange={setNewGroupName}
+                onCommit={handleSave}
+                onCancel={onCancel}
+                restoreOnEscape
+                onBlurCommit={false}
                 placeholder="New group name..."
                 style={{ flex: 1, background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 8px', fontSize: 13, outline: 'none' }}
               />
@@ -135,11 +188,14 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
         </select>
       )}
       {!creatingNewGroup ? (
-        <input
+        <TransientTextInput
           ref={inputRef}
           value={name}
-          onChange={e => setName(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') onCancel() }}
+          onChange={setName}
+          onCommit={handleSave}
+          onCancel={onCancel}
+          restoreOnEscape
+          onBlurCommit={false}
           placeholder={mode === 'group' ? 'Group name…' : 'Category name…'}
           style={{ background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 8px', fontSize: 13, outline: 'none' }}
         />
@@ -165,6 +221,7 @@ export default function CategoryPicker({
   showSelectedBadge = false,
   compact = false,
   style,
+  onOpenChange,
 }) {
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(null)
@@ -174,19 +231,95 @@ export default function CategoryPicker({
   const ref = useRef(null)
   const inputRef = useRef(null)
   const panelRef = useRef(null)
+  const triggerButtonRef = useRef(null)
+  const toggleButtonRef = useRef(null)
+  const querySnapshotRef = useRef(initialQuery || '')
+  const hasReportedInitialOpenStateRef = useRef(false)
   const groups = categories.filter(c => !c.parent_id)
   const leaves = categories.filter(c => c.parent_id)
   const selected = categories.find(c => c.id === value)
-  const filtered = query.trim()
-    ? leaves.filter(c => {
-        const haystack = `${c.name} ${groups.find(g => g.id === c.parent_id)?.name || ''}`.toLowerCase()
-        return haystack.includes(query.toLowerCase())
+  const selectedGroupId = selected?.parent_id ?? null
+  const trimmedQuery = query.trim().toLowerCase()
+  const matchingItems = useMemo(() => {
+    if (!trimmedQuery) return []
+
+    function getMatchRank(category) {
+      const categoryName = String(category.name || '').toLowerCase()
+
+      if (categoryName.startsWith(trimmedQuery)) return 0
+      if (categoryName.split(/[\s/&-]+/).some(part => part.startsWith(trimmedQuery))) return 1
+      if (categoryName.includes(trimmedQuery)) return 2
+      return null
+    }
+
+    return leaves
+      .map(category => ({
+        category,
+        rank: getMatchRank(category),
+        inSelectedGroup: selectedGroupId != null && category.parent_id === selectedGroupId,
+      }))
+      .filter(item => item.rank != null)
+      .sort((a, b) => {
+        if (a.rank !== b.rank) return a.rank - b.rank
+        if (a.inSelectedGroup !== b.inSelectedGroup) return a.inSelectedGroup ? -1 : 1
+        return String(a.category.name || '').localeCompare(String(b.category.name || ''), undefined, { sensitivity: 'base' })
       })
-    : leaves
+  }, [leaves, trimmedQuery, selectedGroupId])
+  const filtered = useMemo(
+    () => (trimmedQuery ? matchingItems.map(item => item.category) : leaves),
+    [leaves, matchingItems, trimmedQuery],
+  )
+  const displayGroups = useMemo(() => {
+    if (!trimmedQuery) {
+      return groups.map(group => ({
+        group,
+        categories: leaves.filter(category => category.parent_id === group.id),
+      }))
+    }
+
+    const groupEntries = new Map()
+    for (const item of matchingItems) {
+      const existing = groupEntries.get(item.category.parent_id) ?? {
+        categories: [],
+        bestRank: item.rank,
+      }
+      existing.categories.push(item.category)
+      existing.bestRank = Math.min(existing.bestRank, item.rank)
+      groupEntries.set(item.category.parent_id, existing)
+    }
+
+    return groups
+      .map(group => {
+        const entry = groupEntries.get(group.id)
+        return entry ? { group, categories: entry.categories, bestRank: entry.bestRank } : null
+      })
+      .filter(Boolean)
+      .sort((a, b) => {
+        const aInSelectedGroup = selectedGroupId != null && a.group.id === selectedGroupId
+        const bInSelectedGroup = selectedGroupId != null && b.group.id === selectedGroupId
+        if (aInSelectedGroup !== bInSelectedGroup) return aInSelectedGroup ? -1 : 1
+        if (a.bestRank !== b.bestRank) return a.bestRank - b.bestRank
+        return String(a.group.name || '').localeCompare(String(b.group.name || ''), undefined, { sensitivity: 'base' })
+      })
+  }, [groups, leaves, matchingItems, selectedGroupId, trimmedQuery])
+  const displayedCategories = useMemo(
+    () => displayGroups.flatMap(entry => entry.categories),
+    [displayGroups],
+  )
+  const displayedIndexById = useMemo(
+    () => new Map(displayedCategories.map((category, index) => [category.id, index])),
+    [displayedCategories],
+  )
 
   useEffect(() => {
     setCursor(0)
   }, [query])
+
+  useEffect(() => {
+    if (!open || !panelRef.current) return
+    if (!trimmedQuery) return
+    panelRef.current.scrollTop = 0
+  }, [open, trimmedQuery])
 
   useEffect(() => {
     setQuery(initialQuery || '')
@@ -203,6 +336,38 @@ export default function CategoryPicker({
   useEffect(() => {
     if (!open) setCreating(null)
   }, [open])
+
+  useEffect(() => {
+    if (!hasReportedInitialOpenStateRef.current) {
+      hasReportedInitialOpenStateRef.current = true
+      return
+    }
+    onOpenChange?.(open)
+  }, [open, onOpenChange])
+
+  function openPicker(nextQuery = query) {
+    querySnapshotRef.current = query
+    setCreating(null)
+    setOpen(true)
+    if (nextQuery !== query) {
+      setQuery(nextQuery)
+    }
+    setTimeout(() => inputRef.current?.focus(), 0)
+  }
+
+  function closePicker({ restoreQuery = true, focusTarget = 'trigger' } = {}) {
+    if (restoreQuery) {
+      setQuery(querySnapshotRef.current)
+    }
+    setOpen(false)
+    setCreating(null)
+    if (focusTarget) {
+      setTimeout(() => {
+        if (focusTarget === 'toggle') toggleButtonRef.current?.focus()
+        else triggerButtonRef.current?.focus()
+      }, 0)
+    }
+  }
 
   useLayoutEffect(() => {
     if (!open || !ref.current) {
@@ -246,17 +411,11 @@ export default function CategoryPicker({
     }
   }, [open])
 
-  useEffect(() => {
-    if (!open) return
-    function h(e) {
-      if (ref.current && !ref.current.contains(e.target)) {
-        setOpen(false)
-        setCreating(null)
-      }
-    }
-    document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [open])
+  useDismissibleLayer({
+    open,
+    onClose: () => closePicker({ focusTarget: null }),
+    refs: [ref, panelRef],
+  })
 
   async function handleCreated(created, createdGroup = null) {
     if (createdGroup) onAddCategory?.(createdGroup)
@@ -287,30 +446,30 @@ export default function CategoryPicker({
     e.stopPropagation()
     if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) {
       e.preventDefault()
-      setOpen(true)
+      openPicker()
       return
     }
     if (e.key === 'Escape') {
-      setOpen(false)
-      setCreating(null)
+      e.preventDefault()
+      closePicker()
       return
     }
     if (creating || !open) return
-    if (e.key === 'Enter' && query.trim() && filtered.length === 0) {
+    if (e.key === 'Enter' && query.trim() && displayedCategories.length === 0) {
       e.preventDefault()
       setCreating({ type: 'leaf', groupId: null, defaultName: query.trim() })
       return
     }
-    if (filtered.length === 0) return
+    if (displayedCategories.length === 0) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setCursor(c => Math.min(c + 1, filtered.length - 1))
+      setCursor(c => Math.min(c + 1, displayedCategories.length - 1))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       setCursor(c => Math.max(c - 1, 0))
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      pick(filtered[cursor])
+      pick(displayedCategories[cursor])
     }
   }
 
@@ -362,7 +521,9 @@ export default function CategoryPicker({
           <input
             ref={inputRef}
             value={query}
-            onFocus={() => setOpen(true)}
+            onFocus={() => {
+              if (!open) openPicker()
+            }}
             onChange={e => { setQuery(e.target.value); setOpen(true); setCreating(null) }}
             onKeyDown={handleKeyDown}
             onMouseDown={e => e.stopPropagation()}
@@ -371,11 +532,10 @@ export default function CategoryPicker({
           />
         ) : (
           <button
+            ref={triggerButtonRef}
             type="button"
             onClick={() => {
-              setOpen(true)
-              setCreating(null)
-              setTimeout(() => inputRef.current?.focus(), 0)
+              openPicker()
             }}
             style={{
               flex: 1,
@@ -409,11 +569,11 @@ export default function CategoryPicker({
           </button>
         )}
         <button
+          ref={toggleButtonRef}
           type="button"
           onClick={() => {
-            setOpen(v => !v)
-            setCreating(null)
-            setTimeout(() => inputRef.current?.focus(), 0)
+            if (open) closePicker({ focusTarget: 'toggle' })
+            else openPicker()
           }}
           style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 11, padding: '0 2px', lineHeight: 1 }}
           title="Browse categories"
@@ -463,40 +623,72 @@ export default function CategoryPicker({
             </div>
           ) : (
             <>
-              {query.trim() ? (
-                <>
-                  {filtered.map((c, idx) => {
-                    const parent = groups.find(g => g.id === c.parent_id)
-                    const active = idx === cursor
-                    const selectedRow = value === c.id
-                    return (
-                      <div
-                        key={c.id}
-                        onMouseDown={e => { e.preventDefault(); pick(c) }}
-                        onMouseEnter={() => setCursor(idx)}
-                        style={{
-                          padding: '5px 10px',
-                          fontSize: 13,
-                          cursor: 'pointer',
-                          background: active || selectedRow ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))' : 'transparent',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          minWidth: 0,
-                        }}
-                      >
-                        <CategoryMarker kind="category" />
-                        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {c.name}
-                        </span>
-                        {parent && (
-                          <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                            {parent.name}
+              {displayGroups.map(({ group, categories: groupCategories }) => {
+                const creatingHere = creating?.type === 'leaf' && creating.groupId === group.id
+                return (
+                  <div key={group.id}>
+                    <div style={{ padding: '5px 10px 1px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 7 }}>
+                      <CategoryMarker kind="group" />
+                      <span>{group.name}</span>
+                    </div>
+                    {groupCategories.map(c => {
+                      const active = trimmedQuery && displayedIndexById.get(c.id) === cursor
+                      const selectedRow = value === c.id
+                      const background = active
+                        ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
+                        : (!trimmedQuery && selectedRow)
+                          ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
+                        : 'transparent'
+                      return (
+                        <div
+                          key={c.id}
+                          data-picker-row-active={active ? 'true' : 'false'}
+                          onMouseDown={e => { e.preventDefault(); pick(c) }}
+                          onMouseEnter={() => {
+                            const nextCursor = displayedIndexById.get(c.id)
+                            if (nextCursor != null) setCursor(nextCursor)
+                          }}
+                          style={{ padding: '5px 10px 5px 24px', fontSize: 13, cursor: 'pointer', background, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
+                        >
+                          <CategoryMarker kind="category" />
+                          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {renderHighlightedCategoryName(c.name, trimmedQuery)}
                           </span>
-                        )}
+                          {selectedRow ? <span style={{ marginLeft: 'auto', color: 'var(--accent2)', fontSize: 11 }}>✓</span> : null}
+                        </div>
+                      )
+                    })}
+                    {creatingHere ? (
+                      <div style={{ padding: '4px 10px 6px 18px' }}>
+                        <NewCategoryForm
+                          groups={groups}
+                          mode="leaf"
+                          defaultGroupId={group.id}
+                          defaultName={creating.defaultName ?? query.trim()}
+                          onSave={handleCreated}
+                          onCancel={() => setCreating(null)}
+                        />
                       </div>
-                    )
-                  })}
+                    ) : !trimmedQuery ? (
+                      <div
+                        onMouseDown={e => { e.stopPropagation(); setCreating({ type: 'leaf', groupId: group.id }) }}
+                        style={{ padding: '4px 10px 5px 24px', fontSize: 12, color: 'var(--accent2)', cursor: 'pointer', opacity: 0.8 }}
+                        onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                        onMouseLeave={e => e.currentTarget.style.opacity = '0.8'}
+                      >
+                        ＋ New category in {group.name}
+                      </div>
+                    ) : null}
+                  </div>
+                )
+              })}
+              {trimmedQuery && displayGroups.length === 0 && (
+                <div style={{ padding: '10px 12px 8px', fontSize: 12, color: 'var(--muted)' }}>
+                  No matching categories
+                </div>
+              )}
+              {trimmedQuery && (
+                <>
                   <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
                   <div
                     onMouseDown={e => { e.stopPropagation(); setCreating({ type: 'leaf', groupId: null, defaultName: query.trim() }) }}
@@ -507,55 +699,8 @@ export default function CategoryPicker({
                     ＋ New category
                   </div>
                 </>
-              ) : groups.map(g => {
-                const kids = leaves.filter(c => c.parent_id === g.id)
-                const creatingHere = creating?.type === 'leaf' && creating.groupId === g.id
-                return (
-                  <div key={g.id}>
-                    <div style={{ padding: '5px 10px 1px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 7 }}>
-                      <CategoryMarker kind="group" />
-                      <span>{g.name}</span>
-                    </div>
-                    {kids.map(c => (
-                      <div
-                      key={c.id}
-                      onMouseDown={e => { e.preventDefault(); pick(c) }}
-                      style={{ padding: '5px 10px 5px 24px', fontSize: 13, cursor: 'pointer', background: value === c.id ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))' : 'transparent', display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
-                      onMouseEnter={e => e.currentTarget.style.background = 'var(--surface2)'}
-                      onMouseLeave={e => e.currentTarget.style.background = value === c.id ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))' : 'transparent'}
-                    >
-                      <CategoryMarker kind="category" />
-                      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {c.name}
-                      </span>
-                      {value === c.id && <span style={{ marginLeft: 'auto', color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
-                    </div>
-                    ))}
-                    {creatingHere ? (
-                      <div style={{ padding: '4px 10px 6px 18px' }}>
-                        <NewCategoryForm
-                          groups={groups}
-                          mode="leaf"
-                          defaultGroupId={g.id}
-                          defaultName={creating.defaultName ?? query.trim()}
-                          onSave={handleCreated}
-                          onCancel={() => setCreating(null)}
-                        />
-                      </div>
-                    ) : (
-                      <div
-                        onMouseDown={e => { e.stopPropagation(); setCreating({ type: 'leaf', groupId: g.id }) }}
-                        style={{ padding: '4px 10px 5px 24px', fontSize: 12, color: 'var(--accent2)', cursor: 'pointer', opacity: 0.8 }}
-                        onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-                        onMouseLeave={e => e.currentTarget.style.opacity = '0.8'}
-                      >
-                        ＋ New category in {g.name}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-              {!query.trim() && (
+              )}
+              {!trimmedQuery && (
                 <>
                   <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
                   <div

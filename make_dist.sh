@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 # make_dist.sh — Package FinTrack source files for distribution
 #
 # Run this from inside your installed FinTrack directory:
@@ -40,11 +41,13 @@ INCLUDE=(
   "docker-compose.yml"
   "README.md"
   "CHANGELOG.md"
+  "CONTRIBUTING.md"
   "LICENSE"
   ".env_example"
   "make_dist.bat"
   "make_dist.sh"
   "make_dist.ps1"
+  "docs/"
   "backend/main.py"
   "backend/runtime_config.py"
   "backend/requirements.txt"

@@ -1,7 +1,11 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { useState } from 'react'
 import { api } from '../lib/api.js'
 import { passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import { getSecurityProfile } from '../lib/securityProfiles.js'
+import TransientTextInput from './TransientTextInput.jsx'
 
 const s = {
   page: {
@@ -115,18 +119,22 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
 
         <div style={{ display: 'grid', gap: 12 }}>
           {!awaiting2fa && (
-            <input
+            <TransientTextInput
               value={username}
-              onChange={e => setUsername(e.target.value)}
+              onChange={setUsername}
+              restoreOnEscape
+              onBlurCommit={false}
               placeholder="Username"
               autoComplete="username"
               style={s.input}
             />
           )}
           {!awaiting2fa && needsBootstrap && (
-            <input
+            <TransientTextInput
               value={displayName}
-              onChange={e => setDisplayName(e.target.value)}
+              onChange={setDisplayName}
+              restoreOnEscape
+              onBlurCommit={false}
               placeholder="Display name"
               autoComplete="name"
               style={s.input}
@@ -134,10 +142,12 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
           )}
           {!awaiting2fa ? (
             <>
-              <input
+              <TransientTextInput
                 type="password"
                 value={password}
-                onChange={e => setPassword(e.target.value)}
+                onChange={setPassword}
+                restoreOnEscape
+                onBlurCommit={false}
                 placeholder="Password"
                 autoComplete={needsBootstrap ? 'new-password' : 'current-password'}
                 style={s.input}
@@ -149,9 +159,11 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
               )}
             </>
           ) : (
-            <input
+            <TransientTextInput
               value={twoFactorCode}
-              onChange={e => setTwoFactorCode(e.target.value)}
+              onChange={setTwoFactorCode}
+              restoreOnEscape
+              onBlurCommit={false}
               placeholder="123456"
               inputMode="numeric"
               autoComplete="one-time-code"

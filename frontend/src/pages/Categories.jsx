@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
@@ -13,6 +16,7 @@ import {
 import { useFilters } from '../lib/FilterContext.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import { usePagedTransactions } from '../components/detailShared.jsx'
+import { ESCAPE_BEHAVIOR, useDismissibleLayer, useEscapeAction } from '../lib/uiInteractions.js'
 
 const SECTION_META = {
   income: { label: 'Income' },
@@ -77,14 +81,11 @@ function getGroupStorageKey(instanceId, userId) {
 
 function DeleteCategoryDialog({ category, preview, categories, replacementId, onReplacementChange, mode, onModeChange, onConfirm, onCancel, saving }) {
   const ref = useRef(null)
-
-  useEffect(() => {
-    function handleClick(e) {
-      if (ref.current && !ref.current.contains(e.target)) onCancel()
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [onCancel])
+  useDismissibleLayer({
+    open: true,
+    onClose: onCancel,
+    refs: [ref],
+  })
 
   const canConfirm = mode === 'unassigned' || !!replacementId
 
@@ -223,14 +224,11 @@ function ContextMenu({
 }) {
   const ref = useRef(null)
   const [menuHeight, setMenuHeight] = useState(0)
-
-  useEffect(() => {
-    function handleClick(e) {
-      if (ref.current && !ref.current.contains(e.target)) onClose()
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [onClose])
+  useDismissibleLayer({
+    open: true,
+    onClose,
+    refs: [ref],
+  })
 
   useLayoutEffect(() => {
     if (!ref.current) return
@@ -469,6 +467,7 @@ function InlineGroupDraftRow({ onSubmit, onCancel }) {
       autoEditToken={1}
       autoEditPlaceholder="Group name"
       onAutoEditConsumed={() => {}}
+      onCancelEdit={onCancel}
       onToggleCollapse={() => {}}
       onSelect={() => {}}
       onRename={(_, name) => onSubmit(name)}
@@ -522,6 +521,7 @@ function InlineCategoryDraftRow({ onSubmit, onCancel }) {
       autoEditToken={1}
       autoEditPlaceholder="category name"
       onAutoEditConsumed={() => {}}
+      onCancelEdit={onCancel}
       onSelect={() => {}}
       onRename={(_, name) => onSubmit(name)}
       onDelete={() => {}}
@@ -678,6 +678,39 @@ export default function Categories() {
 
   useEffect(() => { loadCategories() }, [loadCategories])
   useEffect(() => { api.getOwners().then(setOwners) }, [])
+  useEscapeAction(event => {
+    if (deleteDialog) {
+      if (deleteSaving) return
+      event.preventDefault()
+      closeDeleteDialog()
+      return
+    }
+    if (contextMenu) {
+      event.preventDefault()
+      setContextMenu(null)
+      return
+    }
+    if (inlineForm) {
+      event.preventDefault()
+      setInlineForm(null)
+      setNewName('')
+      return
+    }
+    if (bulkMoveMode) {
+      event.preventDefault()
+      cancelBulkMove()
+      return
+    }
+    if (selected || selectedCategoryIds.length > 0) {
+      event.preventDefault()
+      setSelected(null)
+      setSelectedCategoryIds([])
+    }
+  }, {
+    enabled: !!deleteDialog || !!contextMenu || !!inlineForm || bulkMoveMode || !!selected || selectedCategoryIds.length > 0,
+    ignoreEditableTarget: false,
+    escapeBehavior: ESCAPE_BEHAVIOR.CLEAR_SELECTION,
+  })
   useEffect(() => {
     if (!collapseStateLoaded) return
     const storageKey = getSectionStorageKey(dbInstanceId, userId)
@@ -1401,8 +1434,6 @@ export default function Categories() {
                 border: '1px solid var(--border)',
                 borderRadius: 10,
                 background: 'var(--surface)',
-                scrollbarWidth: 'thin',
-                scrollbarColor: 'color-mix(in srgb, var(--border) 85%, transparent) transparent',
               }}
             >
             {!loading && bulkMoveMode ? (
@@ -1624,8 +1655,6 @@ export default function Categories() {
               borderRadius: 10,
               background: 'var(--surface)',
               padding: 20,
-              scrollbarWidth: 'thin',
-              scrollbarColor: 'color-mix(in srgb, var(--border) 85%, transparent) transparent',
             }}
           >
           {!selected ? (

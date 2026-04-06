@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 const BADGE_THEMES = [
   { bg: '#eef2ff', border: '#c7d2fe', text: '#3730a3' },
   { bg: '#ecfeff', border: '#a5f3fc', text: '#155e75' },

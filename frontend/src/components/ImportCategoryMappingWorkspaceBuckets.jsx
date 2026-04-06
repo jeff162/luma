@@ -1,9 +1,14 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import {
   cloneImportCategoryMappingSnapshot,
   createImportCategoryMappingDraftState,
 } from '../lib/importCategoryMappingState.js'
+import { useDismissibleLayer } from '../lib/uiInteractions.js'
+import TransientTextInput from './TransientTextInput.jsx'
 import { Button } from './ui.jsx'
 import {
   clearCategoryTreeDragItem,
@@ -529,6 +534,11 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
   const [floatingGroupDraft, setFloatingGroupDraft] = useState(null)
   const sourceScrollRef = useRef(null)
   const bucketScrollRef = useRef(null)
+  const panelMenuRef = useRef(null)
+  const groupMenuRef = useRef(null)
+  const resetMenuRef = useRef(null)
+  const sourceMenuRef = useRef(null)
+  const floatingGroupDraftRef = useRef(null)
 
   function buildCurrentDraftState() {
     return {
@@ -552,84 +562,46 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
     return () => { cancelled = true }
   }, [existingCategories])
 
-  useEffect(() => {
-    if (!panelMenu) return undefined
-    function dismiss() {
-      setPanelMenu(null)
-    }
-    window.addEventListener('mousedown', dismiss)
-    window.addEventListener('scroll', dismiss, true)
-    window.addEventListener('resize', dismiss)
-    return () => {
-      window.removeEventListener('mousedown', dismiss)
-      window.removeEventListener('scroll', dismiss, true)
-      window.removeEventListener('resize', dismiss)
-    }
-  }, [panelMenu])
+  useDismissibleLayer({
+    open: !!panelMenu,
+    onClose: () => setPanelMenu(null),
+    refs: [panelMenuRef],
+    closeOnScrollResize: true,
+  })
 
-  useEffect(() => {
-    if (!groupMenu) return undefined
-    function dismiss() {
-      setGroupMenu(null)
-    }
-    window.addEventListener('mousedown', dismiss)
-    window.addEventListener('scroll', dismiss, true)
-    window.addEventListener('resize', dismiss)
-    return () => {
-      window.removeEventListener('mousedown', dismiss)
-      window.removeEventListener('scroll', dismiss, true)
-      window.removeEventListener('resize', dismiss)
-    }
-  }, [groupMenu])
+  useDismissibleLayer({
+    open: !!groupMenu,
+    onClose: () => setGroupMenu(null),
+    refs: [groupMenuRef],
+    closeOnScrollResize: true,
+  })
 
-  useEffect(() => {
-    if (!resetMenu) return undefined
-    function dismiss() {
-      setResetMenu(null)
-    }
-    window.addEventListener('mousedown', dismiss)
-    window.addEventListener('scroll', dismiss, true)
-    window.addEventListener('resize', dismiss)
-    return () => {
-      window.removeEventListener('mousedown', dismiss)
-      window.removeEventListener('scroll', dismiss, true)
-      window.removeEventListener('resize', dismiss)
-    }
-  }, [resetMenu])
+  useDismissibleLayer({
+    open: !!resetMenu,
+    onClose: () => setResetMenu(null),
+    refs: [resetMenuRef],
+    closeOnScrollResize: true,
+  })
 
-  useEffect(() => {
-    if (!sourceMenu) return undefined
-    function dismiss() {
-      setSourceMenu(null)
-    }
-    window.addEventListener('mousedown', dismiss)
-    window.addEventListener('scroll', dismiss, true)
-    window.addEventListener('resize', dismiss)
-    return () => {
-      window.removeEventListener('mousedown', dismiss)
-      window.removeEventListener('scroll', dismiss, true)
-      window.removeEventListener('resize', dismiss)
-    }
-  }, [sourceMenu])
+  useDismissibleLayer({
+    open: !!sourceMenu,
+    onClose: () => setSourceMenu(null),
+    refs: [sourceMenuRef],
+    closeOnScrollResize: true,
+  })
 
-  useEffect(() => {
-    if (!floatingGroupDraft) return undefined
-    function dismiss(event) {
-      const target = event.target
-      if (target?.closest?.('[data-floating-group-draft="true"]')) return
-      if (floatingGroupDraft.name.trim()) {
+  useDismissibleLayer({
+    open: !!floatingGroupDraft,
+    onClose: () => {
+      if (floatingGroupDraft?.name.trim()) {
         finalizeFloatingGroupDraft()
+      } else {
+        setFloatingGroupDraft(null)
       }
-    }
-    window.addEventListener('mousedown', dismiss)
-    window.addEventListener('scroll', dismiss, true)
-    window.addEventListener('resize', dismiss)
-    return () => {
-      window.removeEventListener('mousedown', dismiss)
-      window.removeEventListener('scroll', dismiss, true)
-      window.removeEventListener('resize', dismiss)
-    }
-  }, [floatingGroupDraft])
+    },
+    refs: [floatingGroupDraftRef],
+    closeOnScrollResize: true,
+  })
 
   function applySnapshotChange(mutator) {
     const next = cloneImportCategoryMappingSnapshot(snapshot)
@@ -813,23 +785,6 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
       }
     })
     setEditingId(null)
-  }
-
-  function handleEditBlur(event) {
-    const value = event.target.value.trim()
-    if (value) {
-      commitEdit()
-      return
-    }
-    const info = editingId ? findNode(snapshot.tree, editingId) : null
-    if (info?.node?.isNew && !info.node.name) {
-      requestAnimationFrame(() => {
-        event.target?.focus()
-      })
-      return
-    }
-    setEditingId(null)
-    setEditingValue('')
   }
 
   function handleSelectSource(id, event) {
@@ -1413,6 +1368,7 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
                   </button>
                   {resetMenu ? (
                     <div
+                      ref={resetMenuRef}
                       style={{
                         position: 'fixed',
                         left: resetMenu.x,
@@ -1501,7 +1457,7 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
                       <div style={{ minWidth: 0, flex: 1 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <button onClick={e => { e.stopPropagation(); setSnapshot(prev => ({ ...prev, collapsedGroups: { ...prev.collapsedGroups, [group.id]: !prev.collapsedGroups[group.id] } })) }} style={{ width: 20, height: 20, borderRadius: 6, border: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))', color: 'var(--muted)', cursor: 'pointer' }}>{snapshot.collapsedGroups[group.id] ? '+' : '-'}</button>
-                          {editingId === group.id ? <input autoFocus placeholder="Group name" value={editingValue} onChange={e => setEditingValue(e.target.value)} onBlur={handleEditBlur} onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') { setEditingId(null); setEditingValue('') } }} style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid color-mix(in srgb, var(--accent) 55%, var(--border))', borderRadius: 8, padding: '4px 8px', fontSize: 14, fontWeight: 650, outline: 'none', width: '100%' }} /> : <div onClick={e => handleNameClick(group.id, group.name, e)} style={{ fontSize: 14, fontWeight: 650, color: 'color-mix(in srgb, var(--text) 88%, var(--muted))', cursor: 'text' }}>{group.name}</div>}
+                          {editingId === group.id ? <TransientTextInput placeholder="Group name" value={editingValue} onChange={setEditingValue} onCommit={commitEdit} onCancel={() => { setEditingId(null); setEditingValue('') }} style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid color-mix(in srgb, var(--accent) 55%, var(--border))', borderRadius: 8, padding: '4px 8px', fontSize: 14, fontWeight: 650, outline: 'none', width: '100%' }} /> : <div onClick={e => handleNameClick(group.id, group.name, e)} style={{ fontSize: 14, fontWeight: 650, color: 'color-mix(in srgb, var(--text) 88%, var(--muted))', cursor: 'text' }}>{group.name}</div>}
                         </div>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1642,7 +1598,7 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
                                     +
                                   </span>
                                 ) : null}
-                                {editingId === child.id ? <input autoFocus value={editingValue} onChange={e => setEditingValue(e.target.value)} onBlur={handleEditBlur} onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') { setEditingId(null); setEditingValue('') } }} style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid color-mix(in srgb, var(--accent) 55%, var(--border))', borderRadius: 8, padding: '3px 8px', fontSize: 12, fontWeight: 500, outline: 'none', minWidth: 96 }} /> : <span onClick={e => handleNameClick(child.id, child.name, e)} style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', fontStyle: child.importBadge === 'new' ? 'italic' : 'normal', cursor: selected ? 'text' : 'pointer' }}>{child.name || 'category name'}</span>}
+                                {editingId === child.id ? <TransientTextInput value={editingValue} onChange={setEditingValue} onCommit={commitEdit} onCancel={() => { setEditingId(null); setEditingValue('') }} style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid color-mix(in srgb, var(--accent) 55%, var(--border))', borderRadius: 8, padding: '3px 8px', fontSize: 12, fontWeight: 500, outline: 'none', minWidth: 96 }} /> : <span onClick={e => handleNameClick(child.id, child.name, e)} style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', fontStyle: child.importBadge === 'new' ? 'italic' : 'normal', cursor: selected ? 'text' : 'pointer' }}>{child.name || 'category name'}</span>}
                                 {pillTrailingNoDragZone()}
                                 <button onMouseDown={e => { e.preventDefault(); e.stopPropagation() }} onClick={e => { e.stopPropagation(); removeNode(child.id) }} style={pillRemoveButtonStyle(removeTone(usageInUse(child)))}>x</button>
                               </div>
@@ -1707,7 +1663,7 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
                                     +
                                   </span>
                                 ) : null}
-                                {editingId === child.id ? <input autoFocus value={editingValue} onChange={e => setEditingValue(e.target.value)} onBlur={handleEditBlur} onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') { setEditingId(null); setEditingValue('') } }} style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid color-mix(in srgb, var(--accent) 55%, var(--border))', borderRadius: 8, padding: '3px 8px', fontSize: 12, fontWeight: 500, outline: 'none', minWidth: 96 }} /> : <span onClick={e => handleNameClick(child.id, child.name, e)} style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', fontStyle: child.importBadge === 'new' ? 'italic' : 'normal', cursor: selected ? 'text' : 'pointer' }}>{child.name || 'category name'}</span>}
+                                {editingId === child.id ? <TransientTextInput value={editingValue} onChange={setEditingValue} onCommit={commitEdit} onCancel={() => { setEditingId(null); setEditingValue('') }} style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid color-mix(in srgb, var(--accent) 55%, var(--border))', borderRadius: 8, padding: '3px 8px', fontSize: 12, fontWeight: 500, outline: 'none', minWidth: 96 }} /> : <span onClick={e => handleNameClick(child.id, child.name, e)} style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', fontStyle: child.importBadge === 'new' ? 'italic' : 'normal', cursor: selected ? 'text' : 'pointer' }}>{child.name || 'category name'}</span>}
                                 {pillTrailingNoDragZone()}
                                 <button onMouseDown={e => { e.preventDefault(); e.stopPropagation() }} onClick={e => { e.stopPropagation(); removeNode(child.id) }} style={pillRemoveButtonStyle(removeTone(usageInUse(child)))}>x</button>
                               </div>
@@ -1756,7 +1712,7 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
                             +
                           </span>
                         ) : null}
-                        {editingId === child.id ? <input autoFocus value={editingValue} onChange={e => setEditingValue(e.target.value)} onBlur={handleEditBlur} onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') { setEditingId(null); setEditingValue('') } }} style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid color-mix(in srgb, var(--accent) 55%, var(--border))', borderRadius: 8, padding: '3px 8px', fontSize: 12, fontWeight: 500, outline: 'none', minWidth: 96 }} /> : <span onClick={e => handleNameClick(child.id, child.name, e)} style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', fontStyle: child.importBadge === 'new' ? 'italic' : 'normal', cursor: selected ? 'text' : 'pointer' }}>{child.name || 'category name'}</span>}
+                        {editingId === child.id ? <TransientTextInput value={editingValue} onChange={setEditingValue} onCommit={commitEdit} onCancel={() => { setEditingId(null); setEditingValue('') }} style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid color-mix(in srgb, var(--accent) 55%, var(--border))', borderRadius: 8, padding: '3px 8px', fontSize: 12, fontWeight: 500, outline: 'none', minWidth: 96 }} /> : <span onClick={e => handleNameClick(child.id, child.name, e)} style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', fontStyle: child.importBadge === 'new' ? 'italic' : 'normal', cursor: selected ? 'text' : 'pointer' }}>{child.name || 'category name'}</span>}
                         {pillTrailingNoDragZone()}
                         <button onMouseDown={e => { e.preventDefault(); e.stopPropagation() }} onClick={e => { e.stopPropagation(); removeNode(child.id) }} style={pillRemoveButtonStyle(removeTone(usageInUse(child)))}>x</button>
                       </div>
@@ -1767,6 +1723,7 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
               </div>}
               {panelMenu ? (
                 <div
+                  ref={panelMenuRef}
                   style={{
                     position: 'fixed',
                     left: panelMenu.x,
@@ -1840,6 +1797,7 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
               ) : null}
               {groupMenu ? (
                 <div
+                  ref={groupMenuRef}
                   style={{
                     position: 'fixed',
                     left: groupMenu.x,
@@ -1906,6 +1864,7 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
               ) : null}
               {sourceMenu ? (
                 <div
+                  ref={sourceMenuRef}
                   style={{
                     position: 'fixed',
                     left: sourceMenu.x,
@@ -1944,6 +1903,7 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
               ) : null}
               {floatingGroupDraft ? (
                 <div
+                  ref={floatingGroupDraftRef}
                   data-floating-group-draft="true"
                   style={{
                     position: 'fixed',
@@ -1987,24 +1947,18 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
                         >
                           -
                         </button>
-                        <input
-                          autoFocus
+                        <TransientTextInput
                           placeholder="Group name"
                           value={floatingGroupDraft.name}
-                          onChange={e => setFloatingGroupDraft(prev => prev ? { ...prev, name: e.target.value } : prev)}
-                          onBlur={event => {
+                          onChange={value => setFloatingGroupDraft(prev => prev ? { ...prev, name: value } : prev)}
+                          onCommit={() => {
                             if (floatingGroupDraft?.name.trim()) {
                               finalizeFloatingGroupDraft()
                               return
                             }
-                            requestAnimationFrame(() => {
-                              event.target?.focus()
-                            })
                           }}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') finalizeFloatingGroupDraft()
-                            if (e.key === 'Escape') setFloatingGroupDraft(null)
-                          }}
+                          onBlurCommit={false}
+                          onCancel={() => setFloatingGroupDraft(null)}
                           style={{
                             background: 'var(--bg)',
                             color: 'var(--text)',

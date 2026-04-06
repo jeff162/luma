@@ -1,19 +1,36 @@
+<!-- SPDX-FileCopyrightText: 2026 Jeffrey Orlin -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # UI Patterns
 
-This is a working guide for keeping FinTrack pages visually and behaviorally
-consistent. It is not a rigid design system; it is a practical set of patterns
-the app already uses and should continue to prefer.
+This document records the UI patterns FinTrack should prefer. It is not a full
+design system; it is a working reference for visual and interaction consistency.
+
+## Contents
+
+- [Product intent](#product-intent)
+- [General principles](#general-principles)
+- [Page structure](#page-structure)
+- [Tree views](#tree-views)
+- [Section toggles](#section-toggles)
+- [Row editing](#row-editing)
+- [Pills and expanding selectors](#pills-and-expanding-selectors)
+- [Empty states](#empty-states)
+- [Drop zones and file inputs](#drop-zones-and-file-inputs)
+- [Confirmation and completion flows](#confirmation-and-completion-flows)
+- [Import-specific patterns](#import-specific-patterns)
+- [Ownership rules](#ownership-rules)
+- [When to document a new pattern](#when-to-document-a-new-pattern)
 
 ## Product intent
 
 FinTrack should feel polished, quiet, and immediately useful. The UI should
-stay out of the user's way and let them manipulate their data from wherever
-they already are, rather than forcing them through a separate admin or
-settings workflow for routine actions.
+support routine work in place rather than forcing separate admin or settings
+flows for common actions.
 
-That means polish is part of the feature, not a later cleanup step. When adding
-interactive controls, assume the finished behavior includes the usual edge-case
-handling:
+Polish is part of the feature, not a later cleanup step.
+
+Baseline interaction expectations:
 
 - overlays should open in the correct place on first paint
 - menus and popovers should respect viewport edges and scroll containers
@@ -21,14 +38,14 @@ handling:
 - selectors and dialogs should render above surrounding content
 - inline edit states should preserve layout stability whenever possible
 
-If a user can already see the data they want to change, prefer enabling the
-change right there unless there is a strong reason to route them elsewhere.
+If the user can already see the data they need to change, prefer enabling the
+change in place unless there is a strong reason to route it elsewhere.
 
-Shared controls should be treated as finished product surfaces, not just reused
-snippets. If a picker, menu, overlay, inline editor, or other control appears
-in more than one place, its viewport behavior, scroll behavior, first-paint
-placement, and general polish should be handled up front as part of the change,
-not left for follow-up cleanup after page-specific issues are discovered.
+Shared controls should be treated as finished product surfaces, not reused
+snippets. If a picker, menu, overlay, inline editor, or related control appears
+in more than one place, viewport behavior, scroll behavior, first-paint
+placement, and general polish should be handled as part of the shared control,
+not deferred to follow-up page-specific cleanup.
 
 ## General principles
 
@@ -51,14 +68,16 @@ not left for follow-up cleanup after page-specific issues are discovered.
 - When a UI behavior is meant to be shared, implement the shared behavior first.
   Do not land a one-sided or page-specific version and plan to “sync it up”
   later unless the narrower scope is intentional and explicitly documented.
-- Before changing a UI interaction, decide whether it is:
-  1. page-specific behavior
-  2. shared product language
-  If it is shared product language, the implementation and review standard
-  should assume parity across all affected surfaces from the start.
+- Before changing a UI interaction, decide whether it is page-specific behavior
+  or shared product language. Shared product language should be implemented and
+  reviewed with parity across all affected surfaces from the start.
 - Keep advanced and less-common settings below everyday workflows.
 - Use inline editing for lightweight data changes; reserve dedicated forms or
   modals for multi-step or higher-risk actions.
+- Treat transient edits as cancellable work. If a control enters a temporary
+  edit state, the user should normally be able to back out without keeping the
+  in-progress value, and similar transient controls should behave the same way
+  across the app unless there is a strong reason to differ.
 - Let the user control presentation where it materially helps them work. This
   includes things like panel placement, list scrolling, filtering, and other
   layout choices that improve usability without turning the app into a fully
@@ -74,7 +93,7 @@ not left for follow-up cleanup after page-specific issues are discovered.
 
 ## Page structure
 
-Most pages should follow this shape:
+Most pages should follow this structure:
 
 1. A `PageHeader` at the top.
 2. One or more `Card` blocks or list/table regions underneath.
@@ -82,8 +101,8 @@ Most pages should follow this shape:
 4. Scroll inside long data regions when the list grows large, rather than
    making the whole page excessively tall.
 
-Prefer page-local scrolling for long lists like accounts, with the header or
-controls remaining visually stable above the list.
+Prefer page-local scrolling for long lists, with header and controls remaining
+visually stable above the scrolling region.
 
 ## Tree views
 
@@ -156,7 +175,8 @@ browser file input.
 
 ## Confirmation and completion flows
 
-Do not rely on browser `confirm()` dialogs when the rest of the app has a clear UI style.
+Do not rely on browser `confirm()` dialogs when the rest of the app has a clear
+UI style.
 
 - Use in-app confirmation overlays for destructive actions like restore.
 - Confirmation and completion steps in the same flow should use the same visual language.
@@ -180,13 +200,13 @@ CSV import has a few special rules:
 
 ### Import mapping persistence
 
-Import mapping persistence has two layers, with different responsibilities:
+Import mapping persistence has two layers:
 
-- The import profile/filter is the source of truth for provider-level reusable
-  mapping behavior.
-- A local draft exists only as a fallback for the no-profile/manual case.
+- **Import profile/filter:** source of truth for provider-level reusable
+  mapping behavior
+- **Local draft:** fallback only for the no-profile/manual case
 
-When a profile matches, it should carry the reusable import workspace state,
+When a profile matches, it should carry reusable import workspace state,
 including:
 
 - column mapping
@@ -195,26 +215,26 @@ including:
 - category mapping workspace state such as `Set Aside`
 - collapsed/open bucket state
 
-The local draft must not override a matched profile. It is only there so a
-manual/no-profile import session can resume later if the next file still looks
+The local draft must not override a matched profile. It exists only so a
+manual/no-profile import session can resume later if the next file is still
 compatible.
 
 ## Ownership rules
 
 Ownership should be managed where it is most relevant:
 
-- Account owners are created, assigned, renamed, and deleted on the Accounts page.
-- Category and group ownership is managed on the Categories page.
-- Avoid duplicate ownership editors in multiple places.
+- **Accounts page:** create, assign, rename, and delete account owners
+- **Categories page:** manage category and group ownership
+- **General rule:** avoid duplicate ownership editors in multiple places
 
-Category ownership semantics are different from account ownership and should be
-kept explicit:
+Category ownership semantics differ from account ownership and should remain
+explicit:
 
-- Accounts use explicit ownership only.
-- Category groups can resolve to shared ownership when more than one personal
-  owner exists.
-- Child categories with `owner_id = NULL` inherit from their group.
-- Explicitly owned child categories must not be rewritten when the group owner changes.
+- **Accounts:** explicit ownership only
+- **Category groups:** can resolve to shared ownership when more than one
+  personal owner exists
+- **Child categories:** `owner_id = NULL` means inheritance from the group
+- **Explicit child ownership:** must not be rewritten when the group owner changes
 
 ## When to document a new pattern
 

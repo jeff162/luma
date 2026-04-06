@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /**
  * Dashboard.jsx — Main spending overview with drill-down, compare, and trends
  *

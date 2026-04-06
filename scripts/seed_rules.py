@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """
 Run once after first launch to populate default categorization rules.
 Usage: DB_PATH=./data/fintrack.db python3 scripts/seed_rules.py

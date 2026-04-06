@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """
 database.py — SQLite schema, migrations, and seed data
 
@@ -21,6 +24,10 @@ SCHEMA OVERVIEW:
 MIGRATION SYSTEM:
   Every schema change or data migration that needs to run on existing databases
   should be implemented as a migration function, not just in init_db().
+
+  Fresh databases are created directly in the latest schema and should be
+  marked at CURRENT_VERSION immediately. They should not "replay" the
+  migration chain on first boot just to reach the already-current schema.
 
   To add a new migration:
     1. Write a function decorated with @migration(N) where N = CURRENT_VERSION + 1
@@ -61,10 +68,16 @@ DESIGN PRINCIPLES:
 
 import os
 import sqlite3
+import sys
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
+
+try:
+    from app_logging import log_info
+except ModuleNotFoundError:
+    from backend.app_logging import log_info
 
 DB_PATH = os.getenv("DB_PATH", "fintrack.db")
 _current_db_path: ContextVar[str | None] = ContextVar("fintrack_current_db_path", default=None)
@@ -144,11 +157,11 @@ def get_db(db_path: str | None = None):
 #      schema shape instead of relying on the migration chain.
 #   3. Decorate the upgrade step with @migration(N) where N = CURRENT_VERSION + 1
 #   4. Bump CURRENT_VERSION to N
-#   5. If migration coverage is needed, add/update a historical test DB creator
-#      under backend/db/test_fixtures/ that can build a database at the
-#      pre-migration version for upgrade testing.
+#   5. Add/update the matching fixture creator(s) under backend/db/test_fixtures/:
+#      - a current-schema creator tagged to version N
+#      - any historical pre-migration creators still needed for upgrade tests
 #   6. On next startup, run_migrations() will detect the version mismatch and
-#      apply all pending migrations in order.
+#      apply all pending migrations in order for existing databases only.
 #
 # Migrations run inside the same init_db() connection, so they can reference
 # any helper functions defined in this file.
@@ -178,6 +191,12 @@ def get_db_version(conn) -> int:
 
 
 def set_db_version(conn, version: int):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS db_meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
     conn.execute(
         "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('version', ?)",
         (str(version),)
@@ -209,10 +228,10 @@ def run_migrations(conn):
         return
     for version in sorted(MIGRATIONS):
         if version > current:
-            print(f"[db] applying migration v{version}...")
+            log_info(f"[db] applying migration v{version}...")
             MIGRATIONS[version](conn)
             set_db_version(conn, version)
-    print(f"[db] database is now at version {CURRENT_VERSION}")
+    log_info(f"[db] database is now at version {CURRENT_VERSION}")
 
 
 # ── Migrations ────────────────────────────────────────────────────────────────
@@ -230,7 +249,21 @@ def init_db(db_path: str | None = None):
     Create all tables and indexes if they don't exist, seed default data,
     and run any pending migrations. Called once at application startup.
     """
-    with get_db(db_path) as conn:
+    resolved_path = _normalize_db_path(db_path)
+    with get_db(resolved_path) as conn:
+        existing_tables = {
+            row["name"]
+            for row in conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table'
+                  AND name NOT LIKE 'sqlite_%'
+                """
+            ).fetchall()
+        }
+        is_fresh_db = len(existing_tables) == 0
+
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS plaid_item (
                 item_id          TEXT PRIMARY KEY,
@@ -375,12 +408,24 @@ def init_db(db_path: str | None = None):
 
         _seed_default_categories(conn)
 
-        run_migrations(conn)
+        if is_fresh_db:
+            set_db_version(conn, CURRENT_VERSION)
+            log_info(f"[db] created new database at schema version {CURRENT_VERSION}")
+        else:
+            run_migrations(conn)
         ensure_shared_owner(conn)
 
         rule_count = conn.execute("SELECT COUNT(*) FROM category_rule").fetchone()[0]
         if rule_count == 0:
-            from services.categorizer import seed_default_rules
+            try:
+                from services.categorizer import seed_default_rules
+            except ModuleNotFoundError:
+                backend_root = Path(__file__).resolve().parents[1]
+                repo_root = backend_root.parent
+                for path in (str(repo_root), str(backend_root)):
+                    if path not in sys.path:
+                        sys.path.insert(0, path)
+                from backend.services.categorizer import seed_default_rules
             seed_default_rules(conn)
 
 
@@ -434,34 +479,40 @@ def _seed_default_categories(conn: sqlite3.Connection):
     gifts         = upsert_cat("Gifts & Donations", category_type="expense")
     health        = upsert_cat("Health & Fitness", category_type="expense")
     household     = upsert_cat("Household", category_type="expense")
-    other         = upsert_cat("Other", category_type="expense")
+    medical       = upsert_cat("Medical", category_type="expense")
+    other         = upsert_cat("Miscellaneous", category_type="expense")
     shopping      = upsert_cat("Shopping", category_type="expense")
     entertainment = upsert_cat("Entertainment", category_type="expense")
     transport     = upsert_cat("Transportation", category_type="expense")
-    travel        = upsert_cat("Travel", category_type="expense")
+    travel        = upsert_cat("Vacation & Travel", category_type="expense")
+    utilities     = upsert_cat("Utilities", category_type="expense")
     transfers     = upsert_cat("Transfers", category_type="expense", exclude_from_totals=1)
 
-    upsert_cat("Dental", health)
-    upsert_cat("Doctor & Medical", health)
-    upsert_cat("Gym & Fitness", health)
-    upsert_cat("Pharmacy", health)
-    upsert_cat("Vision", health)
+    upsert_cat("Fitness Classes", health)
+    upsert_cat("Gym Membership", health)
+
+    upsert_cat("Doctor", medical)
+    upsert_cat("Medical", medical)
+    upsert_cat("Dental", medical)
+    upsert_cat("Pharmacy", medical)
+    upsert_cat("Vision", medical)
 
     upsert_cat("Alcohol", food)
     upsert_cat("Coffee & Drinks", food)
     upsert_cat("Dining Out", food)
     upsert_cat("Groceries", food)
 
-    upsert_cat("Electricity", household)
-    upsert_cat("Gas", household)
     upsert_cat("Home Improvement", household)
     upsert_cat("Home Insurance", household)
     upsert_cat("Home Repairs", household)
-    upsert_cat("Internet", household)
-    upsert_cat("Phone", household)
     upsert_cat("Property Tax", household)
     upsert_cat("Rent & Mortgage", household)
-    upsert_cat("Water", household)
+
+    upsert_cat("Electricity", utilities)
+    upsert_cat("Gas", utilities)
+    upsert_cat("Internet", utilities)
+    upsert_cat("Phone", utilities)
+    upsert_cat("Water", utilities)
 
     upsert_cat("Auto Insurance", transport)
     upsert_cat("Gas", transport)

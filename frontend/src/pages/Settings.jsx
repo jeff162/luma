@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /**
  * Settings.jsx — App settings and category ownership management
  *
@@ -15,11 +18,23 @@ import { api } from '../lib/api.js'
 import { Card, PageHeader, Button, Spinner, EmptyState } from '../components/ui.jsx'
 import { PASSWORD_POLICIES, passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import { SECURITY_PROFILES, getSecurityProfile } from '../lib/securityProfiles.js'
+import { useTransientTextEdit } from '../lib/uiInteractions.js'
+import TransientTextInput from '../components/TransientTextInput.jsx'
 
 const SETTINGS_SECTIONS_PREF_KEY = 'ui.settings.stickySections'
 const SETTINGS_SECTIONS_STORAGE_KEY_PREFIX = 'fintrack.settings.stickySections'
+const SETTINGS_CONTENT_WIDTH = 'min(1040px, 100%)'
+function clearBrowserStoredState() {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.clear()
+  } catch {}
+  try {
+    window.sessionStorage.clear()
+  } catch {}
+}
 
-// ── Import profiles section ───────────────────────────────────────────────────
+// ── Data sources section ──────────────────────────────────────────────────────
 
 const AMOUNT_CONVENTIONS = [
   { value: 'single_signed',   label: 'Single column — negative = debit' },
@@ -92,13 +107,13 @@ function ProfileForm({ profile, accounts, onSave, onCancel }) {
       display: 'flex', flexDirection: 'column', gap: 12,
     }}>
       <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)' }}>
-        {isNew ? 'New import profile' : `Edit: ${profile.name}`}
+        {isNew ? 'New data source' : `Edit: ${profile.name}`}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <div>
           <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
-            Profile name *
+            Data source name *
           </label>
           <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Chase Checking" style={inputStyle} />
         </div>
@@ -187,7 +202,7 @@ function ProfileForm({ profile, accounts, onSave, onCancel }) {
         </label>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           <Button small onClick={handleSave} disabled={!name.trim() || !colDate.trim() || !colDesc.trim()}>
-            {isNew ? 'Create profile' : 'Save changes'}
+            {isNew ? 'Create data source' : 'Save changes'}
           </Button>
           <Button small variant="ghost" onClick={onCancel}>Cancel</Button>
         </div>
@@ -221,7 +236,7 @@ function ImportProfilesSection() {
   }
 
   async function handleDelete(id) {
-    if (!confirm('Delete this import profile?')) return
+    if (!confirm('Delete this data source?')) return
     await api.deleteImportProfile(id)
     setProfiles(prev => prev.filter(p => p.id !== id))
   }
@@ -236,11 +251,14 @@ function ImportProfilesSection() {
 
       {loading ? <Spinner /> : profiles.length === 0 && !showAdd ? (
         <div style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
-          No import profiles yet.
+          <div>
+            {'<'}<span style={{ fontStyle: 'italic' }}>empty</span>{'>'}
+          </div>
           <button onClick={() => setShowAdd(true)} style={{
-            marginLeft: 8, background: 'var(--accent)', color: '#fff',
+            marginTop: 10,
+            background: 'var(--accent)', color: '#fff',
             border: 'none', borderRadius: 6, padding: '5px 12px', fontSize: 13, cursor: 'pointer',
-          }}>+ Create first profile</button>
+          }}>+ Create first data source</button>
         </div>
       ) : (
         <>
@@ -285,7 +303,7 @@ function ImportProfilesSection() {
                 padding: '10px 16px', textAlign: 'center', cursor: 'pointer',
                 fontSize: 13, color: 'var(--muted)', borderTop: '1px solid var(--border)',
               }}
-            >+ New profile</div>
+            >+ New data source</div>
           )}
         </>
       )}
@@ -1102,28 +1120,29 @@ function StickySection({ title, description, actions, children, defaultCollapsed
   }, [open])
 
   return (
-    <section ref={sectionRef} style={{ marginBottom: 24, display: 'grid', justifyItems: 'start' }}>
+    <section ref={sectionRef} style={{ marginBottom: 18, display: 'grid', justifyItems: 'stretch', width: '100%' }}>
       <div
         style={{
-          padding: '8px 0 8px',
-          width: '100%',
+          padding: '4px 0 6px',
+          width: 'min(100%, 420px)',
         }}
       >
         <div style={{
-          display: 'inline-flex',
+          display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: 12,
-          padding: '9px 14px',
+          padding: '8px 12px',
           border: '1px solid var(--border)',
-          borderRadius: 999,
-          background: 'var(--surface)',
-          maxWidth: '100%',
-          boxShadow: '0 1px 0 rgba(15, 23, 42, 0.03)',
+          borderRadius: 16,
+          background: open ? 'color-mix(in srgb, var(--surface) 78%, var(--surface2))' : 'var(--surface)',
+          width: '100%',
+          boxShadow: open ? '0 8px 24px rgba(15, 23, 42, 0.05)' : '0 1px 0 rgba(15, 23, 42, 0.03)',
+          transition: 'background 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease',
         }}>
           <button
             type="button"
-            onClick={() => setOpen(prev => !prev)}
+            onClick={() => setOpen(!open)}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -1140,29 +1159,68 @@ function StickySection({ title, description, actions, children, defaultCollapsed
             }}
           >
             <span style={{
-              width: 22,
-              height: 22,
+              width: 20,
+              height: 20,
               borderRadius: 999,
-              border: '1px solid var(--border)',
+              border: '1px solid color-mix(in srgb, var(--border) 82%, transparent)',
               display: 'grid',
               placeItems: 'center',
-              fontSize: 14,
+              fontSize: 13,
               color: 'var(--muted)',
-              background: 'var(--surface2)',
+              background: open ? 'color-mix(in srgb, var(--surface2) 65%, var(--surface))' : 'var(--surface2)',
               lineHeight: 1,
               flexShrink: 0,
             }}>
               {open ? '-' : '+'}
             </span>
             <span style={{ display: 'grid', gap: description ? 2 : 0, minWidth: 0 }}>
-              <span style={{ fontSize: 16, fontWeight: 600 }}>{title}</span>
-              {description ? <span style={{ fontSize: 13, color: 'var(--muted)' }}>{description}</span> : null}
+              <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: '-0.01em' }}>{title}</span>
+              {description ? <span style={{ fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.45 }}>{description}</span> : null}
             </span>
           </button>
           {open && actions ? <div style={{ flexShrink: 0 }}>{actions}</div> : null}
         </div>
       </div>
-      {open ? <div style={{ marginTop: 5, width: '100%', paddingLeft: 25 }}>{children}</div> : null}
+      {open ? (
+        <div
+          style={{
+            marginTop: 2,
+            marginLeft: 12,
+            width: 'calc(100% - 12px)',
+            paddingLeft: 14,
+            paddingBottom: 8,
+            position: 'relative',
+          }}
+        >
+          <span
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              bottom: 10,
+              width: 1,
+              background: 'color-mix(in srgb, var(--border) 70%, transparent)',
+              pointerEvents: 'none',
+            }}
+          />
+          <span
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              left: 0,
+              bottom: 0,
+              width: 10,
+              height: 10,
+              borderLeft: '1px solid color-mix(in srgb, var(--border) 70%, transparent)',
+              borderBottom: '1px solid color-mix(in srgb, var(--border) 70%, transparent)',
+              borderBottomLeftRadius: 10,
+              pointerEvents: 'none',
+            }}
+          />
+          {children}
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -1174,9 +1232,6 @@ function BackupRecipientsSection() {
   const [error, setError] = useState('')
   const [form, setForm] = useState({ label: '', public_key: '' })
   const fileInputRef = useRef(null)
-  const [editingRecipientId, setEditingRecipientId] = useState(null)
-  const [editingLabel, setEditingLabel] = useState('')
-
   async function load() {
     setLoading(true)
     try {
@@ -1242,24 +1297,6 @@ function BackupRecipientsSection() {
     }
   }
 
-  function beginEditRecipient(recipient) {
-    setEditingRecipientId(recipient.id)
-    setEditingLabel(recipient.label || '')
-  }
-
-  async function commitRecipientLabel(recipient) {
-    const next = editingLabel.trim()
-    setEditingRecipientId(null)
-    if (!next || next === recipient.label) return
-    try {
-      const updated = await api.updateBackupRecipient(recipient.id, { label: next })
-      setRecipients(prev => prev.map(item => item.id === recipient.id ? updated : item))
-    } catch (err) {
-      setError(err.message || 'Failed to update recipient')
-      setEditingRecipientId(recipient.id)
-    }
-  }
-
   async function removeRecipient(recipient) {
     if (!confirm(`Delete backup recipient "${recipient.label}"?`)) return
     try {
@@ -1279,7 +1316,7 @@ function BackupRecipientsSection() {
   return (
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '14px 16px 0', color: 'var(--muted)', fontSize: 13 }}>
-          Used to encrypt backup files for external storage. A matching private key file needs to be provided during the restore; only public keys are stored.
+          RSA public keys used to encrypt backup files. The private key that matches the selected public key is required during restore; only public keys are stored.
         </div>
         <form onSubmit={handleCreate} style={{ display: 'grid', gap: 10, padding: 16, borderBottom: '1px solid var(--border)' }}>
           <input
@@ -1313,7 +1350,7 @@ function BackupRecipientsSection() {
             >
               <div style={{ fontSize: 32, marginBottom: 12 }}>📂</div>
               <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>
-                Drop a public key file here, or click to browse
+                Drop an RSA public key file here, or click to browse
               </div>
               <div style={{ fontSize: 13, color: 'var(--muted)' }}>
                 RSA public keys only.
@@ -1346,60 +1383,24 @@ function BackupRecipientsSection() {
       {error && <div style={{ padding: '10px 16px', color: '#ef4444', fontSize: 13, borderBottom: '1px solid var(--border)' }}>{error}</div>}
       {loading ? <Spinner /> : recipients.length === 0 ? (
         <div style={{ padding: '18px 16px', color: 'var(--muted)', fontSize: 13 }}>
-          No backup recipients yet. Add an RSA public key here to enable encrypted backups for cloud storage.
+          Add an RSA public key here if you wish to generate encrypted backups.
         </div>
       ) : (
         recipients.map(recipient => (
           <div key={recipient.id} style={{ display: 'grid', gridTemplateColumns: '1fr 120px 90px', gap: 10, padding: '12px 16px', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
-              {editingRecipientId === recipient.id ? (
-                <input
-                  autoFocus
-                  value={editingLabel}
-                  onChange={e => setEditingLabel(e.target.value)}
-                  onBlur={() => commitRecipientLabel(recipient)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      commitRecipientLabel(recipient)
-                    }
-                    if (e.key === 'Escape') {
-                      setEditingRecipientId(null)
-                    }
-                  }}
-                  style={{
-                    background: 'var(--surface)',
-                    color: 'var(--text)',
-                    border: '1px solid var(--accent)',
-                    borderRadius: 999,
-                    padding: '4px 10px',
-                    fontSize: 13,
-                    fontWeight: 600,
-                    lineHeight: 1.2,
-                    minWidth: 120,
-                    outline: 'none',
-                  }}
-                />
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => beginEditRecipient(recipient)}
-                  style={{
-                    background: 'var(--surface2)',
-                    color: 'var(--text)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 999,
-                    padding: '4px 10px',
-                    fontSize: 13,
-                    fontWeight: 600,
-                    lineHeight: 1.2,
-                    whiteSpace: 'nowrap',
-                    cursor: 'text',
-                  }}
-                >
-                  {recipient.label}
-                </button>
-              )}
+              <EditableRecipientLabel
+                recipient={recipient}
+                onCommit={async next => {
+                  try {
+                    const updated = await api.updateBackupRecipient(recipient.id, { label: next })
+                    setRecipients(prev => prev.map(item => item.id === recipient.id ? updated : item))
+                  } catch (err) {
+                    setError(err.message || 'Failed to update recipient')
+                    throw err
+                  }
+                }}
+              />
               <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'monospace', lineHeight: 1.2, wordBreak: 'break-all', minWidth: 0 }}>
                 {recipient.fingerprint}
               </div>
@@ -1429,6 +1430,64 @@ function BackupRecipientsSection() {
         ))
       )}
     </Card>
+  )
+}
+
+function EditableRecipientLabel({ recipient, onCommit }) {
+  const {
+    editing,
+    draft,
+    setDraft,
+    beginEdit,
+    cancelEdit,
+    commitEdit,
+  } = useTransientTextEdit(recipient.label || '', {
+    onCommit,
+  })
+
+  if (editing) {
+    return (
+      <TransientTextInput
+        value={draft}
+        onChange={setDraft}
+        onCommit={commitEdit}
+        onCancel={cancelEdit}
+        restoreOnEscape
+        style={{
+          background: 'var(--surface)',
+          color: 'var(--text)',
+          border: '1px solid var(--accent)',
+          borderRadius: 999,
+          padding: '4px 10px',
+          fontSize: 13,
+          fontWeight: 600,
+          lineHeight: 1.2,
+          minWidth: 120,
+          outline: 'none',
+        }}
+      />
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => beginEdit(recipient.label || '')}
+      style={{
+        background: 'var(--surface2)',
+        color: 'var(--text)',
+        border: '1px solid var(--border)',
+        borderRadius: 999,
+        padding: '4px 10px',
+        fontSize: 13,
+        fontWeight: 600,
+        lineHeight: 1.2,
+        whiteSpace: 'nowrap',
+        cursor: 'text',
+      }}
+    >
+      {recipient.label}
+    </button>
   )
 }
 
@@ -1567,7 +1626,7 @@ function EnvironmentSection({ authEnabled, currentUser }) {
           </div>
 
           <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
-            These settings are stored in <code>{settings.env_file_path || '.env'}</code> and take effect after you restart the backend.
+            These settings are stored in <code>{settings.env_file_path || '.env'}</code> and require restarting the backend to take effect.
           </div>
 
           {saved && (
@@ -1592,12 +1651,172 @@ function EnvironmentSection({ authEnabled, currentUser }) {
   )
 }
 
+function DeveloperOptionsSection({ authEnabled }) {
+  const [workingAction, setWorkingAction] = useState('')
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  async function runAction(actionKey, work) {
+    setWorkingAction(actionKey)
+    setMessage('')
+    setError('')
+    try {
+      await work()
+    } catch (err) {
+      setError(err.message || 'Unable to complete that reset.')
+    } finally {
+      setWorkingAction('')
+    }
+  }
+
+  return (
+    <Card style={{ display: 'grid', gap: 16, position: 'relative', paddingTop: 18, overflow: 'hidden' }}>
+      <Button
+        small
+        variant="ghost"
+        style={{
+          position: 'absolute',
+          top: -1,
+          right: -1,
+          borderRadius: '0 12px 0 12px',
+          borderLeft: '1px solid var(--border)',
+          borderBottom: '1px solid var(--border)',
+          padding: '10px 18px',
+        }}
+        title={authEnabled
+          ? "Clears browser state, saved preferences, and import memory, then reloads the app."
+          : "Clears browser state, saved preferences, import memory, and local user profiles, then reloads the app."}
+        onClick={() => runAction('all', async () => {
+          const confirmMessage = authEnabled
+            ? 'Clear browser-local state, saved preferences, and import memory, then reload?'
+            : 'Clear browser-local state, saved preferences, import memory, and local user profiles, then reload?'
+          if (!window.confirm(confirmMessage)) return
+          await api.clearUserPreferences()
+          await api.clearImportMemory()
+          if (!authEnabled) await api.clearLocalPreferenceProfiles()
+          clearBrowserStoredState()
+          window.location.reload()
+        })}
+        disabled={!!workingAction}
+      >
+        {workingAction === 'all' ? 'Clearing…' : 'Clear all'}
+      </Button>
+      <div style={{ paddingRight: 146 }}>
+        <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, maxWidth: 560 }}>
+          Tools to erase stored state; return to a clean starting point.
+        </div>
+      </div>
+      <div style={{ display: 'grid', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Clear browser-local state</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
+              Clears localStorage and sessionStorage for this browser, then reloads.
+            </div>
+          </div>
+          <Button
+            small
+            variant="ghost"
+            title="Clears this browser's localStorage and sessionStorage, then reloads the app."
+            onClick={() => runAction('browser', async () => {
+              if (!window.confirm('Clear browser-local FinTrack state for this browser and reload?')) return
+              clearBrowserStoredState()
+              window.location.reload()
+            })}
+            disabled={!!workingAction}
+          >
+            {workingAction === 'browser' ? 'Clearing…' : 'Clear browser state'}
+          </Button>
+        </div>
+        <div style={{ height: 1, background: 'var(--border)' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Clear saved preferences</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
+              Clears server-stored user or profile preferences, then reloads.
+            </div>
+          </div>
+          <Button
+            small
+            variant="ghost"
+            title="Clears saved user or local-profile preferences stored by the backend, then reloads the app."
+            onClick={() => runAction('preferences', async () => {
+              if (!window.confirm('Clear saved user/profile preferences and reload?')) return
+              await api.clearUserPreferences()
+              window.location.reload()
+            })}
+            disabled={!!workingAction}
+          >
+            {workingAction === 'preferences' ? 'Clearing…' : 'Clear preferences'}
+          </Button>
+        </div>
+        <div style={{ height: 1, background: 'var(--border)' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Clear import memory</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
+                  Clears saved CSV data sources and import snapshots stored in the backend, then reloads.
+            </div>
+          </div>
+          <Button
+            small
+            variant="ghost"
+            title="Clears saved CSV data sources and remembered import snapshots in the backend, then reloads the app."
+            onClick={() => runAction('importMemory', async () => {
+              if (!window.confirm('Clear saved data sources and import snapshots, then reload?')) return
+              await api.clearImportMemory()
+              window.location.reload()
+            })}
+            disabled={!!workingAction}
+          >
+            {workingAction === 'importMemory' ? 'Clearing…' : 'Clear import memory'}
+          </Button>
+        </div>
+        {!authEnabled ? (
+          <>
+            <div style={{ height: 1, background: 'var(--border)' }} />
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>Clear local user profiles</div>
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
+                  Deletes the local-mode profile records from the control database, then reloads to the profile chooser.
+                </div>
+              </div>
+              <Button
+                small
+                variant="ghost"
+                title="Deletes local-mode user profile records from the control database, then reloads the app."
+                onClick={() => runAction('profiles', async () => {
+                  if (!window.confirm('Clear all local user profiles and reload?')) return
+                  await api.clearLocalPreferenceProfiles()
+                  clearBrowserStoredState()
+                  window.location.reload()
+                })}
+                disabled={!!workingAction}
+              >
+                {workingAction === 'profiles' ? 'Clearing…' : 'Clear local profiles'}
+              </Button>
+            </div>
+          </>
+        ) : null}
+      </div>
+      {message ? (
+        <div style={{ fontSize: 12, color: 'var(--muted)' }}>{message}</div>
+      ) : null}
+      {error ? (
+        <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div>
+      ) : null}
+    </Card>
+  )
+}
+
 export default function Settings() {
   const [authEnabled, setAuthEnabled] = useState(false)
   const [currentUser, setCurrentUser] = useState(null)
   const [passwordPolicy, setPasswordPolicy] = useState('min_8')
   const [securityProfile, setSecurityProfile] = useState('local_private')
   const [experimentalSecuritySettings, setExperimentalSecuritySettings] = useState(false)
+  const [developerOptionsEnabled, setDeveloperOptionsEnabled] = useState(false)
   const [dbInstanceId, setDbInstanceId] = useState('')
   const [userId, setUserId] = useState('')
   const [sectionOpenState, setSectionOpenState] = useState({})
@@ -1614,6 +1833,7 @@ export default function Settings() {
       setPasswordPolicy(status.password_policy || 'min_8')
       setSecurityProfile(status.security_profile || 'local_private')
       setExperimentalSecuritySettings(!!status.experimental_security_settings)
+      setDeveloperOptionsEnabled(!!status.developer_options_enabled)
       const nextDbInstanceId = status?.db_instance_id || ''
       const nextUserId = status?.selected_local_profile_id || status?.user?.id || status?.user_id || ''
       setDbInstanceId(nextDbInstanceId)
@@ -1668,14 +1888,17 @@ export default function Settings() {
 
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
-        <PageHeader title="Settings" />
+      <div style={{ padding: '24px 28px 0', flexShrink: 0 }}>
+        <div style={{ width: SETTINGS_CONTENT_WIDTH, margin: '0 auto' }}>
+          <PageHeader title="Settings" />
+        </div>
       </div>
 
-      <div data-browser-context-passthrough="true" ref={settingsScrollRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+      <div data-browser-context-passthrough="true" ref={settingsScrollRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 28px 24px' }}>
+      <div style={{ width: SETTINGS_CONTENT_WIDTH, margin: '0 auto' }}>
 
       <StickySection
-        title="CSV Import Profiles"
+        title="CSV data sources"
         scrollContainerRef={settingsScrollRef}
         {...bindSection('importProfiles')}
       >
@@ -1684,11 +1907,6 @@ export default function Settings() {
 
       <StickySection
         title="Backup recipients"
-        description={
-          <>
-          RSA public keys
-          </>
-        }
         scrollContainerRef={settingsScrollRef}
         {...bindSection('backupRecipients')}
       >
@@ -1774,6 +1992,18 @@ export default function Settings() {
           <UserAdminSection passwordPolicy={passwordPolicy} embedded />
         </StickySection>
       )}
+
+      {developerOptionsEnabled && (
+        <StickySection
+          title="Developer options"
+          description="Useful tools for developers and testing workflows."
+          scrollContainerRef={settingsScrollRef}
+          {...bindSection('developerOptions')}
+        >
+          <DeveloperOptionsSection authEnabled={authEnabled} />
+        </StickySection>
+      )}
+      </div>
       </div>
     </div>
   )

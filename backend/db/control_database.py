@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 import base64
 import hashlib
 import hmac
@@ -298,6 +301,14 @@ def set_user_preference(user_id: str, pref_key: str, pref_value: str):
         )
 
 
+def clear_user_preferences(user_id: str):
+    with get_control_db() as conn:
+        conn.execute(
+            "DELETE FROM user_preference WHERE user_id = ?",
+            (user_id,),
+        )
+
+
 def list_local_preference_profiles() -> list[dict]:
     with get_control_db() as conn:
         rows = conn.execute(
@@ -380,6 +391,11 @@ def delete_local_preference_profile(profile_id: str):
         )
 
 
+def clear_all_local_preference_profiles():
+    with get_control_db() as conn:
+        conn.execute("DELETE FROM local_preference_profile")
+
+
 def get_local_preferences(profile_id: str) -> dict[str, str]:
     with get_control_db() as conn:
         rows = conn.execute(
@@ -399,6 +415,14 @@ def set_local_preference(profile_id: str, pref_key: str, pref_value: str):
             DO UPDATE SET pref_value = excluded.pref_value, updated_at = datetime('now')
             """,
             (profile_id, pref_key, pref_value),
+        )
+
+
+def clear_local_preferences(profile_id: str):
+    with get_control_db() as conn:
+        conn.execute(
+            "DELETE FROM local_preference_value WHERE profile_id = ?",
+            (profile_id,),
         )
 
 

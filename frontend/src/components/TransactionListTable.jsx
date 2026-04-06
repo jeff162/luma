@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { formatDate } from '../lib/utils.js'
 import { CategoryCell, MerchantCell } from './TransactionRow.jsx'
 import AmountDisplay from './AmountDisplay.jsx'

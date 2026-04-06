@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -6,6 +9,11 @@ load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env", overrid
 
 import os
 from contextlib import asynccontextmanager
+
+try:
+    from app_logging import log_warning
+except ModuleNotFoundError:
+    from backend.app_logging import log_warning
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -97,7 +105,7 @@ async def lifespan(app: FastAPI):
     init_control_db()
     config_status = runtime_config_status()
     if not config_status["ok"]:
-        print(f"[config] warning: {config_status['message']}")
+        log_warning(f"[config] {config_status['message']}")
     yield
 
 

@@ -1,9 +1,13 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { refreshTaskBadge } from '../App.jsx'
 import { formatDate } from '../lib/utils.js'
 import AmountDisplay from '../components/AmountDisplay.jsx'
+import { formatTransactionAmount } from '../lib/moneyDisplay.js'
 import { Card, PageHeader, Spinner, EmptyState, Input } from '../components/ui.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
@@ -37,6 +41,19 @@ const COLUMN_DEFS = [
 const DEFAULT_ORDER = ['date', 'merchant', 'category', 'account', 'amount']
 const TXN_COLUMNS_STORAGE_KEY_PREFIX = 'fintrack:txn-columns'
 const TXN_COLUMNS_PREF_KEY = 'ui.transactions.columns'
+const TRANSACTIONS_BASE_PAGE_SIZE = 500
+const TRANSACTIONS_MAX_PAGE_SIZE = 1000
+const TRANSACTIONS_PAGE_GROWTH_STEP = 250
+const TRANSACTIONS_PAGE_GROWTH_INTERVAL = 1500
+const TRANSACTIONS_SCROLL_BUFFER_PX = 1600
+
+function getTransactionsPageSize(loadedCount = 0) {
+  const growthSteps = Math.floor(Math.max(0, loadedCount) / TRANSACTIONS_PAGE_GROWTH_INTERVAL)
+  return Math.min(
+    TRANSACTIONS_MAX_PAGE_SIZE,
+    TRANSACTIONS_BASE_PAGE_SIZE + (growthSteps * TRANSACTIONS_PAGE_GROWTH_STEP),
+  )
+}
 
 function getTxnColumnsStorageKey(instanceId, userId) {
   return instanceId && userId ? `${TXN_COLUMNS_STORAGE_KEY_PREFIX}:${instanceId}:${userId}` : null
@@ -86,6 +103,31 @@ function saveColumnConfig(instanceId, userId, cfg) {
 
 function buildGridTemplate(cols) {
   return cols.map(c => `${c.width}px`).join(' ')
+}
+
+function formatTransactionClipboardCell(key, txn) {
+  switch (key) {
+    case 'date':
+      return formatDate(txn.date)
+    case 'merchant':
+      return getTxnMerchantLabel(txn)
+    case 'category':
+      return txn.category_name || 'Uncategorized'
+    case 'account':
+      return `${txn.account_name || ''}${txn.account_mask ? ` ···${txn.account_mask}` : ''}`.trim()
+    case 'amount':
+      return formatTransactionAmount(txn.amount)
+    default:
+      return ''
+  }
+}
+
+function escapeCsvClipboardCell(value) {
+  const text = String(value ?? '')
+  if (/[",\r\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`
+  }
+  return text
 }
 
 function RuleActionModal({ state, onClose, onSaved }) {
@@ -212,8 +254,9 @@ export default function Transactions() {
   const [dbInstanceId, setDbInstanceId] = useState('')
   const [userId, setUserId] = useState('')
   const [categories, setCategories] = useState([])
-  const [data, setData]             = useState({ transactions: [], total: 0 })
+  const [data, setData]             = useState({ transactions: [], total: 0, offset: 0, limit: TRANSACTIONS_BASE_PAGE_SIZE })
   const [initialLoading, setInitialLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [detailTxn, setDetailTxn]   = useState(null)
   const [detailCategory, setDetailCategory] = useState(null)  // { id, name, color }
   const [detailAccount, setDetailAccount]   = useState(null)  // { id, name, mask }
@@ -222,9 +265,12 @@ export default function Transactions() {
   const [noteTarget, setNoteTarget] = useState(null)
   const [rulePrompt, setRulePrompt] = useState(null)
   const [merchantSearch, setMerchantSearch] = useState('')
+  const [debouncedMerchantSearch, setDebouncedMerchantSearch] = useState('')
   const [contextRuleMatch, setContextRuleMatch] = useState({ txnId: null, loading: false, ruleId: null })
   const [ruleModalState, setRuleModalState] = useState(null)
   const isFirstLoad = useRef(true)
+  const listScrollRef = useRef(null)
+  const latestRequestKeyRef = useRef('')
   const dragColKey = useRef(null)
   const resizeState = useRef(null)
 
@@ -275,14 +321,40 @@ export default function Transactions() {
     api.getCategories().then(setCategories)
   }, [])
 
-  const load = useCallback(() => {
-    if (isFirstLoad.current) setInitialLoading(true)
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedMerchantSearch(merchantSearch.trim())
+    }, 180)
+    return () => window.clearTimeout(timeoutId)
+  }, [merchantSearch])
+
+  const load = useCallback(async ({ append = false, offsetOverride = 0 } = {}) => {
     const accountSel  = filters.selections.filter(s => s.type === 'account').map(s => s.id)
     const groupSel    = filters.selections.filter(s => s.type === 'group').map(s => s.id)
     const categorySel = filters.selections.filter(s => s.type === 'category').map(s => s.id)
     const payeeSel    = filters.selections.filter(s => s.type === 'payee').map(s => s.label)
     const ownerSel    = filters.selections.filter(s => s.type === 'owner').map(s => s.id)
-    api.getTransactions({
+    const offset = append ? offsetOverride : 0
+    const pageSize = getTransactionsPageSize(offset)
+    const requestKey = JSON.stringify({
+      accountSel,
+      groupSel,
+      categorySel,
+      payeeSel,
+      ownerSel,
+      uncategorizedOnly,
+      dateStart: filters.date?.start || '',
+      dateEnd: filters.date?.end || '',
+      merchantSearch: debouncedMerchantSearch,
+      offset,
+      pageSize,
+    })
+    latestRequestKeyRef.current = requestKey
+
+    if (append) setLoadingMore(true)
+    else if (isFirstLoad.current) setInitialLoading(true)
+
+    const response = await api.getTransactions({
       date_start:   filters.date?.start || undefined,
       date_end:     filters.date?.end   || undefined,
       account_ids:  accountSel.length   ? accountSel.join(',')   : undefined,
@@ -291,19 +363,51 @@ export default function Transactions() {
       category_ids: !uncategorizedOnly && categorySel.length ? categorySel.join(',') : undefined,
       payees:       payeeSel.length     ? payeeSel.join('|')     : undefined,
       owner_ids:    ownerSel.length     ? ownerSel.join(',')     : undefined,
-      limit: 500,
-    }).then(d => {
-      setData(d)
-      setDetailTxn(prev => prev ? d.transactions.find(t => t.id === prev.id) || prev : prev)
-      setInitialLoading(false)
-      isFirstLoad.current = false
+      search:       debouncedMerchantSearch || undefined,
+      limit:        pageSize,
+      offset,
     })
-  }, [filters, uncategorizedOnly])
+
+    if (latestRequestKeyRef.current !== requestKey) return
+
+    setData(prev => {
+      const transactions = append
+        ? [...prev.transactions, ...response.transactions]
+        : response.transactions
+      setDetailTxn(current => current ? transactions.find(t => t.id === current.id) || current : current)
+      return {
+        ...response,
+        transactions,
+      }
+    })
+    setInitialLoading(false)
+    setLoadingMore(false)
+    isFirstLoad.current = false
+  }, [filters, uncategorizedOnly, debouncedMerchantSearch])
 
   useEffect(() => {
     isFirstLoad.current = true
-    load()
+    setLoadingMore(false)
+    load({ append: false }).catch(() => {
+      setInitialLoading(false)
+      setLoadingMore(false)
+      isFirstLoad.current = false
+    })
   }, [load])
+
+  const maybeLoadMore = useCallback(() => {
+    if (initialLoading || loadingMore) return
+    if (data.transactions.length >= data.total) return
+    const root = listScrollRef.current
+    if (!root) return
+    const remaining = root.scrollHeight - root.scrollTop - root.clientHeight
+    if (remaining > TRANSACTIONS_SCROLL_BUFFER_PX) return
+    load({ append: true, offsetOverride: data.transactions.length }).catch(() => setLoadingMore(false))
+  }, [data.total, data.transactions.length, initialLoading, loadingMore, load])
+
+  useEffect(() => {
+    maybeLoadMore()
+  }, [data.transactions.length, maybeLoadMore])
 
   useEffect(() => {
     if (!menu?.txn?.id) {
@@ -413,11 +517,38 @@ export default function Transactions() {
     }
   }
 
-  const displayedTransactions = merchantSearch.trim()
-    ? data.transactions.filter(txn =>
-        getTxnMerchantLabel(txn).toLowerCase().includes(merchantSearch.trim().toLowerCase())
-      )
-    : data.transactions
+  const handleTransactionCopy = useCallback((event) => {
+    const root = listScrollRef.current
+    const selection = window.getSelection?.()
+    if (!root || !selection || selection.isCollapsed || selection.rangeCount === 0) return
+
+    const range = selection.getRangeAt(0)
+    const rowIds = Array.from(root.querySelectorAll('[data-txn-copy-row]'))
+      .filter(row => {
+        try {
+          return range.intersectsNode(row)
+        } catch {
+          return false
+        }
+      })
+      .map(row => row.getAttribute('data-txn-copy-row'))
+      .filter(Boolean)
+
+    if (rowIds.length === 0) return
+
+    const txnById = new Map(data.transactions.map(txn => [txn.id, txn]))
+    const csvText = rowIds
+      .map(id => txnById.get(id))
+      .filter(Boolean)
+      .map(txn => cols.map(col => escapeCsvClipboardCell(formatTransactionClipboardCell(col.key, txn))).join(','))
+      .join('\r\n')
+
+    if (!csvText) return
+
+    event.preventDefault()
+    event.clipboardData.setData('text/plain', csvText)
+    event.clipboardData.setData('text/csv', csvText)
+  }, [cols, data.transactions])
 
   // ── Cell renderers keyed by column ────────────────────────────────────────
 
@@ -528,7 +659,7 @@ export default function Transactions() {
         <PageHeader title="Transactions" />
       </div>
 
-      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 32px 32px' }}>
         <div style={{ padding: '0 0 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <Input
@@ -570,12 +701,12 @@ export default function Transactions() {
               {uncategorizedOnly ? '✕ Uncategorized only' : 'Uncategorized only'}
             </button>
             <span style={{ fontSize: 13, color: 'var(--muted)' }}>
-              {displayedTransactions.length}{displayedTransactions.length !== data.total ? ` of ${data.total}` : ''} transactions
+              {data.total} transactions
             </span>
           </div>
         </div>
 
-        <Card style={{ padding: 0, overflow: 'hidden' }}>
+        <Card style={{ padding: 0, overflow: 'hidden', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           {/* Header row */}
           <div style={{
             display: 'grid',
@@ -633,39 +764,56 @@ export default function Transactions() {
             })}
           </div>
 
-          {initialLoading ? <Spinner /> : displayedTransactions.length === 0 ? (
-            <EmptyState message={merchantSearch.trim() ? 'No merchants match that filter' : 'No transactions found'} />
-          ) : (
-            displayedTransactions.map(txn => (
-              <div
-                key={txn.id}
-                onContextMenu={e => onContextMenu(e, txn)}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: gridTemplate,
-                  padding: '11px 16px', alignItems: 'center',
-                  borderBottom: '1px solid var(--border)',
-                  fontSize: 14,
-                  background: editId === txn.id ? 'var(--surface2)' : 'transparent',
-                  minWidth: 0,
-                }}
-              >
-                {cols.map(col => (
-                  <div
-                    key={col.key}
-                    style={{
-                      overflow: 'hidden',
-                      minWidth: 0,
-                      // amount column needs no overflow constraint (it's a number)
-                      ...(col.key === 'amount' ? {} : { textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
-                    }}
-                  >
-                    {renderCell(col, txn)}
-                  </div>
-                ))}
+          <div
+            ref={listScrollRef}
+            onScroll={maybeLoadMore}
+            onCopy={handleTransactionCopy}
+            style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
+          >
+            {initialLoading ? <Spinner /> : data.transactions.length === 0 ? (
+              <EmptyState message={merchantSearch.trim() ? 'No merchants match that filter' : 'No transactions found'} />
+            ) : (
+              data.transactions.map(txn => (
+                <div
+                  key={txn.id}
+                  data-txn-copy-row={txn.id}
+                  onContextMenu={e => onContextMenu(e, txn)}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: gridTemplate,
+                    padding: '11px 16px', alignItems: 'center',
+                    borderBottom: '1px solid var(--border)',
+                    fontSize: 14,
+                    background: editId === txn.id ? 'var(--surface2)' : 'transparent',
+                    minWidth: 0,
+                  }}
+                >
+                  {cols.map(col => (
+                    <div
+                      key={col.key}
+                      style={{
+                        overflow: 'hidden',
+                        minWidth: 0,
+                        // amount column needs no overflow constraint (it's a number)
+                        ...(col.key === 'amount' ? {} : { textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+                      }}
+                    >
+                      {renderCell(col, txn)}
+                    </div>
+                  ))}
+                </div>
+              ))
+            )}
+            {!initialLoading && data.transactions.length > 0 ? (
+              <div style={{ padding: '14px 16px', textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
+                {loadingMore
+                  ? 'Loading more transactions…'
+                  : data.transactions.length < data.total
+                    ? 'Scroll for older transactions'
+                    : 'All matching transactions loaded'}
               </div>
-            ))
-          )}
+            ) : null}
+          </div>
         </Card>
 
         {/* Context menu */}

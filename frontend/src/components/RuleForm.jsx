@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /**
  * RuleForm — Shared rule creation/editing form
  *
@@ -38,14 +41,19 @@
  *   This does not auto-activate the amount condition on open.
  */
 
-import { useState, useEffect, useRef } from 'react'
+import { forwardRef, useState, useEffect, useImperativeHandle, useLayoutEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
 import CategoryPicker from './CategoryPicker.jsx'
+import {
+  getSharedPillCornerRemoveButtonStyle,
+  getSharedPillLabelStyle,
+  getSharedPillStyle,
+} from './pillStyles.js'
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
 const sectionHeadStyle = {
   fontSize: 11, fontWeight: 700, color: 'var(--accent2)',
-  textTransform: 'uppercase', letterSpacing: '0.07em',
+  letterSpacing: '0.03em',
   marginBottom: 12,
 }
 
@@ -60,6 +68,19 @@ export function amountConditionSummary(low, lowOp, high, highOp, side) {
     if (high != null) parts.push(`${highOp ?? '<='} $${high}`)
   }
   return parts.length ? parts.join(', ') : null
+}
+
+function getCategoryDisplayLabel(categories, categoryId) {
+  if (!categoryId) return null
+  const leaves = categories.filter(category => category.parent_id)
+  const groupsById = new Map(categories.filter(category => !category.parent_id).map(group => [group.id, group]))
+  const selected = leaves.find(category => String(category.id) === String(categoryId))
+  if (!selected) return null
+  const normalizedName = String(selected.name || '').trim().toLowerCase()
+  const duplicateCount = leaves.filter(category => String(category.name || '').trim().toLowerCase() === normalizedName).length
+  if (duplicateCount <= 1) return selected.name
+  const group = groupsById.get(selected.parent_id)
+  return group?.name ? `${group.name}: ${selected.name}` : selected.name
 }
 
 // ── NumberInput ───────────────────────────────────────────────────────────────
@@ -195,10 +216,11 @@ function AmountCondition({ low, lowOp, high, highOp, side, onChange }) {
 
 // ── ConditionChip — ... (unchanged) ...
 
-function ConditionChip({ label, summary, active, onActivate, onClear, children }) {
+function ConditionChip({ label, summary, active, expanded = true, onActivate, onClear, children, containerRef, triggerRef }) {
   if (!active) {
     return (
       <button
+        ref={triggerRef}
         onClick={onActivate}
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 5,
@@ -214,63 +236,164 @@ function ConditionChip({ label, summary, active, onActivate, onClear, children }
     )
   }
   return (
-    <div style={{ border: '1px solid var(--accent)', borderRadius: 10, background: 'color-mix(in srgb, var(--accent) 5%, var(--surface))', overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid var(--border)', background: 'color-mix(in srgb, var(--accent) 8%, var(--surface2))' }}>
-        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent2)', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{label}</span>
+    <div
+      ref={containerRef}
+      tabIndex={-1}
+      style={{ border: '1px solid var(--accent)', borderRadius: 10, background: 'color-mix(in srgb, var(--accent) 5%, var(--surface))', overflow: 'hidden', outline: 'none' }}
+    >
+      <button
+        type="button"
+        onClick={onActivate}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '6px 10px', border: 'none', borderBottom: expanded ? '1px solid var(--border)' : 'none', background: 'color-mix(in srgb, var(--accent) 8%, var(--surface2))', textAlign: 'left', cursor: 'pointer' }}
+      >
+        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent2)', letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>{label}</span>
         {summary && <span style={{ fontSize: 12, color: 'var(--muted)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summary}</span>}
-        <button onClick={onClear} title={`Remove ${label}`} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}>×</button>
-      </div>
-      <div style={{ padding: '10px 12px' }}>{children}</div>
+        <button onClick={event => { event.stopPropagation(); onClear() }} title={`Remove ${label}`} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}>×</button>
+      </button>
+      {expanded ? <div style={{ padding: '10px 12px' }}>{children}</div> : null}
     </div>
   )
 }
 
-// ── MatchPreview ──────────────────────────────────────────────────────────────
+function SummaryPill({
+  label,
+  onClear,
+  onClick,
+  editing = false,
+  editValue = '',
+  onEditValueChange,
+  onEditCommit,
+  onEditCancel,
+}) {
+  const LabelTag = onClick && !editing ? 'button' : 'span'
+  const labelRef = useRef(null)
+  const restoreFocusRef = useRef(false)
 
-function MatchPreview({ keyword, amtLow, amtHigh, ownerId, accountId, onCountChange }) {
-  const [count,   setCount]   = useState(null)
+  useEffect(() => {
+    if (!editing && restoreFocusRef.current) {
+      labelRef.current?.focus()
+      restoreFocusRef.current = false
+    }
+  }, [editing])
+
+  return (
+    <span style={{ ...getSharedPillStyle({ tone: 'accent' }), position: 'relative' }}>
+      {editing ? (
+        <input
+          autoFocus
+          value={editValue}
+          onChange={event => onEditValueChange?.(event.target.value)}
+          onBlur={() => onEditCommit?.()}
+          onKeyDown={event => {
+            if (event.key === 'Enter') {
+              event.stopPropagation()
+              onEditCommit?.()
+            }
+            if (event.key === 'Escape') {
+              event.stopPropagation()
+              restoreFocusRef.current = true
+              onEditCancel?.()
+            }
+          }}
+          style={{
+            ...getSharedPillLabelStyle(),
+            minWidth: 150,
+            background: 'none',
+            border: 'none',
+            padding: 0,
+            outline: 'none',
+          }}
+        />
+      ) : (
+        <LabelTag
+          ref={labelRef}
+          type={onClick ? 'button' : undefined}
+          onClick={onClick}
+          style={{
+            ...getSharedPillLabelStyle(),
+            ...(onClick ? {
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              textAlign: 'left',
+            } : {}),
+          }}
+        >
+          {label}
+        </LabelTag>
+      )}
+      <button
+        type="button"
+        onClick={event => {
+          event.stopPropagation()
+          onClear()
+        }}
+        style={getSharedPillCornerRemoveButtonStyle()}
+        title={`Remove ${label}`}
+      >
+        ×
+      </button>
+    </span>
+  )
+}
+
+function MatchCountInline({ keyword, amtLow, amtHigh, ownerId, accountId, onCountChange }) {
+  const [count, setCount] = useState(null)
   const [loading, setLoading] = useState(false)
   const debounceRef = useRef(null)
 
   const hasKeyword = keyword.trim().length >= 2
-  const hasAmount  = amtLow != null || amtHigh != null
-  const canSearch  = hasKeyword || hasAmount
+  const hasAmount = amtLow != null || amtHigh != null
+  const canSearch = hasKeyword || hasAmount
 
   useEffect(() => {
-    if (!canSearch) { setCount(null); onCountChange(0); return }
+    if (!canSearch) {
+      setCount(null)
+      onCountChange(0)
+      return
+    }
     clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(async () => {
       setLoading(true)
       try {
         const resp = await api.getTransactions({
           limit: 500,
-          ...(hasKeyword ? { search:      keyword.trim() } : {}),
-          ...(ownerId    ? { owner_ids:   ownerId }        : {}),
-          ...(accountId  ? { account_ids: accountId }      : {}),
+          ...(hasKeyword ? { search: keyword.trim() } : {}),
+          ...(ownerId ? { owner_ids: ownerId } : {}),
+          ...(accountId ? { account_ids: accountId } : {}),
         })
         const matched = resp.transactions.filter(t => {
           const abs = Math.abs(t.amount)
-          if (amtLow  != null && abs < amtLow)  return false
+          if (amtLow != null && abs < amtLow) return false
           if (amtHigh != null && abs > amtHigh) return false
           return true
         })
-        setCount(matched.length); onCountChange(matched.length)
-      } catch { setCount(null); onCountChange(0) }
-      finally { setLoading(false) }
+        setCount(matched.length)
+        onCountChange(matched.length)
+      } catch {
+        setCount(null)
+        onCountChange(0)
+      } finally {
+        setLoading(false)
+      }
     }, 600)
     return () => clearTimeout(debounceRef.current)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keyword, amtLow, amtHigh, ownerId, accountId, canSearch])
 
-  if (!canSearch || (!loading && count === 0)) return null
-  if (loading) return <div style={{ fontSize: 12, color: 'var(--muted)', padding: '4px 0' }}>Checking which existing transactions this rule would update…</div>
-  if (count === null) return null
-  return <div style={{ fontSize: 12, color: 'var(--muted)', padding: '4px 0' }}>{count} existing transaction{count !== 1 ? 's' : ''} match{count === 1 ? 'es' : ''} this rule</div>
+  if (!canSearch) return null
+  if (loading) return <span style={{ fontSize: 12, color: 'var(--muted)' }}>checking matches…</span>
+  if (count == null || count === 0) return null
+  return (
+    <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+      {count} matching row{count === 1 ? '' : 's'}
+    </span>
+  )
 }
 
-
 // ── RuleForm ──────────────────────────────────────────────────────────────────
-export default function RuleForm({
+const RuleForm = forwardRef(function RuleForm({
   initialValues = {},
   categories,
   owners,
@@ -279,7 +402,10 @@ export default function RuleForm({
   onCancel,
   saveLabel = 'Save rule',
   transactionData = null,
-}) {
+  showApplyToExisting = true,
+  hideFooter = false,
+  onDraftChange,
+}, ref) {
   const getTransactionAmountState = () => {
     if (!transactionData || transactionData.amount == null) return null
     const absAmount = Math.abs(transactionData.amount)
@@ -333,6 +459,7 @@ export default function RuleForm({
   const [catId, setCatId] = useState(initialValues.catId ?? '')
   const [cleanName, setCleanName] = useState(initialValues.cleanName ?? '')
   const [renameOpen, setRenameOpen] = useState(!!initialValues.cleanName)
+  const [renameExpanded, setRenameExpanded] = useState(!!initialValues.cleanName)
 
   const [matchCount, setMatchCount] = useState(0)
   const [applyToExisting, setApplyToExisting] = useState(false)
@@ -340,6 +467,22 @@ export default function RuleForm({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [transactionDefaultsApplied, setTransactionDefaultsApplied] = useState(false)
+  const keywordSummaryInputRef = useRef(null)
+  const keywordConditionRef = useRef(null)
+  const renameConditionRef = useRef(null)
+  const renameInputRef = useRef(null)
+  const keywordConditionTriggerRef = useRef(null)
+  const renameConditionTriggerRef = useRef(null)
+  const keywordEditSnapshotRef = useRef({
+    value: initialValues.keyword ?? '',
+    open: !!initialValues.keyword,
+  })
+  const renameEditSnapshotRef = useRef({
+    value: initialValues.cleanName ?? '',
+    open: !!initialValues.cleanName,
+  })
+  const [editingActionKey, setEditingActionKey] = useState(null)
+  const [renamePillDraft, setRenamePillDraft] = useState('')
 
   useEffect(() => {
     if (
@@ -359,55 +502,266 @@ export default function RuleForm({
 
   const canSave = keyword.trim().length > 0 && catId
 
+  function buildDraftPayload() {
+    return {
+      keyword: keyword.trim(),
+      category_id: catId || null,
+      amount_min: amtLow,
+      amount_max: amtHigh,
+      clean_name: cleanName.trim() || null,
+      owner_id: ownerId || null,
+      account_id: accountId || null,
+      clear_amount_min: amtLow === null,
+      clear_amount_max: amtHigh === null,
+      clear_clean_name: !cleanName.trim(),
+      clear_owner: !ownerId,
+      clear_account: !accountId,
+      applyToExisting,
+    }
+  }
+
+  function getDraftState() {
+    return {
+      data: buildDraftPayload(),
+      canSave,
+    }
+  }
+
+  useLayoutEffect(() => {
+    onDraftChange?.({
+      data: buildDraftPayload(),
+      canSave,
+    })
+  }, [keyword, catId, amtLow, amtHigh, cleanName, ownerId, accountId, applyToExisting, canSave])
+
+  useImperativeHandle(ref, () => ({
+    getDraftState,
+  }), [keyword, catId, amtLow, amtHigh, cleanName, ownerId, accountId, applyToExisting, canSave])
+
   function handleAmtChange({ low, lowOp, high, highOp, side }) {
     setAmtLow(low); setAmtLowOp(lowOp ?? '>=')
     setAmtHigh(high); setAmtHighOp(highOp ?? '<=')
     setAmtSide(side ?? 'both')
   }
 
+  function captureKeywordEditState() {
+    keywordEditSnapshotRef.current = {
+      value: keyword,
+      open: kwOpen,
+    }
+  }
+
+  function cancelKeywordEdit(target, focusRef = null, closeEditor = false) {
+    setKeyword(keywordEditSnapshotRef.current.value)
+    setKwOpen(closeEditor ? false : keywordEditSnapshotRef.current.open)
+    setTimeout(() => {
+      if (closeEditor && keywordConditionTriggerRef.current) {
+        keywordConditionTriggerRef.current.focus()
+        return
+      }
+      if (focusRef?.current) {
+        focusRef.current.focus()
+        return
+      }
+      target?.focus?.()
+      target?.select?.()
+    }, 0)
+  }
+
+  function captureRenameEditState() {
+    renameEditSnapshotRef.current = {
+      value: cleanName,
+      open: renameOpen,
+    }
+  }
+
+  function cancelRenameEdit(target, focusRef = null, closeEditor = false) {
+    setCleanName(renameEditSnapshotRef.current.value)
+    setRenameOpen(closeEditor ? false : renameEditSnapshotRef.current.open)
+    setRenameExpanded(closeEditor ? false : renameEditSnapshotRef.current.open)
+    setTimeout(() => {
+      if (closeEditor && renameConditionTriggerRef.current) {
+        renameConditionTriggerRef.current.focus()
+        return
+      }
+      if (focusRef?.current) {
+        focusRef.current.focus()
+        return
+      }
+      target?.focus?.()
+      target?.select?.()
+    }, 0)
+  }
+
+  function openRenameEditor() {
+    setRenameOpen(true)
+    setRenameExpanded(true)
+    setTimeout(() => {
+      renameInputRef.current?.focus()
+      renameInputRef.current?.select()
+    }, 0)
+  }
+
+  function commitRenameEditor() {
+    const nextValue = cleanName.trim()
+    setCleanName(nextValue)
+    setRenameOpen(Boolean(nextValue))
+    setRenameExpanded(false)
+    setTimeout(() => {
+      if (nextValue) {
+        renameConditionRef.current?.focus()
+      } else {
+        renameInputRef.current?.focus()
+      }
+    }, 0)
+  }
+
   async function handleSave() {
     if (!canSave) return
     setSaving(true); setError(null)
     try {
-      await onSave({
-        keyword: keyword.trim(),
-        category_id: catId,
-        amount_min: amtLow,
-        amount_max: amtHigh,
-        clean_name: cleanName.trim() || null,
-        owner_id: ownerId || null,
-        account_id: accountId || null,
-        clear_amount_min: amtLow === null,
-        clear_amount_max: amtHigh === null,
-        clear_clean_name: !cleanName.trim(),
-        clear_owner: !ownerId,
-        clear_account: !accountId,
-        applyToExisting,
-      })
+      await onSave(buildDraftPayload())
     } catch (e) {
       setError(e.message || 'Failed to save rule')
       setSaving(false)
     }
   }
 
+  function commitRenamePillEdit() {
+    const nextValue = renamePillDraft.trim()
+    if (!nextValue) {
+      setCleanName('')
+      setRenameOpen(false)
+      setRenameExpanded(false)
+      setEditingActionKey(null)
+      return
+    }
+    setCleanName(nextValue)
+    setRenameOpen(true)
+    setRenameExpanded(false)
+    setEditingActionKey(null)
+  }
+
   const amtSummary = amountConditionSummary(amtLow, amtLowOp, amtHigh, amtHighOp, amtSide)
+  const selectedCategoryName = getCategoryDisplayLabel(categories, catId)
+  const actionSummaryPills = [
+    catId && selectedCategoryName
+      ? {
+          key: 'category',
+          label: `category: ${selectedCategoryName}`,
+          onClear: () => setCatId(''),
+        }
+      : null,
+    renameOpen && cleanName.trim()
+      ? {
+          key: 'rename',
+          label: `rename to ${cleanName.trim()}`,
+          onClear: () => { setCleanName(''); setRenameOpen(false) },
+          onClick: () => {
+            setRenamePillDraft(cleanName.trim())
+            setEditingActionKey('rename')
+          },
+        }
+      : null,
+  ].filter(Boolean)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '14px 20px', borderBottom: '2px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 64%, var(--surface))' }}>
+        <div style={sectionHeadStyle}>Current Rule</div>
+        <div style={{ display: 'grid', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Merchant contains</span>
+            <input
+              ref={keywordSummaryInputRef}
+              value={keyword}
+              onFocus={() => {
+                captureKeywordEditState()
+                setKwOpen(true)
+              }}
+              onChange={e => {
+                setKwOpen(true)
+                setKeyword(e.target.value)
+              }}
+              onKeyDown={event => {
+                if (event.key !== 'Escape') return
+                event.stopPropagation()
+                event.preventDefault()
+                cancelKeywordEdit(event.currentTarget)
+              }}
+              placeholder="e.g. starbucks"
+              style={{
+                minWidth: 220,
+                flex: '1 1 280px',
+                maxWidth: 420,
+                boxSizing: 'border-box',
+                background: 'var(--surface2)',
+                color: 'var(--text)',
+                border: '1px solid color-mix(in srgb, var(--accent) 22%, var(--border))',
+                borderRadius: 999,
+                padding: '7px 12px',
+                fontSize: 13,
+                outline: 'none',
+              }}
+            />
+            <MatchCountInline
+              keyword={keyword}
+              amtLow={amtLow}
+              amtHigh={amtHigh}
+              ownerId={ownerId}
+              accountId={accountId}
+              onCountChange={n => { setMatchCount(n); if (n === 0) setApplyToExisting(false) }}
+            />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>actions:</span>
+            {actionSummaryPills.length > 0 ? (
+              actionSummaryPills.map(pill => (
+                <SummaryPill
+                  key={pill.key}
+                  label={pill.label}
+                  onClear={pill.onClear}
+                  onClick={pill.key === 'rename' ? pill.onClick : undefined}
+                  editing={pill.key === 'rename' && editingActionKey === 'rename'}
+                  editValue={pill.key === 'rename' ? renamePillDraft : ''}
+                  onEditValueChange={pill.key === 'rename' ? setRenamePillDraft : undefined}
+                  onEditCommit={pill.key === 'rename' ? commitRenamePillEdit : undefined}
+                  onEditCancel={pill.key === 'rename' ? () => {
+                    setRenamePillDraft(cleanName.trim())
+                    setEditingActionKey(null)
+                  } : undefined}
+                />
+              ))
+            ) : (
+              <span style={{ fontSize: 12, color: 'var(--muted)' }}>No suggested actions yet.</span>
+            )}
+          </div>
+        </div>
+      </div>
+
       <div style={{ padding: '16px 20px', borderBottom: '2px solid var(--border)' }}>
-        <div style={sectionHeadStyle}>If the transaction matches…</div>
+        <div style={sectionHeadStyle}>If The Transaction Matches…</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <ConditionChip
-            label="Merchant name contains"
+            label="Merchant Name Contains"
             summary={kwOpen && keyword.trim() ? `"${keyword}"` : null}
             active={kwOpen}
             onActivate={() => setKwOpen(true)}
             onClear={() => { setKeyword(''); setKwOpen(false) }}
+            containerRef={keywordConditionRef}
+            triggerRef={keywordConditionTriggerRef}
           >
             <input
               autoFocus={kwOpen && !initialValues.keyword}
               value={keyword}
+              onFocus={captureKeywordEditState}
               onChange={e => setKeyword(e.target.value)}
+              onKeyDown={event => {
+                if (event.key !== 'Escape') return
+                event.stopPropagation()
+                event.preventDefault()
+                cancelKeywordEdit(event.currentTarget, keywordConditionRef, true)
+              }}
               placeholder="e.g. starbucks"
               style={{ width: '100%', boxSizing: 'border-box', background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 10px', fontSize: 13, outline: 'none' }}
             />
@@ -464,26 +818,44 @@ export default function RuleForm({
       </div>
 
       <div style={{ padding: '16px 20px', borderBottom: '2px solid var(--border)' }}>
-        <div style={sectionHeadStyle}>Then these actions apply…</div>
+        <div style={sectionHeadStyle}>Then These Actions Apply…</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>
-              Assign category
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', letterSpacing: '0.03em', marginBottom: 6 }}>
+              Assign Category
             </div>
             <div style={{ display: 'flex' }}>
               <CategoryPicker value={catId} categories={categories} onChange={setCatId} onCategoryCreated={() => api.getCategories()} />
             </div>
           </div>
           <ConditionChip
-            label="Rename merchant to"
+            label="Rename Merchant To"
             summary={renameOpen && cleanName.trim() ? cleanName : null}
             active={renameOpen}
-            onActivate={() => setRenameOpen(true)}
-            onClear={() => { setCleanName(''); setRenameOpen(false) }}
+            expanded={renameExpanded}
+            onActivate={openRenameEditor}
+            onClear={() => { setCleanName(''); setRenameOpen(false); setRenameExpanded(false) }}
+            containerRef={renameConditionRef}
+            triggerRef={renameConditionTriggerRef}
           >
             <input
+              ref={renameInputRef}
               value={cleanName}
+              onFocus={captureRenameEditState}
               onChange={e => setCleanName(e.target.value)}
+              onKeyDown={event => {
+                if (event.key === 'Enter') {
+                  event.stopPropagation()
+                  event.preventDefault()
+                  commitRenameEditor()
+                  return
+                }
+                if (event.key === 'Escape') {
+                  event.stopPropagation()
+                  event.preventDefault()
+                  cancelRenameEdit(event.currentTarget, renameConditionRef, true)
+                }
+              }}
               placeholder="Clean display name, e.g. Whole Foods"
               style={{ width: '100%', boxSizing: 'border-box', background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 10px', fontSize: 13, outline: 'none' }}
             />
@@ -492,36 +864,44 @@ export default function RuleForm({
         </div>
       </div>
 
-      <div style={{ padding: '12px 20px', background: 'var(--surface2)' }}>
-        <div style={{ minHeight: 40 }}>
-          <MatchPreview
-            keyword={keyword} amtLow={amtLow} amtHigh={amtHigh}
-            ownerId={ownerId} accountId={accountId}
-            onCountChange={n => { setMatchCount(n); if (n === 0) setApplyToExisting(false) }}
-          />
-        </div>
-        {matchCount > 0 && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 13, cursor: 'pointer', userSelect: 'none' }}>
-            <input type="checkbox" checked={applyToExisting} onChange={e => setApplyToExisting(e.target.checked)}
-              style={{ width: 15, height: 15, accentColor: 'var(--accent)', cursor: 'pointer' }} />
-            Apply this rule now to {matchCount} matching existing transaction{matchCount !== 1 ? 's' : ''}
-          </label>
-        )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
-          {error && <span style={{ fontSize: 12, color: 'var(--danger)', flex: 1 }}>{error}</span>}
-          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
-            {onCancel && (
-              <button onClick={onCancel} style={{ background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 16px', fontSize: 13, cursor: 'pointer' }}>Cancel</button>
-            )}
-            <button onClick={handleSave} disabled={saving || !canSave} style={{
-              background: canSave ? 'var(--accent)' : 'var(--surface)', color: canSave ? '#fff' : 'var(--muted)',
-              border: canSave ? 'none' : '1px solid var(--border)', borderRadius: 8,
-              padding: '8px 20px', fontSize: 13, fontWeight: 500,
-              cursor: saving || !canSave ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1,
-            }}>{saving ? 'Saving…' : saveLabel}</button>
+      {hideFooter ? null : (
+        <div style={{ padding: '12px 20px', background: 'var(--surface2)' }}>
+          {showApplyToExisting ? (
+            <div style={{ minHeight: 20, display: 'flex', alignItems: 'center' }}>
+              <label style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontSize: 13,
+                cursor: matchCount > 0 ? 'pointer' : 'default',
+                userSelect: 'none',
+                visibility: matchCount > 0 ? 'visible' : 'hidden',
+              }}>
+                <input type="checkbox" checked={applyToExisting} onChange={e => setApplyToExisting(e.target.checked)}
+                  disabled={matchCount === 0}
+                  style={{ width: 15, height: 15, accentColor: 'var(--accent)', cursor: matchCount > 0 ? 'pointer' : 'default' }} />
+                Apply this rule now to {matchCount} matching existing transaction{matchCount !== 1 ? 's' : ''}
+              </label>
+            </div>
+          ) : null}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+            {error && <span style={{ fontSize: 12, color: 'var(--danger)', flex: 1 }}>{error}</span>}
+            <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+              {onCancel && (
+                <button onClick={onCancel} style={{ background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 16px', fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+              )}
+              <button onClick={handleSave} disabled={saving || !canSave} style={{
+                background: canSave ? 'var(--accent)' : 'var(--surface)', color: canSave ? '#fff' : 'var(--muted)',
+                border: canSave ? 'none' : '1px solid var(--border)', borderRadius: 8,
+                padding: '8px 20px', fontSize: 13, fontWeight: 500,
+                cursor: saving || !canSave ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1,
+              }}>{saving ? 'Saving…' : saveLabel}</button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   )
-}
+})
+
+export default RuleForm

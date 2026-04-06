@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """
 categorizer.py — Auto-categorization engine
 
@@ -195,21 +198,21 @@ def seed_default_rules(conn: sqlite3.Connection):
         ("apple.com",    "Subscriptions",      9, None, None),
         ("amazon prime", "Subscriptions",      9, None, None),
         ("youtube",      "Subscriptions",      8, None, None),
-        ("electric",     "Utilities",          8, None, None),
-        ("water bill",   "Utilities",          8, None, None),
-        ("comcast",      "Internet & Phone",   9, None, None),
-        ("verizon",      "Internet & Phone",   9, None, None),
-        ("at&t",         "Internet & Phone",   9, None, None),
+        ("electric",     "Electricity",        8, None, None),
+        ("water bill",   "Water",              8, None, None),
+        ("comcast",      "Internet",           9, None, None),
+        ("verizon",      "Phone",              9, None, None),
+        ("at&t",         "Phone",              9, None, None),
         ("cvs",          "Pharmacy",           8, None, None),
         ("walgreen",     "Pharmacy",           8, None, None),
         ("amazon",       "Online Shopping",    7, None, None),
         ("target",       "Shopping",           8, None, None),
         ("walmart",      "Shopping",           8, None, None),
         ("best buy",     "Electronics",        9, None, None),
-        ("airbnb",       "Travel",            10, None, None),
-        ("hotel",        "Travel",             8, None, None),
-        ("delta",        "Travel",             9, None, None),
-        ("united",       "Travel",             9, None, None),
+        ("airbnb",       "Vacation & Travel", 10, None, None),
+        ("hotel",        "Vacation & Travel",  8, None, None),
+        ("delta",        "Vacation & Travel",  9, None, None),
+        ("united",       "Vacation & Travel",  9, None, None),
         ("payroll",      "Income",            10, None, None),
         ("direct dep",   "Income",             9, None, None),
         ("zelle",        "Transfer",           9, None, None),

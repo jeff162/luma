@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
 
 // Shared UI primitives
@@ -81,7 +84,7 @@ export function PageHeader({ title, children }) {
   )
 }
 
-export function Button({ children, onClick, variant = 'primary', small, disabled, style }) {
+export function Button({ children, onClick, variant = 'primary', small, disabled, style, title }) {
   const base = {
     padding: small ? '6px 12px' : '9px 16px',
     borderRadius: 8, border: 'none', cursor: disabled ? 'not-allowed' : 'pointer',
@@ -94,7 +97,11 @@ export function Button({ children, onClick, variant = 'primary', small, disabled
     danger:   { background: 'var(--danger)',  color: '#fff' },
   }
   return (
-    <button onClick={disabled ? undefined : onClick} style={{ ...base, ...variants[variant] }}>
+    <button
+      onClick={disabled ? undefined : onClick}
+      style={{ ...base, ...variants[variant] }}
+      title={title}
+    >
       {children}
     </button>
   )

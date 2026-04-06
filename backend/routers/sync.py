@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """
 sync.py — Plaid transaction sync and nightly pull.
 
@@ -20,6 +23,12 @@ DESIGN PRINCIPLES:
 import uuid
 from datetime import date, timedelta
 from fastapi import APIRouter, Request
+
+try:
+    from app_logging import log_warning
+except ModuleNotFoundError:
+    from backend.app_logging import log_warning
+
 from db.database import get_db
 from services import plaid_service, crypto_service
 from services.categorizer import categorize_transaction, recategorize_all
@@ -61,7 +70,7 @@ def run_sync(days: int = 30, request: Request = None):
                 )
             except Exception as e:
                 # Log and continue — don't let one bad item stop the rest
-                print(f"[sync] Error fetching item {item['item_id']}: {e}")
+                log_warning(f"[sync] error fetching item {item['item_id']}: {e}")
                 continue
 
             for t in txns:

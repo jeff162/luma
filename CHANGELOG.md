@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2026 Jeffrey Orlin -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Changelog
 
 All notable changes to FinTrack are documented here.
@@ -44,7 +47,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [0.1.0] — Initial release
+## Pre-release baseline
 
 ### Added
 - SQLite database with versioned migration system (v1–v13)

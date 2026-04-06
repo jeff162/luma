@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /**
  * TransactionDetail — Payee spending history panel
  *
@@ -49,8 +52,10 @@ import { Spinner, Badge } from './ui.jsx'
 import { MerchantCell, CategoryCell, getTxnMerchantLabel } from './TransactionRow.jsx'
 import AmountDisplay from './AmountDisplay.jsx'
 import CategoryDisplay from './CategoryDisplay.jsx'
+import TransientTextInput from './TransientTextInput.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
+import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import {
   DETAIL_LIST_MAX_HEIGHT,
   getDetailMonthSectionHeight,
@@ -74,8 +79,6 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
   const dateEnd   = filters.date?.end   || null
   const { pos, dragging, panelRef, onDragStart } = useDetailPanelChrome(onClose)
   const [trend, setTrend]               = useState([])
-  const [editingName, setEditingName]   = useState(false)
-  const [nameDraft, setNameDraft]       = useState('')
   const [displayName, setDisplayName]   = useState(getTxnMerchantLabel(txn))
   const [selectedMonth, setSelectedMonth] = useState(null)
   const [trendLoading, setTrendLoading] = useState(true)
@@ -119,14 +122,6 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
     })
   }, [payee, dateStart, dateEnd])
 
-  async function saveMerchantName() {
-    const name = nameDraft.trim()
-    if (!name || name === displayName) { setEditingName(false); return }
-    await api.updateMerchant(txn.id, name)
-    setDisplayName(name)
-    setEditingName(false)
-  }
-
   // Update a single transaction's category in local state
   function handleCatSaved(txnId, cat) {
     setMonthTxns(prev => prev.map(t =>
@@ -150,17 +145,34 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
     handleCatSaved(txnId, resolvedCat || null)
   }
 
+  const {
+    editing: editingName,
+    draft: nameDraft,
+    setDraft: setNameDraft,
+    beginEdit: beginEditingName,
+    cancelEdit: cancelEditingName,
+    commitEdit: commitEditingName,
+  } = useTransientTextEdit(displayName, {
+    onCommit: async nextName => {
+      await api.updateMerchant(txn.id, nextName)
+      setDisplayName(nextName)
+      setMonthTxns(prev => prev.map(row => row.id === txn.id ? { ...row, display_name: nextName } : row))
+    },
+  })
+
   const selectedMonthRow = trend.find(r => r.month === selectedMonth)
   const monthSectionHeight = getDetailMonthSectionHeight(trend)
   const header = (
     <>
       {editingName ? (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input
-            autoFocus
+          <TransientTextInput
             value={nameDraft}
-            onChange={e => setNameDraft(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') saveMerchantName(); if (e.key === 'Escape') setEditingName(false) }}
+            onChange={setNameDraft}
+            onCommit={commitEditingName}
+            onCancel={cancelEditingName}
+            restoreOnEscape
+            onBlurCommit={false}
             style={{
               ...inputStyle,
               fontSize: 17,
@@ -169,11 +181,11 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
               minWidth: 220,
             }}
           />
-          <button onClick={saveMerchantName} style={{
+          <button onClick={commitEditingName} style={{
             background: 'var(--accent)', color: '#fff', border: 'none',
             borderRadius: 6, padding: '4px 12px', fontSize: 13, cursor: 'pointer',
           }}>Save</button>
-          <button onClick={() => setEditingName(false)} style={{
+          <button onClick={cancelEditingName} style={{
             background: 'none', border: '1px solid var(--border)', color: 'var(--muted)',
             borderRadius: 6, padding: '4px 10px', fontSize: 13, cursor: 'pointer',
           }}>Cancel</button>
@@ -182,7 +194,7 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ fontSize: 17, fontWeight: 600 }}>{displayName}</div>
           <button
-            onClick={() => { setNameDraft(displayName); setEditingName(true) }}
+            onClick={() => beginEditingName(displayName)}
             title="Edit merchant name"
             style={{
               background: 'none', border: 'none', color: 'var(--muted)',

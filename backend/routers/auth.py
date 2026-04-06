@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 import json
 import os
 
@@ -18,6 +21,9 @@ from db.control_database import (
     enable_auth_mode,
     auth_required,
     create_local_preference_profile,
+    clear_all_local_preference_profiles,
+    clear_local_preferences,
+    clear_user_preferences,
     delete_local_preference_profile,
     consume_recovery_code,
     create_user,
@@ -208,6 +214,10 @@ def _auth_status_payload(request: Request | None = None) -> dict:
         os.getenv("FINTRACK_EXPERIMENTAL_SECURITY_SETTINGS"),
         default=False,
     )
+    developer_options_enabled = _truthy_env(
+        os.getenv("FINTRACK_DEVELOPER_OPTIONS"),
+        default=False,
+    )
     payload = {
         "auth_enabled": enabled,
         "needs_bootstrap": enabled and bootstrap_required(),
@@ -220,6 +230,7 @@ def _auth_status_payload(request: Request | None = None) -> dict:
         "security_profile_recommended_auth": security_guidance["recommended_auth"],
         "security_profile_suggested_password_policy": security_guidance["suggested_password_policy"],
         "experimental_security_settings": experimental_security_settings,
+        "developer_options_enabled": developer_options_enabled,
         "db_instance_id": db_instance_id,
     }
     if request and enabled:
@@ -285,6 +296,17 @@ def save_auth_preference(body: UserPreferenceRequest, request: Request):
     return {"ok": True}
 
 
+@router.delete("/preferences")
+def clear_auth_preferences(request: Request):
+    if auth_required():
+        user = _require_current_user(request)
+        clear_user_preferences(user["id"])
+    else:
+        profile = _require_local_preference_profile(request)
+        clear_local_preferences(profile["id"])
+    return {"ok": True}
+
+
 @router.get("/local-preference-profiles")
 def local_preference_profiles():
     _require_local_mode()
@@ -324,6 +346,18 @@ def delete_local_profile(profile_id: str):
         if detail == "Preference profile not found":
             raise HTTPException(status_code=404, detail=detail)
         raise HTTPException(status_code=400, detail=detail)
+    return {"ok": True}
+
+
+@router.delete("/local-preference-profiles")
+def clear_local_profiles(request: Request):
+    if not _truthy_env(
+        os.getenv("FINTRACK_DEVELOPER_OPTIONS"),
+        default=False,
+    ):
+        raise HTTPException(status_code=404, detail="Developer options are not enabled")
+    _require_local_mode()
+    clear_all_local_preference_profiles()
     return {"ok": True}
 
 

@@ -1,8 +1,19 @@
+<!-- SPDX-FileCopyrightText: 2026 Jeffrey Orlin -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Contributing
 
-FinTrack is currently a small, fast-moving project. This guide is mainly here to
-help future contributors, including future-me, make changes without having to
-reverse-engineer the project conventions first.
+FinTrack is currently a small, fast-moving project. This guide records the main
+conventions contributors should follow when changing the application.
+
+## Contents
+
+- [Goals](#goals)
+- [Local development](#local-development)
+- [Useful checks](#useful-checks)
+- [Project conventions](#project-conventions)
+- [Important product invariants](#important-product-invariants)
+- [Documentation expectations](#documentation-expectations)
 
 ## Goals
 
@@ -13,7 +24,7 @@ reverse-engineer the project conventions first.
 
 ## Local development
 
-The easiest way to start the app is with the launcher scripts documented in
+For the shortest local startup path, use the launcher scripts documented in
 [README.md](README.md).
 
 For manual development:
@@ -35,9 +46,20 @@ npm install
 npm run dev
 ```
 
+### Developer-only reset tools
+
+To enable the use of some useful developer features for testing, add this to
+`.env`:
+
+```bash
+FINTRACK_DEVELOPER_OPTIONS=true
+```
+
+This exposes a **Developer options** section on the main Settings page.
+
 ## Useful checks
 
-Before committing, run what makes sense for the files you changed:
+Before committing, run the checks that match the changed files:
 
 ```bash
 # frontend production build
@@ -51,38 +73,40 @@ cd backend
 py -3.12 -m py_compile main.py
 ```
 
-If you touched larger backend areas, it is also worth starting the app and
-clicking through the affected flow manually.
+For larger backend changes, also start the app and exercise the affected flow
+manually.
 
 ## Project conventions
 
 ### Backend
 
-- FastAPI routers live under `backend/routers/`
-- Database setup and migrations live in `backend/db/database.py`
-- New schema changes should be implemented as migrations, not ad-hoc SQL edits
-- SQLite is the source of truth; prefer simple, explicit SQL over abstraction layers
+- **Routers:** `backend/routers/`
+- **Database setup and migrations:** `backend/db/database.py`
+- **Schema changes:** implement as migrations, not ad-hoc SQL edits
+- **Database style:** SQLite is the source of truth; prefer simple, explicit SQL
+  over abstraction layers
 
 ### Frontend
 
-- Shared transaction display/editing behavior belongs in
-  `frontend/src/components/TransactionRow.jsx`
-- Shared detail-panel behavior belongs in
-  `frontend/src/components/detailShared.jsx`
-- Prefer reusing shared components over duplicating page-specific variants
-- Optimistic UI is acceptable when it keeps local interaction smooth and failures
-  are low-risk
+- **Shared transaction display/editing:** `frontend/src/components/TransactionRow.jsx`
+- **Shared detail-panel behavior:** `frontend/src/components/detailShared.jsx`
+- **Shared transient interaction behavior:** `frontend/src/lib/uiInteractions.js`
+  and `frontend/src/components/TransientTextInput.jsx`
+- **Component strategy:** prefer reusing shared components over duplicating
+  page-specific variants
+- **Optimistic UI:** acceptable when it keeps local interaction smooth and
+  failures are low-risk
 
 ## Important product invariants
 
-- Amount sign convention:
-  positive = money out, negative = money in
-- Categories are two-level only:
-  groups at the top, leaf categories underneath
-- Transactions should be assigned to leaf categories, not groups
-- Rule specificity is automatic:
-  more specific rules override more general ones without manual priority ordering
-- `exclude_from_totals` removes a group and its descendants from summaries/charts
+- **Amount sign convention:** positive = money out, negative = money in
+- **Category depth:** groups at the top, leaf categories underneath
+- **Transaction categorization:** transactions should be assigned to leaf
+  categories, not groups
+- **Rule specificity:** more specific rules override more general ones without
+  manual priority ordering
+- **`exclude_from_totals`:** removes a group and its descendants from
+  summaries/charts
 
 See [docs/data-model.md](docs/data-model.md) and
 [docs/architecture.md](docs/architecture.md) for more detail.

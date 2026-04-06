@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /**
  * FilterBar — Global filter controls, rendered once in App.jsx
  *
@@ -42,6 +45,7 @@ import { useFilters } from '../lib/FilterContext.jsx'
 import { api } from '../lib/api.js'
 import { getTxnMerchantLabel } from './TransactionRow.jsx'
 import { CategoryMarker } from './ui.jsx'
+import { useDismissibleLayer } from '../lib/uiInteractions.js'
 
 const fmt   = d => format(d, 'yyyy-MM-dd')
 const today = new Date()
@@ -74,11 +78,11 @@ const rowStyle = {
 
 function Popover({ children, onClose, style }) {
   const ref = useRef(null)
-  useEffect(() => {
-    function h(e) { if (ref.current && !ref.current.contains(e.target)) onClose() }
-    document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [onClose])
+  useDismissibleLayer({
+    open: true,
+    onClose,
+    refs: [ref],
+  })
   return (
     <div ref={ref} style={{
       position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 300,
