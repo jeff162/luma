@@ -116,10 +116,11 @@ def categorize_transaction(
 def recategorize_all(conn: sqlite3.Connection) -> int:
     """
     Re-run the rules engine over every transaction that hasn't been
-    manually overridden. Returns the number of transactions updated.
+    manually overridden. Returns the number of transactions whose
+    category actually changed (including newly categorized ones).
     """
     txns = conn.execute(
-        """SELECT id, merchant_name, display_name, raw_name, amount, owner_id, account_id
+        """SELECT id, merchant_name, display_name, raw_name, amount, owner_id, account_id, category_id
            FROM   txn
            WHERE  category_overridden = 0"""
     ).fetchall()
@@ -135,11 +136,12 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
         display_name = (
             result.get("clean_name") if isinstance(result, dict) else None
         ) or txn["merchant_name"] or txn["raw_name"]
-        conn.execute(
-            "UPDATE txn SET category_id = ?, display_name = ? WHERE id = ?",
-            (cat_id, display_name, txn["id"]),
-        )
-        updated += 1
+        if cat_id != txn["category_id"]:
+            conn.execute(
+                "UPDATE txn SET category_id = ?, display_name = ? WHERE id = ?",
+                (cat_id, display_name, txn["id"]),
+            )
+            updated += 1
 
     return updated
 

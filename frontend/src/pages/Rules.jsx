@@ -213,6 +213,7 @@ export default function Rules() {
   const [editingRuleId, setEditingRuleId] = useState(null)
   const [createInitialValues, setCreateInitialValues] = useState({})
   const [createTransactionData, setCreateTransactionData] = useState(null)
+  const [recategorizeResult, setRecategorizeResult] = useState(null)
 
   const loadRules = useCallback(() => {
     api.getRules(search || undefined).then(r => { setRules(r); setLoading(false) })
@@ -249,8 +250,10 @@ export default function Rules() {
   }
 
   async function runRecategorize() {
+    setRecategorizeResult(null)
     const result = await api.recategorize()
-    alert(`Re-categorized ${result.updated} transactions.`)
+    setRecategorizeResult(result.updated)
+    setTimeout(() => setRecategorizeResult(null), 6000)
   }
 
   const editingRule = editingRuleId ? rules.find(rule => rule.id === editingRuleId) : null
@@ -310,6 +313,37 @@ export default function Rules() {
           </Button>
         </PageHeader>
       </div>
+
+      {recategorizeResult !== null && (
+        <div style={{
+          margin: '12px 32px 0',
+          padding: '10px 16px',
+          borderRadius: 8,
+          background: recategorizeResult > 0
+            ? 'color-mix(in srgb, var(--success) 10%, var(--surface2))'
+            : 'var(--surface2)',
+          border: `1px solid ${recategorizeResult > 0
+            ? 'color-mix(in srgb, var(--success) 30%, var(--border))'
+            : 'var(--border)'}`,
+          fontSize: 13,
+          color: recategorizeResult > 0 ? 'var(--success)' : 'var(--muted)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          flexShrink: 0,
+        }}>
+          <span>
+            {recategorizeResult > 0
+              ? `↻ ${recategorizeResult} transaction${recategorizeResult === 1 ? '' : 's'} re-categorized.`
+              : '↻ No transactions needed re-categorization.'}
+          </span>
+          <button
+            onClick={() => setRecategorizeResult(null)}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 16, lineHeight: 1, padding: 0 }}
+          >×</button>
+        </div>
+      )}
 
       {/* Sticky toolbar */}
       <div style={{

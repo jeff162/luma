@@ -289,6 +289,12 @@ export const api = {
     }),
   applyBatchCategoryMappings: (id, assignments) =>
     request(`/import-export/batches/${id}/category-mappings`, { method: 'POST', body: JSON.stringify({ assignments }) }),
+  saveBatchCategoryWorkspaceDraft: (id, draft) =>
+    request(`/import-export/batches/${id}/category-workspace-draft`, { method: 'PATCH', body: JSON.stringify({ draft }) }),
+  getBatchCategoryWorkspaceDraft: (id) =>
+    request(`/import-export/batches/${id}/category-workspace-draft`),
+  setBatchProfile: (id, profileId) =>
+    request(`/import-export/batches/${id}/profile`, { method: 'PATCH', body: JSON.stringify({ profile_id: profileId }) }),
   undoBatch:        (id, force = false) =>
     request(`/import-export/batches/${id}${force ? '?force=true' : ''}`, { method: 'DELETE' }),
   getImportProfiles:    ()      => request('/import-export/profiles'),

@@ -58,6 +58,10 @@ export default function ImportRuleSuggestions() {
   const [reviewFilter, setReviewFilter] = useState('pending')
   const [merchantFilterOpen, setMerchantFilterOpen] = useUserPreference(IMPORT_RULE_MERCHANT_FILTER_OPEN_PREF_KEY, true)
   const [ownerFilterOpen, setOwnerFilterOpen] = useUserPreference(IMPORT_RULE_OWNER_FILTER_OPEN_PREF_KEY, false)
+  // Undo stack: each entry is a map of suggestion id → previous field values.
+  // Capped at 10 entries — older entries fall off the back.
+  const [undoStack, setUndoStack] = useState([])
+  const MAX_UNDO = 10
 
   const batch = useMemo(
     () => batches.find(item => item.id === batchId) || null,
@@ -175,12 +179,41 @@ export default function ImportRuleSuggestions() {
     })
   }
 
+  // Capture the current review_status (and rule_id) of the given suggestion ids
+  // before a change so it can be restored on undo.
+  function pushUndo(suggestionIds) {
+    const idSet = new Set(suggestionIds)
+    const snapshot = {}
+    for (const s of ruleSuggestionState.suggestions) {
+      if (idSet.has(s.id)) {
+        snapshot[s.id] = { review_status: s.review_status, rule_id: s.rule_id ?? null }
+      }
+    }
+    setUndoStack(prev => [...prev.slice(-(MAX_UNDO - 1)), snapshot])
+  }
+
+  async function performUndo() {
+    if (undoStack.length === 0) return
+    const snapshot = undoStack[undoStack.length - 1]
+    setUndoStack(prev => prev.slice(0, -1))
+    // Revert each suggestion to its previous status on the server
+    for (const [suggestionId, prev] of Object.entries(snapshot)) {
+      await api.updateBatchRuleSuggestionReview(batchId, {
+        suggestion_id: suggestionId,
+        status: prev.review_status,
+      }).catch(() => {})
+    }
+    // Reload to get accurate review_summary from server
+    await reloadSuggestions()
+  }
+
   function getCategoryName(categoryId) {
     return categories.find(category => String(category.id) === String(categoryId))?.name || null
   }
 
   async function setSuggestionStatus(suggestion, status) {
     setEditingSuggestionId(null)
+    pushUndo([suggestion.id])
     const result = await api.updateBatchRuleSuggestionReview(batchId, {
       suggestion_id: suggestion.id,
       status,
@@ -199,6 +232,7 @@ export default function ImportRuleSuggestions() {
   async function setSuggestionStatusBulk(suggestions, status) {
     setEditingSuggestionId(null)
     setRuleSuggestionState(prev => ({ ...prev, error: '' }))
+    pushUndo(suggestions.map(s => s.id))
     try {
       let lastResult = null
       for (const suggestion of suggestions) {
@@ -228,6 +262,7 @@ export default function ImportRuleSuggestions() {
 
   async function saveSuggestion(suggestion, data) {
     const { applyToExisting, ...ruleData } = data
+    pushUndo([suggestion.id])
     const createdRule = await api.createRule(ruleData)
     const result = await api.updateBatchRuleSuggestionReview(batchId, {
       suggestion_id: suggestion.id,
@@ -261,6 +296,7 @@ export default function ImportRuleSuggestions() {
   async function saveAcceptedSuggestion(suggestion, data) {
     const { applyToExisting, ...ruleData } = data
     let ruleId = suggestion.rule_id || null
+    pushUndo([suggestion.id])
 
     if (ruleId) {
       await api.updateRule(ruleId, ruleData)
@@ -314,6 +350,7 @@ export default function ImportRuleSuggestions() {
   async function saveSuggestionsAsIsBulk(suggestions) {
     setEditingSuggestionId(null)
     setRuleSuggestionState(prev => ({ ...prev, error: '' }))
+    pushUndo(suggestions.map(s => s.id))
     try {
       let lastResult = null
       const updatesById = {}
@@ -356,10 +393,15 @@ export default function ImportRuleSuggestions() {
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '20px 32px 0', flexShrink: 0 }}>
-        <div style={{ marginBottom: 8 }}>
+        <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <Link to="/import-export" style={{ fontSize: 13, color: 'var(--accent2)', textDecoration: 'none' }}>
             ← Back to Import / Export
           </Link>
+          {undoStack.length > 0 && (
+            <Button variant="ghost" small onClick={performUndo}>
+              ↩ Undo ({undoStack.length})
+            </Button>
+          )}
         </div>
         <PageHeader title="Imported Rule Suggestions" />
       </div>

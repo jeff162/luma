@@ -147,6 +147,10 @@ class BatchCategoryMappingApplyRequest(BaseModel):
     assignments: dict[str, str]
 
 
+class BatchCategoryWorkspaceDraftRequest(BaseModel):
+    draft: Optional[dict] = None
+
+
 class BatchRuleSuggestionReviewUpdateRequest(BaseModel):
     suggestion_id: str
     status: str
@@ -198,6 +202,45 @@ def load_json_object(raw: Optional[str]) -> dict:
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}
+
+
+def summarize_category_workspace_draft(draft: Optional[dict]) -> Optional[dict]:
+    """
+    Return {total_count, remaining_count} for a category workspace draft,
+    mirroring the summarizeCategoryWorkspaceDraft logic in the frontend.
+    Returns None if there is no draft or it contains no source values.
+    total_count  — all source values ever seen (pending + set-aside + placed in tree).
+    remaining_count — items still in the pending (sourceOrder) bucket.
+    """
+    if not isinstance(draft, dict):
+        return None
+    snapshot = draft.get("snapshot")
+    if not isinstance(snapshot, dict):
+        return None
+
+    seen: set = set()
+
+    def add(value):
+        normalized = str(value or "").strip()
+        if normalized:
+            seen.add(normalized)
+
+    for v in snapshot.get("sourceOrder") or []:
+        add(v)
+    for v in snapshot.get("setAsideOrder") or []:
+        add(v)
+    tree = snapshot.get("tree") or {}
+    for section in ("income", "expense"):
+        for group in tree.get(section) or []:
+            for child in group.get("children") or []:
+                add(child.get("sourceValue") or child.get("name"))
+
+    total_count = len(seen)
+    if total_count == 0:
+        return None
+
+    remaining_count = len(snapshot.get("sourceOrder") or [])
+    return {"total_count": total_count, "remaining_count": remaining_count}
 
 
 def get_rule_suggestion_review_state(snapshot: dict) -> dict:
@@ -1525,6 +1568,16 @@ def list_batches():
                 **summary,
             } if d["has_imported_categories"] else None
 
+            # For profileless batches, the category workspace draft is stored
+            # directly in config_snapshot rather than in a profile. Surface a
+            # summary so the frontend can show the Import categories button on
+            # the individual batch row without fetching the full snapshot.
+            d["category_workspace_summary"] = (
+                summarize_category_workspace_draft(snapshot.get("category_workspace_draft"))
+                if not d.get("profile_id")
+                else None
+            )
+
             accs = conn.execute("""
                 SELECT iba.csv_value, iba.account_id, iba.row_count, iba.was_skipped,
                        COALESCE(a.name, iba.csv_value) AS account_name
@@ -2105,6 +2158,88 @@ def get_batch_rule_suggestion_matches(batch_id: str, body: BatchRuleSuggestionMa
         "count": len(matching_rows),
         "transactions": matching_rows,
     }
+
+
+
+@router.patch("/batches/{batch_id}/profile")
+def set_batch_profile(batch_id: str, body: dict):
+    """
+    Link a previously profileless batch to a newly created profile.
+    Used when the user saves a temporary draft as a data source after import —
+    the batch record is updated so the file card moves under the new profile
+    in the history list.
+    Only valid for profileless batches; batches already linked to a profile
+    are left unchanged.
+    """
+    profile_id = (body.get("profile_id") or "").strip()
+    if not profile_id:
+        raise HTTPException(status_code=400, detail="profile_id is required")
+    with get_db() as conn:
+        batch = conn.execute(
+            "SELECT id, profile_id FROM import_batch WHERE id = ?", (batch_id,)
+        ).fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+        if batch["profile_id"]:
+            raise HTTPException(status_code=400, detail="Batch is already linked to a profile")
+        profile = conn.execute(
+            "SELECT id FROM csv_import_profile WHERE id = ?", (profile_id,)
+        ).fetchone()
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        conn.execute(
+            "UPDATE import_batch SET profile_id = ? WHERE id = ?",
+            (profile_id, batch_id),
+        )
+    return {"ok": True}
+
+
+@router.get("/batches/{batch_id}/category-workspace-draft")
+def get_batch_category_workspace_draft(batch_id: str):
+    """Return the category workspace draft stored in a batch's config_snapshot."""
+    with get_db() as conn:
+        batch = conn.execute(
+            "SELECT id, profile_id, config_snapshot FROM import_batch WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+        snapshot = load_json_object(batch["config_snapshot"])
+        draft = snapshot.get("category_workspace_draft")
+        summary = summarize_category_workspace_draft(draft)
+    return {"draft": draft, "summary": summary}
+
+
+@router.patch("/batches/{batch_id}/category-workspace-draft")
+def save_batch_category_workspace_draft(batch_id: str, body: BatchCategoryWorkspaceDraftRequest):
+    """
+    Persist a category workspace draft into a batch's config_snapshot.
+    Used for profileless imports where there is no data source profile to
+    store the draft in. The draft is stored under the same
+    'category_workspace_draft' key used by profile column_map, so the
+    frontend category workspace machinery works identically in both cases.
+    Only valid for profileless batches (profile_id IS NULL); batches linked
+    to a profile store their draft in the profile instead.
+    """
+    with get_db() as conn:
+        batch = conn.execute(
+            "SELECT id, profile_id, config_snapshot FROM import_batch WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+        if batch["profile_id"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Category workspace draft is stored on the profile for profile-linked batches",
+            )
+        snapshot = load_json_object(batch["config_snapshot"])
+        if body.draft is None:
+            snapshot.pop("category_workspace_draft", None)
+        else:
+            snapshot["category_workspace_draft"] = body.draft
+        save_batch_snapshot(conn, batch_id, snapshot)
+    return {"ok": True}
 
 
 @router.delete("/batches/{batch_id}")

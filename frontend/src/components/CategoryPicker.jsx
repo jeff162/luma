@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '../lib/api.js'
 import { Badge, CategoryMarker } from './ui.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
@@ -581,7 +582,7 @@ export default function CategoryPicker({
           {open ? '▴' : '▾'}
         </button>
       </div>
-      {open && (
+      {open && createPortal(
         <div
           ref={panelRef}
           style={{
@@ -590,7 +591,7 @@ export default function CategoryPicker({
             top: panelPosition?.top ?? 'auto',
             bottom: panelPosition?.bottom ?? 'auto',
             width: panelPosition?.width ?? (compact ? 280 : 340),
-            zIndex: 300,
+            zIndex: 1100,
             visibility: panelPosition ? 'visible' : 'hidden',
             background: 'var(--surface)',
             border: '1px solid var(--border)',
@@ -715,7 +716,8 @@ export default function CategoryPicker({
               )}
             </>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

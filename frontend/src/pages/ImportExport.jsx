@@ -1196,7 +1196,15 @@ function ImportTab() {
   const [categoryMappingSummary, setCategoryMappingSummary] = useState(null)
   const [showCategoryWorkspace, setShowCategoryWorkspace] = useState(false)
   const [sourceWorkspaceProfileId, setSourceWorkspaceProfileId] = useState('')
+  const [sourceWorkspaceBatchId, setSourceWorkspaceBatchId] = useState('')
   const [sourceWorkspaceDraft, setSourceWorkspaceDraft] = useState(null)
+  // Source values for the batch workspace are captured once when the workspace
+  // opens and held stable for its lifetime. They must NOT be derived from
+  // sourceWorkspaceDraft on each render — that would recompute on every
+  // onDraftStateChange call, producing a new array reference that triggers
+  // the sanitizeSnapshot useEffect inside CategoryImportWorkspace on every
+  // render, causing an infinite setState loop.
+  const [sourceWorkspaceSourceValues, setSourceWorkspaceSourceValues] = useState([])
   const [showCategoryImportHelp, setShowCategoryImportHelp] = useState(false)
   const [importCategoryDraft, setImportCategoryDraft] = useState(null)
   const [pendingCategoryApply, setPendingCategoryApply] = useState(null)
@@ -1246,6 +1254,9 @@ function ImportTab() {
     () => summarizeCategoryWorkspaceDraft(sourceWorkspaceDraft || clonePersistedCategoryWorkspaceDraft(activeSourceWorkspaceProfile?.column_map?.category_workspace_draft)),
     [activeSourceWorkspaceProfile, sourceWorkspaceDraft],
   )
+
+  // Stable source values for the batch-backed workspace are captured in
+  // sourceWorkspaceSourceValues state (set once when the workspace opens).
 
   function selectUploadSource(nextSourceId, options = {}) {
     const { persist = true } = options
@@ -1338,16 +1349,32 @@ function ImportTab() {
       }
     })
     const manualBatches = batches.filter(batch => !batch.profile_id).sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
-    if (manualDraftRecord || manualBatches.length > 0) {
+    const latestManualBatch = manualBatches[0] || null
+    const olderManualBatches = manualBatches.slice(1)
+
+    if (manualDraftRecord || latestManualBatch) {
       savedSourceRows.push({
         key: 'manual-draft',
         kind: 'manual',
         profile: null,
         draft: clonePersistedCategoryWorkspaceDraft(manualDraftRecord?.snapshot?.category_workspace_draft),
         categorySummary: summarizeCategoryWorkspaceDraft(clonePersistedCategoryWorkspaceDraft(manualDraftRecord?.snapshot?.category_workspace_draft)),
-        batches: manualBatches,
-        latestBatch: manualBatches[0] || null,
+        batches: latestManualBatch ? [latestManualBatch] : [],
+        latestBatch: latestManualBatch,
         manualDraftRecord,
+      })
+    }
+
+    if (olderManualBatches.length > 0) {
+      savedSourceRows.push({
+        key: 'unknown-source',
+        kind: 'unknown',
+        profile: null,
+        draft: null,
+        categorySummary: { sourceValues: [], totalCount: 0, remainingCount: 0 },
+        batches: olderManualBatches,
+        latestBatch: olderManualBatches[0],
+        manualDraftRecord: null,
       })
     }
     return savedSourceRows.sort((a, b) => String(b.latestBatch?.imported_at || '').localeCompare(String(a.latestBatch?.imported_at || '')))
@@ -2068,6 +2095,29 @@ function ImportTab() {
       refreshTaskBadge()
       const refreshedAccounts = await api.getAccounts()
       setAccounts(refreshedAccounts)
+      // For profileless imports, persist the category workspace draft into the
+      // batch record so it survives beyond the current session and appears on
+      // the history row immediately. If the user never opened the workspace
+      // before importing, importCategoryDraft is null — eagerly create it from
+      // the source values so the button appears on the batch card right away.
+      if (!selectedProfile && result.batch_id) {
+        let draftToSave = importCategoryDraft
+        if (!draftToSave && colCategory && sourceCategoryValues.length > 0) {
+          draftToSave = createCategoryImportDraftState(sourceCategoryValues, categories)
+          setImportCategoryDraft(draftToSave)
+        }
+        const categoryWorkspaceDraft = clonePersistedCategoryWorkspaceDraft(draftToSave)
+        if (categoryWorkspaceDraft) {
+          api.saveBatchCategoryWorkspaceDraft(result.batch_id, categoryWorkspaceDraft).catch(() => {})
+        }
+      }
+      // Force the tree row for this import open so the file card is visible
+      // regardless of the user's saved expand/collapse preference.
+      const rowKeyToExpand = selectedProfile ? `profile:${selectedProfile}` : 'manual-draft'
+      setExpandedSourceRows(prev => ({
+        ...(prev && typeof prev === 'object' ? prev : {}),
+        [rowKeyToExpand]: true,
+      }))
       api.listBatches().then(setBatches)
       if (selectedProfile) {
         await autoSaveProfile(refreshedAccounts).catch(() => {})
@@ -2160,13 +2210,32 @@ function ImportTab() {
     setSavingManualDraftSource(true)
     try {
       const response = await api.createImportProfile(body)
+      const newProfileId = response?.id
+      // Link the most recent profileless batch to the new profile so its file
+      // card moves under the new data source row rather than staying in
+      // "temporary draft" or "unknown data source".
+      const latestManualBatch = batches
+        .filter(b => !b.profile_id)
+        .sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))[0]
+      if (newProfileId && latestManualBatch) {
+        await api.setBatchProfile(latestManualBatch.id, newProfileId).catch(() => {})
+      }
       const updatedProfiles = await api.getImportProfiles()
       setProfiles(updatedProfiles)
       clearSavedImportDraft(dbInstanceId, preferenceSubjectId)
       setManualDraftRecord(loadSavedImportDraftRecord(dbInstanceId, preferenceSubjectId))
       setShowManualDraftSave(false)
       setManualDraftSaveName('')
-      selectUploadSource(response?.id || '')
+      // Open the new profile's tree row so the file card is visible in its new home.
+      if (newProfileId) {
+        setExpandedSourceRows(prev => ({
+          ...(prev && typeof prev === 'object' ? prev : {}),
+          [`profile:${newProfileId}`]: true,
+        }))
+      }
+      api.listBatches().then(setBatches)
+      // Deliberately not switching the upload source selector to the new profile —
+      // the user is reviewing a completed import and hasn't asked to start a new one.
     } catch (error) {
       alert(error?.message || 'Could not save the temporary draft as a data source.')
     } finally {
@@ -2309,8 +2378,46 @@ function ImportTab() {
   }
 
   async function confirmUndo(force) {
-    await api.undoBatch(undoTarget.id, force)
-    setUndoTarget(null); setUndoEdited([]); setDupAccountWarning([]); api.listBatches().then(setBatches)
+    const batch = undoTarget
+    await api.undoBatch(batch.id, force)
+    setUndoTarget(null); setUndoEdited([]);
+
+    // If the undone batch is the one currently shown in the Import complete box,
+    // clear it so the card disappears immediately without waiting for a refresh.
+    if (importResult?.batch_id === batch.id) {
+      setImportResult(null)
+      setStage('upload')
+    }
+
+    const remainingBatches = batches.filter(b => b.id !== batch.id)
+
+    if (!batch.profile_id) {
+      // Profileless batch: if this was the only remaining profileless import,
+      // clear the manual draft (localStorage) so "Save as data source" and the
+      // header-level "Import categories" button disappear.
+      const remainingManual = remainingBatches.filter(b => !b.profile_id)
+      if (remainingManual.length === 0) {
+        clearSavedImportDraft(dbInstanceId, preferenceSubjectId)
+        setManualDraftRecord(null)
+      }
+    } else {
+      // Profile-linked batch: if this was the last batch for the profile,
+      // clear the category workspace draft from the profile so the
+      // "Import categories" button on the profile header disappears.
+      const remainingForProfile = remainingBatches.filter(b => b.profile_id === batch.profile_id)
+      if (remainingForProfile.length === 0) {
+        const profile = profiles.find(p => p.id === batch.profile_id)
+        if (profile) {
+          const nextColumnMap = { ...(profile.column_map || {}) }
+          delete nextColumnMap.category_workspace_draft
+          api.updateImportProfile(batch.profile_id, { column_map: nextColumnMap })
+            .then(() => api.getImportProfiles().then(setProfiles))
+            .catch(() => {})
+        }
+      }
+    }
+
+    api.listBatches().then(setBatches)
     refreshTaskBadge()
   }
 
@@ -2429,8 +2536,37 @@ function ImportTab() {
       : clonePersistedCategoryWorkspaceDraft(profiles.find(item => item.id === profileId)?.column_map?.category_workspace_draft)
     if (!draft?.snapshot) return
     setSourceWorkspaceProfileId(profileId)
+    setSourceWorkspaceBatchId('')
+    setSourceWorkspaceSourceValues([])
     setSourceWorkspaceDraft(draft)
     setShowCategoryWorkspace(true)
+  }
+
+  async function openBatchCategoryWorkspace(batchId) {
+    // Opens the category workspace backed by a specific profileless batch record.
+    // The draft is fetched on demand from the batch's config_snapshot rather than
+    // held in memory — batch records are not loaded with their full snapshots by
+    // list_batches to keep payloads lean.
+    // Source values are captured once here and held in sourceWorkspaceSourceValues
+    // state for the lifetime of this workspace session. They must not be recomputed
+    // from sourceWorkspaceDraft on each render or they trigger an infinite loop
+    // inside CategoryImportWorkspace's sanitizeSnapshot useEffect.
+    setLoading(true)
+    try {
+      const { draft } = await api.getBatchCategoryWorkspaceDraft(batchId)
+      const cloned = clonePersistedCategoryWorkspaceDraft(draft)
+      if (!cloned?.snapshot) return
+      const stableSourceValues = collectCategoryWorkspaceSourceValues(cloned)
+      setSourceWorkspaceProfileId('')
+      setSourceWorkspaceBatchId(batchId)
+      setSourceWorkspaceSourceValues(stableSourceValues)
+      setSourceWorkspaceDraft(cloned)
+      setShowCategoryWorkspace(true)
+    } catch {
+      alert('Could not load category workspace for this import.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   function persistManualDraftCategoryWorkspaceDraft(draft) {
@@ -2450,11 +2586,18 @@ function ImportTab() {
 
   function closeSourceCategoryWorkspace() {
     const profileId = sourceWorkspaceProfileId
+    const batchId = sourceWorkspaceBatchId
     const draft = sourceWorkspaceDraft
     setShowCategoryWorkspace(false)
     setSourceWorkspaceProfileId('')
+    setSourceWorkspaceBatchId('')
+    setSourceWorkspaceSourceValues([])
     setSourceWorkspaceDraft(null)
-    if (profileId && draft) {
+    if (batchId && draft) {
+      // Batch-backed workspace: persist draft back to the batch record
+      const persistedDraft = clonePersistedCategoryWorkspaceDraft(draft)
+      api.saveBatchCategoryWorkspaceDraft(batchId, persistedDraft).catch(() => {})
+    } else if (profileId && draft) {
       if (profileId === MANUAL_DATA_SOURCE_VALUE) persistManualDraftCategoryWorkspaceDraft(draft)
       else persistProfileCategoryWorkspaceDraft(profileId, draft)
     }
@@ -2535,19 +2678,26 @@ function ImportTab() {
   }
 
   async function applySourceCategoryWorkspaceDraft(draft) {
-    if (!sourceWorkspaceProfileId) return
+    if (!sourceWorkspaceProfileId && !sourceWorkspaceBatchId) return
     setLoading(true)
     try {
       const { refreshedCategories, nextDraft } = await commitCategoryWorkspaceDraftToLiveCategories(draft)
       setCategories(refreshedCategories)
       setSourceWorkspaceDraft(nextDraft)
-      if (sourceWorkspaceProfileId === MANUAL_DATA_SOURCE_VALUE) {
+      if (sourceWorkspaceBatchId) {
+        // Batch-backed workspace: save updated draft back to the batch record
+        const persistedDraft = clonePersistedCategoryWorkspaceDraft(nextDraft)
+        await api.saveBatchCategoryWorkspaceDraft(sourceWorkspaceBatchId, persistedDraft).catch(() => {})
+        api.listBatches().then(setBatches)
+      } else if (sourceWorkspaceProfileId === MANUAL_DATA_SOURCE_VALUE) {
         persistManualDraftCategoryWorkspaceDraft(nextDraft)
       } else {
         await persistProfileCategoryWorkspaceDraft(sourceWorkspaceProfileId, nextDraft)
       }
       setShowCategoryWorkspace(false)
       setSourceWorkspaceProfileId('')
+      setSourceWorkspaceBatchId('')
+      setSourceWorkspaceSourceValues([])
       setSourceWorkspaceDraft(null)
     } finally {
       setLoading(false)
@@ -2556,9 +2706,13 @@ function ImportTab() {
 
   return (
     <div style={{ width: '100%', maxWidth: IMPORT_CONFIG_MAX_WIDTH }}>
-      {showCategoryWorkspace && (preview || sourceWorkspaceProfileId) ? (
+      {showCategoryWorkspace && (preview || sourceWorkspaceProfileId || sourceWorkspaceBatchId) ? (
         <CategoryImportWorkspace
-          sourceValues={sourceWorkspaceProfileId ? activeSourceWorkspaceSummary.sourceValues : sourceCategoryValues}
+          sourceValues={sourceWorkspaceProfileId
+            ? activeSourceWorkspaceSummary.sourceValues
+            : sourceWorkspaceBatchId
+              ? sourceWorkspaceSourceValues
+              : sourceCategoryValues}
           sourceMeta={sourceWorkspaceProfileId
             ? {
                 total_count: activeSourceWorkspaceSummary.totalCount,
@@ -2566,12 +2720,19 @@ function ImportTab() {
                 truncated: false,
                 limit: activeSourceWorkspaceSummary.totalCount,
               }
-            : sourceCategoryMeta}
+            : sourceWorkspaceBatchId
+              ? {
+                  total_count: sourceWorkspaceSourceValues.length,
+                  displayed_count: sourceWorkspaceSourceValues.length,
+                  truncated: false,
+                  limit: sourceWorkspaceSourceValues.length,
+                }
+              : sourceCategoryMeta}
           existingCategories={categories}
-          initialDraftState={sourceWorkspaceProfileId ? sourceWorkspaceDraft : importCategoryDraft}
-          onDraftStateChange={sourceWorkspaceProfileId ? setSourceWorkspaceDraft : setImportCategoryDraft}
-          onApply={sourceWorkspaceProfileId ? applySourceCategoryWorkspaceDraft : applyCategoryWorkspaceDraft}
-          onClose={sourceWorkspaceProfileId ? closeSourceCategoryWorkspace : () => setShowCategoryWorkspace(false)}
+          initialDraftState={sourceWorkspaceProfileId || sourceWorkspaceBatchId ? sourceWorkspaceDraft : importCategoryDraft}
+          onDraftStateChange={sourceWorkspaceProfileId || sourceWorkspaceBatchId ? setSourceWorkspaceDraft : setImportCategoryDraft}
+          onApply={sourceWorkspaceProfileId || sourceWorkspaceBatchId ? applySourceCategoryWorkspaceDraft : applyCategoryWorkspaceDraft}
+          onClose={sourceWorkspaceProfileId || sourceWorkspaceBatchId ? closeSourceCategoryWorkspace : () => setShowCategoryWorkspace(false)}
           onCategoriesChanged={setCategories}
         />
       ) : null}
@@ -3284,7 +3445,7 @@ function ImportTab() {
                       boxShadow: hasImportWorkToSave ? '0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent)' : 'none',
                     }}
                   >
-                    ＋ Create data source
+                    ＋ Save as data source
                   </button>
                 )
               )}
@@ -3774,6 +3935,8 @@ function ImportTab() {
           <>
             {dataSourceRows.map(row => {
               const isManual = row.kind === 'manual'
+              const isUnknown = row.kind === 'unknown'
+              const isUnsaved = isManual || isUnknown
               const hasCategoryWorkspace = row.categorySummary.totalCount > 0
               const categoryActionLabel = getCategoryWorkspaceActionLabel(row.categorySummary.remainingCount)
               const rowExpanded = !!expandedSourceRows[row.key]
@@ -3798,13 +3961,13 @@ function ImportTab() {
                         </button>
                       ) : <span style={{ width: 20, height: 20 }} />}
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ fontStyle: isManual ? 'italic' : 'normal', color: isManual ? 'var(--muted)' : 'var(--text)' }}>
-                          {isManual ? 'temporary draft' : row.profile.name}
+                        <div style={{ fontStyle: isUnsaved ? 'italic' : 'normal', color: isUnsaved ? 'var(--muted)' : 'var(--text)' }}>
+                          {isManual ? 'temporary draft' : isUnknown ? 'unknown data source' : row.profile.name}
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 3, fontSize: 11, color: 'var(--muted)' }}>
                           {isManual ? (
                             row.manualDraftRecord?.filenamePattern ? <span>{row.manualDraftRecord.filenamePattern}</span> : null
-                          ) : editingSourceDescriptionId === row.profile.id ? (
+                          ) : isUnknown ? null : editingSourceDescriptionId === row.profile.id ? (
                             <TransientTextInput
                               value={sourceDescriptionDraft}
                               onChange={setSourceDescriptionDraft}
@@ -3855,7 +4018,7 @@ function ImportTab() {
                       </div>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
-                      {hasCategoryWorkspace ? (
+                      {hasCategoryWorkspace && !isUnknown ? (
                         <button
                           type="button"
                           onClick={() => openSourceCategoryWorkspace(isManual ? MANUAL_DATA_SOURCE_VALUE : row.profile.id)}
@@ -3928,7 +4091,7 @@ function ImportTab() {
                     <div style={{ borderTop: '2px solid color-mix(in srgb, var(--border) 92%, var(--accent))', borderBottom: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 36%, var(--surface))', boxShadow: 'inset 0 1px 0 color-mix(in srgb, white 5%, transparent)' }}>
                       {row.batches.map(b => (
                         <div key={b.id}>
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 70px 240px', padding: '10px 16px 10px 46px', alignItems: 'center', fontSize: 13, borderBottom: (b.accounts?.length || b.deduped_count > 0) ? 'none' : '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 70px 240px', padding: '10px 16px 10px 46px', alignItems: 'start', fontSize: 13, borderBottom: (b.accounts?.length || b.deduped_count > 0) ? 'none' : '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
                             <div>
                               <div>{b.filename}</div>
                               {b.has_imported_categories && getRuleSuggestionProgressLabel(b) ? (
@@ -3939,25 +4102,47 @@ function ImportTab() {
                             </div>
                             <span style={{ fontSize: 12, color: 'var(--muted)' }}>{b.imported_at.slice(0,16).replace('T',' ')}</span>
                             <span style={{ textAlign: 'center' }}>{b.row_count} rows</span>
-                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                              {b.has_imported_categories ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+                              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                                {b.has_imported_categories ? (
+                                  <button
+                                    onClick={() => openRuleSuggestionReview(b.id)}
+                                    style={{
+                                      background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
+                                      border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
+                                      borderRadius: 6,
+                                      color: 'var(--accent2)',
+                                      cursor: 'pointer',
+                                      fontSize: 12,
+                                      fontWeight: 600,
+                                      padding: '3px 8px',
+                                    }}
+                                  >
+                                    {b.rule_suggestion_review?.generated_at ? 'View rules' : 'Generate rules'}
+                                  </button>
+                                ) : null}
+                                <button onClick={() => handleUndoClick(b)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}>Undo</button>
+                              </div>
+                              {isUnsaved && b.category_workspace_summary ? (
                                 <button
-                                  onClick={() => openRuleSuggestionReview(b.id)}
+                                  onClick={() => openBatchCategoryWorkspace(b.id)}
                                   style={{
-                                    background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
-                                    border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
+                                    background: b.category_workspace_summary.remaining_count > 0
+                                      ? 'color-mix(in srgb, var(--accent) 10%, var(--surface2))'
+                                      : 'var(--surface2)',
+                                    border: `1px solid ${b.category_workspace_summary.remaining_count > 0 ? 'color-mix(in srgb, var(--accent) 28%, var(--border))' : 'var(--border)'}`,
                                     borderRadius: 6,
-                                    color: 'var(--accent2)',
+                                    color: b.category_workspace_summary.remaining_count > 0 ? 'var(--accent2)' : 'var(--muted)',
                                     cursor: 'pointer',
                                     fontSize: 12,
-                                    fontWeight: 600,
+                                    fontWeight: b.category_workspace_summary.remaining_count > 0 ? 600 : 500,
                                     padding: '3px 8px',
+                                    whiteSpace: 'nowrap',
                                   }}
                                 >
-                                  {b.rule_suggestion_review?.generated_at ? 'View rules' : 'Generate rules'}
+                                  {getCategoryWorkspaceActionLabel(b.category_workspace_summary.remaining_count)}
                                 </button>
                               ) : null}
-                              <button onClick={() => handleUndoClick(b)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}>Undo</button>
                             </div>
                           </div>
                           {(b.accounts?.length > 0 || b.deduped_count > 0) && (
