@@ -1,41 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/**
- * FilterBar — Global filter controls, rendered once in App.jsx
- *
- * DESIGN: Two buttons sit at the top of every page. Their state lives in
- * FilterContext (not here) so filters persist across navigation.
- *
- * DATE BUTTON:
- *   Shows "Date" when unset, or the active preset/range label when set.
- *   Highlighted (accent border + tinted background) when active.
- *   Dropdown offers preset ranges (MTD, last month, YTD, etc.) and a custom
- *   date range with two <input type="date"> fields.
- *
- * FILTER BUTTON:
- *   Shows "Filter" with a count badge when selections are active.
- *   Dropdown has four tabs: Accounts, Groups, Categories, Payee.
- *   - Accounts/Groups/Categories: toggle items on/off, ✓ marks selected
- *   - Payee: live search against actual transactions via api.getTransactions()
- *   Multiple items across multiple tabs can be selected simultaneously.
- *
- * CHIPS:
- *   Active filter selections render as dismissible chips in the bar so the
- *   user can see and remove individual filters without opening the dropdown.
- *   A "Clear all" button appears on the right when anything is active.
- *
- * POPOVER PATTERN:
- *   Each button tracks its own open/close state. Opening one closes the other.
- *   Popovers close on outside click via a mousedown listener on document.
- *   Popovers use position:absolute relative to their trigger button so they
- *   stay anchored correctly regardless of scroll position.
- *
- * EXTENDING:
- *   To add a new filter type (e.g. amount range):
- *   1. Add a tab to FilterPopover with the appropriate UI
- *   2. Add the selection type to FilterContext selections array
- *   3. Handle the new type in each page's API call construction
+/*
+ * FilterBar owns only the local popover UI. The actual filter meaning lives in FilterContext so every page can
+ * interpret the same active chips through its own API calls while the user's current slice survives navigation.
  */
 
 import { useState, useRef, useEffect } from 'react'
@@ -178,6 +146,7 @@ function FilterPopover({ onClose }) {
 
   useEffect(() => {
     if (!payeeSearch.trim()) { setPayeeSuggestions([]); return }
+    // Payees are derived from real transactions because the app does not keep a separate payee directory in sync.
     api.getTransactions({ search: payeeSearch, limit: 10 }).then(d => {
       const seen = new Set()
       const s = []
@@ -203,7 +172,6 @@ function FilterPopover({ onClose }) {
 
   return (
     <Popover onClose={onClose} style={{ minWidth: 300 }}>
-      {/* Tabs */}
       <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
         {FILTER_TABS.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{
@@ -218,7 +186,6 @@ function FilterPopover({ onClose }) {
 
       <div style={{ maxHeight: 300, overflowY: 'auto', padding: '6px 0' }}>
 
-        {/* Accounts */}
         {tab === 'accounts' && accounts.map(a => {
           const sel = { type: 'account', id: a.id, label: `${a.name}${a.mask ? ` ···${a.mask}` : ''}` }
           return (
@@ -241,7 +208,6 @@ function FilterPopover({ onClose }) {
           )
         })}
 
-        {/* Groups */}
         {tab === 'groups' && groups.map(g => {
           const sel = { type: 'group', id: g.id, label: g.name }
           return (
@@ -259,7 +225,6 @@ function FilterPopover({ onClose }) {
           )
         })}
 
-        {/* Categories */}
         {tab === 'categories' && groups.map(g => (
           <div key={g.id}>
             <div style={{ padding: '6px 16px 2px', fontSize: 11, fontWeight: 600,
@@ -286,7 +251,6 @@ function FilterPopover({ onClose }) {
           </div>
         ))}
 
-        {/* Owners */}
         {tab === 'owners' && (
           owners.length === 0 ? (
             <div style={{ padding: '12px 16px', fontSize: 13, color: 'var(--muted)' }}>
@@ -309,7 +273,6 @@ function FilterPopover({ onClose }) {
           })
         )}
 
-        {/* Payee */}
         {tab === 'payee' && (
           <div style={{ padding: '8px 12px' }}>
             <input
@@ -406,7 +369,6 @@ export default function FilterBar() {
       padding: '8px 32px', borderBottom: '1px solid var(--border)',
       background: 'var(--surface)', minHeight: 48,
     }}>
-      {/* Date button — left side */}
       <div style={{ position: 'relative', flexShrink: 0 }}>
         <FilterButton
           active={hasDate}
@@ -417,7 +379,6 @@ export default function FilterBar() {
         {showDate && <DatePickerPopover onClose={() => setShowDate(false)} />}
       </div>
 
-      {/* Filter button */}
       <div style={{ position: 'relative', flexShrink: 0 }}>
         <FilterButton
           active={hasSelections}
@@ -429,12 +390,10 @@ export default function FilterBar() {
         {showFilter && <FilterPopover onClose={() => setShowFilter(false)} />}
       </div>
 
-      {/* Active chips */}
       {filters.selections.map(s => (
         <FilterChip key={s.id} sel={s} onRemove={removeSelection} />
       ))}
 
-      {/* Clear all — right side */}
       {hasAny && (
         <button onClick={clearAll} style={{
           marginLeft: 'auto', background: 'none', border: 'none',

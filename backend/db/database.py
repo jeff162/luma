@@ -2,82 +2,22 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-database.py — SQLite schema, migrations, and seed data
+Primary application database: schema, seeding, and migrations for each tenant DB.
 
-SCHEMA OVERVIEW:
-  category        — Two-level hierarchy: groups (parent_id=NULL) and leaf categories.
-                    Color remains in schema for compatibility, but seeded
-                    categories no longer require a separately-maintained color map.
-  category_rule   — Keyword rules for auto-categorization. Matched case-insensitively
-                    as substrings of merchant_name+raw_name. Higher priority wins.
-                    Optional amount_min/amount_max for amount-based routing.
-  merchant_rename — Raw name → clean name mapping applied during sync before
-                    categorization. Lets garbled Plaid names be fixed once and
-                    automatically corrected on all future syncs.
-  txn             — Transactions (table named 'txn' not 'transaction' — reserved
-                    word in SQLite). category_overridden=1 means the user manually
-                    set the category; the auto-categorizer skips these.
-  account         — Linked Plaid accounts.
-  plaid_item      — Plaid items (one per linked institution), stores access_token.
-  db_meta         — Key/value store for database metadata (currently just 'version').
-
-MIGRATION SYSTEM:
-  Every schema change or data migration that needs to run on existing databases
-  should be implemented as a migration function, not just in init_db().
-
-  Fresh databases are created directly in the latest schema and should be
-  marked at CURRENT_VERSION immediately. They should not "replay" the
-  migration chain on first boot just to reach the already-current schema.
-
-  To add a new migration:
-    1. Write a function decorated with @migration(N) where N = CURRENT_VERSION + 1
-    2. Bump CURRENT_VERSION to N
-    3. The function runs automatically on next startup for any DB below version N
-
-  Migrations are idempotent by convention — use CREATE TABLE IF NOT EXISTS,
-  ALTER TABLE wrapped in try/except, and UPDATE ... WHERE to avoid re-applying.
-
-  init_db() also calls a few helper functions directly for fresh installs where
-  the migration version baseline doesn't exist yet.
-
-SEEDING:
-  _seed_default_categories() uses upsert_cat() which INSERT OR IGNOREs, so it's
-  safe to call on every startup — it won't overwrite user changes.
-  seed_default_rules() in categorizer.py does the same for categorization rules.
-  Both are called only when the respective tables are empty (first run).
-"""
-
-"""
-database.py — SQLite setup, migrations, and seed data.
-
-DESIGN PRINCIPLES:
-- Single SQLite file, path controlled by DB_PATH env var (default: fintrack.db)
-- All schema changes go through the migration system (see run_migrations).
-  Never ALTER tables ad-hoc; add a new @migration(N) function and bump CURRENT_VERSION.
-- The db_meta table stores key/value metadata, currently just the schema version.
-- get_db() is a context manager that yields a Row-factory connection and commits
-  on clean exit. All routers use this pattern — never manage connections manually.
-- Categories are two-level only: top-level groups (parent_id IS NULL) and leaf
-  categories (parent_id = group.id). Transactions are always assigned to leaves,
-  never to groups directly. The UI and queries depend on this invariant.
-- category_overridden=1 means the user manually set the category; the auto-
-  categorizer will skip these transactions during re-categorization runs.
-- merchant_rename rules are applied during sync BEFORE categorization, so a
-  cleaned-up merchant name flows through to the category matching rules.
+This file owns the durable model the routers and services share. Its key guarantees
+are that fresh databases are created directly in the current shape, existing ones
+advance through ordered migrations, and core invariants like leaf-only transaction
+categories and the built-in shared owner are re-established on startup.
 """
 
 import os
 import sqlite3
-import sys
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 
-try:
-    from app_logging import log_info
-except ModuleNotFoundError:
-    from backend.app_logging import log_info
+from backend.app_logging import log_info
 
 DB_PATH = os.getenv("DB_PATH", "fintrack.db")
 _current_db_path: ContextVar[str | None] = ContextVar("fintrack_current_db_path", default=None)
@@ -148,23 +88,8 @@ def get_db(db_path: str | None = None):
         conn.close()
 
 
-# ── Database versioning ───────────────────────────────────────────────────────
-#
-# HOW TO ADD A MIGRATION:
-#   1. Write a function that makes the change idempotently (use IF NOT EXISTS,
-#      try/except on ALTER TABLE, etc.)
-#   2. Update init_db() so fresh databases are created directly in the new
-#      schema shape instead of relying on the migration chain.
-#   3. Decorate the upgrade step with @migration(N) where N = CURRENT_VERSION + 1
-#   4. Bump CURRENT_VERSION to N
-#   5. Add/update the matching fixture creator(s) under backend/db/test_fixtures/:
-#      - a current-schema creator tagged to version N
-#      - any historical pre-migration creators still needed for upgrade tests
-#   6. On next startup, run_migrations() will detect the version mismatch and
-#      apply all pending migrations in order for existing databases only.
-#
-# Migrations run inside the same init_db() connection, so they can reference
-# any helper functions defined in this file.
+# Migrations are additive startup upgrades for existing databases only; fresh installs
+# are created directly at `CURRENT_VERSION` and should not replay the migration chain.
 
 CURRENT_VERSION = 1
 
@@ -172,7 +97,6 @@ MIGRATIONS = {}
 
 
 def migration(version):
-    """Decorator to register a migration function."""
     def decorator(fn):
         MIGRATIONS[version] = fn
         return fn
@@ -222,7 +146,6 @@ def get_db_instance_id(conn) -> str:
 
 
 def run_migrations(conn):
-    """Apply any pending migrations in order, updating the version after each."""
     current = get_db_version(conn)
     if current >= CURRENT_VERSION:
         return
@@ -234,21 +157,12 @@ def run_migrations(conn):
     log_info(f"[db] database is now at version {CURRENT_VERSION}")
 
 
-# ── Migrations ────────────────────────────────────────────────────────────────
-
 @migration(1)
 def m1_baseline(conn):
-    """Baseline schema version for the current direct-bootstrap database."""
     pass
 
 
-# ── Schema creation ───────────────────────────────────────────────────────────
-
 def init_db(db_path: str | None = None):
-    """
-    Create all tables and indexes if they don't exist, seed default data,
-    and run any pending migrations. Called once at application startup.
-    """
     resolved_path = _normalize_db_path(db_path)
     with get_db(resolved_path) as conn:
         existing_tables = {
@@ -284,7 +198,6 @@ def init_db(db_path: str | None = None):
                 owner_id            TEXT REFERENCES owner(id) ON DELETE SET NULL
             );
 
-            -- Keyword-based auto-categorization rules.
             -- keyword is matched as a case-insensitive substring of merchant_name or raw_name.
             -- Higher priority wins when multiple rules match.
             -- amount_min/amount_max allow the same payee to map to different categories
@@ -409,6 +322,8 @@ def init_db(db_path: str | None = None):
         _seed_default_categories(conn)
 
         if is_fresh_db:
+            # Fresh databases are stamped current immediately; the migration pipeline exists
+            # to upgrade historical files, not to bootstrap brand-new ones step by step.
             set_db_version(conn, CURRENT_VERSION)
             log_info(f"[db] created new database at schema version {CURRENT_VERSION}")
         else:
@@ -417,27 +332,11 @@ def init_db(db_path: str | None = None):
 
         rule_count = conn.execute("SELECT COUNT(*) FROM category_rule").fetchone()[0]
         if rule_count == 0:
-            try:
-                from services.categorizer import seed_default_rules
-            except ModuleNotFoundError:
-                backend_root = Path(__file__).resolve().parents[1]
-                repo_root = backend_root.parent
-                for path in (str(repo_root), str(backend_root)):
-                    if path not in sys.path:
-                        sys.path.insert(0, path)
-                from backend.services.categorizer import seed_default_rules
+            from backend.services.categorizer import seed_default_rules
             seed_default_rules(conn)
 
 
-# ── Category seed data ────────────────────────────────────────────────────────
-
 def _seed_default_categories(conn: sqlite3.Connection):
-    """
-    Insert the default group/category tree if it doesn't exist yet.
-    Uses upsert-by-name so re-running is safe (idempotent).
-    Groups and their children are defined here directly. Seeded categories now
-    use the schema default color unless a color is explicitly chosen elsewhere.
-    """
     import uuid
 
     def upsert_cat(name, parent_id=None, category_type=None, exclude_from_totals=0):
@@ -472,7 +371,6 @@ def _seed_default_categories(conn: sqlite3.Connection):
         )
         return new_id
 
-    # Top-level groups
     income_group  = upsert_cat("Income", category_type="income")
     finance       = upsert_cat("Finance", category_type="expense")
     food          = upsert_cat("Food & Drink", category_type="expense")
@@ -544,16 +442,7 @@ def _seed_default_categories(conn: sqlite3.Connection):
     upsert_cat("Other Income", income_group)
 
 
-# ── Helper functions called by migrations ─────────────────────────────────────
-
 def init_merchant_renames(conn: sqlite3.Connection):
-    """
-    Create merchant_rename table.
-    raw_pattern is matched as a case-insensitive substring of raw_name during sync.
-    When a match is found, merchant_name is set to clean_name before categorization runs.
-    This lets you fix garbled Plaid names (e.g. 'WHOLEFDS #1234 MKT' -> 'Whole Foods')
-    once and have the fix apply to all future transactions automatically.
-    """
     conn.execute("""
         CREATE TABLE IF NOT EXISTS merchant_rename (
             id          TEXT PRIMARY KEY,

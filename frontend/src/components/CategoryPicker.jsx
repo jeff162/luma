@@ -8,6 +8,11 @@ import { Badge, CategoryMarker } from './ui.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import TransientTextInput from './TransientTextInput.jsx'
 
+/*
+ * CategoryPicker is a hybrid search-and-create control: it preserves group context while searching,
+ * biases matches toward the currently selected group, and can branch directly into creating a missing
+ * category or group so recategorization never dead-ends on "no results".
+ */
 function renderHighlightedCategoryName(name, query) {
   if (!query) return name
 
@@ -271,6 +276,7 @@ export default function CategoryPicker({
     [leaves, matchingItems, trimmedQuery],
   )
   const displayGroups = useMemo(() => {
+    // Even in search mode, keep matches grouped under their parents so the user can judge context and create in the right place.
     if (!trimmedQuery) {
       return groups.map(group => ({
         group,
@@ -357,6 +363,7 @@ export default function CategoryPicker({
   }
 
   function closePicker({ restoreQuery = true, focusTarget = 'trigger' } = {}) {
+    // Half-typed searches are transient; closing without a pick should restore the last committed label/query.
     if (restoreQuery) {
       setQuery(querySnapshotRef.current)
     }
@@ -376,6 +383,7 @@ export default function CategoryPicker({
       return
     }
 
+    // The panel portals to document.body, so it has to measure against the viewport instead of any clipped parent container.
     const triggerRect = ref.current.getBoundingClientRect()
     const viewportPadding = 8
     const panelGap = 4

@@ -32,15 +32,10 @@ function getSectionStorageKey(instanceId, userId) {
   return instanceId && userId ? `${SECTION_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
 }
 
-// ---------------------------------------------------------------------------
-// Owner helpers — category groups and categories resolve ownership differently:
-//   group.owner_id = NULL     → shared when multiple personal owners exist,
-//                               otherwise the sole personal owner
-//   category.owner_id = NULL  → inherit the parent group's effective owner
-//   owner_id = <id>           → explicitly owned by that personal owner
-// Important: changing a group owner must not rewrite explicitly owned children.
-// Only children with owner_id = NULL should track future group-owner changes.
-// ---------------------------------------------------------------------------
+/*
+ * Ownership is intentionally tri-state: groups can resolve from "no explicit owner" to shared or sole-owner,
+ * while child categories only inherit when owner_id is null. Explicit child ownership must survive later group-owner changes.
+ */
 function isSharedOwner(owner) {
   return !!owner?.is_shared || (owner?.name || '').trim().toLowerCase() === 'shared'
 }
@@ -591,6 +586,10 @@ function ScrollFade({ top, bottom }) {
   )
 }
 
+/*
+ * The tree has two overlapping modes: single-focus selection drives the detail pane, while bulk move temporarily
+ * turns categories into an additive selection set. Keeping both selection shapes avoids rebuilding the page around one mode.
+ */
 export default function Categories() {
   const navigate = useNavigate()
   const { filters } = useFilters()
@@ -626,6 +625,8 @@ export default function Categories() {
     selectedRef.current = selected
   }, [selected])
 
+
+  // Tree-collapse state is scoped per db/profile so one user's workspace shape does not leak into another's, with localStorage as fallback only.
   useEffect(() => {
     let cancelled = false
     Promise.all([
@@ -679,6 +680,8 @@ export default function Categories() {
   useEffect(() => { loadCategories() }, [loadCategories])
   useEffect(() => { api.getOwners().then(setOwners) }, [])
   useEscapeAction(event => {
+     // Escape unwinds the most specific transient UI first so keyboard users can
+     // back out one layer at a time instead of losing the whole tree context at once.
     if (deleteDialog) {
       if (deleteSaving) return
       event.preventDefault()
@@ -862,6 +865,7 @@ export default function Categories() {
     )
   }
 
+  // Reordering is backend-first: every drag updates persisted sort_order immediately so reloads and other surfaces see the same tree order.
   async function moveGroup(dragged, sectionType, targetIndex = null) {
     const fromSection = normalizeCategoryType(dragged.categoryType)
     const targetIds = groupsBySection[sectionType].map(group => group.id).filter(id => id !== dragged.id)
@@ -888,6 +892,7 @@ export default function Categories() {
     await loadCategories(dragged.id)
   }
 
+  // Snapshot every affected parent before the move so undo can restore full sibling order, not just send categories back.
   async function moveChildrenBatch(childIds, targetParentId) {
     const orderedChildIds = visibleChildIds.filter(id => childIds.includes(id))
     if (!orderedChildIds.length) return

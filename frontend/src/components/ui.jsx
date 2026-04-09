@@ -3,7 +3,10 @@
 
 import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
 
-// Shared UI primitives
+/*
+ * These primitives carry the shared visual language for categories and lightweight actions. In particular,
+ * group-vs-leaf markers differ by shape as well as color so mixed lists stay scannable without relying on hue alone.
+ */
 
 export function CategoryMarker({ kind = 'category', size, style }) {
   const markerSize = size ?? (kind === 'group' ? 9 : 7)
@@ -180,8 +183,6 @@ export function EmptyState({ message }) {
 }
 
 export function GroupedSelect({ value, onChange, groups, extra = [], style }) {
-  // groups: [{ label, color, options: [{ value, label }] }]
-  // extra:  flat options appended after the groups (e.g. "+ New category...")
   return (
     <select
       value={value}

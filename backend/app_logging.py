@@ -1,6 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""
+Small logging shim used across the backend.
+
+It prefers the active Uvicorn logger when available so startup and request logs
+land in the same stream, but still falls back to plain stdout in contexts like
+scripts or tests where the app logger stack has not been configured yet.
+"""
+
 import logging
 
 

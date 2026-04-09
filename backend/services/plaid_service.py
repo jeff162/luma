@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Plaid API service.
-Handles link token creation, access token exchange, and transaction fetching.
+Boundary between Plaid's Python models and the app's plain-dict contracts.
+
+This service is intentionally thin, but it centralizes the normalization choices
+the database and routers rely on: stable field names, string dates, and full
+pagination before control returns to the caller.
 """
 
 import os
@@ -106,6 +109,8 @@ def fetch_transactions(
     offset   = 0
 
     while True:
+        # Plaid paginates transaction history; service callers expect a complete logical
+        # slice for the requested window, not a page cursor they have to manage.
         request = TransactionsGetRequest(
             access_token=access_token,
             start_date=start_date,
@@ -125,6 +130,8 @@ def fetch_transactions(
         result.append({
             "plaid_transaction_id": t["transaction_id"],
             "plaid_account_id":     t["account_id"],
+            # Keep Plaid's amount sign convention intact here; downstream categorization
+            # and reporting logic is written against that imported representation.
             "amount":               float(t["amount"]),
             "merchant_name":        t.get("merchant_name"),
             "raw_name":             t.get("name"),

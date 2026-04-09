@@ -2,27 +2,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-owners.py — Owner CRUD endpoints
+Owners model household attribution across accounts, categories, rules, and reports.
 
-Owners represent people (or the concept of "Shared") in a household.
-Accounts are assigned to an owner; transactions inherit that owner from
-their account. Category groups are tagged with an owner to indicate whose
-spending domain they belong to.
-
-DESIGN:
-- Owners are simple name + color records. No auth — this is a local app.
-- Deleting an owner NULLs out owner_id on related accounts, categories,
-  and transactions (via ON DELETE SET NULL foreign keys in the schema).
-- The /api/owners/summary endpoint returns per-owner spending totals for
-  the Dashboard split-by-owner view, respecting the same date/account
-  filters the rest of the app uses.
+This router maintains the special "Shared" semantics the UI depends on: it is a
+built-in bucket rather than a normal user record, and it is collapsed away again
+when the household no longer has enough personal owners to make shared ownership meaningful.
 """
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 import uuid
-from db.database import SHARED_OWNER_NAME, ensure_shared_owner, get_db, get_shared_owner_id
+from backend.db.database import SHARED_OWNER_NAME, ensure_shared_owner, get_db, get_shared_owner_id
 
 router = APIRouter()
 
@@ -98,6 +89,8 @@ def delete_owner(owner_id: str):
             (SHARED_OWNER_NAME,),
         ).fetchone()[0]
         if shared_owner_id and remaining_personal_owner_count <= 1:
+            # "Shared" only has meaning when more than one personal owner exists. Once
+            # the household collapses back to one person, shared assignments become noise.
             conn.execute("UPDATE account SET owner_id = NULL WHERE owner_id = ?", (shared_owner_id,))
             conn.execute("UPDATE txn SET owner_id = NULL WHERE owner_id = ?", (shared_owner_id,))
             conn.execute("UPDATE category SET owner_id = NULL WHERE owner_id = ?", (shared_owner_id,))
@@ -112,7 +105,8 @@ def owner_summary(
     month:       Optional[str] = None,
     account_ids: Optional[str] = None,
 ):
-    """Per-owner spending totals for the Dashboard split view."""
+    # The split view keeps unassigned spending visible as its own bucket instead of
+    # dropping those transactions from the totals once owner filtering is introduced.
     clauses = ["t.amount > 0", "t.is_pending = 0"]
     params  = []
 

@@ -41,6 +41,7 @@ function estimateGroupCardHeight(group, collapsed) {
 
 function buildGroupColumns(groups, collapsedGroups, availableHeight, measuredGroupHeights = {}) {
   if (!groups?.length) return []
+  // Balance the right pane into measured columns so large imports stay scannable without pushing drag targets far below the fold.
   const targetHeight = Math.max(320, availableHeight || 720)
   const columns = []
   let currentColumn = []
@@ -202,6 +203,7 @@ function sortSection(tree, sectionType) {
 }
 
 function sanitizeSnapshot(snapshot, sourceValues) {
+  // Drafts can outlive truncated previews or later source changes, so strip stale claims and return orphaned values to the inbox.
   const next = cloneCategoryImportSnapshot(snapshot)
   const validSourceValues = new Set((sourceValues || []).filter(Boolean))
   const claimed = new Set()
@@ -608,12 +610,18 @@ function GroupCard({
 }
 
 export default function CategoryImportWorkspace({ sourceValues, sourceMeta, existingCategories = [], initialDraftState, onDraftStateChange, onApply, onClose, onCategoriesChanged }) {
+  /*
+   * This workspace is a reversible staging area, not the live category tree. Every gesture mutates a sanitized
+   * draft snapshot with undo/redo while the left column tracks raw import values that can be grouped, parked in
+   * Set Aside, or returned to the inbox before anything is written on Apply.
+   */
   const computedInitialDraftState = useMemo(
     () => createCategoryImportDraftState(sourceValues, existingCategories),
     [existingCategories, sourceValues],
   )
   const [showPreviouslyImportedBadge] = useState(() => {
     const initialSnapshot = sanitizeSnapshot((initialDraftState || computedInitialDraftState).snapshot, sourceValues)
+    // Only show previously imported categories as muted context while unresolved source values remain to be sorted.
     return initialSnapshot.sourceOrder.length > 0
   })
   const hasPersistedLeftPanelWidth = initialDraftState?.leftPanelWidth != null
@@ -765,6 +773,7 @@ export default function CategoryImportWorkspace({ sourceValues, sourceMeta, exis
   }, [activeSection, bucketSelectionAnchor, leftPanelWidth, onDraftStateChange, redoStack, selectedBucketCategoryIds, selectionAnchor, snapshot, undoStack])
 
   function applySnapshotChange(mutator) {
+    // Funnel every structural edit through one path so undo/redo always captures a clean, source-aware snapshot.
     const next = cloneCategoryImportSnapshot(snapshot)
     mutator(next)
     setUndoStack(prev => [...prev, cloneCategoryImportSnapshot(snapshot)])
@@ -1346,6 +1355,7 @@ export default function CategoryImportWorkspace({ sourceValues, sourceMeta, exis
   const remainingCount = snapshot.sourceOrder.length
   const processedCount = Math.max(0, (sourceValues || []).filter(Boolean).length - remainingCount)
   const hasWorkToApply = useMemo(() => {
+    // Applying should be a no-op if the draft only mirrors categories that already exist live.
     const liveGroupsByKey = new Map(
       (existingCategories || [])
         .filter(category => !category?.parent_id)

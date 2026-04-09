@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// The settings flow uses a small shared policy vocabulary so setup, validation, and persistence can talk about the same choices.
 export const PASSWORD_POLICIES = [
   {
     value: 'none',

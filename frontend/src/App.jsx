@@ -124,6 +124,10 @@ function getLocalProfileStorageKey(dbInstanceId) {
   return dbInstanceId ? `${LOCAL_PROFILE_STORAGE_KEY_PREFIX}.${dbInstanceId}` : null
 }
 
+/*
+ * In local-access mode these profiles are not auth identities; they are named preference buckets so multiple
+ * people can share one install while keeping separate layout, filter, and startup-route state.
+ */
 function LocalPreferenceProfileScreen({
   profiles,
   onSelect,
@@ -430,6 +434,11 @@ export function refreshTaskBadge() {
 }
 
 export default function App() {
+  /*
+   * App boots through one of three gates before the main shell exists: runtime-config recovery, authenticated
+   * sign-in/bootstrap, or local preference-profile selection. After that, the active user/profile becomes the
+   * identity boundary for preference providers and startup-route persistence.
+   */
   const location = useLocation()
   const navigate = useNavigate()
   const [taskCount, setTaskCount] = useState(0)
@@ -459,6 +468,8 @@ export default function App() {
     const { forceFromRoot = false } = options
     try {
       if (profileId) setLocalPreferenceProfileId(profileId)
+      // The startup route is stored per active preference identity, so hydrate it before we start saving the
+      // current location; otherwise first load would immediately overwrite the remembered landing page with "/".
       const prefResp = await api.getUserPreferences().catch(() => ({ preferences: {} }))
       const startupRoute = String(prefResp?.preferences?.[STARTUP_ROUTE_PREFERENCE_KEY] || '').trim()
       const validStartupRoute = startupRoute && startupRoute.startsWith('/') ? startupRoute : ''
@@ -502,6 +513,8 @@ export default function App() {
           const storageKey = getLocalProfileStorageKey(status.db_instance_id || '')
           const rememberedId = storageKey ? window.localStorage.getItem(storageKey) : ''
           const remembered = profiles.find(profile => profile.id === rememberedId) || null
+          // Skip the picker when there is an unambiguous local profile so desktop startup lands directly in the
+          // last-used workspace instead of stopping on a purely preference-level choice.
           const autoSelected = remembered || (profiles.length === 1 ? profiles[0] : null)
           if (autoSelected) {
             setLocalPreferenceProfileId(autoSelected.id)
@@ -549,6 +562,8 @@ export default function App() {
     if (!startupRouteApplied) return
     if (authEnabled && !currentUser) return
     if (!authEnabled && !activeLocalProfile) return
+    // Do not persist the current route until the initial startup-route hydration finished; that would turn the
+    // bootstrap/login/profile-entry route into the new default landing page.
     const route = `${location.pathname}${location.search || ''}`
     api.saveUserPreference(STARTUP_ROUTE_PREFERENCE_KEY, route).catch(() => {})
   }, [
@@ -768,6 +783,7 @@ export default function App() {
 
   return (
     <AppErrorBoundary>
+      {/* Key the provider by the active preference identity so switching user/profile drops cached preference state instead of leaking it across sessions. */}
       <UserPreferencesProvider key={authEnabled ? `user:${currentUser?.id || currentUser?.username || ''}` : `local:${activeLocalProfile?.id || ''}`}>
         <FilterProvider>
         <style>{GLOBAL_SCROLLBAR_STYLES}</style>

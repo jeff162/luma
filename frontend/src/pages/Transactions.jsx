@@ -24,12 +24,6 @@ const NEW_CAT_COLORS = [
   '#14b8a6','#3b82f6','#a855f7','#ef4444','#64748b',
 ]
 
-// ── Column configuration ───────────────────────────────────────────────────────
-//
-// Each column has: key, label, defaultWidth (px), minWidth (px).
-// The user can reorder and resize. Config is persisted to localStorage.
-// "merchant" and "amount" are always present and cannot be removed.
-
 const COLUMN_DEFS = [
   { key: 'date',     label: 'Date',     defaultWidth: 100, minWidth: 70  },
   { key: 'merchant', label: 'Merchant', defaultWidth: 220, minWidth: 120 },
@@ -246,8 +240,6 @@ function RuleActionModal({ state, onClose, onSaved }) {
   )
 }
 
-// ── Transactions page ─────────────────────────────────────────────────────────
-
 export default function Transactions() {
   const { filters } = useFilters()
   const location = useLocation()
@@ -258,8 +250,8 @@ export default function Transactions() {
   const [initialLoading, setInitialLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [detailTxn, setDetailTxn]   = useState(null)
-  const [detailCategory, setDetailCategory] = useState(null)  // { id, name, color }
-  const [detailAccount, setDetailAccount]   = useState(null)  // { id, name, mask }
+  const [detailCategory, setDetailCategory] = useState(null)
+  const [detailAccount, setDetailAccount]   = useState(null)
   const [editId, setEditId]         = useState(null)
   const { menu, onContextMenu, close: closeMenu } = useContextMenu()
   const [noteTarget, setNoteTarget] = useState(null)
@@ -274,8 +266,6 @@ export default function Transactions() {
   const dragColKey = useRef(null)
   const resizeState = useRef(null)
 
-  // ── Column config (persisted) ──────────────────────────────────────────────
-
   const [cols, setCols] = useState(() => defaultColumnConfig())
 
   function handleColUpdate(newCols) {
@@ -285,8 +275,6 @@ export default function Transactions() {
   }
 
   const gridTemplate = buildGridTemplate(cols)
-
-  // ── Seed from ?uncategorized=1 ─────────────────────────────────────────────
 
   const [uncategorizedOnly, setUncategorizedOnly] = useState(
     () => new URLSearchParams(location.search).get('uncategorized') === '1'
@@ -349,6 +337,8 @@ export default function Transactions() {
       offset,
       pageSize,
     })
+    // Filter/search requests can resolve out of order; keep only the newest one so
+    // the grid never snaps back to stale results after fast typing or toggling.
     latestRequestKeyRef.current = requestKey
 
     if (append) setLoadingMore(true)
@@ -434,6 +424,8 @@ export default function Transactions() {
       setCategories(prev => [...prev, catObj])
     }
     setData(prev => {
+      // In "uncategorized only" mode, recategorizing a row should remove it from the
+      // list immediately instead of waiting for a refetch.
       if (uncategorizedOnly) {
         return {
           ...prev,
@@ -550,8 +542,6 @@ export default function Transactions() {
     event.clipboardData.setData('text/csv', csvText)
   }, [cols, data.transactions])
 
-  // ── Cell renderers keyed by column ────────────────────────────────────────
-
   function renderCell(col, txn) {
     switch (col.key) {
       case 'date':
@@ -651,8 +641,6 @@ export default function Transactions() {
     })
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────
-
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
@@ -707,7 +695,6 @@ export default function Transactions() {
         </div>
 
         <Card style={{ padding: 0, overflow: 'hidden', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          {/* Header row */}
           <div style={{
             display: 'grid',
             gridTemplateColumns: gridTemplate,
@@ -794,7 +781,6 @@ export default function Transactions() {
                       style={{
                         overflow: 'hidden',
                         minWidth: 0,
-                        // amount column needs no overflow constraint (it's a number)
                         ...(col.key === 'amount' ? {} : { textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
                       }}
                     >
@@ -816,7 +802,6 @@ export default function Transactions() {
           </div>
         </Card>
 
-        {/* Context menu */}
         {menu && (
           <ContextMenu
             menu={menu}
@@ -834,7 +819,6 @@ export default function Transactions() {
           />
         )}
 
-        {/* Note editor */}
         {noteTarget && (
           <div style={{
             position: 'fixed', inset: 0, zIndex: 400,
@@ -855,7 +839,6 @@ export default function Transactions() {
           </div>
         )}
 
-        {/* Merchant detail panel */}
         {detailTxn && (
           <TransactionDetail
             txn={detailTxn}
@@ -864,7 +847,6 @@ export default function Transactions() {
           />
         )}
 
-        {/* Category detail panel */}
         {detailCategory && (
           <CategoryDetail
             category={detailCategory}
@@ -873,7 +855,6 @@ export default function Transactions() {
           />
         )}
 
-        {/* Account detail panel */}
         {detailAccount && (
           <AccountDetail
             account={detailAccount}

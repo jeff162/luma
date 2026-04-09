@@ -1,25 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""
-tasks.py — Live task/action-item computation
-
-Tasks are computed fresh from the database on every request — no storage needed.
-They self-resolve automatically as the user completes the work.
-
-Current tasks:
-  unowned_accounts   — accounts with owner_id IS NULL when at least one owner
-                       exists. Links to Accounts.
-  uncategorized_txns — non-pending transactions with no category. Links to Transactions
-                       with the __uncategorized__ filter active.
-
-Adding a new task type:
-  Add a query to get_tasks() and append a dict to the result list.
-  The frontend Tasks page and Dashboard card render whatever the API returns.
-"""
-
 from fastapi import APIRouter
-from db.database import get_db
+from backend.db.database import get_db
 
 router = APIRouter()
 
@@ -29,11 +12,6 @@ SEVERITY_INFO    = "info"
 
 @router.get("")
 def get_tasks():
-    """
-    Return a list of open action items, computed live from the database.
-    Each task has: id, title, description, count, link, severity.
-    Only tasks with count > 0 are returned.
-    """
     tasks = []
 
     with get_db() as conn:
@@ -42,6 +20,8 @@ def get_tasks():
         """).fetchone()["n"]
 
         if owner_count > 0:
+            # Owner-related tasks stay hidden until the household actually uses owner
+            # tracking, so a fresh single-user install does not start with noisy warnings.
             unowned = conn.execute("""
                 SELECT COUNT(*) AS n FROM account WHERE owner_id IS NULL
             """).fetchone()["n"]
@@ -58,7 +38,8 @@ def get_tasks():
                     "severity":    SEVERITY_WARNING,
                 })
 
-        # ── Uncategorized transactions ────────────────────────────────────────
+        # Pending transactions are intentionally excluded because the rest of the product
+        # also keeps them out of reporting and categorization chores until they settle.
         uncategorized = conn.execute("""
             SELECT COUNT(*) AS n
             FROM   txn

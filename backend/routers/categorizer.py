@@ -2,61 +2,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-categorizer.py — Auto-categorization engine
+Keyword-based categorization helper.
 
-HOW CATEGORIZATION WORKS:
-  1. During sync, each new transaction's merchant_name + raw_name are concatenated
-     and matched (case-insensitive substring) against every rule in category_rule,
-     ordered by priority DESC.
-  2. The first rule that matches (keyword found AND amount within range) wins.
-  3. Transactions with category_overridden=1 are never auto-categorized — the
-     user's manual assignment is preserved.
-
-MERCHANT RENAME INTERACTION:
-  Rename rules (merchant_rename table) are applied BEFORE categorization during
-  sync. This means a cleaned merchant name flows into the keyword matching.
-  Example: raw_name="WHOLEFDS #1234 MKT" → rename rule → merchant_name="Whole Foods"
-           → rule keyword "whole foods" matches correctly.
-
-RULE PRIORITY:
-  Higher numbers win. Use 10 for specific well-known merchants, 7-8 for
-  category-level patterns, 4-5 for generic fallbacks. This lets you add
-  "starbucks" at priority 9 to beat a generic "cafe" rule at priority 4.
-
-AMOUNT FILTERS:
-  Rules can optionally specify amount_min and/or amount_max (in dollars, positive).
-  This allows routing the same payee to different categories based on amount —
-  e.g. small Costco charges → "Dining Out", large charges → "Shopping".
-
-recategorize_all():
-  Re-runs rules over all non-overridden transactions. Called from the
-  /sync/recategorize endpoint when the user updates rules and wants them
-  applied retroactively.
-"""
-
-"""
-categorizer.py — Keyword-based auto-categorization engine.
-
-DESIGN PRINCIPLES:
-- Rules are matched by case-insensitive substring against a combined text of
-  merchant_name and raw_name. Higher priority wins when multiple rules match.
-- amount_min/amount_max allow the same keyword to map to different categories
-  depending on transaction size (e.g. Costco small = Groceries, large = Shopping).
-- categorize_transaction() returns a single category_id or None. It does NOT
-  modify the database — callers (sync.py and the /recategorize endpoint) handle writes.
-- category_overridden=1 transactions are skipped by recategorize_all(). Manual
-  user overrides are always preserved across re-categorization runs.
-- seed_default_rules() is called once at startup when the category_rule table is
-  empty. To change seed rules: modify this function and delete the existing rules,
-  or write a migration that updates specific rules by keyword.
+The important guarantee is deterministic rule precedence: the same transaction
+text, owner, and amount should resolve to the same category whenever this file's
+matching logic is used for previews, imports, or retroactive reclassification.
 """
 
 import sqlite3
-from db.database import get_db
+from backend.db.database import get_db
 
 
 def _amount_matches(amount: float, amount_min, amount_max) -> bool:
-    """Return True if amount satisfies the rule's amount constraints."""
     if amount_min is not None and amount < amount_min:
         return False
     if amount_max is not None and amount > amount_max:
@@ -95,22 +52,20 @@ def categorize_transaction(
     if not text:
         return None
 
+    # Any endpoint that previews "which rule wins" has to mirror this ordering exactly;
+    # specificity here is the categorization contract, not just a query optimization.
     rules = conn.execute(
         """SELECT category_id, keyword, amount_min, amount_max, owner_id, clean_name
            FROM   category_rule
            ORDER BY
-               -- Owner-specific rules first
                CASE WHEN owner_id IS NOT NULL THEN 1 ELSE 0 END DESC,
-               -- Longer keywords are more specific
                LENGTH(keyword) DESC,
-               -- More conditions = more specific (each non-null condition adds 1)
                (CASE WHEN amount_min IS NOT NULL THEN 1 ELSE 0 END +
                 CASE WHEN amount_max IS NOT NULL THEN 1 ELSE 0 END +
                 CASE WHEN owner_id   IS NOT NULL THEN 1 ELSE 0 END) DESC"""
     ).fetchall()
 
     for rule in rules:
-        # Skip owner-scoped rules that don't match this transaction's owner
         if rule["owner_id"] is not None and rule["owner_id"] != owner_id:
             continue
         if rule["keyword"].lower() not in text:
@@ -126,10 +81,6 @@ def categorize_transaction(
 
 
 def recategorize_all(conn: sqlite3.Connection) -> int:
-    """
-    Re-run the rules engine over every transaction that hasn't been
-    manually overridden. Returns the number of transactions updated.
-    """
     txns = conn.execute(
         """SELECT id, merchant_name, raw_name, amount, owner_id
            FROM   txn
@@ -149,7 +100,6 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
                WHERE id = ?""",
             (cat_id, txn["id"]),
         )
-        # Apply clean_name rename if the rule specifies one and the name differs
         if clean_name and clean_name != txn["merchant_name"]:
             conn.execute(
                 "UPDATE txn SET merchant_name = ? WHERE id = ?",
@@ -161,7 +111,6 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
 
 
 def seed_default_rules(conn: sqlite3.Connection):
-    """Insert a sensible starter set of keyword rules."""
     import uuid
 
     def cat_id(name: str) -> str | None:

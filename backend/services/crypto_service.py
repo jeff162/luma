@@ -1,6 +1,15 @@
 # SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""
+Privacy mode uses envelope encryption:
+- a per-user data key protects Plaid tokens
+- the app master key only wraps that per-user key
+
+That split lets the app re-encrypt stored tokens when privacy mode changes
+without changing the external Plaid item ids the rest of the system keys on.
+"""
+
 import base64
 import hashlib
 import json
@@ -8,7 +17,7 @@ import os
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from db.control_database import get_user_secret_material, update_user_secret_material
+from backend.db.control_database import get_user_secret_material, update_user_secret_material
 
 
 def _b64e(data: bytes) -> str:
@@ -35,6 +44,8 @@ def _master_key() -> bytes:
 
 
 def _aad(*parts) -> bytes:
+    # Bind ciphertext to the user/item context it was created for so a copied blob
+    # cannot be replayed under a different row and still decrypt successfully.
     return "|".join("" if part is None else str(part) for part in parts).encode("utf-8")
 
 
@@ -54,6 +65,8 @@ def privacy_mode_enabled(user: dict | None) -> bool:
 
 
 def _ensure_server_managed_user_key(user: dict) -> bytes:
+    # The per-user key is created lazily so privacy mode can be enabled on an existing
+    # install without a migration or pre-provisioning step.
     material = get_user_secret_material(user["id"])
     wrapped = material.get("wrapped_user_key")
     if wrapped:
@@ -70,6 +83,8 @@ def _ensure_server_managed_user_key(user: dict) -> bytes:
 
 
 def encrypt_plaid_access_token(user: dict, item_id: str, access_token: str) -> tuple[str, str | None]:
+    # Privacy mode preserves the old schema contract by leaving plaintext populated only
+    # when privacy is off; callers do not need separate storage paths.
     if not privacy_mode_enabled(user):
         return access_token, None
     dek = _ensure_server_managed_user_key(user)
@@ -87,6 +102,8 @@ def decrypt_plaid_access_token(user: dict, item_id: str, access_token: str | Non
 def reencrypt_plaid_items(conn, user: dict, enable_privacy: bool):
     rows = conn.execute("SELECT item_id, access_token, access_token_enc FROM plaid_item").fetchall()
     if enable_privacy:
+        # Turning privacy on upgrades rows in place so the rest of the app can keep
+        # reading from plaid_item without coordinating a second migration step.
         for row in rows:
             if row["access_token_enc"]:
                 continue
@@ -99,6 +116,8 @@ def reencrypt_plaid_items(conn, user: dict, enable_privacy: bool):
                 (access_token, access_token_enc, row["item_id"]),
             )
     else:
+        # Turning privacy off restores plaintext tokens for environments that choose
+        # compatibility over at-rest secrecy, again without changing item identity.
         for row in rows:
             if not row["access_token_enc"]:
                 continue

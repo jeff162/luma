@@ -1,20 +1,24 @@
-# ── Environment & secrets ─────────────────────────────────────────────────────
+# ── Working storage ──────────────────────────────────────────────────────────
+# Local storage for files not to be commited (eg. db backups, private
+# keys, test scripts). Not created by the system.
+data/
+
+# ── Environment & secrets ────────────────────────────────────────────────────
 .env
 *.env.local
 
-# ── Databases ─────────────────────────────────────────────────────────────────
+# ── Databases ────────────────────────────────────────────────────────────────
 # Your personal financial data — never commit these
 *.db
 *.db-shm
 *.db-wal
 *.db-journal
-data/
 
-# ── Database Backups ──────────────────────────────────────────────────────────
+# ── Database Backups ─────────────────────────────────────────────────────────
 # Your personal financial data — never commit these
 fintrack_backup.json
 
-# ── Python ────────────────────────────────────────────────────────────────────
+# ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
@@ -29,17 +33,17 @@ build/
 .ruff_cache/
 .mypy_cache/
 
-# ── Node / Frontend ───────────────────────────────────────────────────────────
+# ── Node / Frontend ──────────────────────────────────────────────────────────
 node_modules/
 frontend/dist/
 frontend/.vite/
 
-# ── OS ────────────────────────────────────────────────────────────────────────
+# ── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# ── Editors ───────────────────────────────────────────────────────────────────
+# ── Editors ──────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
@@ -49,6 +53,6 @@ desktop.ini
 *.log
 logs/
 
-# ── Source zip files ──────────────────────────────────────────────────────────
+# ── project zip files from make_dist ─────────────────────────────────────────
 fintrack-dist-*.zip
 

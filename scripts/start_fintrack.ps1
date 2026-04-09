@@ -133,7 +133,8 @@ $backendArgs = @(
 if ($useLogFiles) {
   $backendArgs += @('-LogPath', $backendLog)
 }
-Start-Process -FilePath $powerShellExe -ArgumentList $backendArgs
+
+wt.exe -w 0 new-tab --title "FinTrack Backend" $powerShellExe @backendArgs
 
 Write-Host "Waiting for backend to respond on $backendHealthUrl ..."
 if (Wait-BackendReady -Url $backendHealthUrl -TimeoutSeconds $backendReadyTimeout) {
@@ -151,7 +152,10 @@ $frontendArgs = @(
 if ($useLogFiles) {
   $frontendArgs += @('-LogPath', $frontendLog)
 }
-Start-Process -FilePath $powerShellExe -ArgumentList $frontendArgs
+
+#note, title won't stick for frontend window because after npm run
+#dev Vite will change it to ...\system32\cmd
+wt.exe -w 0 new-tab --title "FinTrack Frontend" $powerShellExe @frontendArgs
 
 Write-Host ""
 Write-Host "FinTrack launch requested."

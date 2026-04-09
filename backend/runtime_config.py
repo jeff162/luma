@@ -1,6 +1,15 @@
 # SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""
+Runtime environment setup and validation.
+
+This module backs the frontend's first-run setup flow by treating `.env` as part
+of the application's persisted state: it can generate safe defaults, detect when
+a restart is still required, and separate bootstrap-critical secrets from ordinary
+environment settings like Plaid credentials.
+"""
+
 import os
 import secrets
 import shutil
@@ -58,6 +67,8 @@ def runtime_config_status() -> dict:
     env_exists = env_path.exists()
     env_values = dotenv_values(str(env_path)) if env_exists else {}
     env_secret = (env_values.get("SESSION_SECRET") or "").strip()
+    # The backend can already see a valid secret written to `.env` while still running
+    # with the old placeholder in memory, which is why setup needs an explicit restart state.
     pending_restart = _invalid_session_secret(configured_secret) and not _invalid_session_secret(env_secret)
 
     if _invalid_session_secret(configured_secret):
@@ -94,6 +105,8 @@ def write_runtime_env(
 ) -> dict:
     env_path = env_file_path()
     if not env_path.exists():
+        # First-run setup prefers copying the example file so any non-secret defaults and
+        # documentation comments survive instead of starting from an empty `.env`.
         example_path = env_example_path()
         if example_path.exists():
             shutil.copyfile(example_path, env_path)

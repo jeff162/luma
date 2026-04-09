@@ -1,18 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/**
- * AccountDetail — Account spending history panel
- *
- * Opens as a bottom sheet (same drag-to-float behaviour as TransactionDetail).
- * Shows a monthly bar chart of all spending on the account, then a transaction
- * list for whichever month is selected.
- *
- * Props:
- *   account  — { id, name, mask }  (derived from the txn row)
- *   onClose  — () => void
- */
-
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
 import { formatCurrency, formatDate, monthLabel } from '../lib/utils.js'
@@ -29,9 +17,12 @@ import {
   usePagedMonthTransactions,
 } from './detailShared.jsx'
 
-// ── Main component ────────────────────────────────────────────────────────────
-
 export default function AccountDetail({ account, categories = [], onClose }) {
+  /*
+   * This panel is mostly a thin account-specific wrapper around the shared detail-sheet chrome:
+   * the chart picks the month, and the month list stays locally editable so inline category changes
+   * feel immediate without disturbing the selected slice of history.
+   */
   const { filters } = useFilters()
   const dateStart = filters.date?.start || null
   const dateEnd   = filters.date?.end   || null
@@ -74,12 +65,6 @@ export default function AccountDetail({ account, categories = [], onClose }) {
     api.overrideCategory(txnId, catId)
   }
 
-  // ── Load trend ────────────────────────────────────────────────────────────
-  // Uses getMonthlyByGroup with account_id to get per-month totals for this account.
-  // We want a flat month→total series regardless of group, so we sum across groups
-  // client-side. If getMonthlyByGroup doesn't support account_id filtering that
-  // way, fall back to getTransactions grouped by month manually.
-
   useEffect(() => {
     setTrendLoading(true)
     api.getMonthlyTrend(60, undefined, String(account.id), dateStart, dateEnd).then(rows => {
@@ -103,8 +88,6 @@ export default function AccountDetail({ account, categories = [], onClose }) {
     </>
   )
 
-  // ── Render ────────────────────────────────────────────────────────────────
-
   return (
     <DetailPanelShell
       pos={pos}
@@ -126,7 +109,6 @@ export default function AccountDetail({ account, categories = [], onClose }) {
             <DetailTrendChart trend={trend} selectedMonth={selectedMonth} onSelectMonth={setSelectedMonth} />
           )}
 
-          {/* Month transaction list */}
           {selectedMonth && (
             <div style={{ marginTop: 24, height: monthSectionHeight }}>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>

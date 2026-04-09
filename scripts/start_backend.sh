@@ -169,8 +169,8 @@ if port_in_use "$BACKEND_PORT"; then
   exit 1
 fi
 
-cd "$BACKEND_DIR"
+cd "$ROOT_DIR"
 echo "Checking/installing backend dependencies. This can take a minute on first run..."
-"$VENV_PYTHON" -m pip install -r requirements.txt
+"$VENV_PYTHON" -m pip install -r backend/requirements.txt
 echo "Starting backend on port $BACKEND_PORT"
-exec "$VENV_PYTHON" -m uvicorn main:app --reload --reload-exclude "db/test_fixtures" --host 0.0.0.0 --port "$BACKEND_PORT"
+exec "$VENV_PYTHON" -m uvicorn backend.main:app --reload --reload-dir backend --reload-exclude "backend/db/test_fixtures" --host 0.0.0.0 --port "$BACKEND_PORT"

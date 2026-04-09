@@ -1,11 +1,19 @@
 # SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""
+Account records anchor ownership and import behavior across the app.
+
+This router keeps account edits aligned with transaction history by treating the
+account owner as the default owner for imported rows, while only auto-assigning
+an owner when the household model makes that choice unambiguous.
+"""
+
 import uuid
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from db.database import SHARED_OWNER_NAME, get_db
+from backend.db.database import SHARED_OWNER_NAME, get_db
 
 router = APIRouter()
 
@@ -23,6 +31,9 @@ class AccountUpdate(BaseModel):
 
 
 def resolve_default_owner_id(conn, owner_id: Optional[str]) -> Optional[str]:
+    # New accounts only inherit an owner automatically when the choice is unambiguous.
+    # Once a household has multiple personal owners, leaving the account unassigned is
+    # safer than guessing and backfilling the wrong owner across imported history.
     explicit_owner_id = owner_id.strip() if owner_id else None
     if explicit_owner_id:
         owner = conn.execute("SELECT id FROM owner WHERE id = ?", (explicit_owner_id,)).fetchone()
@@ -109,7 +120,8 @@ def update_account(account_id: str, body: AccountUpdate):
                 "UPDATE account SET owner_id = ? WHERE id = ?",
                 (owner_val, account_id),
             )
-            # Propagate owner to all transactions on this account
+            # Account ownership is the default source of truth for imported rows, so
+            # historical transactions stay aligned when the account owner changes.
             conn.execute(
                 "UPDATE txn SET owner_id = ? WHERE account_id = ?",
                 (owner_val, account_id),

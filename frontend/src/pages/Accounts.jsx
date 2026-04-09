@@ -25,6 +25,7 @@ function accountTypeIcon(type) {
   return map[type] || '🏦'
 }
 
+// "Shared" only becomes an assignable owner when there are multiple personal owners; otherwise it would just duplicate the sole-owner default.
 function isSharedOwner(owner) {
   return !!owner?.is_shared || (owner?.name || '').trim().toLowerCase() === 'shared'
 }
@@ -1161,6 +1162,10 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
 }
 
 export default function Accounts() {
+  /*
+   * This page treats the account list as the primary workspace and keeps the lower detail/owners surfaces
+   * derived from the same loaded snapshot so inline edits stay coherent without each card refetching separately.
+   */
   const [accounts, setAccounts] = useState([])
   const [owners, setOwners] = useState([])
   const [categories, setCategories] = useState([])
@@ -1230,6 +1235,7 @@ export default function Accounts() {
     }
   }, [])
 
+  // Owner-panel collapse state is profile-scoped UI state, so hydration finishes before writes start and localStorage only acts as a fast fallback.
   useEffect(() => {
     if (!ownersPanelStateLoaded) return
     const storageKey = dbInstanceId && userId
@@ -1250,6 +1256,8 @@ export default function Accounts() {
     const observer = new ResizeObserver(entries => {
       const entry = entries[0]
       if (!entry) return
+      // Mirror the table width into the lower cards so the page still reads as one
+      // anchored column even when account rows reflow or the create row appears.
       setAccountsPanelWidth(Math.round(entry.contentRect.width))
     })
     observer.observe(accountsPanelRef.current)
@@ -1259,6 +1267,8 @@ export default function Accounts() {
   const connectBank = async () => {
     try {
       const { link_token } = await api.getLinkToken()
+      // Load Plaid only on demand so normal account-page visits do not pull in a
+      // third-party banking script unless the user actually starts a connection flow.
       const script = document.createElement('script')
       script.src = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js'
       document.head.appendChild(script)

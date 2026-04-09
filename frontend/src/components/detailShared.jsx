@@ -1,35 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/**
- * detailShared.jsx — Shared detail-panel shell, chart, and paging helpers
- *
- * WHY THIS FILE EXISTS:
- * The payee, category, and account detail panels all evolved toward the same
- * structure:
- * - a draggable panel shell that can start docked and then float
- * - a monthly bar chart with a sliding 18-month window
- * - a month-scoped transaction list that lazy-loads additional rows on scroll
- *
- * Keeping those behaviors in one place prevents the three detail panels from
- * drifting apart when we tune the UX. Panel-specific files are responsible for
- * their own headers, row columns, and API queries; this file owns the shared
- * mechanics and layout rules.
- *
- * POSITIONING MODEL:
- * - `pos === null` means "docked" mode: the panel opens in the default centered
- *   bottom-sheet position.
- * - `pos = { x, y }` means "floating" mode: the panel is positioned with
- *   `position: fixed` and can be dragged freely.
- * - The remembered floating position is stored as a bottom-left anchor rather
- *   than top-left so the panel reopens in roughly the same place even when its
- *   height changes due to different data.
- *
- * SIZING MODEL:
- * The month-detail section is sized from the busiest visible month in the trend
- * data, capped at the point where the transaction list becomes internally
- * scrollable. This keeps the panel steady when switching months while avoiding
- * unnecessary empty space for smaller datasets.
+/*
+ * Account, category, and transaction detail drawers all share the same interaction model here:
+ * open docked, optionally become a remembered floating panel, show a windowed month chart, and lazy-load
+ * the selected month's transactions. The leaf components only swap in their own header and query logic.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -400,6 +375,7 @@ export function DetailTrendChart({ trend, selectedMonth, onSelectMonth }) {
   const [windowEnd, setWindowEnd] = useState(null)
 
   useEffect(() => {
+    // Fresh trend data should reopen on its newest segment rather than staying stranded in an old scrolled window.
     setWindowEnd(null)
   }, [trend])
 
@@ -510,7 +486,6 @@ export function DetailTrendChart({ trend, selectedMonth, onSelectMonth }) {
             pointerEvents: 'none',
           }}
         >
-          {/* Draw year-change markers between month columns, not through bars. */}
           {visible.map((entry, index) => (
             <div
               key={`${entry.month}-divider`}

@@ -7,6 +7,10 @@ import { api } from '../lib/api.js'
 const WAITING_STORAGE_KEY = 'fintrack.runtimeConfigWaitingForRestart'
 const WAITING_STORAGE_TTL_MS = 5 * 60 * 1000
 
+/*
+ * Saving runtime secrets can knock the backend offline before the browser hears back, so this screen remembers
+ * "waiting for restart" in sessionStorage and keeps polling until the same tab sees the backend come back.
+ */
 function readWaitingState() {
   try {
     const raw = window.sessionStorage.getItem(WAITING_STORAGE_KEY)

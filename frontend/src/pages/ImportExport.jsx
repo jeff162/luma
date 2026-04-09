@@ -1,22 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/**
- * ImportExport.jsx — CSV import/export and backup/restore
- *
- * IMPORT FLOW:
- *   1. Drop/click to upload CSV → raw file preview shown immediately.
- *   2. Server returns headers, 10 sample rows, all distinct column values,
- *      detected profile, previous batch info + account history, config snapshot.
- *   3. User maps columns (pre-filled from profile or config snapshot).
- *   4. Exact-file warning shown if the same CSV was previously imported.
- *   5. Multi-account CSVs: each CSV account value maps to a FinTrack account,
- *      new account, or skip. Skip checkbox excludes all rows for that value.
- *   6. Preview table updates live as columns are mapped.
- *   7. Import → batch record with config_snapshot + per-account counts.
- *   8. Recent imports list with per-account breakdown and undo.
- */
-
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
@@ -790,17 +774,10 @@ function ColSelect({
   )
 }
 
-// ── Raw file preview — draggable floating panel ──────────────────────────────
-// Opens fixed-position so the mapping form below stays usable.
-// Drag the header bar to reposition. Shows header + 4 data rows prominently,
-// rest dimmed. Scrollable if you need to see more.
-
-// ── Raw file preview — draggable + resizable floating panel ──────────────────
-
 function RawFilePreview({ rawLines, headerRowIndex, onClose, lineNumberOffset = 0, title = 'Raw file', note = null }) {
   const [pos,  setPos]  = useState({ x: Math.max(0, window.innerWidth - 560), y: 80 })
   const [size, setSize] = useState({ w: 520, h: 320 })
-  const [dragState, setDragState] = useState(null) // null | 'move' | 'resize'
+  const [dragState, setDragState] = useState(null)
   const startRef = useRef({})
 
   useEffect(() => {
@@ -850,7 +827,6 @@ function RawFilePreview({ rawLines, headerRowIndex, onClose, lineNumberOffset = 
       display: 'flex', flexDirection: 'column',
       userSelect: dragState ? 'none' : 'auto',
     }}>
-      {/* Drag handle / title bar */}
       <div onMouseDown={startMove} style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '8px 12px', cursor: 'grab',
@@ -871,7 +847,6 @@ function RawFilePreview({ rawLines, headerRowIndex, onClose, lineNumberOffset = 
         >×</button>
       </div>
 
-      {/* Scrollable content */}
       {note && (
         <div style={{
           padding: '8px 12px',
@@ -909,7 +884,6 @@ function RawFilePreview({ rawLines, headerRowIndex, onClose, lineNumberOffset = 
         })}
       </div>
 
-      {/* Resize handle — bottom-right corner */}
       <div
         onMouseDown={startResize}
         style={{
@@ -924,7 +898,6 @@ function RawFilePreview({ rawLines, headerRowIndex, onClose, lineNumberOffset = 
   )
 }
 
-// ── AccountHandlingPicker ─────────────────────────────────────────────────────
 // Custom dropdown that shows different text when closed vs open:
 //   Closed (column mode):  "↔ Column  AccountName"
 //   Closed (account mode): "AccountName ···mask"
@@ -942,7 +915,6 @@ function AccountHandlingPicker({ headers, allHeaders = headers, accounts, colAcc
     placementDeps: [headers.length, allHeaders.length],
   })
 
-  // Compute the closed display label
   const selectedAccount = accounts.find(a => a.id === accountId)
   let closedLabel = <span style={{ color: 'var(--muted)' }}>— Select account or column —</span>
   if (colAccount) {
@@ -1043,7 +1015,6 @@ function AccountHandlingPicker({ headers, allHeaders = headers, accounts, colAcc
 
         {open && (
           <div ref={listRef} style={listStyle}>
-            {/* Clear option */}
             <div
               style={itemStyle(!colAccount && !accountId && !singleAccountNew?.enabled)}
               onMouseDown={e => { e.preventDefault(); onChange({ acct: '', createNew: false }); setOpen(false) }}
@@ -1051,7 +1022,6 @@ function AccountHandlingPicker({ headers, allHeaders = headers, accounts, colAcc
               <span style={{ color: 'var(--muted)' }}>— Select account or column —</span>
             </div>
 
-            {/* Column options */}
             {allHeaders.length > 0 && (
               <>
                 <div style={groupLabel}>Map rows from a column in the file</div>
@@ -1081,7 +1051,6 @@ function AccountHandlingPicker({ headers, allHeaders = headers, accounts, colAcc
               </>
             )}
 
-            {/* Account options */}
             <>
               <div style={{ ...groupLabel, borderTop: '1px solid var(--border)' }}>Assign all rows to one account</div>
               {accounts.map(a => (
@@ -1110,8 +1079,7 @@ function AccountHandlingPicker({ headers, allHeaders = headers, accounts, colAcc
   )
 }
 
-// ── Error boundary — catches render crashes so the whole page doesn't go black ─
-
+// Keep the import UI recoverable if a preview or mapping render crashes.
 class ImportErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { error: null } }
   static getDerivedStateFromError(e) { return { error: e } }
@@ -1198,12 +1166,9 @@ function ImportTab() {
   const [sourceWorkspaceProfileId, setSourceWorkspaceProfileId] = useState('')
   const [sourceWorkspaceBatchId, setSourceWorkspaceBatchId] = useState('')
   const [sourceWorkspaceDraft, setSourceWorkspaceDraft] = useState(null)
-  // Source values for the batch workspace are captured once when the workspace
-  // opens and held stable for its lifetime. They must NOT be derived from
-  // sourceWorkspaceDraft on each render — that would recompute on every
-  // onDraftStateChange call, producing a new array reference that triggers
-  // the sanitizeSnapshot useEffect inside CategoryImportWorkspace on every
-  // render, causing an infinite setState loop.
+  // Snapshot the source values when the workspace opens and keep them stable.
+  // Recomputing them from the live draft would churn the array identity and
+  // retrigger CategoryImportWorkspace sanitization on every draft update.
   const [sourceWorkspaceSourceValues, setSourceWorkspaceSourceValues] = useState([])
   const [showCategoryImportHelp, setShowCategoryImportHelp] = useState(false)
   const [importCategoryDraft, setImportCategoryDraft] = useState(null)
@@ -1254,9 +1219,6 @@ function ImportTab() {
     () => summarizeCategoryWorkspaceDraft(sourceWorkspaceDraft || clonePersistedCategoryWorkspaceDraft(activeSourceWorkspaceProfile?.column_map?.category_workspace_draft)),
     [activeSourceWorkspaceProfile, sourceWorkspaceDraft],
   )
-
-  // Stable source values for the batch-backed workspace are captured in
-  // sourceWorkspaceSourceValues state (set once when the workspace opens).
 
   function selectUploadSource(nextSourceId, options = {}) {
     const { persist = true } = options
@@ -1353,6 +1315,8 @@ function ImportTab() {
     const olderManualBatches = manualBatches.slice(1)
 
     if (manualDraftRecord || latestManualBatch) {
+      // Keep the newest profileless import surfaced as the active temporary draft;
+      // older profileless batches move to "unknown source" so save-as-profile targets stay unambiguous.
       savedSourceRows.push({
         key: 'manual-draft',
         kind: 'manual',
@@ -1558,7 +1522,6 @@ function ImportTab() {
       const next = { ...prev }
       for (const val of distinctAccountValues) {
         if (!(val in next)) {
-          // Check if an existing account name matches this CSV value (case-insensitive)
           const match = accounts.find(a => a.name.toLowerCase() === val.toLowerCase())
           next[val] = {
             accountId:  match ? match.id : '',
@@ -1647,11 +1610,12 @@ function ImportTab() {
         } else if (colAmount) {
           const cell = row[colAmount]
           rawAmountStr = String(cell ?? '')
-          // Handle formats: $1,234.56 / (1234.56) / -1234.56 / 1234.56 CR
+          // Accept the statement formats we actually see from banks so preview totals
+          // and validation stay stable before import.
           const cleaned = rawAmountStr
             .replace(/[$,\s]/g, '')
-            .replace(/\(([0-9.]+)\)/, '-$1')  // (50.00) → -50.00
-            .replace(/\s*CR$/i, '')            // trailing CR = credit (positive stored as negative)
+            .replace(/\(([0-9.]+)\)/, '-$1')
+            .replace(/\s*CR$/i, '')
           const val = parseFloat(cleaned)
           if (!isNaN(val)) amount = -val
         }
@@ -1808,10 +1772,9 @@ function ImportTab() {
       ? { enabled: true, name: cm.single_account_new.name || '', type: cm.single_account_new.type || 'depository' }
       : { enabled: false, name: '', type: 'depository' })
     const newColAccount = cm.account || null
-    setAccountMap({})  // always reset before restoring
+    setAccountMap({})
     setColAccount(newColAccount)
 
-    // Restore saved per-account assignments if present.
     // Validate each stored account ID against the live accounts list — the account
     // may have been deleted since the profile was last saved. Fall back to name-match,
     // then to createNew so the user is prompted rather than silently sending a dead ID.
@@ -1822,7 +1785,6 @@ function ImportTab() {
         if (stillExists) {
           restored[csvVal] = { accountId: aid, createNew: false, newName: stillExists.name, newType: stillExists.type || 'depository', skip: false }
         } else {
-          // Account was deleted — try to match by the CSV value as a name fallback
           const byName = accounts.find(a => a.name.toLowerCase() === csvVal.toLowerCase())
           if (byName) {
             restored[csvVal] = { accountId: byName.id, createNew: false, newName: byName.name, newType: byName.type || 'depository', skip: false }
@@ -1960,7 +1922,8 @@ function ImportTab() {
         if (m.createNew) {
           const name = m.newName.trim()
           if (!name) return false
-          // Block if name already exists — user should select the existing account instead
+          // Force the user to pick the existing account instead of accidentally
+          // creating a duplicate account during import.
           if (accounts.some(a => a.name.toLowerCase() === name.toLowerCase())) return false
           return true
         }
@@ -2111,8 +2074,8 @@ function ImportTab() {
           api.saveBatchCategoryWorkspaceDraft(result.batch_id, categoryWorkspaceDraft).catch(() => {})
         }
       }
-      // Force the tree row for this import open so the file card is visible
-      // regardless of the user's saved expand/collapse preference.
+      // Force the tree row open so the completed file card is visible immediately,
+      // even if this source was collapsed in the user's saved history view.
       const rowKeyToExpand = selectedProfile ? `profile:${selectedProfile}` : 'manual-draft'
       setExpandedSourceRows(prev => ({
         ...(prev && typeof prev === 'object' ? prev : {}),
@@ -2127,7 +2090,6 @@ function ImportTab() {
     finally { setLoading(false) }
   }
 
-  // Build the profile body from current mapping state — shared by saveProfile and auto-save
   function buildProfileBody(name) {
     const cm = getColumnMap()
     const categoryWorkspaceDraft = clonePersistedCategoryWorkspaceDraft(importCategoryDraft)
@@ -2226,7 +2188,7 @@ function ImportTab() {
       setManualDraftRecord(loadSavedImportDraftRecord(dbInstanceId, preferenceSubjectId))
       setShowManualDraftSave(false)
       setManualDraftSaveName('')
-      // Open the new profile's tree row so the file card is visible in its new home.
+      // Open the new profile row so the moved file card is visible in its new home.
       if (newProfileId) {
         setExpandedSourceRows(prev => ({
           ...(prev && typeof prev === 'object' ? prev : {}),
@@ -2266,23 +2228,20 @@ function ImportTab() {
     if (!selectedProfile) return
     const p = profiles.find(x => x.id === selectedProfile)
     if (!p) return
-    // Resolve any createNew entries that were just created — match by name
-    // in the freshly-fetched accounts list
+    // Newly created accounts do not have ids in the pre-import draft, so reconcile
+    // them by name before saving the refreshed profile mappings.
     const resolvedMap = {}
     for (const [csvVal, m] of Object.entries(accountMap)) {
       if (m.createNew && m.newName?.trim()) {
         const created = refreshedAccounts.find(a => a.name === m.newName.trim())
         resolvedMap[csvVal] = created
           ? { ...m, createNew: false, accountId: created.id }
-          : m  // account not found yet, keep as createNew
+          : m
       } else {
         resolvedMap[csvVal] = m
       }
     }
-    // Temporarily update accountMap state with resolved entries
-    // so buildProfileBody picks them up
     const savedMap = accountMap
-    // Build body using resolved map directly
     const cm = getColumnMap()
     const categoryWorkspaceDraft = clonePersistedCategoryWorkspaceDraft(importCategoryDraft)
     if (categoryWorkspaceDraft) cm.category_workspace_draft = categoryWorkspaceDraft
@@ -2594,7 +2553,6 @@ function ImportTab() {
     setSourceWorkspaceSourceValues([])
     setSourceWorkspaceDraft(null)
     if (batchId && draft) {
-      // Batch-backed workspace: persist draft back to the batch record
       const persistedDraft = clonePersistedCategoryWorkspaceDraft(draft)
       api.saveBatchCategoryWorkspaceDraft(batchId, persistedDraft).catch(() => {})
     } else if (profileId && draft) {
@@ -2685,7 +2643,6 @@ function ImportTab() {
       setCategories(refreshedCategories)
       setSourceWorkspaceDraft(nextDraft)
       if (sourceWorkspaceBatchId) {
-        // Batch-backed workspace: save updated draft back to the batch record
         const persistedDraft = clonePersistedCategoryWorkspaceDraft(nextDraft)
         await api.saveBatchCategoryWorkspaceDraft(sourceWorkspaceBatchId, persistedDraft).catch(() => {})
         api.listBatches().then(setBatches)
@@ -3001,7 +2958,6 @@ function ImportTab() {
           )}
 
           <Card style={{ width: IMPORT_CONFIG_MAX_WIDTH }}>
-            {/* 1. Filename + row count */}
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 0, flexWrap: 'wrap', marginBottom: 12 }}>
               <span style={{ fontSize: 14, fontWeight: 600 }}>
                 {preview.filename}
@@ -3034,7 +2990,6 @@ function ImportTab() {
               </span>
             </div>
 
-            {/* 2. Utility actions */}
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: 0 }} />
               <Link to="/settings" style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap', textDecoration: 'none', flexShrink: 0 }}
@@ -3057,7 +3012,6 @@ function ImportTab() {
               </button>
             </div>
 
-            {/* Header-not-on-line-1 nudge */}
             {!showAdvanced && (preview.header_row_index ?? 0) > 0 && (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14,
@@ -3077,7 +3031,6 @@ function ImportTab() {
               </div>
             )}
 
-            {/* Advanced section */}
             {showAdvanced && (
               <div style={{
                 display: 'flex', gap: 14, marginBottom: 14, flexWrap: 'wrap',
@@ -3127,7 +3080,6 @@ function ImportTab() {
               </div>
             )}
 
-            {/* 3. Column mapping — row 1: Date | Amount | Category, row 2: Merchant | Account handling */}
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Column mapping</div>
             <div style={{
               display: 'grid',
@@ -3135,7 +3087,6 @@ function ImportTab() {
               gap: '24px 30px',
               marginBottom: 14,
             }}>
-              {/* Row 1 */}
               <ColSelect
                 label="Date"
                 headers={columnAnalysis.dateCandidates}
@@ -3177,7 +3128,6 @@ function ImportTab() {
                 hint={columnAnalysis.pendingCandidates.length > 0 && !colPending ? formatLikelyMatchLabel(columnAnalysis.pendingCandidates.length) : ''}
               />
 
-              {/* Extra cells for two_column and single_unsigned — push into row 2 start */}
               {amtConv === 'two_column' && (
                 <ColSelect
                   label="Credit column"
@@ -3287,7 +3237,6 @@ function ImportTab() {
                 ) : null}
               </div>
 
-              {/* Row 2 (or continues from row 1 overflow) */}
               <ColSelect label="Notes" headers={preview.headers} value={colNotes} onChange={setColNotes} />
               <AccountHandlingPicker
                 headers={columnAnalysis.accountCandidates}
@@ -3358,7 +3307,6 @@ function ImportTab() {
               </div>
             )}
 
-            {/* Apply categorization + Save profile */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
                 <input type="checkbox" checked={applyCat} onChange={e => setApplyCat(e.target.checked)} />
@@ -3454,7 +3402,6 @@ function ImportTab() {
 
           {colAccount && distinctAccountValues.length > 0 && (
             <Card style={{ padding: 0, overflow: 'hidden', width: IMPORT_CONFIG_MAX_WIDTH }}>
-              {/* Column headers: Input file | → | Maps to | Skip */}
               <div style={{
                 display: 'grid', gridTemplateColumns: '1fr 16px 240px 52px',
                 padding: '6px 14px', gap: 12,
@@ -3482,7 +3429,6 @@ function ImportTab() {
                     borderBottom: '1px solid var(--border)',
                     opacity: alreadyImported ? 0.5 : (m.skip ? 0.45 : 1),
                   }}>
-                    {/* Input file value */}
                     <div>
                       <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={csvVal}>{csvVal}</div>
                       {alreadyImported ? (
@@ -3494,7 +3440,6 @@ function ImportTab() {
 
                     <span style={{ color: 'var(--muted)', textAlign: 'center', fontSize: 11 }}>→</span>
 
-                    {/* Maps to */}
                     {alreadyImported ? (
                       <span style={{ fontSize: 12, color: 'var(--muted)', fontStyle: 'italic' }}>
                         already imported
@@ -3567,7 +3512,6 @@ function ImportTab() {
                       </div>
                     )}
 
-                    {/* Skip checkbox — right edge */}
                     <div style={{ display: 'flex', justifyContent: 'center' }}>
                       {alreadyImported ? (
                         <span style={{ fontSize: 11, color: 'var(--muted)' }}>—</span>

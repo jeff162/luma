@@ -1,18 +1,27 @@
 # SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""
+Categories are not just a tree for display: the same ids also live inside rules,
+import drafts, and historical transactions. Category edits therefore have to keep
+taxonomy, reporting metadata, and saved import state in sync.
+"""
+
 import uuid
 import json
 from collections import Counter
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from db.database import get_db
+from backend.db.database import get_db
+from backend.json_utils import safe_json_dict
 
 router = APIRouter()
 
 
 def _get_affected_category_ids(conn, category_id: str) -> list[str]:
+    # Deletion/replacement acts on the whole branch because descendant ids may already
+    # be persisted in rules, imports, and transaction history.
     return [
         row["id"]
         for row in conn.execute(
@@ -31,17 +40,6 @@ def _get_affected_category_ids(conn, category_id: str) -> list[str]:
             (category_id,),
         ).fetchall()
     ]
-
-
-def _safe_json_object(raw_value: str | None) -> dict:
-    if not raw_value:
-        return {}
-    try:
-        parsed = json.loads(raw_value)
-    except Exception:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
 
 def _extract_category_assignments(payload: dict) -> dict[str, str]:
     if not isinstance(payload, dict):
@@ -66,7 +64,7 @@ def _collect_mapping_counts(conn, table: str, json_column: str) -> Counter:
         f"SELECT {json_column} AS payload_json FROM {table}"
     ).fetchall()
     for row in rows:
-        payload = _safe_json_object(row["payload_json"])
+        payload = safe_json_dict(row["payload_json"])
         for category_id in _extract_category_assignments(payload).values():
             counts[category_id] += 1
     return counts
@@ -142,11 +140,6 @@ class CategoryDelete(BaseModel):
 
 @router.get("")
 def list_categories():
-    """
-    Returns a nested structure: each top-level group has a `children` list.
-    Leaf categories (no children) can also appear at the top level if they
-    have no parent.
-    """
     with get_db() as conn:
         rows = conn.execute(
             """
@@ -159,6 +152,9 @@ def list_categories():
                 sort_order,
                 exclude_from_totals
             FROM category
+            -- The category editor and reporting UI both treat top-level income groups as
+            -- a distinct section, so the API bakes that ordering in instead of leaving it
+            -- to each client to reconstruct.
             ORDER BY
                 CASE
                     WHEN parent_id IS NULL AND COALESCE(category_type, 'expense') = 'income' THEN 0
@@ -185,7 +181,6 @@ def list_categories():
 
 @router.get("/flat")
 def list_categories_flat():
-    """Flat list of all categories, including parent_id and owner_id. Used by dropdowns."""
     with get_db() as conn:
         rows = conn.execute(
             """
@@ -271,6 +266,8 @@ def create_category(body: CategoryCreate):
     with get_db() as conn:
         category_type = body.category_type
         if body.parent_id:
+            # Child categories inherit the parent's type so a group cannot silently mix
+            # income and expense semantics inside one reporting branch.
             parent = conn.execute(
                 "SELECT COALESCE(category_type, 'expense') AS category_type FROM category WHERE id = ?",
                 (body.parent_id,),
@@ -352,6 +349,8 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
                 raise HTTPException(status_code=404, detail="Replacement category not found")
             if replacement_category_id in affected_ids:
                 raise HTTPException(status_code=400, detail="Replacement category cannot be deleted in the same operation")
+            # Replacements are taxonomy maintenance, not manual recategorization, so the
+            # affected transactions are unlocked for future rule-based updates.
             conn.execute(
                 f"""
                 UPDATE txn
@@ -362,6 +361,8 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
                 [replacement_category_id, *affected_ids],
             )
         else:
+            # Clearing a deleted branch also clears the manual override bit so later rule
+            # runs are free to classify the now-uncategorized transactions again.
             conn.execute(
                 f"""
                 UPDATE txn
@@ -373,12 +374,14 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
             )
 
         affected_id_set = set(affected_ids)
+        # Import drafts store category ids inside JSON snapshots, so deletes have to
+        # rewrite both saved profiles and already-imported batch state to avoid dangling ids.
         profile_rows = conn.execute(
             "SELECT id, column_map FROM csv_import_profile"
         ).fetchall()
         for row in profile_rows:
             payload, changed = _rewrite_category_assignments_in_payload(
-                _safe_json_object(row["column_map"]),
+                safe_json_dict(row["column_map"]),
                 affected_id_set,
                 replacement_category_id,
             )
@@ -393,7 +396,7 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
         ).fetchall()
         for row in batch_rows:
             payload, changed = _rewrite_category_assignments_in_payload(
-                _safe_json_object(row["config_snapshot"]),
+                safe_json_dict(row["config_snapshot"]),
                 affected_id_set,
                 replacement_category_id,
             )
@@ -403,7 +406,8 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
                     (json.dumps(payload), row["id"]),
                 )
 
-        # Re-parent children to the deleted category's parent
+        # Preserve the visible tree shape after a group delete even though historical
+        # references to the deleted branch have already been rewritten above.
         conn.execute(
             """UPDATE category SET parent_id = (
                 SELECT parent_id FROM category WHERE id = ?
@@ -452,7 +456,6 @@ def update_category(category_id: str, body: CategoryUpdate):
 
 @router.patch("/{category_id}/ungroup")
 def ungroup_category(category_id: str):
-    """Promote a child category to a top-level group."""
     with get_db() as conn:
         conn.execute(
             "UPDATE category SET parent_id = NULL WHERE id = ?", (category_id,)

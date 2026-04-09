@@ -62,7 +62,7 @@ if (Test-PortInUse ([int]$frontendPort)) {
 Push-Location $frontendDir
 try {
   Write-Host "Checking/installing frontend dependencies. This can take a minute on first run..."
-  & npm install
+  & npm install --no-audit --no-fund
   Write-Host "Starting frontend"
   & npm run dev
 } finally {

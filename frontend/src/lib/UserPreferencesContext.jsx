@@ -17,6 +17,10 @@ function getPreferenceValue(preferences, key, defaultValue) {
 }
 
 export function UserPreferencesProvider({ children }) {
+  /*
+   * Preferences are loaded once here and then treated as optimistic local state so controls stay responsive
+   * while this provider owns the save/rollback bookkeeping.
+   */
   const [preferences, setPreferences] = useState({})
   const [preferencesReady, setPreferencesReady] = useState(false)
   const mountedRef = useRef(true)
@@ -76,24 +80,25 @@ export function UserPreferencesProvider({ children }) {
     return api.saveUserPreference(key, resolvedNextValue)
       .then(() => true)
       .catch(() => {
-      if (mountedRef.current) {
-        setPreferences(prev => {
-          if (hadPreviousValue && Object.is(prev[key], resolvedNextValue)) {
-            return {
-              ...prev,
-              [key]: previousValue,
+        if (mountedRef.current) {
+          setPreferences(prev => {
+            // Only roll back the failed optimistic write if a newer local change has not already replaced it.
+            if (hadPreviousValue && Object.is(prev[key], resolvedNextValue)) {
+              return {
+                ...prev,
+                [key]: previousValue,
+              }
             }
-          }
 
-          if (!hadPreviousValue && Object.is(prev[key], resolvedNextValue)) {
-            const next = { ...prev }
-            delete next[key]
-            return next
-          }
+            if (!hadPreviousValue && Object.is(prev[key], resolvedNextValue)) {
+              const next = { ...prev }
+              delete next[key]
+              return next
+            }
 
-          return prev
-        })
-      }
+            return prev
+          })
+        }
         return false
       })
   }, [])
@@ -109,6 +114,7 @@ export function UserPreferencesProvider({ children }) {
   if (!preferencesReady) {
     return (
       <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
+        {/* Avoid flashing fallback defaults before the saved preference state arrives. */}
         <div style={{ fontSize: 14, color: 'var(--muted)' }}>Loading preferences...</div>
       </div>
     )

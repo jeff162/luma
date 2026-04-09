@@ -1,12 +1,20 @@
 # SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""
+Plaid onboarding bridges Link into FinTrack's local account model.
+
+The router treats a Plaid item as the durable credential boundary: one token
+exchange can create many accounts, while the access token is stored separately
+so later sync and privacy-mode changes are keyed to item lifecycle rather than account rows.
+"""
+
 import uuid
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from db.database import get_db
-from services import plaid_service, crypto_service
-from routers.accounts import resolve_default_owner_id
+from backend.db.database import get_db
+from backend.routers.accounts import resolve_default_owner_id
+from backend.services import crypto_service, plaid_service
 
 router = APIRouter()
 
@@ -18,7 +26,6 @@ class PublicTokenExchange(BaseModel):
 
 @router.get("/link-token")
 def get_link_token():
-    """Get a Plaid Link token to initialise the Link UI."""
     try:
         token = plaid_service.create_link_token()
         return {"link_token": token}
@@ -28,10 +35,6 @@ def get_link_token():
 
 @router.post("/exchange")
 def exchange_token(body: PublicTokenExchange, request: Request):
-    """
-    Exchange the public token from Plaid Link for a stored access token,
-    then immediately fetch and persist the accounts.
-    """
     try:
         result       = plaid_service.exchange_public_token(body.public_token)
         access_token = result["access_token"]
@@ -42,7 +45,8 @@ def exchange_token(body: PublicTokenExchange, request: Request):
 
     with get_db() as conn:
         default_owner_id = resolve_default_owner_id(conn, None)
-        # Store access token on the item (we reuse the item table via account rows)
+        # Plaid onboarding is item-centric: one exchanged token can fan out to many
+        # accounts, and later sync discovers credentials by item id rather than account id.
         for acc in accounts:
             existing = conn.execute(
                 "SELECT id FROM account WHERE plaid_account_id = ?",
@@ -68,7 +72,8 @@ def exchange_token(body: PublicTokenExchange, request: Request):
                     ),
                 )
 
-        # Persist access token so sync can find it later
+        # Keep the token in plaid_item even if account rows are edited later; sync needs a
+        # stable credential lookup keyed by Plaid's item lifecycle, not the local account rows.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS plaid_item (

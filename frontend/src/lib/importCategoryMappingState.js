@@ -3,6 +3,11 @@
 
 import { normalizeCategoryType } from '../components/CategoryTreePrimitives.jsx'
 
+/*
+ * Mapping drafts keep unresolved source values and a decorated copy of the category tree in sync so the review UI
+ * can mark already-used targets, support undo/redo, and defer final writes until the user applies the mapping.
+ */
+
 function cloneTree(tree) {
   return {
     income: (tree.income || []).map(group => ({
@@ -60,6 +65,7 @@ function buildDraftTree(flatCategories, initialAssignments) {
   for (const targetId of Object.values(initialAssignments || {})) {
     for (const sectionType of ['income', 'expense']) {
       for (const group of groups[sectionType]) {
+        // Highlight destinations that already have an imported value mapped to them so follow-up assignments are made in context.
         if (group.id === targetId) group.importBadge = group.importBadge || 'mapped'
         for (const child of group.children) {
           if (child.id === targetId) child.importBadge = child.importBadge || 'mapped'
@@ -74,6 +80,7 @@ function buildDraftTree(flatCategories, initialAssignments) {
 function getInitialSnapshot(existingCategories, sourceValues, initialAssignments) {
   const tree = buildDraftTree(existingCategories, initialAssignments)
   const sourceOrder = (sourceValues || [])
+    // Values with an existing assignment start resolved instead of showing back up in the inbox.
     .filter(value => value && !initialAssignments?.[value])
     .slice()
     .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))

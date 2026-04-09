@@ -1,18 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/**
- * Settings.jsx — App settings and category ownership management
- *
- * Two sections on one page:
- *
- * 1. CATEGORY GROUPS → OWNER — Tag each spending group (Food & Drink, Transportation,
- *    etc.) with an owner to indicate whose domain it belongs to. This drives the
- *    Dashboard split-by-owner view: "Shared" groups appear in both columns, personal
- *    groups appear only in that person's column.
- *    Leaf categories silently inherit the group's owner (stored in DB, not shown here).
- */
-
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
 import { Card, PageHeader, Button, Spinner, EmptyState } from '../components/ui.jsx'
@@ -33,8 +21,6 @@ function clearBrowserStoredState() {
     window.sessionStorage.clear()
   } catch {}
 }
-
-// ── Data sources section ──────────────────────────────────────────────────────
 
 const AMOUNT_CONVENTIONS = [
   { value: 'single_signed',   label: 'Single column — negative = debit' },
@@ -61,7 +47,6 @@ function ProfileForm({ profile, accounts, onSave, onCancel }) {
   const [skipRows,   setSkipRows]   = useState(profile?.skip_rows ?? 0)
   const [applyCat,   setApplyCat]   = useState(profile?.apply_categorization !== false)
   const [notes,      setNotes]      = useState(profile?.notes || '')
-  // Column map fields
   const cm = profile?.column_map || {}
   const [colDate,   setColDate]   = useState(cm.date || '')
   const [colAmount, setColAmount] = useState(cm.amount || '')
@@ -310,8 +295,6 @@ function ImportProfilesSection() {
     </Card>
   )
 }
-
-// ── Main Settings page ────────────────────────────────────────────────────────
 
 function AuthModeSection({ authEnabled, onEnabled, embedded = false }) {
   const [saving, setSaving] = useState(false)
@@ -1090,11 +1073,9 @@ function StickySection({ title, description, actions, children, defaultCollapsed
 
       let targetTop = null
 
-      // If the section header ends up above the visible viewport, bring it back.
       if (sectionTop < viewTop + padding) {
         targetTop = Math.max(0, sectionTop - padding)
       }
-      // If the section grows below the visible viewport, scroll just enough to reveal it.
       else if (sectionBottom > viewBottom - padding) {
         targetTop = Math.max(0, sectionBottom - scrollParent.clientHeight + padding)
       }
@@ -1106,6 +1087,8 @@ function StickySection({ title, description, actions, children, defaultCollapsed
 
     let timeoutId = null
     let frame2 = null
+    // Wait until the expand/collapse layout settles before scrolling, or the
+    // section can jump to the wrong spot using stale pre-expansion measurements.
     const frame = window.requestAnimationFrame(() => {
       frame2 = window.requestAnimationFrame(() => {
         timeoutId = window.setTimeout(scrollAfterLayout, 0)

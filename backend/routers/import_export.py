@@ -2,39 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-import_export.py — CSV import/export and JSON backup/restore
+Import/export is a long-lived workflow, not a single upload endpoint.
 
-IMPORT FLOW:
-  1. POST /api/import/preview   — client uploads CSV, server returns first 5 rows +
-                                  column headers + auto-detected profile (if any).
-  2. POST /api/import/run       — client sends column mapping + options; server
-                                  imports rows, creates import_batch record, returns
-                                  batch id + counts.
-  3. DELETE /api/import/batch/:id — undo: deletes all txns for that batch. If any
-                                  were manually edited post-import, returns 409 with
-                                  a list of affected transactions so the client can
-                                  warn the user before a forced delete.
-  DELETE /api/import/batch/:id?force=true — deletes unconditionally.
-
-DUPLICATE WARNING:
-  file_content_hash = SHA-256 of the normalized uploaded CSV text.
-  On preview, if the same file content was imported before, the server returns
-  the previous batch info so the client can warn before re-importing it.
-
-CSV EXPORT:
-  GET /api/export/transactions — streams a CSV with user-chosen columns, respecting
-  the same filter params as the transactions list endpoint.
-
-BACKUP / RESTORE:
-  GET /api/export/backup       — JSON dump of all non-sensitive tables.
-  GET /api/export/backup/credentials — JSON dump of plaid_item table (sensitive).
-  POST /api/import/restore     — destructive restore from backup JSON.
-  POST /api/import/restore/credentials — restore plaid_item rows.
-
-AMOUNT CONVENTIONS:
-  single_signed   — one column, negative = debit (e.g. Chase)
-  single_unsigned — one column, always positive; separate column indicates direction
-  two_column      — separate debit and credit columns (both positive)
+This router preserves the mapping context that produced each batch so preview,
+import, undo, category review, rule suggestion review, and backup/restore can
+all reopen or replay the same decisions without drifting from the original run.
 """
 
 import csv
@@ -55,11 +27,12 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from db.database import get_db
-from db.control_database import auth_required, get_local_preference_profile
-from routers.accounts import resolve_default_owner_id
-from services.categorizer import categorize_transaction
-from services import crypto_service
+from backend.db.database import get_db
+from backend.db.control_database import auth_required, get_local_preference_profile
+from backend.json_utils import safe_json_dict
+from backend.routers.accounts import resolve_default_owner_id
+from backend.services import crypto_service
+from backend.services.categorizer import categorize_transaction
 
 router = APIRouter()
 
@@ -89,34 +62,32 @@ def _require_developer_access(request: Request):
     return profile
 
 
-# ── Pydantic models ───────────────────────────────────────────────────────────
-
 class ColumnMap(BaseModel):
     date:         str
     amount:       Optional[str] = None
     debit:        Optional[str] = None
     credit:       Optional[str] = None
-    direction:    Optional[str] = None   # column that says "debit"/"credit"
+    direction:    Optional[str] = None
     pending:      Optional[str] = None
     description:  str
     category:     Optional[str] = None
     notes:        Optional[str] = None
-    account:      Optional[str] = None   # CSV column containing account name/id
+    account:      Optional[str] = None
 
 class ImportRunRequest(BaseModel):
     profile_id:           Optional[str] = None
     filename:             str
-    account_id:           Optional[str] = None  # fallback when no account column mapped
-    account_map:          Optional[dict] = None  # csv_value → account_id
-    skip_accounts:        Optional[list] = None  # csv_values to skip entirely
-    new_accounts:         Optional[list] = None  # [{csv_value, name, type}] to create
+    account_id:           Optional[str] = None
+    account_map:          Optional[dict] = None
+    skip_accounts:        Optional[list] = None
+    new_accounts:         Optional[list] = None
     date_format:          str = "%m/%d/%Y"
     amount_convention:    str = "single_signed"
     column_map:           ColumnMap
     skip_rows:            int = 0
     apply_categorization: bool = True
-    replace_batch_id:     Optional[str] = None   # if set, delete this batch first
-    rows:                 list[dict]              # parsed CSV rows from preview
+    replace_batch_id:     Optional[str] = None
+    rows:                 list[dict]
 
 class ProfileCreate(BaseModel):
     name:                 str
@@ -179,9 +150,6 @@ class BackupRecipientUpdate(BaseModel):
     label: Optional[str] = None
     enabled: Optional[bool] = None
 
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def make_hash(date_str: str, amount: float, description: str) -> str:
     raw = f"{date_str.strip()}|{amount:.2f}|{description.strip().lower()}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
@@ -192,17 +160,6 @@ def make_import_file_hash(text: str) -> str:
     normalized = normalized.lstrip("\ufeff")
     normalized = normalized.rstrip("\n")
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-
-
-def load_json_object(raw: Optional[str]) -> dict:
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-        return parsed if isinstance(parsed, dict) else {}
-    except Exception:
-        return {}
-
 
 def summarize_category_workspace_draft(draft: Optional[dict]) -> Optional[dict]:
     """
@@ -244,6 +201,8 @@ def summarize_category_workspace_draft(draft: Optional[dict]) -> Optional[dict]:
 
 
 def get_rule_suggestion_review_state(snapshot: dict) -> dict:
+    # Batch snapshots can predate rule-review support or contain partial state; normalize
+    # the shape here so review endpoints can round-trip older imports without migrations.
     review_state = snapshot.get(RULE_SUGGESTION_REVIEW_KEY)
     if not isinstance(review_state, dict):
         review_state = {}
@@ -336,15 +295,12 @@ def parse_amount(row: dict, convention: str, col_map: ColumnMap) -> Optional[flo
 
     def clean(raw: str) -> Optional[float]:
         s = raw.strip().replace(",", "").replace("$", "").replace(" ", "")
-        # Parenthetical negative: (50.00) → -50.00
         m = re.fullmatch(r'\(([0-9.]+)\)', s)
         if m:
             return -float(m.group(1))
-        # Trailing CR (credit = income = negative stored value)
         if re.search(r'CR$', s, re.IGNORECASE):
             val = float(re.sub(r'CR$', '', s, flags=re.IGNORECASE))
             return -abs(val)
-        # Trailing DR (debit = expense = positive stored value)
         if re.search(r'DR$', s, re.IGNORECASE):
             val = float(re.sub(r'DR$', '', s, flags=re.IGNORECASE))
             return abs(val)
@@ -367,7 +323,6 @@ def parse_amount(row: dict, convention: str, col_map: ColumnMap) -> Optional[flo
                 return -abs(val)
             return abs(val)
 
-        # single_signed: Chase style stores debits as negative → negate to positive
         return -val
 
     except (ValueError, TypeError, AttributeError):
@@ -391,7 +346,6 @@ def get_import_display_amount(amount: float, convention: str) -> float:
 
 
 def parse_date(val: str, fmt: str) -> Optional[str]:
-    """Parse a date string and return YYYY-MM-DD or None."""
     val = val.strip()
     for f in [fmt, "%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y", "%d-%m-%Y", "%b-%d-%Y", "%b %d, %Y"]:
         try:
@@ -402,7 +356,6 @@ def parse_date(val: str, fmt: str) -> Optional[str]:
 
 
 def parse_pending_flag(row: dict, col_map: ColumnMap) -> bool:
-    """Parse an optional pending/status column. Unknown values default to False."""
     if not getattr(col_map, "pending", None):
         return False
     raw = str(row.get(col_map.pending, "") or "").strip().lower()
@@ -416,7 +369,6 @@ def parse_pending_flag(row: dict, col_map: ColumnMap) -> bool:
 
 
 def _detect_header_row_index(text: str) -> int:
-    """Find header row by scanning the first up to 10 lines."""
     all_lines = text.splitlines()
     header_row_index = 0
     for i, line in enumerate(all_lines[:10]):
@@ -433,7 +385,6 @@ def _detect_header_row_index(text: str) -> int:
 
 
 def _summarize_tail_lines(all_lines: list[str], count: int = 20) -> tuple[list[str], int]:
-    """Return the last `count` lines plus the 0-based line offset they start at."""
     if not all_lines:
         return [], 0
     start = max(0, len(all_lines) - count)
@@ -500,6 +451,8 @@ def _resolve_import_rule_target(row: dict, categories_by_name: dict[str, list[di
     matches = categories_by_name.get(normalized, [])
     if len(matches) == 1:
         return matches[0]["id"], matches[0]["name"], matches[0].get("group_name")
+    # Imported category labels are not globally unique. If the user already overrode a
+    # row during review, prefer that concrete category over guessing by name alone.
     current_category_id = row.get("category_id")
     if row.get("category_overridden") and current_category_id and current_category_id in categories_by_id:
         current = categories_by_id[current_category_id]
@@ -742,9 +695,6 @@ def _load_backup_payload_from_upload(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Unable to decrypt encrypted backup: {exc}")
 
-
-# ── Profile CRUD ──────────────────────────────────────────────────────────────
-
 @router.get("/profiles")
 def list_profiles():
     with get_db() as conn:
@@ -757,10 +707,7 @@ def list_profiles():
     result = []
     for r in rows:
         d = dict(r)
-        try:
-            d["column_map"] = json.loads(d["column_map"])
-        except Exception:
-            d["column_map"] = {}
+        d["column_map"] = safe_json_dict(d["column_map"])
         result.append(d)
     return result
 
@@ -891,9 +838,6 @@ def delete_backup_recipient(recipient_id: str):
         conn.execute("DELETE FROM backup_recipient WHERE id = ?", (recipient_id,))
     return {"ok": True}
 
-
-# ── Preview (parse uploaded CSV, auto-detect profile) ─────────────────────────
-
 @router.post("/preview")
 async def preview_csv(file: UploadFile = File(...)):
     """
@@ -917,7 +861,6 @@ async def preview_csv(file: UploadFile = File(...)):
         text = content.decode("latin-1")
 
     try:
-        # Capture raw lines for the file preview panel
         all_lines = text.splitlines()
         raw_lines  = all_lines[:20]
         raw_tail_lines, raw_tail_start_line = _summarize_tail_lines(all_lines)
@@ -931,7 +874,6 @@ async def preview_csv(file: UploadFile = File(...)):
         headers = [h.strip() for h in raw_headers]
         all_rows = []
         for row in reader:
-            # Re-key each row using stripped header names (skip None keys from malformed rows).
             stripped = {k.strip(): v for k, v in row.items() if k}
             all_rows.append(stripped)
         rows       = all_rows[:10]
@@ -943,7 +885,6 @@ async def preview_csv(file: UploadFile = File(...)):
     header_fp = "|".join(headers)
     file_content_hash = make_import_file_hash(text)
 
-    # Collect distinct values per column across full file
     column_distinct_values: dict = {}
     column_value_counts: dict = {}
     for row in all_rows:
@@ -977,7 +918,6 @@ async def preview_csv(file: UploadFile = File(...)):
 
     try:
         with get_db() as conn:
-            # Auto-detect profile
             profiles = conn.execute(
                 "SELECT id, name, filename_pattern, header_fingerprint FROM csv_import_profile"
             ).fetchall()
@@ -1010,7 +950,6 @@ async def preview_csv(file: UploadFile = File(...)):
             previous_batch_accounts = []
             config_snapshot         = None
             if previous_batch:
-                # Get which accounts were imported (not skipped) from that batch
                 acc_rows = conn.execute("""
                     SELECT iba.csv_value, iba.row_count, iba.was_skipped,
                            a.id AS account_id, a.name AS account_name
@@ -1049,13 +988,10 @@ async def preview_csv(file: UploadFile = File(...)):
         "column_distinct_meta":   column_distinct_meta,
     }
 
-
-# ── Import run ────────────────────────────────────────────────────────────────
-
 @router.post("/run")
 async def run_import(
     file:   UploadFile = File(...),
-    config: str        = Form(...),   # JSON string of all mapping/account settings
+    config: str        = Form(...),
 ):
     """
     Execute the import. Accepts the CSV file as a multipart upload so the full
@@ -1067,7 +1003,6 @@ async def run_import(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid config JSON")
 
-    # Re-parse the full CSV file
     content = await file.read()
     try:
         text = content.decode("utf-8-sig")
@@ -1083,7 +1018,6 @@ async def run_import(
     raw_hdrs = reader.fieldnames or []
     all_rows = []
     for row in reader:
-        # Re-key each row using stripped header names (skip malformed None keys)
         all_rows.append({k.strip(): v for k, v in row.items() if k})
 
     skip_rows = int(cfg.get("skip_rows", 0))
@@ -1155,9 +1089,9 @@ async def run_import(
                         INSERT INTO account
                           (id, plaid_account_id, plaid_item_id, name, type, subtype, owner_id)
                         VALUES (?, ?, 'csv_import', ?, ?, ?, ?)
-                    """, (new_acc_id, f"csv_{new_acc_id}", single_name, single_type, "checking",
-                          default_owner_id))
-                    created_account_ids["__single_account__"] = new_acc_id
+            """, (new_acc_id, f"csv_{new_acc_id}", single_name, single_type, "checking",
+                  default_owner_id))
+            created_account_ids["__single_account__"] = new_acc_id
         for na in new_accounts_cfg:
             csv_val  = na.get("csv_value", "")
             acc_name = na.get("name", csv_val).strip()
@@ -1244,6 +1178,8 @@ async def run_import(
                 }
 
         if previous_batch:
+            # Duplicate detection is file-wide, but account-column imports can still reuse
+            # the same CSV for accounts that were skipped or not imported in the earlier run.
             if col.account:
                 present_csv_values = {
                     str(row.get(col.account, "")).strip()
@@ -1291,6 +1227,8 @@ async def run_import(
             conn.execute("DELETE FROM txn WHERE import_batch_id = ?", (replace_batch_id,))
             conn.execute("UPDATE import_batch SET status = 'undone' WHERE id = ?", (replace_batch_id,))
 
+        # Snapshot the import decisions up front so undo, review, and batch-resume flows
+        # can reopen the exact mapping context that produced these rows.
         config_snap = json.dumps({
             "column_map":          cm_dict,
             "category_assignments": category_assignments_cfg,
@@ -1309,11 +1247,9 @@ async def run_import(
             VALUES (?, ?, ?, ?, 0, 0, 0, ?)
         """, (batch_id, profile_id, filename, file_content_hash, config_snap))
 
-        # Use account column whenever it's mapped — effective_map may be empty
-        # at this point if all entries are createNew (populated in created_account_ids)
         use_account_col = bool(col.account)
-        account_counts: dict = {}   # account_id → {csv_value, count}
-        skip_counts:    dict = {}   # csv_value → row count for skipped accounts
+        account_counts: dict = {}
+        skip_counts:    dict = {}
         consecutive_error_rows = 0
         footer_error_start_index = None
         footer_error_start_data_index = None
@@ -1485,7 +1421,7 @@ async def run_import(
                     VALUES (?, ?, ?, ?, 0)
                 """, (batch_id, info["csv_value"], aid, info["count"]))
             for csv_val, row_ct in skip_counts.items():
-                mapped_id = effective_map.get(csv_val)  # may be None if no account mapped
+                mapped_id = effective_map.get(csv_val)
                 conn.execute("""
                     INSERT OR IGNORE INTO import_batch_account
                       (batch_id, csv_value, account_id, row_count, was_skipped)
@@ -1527,10 +1463,6 @@ async def run_import(
         "errors":               errors[:20],
     }
 
-
-
-# ── Batch list and undo ───────────────────────────────────────────────────────
-
 @router.get("/batches")
 def list_batches():
     with get_db() as conn:
@@ -1555,7 +1487,7 @@ def list_batches():
         for b in batches:
             d = dict(b)
             d.pop("config_snapshot", None)
-            snapshot = load_json_object(b["config_snapshot"])
+            snapshot = safe_json_dict(b["config_snapshot"])
             review_state = get_rule_suggestion_review_state(snapshot)
             summary = review_state.get("summary")
             if not isinstance(summary, dict):
@@ -1622,10 +1554,7 @@ def get_batch_category_mappings(batch_id: str):
 
         snapshot = {}
         if batch["config_snapshot"]:
-            try:
-                snapshot = json.loads(batch["config_snapshot"])
-            except Exception:
-                snapshot = {}
+            snapshot = safe_json_dict(batch["config_snapshot"])
 
         saved_assignments = (snapshot.get("category_assignments") or
                              (snapshot.get("column_map") or {}).get("category_assignments") or {})
@@ -1684,10 +1613,7 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
 
         snapshot = {}
         if batch["config_snapshot"]:
-            try:
-                snapshot = json.loads(batch["config_snapshot"])
-            except Exception:
-                snapshot = {}
+            snapshot = safe_json_dict(batch["config_snapshot"])
 
         valid_category_ids = {
             row["id"] for row in conn.execute("SELECT id FROM category").fetchall()
@@ -1728,15 +1654,14 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
 
         saved_to_profile = False
         if batch["profile_id"]:
+            # The batch keeps an immutable replay record, while the linked profile learns
+            # the same mapping so future files start with the user's reviewed assignments.
             profile = conn.execute(
                 "SELECT column_map FROM csv_import_profile WHERE id = ?",
                 (batch["profile_id"],),
             ).fetchone()
             if profile:
-                try:
-                    profile_map = json.loads(profile["column_map"] or "{}")
-                except Exception:
-                    profile_map = {}
+                profile_map = safe_json_dict(profile["column_map"])
                 profile_map["category_assignments"] = {
                     **(profile_map.get("category_assignments") or {}),
                     **incoming_assignments,
@@ -1793,7 +1718,7 @@ def get_batch_rule_suggestions(batch_id: str, owner_ids: Optional[str] = Query(N
         if not batch:
             raise HTTPException(status_code=404, detail="Batch not found")
 
-        snapshot = load_json_object(batch["config_snapshot"])
+        snapshot = safe_json_dict(batch["config_snapshot"])
         review_state = get_rule_suggestion_review_state(snapshot)
         review_statuses = review_state.get("statuses") or {}
         selected_owner_ids = [value.strip() for value in (owner_ids or "").split(",") if value.strip()]
@@ -1833,6 +1758,8 @@ def get_batch_rule_suggestions(batch_id: str, owner_ids: Optional[str] = Query(N
                 if not row["owner_id"]
             })
             if unowned_accounts:
+                # Owner-scoped rule suggestions are unstable until every imported account
+                # has an owner, so the UI is told to resolve ownership before review.
                 review_summary = review_state.get("summary")
                 if not isinstance(review_summary, dict):
                     review_summary = summarize_rule_suggestion_review(review_state)
@@ -2033,7 +1960,7 @@ def update_batch_rule_suggestion_review(batch_id: str, body: BatchRuleSuggestion
         if not batch:
             raise HTTPException(status_code=404, detail="Batch not found")
 
-        snapshot = load_json_object(batch["config_snapshot"])
+        snapshot = safe_json_dict(batch["config_snapshot"])
         review_state = get_rule_suggestion_review_state(snapshot)
         suggestion_entries = dict(review_state.get("suggestions") or {})
         suggestion_entries.setdefault(body.suggestion_id, {})
@@ -2083,7 +2010,7 @@ def get_batch_rule_suggestion_matches(batch_id: str, body: BatchRuleSuggestionMa
         ).fetchone()
         if not batch:
             raise HTTPException(status_code=404, detail="Batch not found")
-        snapshot = load_json_object(batch["config_snapshot"])
+        snapshot = safe_json_dict(batch["config_snapshot"])
         amount_convention = snapshot.get("amount_convention", "single_signed")
 
         categories_by_name, categories_by_id = _load_import_rule_target_maps(conn)
@@ -2196,7 +2123,6 @@ def set_batch_profile(batch_id: str, body: dict):
 
 @router.get("/batches/{batch_id}/category-workspace-draft")
 def get_batch_category_workspace_draft(batch_id: str):
-    """Return the category workspace draft stored in a batch's config_snapshot."""
     with get_db() as conn:
         batch = conn.execute(
             "SELECT id, profile_id, config_snapshot FROM import_batch WHERE id = ?",
@@ -2204,7 +2130,7 @@ def get_batch_category_workspace_draft(batch_id: str):
         ).fetchone()
         if not batch:
             raise HTTPException(status_code=404, detail="Batch not found")
-        snapshot = load_json_object(batch["config_snapshot"])
+        snapshot = safe_json_dict(batch["config_snapshot"])
         draft = snapshot.get("category_workspace_draft")
         summary = summarize_category_workspace_draft(draft)
     return {"draft": draft, "summary": summary}
@@ -2233,7 +2159,7 @@ def save_batch_category_workspace_draft(batch_id: str, body: BatchCategoryWorksp
                 status_code=400,
                 detail="Category workspace draft is stored on the profile for profile-linked batches",
             )
-        snapshot = load_json_object(batch["config_snapshot"])
+        snapshot = safe_json_dict(batch["config_snapshot"])
         if body.draft is None:
             snapshot.pop("category_workspace_draft", None)
         else:
@@ -2278,9 +2204,6 @@ def undo_batch(batch_id: str, force: bool = Query(False)):
         )
 
     return {"ok": True}
-
-
-# ── CSV Export ────────────────────────────────────────────────────────────────
 
 EXPORT_COLUMNS = {
     "date":          ("t.date",            "Date"),
@@ -2370,12 +2293,8 @@ def export_transactions_csv(
         headers={"Content-Disposition": 'attachment; filename="fintrack_export.csv"'},
     )
 
-
-# ── JSON Backup / Restore ─────────────────────────────────────────────────────
-
 @router.get("/backup")
 def export_backup(encrypted: bool = Query(False)):
-    """Export all non-sensitive data as a JSON backup."""
     with get_db() as conn:
         def dump(table, query=None):
             q = query or f"SELECT * FROM {table} ORDER BY rowid"
@@ -2488,6 +2407,8 @@ def restore_backup(body: RestoreRequest):
     csv_profile_ids = {row.get("id") for row in csv_profiles if row.get("id")}
     import_batch_ids = {row.get("id") for row in import_batches if row.get("id")}
 
+    # Backups can outlive later deletions or schema tightening. Normalize broken foreign
+    # keys to NULL so restore stays best-effort instead of failing the entire archive.
     def normalize_nullable_fk(rows, key, valid_ids):
         for row in rows:
             value = row.get(key)
@@ -2591,7 +2512,6 @@ async def inspect_backup_file(file: UploadFile = File(...)):
 
 @router.post("/restore/credentials")
 def restore_credentials(body: CredentialsRestoreRequest, request: Request):
-    """Restore Plaid access tokens from a credentials backup."""
     d = body.data
     if d.get("version") != 1:
         raise HTTPException(status_code=400, detail="Unrecognised credentials backup version")

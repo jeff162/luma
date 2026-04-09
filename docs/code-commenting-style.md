@@ -63,6 +63,37 @@ Use these only when necessary, for:
 
 ---
 
+## Backend vs Frontend Guidance
+
+This style applies to both frontend and backend code, but the focus differs:
+
+### Frontend
+
+System-level comments should explain:
+
+* interaction models and UI behavior
+* coordination between components, state, and effects
+* user-facing workflows (e.g. drag/drop, selection, editing)
+* persistence and synchronization with backend
+
+Avoid commenting JSX structure or obvious rendering logic.
+
+### Backend
+
+System-level comments should explain:
+
+* API contracts and differences between endpoints
+* data semantics (e.g. how values are interpreted or normalized)
+* invariants, constraints, and ordering rules
+* filtering and aggregation logic that is not obvious from the query alone
+* interactions between UI behavior and backend logic
+
+Avoid commenting simple CRUD operations or obvious queries unless they enforce non-obvious rules.
+
+In both cases, prioritize explaining **why the system behaves this way**, not how the code is written.
+
+---
+
 ## When to Add Comments
 
 Add a comment if:

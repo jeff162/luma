@@ -7,15 +7,9 @@ import { api } from '../lib/api.js'
 import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState } from '../components/ui.jsx'
 import RuleForm, { amountConditionSummary } from '../components/RuleForm.jsx'
 
-// ── Plain-text rule description ───────────────────────────────────────────────
-// Builds a natural-language summary of a rule's conditions and actions.
-// Shown in the second column of the rules list.
-// Example: "and amount >= $10 and owner is Paul → Groceries, rename to Whole Foods"
-
 function describeRule(rule, owners, accounts) {
   const parts = []
 
-  // Amount
   if (rule.amount_min != null || rule.amount_max != null) {
     const isEquals = rule.amount_min != null && rule.amount_max != null && rule.amount_min === rule.amount_max
     if (isEquals) {
@@ -26,13 +20,11 @@ function describeRule(rule, owners, accounts) {
     }
   }
 
-  // Owner
   if (rule.owner_id) {
     const ownerObj = owners.find(o => o.id === rule.owner_id)
     if (ownerObj) parts.push(`owner is ${ownerObj.name}`)
   }
 
-  // Account
   if (rule.account_id) {
     const accountObj = accounts.find(a => a.id === rule.account_id)
     if (accountObj) {
@@ -43,8 +35,6 @@ function describeRule(rule, owners, accounts) {
 
   return parts
 }
-
-// ── RuleRow ───────────────────────────────────────────────────────────────────
 
 function RuleRow({ rule, owners, accounts, onSave, onDelete }) {
   const [confirmDel,  setConfirmDel]  = useState(false)
@@ -74,7 +64,6 @@ function RuleRow({ rule, owners, accounts, onSave, onDelete }) {
         )}
       </div>
 
-      {/* Actions */}
       <div style={{ fontSize: 13, lineHeight: 1.5, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' }}>
         <span style={{ color: 'var(--muted)', opacity: 0.4, margin: '0 2px' }}>→</span>
         <Badge
@@ -82,7 +71,6 @@ function RuleRow({ rule, owners, accounts, onSave, onDelete }) {
           toneKey={rule.category_id || rule.category_name}
         />
 
-        {/* Rename */}
         {rule.clean_name && (
           <span style={{ fontSize: 12, color: 'var(--muted)' }}>
             · rename to <span style={{ color: 'var(--text)', fontStyle: 'italic' }}>{rule.clean_name}</span>
@@ -90,7 +78,6 @@ function RuleRow({ rule, owners, accounts, onSave, onDelete }) {
         )}
       </div>
 
-      {/* Actions */}
       <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
         <button
           onClick={() => onSave(rule.id)}
@@ -198,8 +185,6 @@ function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel 
   )
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
-
 export default function Rules() {
   const location = useLocation()
   const navigate = useNavigate()
@@ -286,6 +271,8 @@ export default function Rules() {
     const creatorState = location.state?.openRuleCreator
     if (!editorState && !creatorState) return
 
+    // Other screens deep-link into the rules page with editor state; clear it
+    // immediately after consuming it so refresh/back does not reopen stale overlays.
     if (editorState?.ruleId) {
       setShowAdd(false)
       setEditingRuleId(editorState.ruleId)
@@ -304,7 +291,6 @@ export default function Rules() {
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
 
-      {/* Page header */}
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
         <PageHeader title="Rules">
           <Button variant="ghost" small onClick={runRecategorize}>↻ Re-run categorization</Button>
@@ -345,7 +331,6 @@ export default function Rules() {
         </div>
       )}
 
-      {/* Sticky toolbar */}
       <div style={{
         padding: '8px 32px', flexShrink: 0,
         borderBottom: '1px solid var(--border)',
@@ -358,10 +343,7 @@ export default function Rules() {
         </span>
       </div>
 
-      {/* Scrollable content */}
       <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 32px 32px' }}>
-
-        {/* Add rule form */}
         {showCreateForm && (
           <Card style={{ padding: 0, overflow: 'hidden', marginBottom: 20 }}>
             <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)', fontSize: 14, fontWeight: 600 }}>
@@ -380,9 +362,7 @@ export default function Rules() {
           </Card>
         )}
 
-        {/* Rules list */}
         <Card style={{ padding: 0, overflow: 'hidden' }}>
-          {/* Column headers */}
           <div style={{
             display: 'grid', gridTemplateColumns: '360px 1fr 80px',
             padding: '8px 16px', gap: 12,

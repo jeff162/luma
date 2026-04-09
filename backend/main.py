@@ -1,6 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""
+Application bootstrap and request wiring for the backend.
+
+This file ties together startup checks, middleware, and router registration. Its
+main guarantee is that each API request runs against the correct tenant database
+for the authenticated user or local-mode session before any router code executes.
+"""
+
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -10,10 +18,7 @@ load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env", overrid
 import os
 from contextlib import asynccontextmanager
 
-try:
-    from app_logging import log_warning
-except ModuleNotFoundError:
-    from backend.app_logging import log_warning
+from backend.app_logging import log_warning
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,10 +26,10 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from db.control_database import auth_required, get_local_mode_user, get_user_by_id, init_control_db
-from db.database import init_db, reset_current_db_path, set_current_db_path
-from routers import accounts, auth, transactions, categories, plaid, sync, rules, owners, import_export, tasks
-from runtime_config import runtime_config_status
+from backend.db.control_database import auth_required, get_local_mode_user, get_user_by_id, init_control_db
+from backend.db.database import init_db, reset_current_db_path, set_current_db_path
+from backend.routers import accounts, auth, categories, import_export, owners, plaid, rules, sync, tasks, transactions
+from backend.runtime_config import runtime_config_status
 
 
 def _env_int(name: str, default: int) -> int:
@@ -45,12 +50,13 @@ def _cors_origins() -> list[str]:
         f"http://localhost:{frontend_port}",
         f"http://localhost:{frontend_docker_port}",
     ]
-    # Preserve order while removing duplicates.
     return list(dict.fromkeys(origins))
 
 
 class TenantSessionMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        # Tenant selection is request-scoped: the control DB authenticates the user, then
+        # the app DB context is switched for just this request and always reset afterward.
         public_paths = {
             "/api/health",
             "/api/auth/status",
@@ -101,6 +107,8 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Startup initializes both databases before any request handling so auth/session
+    # decisions and tenant DB routing are never running against partial state.
     init_db()
     init_control_db()
     config_status = runtime_config_status()

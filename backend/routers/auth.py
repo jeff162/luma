@@ -1,20 +1,27 @@
 # SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""
+This router serves one frontend in two modes:
+- auth-enabled installs use control-db users and sessions
+- local mode still exposes a user-shaped API, but preferences can be split into
+  named local profiles instead of real accounts
+"""
+
 import json
 import os
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from runtime_config import (
+from backend.runtime_config import (
     read_environment_settings,
     runtime_config_defaults,
     runtime_config_status,
     write_environment_settings,
     write_runtime_env,
 )
-from db.control_database import (
+from backend.db.control_database import (
     authenticate_user,
     begin_totp_setup,
     bootstrap_required,
@@ -54,8 +61,8 @@ from db.control_database import (
     update_user_secret_material,
     verify_totp_code,
 )
-from db.database import get_db, get_db_instance_id
-from services.crypto_service import reencrypt_plaid_items
+from backend.db.database import get_db, get_db_instance_id
+from backend.services.crypto_service import reencrypt_plaid_items
 
 
 router = APIRouter()
@@ -204,6 +211,9 @@ def _session_payload(user: dict) -> dict:
 
 
 def _auth_status_payload(request: Request | None = None) -> dict:
+    # App startup consumes one payload to choose bootstrap/auth gates and the active
+    # preference identity, so status has to fold together runtime config, auth mode,
+    # and the current session/profile in a single round trip.
     enabled = auth_required()
     password_policy = get_password_policy()
     security_profile = get_security_profile()
@@ -638,6 +648,8 @@ def add_user(body: UserCreateRequest, request: Request):
 def edit_user(user_id: str, body: UserUpdateRequest, request: Request):
     admin = _require_admin(request)
     if admin["id"] == user_id:
+        # Do not let the currently signed-in admin remove their own ability to finish
+        # the session; role/status changes require a second admin for recoverability.
         current = get_user_by_id(user_id)
         if not current:
             raise HTTPException(status_code=404, detail="User not found")

@@ -1,23 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/**
- * RuleSuggestionToast — Non-intrusive "Create a rule?" prompt
- *
- * Appears after a transaction is manually categorized. Floats fixed
- * bottom-right, never steals focus, auto-dismisses after TIMEOUT_MS.
- *
- * Clicking "Create rule" opens a full-screen modal containing the shared
- * RuleForm component — same UI as the Rules page, pre-filled with the
- * merchant name as keyword and the chosen category as the action.
- *
- * After saving, the toast briefly shows a confirmation before dismissing.
- *
- * TRANSACTION DEFAULTS:
- *   When prompt.transactionData is provided, RuleForm will auto-populate
- *   the amount filter and debit/credit selector based on the transaction.
- */
-
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
 import { Badge } from './ui.jsx'
@@ -25,7 +8,10 @@ import RuleForm from './RuleForm.jsx'
 
 const TIMEOUT_MS = 8000
 
-// ── RuleModal — full-screen modal wrapping RuleForm ───────────────────────────
+/*
+ * This prompt is intentionally low-commitment: it rides on the moment right after a manual recategorization,
+ * lets the user ignore it without losing flow, and only expands into full rule editing if they opt in.
+ */
 
 function RuleModal({ prompt, onSave, onCancel }) {
   const [categories, setCategories] = useState([])
@@ -49,6 +35,7 @@ function RuleModal({ prompt, onSave, onCancel }) {
       setAccounts(acc)
 
       if (match?.rule_id) {
+        // Reopen the existing rule when one already matched this transaction so we do not encourage duplicate rules for the same pattern.
         const rules = await api.getRules()
         if (cancelled) return
         setExistingRule(rules.find(rule => rule.id === match.rule_id) || null)
@@ -95,7 +82,6 @@ function RuleModal({ prompt, onSave, onCancel }) {
           overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.45)',
         }}
       >
-        {/* Header */}
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '16px 20px', borderBottom: '1px solid var(--border)',
@@ -134,8 +120,6 @@ function RuleModal({ prompt, onSave, onCancel }) {
   )
 }
 
-// ── RuleSuggestionToast ───────────────────────────────────────────────────────
-
 export default function RuleSuggestionToast({ prompt, onDismiss, onSaved }) {
   const [showModal, setShowModal] = useState(false)
   const [progress,  setProgress]  = useState(100)
@@ -146,7 +130,6 @@ export default function RuleSuggestionToast({ prompt, onDismiss, onSaved }) {
   const intervalRef = useRef(null)
   const startRef    = useRef(Date.now())
 
-  // Auto-dismiss countdown
   useEffect(() => {
     startRef.current = Date.now()
     intervalRef.current = setInterval(() => {
@@ -159,7 +142,6 @@ export default function RuleSuggestionToast({ prompt, onDismiss, onSaved }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Pause countdown while modal is open
   useEffect(() => {
     if (showModal) {
       clearTimeout(timerRef.current)
@@ -178,7 +160,7 @@ export default function RuleSuggestionToast({ prompt, onDismiss, onSaved }) {
 
   function handleCancel() {
     setShowModal(false)
-    // Resume with 3s remaining
+    // Give the user a short grace period after closing the modal so the suggestion does not disappear immediately.
     clearTimeout(timerRef.current)
     clearInterval(intervalRef.current)
     startRef.current = Date.now() - (TIMEOUT_MS - 3000)
@@ -193,7 +175,6 @@ export default function RuleSuggestionToast({ prompt, onDismiss, onSaved }) {
 
   return (
     <>
-      {/* Toast */}
       <div style={{
         position: 'fixed', bottom: 28, right: 28, zIndex: 800,
         background: 'var(--surface)', border: '1px solid var(--border)',
@@ -201,7 +182,6 @@ export default function RuleSuggestionToast({ prompt, onDismiss, onSaved }) {
         width: 320, overflow: 'hidden',
         animation: 'slideInToast 0.2s ease-out',
       }}>
-        {/* Progress bar */}
         <div style={{ height: 3, background: 'var(--surface2)' }}>
           <div style={{
             height: '100%', background: 'var(--accent)',

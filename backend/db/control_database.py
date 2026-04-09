@@ -1,6 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""
+Control database for auth, tenant routing, security settings, and user-scoped state.
+
+Unlike the app database, this file manages cross-tenant concerns: who can sign in,
+which tenant DB a request should use, when auth becomes mandatory, and which local
+preference profiles or secret material belong to each user.
+"""
+
 import base64
 import hashlib
 import hmac
@@ -14,7 +22,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from db.database import DB_PATH, init_db
+from backend.db.database import DB_PATH, init_db
 
 
 CONTROL_DB_PATH = str(Path(os.getenv("CONTROL_DB_PATH", "control.db")))
@@ -536,6 +544,8 @@ def bootstrap_required() -> bool:
 
 
 def auth_required() -> bool:
+    # More than one user implies shared access semantics even if an older install never
+    # explicitly flipped the auth flag, so multi-user setups cannot silently run open.
     return get_app_setting("auth_enabled", "0") == "1" or user_count() > 1
 
 
@@ -562,6 +572,8 @@ def _legacy_db_path() -> str:
 def _default_tenant_db_path(tenant_id: str) -> str:
     legacy_path = Path(_legacy_db_path())
     if legacy_path.exists():
+        # Bootstrap can adopt the pre-auth single-user database in place so enabling auth
+        # does not strand the user's existing data in an unused legacy file.
         return str(legacy_path)
     tenant_root = TENANT_DATA_ROOT / tenant_id
     tenant_root.mkdir(parents=True, exist_ok=True)
@@ -603,6 +615,8 @@ def _create_user_with_tenant(
             if not tenant:
                 raise ValueError("tenant not found")
         else:
+            # Creating a user without an explicit tenant usually means bootstrap or the admin
+            # is provisioning a new isolated workspace, so the tenant record and DB are created together.
             resolved_tenant_id = str(uuid.uuid4())
             tenant_name = user_display_name
             base_slug = _tenant_slug(clean_username)

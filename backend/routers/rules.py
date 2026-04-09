@@ -4,13 +4,15 @@
 """
 Rules router — manage categorization rules by payee/keyword.
 Rules are the bridge between merchants (payees) and categories.
+This router also exposes previews and retroactive apply paths, so its matching
+order needs to stay in lockstep with the categorizer used during sync/import.
 """
 import uuid
 from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from db.database import get_db
-from services.categorizer import _amount_matches
+from backend.db.database import get_db
+from backend.services.categorizer import _amount_matches
 
 router = APIRouter()
 
@@ -24,6 +26,8 @@ def _find_matching_rule(conn, txn):
     if not text:
         return None
 
+    # Mirror the engine's specificity ordering so "match this transaction" previews and
+    # explicit apply flows agree with what future imports/syncs would pick automatically.
     rules = conn.execute(
         """
         SELECT id
@@ -96,6 +100,8 @@ def _apply_rule_to_existing(conn, rule_id: str) -> int:
         if not _rule_matches_txn(rule, txn):
             continue
         params = [rule["category_id"]]
+        # An explicit apply is the user asking the rule to own these matches, so any
+        # prior auto state is replaced with the rule's category/clean name output.
         set_parts = ["category_id = ?", "category_overridden = 0"]
         if rule["clean_name"]:
             set_parts.append("display_name = ?")
@@ -139,7 +145,6 @@ class RuleUpdate(BaseModel):
 
 @router.get("")
 def list_rules(search: Optional[str] = Query(None)):
-    """All rules, joined with their category and owner, optionally filtered by keyword search."""
     where  = "WHERE cr.keyword LIKE ?" if search else ""
     params = [f"%{search}%"] if search else []
     with get_db() as conn:

@@ -53,13 +53,13 @@ export default function ImportRuleSuggestions() {
     review_summary: null,
     generated_at: null,
   })
+  // Owner resolution is intentionally one-at-a-time: ambiguous imports need a
+  // single ownership lens before the suggested rules are meaningful.
   const [selectedOwnerIds, setSelectedOwnerIds] = useState([])
   const [editingSuggestionId, setEditingSuggestionId] = useState(null)
   const [reviewFilter, setReviewFilter] = useState('pending')
   const [merchantFilterOpen, setMerchantFilterOpen] = useUserPreference(IMPORT_RULE_MERCHANT_FILTER_OPEN_PREF_KEY, true)
   const [ownerFilterOpen, setOwnerFilterOpen] = useUserPreference(IMPORT_RULE_OWNER_FILTER_OPEN_PREF_KEY, false)
-  // Undo stack: each entry is a map of suggestion id → previous field values.
-  // Capped at 10 entries — older entries fall off the back.
   const [undoStack, setUndoStack] = useState([])
   const MAX_UNDO = 10
 
@@ -179,8 +179,6 @@ export default function ImportRuleSuggestions() {
     })
   }
 
-  // Capture the current review_status (and rule_id) of the given suggestion ids
-  // before a change so it can be restored on undo.
   function pushUndo(suggestionIds) {
     const idSet = new Set(suggestionIds)
     const snapshot = {}
@@ -196,14 +194,14 @@ export default function ImportRuleSuggestions() {
     if (undoStack.length === 0) return
     const snapshot = undoStack[undoStack.length - 1]
     setUndoStack(prev => prev.slice(0, -1))
-    // Revert each suggestion to its previous status on the server
+    // Accepted suggestions may have created or linked rules, so undo has to replay
+    // the server-side review state instead of only rolling back local UI state.
     for (const [suggestionId, prev] of Object.entries(snapshot)) {
       await api.updateBatchRuleSuggestionReview(batchId, {
         suggestion_id: suggestionId,
         status: prev.review_status,
       }).catch(() => {})
     }
-    // Reload to get accurate review_summary from server
     await reloadSuggestions()
   }
 

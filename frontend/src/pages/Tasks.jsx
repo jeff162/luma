@@ -119,6 +119,8 @@ export default function Tasks() {
         {loading ? (
           <Spinner />
         ) : result?.tasks?.length === 0 ? (
+          // Keep the empty state intentionally quiet so this page feels like an inbox:
+          // visual urgency comes from the tasks themselves, not from "all clear."
           <Card
             style={{
               textAlign: 'center',

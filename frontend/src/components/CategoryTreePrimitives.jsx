@@ -6,6 +6,11 @@ import { CategoryMarker } from './ui.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from './TransientTextInput.jsx'
 
+/*
+ * These primitives keep every tree surface on the same interaction contract: rows select before they rename,
+ * deletes confirm inline, and drag/drop shares one transient payload because rows, lanes, and end zones do not
+ * all live under a single parent state owner.
+ */
 let dragItem = null
 
 export function setCategoryTreeDragItem(item) {
@@ -136,6 +141,7 @@ export function EditableName({
     }
     e.stopPropagation()
     if (!isSelected) {
+      // Selection is a separate step from rename so keyboard focus, context menus, and bulk actions can target the row first.
       onFirstClick()
       return
     }

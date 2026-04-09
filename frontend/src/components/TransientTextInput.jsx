@@ -4,6 +4,11 @@
 import { forwardRef, useRef } from 'react'
 import { ESCAPE_BEHAVIOR } from '../lib/uiInteractions.js'
 
+/*
+ * Inline editors all funnel through this wrapper so Enter, blur, and Escape mean the same thing everywhere.
+ * The restore value is captured when the edit begins, which makes Escape behave like "revert this edit" instead
+ * of stepping back through each keystroke.
+ */
 const TransientTextInput = forwardRef(function TransientTextInput({
   value,
   onChange,

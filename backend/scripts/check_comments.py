@@ -149,7 +149,7 @@ def main():
             print(" -", issue)
         sys.exit(1)
     else:
-        print("Comment lint passed ✓")
+        print("Comment lint passed")
 
 if __name__ == "__main__":
     main()

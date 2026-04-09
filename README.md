@@ -10,8 +10,6 @@ You stay in control — Luma makes it easy to review what changed, spot anything
 
 Less repetition. Fewer manual fixes. Clear, usable financial data.
 
-
-
 ## Why Luma?
 
 Most personal finance tools follow the same basic model: import data, categorize transactions, define rules, and review the results.
@@ -30,8 +28,6 @@ Luma is designed to reduce that friction:
 
 You still do the same core tasks — Luma just makes them easier to do and easier to maintain over time.
 
-
-
 ## What does Luma do?
 
 Luma helps you turn raw financial data into something organized and usable.
@@ -49,8 +45,6 @@ You can:
 - analyze spending with dashboards and drill-down views
 
 All core functionality runs locally on your machine. External integrations are optional.
-
-
 
 ## Who is this for?
 
@@ -72,7 +66,6 @@ It may not be ideal for:
 
 - mobile-first apps with zero setup
 
-
 ## Philosophy
 
 Luma is built on a few core principles:
@@ -86,7 +79,6 @@ Luma is built on a few core principles:
 - Interfaces should support natural workflows
 
 - Users should be able to act directly where their data lives
-
 
 ## Features
 
@@ -128,7 +120,6 @@ Luma focuses on making common tasks easy and reducing the effort required to mai
 
 - **Flexible access modes:** run locally or configure access for shared environments
 
-
 ## Tech stack
 
 | **Layer** | **Technology** |
@@ -164,7 +155,6 @@ storage speed, and whether it is run directly or through Docker.
 sync examples are Linux/macOS/Raspberry Pi oriented unless adapted for  
 Windows Task Scheduler or run inside a Linux environment.
 
-
 ## Installation
 
 ### Requirements
@@ -178,30 +168,30 @@ Windows Task Scheduler or run inside a Linux environment.
 ### Quick start
 
 ```
-`git clone https://github.com/your-username/luma.git`
-
-`cd luma`
-
-`\# Windows Command Prompt or double-click`
-
-`.\\scripts\\start\_luma.bat`
-
-
-`\# Windows PowerShell`
-
-`powershell -ExecutionPolicy Bypass -File .\\scripts\\start\_luma.ps1`
-
-
-`\# macOS / Linux / Raspberry Pi`
-
-`bash ./scripts/start\_luma.sh`
+\`git clone https://github.com/your-username/luma.git\`  
+  
+\`cd luma\`  
+  
+\`\\\# Windows Command Prompt or double-click\`  
+  
+\`.\\\\scripts\\\\start\\\_luma.bat\`  
+  
+  
+\`\\\# Windows PowerShell\`  
+  
+\`powershell -ExecutionPolicy Bypass -File .\\\\scripts\\\\start\\\_luma.ps1\`  
+  
+  
+\`\\\# macOS / Linux / Raspberry Pi\`  
+  
+\`bash ./scripts/start\\\_luma.sh\`
 ```
 
 The helper scripts:
 
-- create `.env` from `.env\_example` if needed
+- create `.env` from `.env\\\_example` if needed
 
-- generate secure first-run values for `SESSION\_SECRET`, `APP\_MASTER\_KEY`, and `SESSION\_COOKIE\_NAME`
+- generate secure first-run values for `SESSION\\\_SECRET`, `APP\\\_MASTER\\\_KEY`, and `SESSION\\\_COOKIE\\\_NAME`
 
 - create the backend virtual environment if needed
 
@@ -211,7 +201,6 @@ The helper scripts:
 
 After startup, review `.env` as needed to customize ports, Plaid settings,  
 logging, or other advanced options.
-
 
 ## Contributing
 
@@ -225,6 +214,19 @@ To contribute:
 
 - share usage patterns and feedback
 
+## Documentation
+
+Luma is built around a small set of coordinated systems. The following documents describe how those systems are structured and how they work together:
+
+- **Architecture:** `docs/architecture.md` — application structure, data flow, and major subsystems
+
+- **Data model:** `docs/data-model.md` — core entities, relationships, and invariants
+
+- **UI patterns:** `docs/ui-patterns.md` — interaction patterns and shared UI behavior
+
+These documents are intended for development and deeper understanding of how Luma works internally.
+
+For implementation details, see inline comments in the codebase, which document system behavior and invariants at the module level.
 
 ## License
 

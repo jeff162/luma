@@ -1,50 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/**
- * TransactionDetail — Payee spending history panel
- *
- * CONCEPT: Rather than showing a single transaction in isolation, this panel
- * shows the full history of spending at a given payee. "payee" is derived from
- * merchant_name (cleaned) or raw_name (from Plaid), whichever is set.
- *
- * OPENING BEHAVIOR:
- *   - Opens as a bottom sheet (full-width, slides up from bottom)
- *   - On first drag of the header, snaps to a floating window at its current
- *     position. The backdrop disappears so the user can interact with the page
- *     behind it while keeping the panel open.
- *   - Dragging is constrained to the viewport bounds.
- *
- * DRAG IMPLEMENTATION:
- *   pos=null means bottom-sheet mode. pos={x,y} means floating mode.
- *   onDragStart captures the mouse offset relative to the panel corner.
- *   mousemove/mouseup listeners are added to window (not the element) so
- *   fast mouse movement doesn't lose the drag target.
- *
- * AUTO-SELECT:
- *   The most recent month with data is selected automatically when the panel
- *   opens, so the transaction table is populated immediately without requiring
- *   a click. The clicked transaction's month is highlighted in the chart.
- *
- * YEAR BOUNDARIES:
- *   The YearTick component renders a dashed vertical line and year label
- *   whenever the year changes between adjacent bars. This makes multi-year
- *   data readable without cluttering the x-axis.
- *
- * CATEGORY EDITING:
- *   Each row in the month transaction table has an InlineCatEdit component
- *   that allows changing the category. Changes are saved via
- *   api.overrideCategory() and update local state (monthTxns) optimistically.
- *   The panel does not force a reload of the parent page — changed categories
- *   may appear stale in the background until the user navigates away and back.
- *
- * MERCHANT RENAME:
- *   Editing the merchant name in the header updates just that one transaction.
- *   To rename future transactions automatically, create a categorization rule
- *   with the "Rename merchant to" field set — rules now handle both categorization
- *   and merchant name normalization in a single mechanism.
- */
-
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
 import { formatCurrency, formatDate, monthLabel } from '../lib/utils.js'
@@ -71,8 +27,11 @@ const inputStyle = {
   padding: '5px 8px', fontSize: 13, outline: 'none',
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
-
+/*
+ * This drawer treats one transaction as the entry point into a payee's history. It keeps the visible month
+ * locally editable, but it can also branch straight into rule creation when a manual recategorization looks
+ * like the start of a repeatable pattern.
+ */
 export default function TransactionDetail({ txn, categories, onClose, onRulePrompt: externalRulePrompt }) {
   const { filters } = useFilters()
   const dateStart = filters.date?.start || null
@@ -110,7 +69,6 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
     listRef,
   } = usePagedMonthTransactions({ selectedMonth, loadPage: loadMonthPage })
 
-  // Load trend using the active date filter range, or all history if no filter set
   useEffect(() => {
     setTrendLoading(true)
     api.getPayeeTrend(payee, dateStart, dateEnd).then(rows => {
@@ -122,7 +80,7 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
     })
   }, [payee, dateStart, dateEnd])
 
-  // Update a single transaction's category in local state
+  // Keep the visible month in sync with the just-saved override so the drawer reflects the manual fix immediately.
   function handleCatSaved(txnId, cat) {
     setMonthTxns(prev => prev.map(t =>
       t.id !== txnId ? t : {
@@ -221,7 +179,6 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
         onClose={onClose}
         header={header}
       >
-          {/* Chart */}
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
             Spending at {payee}{dateStart || dateEnd ? '' : ' — all time'}
           </div>
@@ -234,7 +191,6 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
             <DetailTrendChart trend={trend} selectedMonth={selectedMonth} onSelectMonth={setSelectedMonth} />
           )}
 
-          {/* Month transactions */}
           {selectedMonth && (
             <div style={{ marginTop: 24, height: monthSectionHeight }}>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
@@ -313,6 +269,7 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
           prompt={rulePrompt}
           onSaved={({ applyToExisting }) => {
             if (applyToExisting) {
+              // Applying the new rule can recategorize many rows in the current month, so refresh the drawer instead of patching only the clicked row.
               api.getTransactions({
                 month: selectedMonth,
                 payees: payee,

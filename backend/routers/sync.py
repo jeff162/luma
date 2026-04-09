@@ -2,51 +2,31 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-sync.py — Plaid transaction sync and nightly pull.
+Sync is the reconciliation path between Plaid's transaction stream and local state.
 
-DESIGN PRINCIPLES:
-- Sync is idempotent: transactions are upserted by plaid_transaction_id, so
-  running sync multiple times is safe.
-- Categorization rules can carry an optional clean_name. When a rule matches,
-  that clean_name is used as merchant_name on the new transaction, replacing
-  the raw Plaid name. This consolidates rename + categorization into a single
-  rule mechanism — no separate merchant_rename table lookup is needed.
-  Order: fetch from Plaid → auto-categorize (with optional rename) → upsert.
-- Pending transactions are stored but excluded from all spending summaries.
-  They are updated to non-pending on subsequent syncs when Plaid finalizes them.
-- category_overridden transactions keep their category across syncs. Only
-  transactions with category_overridden=0 are auto-categorized on sync.
-- The /recategorize endpoint re-runs the rules engine on all non-overridden
-  transactions in the database. Use this after adding or changing rules.
+Its core invariants are idempotence by Plaid transaction id, pending-to-posted
+advancement without rewriting local edits, and reuse of the shared categorization
+engine so imported history and future syncs stay consistent with one another.
 """
 
 import uuid
 from datetime import date, timedelta
 from fastapi import APIRouter, Request
 
-try:
-    from app_logging import log_warning
-except ModuleNotFoundError:
-    from backend.app_logging import log_warning
-
-from db.database import get_db
-from services import plaid_service, crypto_service
-from services.categorizer import categorize_transaction, recategorize_all
+from backend.app_logging import log_warning
+from backend.db.database import get_db
+from backend.services import crypto_service, plaid_service
+from backend.services.categorizer import categorize_transaction, recategorize_all
 
 router = APIRouter()
 
 
 @router.post("")
 def run_sync(days: int = 30, request: Request = None):
-    """
-    Pull the last N days of transactions for every linked Plaid item.
-    Safe to run repeatedly — deduplicates via plaid_transaction_id.
-    """
     start_date = date.today() - timedelta(days=days)
     added = updated = skipped = 0
 
     with get_db() as conn:
-        # Ensure the plaid_item table exists (created on first token exchange)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS plaid_item (
@@ -69,12 +49,10 @@ def run_sync(days: int = 30, request: Request = None):
                     end_date=date.today(),
                 )
             except Exception as e:
-                # Log and continue — don't let one bad item stop the rest
                 log_warning(f"[sync] error fetching item {item['item_id']}: {e}")
                 continue
 
             for t in txns:
-                # Resolve account row — also grab owner_id for categorization
                 acc = conn.execute(
                     "SELECT id, owner_id FROM account WHERE plaid_account_id = ?",
                     (t["plaid_account_id"],),
@@ -89,7 +67,8 @@ def run_sync(days: int = 30, request: Request = None):
                 ).fetchone()
 
                 if existing:
-                    # Update pending → posted
+                    # Existing Plaid ids are only allowed to advance pending state here;
+                    # category/name edits on already-known rows stay owned by local logic.
                     if existing["is_pending"] and not t["is_pending"]:
                         conn.execute(
                             "UPDATE txn SET is_pending = 0 WHERE id = ?",
@@ -100,7 +79,6 @@ def run_sync(days: int = 30, request: Request = None):
                         skipped += 1
                     continue
 
-                # Auto-categorize — pass owner_id so owner-scoped rules fire correctly
                 result = categorize_transaction(
                     t["merchant_name"], t["raw_name"], t["merchant_name"], t["amount"], conn,
                     owner_id=acc["owner_id"],
@@ -139,7 +117,6 @@ def run_sync(days: int = 30, request: Request = None):
 
 @router.post("/recategorize")
 def recategorize():
-    """Re-run the rules engine over all non-overridden transactions."""
     with get_db() as conn:
         n = recategorize_all(conn)
     return {"updated": n}

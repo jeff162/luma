@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// These profiles are setup presets: they steer onboarding recommendations without trying to encode every security rule here.
 export const SECURITY_PROFILES = [
   {
     value: 'local_private',

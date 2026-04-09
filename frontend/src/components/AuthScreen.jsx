@@ -49,6 +49,10 @@ const s = {
 }
 
 export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', securityProfile = 'local_private', onAuthenticated }) {
+  /*
+   * Bootstrap, password login, and 2FA confirmation share one shell here so the active security profile,
+   * password rules, and recovery-code guidance stay in the same flow instead of bouncing the user between screens.
+   */
   const [username, setUsername] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [password, setPassword] = useState('')
@@ -68,6 +72,7 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
         ? await api.bootstrap(username, password, displayName || username)
         : await api.login(username, password)
       if (resp.requires_2fa) {
+        // Username/password can be accepted before the session is complete, so the form pivots into code entry in place.
         setAwaiting2fa(true)
         setRecoveryCodeCount(resp.recovery_code_count ?? null)
         setTwoFactorCode('')

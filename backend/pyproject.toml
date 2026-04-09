@@ -23,4 +23,4 @@ select = ["E", "F", "W", "I"]
 ignore = ["E501"]  # line length handled by formatter
 
 [tool.ruff.lint.isort]
-known-first-party = ["db", "routers", "services"]
+known-first-party = ["backend"]

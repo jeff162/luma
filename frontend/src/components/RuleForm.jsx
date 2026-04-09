@@ -1,46 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/**
- * RuleForm — Shared rule creation/editing form
- *
- * AMOUNT CONDITION:
- *   The amount chip expands into a structured editor with three parts:
- *   1. Applies to: Debits / Credits / Both  (UI-only — backend uses absolute values)
- *   2. Lower bound (optional): >= or > operator + value
- *   3. Upper bound (optional): <= or < operator + value
- *   Plus an "Equals" shortcut that sets min=max with >= operator on both sides.
- *   All comparisons use absolute values (a debit of -$10 matches ">= $5 and <= $15").
- *
- * AMOUNT STATE:
- *   amtLowOp:  '>=' | '>'  (operator for lower bound)
- *   amtLow:    number | null
- *   amtHighOp: '<=' | '<'  (operator for upper bound)
- *   amtHigh:   number | null
- *   amtSide:   'debit' | 'credit' | 'both'
- *
- *   These map to amount_min / amount_max for the backend. The op modifiers
- *   are stored as half-open adjustments: '>' lowers amtLow by epsilon when
- *   sent to the backend is not practical with floats, so we store the op
- *   separately and reconstruct the display; the backend uses >= / <= semantics
- *   for amount_min / amount_max respectively (both inclusive). The operator
- *   choice is therefore display-only at this stage — the backend always treats
- *   amount_min as >= and amount_max as <=. This matches real-world needs since
- *   financial amounts are typically compared with inclusive bounds.
- *
- * LIST DISPLAY (Rules.jsx):
- *   Rules are listed as "merchant name" + plain-text description of all
- *   active conditions and actions. No separate columns.
- *
- * TRANSACTION DEFAULTS:
- *   When transactionData prop is provided (from transaction context), the form
- *   will auto-populate the amount filter and debit/credit selector:
- *   - defaults are applied when user opens the amount section
- *   - amount defaults to abs(transaction.amount)
- *   - applies to debit/credit / both based on sign
- *   This does not auto-activate the amount condition on open.
- */
-
 import { forwardRef, useState, useEffect, useImperativeHandle, useLayoutEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
 import CategoryPicker from './CategoryPicker.jsx'
@@ -50,14 +10,12 @@ import {
   getSharedPillStyle,
 } from './pillStyles.js'
 
-// ── Shared styles ─────────────────────────────────────────────────────────────
 const sectionHeadStyle = {
   fontSize: 11, fontWeight: 700, color: 'var(--accent2)',
   letterSpacing: '0.03em',
   marginBottom: 12,
 }
 
-// ── Amount summary for chip header ────────────────────────────────────────────
 export function amountConditionSummary(low, lowOp, high, highOp, side) {
   const parts = []
   if (side && side !== 'both') parts.push(side === 'debit' ? 'debit' : 'credit')
@@ -83,7 +41,6 @@ function getCategoryDisplayLabel(categories, categoryId) {
   return group?.name ? `${group.name}: ${selected.name}` : selected.name
 }
 
-// ── NumberInput ───────────────────────────────────────────────────────────────
 function NumberInput({ value, onChange, placeholder, width = 88 }) {
   return (
     <input
@@ -100,7 +57,6 @@ function NumberInput({ value, onChange, placeholder, width = 88 }) {
   )
 }
 
-// ── OpSelect — small operator dropdown ───────────────────────────────────────
 function OpSelect({ value, onChange, options }) {
   return (
     <select
@@ -117,7 +73,6 @@ function OpSelect({ value, onChange, options }) {
   )
 }
 
-// ── SegButton — small segmented control button ────────────────────────────────
 function SegButton({ active, onClick, children }) {
   return (
     <button
@@ -134,7 +89,6 @@ function SegButton({ active, onClick, children }) {
   )
 }
 
-// ── AmountCondition ───────────────────────────────────────────────────────────
 function AmountCondition({ low, lowOp, high, highOp, side, onChange }) {
   const isEquals = low != null && high != null && low === high
   function setLow(v)      { onChange({ low: v, lowOp, high, highOp, side }) }
@@ -213,8 +167,6 @@ function AmountCondition({ low, lowOp, high, highOp, side, onChange }) {
     </div>
   )
 }
-
-// ── ConditionChip — ... (unchanged) ...
 
 function ConditionChip({ label, summary, active, expanded = true, onActivate, onClear, children, containerRef, triggerRef }) {
   if (!active) {
@@ -392,7 +344,11 @@ function MatchCountInline({ keyword, amtLow, amtHigh, ownerId, accountId, onCoun
   )
 }
 
-// ── RuleForm ──────────────────────────────────────────────────────────────────
+/*
+ * The form is organized around a "read the rule as a sentence" model: the header mirrors the live draft while
+ * each chip expands into one condition or action editor. Transaction context can prefill the amount rule, but
+ * only once the user opens that section so the form still feels suggestion-driven rather than silently mutated.
+ */
 const RuleForm = forwardRef(function RuleForm({
   initialValues = {},
   categories,
@@ -481,10 +437,13 @@ const RuleForm = forwardRef(function RuleForm({
     value: initialValues.cleanName ?? '',
     open: !!initialValues.cleanName,
   })
+  // Keyword and rename can be edited from both the summary sentence and the expanded chips, so Escape restores
+  // whichever value/open state the user started from instead of just closing the current field.
   const [editingActionKey, setEditingActionKey] = useState(null)
   const [renamePillDraft, setRenamePillDraft] = useState('')
 
   useEffect(() => {
+    // Treat transaction-derived amount data as a starting suggestion; once the user edits the amount condition, stop auto-hydrating it.
     if (
       amtOpen &&
       !transactionDefaultsApplied &&

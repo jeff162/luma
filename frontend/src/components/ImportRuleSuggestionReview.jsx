@@ -71,6 +71,8 @@ function RuleEditorModal({
   const [error, setError] = useState('')
 
   useEffect(() => {
+    // Rehydrate from the current suggestion whenever the editor is retargeted so
+    // in-progress edits from one card never bleed into another.
     setDraftState({
       data: {
         keyword: suggestion.keyword,
@@ -449,6 +451,8 @@ function MatchingTransactionsModal({ state, categories, onClose }) {
   const viewerGridTemplateColumns = `${dateWidth}px ${merchantWidth}px ${importedCategoryWidth}px ${mapsToWidth}px ${amountWidth}px`
   const viewerColumnGap = 12
   const tableHorizontalPadding = 32
+  // Reserve real scrollbar width so the sticky header grid stays aligned with the
+  // scrollable body across platforms that render wider native scrollbars.
   const scrollbarWidth = measureScrollbarWidth()
   const tableContentWidth = dateWidth + merchantWidth + importedCategoryWidth + mapsToWidth + amountWidth + (viewerColumnGap * 4) + tableHorizontalPadding
   const viewerDesiredWidth = Math.max(700, Math.min(1200, tableContentWidth + scrollbarWidth + 36))
@@ -660,6 +664,8 @@ function buildCategoryDisplayLabel(categories, categoryId, fallbackName = '') {
   const selected = leaves.find(category => String(category.id) === String(categoryId))
   if (!selected) return fallbackName || ''
   const normalizedName = String(selected.name || '').trim().toLowerCase()
+  // Imported rows may only know the leaf name; add the parent group only when
+  // that leaf label is ambiguous elsewhere in the tree.
   const duplicateCount = leaves.filter(category => String(category.name || '').trim().toLowerCase() === normalizedName).length
   if (duplicateCount <= 1) return selected.name
   const group = groupsById.get(selected.parent_id)
@@ -1131,6 +1137,8 @@ export default function ImportRuleSuggestionReview({
   const merchantFilterInputRef = useRef(null)
   const merchantFilterButtonRef = useRef(null)
   const ownerFilterButtonRef = useRef(null)
+  // Migrate the pre-preferences sort choice forward once so existing users keep
+  // their review ordering after the setting moved into user preferences.
   const legacySortOrderRef = useRef(
     typeof window === 'undefined'
       ? 'row_count'
@@ -1382,6 +1390,8 @@ export default function ImportRuleSuggestionReview({
       return undefined
     }
 
+    // In bulk mode, row actions normally apply to the current selection; Ctrl is
+    // the temporary escape hatch for acting on just the row under the cursor.
     function syncModifierState(event) {
       setSingleRowActionOverride(Boolean(event.ctrlKey))
     }
@@ -1568,6 +1578,8 @@ export default function ImportRuleSuggestionReview({
     const hasAccountOverride = Object.prototype.hasOwnProperty.call(override, 'accountId')
     const hasAmountMinOverride = Object.prototype.hasOwnProperty.call(override, 'amountMin')
     const hasAmountMaxOverride = Object.prototype.hasOwnProperty.call(override, 'amountMax')
+    // Every preview, bulk action, and match lookup should see the same unsaved
+    // edits, so we always merge transient UI overrides before using a suggestion.
     const ownerId = override.removeOwner ? null : (hasOwnerOverride ? override.ownerId : suggestion.owner_id)
     const accountId = override.removeAccount ? null : (hasAccountOverride ? override.accountId : suggestion.account_id)
     const amountMin = override.removeAmount ? null : (hasAmountMinOverride ? override.amountMin : suggestion.amount_min)
@@ -2585,6 +2597,8 @@ export default function ImportRuleSuggestionReview({
                           categoryPickerHasOpenedRef.current = true
                           return
                         }
+                        // Some picker close events fire before the popover is ever
+                        // visible; ignore those so category edit mode does not cancel instantly.
                         if (categoryPickerHasOpenedRef.current) {
                           setEditingCategorySuggestionId(current => (
                             current === getSuggestionKey(suggestion.id) ? null : current

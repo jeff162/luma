@@ -8,6 +8,7 @@ import App from './App.jsx'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
+    {/* Opt into the newer relative-splat behavior now so route resolution does not change later during a router upgrade. */}
     <BrowserRouter future={{ v7_relativeSplatPath: true }}>
       <App />
     </BrowserRouter>

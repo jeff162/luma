@@ -1,75 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/**
- * TransactionRow — Shared transaction display components
- *
- * DESIGN PRINCIPLE: Single source of truth for transaction presentation.
- * Transactions appear in three places: the Transactions page, the Dashboard
- * drill-down tables, and the TransactionDetail month view. Rather than
- * duplicating the display/edit logic in each place, all three import from here.
- * This ensures consistent behavior everywhere — if you fix a bug or add a
- * feature to category editing, it works everywhere automatically.
- *
- * COMPONENTS:
- *
- * MerchantCell
- *   Renders the merchant name with two interactions:
- *   - Click the name → inline text edit that calls api.updateMerchant() on commit
- *   - Click the ↗ icon → opens TransactionDetail panel (payee history)
- *   The parent passes onOpenDetail(txn) and onRename(id, name) callbacks so
- *   each page can update its own local state optimistically.
- *
- * CategoryCell
- *   Renders the category badge (or "Uncategorized"). Click to enter edit mode,
- *   which renders InlineCategorySelect. On save, calls api.overrideCategory()
- *   and invokes onSave(txnId, catId, catObj) so the parent can update locally.
- *
- * InlineCategorySelect
- *   The full autocomplete category picker:
- *   - Type to search leaf categories
- *   - Click ▾ to browse all categories grouped by parent
- *   - "+ New category" footer creates a category and assigns it in one step
- *   - Arrow keys + Enter/Tab to navigate, Escape to cancel
- *   - Dropdown uses position:fixed with post-render measurement to avoid
- *     clipping inside scrollable containers (openUp flips it above the input)
- *
- * EDIT-IN-PLACE PATTERN:
- *   Components manage their own editing state locally (useState inside the
- *   component). The parent only receives the final saved value via callback.
- *   This keeps editing state contained and prevents re-renders of sibling rows.
- *
- * OPTIMISTIC UPDATES:
- *   All saves are fire-and-forget (no await on the API call in the parent).
- *   The UI updates immediately; if the server call fails the data will be
- *   stale until next reload. For a local app this tradeoff is fine.
- */
-
-/**
- * TransactionRow.jsx — Shared transaction cell components.
- *
- * DESIGN PRINCIPLES:
- * - Any place transactions are displayed (Transactions page, Dashboard drill-down,
- *   TransactionDetail month list) should use these components for consistency.
- *   Do not inline merchant name or category editing directly in a page.
- * - MerchantCell handles: display name, click-to-edit, detail-open via ↗.
- *   Renaming calls the API immediately and updates local state via onRename callback.
- * - CategoryCell handles: badge display, click-to-edit via InlineCategorySelect.
- *   Saving calls the API and updates local state via onSave callback.
- *   The parent component decides what to do with the updated data (e.g. optimistic
- *   update, reload, or leave stale — all are acceptable since the DB is always updated).
- * - InlineCategorySelect is the full autocomplete+browse+create widget. It positions
- *   itself using fixed coordinates measured post-render to avoid clipping inside
- *   scrollable containers.
- * - Neither component causes a full page reload on save. All state updates are
- *   optimistic and local.
- *
- * TO ADD A NEW EDITABLE FIELD:
- *   Follow the same pattern: a component that shows a static view, switches to an
- *   edit mode on click, saves via API on commit, and calls an onSave/onUpdate
- *   callback so the parent can update its local copy of the data.
- */
-
 import { useState, useRef, useEffect } from 'react'
 import { api } from '../lib/api.js'
 import { CategoryMarker } from './ui.jsx'
@@ -77,7 +8,11 @@ import CategoryDisplay from './CategoryDisplay.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from './TransientTextInput.jsx'
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+/*
+ * These cells centralize transaction editing semantics across every table in the app. Parents keep the row data;
+ * the cells keep transient edit state local and report only committed changes back so each surface can stay
+ * optimistic without forking the interaction rules for merchant rename, notes, or recategorization.
+ */
 
 const detailButtonStyle = {
   background: 'none',
@@ -108,9 +43,6 @@ export function buildGroups(flatCats) {
 export function getTxnMerchantLabel(txn) {
   return txn.display_name || txn.merchant_name || txn.raw_name || '—'
 }
-
-// ── NotePopover — inline note editor ─────────────────────────────────────────
-// Anchored to its trigger element, closes on outside click or Escape.
 
 export function NotePopover({ txn, onSave, onClose }) {
   const [draft, setDraft] = useState(txn.notes || '')
@@ -199,8 +131,6 @@ export function NotePopover({ txn, onSave, onClose }) {
   )
 }
 
-// ── NoteIcon — the 📝 indicator shown when a note exists ─────────────────────
-
 export function NoteCell({ txn, onUpdateNote }) {
   const [showPopover, setShowPopover] = useState(false)
   const hasNote = !!txn.notes
@@ -245,10 +175,8 @@ export function NoteCell({ txn, onUpdateNote }) {
   )
 }
 
-// ── ContextMenu — right-click menu on transaction rows ────────────────────────
-
 export function useContextMenu() {
-  const [menu, setMenu] = useState(null) // { x, y, txn }
+  const [menu, setMenu] = useState(null)
 
   function onContextMenu(e, txn) {
     e.preventDefault()
@@ -268,7 +196,6 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onOpenRul
     refs: [ref],
   })
 
-  // Adjust position so menu doesn't go off-screen
   const x = Math.min(menu.x, window.innerWidth  - 180)
   const y = Math.min(menu.y, window.innerHeight - 140)
 
@@ -308,8 +235,6 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onOpenRul
     </div>
   )
 }
-
-// ── MerchantCell ──────────────────────────────────────────────────────────────
 
 export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
   const [name, setName]         = useState(getTxnMerchantLabel(txn))
@@ -396,7 +321,6 @@ export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
           style={{ ...detailButtonStyle, flexShrink: 0 }}
         >↗</button>
       )}
-      {/* Note icon — always rendered, visible only when note exists */}
       {localNotes && (
         <div style={{ position: 'relative', display: 'inline-flex' }}>
           <span
@@ -416,17 +340,6 @@ export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
     </div>
   )
 }
-
-// ── InlineCategorySelect ──────────────────────────────────────────────────────
-//
-// Three modes:
-//   1. Search: user is typing — shows filtered leaf matches
-//   2. Browse: user clicked ▾ — shows full grouped tree
-//   3. New:    user clicked "+ New category" — shows create form
-//
-// The dropdown uses position:fixed with coordinates measured from the input's
-// bounding rect. This avoids clipping inside overflow:hidden or scrollable
-// containers, at the cost of needing to re-measure on open.
 
 export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAddCategory, onClose, initialQuery = '' }) {
   const currentCat = categories.find(c => c.id === txn.category_id)
@@ -449,7 +362,6 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
     inputRef.current?.focus()
   }, [initialQuery])
 
-  // Measure available space and decide whether to open the dropdown upward
   useEffect(() => {
     if (!wrapRef.current || !listRef.current) return
     const wrap = wrapRef.current.getBoundingClientRect()
@@ -490,6 +402,7 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
   }
 
   function handleBlur() {
+    // Let pointer interactions inside the floating menu win before blur tears the inline editor down.
     setTimeout(() => { if (!wrapRef.current?.contains(document.activeElement)) onClose() }, 150)
   }
 
@@ -513,7 +426,6 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
   async function handleNewGroupSave() {
     if (!newGroupName.trim()) return
     const grp = await api.createCategory({ name: newGroupName.trim(), parent_id: null })
-    // Add to categories list without assigning to transaction
     onAddCategory?.(grp)
     setNewParent(grp.id)
     setCreatingGroup(false)
@@ -658,19 +570,13 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
   )
 }
 
-// ── CategoryCell ──────────────────────────────────────────────────────────────
-//
-// Wraps InlineCategorySelect with the static badge display and edit toggle.
-// onSave receives (txnId, catId, catObj) — catObj is the full category object
-// if a brand new category was just created, or undefined if selecting existing.
-// The parent should optimistically update its local transaction data with the
-// new category fields (id, name, color) so the UI updates without reload.
-
 export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePrompt, onOpenDetail }) {
   const [editId, setEditId] = useState(null)
 
   function fireRulePrompt(catId, catObj) {
     if (!onRulePrompt) return
+    // Manual recategorization is the strongest signal for a useful rule, so pass the triggering merchant text
+    // and amount/sign through to the suggestion flow as optional defaults.
     const merchantName = getTxnMerchantLabel(txn)
     const keywordSource = txn.merchant_name || txn.raw_name || merchantName
     if (!keywordSource && !merchantName) return
@@ -683,7 +589,7 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
       categoryId:    cat.id,
       categoryName:  cat.name,
       categoryColor: cat.color,
-      transactionData: {  // NEW: pass transaction for amount/debit-credit defaults
+      transactionData: {
         amount: txn.amount,
       },
     })

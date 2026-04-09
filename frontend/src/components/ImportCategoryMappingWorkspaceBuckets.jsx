@@ -62,6 +62,7 @@ function findNode(tree, nodeId) {
 }
 
 function sanitizeSnapshotForPersistence(snapshot) {
+  // Drafts can be saved mid-edit, so strip blank placeholder nodes and release mappings that pointed at them before the snapshot is reused.
   const next = cloneImportCategoryMappingSnapshot(snapshot)
   const removedIds = new Set()
   const removedSourceValues = []
@@ -510,6 +511,11 @@ function ChoiceDialog({ choice, onChoose, onCancel }) {
 }
 
 export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, sourceMeta, existingCategories, initialAssignments, initialDraftState, onDraftStateChange, onApply, onClose }) {
+  /*
+   * This is a persisted staging model, not the live category tree. The left side tracks unresolved source values,
+   * the right side tracks the draft destination tree, and both feed the same undoable snapshot so import work can
+   * pause, resume, and survive save/close without losing unresolved decisions.
+   */
   const computedInitialDraftState = useMemo(() => createImportCategoryMappingDraftState(existingCategories, sourceValues, initialAssignments), [existingCategories, initialAssignments, sourceValues])
   const [snapshot, setSnapshot] = useState(() => sanitizeSnapshotForPersistence((initialDraftState || computedInitialDraftState).snapshot))
   const [undoStack, setUndoStack] = useState(() => (initialDraftState?.undoStack || []).map(sanitizeSnapshotForPersistence))
@@ -1025,6 +1031,8 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
     if (!item) return
     if (item.isSource) {
       const info = findNode(snapshot.tree, category.id)
+      // Dropping several source values onto one leaf is ambiguous: users may mean "map them all here" or
+      // "create sibling categories in this group", so defer that choice instead of guessing.
       if ((item.sourceIds || []).length > 1) setPendingChoice({ sourceIds: [...item.sourceIds], categoryId: category.id, groupId: info?.group?.id, targetName: category.name, groupName: info?.group?.name || '' })
       else applyMapSourceToCategory(item.sourceIds, category.id)
     } else {

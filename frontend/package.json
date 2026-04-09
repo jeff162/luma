@@ -5,19 +5,24 @@
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "npm run lint:frontend && npm run lint:backend",
+    "lint:frontend": "node scripts/check-comments.js",
+    "lint:backend": "python ../backend/scripts/check_comments.py",
+    "postinstall": "bash ../scripts/install-hooks.sh || sh ../scripts/install-hooks.sh"
   },
   "dependencies": {
+    "date-fns": "^3.6.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.1",
-    "recharts": "^2.12.7",
-    "date-fns": "^3.6.0"
+    "recharts": "^2.12.7"
   },
   "devDependencies": {
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "eslint-plugin-jsdoc": "^62.9.0",
     "vite": "^5.4.1"
   }
 }

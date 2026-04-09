@@ -25,5 +25,6 @@ function hashString(input) {
 }
 
 export function getCategoryBadgeTheme(key) {
+  // Hashing keeps badge colors stable for a given category key without storing presentation state anywhere.
   return BADGE_THEMES[hashString(key) % BADGE_THEMES.length]
 }

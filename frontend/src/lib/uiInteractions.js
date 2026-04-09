@@ -3,6 +3,10 @@
 
 import { useEffect, useState } from 'react'
 
+/*
+ * These hooks centralize the app's dismissal and inline-edit conventions so popovers, menus, and text edits
+ * respond to Escape, outside clicks, and draft resets the same way across otherwise unrelated screens.
+ */
 export const ESCAPE_BEHAVIOR = Object.freeze({
   CUSTOM: 'custom',
   DISMISS_POPUP: 'dismissPopup',
@@ -94,6 +98,7 @@ export function useDismissiblePopup({
     if (!open || !popupRef.current || !anchorRef.current) return
     const anchorRect = anchorRef.current.getBoundingClientRect()
     const popupHeight = popupRef.current.offsetHeight
+    // Measure after render so variable-height popups can flip above the anchor without hard-coded breakpoints.
     setOpenUp(anchorRect.bottom + popupHeight > window.innerHeight - 8)
   }, [anchorRef, open, popupRef, ...placementDeps])
 
@@ -170,6 +175,7 @@ export function useTransientTextEdit(value, {
   const [draft, setDraft] = useState(value ?? '')
 
   useEffect(() => {
+    // Server refreshes should hydrate idle fields, but never overwrite an in-progress draft mid-typing.
     if (!editing) setDraft(value ?? '')
   }, [editing, value])
 

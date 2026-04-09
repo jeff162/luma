@@ -2,28 +2,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-merchants.py — Merchant rename rules.
+Merchant rename rules normalize payee labels before users and rules see them.
 
-DESIGN PRINCIPLES:
-- Plaid merchant names are often garbled (e.g. 'WHOLEFDS #1234 MKT').
-  Rename rules let users define a pattern → clean name mapping that is applied
-  automatically during sync, before categorization runs.
-- raw_pattern is matched as a case-insensitive substring of raw_name.
-  merchant_name is set to clean_name when a match is found.
-- raw_name is never modified — it always holds the original Plaid string.
-  Only merchant_name is updated by rename rules.
-- The /apply endpoint retroactively applies all rules to existing transactions.
-  This is called automatically when a user saves a rename from the TransactionDetail
-  panel, so historical transactions get cleaned up immediately.
-- Rules created from the UI are pre-populated with the transaction's raw_name
-  as the pattern and the user's edited name as the clean name. The user can
-  adjust the pattern before saving (e.g. to match a broader substring).
+The key contract is that raw source text stays untouched while cleaned names can
+be applied both prospectively during sync and retroactively when a manual edit is
+promoted into a reusable rename rule from transaction detail.
 """
+
 import uuid
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from db.database import get_db
+from backend.db.database import get_db
 
 router = APIRouter()
 
@@ -84,16 +74,14 @@ def delete_rename(rename_id: str):
 
 @router.post("/apply")
 def apply_renames():
-    """
-    Re-apply all rename rules to existing transactions.
-    Updates merchant_name on transactions where raw_name matches a pattern.
-    """
     with get_db() as conn:
         rules = conn.execute(
             "SELECT raw_pattern, clean_name FROM merchant_rename"
         ).fetchall()
         updated = 0
         for rule in rules:
+            # This is the historical backfill path after a user turns one manual cleanup
+            # into a reusable rename rule from transaction detail.
             result = conn.execute(
                 """UPDATE txn SET merchant_name = ?
                    WHERE raw_name LIKE ? AND merchant_name != ?""",

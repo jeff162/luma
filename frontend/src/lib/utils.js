@@ -29,6 +29,6 @@ export function lastNMonths(n = 6) {
 }
 
 export function isIncome(amount) {
-  // Plaid: positive = debit (money out), negative = credit (money in)
+  // Plaid amounts are account-centric, so income detection has to invert the usual "positive means money in" intuition.
   return amount < 0
 }

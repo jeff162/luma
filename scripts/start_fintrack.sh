@@ -103,7 +103,7 @@ open_in_terminal() {
     env_prefix=(env FINTRACK_LOG_PATH="$log_path")
     bash_command="FINTRACK_LOG_PATH=\"$log_path\" bash \"$script_path\"; exec bash"
   fi
-
+  
   if command -v x-terminal-emulator >/dev/null 2>&1; then
     x-terminal-emulator -T "$title" -e "${env_prefix[@]}" bash "$script_path" &
     return 0

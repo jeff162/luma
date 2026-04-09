@@ -1,54 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/**
- * api.js — All API calls to the FastAPI backend
- *
- * PATTERN:
- *   All calls go through request(path, options), which prepends '/api' and
- *   parses JSON. Errors are thrown so callers can catch them if needed,
- *   but most call sites are fire-and-forget (.then() only, no catch).
- *
- * PARAM BUILDING:
- *   For GET requests with optional filters, params are built as URLSearchParams
- *   and appended to the path. Undefined/null values are omitted by spreading
- *   with conditional keys:
- *     { ...(value ? { key: value } : {}) }
- *   This keeps query strings clean (no "key=undefined" noise).
- *
- * MULTI-VALUE PARAMS:
- *   Some endpoints accept multiple values for a single filter:
- *     account_ids  — comma-separated:  '123,456'
- *     group_ids    — comma-separated:  '789,012'
- *     payees       — pipe-separated:   'Starbucks|Peet Coffee'
- *   Pipe is used for payees because names can contain commas.
- *
- * OPTIMISTIC UI:
- *   Category and merchant edits call the API without awaiting in the parent
- *   component — the UI updates immediately via local state. If the server
- *   fails, the data will be stale until next page load. Acceptable for a
- *   local self-hosted app; add error handling + rollback if needed.
- *
- * ADDING NEW ENDPOINTS:
- *   Add a method here following the existing pattern. For list endpoints
- *   with optional filters, use the URLSearchParams pattern above.
- *   For mutations, use { method: 'POST'/'PATCH'/'DELETE', body: JSON.stringify(data) }.
- */
-
-/**
- * api.js — All API calls to the FastAPI backend.
- *
- * DESIGN PRINCIPLES:
- * - All requests go through the request() helper which prepends /api and
- *   handles JSON parsing. Never call fetch() directly in components.
- * - Multi-value filter params (account_ids, group_ids, category_ids) are
- *   passed as comma-separated strings. Payees use pipe-separated (|) because
- *   payee names can contain commas.
- * - Summary endpoints accept either a `month` (YYYY-MM) or `date_start`/
- *   `date_end` pair. Pass null/undefined for month to get all-time data.
- * - When adding a new endpoint: add it here first, then add the backend route,
- *   then call it from the component. Keep the frontend and backend param names
- *   in sync to make debugging easier.
+/*
+ * This module is the contract boundary between page-level UI state and backend routes. Most callers hand it
+ * app concepts like filters, profile context, or batch actions and let this layer normalize headers, query strings,
+ * and the handful of upload/download cases that cannot use the default JSON request helper.
  */
 
 const BASE = '/api'
@@ -62,6 +18,7 @@ async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
     headers: {
       'Content-Type': 'application/json',
+      // Preference profile selection is app-wide context, so the header is injected here instead of threaded through every call site.
       ...(localPreferenceProfileId ? { 'X-Fintrack-Preference-Profile': localPreferenceProfileId } : {}),
       ...options.headers,
     },
@@ -77,7 +34,6 @@ async function request(path, options = {}) {
 }
 
 export const api = {
-  // Auth
   getAuthStatus: () => request('/auth/status'),
   getUserPreferences: () => request('/auth/preferences'),
   saveUserPreference: (key, value) =>
@@ -125,7 +81,6 @@ export const api = {
   setPrivacyMode: (privacy_mode) =>
     request('/auth/privacy-mode', { method: 'POST', body: JSON.stringify({ privacy_mode }) }),
 
-  // Transactions
   getTransactions: (params = {}) => {
     const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))
     return request(`/transactions?${q}`)
@@ -184,12 +139,10 @@ export const api = {
       body: JSON.stringify({ category_id, notes }),
     }),
 
-  // Accounts
   getAccounts: () => request('/accounts'),
   createAccount: (data) => request('/accounts', { method: 'POST', body: JSON.stringify(data) }),
   deleteAccount: (id) => request(`/accounts/${id}`, { method: 'DELETE' }),
 
-  // Categories
   getCategoryTree: () => request('/categories'),
   getCategories: () => request('/categories/flat'),
   getCategoryUsageSummary: () => request('/categories/usage-summary'),
@@ -201,7 +154,6 @@ export const api = {
 
   deleteRule: (ruleId) => request(`/categories/rules/${ruleId}`, { method: 'DELETE' }),
 
-  // Plaid
   getLinkToken: () => request('/plaid/link-token'),
   exchangeToken: (public_token, institution_name) =>
     request('/plaid/exchange', {
@@ -213,7 +165,6 @@ export const api = {
   updateNotes:         (id, notes)  => request(`/transactions/${id}/notes`,    { method: 'PATCH', body: JSON.stringify({ notes }) }),
   clearOverride:       (id)         => request(`/transactions/${id}/uncategorize`, { method: 'PATCH' }),
 
-  // Rules
   getRules: (search) => {
     const q = search ? '?' + new URLSearchParams({ search }) : ''
     return request(`/rules${q}`)
@@ -224,11 +175,9 @@ export const api = {
   applyRule: (id) => request(`/rules/${id}/apply`, { method: 'POST' }),
   deleteRule: (id) => request(`/rules/${id}`, { method: 'DELETE' }),
 
-  // Sync
   runSync: (days = 30) => request(`/sync?days=${days}`, { method: 'POST' }),
   recategorize: () => request('/sync/recategorize', { method: 'POST' }),
 
-  // Owners
   getTasks:    () => request('/tasks'),
   getOwners:   () => request('/owners'),
   createOwner: (data) => request('/owners', { method: 'POST', body: JSON.stringify(data) }),
@@ -240,7 +189,7 @@ export const api = {
   },
   updateAccount: (id, data) => request(`/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
-  // Import / Export
+  // Multipart uploads intentionally bypass request() so fetch can set the boundary instead of inheriting the JSON content-type.
   previewCsv: (file) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -304,7 +253,8 @@ export const api = {
   clearImportMemory:    ()      => request('/import-export/developer/import-memory', { method: 'DELETE' }),
   exportTransactionsCsv: (params = {}) => {
     const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))
-    return `/api/import-export/transactions.csv?${q}`  // returns URL for direct download
+    // Export flows hand callers a download URL because these endpoints are usually navigated to, not consumed as JSON.
+    return `/api/import-export/transactions.csv?${q}`
   },
   getBackupRecipients: () => request('/import-export/backup/recipients'),
   createBackupRecipient: (data) => request('/import-export/backup/recipients', { method: 'POST', body: JSON.stringify(data) }),

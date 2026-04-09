@@ -1,18 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/**
- * CategoryDetail — Category spending history panel
- *
- * Opens as a bottom sheet (same drag-to-float behaviour as TransactionDetail).
- * Shows a monthly bar chart of spending in the category, then a transaction
- * list for whichever month is selected.
- *
- * Props:
- *   category   — { id, name }  (from the txn row)
- *   onClose    — () => void
- */
-
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
@@ -28,9 +16,12 @@ import {
   usePagedMonthTransactions,
 } from './detailShared.jsx'
 
-// ── Main component ────────────────────────────────────────────────────────────
-
 export default function CategoryDetail({ category, categories = [], onClose }) {
+  /*
+   * Like the other detail drawers, this component lets the chart choose the active month and then
+   * treats that month's rows as a small editable working set so in-place recategorization does not
+   * force the user back through the drill path.
+   */
   const { filters } = useFilters()
   const dateStart = filters.date?.start || null
   const dateEnd   = filters.date?.end   || null
@@ -53,11 +44,8 @@ export default function CategoryDetail({ category, categories = [], onClose }) {
     listRef,
   } = usePagedMonthTransactions({ selectedMonth, loadPage: loadMonthPage })
 
-  // ── Load trend ────────────────────────────────────────────────────────────
-
   useEffect(() => {
     setTrendLoading(true)
-    // getMonthlyTrend accepts an optional category_id
     api.getMonthlyTrend(36, category.id).then(rows => {
       setTrend(rows)
       setTrendLoading(false)
@@ -106,8 +94,6 @@ export default function CategoryDetail({ category, categories = [], onClose }) {
     </>
   )
 
-  // ── Render ────────────────────────────────────────────────────────────────
-
   return (
     <DetailPanelShell
       pos={pos}
@@ -129,7 +115,6 @@ export default function CategoryDetail({ category, categories = [], onClose }) {
             <DetailTrendChart trend={trend} selectedMonth={selectedMonth} onSelectMonth={setSelectedMonth} />
           )}
 
-          {/* Month transaction list */}
           {selectedMonth && (
             <div style={{ marginTop: 24, height: monthSectionHeight }}>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>

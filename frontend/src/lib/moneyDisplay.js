@@ -40,6 +40,7 @@ export function formatSignedMoneyAmount(
 }
 
 export function getTransactionDisplayAmount(amount) {
+  // Bank feeds store debits/credits from the account's perspective; most UI reads better when spending displays as negative.
   return -(Number(amount) || 0)
 }
 

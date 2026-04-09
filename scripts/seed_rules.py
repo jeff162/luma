@@ -7,11 +7,13 @@
 Run once after first launch to populate default categorization rules.
 Usage: DB_PATH=./data/fintrack.db python3 scripts/seed_rules.py
 """
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../backend"))
+import os
+import sys
 
-from db.database import get_db, init_db
-from services.categorizer import seed_default_rules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from backend.db.database import get_db, init_db
+from backend.services.categorizer import seed_default_rules
 
 init_db()
 with get_db() as conn:

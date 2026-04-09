@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+/*
+ * Category import drafts keep a temporary tree and sidebar ordering separate from live categories so users can
+ * sort incoming values, set some aside, and undo bulk organization before anything is committed.
+ */
+
 function cloneTree(tree) {
   return {
     income: (tree?.income || []).map(group => ({
@@ -17,6 +22,7 @@ function cloneTree(tree) {
 function buildSeededGroupTree(existingCategories) {
   const tree = { income: [], expense: [] }
   const groups = (existingCategories || [])
+    // The workspace starts from existing top-level groups; imported values are organized under them as draft children later.
     .filter(category => !category?.parent_id)
     .map(category => ({
       id: category.id,
@@ -53,6 +59,7 @@ function buildInitialSnapshot(sourceValues, existingCategories) {
   const collapsedGroups = {}
   for (const sectionType of ['income', 'expense']) {
     for (const group of tree[sectionType]) {
+      // Starting collapsed keeps the first pass focused on triaging imported values instead of scanning a fully expanded tree.
       collapsedGroups[group.id] = true
     }
   }

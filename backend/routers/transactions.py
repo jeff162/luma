@@ -2,72 +2,25 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-transactions.py — Transaction list and summary endpoints
+Transaction list and summary endpoints.
 
-FILTERING DESIGN:
-  Most endpoints accept both a legacy `month` param (YYYY-MM) and newer
-  `date_start`/`date_end` params (YYYY-MM-DD). The date range params take
-  precedence. When neither is supplied, no date constraint is applied (all time).
-  This lets the dashboard show all-time totals by default while the global
-  filter bar can pass an explicit range.
-
-MULTI-FILTER PARAMS:
-  The list endpoint accepts several comma/pipe-separated multi-value params:
-    account_ids   — comma-separated account IDs (OR'd)
-    group_ids     — comma-separated group IDs; matches all child categories
-    category_ids  — comma-separated leaf category IDs
-    payees        — pipe-separated payee names (exact match on merchant_name OR raw_name)
-  These are AND'd together (must match all supplied filters).
-  The singular account_id/category_id params remain for backwards compatibility.
-
-SENTINEL VALUES for category_id:
-  '__uncategorized__'  — matches transactions with no category assigned
-  '__group__{id}'      — matches all transactions in any child category of group {id}
-  A plain UUID         — matches that specific leaf category
-
-CATEGORY-IN-GROUP QUERY NOTE:
-  The by-category-in-group endpoint uses a subquery rather than a JOIN filter
-  to restrict to the group's categories:
-    t.category_id IN (SELECT id FROM category WHERE parent_id = ? OR id = ?)
-  Using a JOIN filter instead would silently exclude NULL category_id rows
-  (uncategorized transactions) because NULL comparisons always evaluate false.
-
-SUMMARY ENDPOINTS:
-  /summary/by-group              — totals per top-level group
-  /summary/by-category-in-group  — totals per leaf category within one group
-  /summary/by-category           — totals per leaf category (flat)
-  /summary/monthly-trend         — per-month totals, optionally filtered by category/payee
-  /summary/monthly-by-group      — per-month totals broken down by group (for Trends view)
-"""
-
-"""
-transactions.py — Transaction list and summary endpoints.
-
-DESIGN PRINCIPLES:
-- All summary endpoints (by-group, by-category-in-group, etc.) accept both
-  a `month` param (YYYY-MM) and `date_start`/`date_end` params (YYYY-MM-DD).
-  When a global date filter is active in the UI, date_start/date_end are used.
-  When no filter is set, all params are omitted and the query returns all-time data.
-- Multi-select filters (account_ids, group_ids, category_ids, payees) are passed
-  as comma-separated strings. The backend splits and builds IN() clauses.
-  account_id (singular) is kept for backwards compatibility with direct API calls.
-- The category hierarchy is two levels. Filtering by group uses a subquery:
-    t.category_id IN (SELECT id FROM category WHERE parent_id = ?)
-  rather than a JOIN filter, so that the LEFT JOIN used for display fields
-  doesn't accidentally exclude transactions from the result set.
-- SQLite reserved word: the table is named `txn`, not `transaction`.
-- Pending transactions (is_pending=1) are excluded from all summary queries
-  but included in the raw transaction list so users can see them.
+Treat this file as two related contracts:
+- `list_transactions` is the raw ledger view, so it keeps pending rows and accepts a broad mix of legacy and
+  multi-select filters.
+- the `/summary/*` endpoints normalize transactions into reporting semantics, which means pending rows drop out,
+  amount sign is interpreted through category type, and group/category filters use subqueries so the reporting
+  joins do not accidentally change which transactions qualify.
 """
 from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from db.database import get_db, get_shared_owner_id
+from backend.db.database import get_db, get_shared_owner_id
 
 router = APIRouter()
 
 
 class CategoryOverride(BaseModel):
+    # Category edits from the transaction UI can also persist the note field in the same save gesture.
     category_id: str
     notes: Optional[str] = None
 
@@ -89,10 +42,8 @@ def list_transactions(
     limit:        int           = Query(200, le=1000),
     offset:       int           = Query(0),
 ):
-    """
-    Unified transaction list across all accounts.
-    Filter by month (YYYY-MM), account, category, or free-text search.
-    """
+    # This endpoint is the UI's lossless transaction feed, so filters narrow the raw rows but do not apply the
+    # reporting rules used by summaries such as excluding pending transactions or normalizing amount direction.
     clauses = []
     params  = []
 
@@ -119,7 +70,7 @@ def list_transactions(
     if category_id == "__uncategorized__":
         clauses.append("t.category_id IS NULL")
     elif category_id and category_id.startswith("__group__"):
-        # Filter by all categories whose parent = this group
+        # Group filters expand to leaf categories; the list endpoint never synthesizes group rows of its own.
         gid = category_id[len("__group__"):]
         clauses.append("t.category_id IN (SELECT id FROM category WHERE parent_id = ?)")
         params.append(gid)
@@ -138,6 +89,8 @@ def list_transactions(
         params.extend(ids)
     if payees:
         names = [n.strip() for n in payees.split('|') if n.strip()]
+        # Payee chips come from canonicalized labels in the UI, so matching has to honor whichever merchant field
+        # currently carries the visible name instead of forcing one column to be authoritative.
         or_clauses = ' OR '.join(
             ['(t.display_name = ? OR t.merchant_name = ? OR t.raw_name = ?)'] * len(names)
         )
@@ -146,7 +99,8 @@ def list_transactions(
             params.extend([n, n, n])
     if owner_ids:
         ids = [i.strip() for i in owner_ids.split(',') if i.strip()]
-        # Support 'unassigned' sentinel for transactions with no owner
+        # Owner filters need to express "real owner(s) plus unassigned" because the UI exposes unowned transactions
+        # as a first-class bucket rather than forcing the client to issue separate queries.
         if 'unassigned' in ids:
             other_ids = [i for i in ids if i != 'unassigned']
             if other_ids:
@@ -209,7 +163,6 @@ def list_transactions(
 
 @router.patch("/{txn_id}/category")
 def override_category(txn_id: str, body: CategoryOverride):
-    """Manually set a category, marking it as overridden."""
     with get_db() as conn:
         txn = conn.execute(
             "SELECT id FROM txn WHERE id = ?", (txn_id,)
@@ -231,7 +184,6 @@ def override_category(txn_id: str, body: CategoryOverride):
 
 @router.patch("/{txn_id}/merchant")
 def update_merchant(txn_id: str, body: dict):
-    """Manually set the display merchant name on a transaction."""
     name = body.get("merchant_name", "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="merchant_name required")
@@ -244,7 +196,6 @@ def update_merchant(txn_id: str, body: dict):
 
 @router.patch("/{txn_id}/notes")
 def update_notes(txn_id: str, body: dict):
-    """Set or clear a note on a transaction."""
     notes = body.get("notes", "")
     notes = notes.strip() if notes else None
     with get_db() as conn:
@@ -254,8 +205,9 @@ def update_notes(txn_id: str, body: dict):
 
 @router.patch("/{txn_id}/uncategorize")
 def clear_override(txn_id: str):
-    """Remove manual override so auto-categorization can run again."""
     with get_db() as conn:
+        # Clearing an override resets both the lock bit and the stored category so rule application can fully
+        # re-derive the transaction instead of leaving a stale manual category behind.
         conn.execute(
             "UPDATE txn SET category_overridden = 0, category_id = NULL WHERE id = ?",
             (txn_id,),
@@ -269,7 +221,6 @@ def spending_by_category(
     account_id:  Optional[str] = Query(None),
     account_ids: Optional[str] = Query(None),
 ):
-    """Monthly spending totals grouped by category."""
     clauses = ["t.date LIKE ?", "t.amount > 0", "t.is_pending = 0"]
     params  = [f"{month}%"]
 
@@ -316,7 +267,8 @@ def spending_by_group(
     owner_ids:          Optional[str] = Query(None, description="filter by transaction owner (comma-separated)"),
     category_owner_ids: Optional[str] = Query(None, description="filter by category group owner (comma-separated)"),
 ):
-    """Monthly spending rolled up to top-level category groups."""
+    # Reporting treats amount sign through the category hierarchy: expense groups count positive debits, income
+    # groups count negative credits, and excluded categories are removed before rollup.
     clauses = ["t.is_pending = 0",
                "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0",
                """(
@@ -366,8 +318,8 @@ def spending_by_group(
             if shared_owner_id and shared_owner_id not in filter_ids:
                 filter_ids.append(shared_owner_id)
             placeholders = ','.join('?' * len(filter_ids))
-            # Explicit category ownership must win over the parent/group owner.
-            # Only unowned child categories inherit from the group.
+            # Ownership inherits downward only for unowned child categories. Once a leaf has its own owner, group
+            # ownership stops applying so summaries and drill-downs stay aligned with what the category editor shows.
             clauses.append(
                 f"(COALESCE(p.id, c.id) IS NULL OR "
                 f"COALESCE(c.owner_id, p.owner_id) IN ({placeholders}))"
@@ -381,7 +333,6 @@ def spending_by_group(
                 COALESCE(p.id,              c.id,              'uncategorized') AS group_id,
                 COALESCE(p.name,            c.name,            'Uncategorized') AS group_name,
                 COALESCE(p.color,           c.color,           '#9E9E9E')       AS group_color,
-                -- Child owner_id takes precedence; only NULL children inherit the group owner.
                 COALESCE(c.owner_id,        p.owner_id)                          AS group_owner_id,
                 COALESCE(p.category_type,   c.category_type)                     AS category_type,
                 ABS(SUM(t.amount))                                               AS total,
@@ -409,7 +360,6 @@ def spending_by_category_in_group(
     account_ids: Optional[str] = Query(None),
     owner_ids:   Optional[str] = Query(None, description="comma-separated owner IDs"),
 ):
-    """Monthly spending by category within a specific group."""
     clauses = ["t.amount > 0", "t.is_pending = 0"]
     params  = []
     if date_start and date_end:
@@ -421,8 +371,8 @@ def spending_by_category_in_group(
     elif month:
         clauses.append("t.date LIKE ?"); params.append(f"{month}%")
 
-    # Filter to categories that belong to this group (children or the group itself)
-    # Use a subquery so uncategorized txns don't slip through the LEFT JOIN filter
+    # Keep the membership test separate from the display join so grouping rules do not accidentally mutate which
+    # rows qualify once category metadata is LEFT JOINed in for names/colors.
     clauses.append(
         "t.category_id IN (SELECT id FROM category WHERE parent_id = ? OR id = ?)"
     )
@@ -484,11 +434,9 @@ def monthly_trend(
     date_start:  Optional[str] = Query(None),
     date_end:    Optional[str] = Query(None),
 ):
-    """Spending per month, optionally filtered by category or payee.
-    When filtering by payee, uses date_start/date_end from the active filter
-    (or all history if no date filter is set). Otherwise uses the months window."""
-
     if payee:
+        # Payee detail drawers want the merchant's full visible history by default, so the rolling month window is
+        # suppressed unless the caller supplied an explicit date filter.
         clauses = ["t.amount > 0", "t.is_pending = 0",
                    "(t.display_name = ? OR t.merchant_name = ? OR t.raw_name = ?)"]
         params  = [payee, payee, payee]
@@ -523,6 +471,8 @@ def monthly_trend(
         params.append(date_end)
 
     if not date_start and not date_end and not payee and not account_id and not account_ids:
+        # The generic trends view stays bounded by a rolling window so dashboards do not turn into unbounded
+        # all-history scans unless the caller explicitly asked for that.
         clauses.append("t.date >= date('now', ? || ' months')")
         params.append(f"-{months}")
 
@@ -553,11 +503,6 @@ def monthly_by_group(
     account_ids: Optional[str] = Query(None),
     group_id:    Optional[str] = Query(None),
 ):
-    """
-    Monthly spending totals for the last N months, broken down by group
-    (or by category within a group if group_id supplied).
-    Returns rows of { month, group_id/category_id, name, color, total }.
-    """
     clauses = [
         "t.is_pending = 0",
         "t.date >= date('now', ? || ' months')",
@@ -588,6 +533,8 @@ def monthly_by_group(
     where = "WHERE " + " AND ".join(clauses)
 
     if group_id:
+        # Drill-down switches the series identity from top-level groups to the group's leaf categories without
+        # changing the payload shape, so the trends UI can reuse one charting pipeline for both levels.
         select_id   = "COALESCE(c.id,    'uncategorized') AS series_id"
         select_name = "COALESCE(c.name,  'Uncategorized') AS series_name"
         select_col  = "COALESCE(c.color, '#9E9E9E')       AS series_color"

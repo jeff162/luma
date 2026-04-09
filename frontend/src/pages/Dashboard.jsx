@@ -1,48 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/**
- * Dashboard.jsx — Main spending overview with drill-down, compare, and trends
- *
- * MODES:
- *   'single'  — Single period view. Shows spending by group with a donut chart.
- *               Drill down: groups → categories → transactions (3-level state machine).
- *   'compare' — Side-by-side comparison of two user-defined periods.
- *               Uses PeriodPicker (preset + custom month range).
- *   'trends'  — Multi-month area chart + averages. Uses a year selector to
- *               keep the chart readable (one year at a time, or all-time for
- *               the annual totals bar).
- *
- * DRILL-DOWN STATE MACHINE (single mode):
- *   level: 'groups' → 'categories' → 'transactions'
- *   selectedGroup: null → GroupRow object
- *   selectedCat:   null → CategoryRow object
- *
- *   Navigating down: drillToCategories(group) / drillToTransactions(cat)
- *   Navigating up:   singleNavigate(index) via Breadcrumb clicks
- *
- *   At 'categories' level, the bottom panel shows ALL transactions for the
- *   selected group (not just a trend chart) so the user immediately sees
- *   what makes up the group total.
- *
- * DATE FILTERING:
- *   dateStart/dateEnd are derived from the global FilterContext.
- *   When no date filter is set, both are null and the API returns all-time data.
- *   The summary endpoints (by-group, by-category-in-group) accept either
- *   date_start/date_end or the legacy month param.
- *
- * COLOR ASSIGNMENT (assignColors):
- *   Charts use a display-local palette so the currently visible slices/bars
- *   always have strong contrast. This is presentation-only and does not depend
- *   on any stored category color in the database.
- *
- * ACCOUNT FILTERING:
- *   accountId is derived from global filter selections of type 'account'.
- *   Currently only single-account filtering is supported in summary endpoints
- *   (first selected account wins). Multi-account support would require
- *   passing account_ids to the summary endpoints and aggregating server-side.
- */
-
 import { useState, useEffect, useMemo } from 'react'
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
@@ -59,10 +17,7 @@ import { currentMonth, formatCurrency, formatDate, monthLabel, lastNMonths } fro
 import { Card, PageHeader, Select, Spinner, EmptyState, CategoryMarker } from '../components/ui.jsx'
 import { format, subMonths, subYears, startOfYear, endOfYear, startOfMonth, endOfMonth } from 'date-fns'
 
-// ── Period helpers ────────────────────────────────────────────────────────────
-
 function monthsInRange(startYM, endYM) {
-  // Returns array of 'YYYY-MM' strings between two 'YYYY-MM' values inclusive
   const months = []
   let [sy, sm] = startYM.split('-').map(Number)
   let [ey, em] = endYM.split('-').map(Number)
@@ -111,14 +66,11 @@ function presetToPeriod(preset) {
 
 const RECENT_MONTHS = lastNMonths(24).map(m => ({ value: m, label: monthLabel(m) }))
 
-// ── Fetch totals for a period (sum across all its months) ────────────────────
-
 async function fetchPeriodGroupTotals(period, accountId) {
   const months = periodMonths(period)
   const results = await Promise.all(
     months.map(m => api.getGroupTotals(m, accountId || undefined))
   )
-  // Merge by group_id
   const merged = {}
   for (const monthRows of results) {
     for (const row of monthRows) {
@@ -151,8 +103,6 @@ async function fetchPeriodCatTotals(period, groupId, accountId) {
   }
   return Object.values(merged).sort((a, b) => b.total - a.total)
 }
-
-// ── Sub-components ────────────────────────────────────────────────────────────
 
 function SpendBar({ value, total, color }) {
   const pct = total > 0 ? Math.min((value / total) * 100, 100) : 0
@@ -256,7 +206,6 @@ function PeriodPicker({ label, value, onChange }) {
 }
 
 
-// Distinct color palette for charts — assigned from the currently displayed rows
 const CHART_PALETTE = [
   '#6366f1','#ec4899','#f97316','#eab308','#22c55e',
   '#14b8a6','#3b82f6','#a855f7','#ef4444','#64748b',
@@ -271,8 +220,6 @@ function assignColors(rows, colorKey) {
     _chartColor: CHART_PALETTE[i % CHART_PALETTE.length],
   }))
 }
-
-// ── Comparison row ─────────────────────────────────────────────────────────────
 
 function CompareRow({ label, color, kind = 'category', a, b, maxVal, onClick }) {
   const diff    = a - b
@@ -303,7 +250,6 @@ function CompareRow({ label, color, kind = 'category', a, b, maxVal, onClick }) 
         {onClick && <span style={{ color: 'var(--muted)', fontSize: 14 }}>›</span>}
       </div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        {/* Period A bar */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
           <div style={{ height: 5, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden' }}>
             <div style={{ width: `${maxVal > 0 ? (a / maxVal) * 100 : 0}%`, height: '100%', background: color, opacity: 1, borderRadius: 3 }} />
@@ -322,8 +268,6 @@ function CompareRow({ label, color, kind = 'category', a, b, maxVal, onClick }) 
 }
 
 
-// ── Trends Panel ──────────────────────────────────────────────────────────────
-
 function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onDrillGroup, onClearDrill, loading }) {
   if (loading) return <Spinner />
 
@@ -336,10 +280,8 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
     ? normalizedRows
     : normalizedRows.filter(r => r.month.startsWith(selectedYear))
 
-  // Build a sorted list of all months present
   const allMonths = [...new Set(filteredRows.map(r => r.month))].sort()
 
-  // Build a list of unique series (groups or categories)
   const seriesMap = {}
   for (const r of filteredRows) {
     if (!seriesMap[r.series_id]) {
@@ -348,7 +290,6 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
   }
   const series = Object.values(seriesMap).filter(s => s.category_type !== 'income')
 
-  // Pivot: [{ month, seriesId: total, ... }]
   const chartData = allMonths.map(m => {
     const entry = { month: monthLabel(m) }
     for (const s of series) {
@@ -358,7 +299,6 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
     return entry
   })
 
-  // Averages per series
   const avgBySeries = series.map(s => {
     const totals = allMonths.map(m => {
       const r = filteredRows.find(x => x.month === m && x.series_id === s.id)
@@ -369,7 +309,6 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
     return { ...s, avg, total }
   }).sort((a, b) => b.total - a.total)
 
-  // Annual totals: group by year
   const yearMap = {}
   for (const r of filteredRows) {
     const yr = r.month.slice(0, 4)
@@ -379,7 +318,6 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([year, total]) => ({ year, total }))
 
-  // Overall monthly total for the total line
   const monthlyTotal = allMonths.map(m => ({
     month: monthLabel(m),
     total: filteredRows.filter(r => r.month === m).reduce((s, r) => s + r.total, 0),
@@ -399,7 +337,6 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* Controls */}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <select
           value={selectedYear}
@@ -434,7 +371,6 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
         )}
       </div>
 
-      {/* Stacked area chart — monthly breakdown by series */}
       <Card>
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>
           Monthly spending{drillGroup ? ` · ${drillGroup.series_name}` : ' by group'}
@@ -463,7 +399,6 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
       </Card>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-        {/* Total monthly line with average reference */}
         <Card>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Total per month</div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
@@ -484,7 +419,6 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
           </ResponsiveContainer>
         </Card>
 
-        {/* Annual totals */}
         <Card>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>Annual totals</div>
           {annualData.length === 0 ? (
@@ -504,7 +438,6 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
         </Card>
       </div>
 
-      {/* Average per month table */}
       <Card>
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>
           Monthly averages{drillGroup ? ` · ${drillGroup.series_name}` : ' by group'}
@@ -546,8 +479,6 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
   )
 }
 
-// ── Owner Split Panel ─────────────────────────────────────────────────────────
-
 function OwnerSplitPanel({ owners, sharedOwnerId, ownerSplitData, onDrill }) {
   const activeOwners = owners.filter(o => ownerSplitData[o.id]?.length > 0)
   if (activeOwners.length === 0) {
@@ -560,7 +491,6 @@ function OwnerSplitPanel({ owners, sharedOwnerId, ownerSplitData, onDrill }) {
     )
   }
 
-  // Collect all group ids across all owners for consistent row display
   const allGroupIds = [...new Set(
     Object.values(ownerSplitData).flatMap(rows => rows.map(r => r.group_id))
   )]
@@ -580,8 +510,8 @@ function OwnerSplitPanel({ owners, sharedOwnerId, ownerSplitData, onDrill }) {
         <div />
         {activeOwners.map(o => {
           const rows = ownerSplitData[o.id] || []
-          // For the summary total, only count groups that belong to this owner
-          // (not shared ones, to avoid double-counting)
+          // Shared groups appear in every column, so the owner-specific summary has
+          // to separate them out or the top-line totals overstate personal spending.
           const personalTotal = rows
             .filter(r => r.group_owner_id === o.id)
             .reduce((s, r) => s + r.total, 0)
@@ -676,20 +606,18 @@ function OwnerSplitPanel({ owners, sharedOwnerId, ownerSplitData, onDrill }) {
   )
 }
 
-// ── Main component ─────────────────────────────────────────────────────────────
-
 export default function Dashboard() {
+  /*
+   * Dashboard runs three analysis modes over the same global filters, but each mode keeps its own drill state.
+   * Resetting that state on mode changes avoids carrying breadcrumbs into views that summarize the same data differently.
+   */
   const { filters } = useFilters()
-  const [mode, setMode]           = useState('single')   // 'single' | 'compare'
-
-  // Owner split state
+  const [mode, setMode]           = useState('single')
   const [splitByOwner, setSplitByOwner] = useState(false)
   const [owners, setOwners]             = useState([])
-  const [ownerSplitData, setOwnerSplitData] = useState({}) // { ownerId: groupRows }
+  const [ownerSplitData, setOwnerSplitData] = useState({})
   const personalOwners = useMemo(() => owners.filter(owner => !owner.is_shared), [owners])
   const sharedOwnerId = useMemo(() => owners.find(owner => owner.is_shared)?.id || null, [owners])
-
-  // Single mode
   const [groupRows,  setGroupRows]  = useState([])
   const [incomeRows, setIncomeRows] = useState([])
   const [catRows, setCatRows]     = useState([])
@@ -703,7 +631,6 @@ export default function Dashboard() {
   const [selectedGroup, setSelectedGroup] = useState(null)
   const [selectedCat,   setSelectedCat]   = useState(null)
 
-  // Compare mode
   const [periodA, setPeriodA] = useState(presetToPeriod('this_month'))
   const [periodB, setPeriodB] = useState(presetToPeriod('last_month'))
   const [cmpGroupsA, setCmpGroupsA] = useState([])
@@ -713,9 +640,8 @@ export default function Dashboard() {
   const [cmpGroup,   setCmpGroup]   = useState(null)
   const [cmpLevel,   setCmpLevel]   = useState('groups')
 
-  // Trends mode
   const [trendYear,  setTrendYear]        = useState('all')
-  const [trendGroup,  setTrendGroup]      = useState(null)   // drill into a group
+  const [trendGroup,  setTrendGroup]      = useState(null)
   const [trendRows,   setTrendRows]       = useState([])
   const [trendGroups, setTrendGroups]     = useState([])
   const [trendLoading, setTrendLoading]   = useState(false)
@@ -723,21 +649,16 @@ export default function Dashboard() {
   const [loading,      setLoading]      = useState(true)
   const [drillLoading, setDrillLoading] = useState(false)
 
-  // Date params for API calls — use global filter if set, otherwise no date constraint (all time)
   const dateStart = filters.date?.start || null
   const dateEnd   = filters.date?.end   || null
-
-  // Derive account filter from global filter context
   const accountSelections = filters.selections.filter(s => s.type === 'account')
   const accountId = accountSelections.length === 1 ? accountSelections[0].id : undefined
 
-  // Derive owner filter from global filter context.
   // On the Dashboard this filters by CATEGORY owner (whose budget domain),
   // not transaction owner (who spent it). Shared/null-owner groups always show.
   const ownerSelections = filters.selections.filter(s => s.type === 'owner')
   const categoryOwnerIds = ownerSelections.length > 0 ? ownerSelections.map(s => s.id).join(',') : undefined
 
-  // ── Single mode load ────────────────────────────────────────────────────────
   useEffect(() => {
     if (mode !== 'single') return
     setLoading(true)
@@ -753,12 +674,10 @@ export default function Dashboard() {
     })
   }, [accountId, categoryOwnerIds, mode, filters, dateStart, dateEnd])
 
-  // ── Load owners (for split toggle) ────────────────────────────────────────
   useEffect(() => {
     api.getOwners().then(setOwners)
   }, [])
 
-  // ── Owner split data load ───────────────────────────────────────────────────
   // Fetches all groups once (no owner filter), then the frontend splits them
   // by group_owner_id. Explicit Shared groups appear in every personal-owner column.
   useEffect(() => {
@@ -766,7 +685,6 @@ export default function Dashboard() {
     api.getGroupTotals(null, accountId || undefined, dateStart, dateEnd)
       .then(allRows => {
         const filtered = allRows.filter(r => r.category_type !== 'income')
-        // Build per-owner buckets: each personal owner gets their own groups + shared groups
         const byOwner = {}
         for (const owner of personalOwners) {
           byOwner[owner.id] = filtered.filter(r =>
@@ -778,7 +696,6 @@ export default function Dashboard() {
       })
   }, [mode, splitByOwner, personalOwners, sharedOwnerId, accountId, dateStart, dateEnd, filters])
 
-  // ── Compare mode load ───────────────────────────────────────────────────────
   useEffect(() => {
     if (mode !== 'compare' || !periodA || !periodB) return
     setLoading(true)
@@ -793,7 +710,6 @@ export default function Dashboard() {
     })
   }, [periodA, periodB, accountId, mode])
 
-  // ── Trends mode load ────────────────────────────────────────────────────────
   useEffect(() => {
     if (mode !== 'trends') return
     setTrendLoading(true)
@@ -804,7 +720,6 @@ export default function Dashboard() {
       })
   }, [mode, accountId, trendGroup])
 
-  // Also load group list for trends drill selector
   useEffect(() => {
     if (mode !== 'trends') return
     api.getGroupTotals(thisM, accountId || undefined).then(g => {
@@ -812,7 +727,6 @@ export default function Dashboard() {
     })
   }, [mode, accountId])
 
-  // ── Single drill ────────────────────────────────────────────────────────────
   async function drillToCategories(group) {
     const groupId  = group.group_id ?? group.payload?.group_id
     const groupRow = groupRows.find(r => r.group_id === groupId) || group
@@ -842,6 +756,8 @@ export default function Dashboard() {
     const data = await api.getTransactions({
       date_start:  filters.date?.start || undefined,
       date_end:    filters.date?.end   || undefined,
+      // The transactions endpoint uses an explicit uncategorized sentinel, so the
+      // dashboard drill path has to translate the chart row back into that API value.
       category_id: categoryId === 'uncategorized' ? '__uncategorized__' : categoryId,
       account_id:  accountId || undefined,
       limit: 200,
@@ -856,7 +772,6 @@ export default function Dashboard() {
     if (i === 1) { setLevel('categories'); setSelectedCat(null) }
   }
 
-  // ── Compare drill ───────────────────────────────────────────────────────────
   async function cmpDrillToCategories(group) {
     const groupId  = group.group_id
     const groupRow = cmpGroupsA.find(r => r.group_id === groupId) ||
@@ -873,7 +788,6 @@ export default function Dashboard() {
     setDrillLoading(false)
   }
 
-  // ── Helpers ─────────────────────────────────────────────────────────────────
   const coloredGroupRows = assignColors(groupRows, 'group_color')
   const coloredCatRows = assignColors(catRows, 'category_color')
   const totalSpend = groupRows.reduce((s, r) => s + r.total, 0)
@@ -881,7 +795,6 @@ export default function Dashboard() {
 
 
 
-  // Merge compare groups
   const allGroupIds = [...new Set([
     ...cmpGroupsA.map(r => r.group_id),
     ...cmpGroupsB.map(r => r.group_id),
@@ -920,7 +833,6 @@ export default function Dashboard() {
   const cmpCrumbs = [periodLabel(periodA) + ' vs ' + periodLabel(periodB)]
   if (cmpGroup) cmpCrumbs.push(cmpGroup.group_name)
 
-  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
@@ -973,7 +885,6 @@ export default function Dashboard() {
 
       {loading ? <Spinner /> : (
         <>
-          {/* ── SINGLE MODE ── */}
           {mode === 'single' && (
             <>
 
@@ -1008,7 +919,6 @@ export default function Dashboard() {
 
               {level !== 'groups' && <Breadcrumb items={singleCrumbs} onNavigate={singleNavigate} />}
 
-              {/* ── Owner split view ── */}
               {splitByOwner && level === 'groups' && (
                 <OwnerSplitPanel
                   owners={personalOwners}
@@ -1233,7 +1143,6 @@ export default function Dashboard() {
             </>
           )}
 
-          {/* ── TRENDS MODE ── */}
           {mode === 'trends' && (
             <TrendsPanel
               rows={trendRows}
@@ -1247,10 +1156,8 @@ export default function Dashboard() {
             />
           )}
 
-          {/* ── COMPARE MODE ── */}
           {mode === 'compare' && (
             <>
-              {/* Summary totals */}
               <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
                 <Card style={{ padding: '14px 24px' }}>
                   <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>{periodLabel(periodA)}</div>
