@@ -1,0 +1,157 @@
+# Code Commenting Style
+
+This project uses a **system-level commenting style**. Comments should
+help a reader understand *why the code exists* and *how to think about
+it*, not restate what it does.
+
+---
+
+## Core Principles
+
+* Comments explain **intent and design**, not implementation details
+* Focus on **why**, not **what**
+* Prefer **a few high-value comments** over many low-value ones
+* Treat comments as a way to expose the **mental model** behind the code
+
+---
+
+## Two Levels of Comments
+
+### 1. System-Level Comments (Most Important)
+
+Use these when a file contains a **non-obvious conceptual model**, such as:
+
+* a state model or state machine
+* coordinated behavior across multiple functions or effects
+* ordering, selection, or drag/drop systems
+* persistence or synchronization logic
+* business rules or invariants
+
+**Guidelines:**
+
+* Add **one comment per system**, not per function
+* Place it at the **entry point of the system**, such as:
+
+  * top of a component
+  * above a key function
+  * above an initialization `useEffect`
+* Use short bullet points to describe:
+
+  * what the system governs
+  * key invariants or guarantees
+  * important constraints
+
+**Goal:**
+
+> A reader should understand the system without reverse-engineering multiple functions.
+
+---
+
+### 2. Local Comments (Use Sparingly)
+
+Use these only when necessary, for:
+
+* tricky or non-obvious logic
+* workarounds or edge cases
+* subtle interactions with APIs or UI behavior
+
+**Guidelines:**
+
+* Place directly above the relevant code
+* Keep them short and specific
+* Only include when the reasoning is not obvious
+
+---
+
+## When to Add Comments
+
+Add a comment if:
+
+* multiple parts of the file work together to implement a behavior
+* there is an implicit model that is not immediately visible
+* a future reader would ask “why is this done this way?”
+* changing the code without understanding context could introduce bugs
+
+---
+
+## When NOT to Add Comments
+
+Do **not**:
+
+* restate what the code is doing
+* comment obvious or self-explanatory logic
+* add structural comments like:
+
+  * “Render”
+  * “Header”
+  * “Row 1”
+* add comments to every function or block
+* use comments as filler
+
+If unsure whether a comment adds value, **skip it**.
+
+---
+
+## Style Guidelines
+
+* Prefer short bullet-point comments over paragraphs
+* Keep wording direct and high-signal
+* Avoid redundancy across comments
+* Do not duplicate the same explanation in multiple places
+
+---
+
+## Placement Rules
+
+* Place system-level comments at **system entry points**, not inside every function
+* Avoid scattering related explanations across multiple locations
+* Keep comments close to the code they explain, but not buried in it
+
+---
+
+## Examples
+
+### Good (System-Level)
+
+```js
+// Drag-and-drop model:
+// - Groups are ordered within sections (income/expense)
+// - Categories are ordered within parent groups
+// - Moves persist immediately via sort_order updates
+// - Cross-group moves update both source and destination lists
+```
+
+---
+
+### Good (Local)
+
+```js
+// Some picker close events fire before the popover is visible;
+// ignore those to avoid canceling edit mode immediately.
+```
+
+---
+
+### Bad
+
+```js
+// Loop through items
+for (const item of items)
+```
+
+```js
+// Set loading to true
+setLoading(true)
+```
+
+---
+
+## Summary
+
+* Comment **systems, not lines**
+* Explain **intent, not mechanics**
+* Use **one comment per conceptual model**
+* Keep comments **minimal but meaningful**
+
+When done correctly, the codebase should feel **self-explanatory**,
+with comments acting as guideposts rather than narration.
