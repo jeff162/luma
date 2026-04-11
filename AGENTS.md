@@ -2,6 +2,12 @@
 
 Follow the commenting style defined in `docs/code-commenting-style.md`.
 
+Review `docs/collaboration-notes.md` for project decision-making preferences and collaboration guidance.
+
+When changing shared UI behavior, review `docs/ui-patterns.md`.
+
+When changing shared systems, persistence, or invariants, review `docs/architecture.md` and `docs/data-model.md`.
+
 ## Core Rules
 
 - Comment **systems and intent**, not individual lines
@@ -52,6 +58,14 @@ Follow the commenting style defined in `docs/code-commenting-style.md`.
 
 - Do not modify working logic unless explicitly requested
 
+## Local Scratch Files
+
+- Use `data/` for local helper scripts, screenshots, notes, temporary test artifacts, and other scratch files that should not be committed
+
+- Prefer `data/` over tracked project directories for one-off debugging utilities or local workflow helpers
+
+- For UI debugging, use `data/ui/` for browser helpers and `data/ui/artifacts/` for screenshots or other captured output
+
 ## Documentation Consistency
 
 When modifying code:
@@ -69,4 +83,3 @@ When modifying code:
 Do not add documentation for trivial or localized changes.
 
 Keep documentation aligned with the current behavior of the system.
-

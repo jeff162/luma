@@ -6,50 +6,134 @@ import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { refreshTaskBadge } from '../App.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
-import { Card, PageHeader, Button, Spinner, EmptyState } from '../components/ui.jsx'
+import {
+  Card,
+  DialogActions,
+  PageHeader,
+  Button,
+  Spinner,
+  EmptyState,
+  FloatingPanel,
+  FloatingPanelHeader,
+  OverlayBackdrop,
+  AppConfirmDialog,
+  AppNoticeDialog,
+  getFloatingPanelHeaderBackground,
+  getFloatingPanelSurfaceStyle,
+} from '../components/ui.jsx'
 import CategoryPicker from '../components/CategoryPicker.jsx'
 import CategoryImportWorkspace from '../components/CategoryImportWorkspace.jsx'
+import ImportColumnMappingSection from '../components/ImportColumnMappingSection.jsx'
+import ImportProfilesManager from '../components/ImportProfilesManager.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
-import { cloneCategoryImportSnapshot, createCategoryImportDraftState } from '../lib/categoryImportState.js'
+import { cloneCategoryImportSnapshot, createCategoryImportDraftState, sanitizeCategoryImportDraftAgainstExistingCategories } from '../lib/categoryImportState.js'
+import {
+  analyzeImportColumns,
+  formatLikelyMatchLabel,
+  inferFilenamePattern,
+  inferImportFileCharacteristicsFromPreview,
+  inferUnambiguousImportMappingFromPreview,
+} from '../lib/importColumnInference.js'
 import { formatCurrency } from '../lib/utils.js'
 import { formatTransactionAmount, getTransactionAmountColor } from '../lib/moneyDisplay.js'
-import { useDismissiblePopup } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 
 const AMOUNT_CONVENTIONS = [
-  { value: 'single_signed',   label: 'Single column — negative = debit (Chase, most banks)' },
+  { value: 'single_signed', label: 'Single column — negative = debit (Chase, most banks)' },
   { value: 'single_unsigned', label: 'Single column — always positive, direction column' },
-  { value: 'two_column',      label: 'Two columns — separate debit and credit' },
+  { value: 'two_column', label: 'Two columns — separate debit and credit' },
 ]
 const DATE_FORMATS = [
-  { value: '%m/%d/%Y',  label: 'MM/DD/YYYY  (e.g. 01/31/2024)' },
-  { value: '%Y-%m-%d',  label: 'YYYY-MM-DD  (e.g. 2024-01-31)' },
-  { value: '%Y/%m/%d',  label: 'YYYY/MM/DD  (e.g. 2024/01/31)' },
-  { value: '%d/%m/%Y',  label: 'DD/MM/YYYY  (e.g. 31/01/2024)' },
-  { value: '%m-%d-%Y',  label: 'MM-DD-YYYY  (e.g. 01-31-2024)' },
-  { value: '%d-%m-%Y',  label: 'DD-MM-YYYY  (e.g. 31-01-2024)' },
+  { value: '%m/%d/%Y', label: 'MM/DD/YYYY  (e.g. 01/31/2024)' },
+  { value: '%Y-%m-%d', label: 'YYYY-MM-DD  (e.g. 2024-01-31)' },
+  { value: '%Y/%m/%d', label: 'YYYY/MM/DD  (e.g. 2024/01/31)' },
+  { value: '%d/%m/%Y', label: 'DD/MM/YYYY  (e.g. 31/01/2024)' },
+  { value: '%m-%d-%Y', label: 'MM-DD-YYYY  (e.g. 01-31-2024)' },
+  { value: '%d-%m-%Y', label: 'DD-MM-YYYY  (e.g. 31-01-2024)' },
   { value: '%b %d, %Y', label: 'Mon DD, YYYY  (e.g. Jan 31, 2024)' },
   { value: '%b-%d-%Y', label: 'MMM-DD-YYYY  (e.g. Mar-23-2026)' },
 ]
 const EXPORT_COLUMNS = [
-  { key: 'date',          label: 'Date' },
+  { key: 'date', label: 'Date' },
   { key: 'merchant_name', label: 'Merchant' },
-  { key: 'raw_name',      label: 'Raw description' },
-  { key: 'amount',        label: 'Amount' },
-  { key: 'account',       label: 'Account' },
-  { key: 'category',      label: 'Category' },
-  { key: 'group',         label: 'Group' },
-  { key: 'owner',         label: 'Owner' },
-  { key: 'notes',         label: 'Notes' },
-  { key: 'is_pending',    label: 'Pending' },
-  { key: 'overridden',    label: 'Manually categorized' },
-  { key: 'import_batch',  label: 'Import batch ID' },
+  { key: 'raw_name', label: 'Raw description' },
+  { key: 'amount', label: 'Amount' },
+  { key: 'account', label: 'Account' },
+  { key: 'category', label: 'Category' },
+  { key: 'group', label: 'Group' },
+  { key: 'owner', label: 'Owner' },
+  { key: 'notes', label: 'Notes' },
+  { key: 'is_pending', label: 'Pending' },
+  { key: 'overridden', label: 'Manually categorized' },
+  { key: 'import_batch', label: 'Import batch ID' },
 ]
 const DEFAULT_EXPORT_COLS = ['date', 'merchant_name', 'amount', 'account', 'category']
 const IMPORT_CONFIG_MAX_WIDTH = 'min(900px, 100%)'
 const MANUAL_DATA_SOURCE_VALUE = '__skip_for_now__'
 const LAST_IMPORT_DATA_SOURCE_PREF_KEY = 'import.lastDataSourceId'
 const EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY = 'import.expandedDataSourceRows'
+const DATA_SOURCE_MANAGER_POS_PREF_KEY = 'import.dataSourceManagerPos'
+const ACCOUNT_TYPE_OPTIONS = [
+  { value: 'depository', label: 'Checking' },
+  { value: 'credit', label: 'Credit' },
+  { value: 'p2p', label: 'P2P' },
+  { value: 'investment', label: 'Invest.' },
+  { value: 'savings', label: 'Savings' },
+  { value: 'loan', label: 'Loan' },
+  { value: 'other', label: 'Other' },
+]
+
+function getBlankImportSnapshot() {
+  return {
+    column_map: {},
+    category_assignments: {},
+    account_map: {},
+    skip_accounts: [],
+    account_new: {},
+    account_id: null,
+    single_account_new: null,
+    date_format: '%m/%d/%Y',
+    amount_convention: 'single_signed',
+    skip_rows: 0,
+    apply_categorization: true,
+    category_workspace_draft: null,
+  }
+}
+
+function getBlankMappingSuggestions() {
+  return {
+    date: '',
+    amount: '',
+    debit: '',
+    credit: '',
+    direction: '',
+    description: '',
+    category: '',
+    notes: '',
+    pending: '',
+    account: '',
+  }
+}
+
+function stableSerialize(value) {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function clampFloatingPanelPosition(pos, size, viewport = { width: window.innerWidth, height: window.innerHeight }) {
+  if (!pos) return null
+  const panelWidth = Number(size?.width || 0)
+  const panelHeight = Number(size?.height || 0)
+  const maxX = Math.max(24, viewport.width - panelWidth - 24)
+  const maxY = Math.max(24, viewport.height - panelHeight - 24)
+  return {
+    x: Math.max(24, Math.min(maxX, Math.round(pos.x))),
+    y: Math.max(24, Math.min(maxY, Math.round(pos.y))),
+  }
+}
 
 function CategoryWorkspaceApplyDialog({
   summary,
@@ -64,14 +148,16 @@ function CategoryWorkspaceApplyDialog({
   const canConfirm = !requiresReplacement || !!replacementId
   if (!summary) return null
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 1200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(15, 23, 42, 0.34)', backdropFilter: 'blur(2px)' }}>
-      <div style={{ width: 'min(620px, 100%)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14, boxShadow: '0 20px 48px rgba(0,0,0,0.26)', overflow: 'hidden' }}>
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-          <div style={{ fontSize: 16, fontWeight: 600 }}>Apply category changes?</div>
-          <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
-            Importing this mapping will remove {summary.delete_count} existing categor{summary.delete_count === 1 ? 'y' : 'ies'} from the live category list.
+    <OverlayBackdrop zIndex={1200} tint="rgba(15, 23, 42, 0.34)">
+      <FloatingPanel style={{ width: 'min(620px, 100%)' }}>
+        <FloatingPanelHeader style={{ padding: '16px 20px' }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 600 }}>Apply category changes?</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
+              Importing this mapping will remove {summary.delete_count} existing categor{summary.delete_count === 1 ? 'y' : 'ies'} from the live category list.
+            </div>
           </div>
-        </div>
+        </FloatingPanelHeader>
         <div style={{ padding: 20, display: 'grid', gap: 14 }}>
           <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
             The following live data is affected by categories removed from the draft:
@@ -108,30 +194,101 @@ function CategoryWorkspaceApplyDialog({
             </div>
           )}
         </div>
-        <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button onClick={onCancel} style={{ background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 14px', fontSize: 13, cursor: 'pointer' }}>
+        <DialogActions>
+          <Button variant="ghost" onClick={onCancel}>
             Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={!canConfirm || saving}
-            style={{
-              background: canConfirm && !saving ? 'color-mix(in srgb, var(--accent) 88%, #ffffff 12%)' : 'var(--surface)',
-              color: canConfirm && !saving ? '#fff' : 'var(--muted)',
-              border: canConfirm && !saving ? 'none' : '1px solid var(--border)',
-              borderRadius: 8,
-              padding: '8px 16px',
-              fontSize: 13,
-              fontWeight: 500,
-              cursor: !canConfirm || saving ? 'not-allowed' : 'pointer',
-              opacity: !canConfirm || saving ? 0.6 : 1,
-            }}
-          >
+          </Button>
+          <Button onClick={onConfirm} disabled={!canConfirm || saving}>
             {saving ? 'Applying…' : 'Apply changes'}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogActions>
+      </FloatingPanel>
+    </OverlayBackdrop>
+  )
+}
+
+function DataSourceMismatchDialog({
+  profileName,
+  chooserOpen = false,
+  profiles = [],
+  selectedProfileId = '',
+  onSelectProfile,
+  onSelectTemporaryDraft,
+  onCloseChooser,
+  onConfirm,
+  onCancel,
+  onChangeDataSource,
+}) {
+  if (!profileName) return null
+  return (
+    <OverlayBackdrop zIndex={1200} tint="rgba(15, 23, 42, 0.38)">
+      <FloatingPanel style={{ width: 'min(560px, 100%)' }}>
+        <FloatingPanelHeader style={{ padding: '16px 20px' }}>
+          <div>
+            {chooserOpen ? (
+              <>
+                <div style={{ fontSize: 16, fontWeight: 600 }}>Choose a different data source</div>
+                <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+                  Pick another saved data source or use a temporary draft for this file.
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 16, fontWeight: 600 }}>Mismatch detected</div>
+                <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+                  <span style={{ color: 'var(--text)', fontWeight: 600 }}>{profileName}</span> has a different header signature and may not match this file.
+                </div>
+              </>
+            )}
+          </div>
+        </FloatingPanelHeader>
+        {chooserOpen ? (
+          <>
+            <div style={{ padding: 20, display: 'grid', gap: 12 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'center' }}>
+                <DataSourcePill
+                  label="Temporary draft"
+                  selected={!selectedProfileId}
+                  onClick={onSelectTemporaryDraft}
+                  title="Use a temporary draft for this file"
+                />
+                {profiles.map(profile => (
+                  <DataSourcePill
+                    key={profile.id}
+                    label={profile.name}
+                    selected={selectedProfileId === profile.id}
+                    onClick={() => onSelectProfile?.(profile.id)}
+                    title="Use this saved data source"
+                  />
+                ))}
+              </div>
+              {profiles.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center' }}>
+                  No saved data sources are available yet.
+                </div>
+              ) : null}
+            </div>
+            <DialogActions align="center">
+              <Button variant="ghost" onClick={onCloseChooser}>
+                Back
+              </Button>
+            </DialogActions>
+          </>
+        ) : (
+          <DialogActions align="center">
+            <Button variant="ghost" onClick={onChangeDataSource}>
+              Change data source
+            </Button>
+            <Button variant="ghost" onClick={onConfirm}>
+              OK
+            </Button>
+            <Button variant="ghost" onClick={onCancel}>
+              Cancel
+            </Button>
+          </DialogActions>
+        )}
+      </FloatingPanel>
+    </OverlayBackdrop >
   )
 }
 
@@ -182,37 +339,475 @@ function DataSourcePill({ label, selected, onClick, muted, subtle, title, showMa
   )
 }
 
-function ValidationErrorsDialog({ errors = [], count = 0, onClose, onOpenRawViewer }) {
-  const effectiveCount = Math.max(count, errors.length)
+function summarizeImportOutcome(source) {
+  if (!source) {
+    return {
+      totalRows: 0,
+      importedCount: 0,
+      skippedCount: 0,
+      dedupedCount: 0,
+      accountSkippedCount: 0,
+      zeroAmountCount: 0,
+      validationErrorCount: 0,
+      rejectedCount: 0,
+      trailingNonTransactionCount: 0,
+      otherSkippedCount: 0,
+      rejectedHeaders: [],
+      rejectedRows: [],
+      duplicateHeaders: [],
+      duplicateRows: [],
+    }
+  }
+
+  const rawSummary = source.import_summary && typeof source.import_summary === 'object'
+    ? source.import_summary
+    : null
+  const importedCount = Number(
+    rawSummary?.imported_count
+    ?? source.imported
+    ?? (Number(source.row_count || 0) - Number(source.skipped_count || 0) - Number(source.deduped_count || 0)),
+  ) || 0
+  const skippedCount = Number(rawSummary?.skipped_count ?? source.skipped ?? source.skipped_count) || 0
+  const dedupedCount = Number(rawSummary?.deduped_count ?? source.deduped ?? source.deduped_count) || 0
+  const accountSkippedCount = Number(rawSummary?.account_skipped_count ?? source.account_skipped) || 0
+  const zeroAmountCount = Number(rawSummary?.zero_amount_count ?? source.zero_amount_count) || 0
+  const validationErrorCount = Number(rawSummary?.validation_error_count ?? source.validation_error_count) || 0
+  const trailingNonTransactionCount = Number(
+    rawSummary?.trailing_non_transaction_count
+    ?? (source.trailing_non_transaction_suspected ? source.trailing_error_count : 0),
+  ) || 0
+  const rejectedCount = Number(rawSummary?.rejected_count ?? (zeroAmountCount + validationErrorCount)) || 0
+  const totalRows = Number(
+    rawSummary?.total_rows
+    ?? source.row_count
+    ?? (importedCount + skippedCount + dedupedCount),
+  ) || 0
+  const otherSkippedCount = Math.max(
+    0,
+    skippedCount - accountSkippedCount - rejectedCount - trailingNonTransactionCount,
+  )
+  const rejectedHeaders = Array.isArray(rawSummary?.rejected_headers)
+    ? rawSummary.rejected_headers
+    : []
+  const rejectedRows = Array.isArray(rawSummary?.rejected_rows)
+    ? rawSummary.rejected_rows
+    : Array.isArray(source.rejected_rows)
+      ? source.rejected_rows
+      : []
+  const duplicateHeaders = Array.isArray(rawSummary?.duplicate_headers)
+    ? rawSummary.duplicate_headers
+    : []
+  const duplicateRows = Array.isArray(rawSummary?.duplicate_rows)
+    ? rawSummary.duplicate_rows
+    : Array.isArray(source.duplicate_rows)
+      ? source.duplicate_rows
+      : []
+
+  return {
+    totalRows,
+    importedCount,
+    skippedCount,
+    dedupedCount,
+    accountSkippedCount,
+    zeroAmountCount,
+    validationErrorCount,
+    rejectedCount,
+    trailingNonTransactionCount,
+    otherSkippedCount,
+    rejectedHeaders,
+    rejectedRows,
+    duplicateHeaders,
+    duplicateRows,
+  }
+}
+
+function RejectedRowsDialog({ rows = [], headers = [], count = 0, title = 'this import', onClose, onOpenRawViewer }) {
+  const effectiveCount = Math.max(count, rows.length)
+  const tableHeaders = headers.length > 0
+    ? headers
+    : Array.from(new Set(rows.flatMap(row => Object.keys(row?.values || {}))))
+  const hasSavedRowValues = tableHeaders.length > 0
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 1200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(15, 23, 42, 0.42)', backdropFilter: 'blur(2px)' }}>
-      <div style={{ width: 'min(760px, 100%)', maxHeight: '80vh', overflow: 'hidden', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, boxShadow: '0 24px 60px rgba(15, 23, 42, 0.28)', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '16px 20px 14px', borderBottom: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 72%, var(--surface))' }}>
-          <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 4 }}>
-            {effectiveCount} validation error{effectiveCount === 1 ? '' : 's'} from this import
-          </div>
-          <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
-            These rows could not be imported because they did not validate against the selected column mappings.
-          </div>
-        </div>
-        <div style={{ padding: 18, overflowY: 'auto', display: 'grid', gap: 8 }}>
-          {errors.length > 0 ? errors.map((error, index) => (
-            <div key={`${error.row}:${index}`} style={{ display: 'grid', gridTemplateColumns: '76px 1fr', gap: 12, padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 36%, var(--surface))' }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>Row {error.row}</div>
-              <div style={{ fontSize: 13 }}>{error.reason}</div>
+    <OverlayBackdrop zIndex={1200} tint="rgba(15, 23, 42, 0.42)">
+      <FloatingPanel style={{ width: 'min(1200px, 100%)', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+        <FloatingPanelHeader style={{ padding: '16px 20px 14px' }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 4 }}>
+              {effectiveCount} rejected row{effectiveCount === 1 ? '' : 's'} from {title}
             </div>
-          )) : (
+            <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
+              These rows were not imported because they either had a zero amount or did not validate against the selected column mappings.
+            </div>
+          </div>
+        </FloatingPanelHeader>
+        <div style={{ padding: 18, overflow: 'auto' }}>
+          {rows.length > 0 ? (
+            <div style={{ minWidth: hasSavedRowValues ? 920 : 420, display: 'grid', gap: 12 }}>
+              {!hasSavedRowValues ? (
+                <div style={{ padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 36%, var(--surface))', fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+                  Detailed CSV cell values were not saved for this import, so only the rejection reason and row number are available here.
+                </div>
+              ) : null}
+              <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    <th style={{ position: 'sticky', top: 0, zIndex: 1, textAlign: 'left', padding: '10px 12px', background: 'color-mix(in srgb, var(--surface2) 84%, var(--surface))', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>Reason</th>
+                    <th style={{ position: 'sticky', top: 0, zIndex: 1, textAlign: 'left', padding: '10px 12px', background: 'color-mix(in srgb, var(--surface2) 84%, var(--surface))', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>Row</th>
+                    {tableHeaders.map(header => (
+                      <th key={header} style={{ position: 'sticky', top: 0, zIndex: 1, textAlign: 'left', padding: '10px 12px', background: 'color-mix(in srgb, var(--surface2) 84%, var(--surface))', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>
+                        {header}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row, index) => (
+                    <tr key={`${row.row}:${index}`}>
+                      <td style={{ verticalAlign: 'top', padding: '10px 12px', borderBottom: '1px solid color-mix(in srgb, var(--border) 72%, transparent)', minWidth: 160 }}>
+                        <div style={{ display: 'grid', gap: 4 }}>
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            width: 'fit-content',
+                            padding: '2px 8px',
+                            borderRadius: 999,
+                            fontSize: 11,
+                            fontWeight: 600,
+                            border: '1px solid var(--border)',
+                            background: row.kind === 'zero_amount'
+                              ? 'color-mix(in srgb, #f59e0b 12%, var(--surface2))'
+                              : 'color-mix(in srgb, #ef4444 10%, var(--surface2))',
+                            color: row.kind === 'zero_amount' ? '#b45309' : '#dc2626',
+                          }}>
+                            {row.kind === 'zero_amount' ? 'Zero amount' : 'Validation error'}
+                          </span>
+                          <span>{row.reason}</span>
+                        </div>
+                      </td>
+                      <td style={{ verticalAlign: 'top', padding: '10px 12px', borderBottom: '1px solid color-mix(in srgb, var(--border) 72%, transparent)', whiteSpace: 'nowrap', color: 'var(--muted)', fontWeight: 600 }}>
+                        {row.row}
+                      </td>
+                      {tableHeaders.map(header => (
+                        <td key={header} style={{ verticalAlign: 'top', padding: '10px 12px', borderBottom: '1px solid color-mix(in srgb, var(--border) 72%, transparent)', whiteSpace: 'nowrap' }}>
+                          {String(row?.values?.[header] ?? '')}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
             <div style={{ padding: '12px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 36%, var(--surface))', fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-              Detailed validation rows are not available for this import summary, but the raw file viewer can still be opened to inspect the file around the failed rows.
+              Detailed rejected rows are not available for this import summary, but the raw file viewer can still be opened to inspect the file around the affected rows.
+            </div>
+          )}
+        </div>
+        <div style={{ padding: '14px 18px', borderTop: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 66%, var(--surface))', display: 'flex', justifyContent: onOpenRawViewer ? 'space-between' : 'flex-end', gap: 10, flexWrap: 'wrap' }}>
+          {onOpenRawViewer ? <Button variant="ghost" onClick={onOpenRawViewer}>Open raw file viewer</Button> : null}
+          <Button variant="ghost" onClick={onClose}>Close</Button>
+        </div>
+      </FloatingPanel>
+    </OverlayBackdrop>
+  )
+}
+
+function DuplicateRowsDialog({
+  rows = [],
+  headers = [],
+  count = 0,
+  title = 'this import',
+  loading = false,
+  error = '',
+  importing = false,
+  onClose,
+  onImportSelected,
+  onImportAll,
+}) {
+  const effectiveCount = Math.max(count, rows.length)
+  const tableHeaders = headers.length > 0
+    ? headers
+    : Array.from(new Set(rows.flatMap(row => Object.keys(row?.values || {}))))
+  const hasSavedRowValues = tableHeaders.length > 0
+  const duplicateDisplayRows = useMemo(
+    () => rows.map(row => {
+      const matchedTransaction = row?.matched_transaction || null
+      return {
+        ...row,
+        matchedSummary: matchedTransaction
+          ? `${matchedTransaction.date || ''} · ${matchedTransaction.merchant_name || ''} · ${formatTransactionAmount(matchedTransaction.amount)}`
+          : (row.reason || 'Existing FinTrack transaction'),
+      }
+    }),
+    [rows],
+  )
+  const importableRowNumbers = useMemo(
+    () => rows.filter(row => row?.txn_payload).map(row => Number(row.row)).filter(Boolean),
+    [rows],
+  )
+  const estimateColumnWidthCh = useMemo(
+    () => (values, { header = '', min = 8, max = 22, fallback = 12 } = {}) => {
+      const lengths = values
+        .map(value => String(value ?? '').trim().length)
+        .filter(length => length > 0)
+        .sort((a, b) => a - b)
+      const percentileLength = lengths.length > 0
+        ? lengths[Math.min(lengths.length - 1, Math.floor((lengths.length - 1) * 0.85))]
+        : 0
+      const target = Math.max(header.length + 1, percentileLength + 1, fallback)
+      return Math.max(min, Math.min(max, target))
+    },
+    [],
+  )
+  const rowWidthCh = 6
+  const matchWidthCh = useMemo(
+    () => estimateColumnWidthCh(
+      duplicateDisplayRows.map(row => row.matchedSummary),
+      { header: 'Matches', min: 18, max: 30, fallback: 22 },
+    ),
+    [duplicateDisplayRows, estimateColumnWidthCh],
+  )
+  const dataColumnWidths = useMemo(
+    () => Object.fromEntries(
+      tableHeaders.map(header => [
+        header,
+        estimateColumnWidthCh(
+          duplicateDisplayRows.map(row => row?.values?.[header] ?? ''),
+          { header, min: 8, max: 20, fallback: Math.max(10, String(header || '').length + 2) },
+        ),
+      ]),
+    ),
+    [duplicateDisplayRows, estimateColumnWidthCh, tableHeaders],
+  )
+  const tableMinWidthCh = useMemo(
+    () => 6 + rowWidthCh + matchWidthCh + tableHeaders.reduce((sum, header) => sum + (dataColumnWidths[header] || 10), 0),
+    [dataColumnWidths, matchWidthCh, rowWidthCh, tableHeaders],
+  )
+  const [selectedRows, setSelectedRows] = useState(() => new Set())
+
+  useEffect(() => {
+    setSelectedRows(new Set())
+  }, [importableRowNumbers])
+
+  const allImportableSelected = importableRowNumbers.length > 0 && importableRowNumbers.every(row => selectedRows.has(row))
+  const selectedImportableCount = importableRowNumbers.filter(row => selectedRows.has(row)).length
+
+  function toggleAllImportable(checked) {
+    setSelectedRows(checked ? new Set(importableRowNumbers) : new Set())
+  }
+
+  function toggleRowSelection(rowNumber, checked) {
+    setSelectedRows(prev => {
+      const next = new Set(prev)
+      if (checked) next.add(rowNumber)
+      else next.delete(rowNumber)
+      return next
+    })
+  }
+
+  return (
+    <OverlayBackdrop zIndex={1200} tint="rgba(15, 23, 42, 0.42)">
+      <FloatingPanel style={{ width: 'min(1280px, 100%)', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+        <FloatingPanelHeader style={{ padding: '16px 20px 14px' }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 600 }}>
+              {effectiveCount} possible duplicate row{effectiveCount === 1 ? '' : 's'} detected in {title}
+            </div>
+          </div>
+        </FloatingPanelHeader>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          {loading ? (
+            <div style={{ display: 'grid', placeItems: 'center', minHeight: 180, padding: 18 }}>
+              <Spinner />
+            </div>
+          ) : error ? (
+            <div style={{ margin: 18, padding: '12px 14px', borderRadius: 10, border: '1px solid var(--danger)', background: 'color-mix(in srgb, var(--danger) 8%, var(--surface2))', fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+              {error}
+            </div>
+          ) : rows.length > 0 ? (
+            <>
+              <div style={{ padding: '14px 18px 10px', display: 'grid', gap: 10 }}>
+                {!hasSavedRowValues ? (
+                  <div style={{ padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 36%, var(--surface))', fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+                    Detailed CSV cell values were not saved for this import, so only the matching transaction and row number are available here.
+                  </div>
+                ) : null}
+                {importableRowNumbers.length === 0 ? (
+                  <div style={{ padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 36%, var(--surface))', fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+                    These duplicate rows were saved without enough transaction payload data to import them from this report.
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+                    {selectedImportableCount} selected for import.
+                  </div>
+                )}
+              </div>
+              <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                <div style={{ minWidth: hasSavedRowValues ? `${tableMinWidthCh}ch` : 380, padding: '0 18px 18px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: 12.5, tableLayout: 'fixed' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ position: 'sticky', top: 0, zIndex: 1, textAlign: 'center', padding: '7px 8px', background: 'color-mix(in srgb, var(--surface2) 92%, var(--surface))', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', width: 40 }}>
+                          {importableRowNumbers.length > 0 ? (
+                            <input
+                              type="checkbox"
+                              checked={allImportableSelected}
+                              onChange={event => toggleAllImportable(event.target.checked)}
+                            />
+                          ) : null}
+                        </th>
+                        <th style={{ position: 'sticky', top: 0, zIndex: 1, textAlign: 'left', padding: '7px 8px', background: 'color-mix(in srgb, var(--surface2) 92%, var(--surface))', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', width: `${rowWidthCh}ch` }}>Row</th>
+                        {tableHeaders.map(header => (
+                          <th key={header} style={{ position: 'sticky', top: 0, zIndex: 1, textAlign: 'left', padding: '7px 8px', background: 'color-mix(in srgb, var(--surface2) 92%, var(--surface))', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', width: `${dataColumnWidths[header] || 10}ch` }}>
+                            {header}
+                          </th>
+                        ))}
+                        <th style={{ position: 'sticky', top: 0, zIndex: 1, textAlign: 'left', padding: '7px 8px', background: 'color-mix(in srgb, var(--surface2) 92%, var(--surface))', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', width: `${matchWidthCh}ch` }}>Matches</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {duplicateDisplayRows.map((row, index) => {
+                        const rowNumber = Number(row.row)
+                        const importable = !!row?.txn_payload
+                        return (
+                          <tr key={`${row.row}:${index}`}>
+                            <td style={{ verticalAlign: 'middle', padding: '6px 8px', borderBottom: '1px solid color-mix(in srgb, var(--border) 72%, transparent)', textAlign: 'center' }}>
+                              {importable ? (
+                                <input
+                                  type="checkbox"
+                                  checked={selectedRows.has(rowNumber)}
+                                  onChange={event => toggleRowSelection(rowNumber, event.target.checked)}
+                                />
+                              ) : (
+                                <span style={{ color: 'var(--muted)' }}>-</span>
+                              )}
+                            </td>
+                            <td style={{ verticalAlign: 'middle', padding: '6px 8px', borderBottom: '1px solid color-mix(in srgb, var(--border) 72%, transparent)', whiteSpace: 'nowrap', color: 'var(--muted)', fontWeight: 600 }}>
+                              {row.row}
+                            </td>
+                            {tableHeaders.map(header => {
+                              const value = String(row?.values?.[header] ?? '')
+                              return (
+                                <td
+                                  key={header}
+                                  style={{ verticalAlign: 'middle', padding: '6px 8px', borderBottom: '1px solid color-mix(in srgb, var(--border) 72%, transparent)', fontSize: 12 }}
+                                  title={value}
+                                >
+                                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {value}
+                                  </div>
+                                </td>
+                              )
+                            })}
+                            <td
+                              style={{ verticalAlign: 'middle', padding: '6px 8px', borderBottom: '1px solid color-mix(in srgb, var(--border) 72%, transparent)', fontSize: 12 }}
+                              title={row.matchedSummary}
+                            >
+                              <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {row.matchedSummary}
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div style={{ margin: 18, padding: '12px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 36%, var(--surface))', fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+              Detailed duplicate rows are not available for this import summary.
             </div>
           )}
         </div>
         <div style={{ padding: '14px 18px', borderTop: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 66%, var(--surface))', display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-          <Button variant="ghost" onClick={onOpenRawViewer}>Open raw file viewer</Button>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {!loading && !error && importableRowNumbers.length > 0 ? (
+              <>
+                <Button
+                  onClick={() => onImportSelected?.(Array.from(selectedRows))}
+                  disabled={importing || selectedRows.size === 0}
+                >
+                  {importing ? 'Importing…' : `Import selected${selectedRows.size > 0 ? ` (${selectedRows.size})` : ''}`}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => onImportAll?.()}
+                  disabled={importing}
+                >
+                  {importing ? 'Importing…' : 'Import all duplicates'}
+                </Button>
+              </>
+            ) : null}
+          </div>
           <Button variant="ghost" onClick={onClose}>Close</Button>
         </div>
-      </div>
-    </div>
+      </FloatingPanel>
+    </OverlayBackdrop>
+  )
+}
+
+function DuplicateImportConfirmDialog({
+  pending,
+  importing = false,
+  onCancel,
+  onConfirm,
+}) {
+  const dialogRef = useRef(null)
+
+  useEffect(() => {
+    dialogRef.current?.focus()
+  }, [])
+
+  if (!pending) return null
+
+  return (
+    <OverlayBackdrop
+      onClick={onCancel}
+      zIndex={1250}
+      tint="rgba(15, 23, 42, 0.45)"
+    >
+      <FloatingPanel
+        ref={dialogRef}
+        tabIndex={-1}
+        onClick={event => event.stopPropagation()}
+        onKeyDownCapture={event => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            event.stopPropagation()
+          }
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            onCancel?.()
+          }
+        }}
+        style={{
+          width: 'min(360px, calc(100% - 48px))',
+          border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
+          padding: '18px 18px 16px',
+          display: 'grid',
+          gap: 10,
+          outline: 'none',
+        }}
+      >
+        <div style={{ fontSize: 16, fontWeight: 600, textAlign: 'center' }}>Confirm import?</div>
+        <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, textAlign: 'center' }}>
+          {pending.importAll
+            ? `Import all ${pending.count} row${pending.count === 1 ? '' : 's'}?`
+            : `Import ${pending.count} selected row${pending.count === 1 ? '' : 's'}?`}
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap', marginTop: 2 }}>
+          <Button small variant="ghost" onClick={onCancel} disabled={importing}>
+            Cancel
+          </Button>
+          <Button small variant="ghost" onClick={onConfirm} disabled={importing}>
+            {importing ? 'Importing…' : 'Import duplicates'}
+          </Button>
+        </div>
+      </FloatingPanel>
+    </OverlayBackdrop>
   )
 }
 
@@ -230,6 +825,8 @@ function buildEmptyDataSourceBody(name) {
     name: name.trim(),
     filename_pattern: null,
     header_fingerprint: null,
+    template_filename: null,
+    template_file_hash: null,
     column_map: {},
     account_id: null,
     date_format: '%m/%d/%Y',
@@ -282,11 +879,13 @@ function saveImportDraft(previewLike, snapshot, instanceId, subjectId) {
     const record = {
       headerFingerprint,
       filenamePattern,
+      templateFilename: previewLike?.filename || '',
+      templateFileHash: previewLike?.file_content_hash || '',
       snapshot,
     }
     window.localStorage.setItem(storageKey, JSON.stringify(record))
     return record
-  } catch {}
+  } catch { }
 }
 
 function saveImportDraftRecord(record, instanceId, subjectId) {
@@ -295,7 +894,7 @@ function saveImportDraftRecord(record, instanceId, subjectId) {
   try {
     window.localStorage.setItem(storageKey, JSON.stringify(record))
     return record
-  } catch {}
+  } catch { }
 }
 
 function clearSavedImportDraft(instanceId, subjectId) {
@@ -303,7 +902,7 @@ function clearSavedImportDraft(instanceId, subjectId) {
   if (!storageKey) return
   try {
     window.localStorage.removeItem(storageKey)
-  } catch {}
+  } catch { }
 }
 
 function buildProfileBodyFromSnapshot(name, draftRecord) {
@@ -332,6 +931,8 @@ function buildProfileBodyFromSnapshot(name, draftRecord) {
     name: name.trim(),
     filename_pattern: draftRecord?.filenamePattern || null,
     header_fingerprint: draftRecord?.headerFingerprint || null,
+    template_filename: draftRecord?.templateFilename || null,
+    template_file_hash: draftRecord?.templateFileHash || null,
     column_map: columnMap,
     account_id: snapshot.account_id || null,
     date_format: snapshot.date_format || '%m/%d/%Y',
@@ -370,8 +971,8 @@ function collectCategoryWorkspaceSourceValues(draft) {
     seen.add(normalized)
     ordered.push(normalized)
   }
-  ;(snapshot.sourceOrder || []).forEach(addValue)
-  ;(snapshot.setAsideOrder || []).forEach(addValue)
+    ; (snapshot.sourceOrder || []).forEach(addValue)
+    ; (snapshot.setAsideOrder || []).forEach(addValue)
   for (const sectionType of ['income', 'expense']) {
     for (const group of snapshot.tree?.[sectionType] || []) {
       for (const child of group.children || []) {
@@ -388,6 +989,21 @@ function summarizeCategoryWorkspaceDraft(draft) {
     sourceValues,
     totalCount: sourceValues.length,
     remainingCount: draft?.snapshot?.sourceOrder?.length || 0,
+  }
+}
+
+function summarizeRuleSuggestionReview(review) {
+  if (!review || typeof review !== 'object') return null
+  const summary = review.summary && typeof review.summary === 'object' ? review.summary : null
+  return {
+    generated_at: review.generated_at || null,
+    last_generated_at: review.last_generated_at || null,
+    total_count: Number(summary?.total_count || 0),
+    reviewed_count: Number(summary?.reviewed_count || 0),
+    accepted_count: Number(summary?.accepted_count || 0),
+    skipped_count: Number(summary?.skipped_count || 0),
+    discarded_count: Number(summary?.discarded_count || 0),
+    pending_count: Number(summary?.pending_count || 0),
   }
 }
 
@@ -422,360 +1038,8 @@ function profileHeaderClearlyMismatches(profile, previewLike) {
   return !!profileHeader && !!previewHeader && profileHeader !== previewHeader
 }
 
-function normalizeImportHeaderName(header) {
-  return String(header || '').trim().toLowerCase()
-}
-
-function parseIntegerWithinRange(value, min, max) {
-  if (!/^\d{1,4}$/.test(value)) return null
-  const parsed = Number(value)
-  return parsed >= min && parsed <= max ? parsed : null
-}
-
-function getDateCandidatesFromSample(value) {
-  const sample = String(value || '').trim()
-  if (!sample) return []
-
-  let match = sample.match(/^(\d{4})([/-])(\d{1,2})\2(\d{1,2})$/)
-  if (match) {
-    const month = parseIntegerWithinRange(match[3], 1, 12)
-    const day = parseIntegerWithinRange(match[4], 1, 31)
-    if (month && day) {
-      return [match[2] === '-' ? '%Y-%m-%d' : '%Y/%m/%d']
-    }
-  }
-
-  match = sample.match(/^(\d{1,2})([/-])(\d{1,2})\2(\d{4})$/)
-  if (match) {
-    const first = parseIntegerWithinRange(match[1], 1, 31)
-    const second = parseIntegerWithinRange(match[3], 1, 31)
-    const sep = match[2]
-    if (!first || !second) return []
-    const monthFirstFormat = sep === '-' ? '%m-%d-%Y' : '%m/%d/%Y'
-    const dayFirstFormat = sep === '-' ? '%d-%m-%Y' : '%d/%m/%Y'
-    if (first > 12 && second <= 12) return [dayFirstFormat]
-    if (second > 12 && first <= 12) return [monthFirstFormat]
-    const candidates = []
-    if (first <= 12) candidates.push(monthFirstFormat)
-    if (second <= 12) candidates.push(dayFirstFormat)
-    return candidates
-  }
-
-  if (/^[A-Za-z]{3}\s+\d{1,2},\s*\d{4}$/.test(sample)) return ['%b %d, %Y']
-  if (/^[A-Za-z]{3}-\d{1,2}-\d{4}$/.test(sample)) return ['%b-%d-%Y']
-  return []
-}
-
-function analyzeDateSamples(values) {
-  const scores = new Map()
-  let matchedCount = 0
-  let decisiveCount = 0
-
-  values.forEach(value => {
-    const candidates = getDateCandidatesFromSample(value)
-    if (!candidates.length) return
-    matchedCount += 1
-    if (candidates.length === 1) decisiveCount += 1
-    candidates.forEach(candidate => scores.set(candidate, (scores.get(candidate) || 0) + 1))
-  })
-
-  const rankedFormats = [...scores.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([format]) => format)
-
-  return {
-    matchedCount,
-    decisiveCount,
-    rankedFormats,
-    guessedFormat: rankedFormats[0] || null,
-  }
-}
-
-function looksLikeAmountSample(value) {
-  const sample = String(value || '').trim()
-  if (!sample) return false
-  const compact = sample.replace(/\s+/g, '')
-  return /^(\(\$?\d[\d,]*(\.\d+)?\)|[+-]?\$?\d[\d,]*(\.\d+)?(?:CR|DR)?)$/i.test(compact)
-}
-
-function analyzeAmountSamples(values) {
-  const styles = {
-    accounting: 0,
-    currency: 0,
-    trailingCode: 0,
-    signed: 0,
-    plain: 0,
-  }
-
-  values.forEach(value => {
-    const sample = String(value || '').trim()
-    if (!looksLikeAmountSample(sample)) return
-    if (/^\(\$?\d[\d,]*(\.\d+)?\)$/i.test(sample)) styles.accounting += 1
-    else if (/(CR|DR)$/i.test(sample)) styles.trailingCode += 1
-    else if (/^[+-]/.test(sample)) styles.signed += 1
-    else if (sample.includes('$')) styles.currency += 1
-    else styles.plain += 1
-  })
-
-  const ranked = Object.entries(styles).sort((a, b) => b[1] - a[1])
-  const [topStyle, topCount] = ranked[0] || [null, 0]
-  const labels = {
-    accounting: 'Detected accounting-style negatives.',
-    currency: 'Detected currency amounts.',
-    trailingCode: 'Detected trailing CR/DR amounts.',
-    signed: 'Detected signed amounts.',
-    plain: 'Detected plain numeric amounts.',
-  }
-
-  return {
-    guessedStyle: topCount > 0 ? topStyle : null,
-    guessedLabel: topCount > 0 ? labels[topStyle] : null,
-  }
-}
-
-function looksLikeDirectionSample(value) {
-  const normalized = String(value || '').trim().toLowerCase()
-  return ['credit', 'debit', 'cr', 'dr', 'deposit', 'withdrawal', 'payment', 'incoming', 'outgoing'].includes(normalized)
-}
-
-function looksLikePendingSample(value) {
-  const normalized = String(value || '').trim().toLowerCase()
-  return ['pending', 'posted', 'cleared', 'complete', 'completed', 'final', 'finalized', 'finalised', 'true', 'false', 'yes', 'no', 'y', 'n', '1', '0', 'p'].includes(normalized)
-}
-
-function scoreHeaderName(header, type) {
-  const normalized = normalizeImportHeaderName(header)
-  if (!normalized) return 0
-
-  const tests = {
-    date: ['date', 'posted', 'trans date', 'transaction date', 'post date'],
-    amount: ['amount', 'amt', 'value'],
-    category: ['category', 'cat', 'classification', 'type'],
-    account: ['account', 'acct'],
-    debit: ['debit', 'withdrawal', 'outflow', 'payment', 'charge'],
-    credit: ['credit', 'deposit', 'inflow', 'refund'],
-    direction: ['type', 'direction', 'dr/cr', 'transaction type'],
-    pending: ['pending', 'status', 'posted', 'cleared'],
-  }
-
-  return (tests[type] || []).reduce((score, token) => score + (normalized.includes(token) ? 1 : 0), 0)
-}
-
-function formatLikelyMatchLabel(count) {
-  if (!count) return ''
-  return `${count} likely ${count === 1 ? 'match' : 'matches'}`
-}
-
-function ColSelect({
-  label,
-  headers,
-  allHeaders = headers,
-  value,
-  onChange,
-  required,
-  hint,
-  tone = 'muted',
-}) {
-  const borderColor = required && !value ? 'var(--danger)' : 'var(--border)'
-  const hintColor = tone === 'danger' ? 'var(--danger)' : 'var(--muted)'
-  const [open, setOpen] = useState(false)
-  const wrapRef = useRef(null)
-  const listRef = useRef(null)
-  const { openUp } = useDismissiblePopup({
-    open,
-    setOpen,
-    anchorRef: wrapRef,
-    popupRef: listRef,
-    placementDeps: [headers.length, allHeaders.length],
-  })
-
-  const hasDetectedSuggestions = headers.length > 0 && headers.length < allHeaders.length
-  const suggestedHeaders = headers
-  const remainingHeaders = allHeaders.filter(h => !suggestedHeaders.includes(h))
-  const showSuggestedSection = hasDetectedSuggestions && suggestedHeaders.length > 0
-  const directHeaders = showSuggestedSection ? remainingHeaders : allHeaders
-  const selectedLabel = value
-    ? value
-    : <span style={{ color: 'var(--muted)' }}>Not mapped</span>
-
-  const triggerStyle = {
-    width: '100%',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    background: 'var(--surface2)',
-    color: 'var(--text)',
-    border: `1px solid ${borderColor}`,
-    borderRadius: 6,
-    padding: '6px 8px',
-    fontSize: 13,
-    cursor: 'pointer',
-    textAlign: 'left',
-  }
-
-  const listStyle = {
-    position: 'absolute',
-    zIndex: 600,
-    left: 0,
-    right: 0,
-    background: 'var(--surface)',
-    border: '1px solid var(--border)',
-    borderRadius: 8,
-    boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
-    maxHeight: 320,
-    overflowY: 'auto',
-    ...(openUp ? { bottom: 'calc(100% + 4px)' } : { top: 'calc(100% + 4px)' }),
-  }
-
-  const menuItemStyle = (active, subtle = false) => ({
-    width: '100%',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    padding: subtle ? '7px 12px' : '8px 12px',
-    border: 'none',
-    background: active
-      ? 'color-mix(in srgb, var(--accent2) 14%, var(--surface2))'
-      : subtle
-        ? 'color-mix(in srgb, var(--surface2) 75%, transparent)'
-        : 'transparent',
-    color: subtle ? 'var(--muted)' : 'var(--text)',
-    cursor: 'pointer',
-    fontSize: 13,
-    textAlign: 'left',
-  })
-
-  const suggestedPillStyle = {
-    flexShrink: 0,
-    fontSize: 10,
-    fontWeight: 700,
-    color: 'var(--accent2)',
-    background: 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
-    border: '1px solid color-mix(in srgb, var(--accent2) 35%, var(--border))',
-    borderRadius: 999,
-    padding: '2px 7px',
-    letterSpacing: '0.02em',
-    lineHeight: 1.1,
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>
-        {label}{required && <span style={{ color: 'var(--danger)' }}> *</span>}
-      </label>
-      <div ref={wrapRef} style={{ position: 'relative' }}>
-        <button
-          type="button"
-          onClick={() => setOpen(v => !v)}
-          aria-haspopup="listbox"
-          aria-expanded={open}
-          style={triggerStyle}
-        >
-          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {selectedLabel}
-          </span>
-          {!value && hint ? (
-            <span style={{
-              flexShrink: 0,
-              fontSize: 11,
-              color: hintColor,
-              background: 'color-mix(in srgb, var(--surface) 60%, transparent)',
-              border: '1px solid var(--border)',
-              borderRadius: 999,
-              padding: '2px 7px',
-            }}>
-              {hint}
-            </span>
-          ) : null}
-          <span style={{ fontSize: 10, color: 'var(--muted)', flexShrink: 0 }}>▾</span>
-        </button>
-
-        {open && (
-          <div ref={listRef} style={listStyle} role="listbox" aria-label={`${label} column options`}>
-            <button
-              type="button"
-              role="option"
-              aria-selected={!value}
-              style={menuItemStyle(!value)}
-              onMouseDown={e => {
-                e.preventDefault()
-                onChange(null)
-                setOpen(false)
-              }}
-            >
-              <span style={{ flex: 1, color: 'var(--muted)' }}>Not mapped</span>
-              {!value && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
-            </button>
-
-            {showSuggestedSection && (
-              <>
-                {suggestedHeaders.map(h => (
-                  <button
-                    key={h}
-                    type="button"
-                    role="option"
-                    aria-selected={value === h}
-                    style={menuItemStyle(value === h)}
-                    onMouseDown={e => {
-                      e.preventDefault()
-                      onChange(h)
-                      setOpen(false)
-                    }}
-                  >
-                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {h}
-                    </span>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexShrink: 0, minWidth: 98 }}>
-                      <span style={suggestedPillStyle}>Suggested</span>
-                      <span style={{ width: 12, textAlign: 'center', fontSize: 11, color: 'var(--accent2)', visibility: value === h ? 'visible' : 'hidden' }}>✓</span>
-                    </div>
-                  </button>
-                ))}
-              </>
-            )}
-
-            {directHeaders.length > 0 && (
-              <>
-                {showSuggestedSection ? (
-                  <div
-                    style={{
-                      height: 1,
-                      background: 'var(--border)',
-                      margin: '3px 0',
-                    }}
-                  />
-                ) : null}
-                {directHeaders.map(h => (
-                  <button
-                    key={h}
-                    type="button"
-                    role="option"
-                    aria-selected={value === h}
-                    style={menuItemStyle(value === h)}
-                    onMouseDown={e => {
-                      e.preventDefault()
-                      onChange(h)
-                      setOpen(false)
-                    }}
-                  >
-                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {h}
-                    </span>
-                    {value === h && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
-                  </button>
-                ))}
-              </>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 function RawFilePreview({ rawLines, headerRowIndex, onClose, lineNumberOffset = 0, title = 'Raw file', note = null }) {
-  const [pos,  setPos]  = useState({ x: Math.max(0, window.innerWidth - 560), y: 80 })
+  const [pos, setPos] = useState({ x: Math.max(0, window.innerWidth - 560), y: 80 })
   const [size, setSize] = useState({ w: 520, h: 320 })
   const [dragState, setDragState] = useState(null)
   const startRef = useRef({})
@@ -787,8 +1051,8 @@ function RawFilePreview({ rawLines, headerRowIndex, onClose, lineNumberOffset = 
       const dy = e.clientY - startRef.current.my
       if (dragState === 'move') {
         setPos({
-          x: Math.max(0, Math.min(window.innerWidth  - 200, startRef.current.x + dx)),
-          y: Math.max(0, Math.min(window.innerHeight - 60,  startRef.current.y + dy)),
+          x: Math.max(0, Math.min(window.innerWidth - 200, startRef.current.x + dx)),
+          y: Math.max(0, Math.min(window.innerHeight - 60, startRef.current.y + dy)),
         })
       } else {
         setSize({
@@ -799,7 +1063,7 @@ function RawFilePreview({ rawLines, headerRowIndex, onClose, lineNumberOffset = 
     }
     function onUp() { setDragState(null) }
     window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup',  onUp)
+    window.addEventListener('mouseup', onUp)
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
   }, [dragState])
 
@@ -867,8 +1131,8 @@ function RawFilePreview({ rawLines, headerRowIndex, onClose, lineNumberOffset = 
         {rawLines.map((line, i) => {
           const actualLineIndex = lineNumberOffset + i
           const isHeader = actualLineIndex === headerRowIndex
-          const isData   = actualLineIndex > headerRowIndex && actualLineIndex <= headerRowIndex + 4
-          const dimmed   = !isHeader && !isData && actualLineIndex > headerRowIndex
+          const isData = actualLineIndex > headerRowIndex && actualLineIndex <= headerRowIndex + 4
+          const dimmed = !isHeader && !isData && actualLineIndex > headerRowIndex
           return (
             <div key={i} style={{
               display: 'flex', alignItems: 'baseline',
@@ -902,182 +1166,6 @@ function RawFilePreview({ rawLines, headerRowIndex, onClose, lineNumberOffset = 
 //   Closed (column mode):  "↔ Column  AccountName"
 //   Closed (account mode): "AccountName ···mask"
 //   Open list:             plain "AccountName" and plain "HeaderName" (no prefix)
-
-function AccountHandlingPicker({ headers, allHeaders = headers, accounts, colAccount, accountId, singleAccountNew, isRequired, hint, onChange }) {
-  const [open, setOpen]   = useState(false)
-  const wrapRef           = useRef(null)
-  const listRef           = useRef(null)
-  const { openUp } = useDismissiblePopup({
-    open,
-    setOpen,
-    anchorRef: wrapRef,
-    popupRef: listRef,
-    placementDeps: [headers.length, allHeaders.length],
-  })
-
-  const selectedAccount = accounts.find(a => a.id === accountId)
-  let closedLabel = <span style={{ color: 'var(--muted)' }}>— Select account or column —</span>
-  if (colAccount) {
-    closedLabel = (
-      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, letterSpacing: '0.03em' }}>↔ Column</span>
-        <span>{colAccount}</span>
-      </span>
-    )
-  } else if (selectedAccount) {
-    closedLabel = (
-      <span>{selectedAccount.name}{selectedAccount.mask ? ` ···${selectedAccount.mask}` : ''}</span>
-    )
-  } else if (singleAccountNew?.enabled) {
-    closedLabel = (
-      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, letterSpacing: '0.03em' }}>＋ New</span>
-        <span>{singleAccountNew.name?.trim() || 'Create new account'}</span>
-      </span>
-    )
-  }
-
-  const triggerStyle = {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    background: 'var(--surface2)', color: 'var(--text)',
-    border: `1px solid ${isRequired ? 'var(--danger)' : 'var(--border)'}`,
-    borderRadius: 6, padding: '6px 8px', fontSize: 13,
-    cursor: 'pointer', userSelect: 'none', gap: 6,
-  }
-
-  const groupLabel = {
-    padding: '5px 10px 2px', fontSize: 10, fontWeight: 700,
-    color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.08em',
-    borderTop: '1px solid var(--border)',
-  }
-
-  const itemStyle = (active) => ({
-    padding: '4px 12px', fontSize: 13, cursor: 'pointer',
-    background: active ? 'var(--surface2)' : 'transparent',
-    display: 'flex', alignItems: 'center', gap: 8,
-  })
-
-  const hasDetectedSuggestions = headers.length > 0 && headers.length < allHeaders.length
-  const suggestedHeaders = headers
-  const remainingHeaders = allHeaders.filter(h => !suggestedHeaders.includes(h))
-  const showSuggestedSection = hasDetectedSuggestions && suggestedHeaders.length > 0
-  const directHeaders = showSuggestedSection ? remainingHeaders : suggestedHeaders
-  const suggestedPillStyle = {
-    flexShrink: 0,
-    fontSize: 10,
-    fontWeight: 700,
-    color: 'var(--accent2)',
-    background: 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
-    border: '1px solid color-mix(in srgb, var(--accent2) 35%, var(--border))',
-    borderRadius: 999,
-    padding: '2px 7px',
-    letterSpacing: '0.02em',
-    lineHeight: 1.1,
-  }
-
-  const listStyle = {
-    position: 'absolute', zIndex: 600,
-    left: 0, right: 0,
-    background: 'var(--surface)', border: '1px solid var(--border)',
-    borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
-    maxHeight: 320, overflowY: 'auto',
-    ...(openUp
-      ? { bottom: 'calc(100% + 4px)' }
-      : { top:    'calc(100% + 4px)' }
-    ),
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)' }}>
-        Account heading <span style={{ color: 'var(--danger)' }}>*</span>
-      </label>
-      <div ref={wrapRef} style={{ position: 'relative' }}>
-        <div style={triggerStyle} onClick={() => setOpen(v => !v)}>
-          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {closedLabel}
-          </span>
-          {!colAccount && !accountId && !singleAccountNew?.enabled && hint ? (
-            <span style={{
-              flexShrink: 0,
-              fontSize: 11,
-              color: 'var(--muted)',
-              background: 'color-mix(in srgb, var(--surface) 60%, transparent)',
-              border: '1px solid var(--border)',
-              borderRadius: 999,
-              padding: '2px 7px',
-            }}>
-              {hint}
-            </span>
-          ) : null}
-          <span style={{ fontSize: 10, color: 'var(--muted)', flexShrink: 0 }}>▾</span>
-        </div>
-
-        {open && (
-          <div ref={listRef} style={listStyle}>
-            <div
-              style={itemStyle(!colAccount && !accountId && !singleAccountNew?.enabled)}
-              onMouseDown={e => { e.preventDefault(); onChange({ acct: '', createNew: false }); setOpen(false) }}
-            >
-              <span style={{ color: 'var(--muted)' }}>— Select account or column —</span>
-            </div>
-
-            {allHeaders.length > 0 && (
-              <>
-                <div style={groupLabel}>Map rows from a column in the file</div>
-                {showSuggestedSection && suggestedHeaders.map(h => (
-                  <div
-                    key={h}
-                    style={itemStyle(colAccount === h)}
-                    onMouseDown={e => { e.preventDefault(); onChange({ col: h, createNew: false }); setOpen(false) }}
-                  >
-                    <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, flexShrink: 0 }}>↔</span>
-                    <span>{h}</span>
-                    <span style={suggestedPillStyle}>Suggested</span>
-                    {colAccount === h && <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
-                  </div>
-                ))}
-                {directHeaders.map(h => (
-                  <div
-                    key={h}
-                    style={itemStyle(colAccount === h)}
-                    onMouseDown={e => { e.preventDefault(); onChange({ col: h, createNew: false }); setOpen(false) }}
-                  >
-                    <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, flexShrink: 0 }}>↔</span>
-                    <span>{h}</span>
-                    {colAccount === h && <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
-                  </div>
-                ))}
-              </>
-            )}
-
-            <>
-              <div style={{ ...groupLabel, borderTop: '1px solid var(--border)' }}>Assign all rows to one account</div>
-              {accounts.map(a => (
-                <div
-                  key={a.id}
-                  style={itemStyle(accountId === a.id)}
-                  onMouseDown={e => { e.preventDefault(); onChange({ acct: a.id, createNew: false }); setOpen(false) }}
-                >
-                  <span style={{ flex: 1 }}>{a.name}{a.mask ? ` ···${a.mask}` : ''}</span>
-                  {accountId === a.id && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
-                </div>
-              ))}
-              <div
-                style={itemStyle(!!singleAccountNew?.enabled)}
-                onMouseDown={e => { e.preventDefault(); onChange({ acct: '', createNew: true }); setOpen(false) }}
-              >
-                <span style={{ fontSize: 11, color: 'var(--accent2)', fontWeight: 600, flexShrink: 0 }}>＋</span>
-                <span style={{ flex: 1 }}>Create new account…</span>
-                {singleAccountNew?.enabled && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
-              </div>
-            </>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
 
 // Keep the import UI recoverable if a preview or mapping render crashes.
 class ImportErrorBoundary extends React.Component {
@@ -1114,15 +1202,16 @@ function ImportTab() {
   const navigate = useNavigate()
   const [lastImportDataSourceId, setLastImportDataSourceId] = useUserPreference(LAST_IMPORT_DATA_SOURCE_PREF_KEY, '')
   const [expandedSourceRows, setExpandedSourceRows] = useUserPreference(EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY, {})
+  const [savedDataSourceManagerPos, setSavedDataSourceManagerPos] = useUserPreference(DATA_SOURCE_MANAGER_POS_PREF_KEY, null)
   const [dbInstanceId, setDbInstanceId] = useState('')
   const [preferenceSubjectId, setPreferenceSubjectId] = useState('')
-  const [stage, setStage]           = useState('upload')
-  const [preview, setPreview]       = useState(null)
-  const [profiles, setProfiles]     = useState([])
-  const [accounts, setAccounts]     = useState([])
+  const [stage, setStage] = useState('upload')
+  const [preview, setPreview] = useState(null)
+  const [profiles, setProfiles] = useState([])
+  const [accounts, setAccounts] = useState([])
   const [categories, setCategories] = useState([])
-  const [loading, setLoading]       = useState(false)
-  const [batches, setBatches]       = useState([])
+  const [loading, setLoading] = useState(false)
+  const [batches, setBatches] = useState([])
   const [undoTarget, setUndoTarget] = useState(null)
   const [undoEdited, setUndoEdited] = useState([])
   const [undoLoading, setUndoLoading] = useState(false)
@@ -1134,29 +1223,39 @@ function ImportTab() {
   const [showUploadSourceCreate, setShowUploadSourceCreate] = useState(false)
   const [uploadSourceDraftName, setUploadSourceDraftName] = useState('')
   const [creatingUploadSource, setCreatingUploadSource] = useState(false)
+  const [showMappingSourceChooser, setShowMappingSourceChooser] = useState(false)
+  const [mappingBaselineSnapshot, setMappingBaselineSnapshot] = useState('')
+  const [pendingMappingBaselineCapture, setPendingMappingBaselineCapture] = useState(false)
   const [manualDraftRecord, setManualDraftRecord] = useState(null)
   const [showManualDraftSave, setShowManualDraftSave] = useState(false)
   const [manualDraftSaveName, setManualDraftSaveName] = useState('')
   const [savingManualDraftSource, setSavingManualDraftSource] = useState(false)
+  const [showDataSourceManager, setShowDataSourceManager] = useState(false)
+  const [dataSourceManagerEditing, setDataSourceManagerEditing] = useState(false)
+  const [dataSourceManagerPos, setDataSourceManagerPos] = useState(null)
+  const [dataSourceManagerDragging, setDataSourceManagerDragging] = useState(false)
+  const [editingSourceNameKey, setEditingSourceNameKey] = useState('')
+  const [sourceNameDraft, setSourceNameDraft] = useState('')
   const [editingSourceDescriptionId, setEditingSourceDescriptionId] = useState('')
   const [sourceDescriptionDraft, setSourceDescriptionDraft] = useState('')
 
   const [selectedProfile, setSelectedProfile] = useState('')
-  const [accountId,  setAccountId]  = useState('')
+  const [accountId, setAccountId] = useState('')
   const [dateFormat, setDateFormat] = useState('%m/%d/%Y')
-  const [amtConv,    setAmtConv]    = useState('single_signed')
-  const [skipRows,   setSkipRows]   = useState(0)
-  const [applyCat,   setApplyCat]   = useState(true)
-  const [colDate,    setColDate]    = useState(null)
-  const [colAmount,  setColAmount]  = useState(null)
-  const [colDebit,   setColDebit]   = useState(null)
-  const [colCredit,  setColCredit]  = useState(null)
-  const [colDir,     setColDir]     = useState(null)
-  const [colDesc,    setColDesc]    = useState(null)
-  const [colCategory,setColCategory]= useState(null)
-  const [colNotes,   setColNotes]   = useState(null)
+  const [amtConv, setAmtConv] = useState('single_signed')
+  const [skipRows, setSkipRows] = useState(0)
+  const [applyCat, setApplyCat] = useState(true)
+  const [colDate, setColDate] = useState(null)
+  const [colAmount, setColAmount] = useState(null)
+  const [colDebit, setColDebit] = useState(null)
+  const [colCredit, setColCredit] = useState(null)
+  const [colDir, setColDir] = useState(null)
+  const [colDesc, setColDesc] = useState(null)
+  const [colCategory, setColCategory] = useState(null)
+  const [colNotes, setColNotes] = useState(null)
   const [colPending, setColPending] = useState(null)
   const [colAccount, setColAccount] = useState(null)
+  const [mappingSuggestions, setMappingSuggestions] = useState(getBlankMappingSuggestions())
   const [singleAccountNew, setSingleAccountNew] = useState({ enabled: false, name: '', type: 'depository' })
   const [accountMap, setAccountMap] = useState({})
   const [categoryAssignments, setCategoryAssignments] = useState({})
@@ -1174,13 +1273,21 @@ function ImportTab() {
   const [importCategoryDraft, setImportCategoryDraft] = useState(null)
   const [pendingCategoryApply, setPendingCategoryApply] = useState(null)
   const [pendingCategoryReplacementId, setPendingCategoryReplacementId] = useState('')
-  const [importResult,      setImportResult]      = useState(null)
-  const [showRaw,           setShowRaw]           = useState(false)
-  const [showValidationViewer, setShowValidationViewer] = useState(false)
-  const [showAdvanced,      setShowAdvanced]      = useState(false)
-  const [showSaveProfile,   setShowSaveProfile]   = useState(false)
-  const [saveProfileName,   setSaveProfileName]   = useState('')
-  const [dateFormatLocked,  setDateFormatLocked]  = useState(false)
+  const [importResult, setImportResult] = useState(null)
+  const [showRaw, setShowRaw] = useState(false)
+  const [rejectedRowsViewer, setRejectedRowsViewer] = useState(null)
+  const [duplicateRowsViewer, setDuplicateRowsViewer] = useState(null)
+  const [duplicateImporting, setDuplicateImporting] = useState(false)
+  const [pendingDuplicateImport, setPendingDuplicateImport] = useState(null)
+  const [pendingProfileMismatch, setPendingProfileMismatch] = useState(null)
+  const [showProfileMismatchChooser, setShowProfileMismatchChooser] = useState(false)
+  const [pendingMappingSourceSwitch, setPendingMappingSourceSwitch] = useState(null)
+  const [noticeDialog, setNoticeDialog] = useState(null)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [dateFormatLocked, setDateFormatLocked] = useState(false)
+  const duplicateViewerRequestRef = useRef(0)
+  const dataSourceManagerRef = useRef(null)
+  const dataSourceManagerDragStartRef = useRef(null)
 
   useEffect(() => {
     Promise.all([
@@ -1224,10 +1331,14 @@ function ImportTab() {
     const { persist = true } = options
     setSelectedUploadSource(nextSourceId)
     if (persist && nextSourceId && nextSourceId !== MANUAL_DATA_SOURCE_VALUE) {
-      setLastImportDataSourceId(nextSourceId).catch(() => {})
+      setLastImportDataSourceId(nextSourceId).catch(() => { })
     } else if (!persist || nextSourceId === MANUAL_DATA_SOURCE_VALUE || !nextSourceId) {
-      setLastImportDataSourceId('').catch(() => {})
+      setLastImportDataSourceId('').catch(() => { })
     }
+  }
+
+  function getSourceNameEditKey(location, profileId) {
+    return `${location}:${profileId || ''}`
   }
 
   useEffect(() => {
@@ -1239,7 +1350,7 @@ function ImportTab() {
     if (profiles.some(profile => profile.id === lastImportDataSourceId)) {
       setSelectedUploadSource(lastImportDataSourceId)
     } else {
-      setLastImportDataSourceId('').catch(() => {})
+      setLastImportDataSourceId('').catch(() => { })
     }
     setStartupUploadSourceApplied(true)
   }, [uploadSourcesReady, startupUploadSourceApplied, lastImportDataSourceId, profiles, setLastImportDataSourceId])
@@ -1249,10 +1360,102 @@ function ImportTab() {
     if (!profiles.some(profile => profile.id === selectedUploadSource)) {
       setSelectedUploadSource('')
       if (lastImportDataSourceId === selectedUploadSource) {
-        setLastImportDataSourceId('').catch(() => {})
+        setLastImportDataSourceId('').catch(() => { })
       }
     }
   }, [profiles, selectedUploadSource, lastImportDataSourceId, setLastImportDataSourceId])
+
+  function getDataSourceManagerDefaultPosition() {
+    if (typeof window === 'undefined') return { x: 360, y: 180 }
+    const width = Math.min(1040, window.innerWidth - 96)
+    const height = Math.max(380, Math.min(window.innerHeight * 0.78, 640))
+    return clampFloatingPanelPosition(
+      {
+        x: Math.max(340, Math.round(window.innerWidth * 0.24)),
+        y: 180,
+      },
+      { width, height },
+    )
+  }
+
+  function closeDataSourceManager() {
+    setShowDataSourceManager(false)
+    setDataSourceManagerEditing(false)
+    setDataSourceManagerDragging(false)
+  }
+
+  function handleManagerDataChange({ profiles: nextProfiles, batches: nextBatches } = {}) {
+    if (Array.isArray(nextProfiles)) {
+      setProfiles(nextProfiles)
+    }
+    if (Array.isArray(nextBatches)) {
+      setBatches(nextBatches)
+    }
+  }
+
+  function startDataSourceManagerDrag(event) {
+    if (dataSourceManagerEditing || !dataSourceManagerRef.current) return
+    const rect = dataSourceManagerRef.current.getBoundingClientRect()
+    dataSourceManagerDragStartRef.current = {
+      mouseX: event.clientX,
+      mouseY: event.clientY,
+      x: dataSourceManagerPos?.x ?? rect.left,
+      y: dataSourceManagerPos?.y ?? rect.top,
+      width: rect.width,
+      height: rect.height,
+    }
+    setDataSourceManagerDragging(true)
+    event.preventDefault()
+  }
+
+  useEffect(() => {
+    if (!showDataSourceManager) return
+    const saved = savedDataSourceManagerPos && typeof savedDataSourceManagerPos === 'object'
+      ? savedDataSourceManagerPos
+      : null
+    const rect = dataSourceManagerRef.current?.getBoundingClientRect()
+    const nextPos = saved
+      ? clampFloatingPanelPosition(saved, rect || { width: Math.min(1040, window.innerWidth - 96), height: Math.max(380, Math.min(window.innerHeight * 0.78, 640)) })
+      : getDataSourceManagerDefaultPosition()
+    setDataSourceManagerPos(nextPos)
+  }, [savedDataSourceManagerPos, showDataSourceManager])
+
+  useEffect(() => {
+    if (!showDataSourceManager) return undefined
+    function handleResize() {
+      const rect = dataSourceManagerRef.current?.getBoundingClientRect()
+      setDataSourceManagerPos(prev => clampFloatingPanelPosition(prev || getDataSourceManagerDefaultPosition(), rect || { width: Math.min(1040, window.innerWidth - 96), height: Math.max(380, Math.min(window.innerHeight * 0.78, 640)) }))
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [showDataSourceManager])
+
+  useEffect(() => {
+    if (!dataSourceManagerDragging) return undefined
+    function handleMove(event) {
+      const start = dataSourceManagerDragStartRef.current
+      if (!start) return
+      setDataSourceManagerPos(clampFloatingPanelPosition({
+        x: start.x + (event.clientX - start.mouseX),
+        y: start.y + (event.clientY - start.mouseY),
+      }, { width: start.width, height: start.height }))
+    }
+    function handleUp() {
+      setDataSourceManagerDragging(false)
+      const start = dataSourceManagerDragStartRef.current
+      if (!start) return
+      setSavedDataSourceManagerPos(prev => {
+        const next = dataSourceManagerPos || prev || getDataSourceManagerDefaultPosition()
+        return next
+      }).catch(() => { })
+    }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+    }
+  }, [dataSourceManagerDragging, dataSourceManagerPos, setSavedDataSourceManagerPos])
 
   const distinctAccountValues = useMemo(() => {
     if (!colAccount || !preview?.column_distinct_values) return []
@@ -1298,6 +1501,7 @@ function ImportTab() {
     const savedSourceRows = profiles.map(profile => {
       const draft = clonePersistedCategoryWorkspaceDraft(profile.column_map?.category_workspace_draft)
       const categorySummary = summarizeCategoryWorkspaceDraft(draft)
+      const ruleSuggestionReview = summarizeRuleSuggestionReview(profile.column_map?.rule_suggestion_review)
       const profileBatches = batches.filter(batch => batch.profile_id === profile.id).sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
       const latestBatch = profileBatches[0] || null
       return {
@@ -1306,11 +1510,18 @@ function ImportTab() {
         profile,
         draft,
         categorySummary,
+        ruleSuggestionReview,
+        hasImportedCategories: profileBatches.some(batch => batch.has_imported_categories),
         batches: profileBatches,
         latestBatch,
       }
     })
-    const manualBatches = batches.filter(batch => !batch.profile_id).sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
+    const manualBatches = batches
+      .filter(batch => !batch.profile_id && !batch.unknown_source_fallback)
+      .sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
+    const fallbackUnknownBatches = batches
+      .filter(batch => !batch.profile_id && batch.unknown_source_fallback)
+      .sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
     const latestManualBatch = manualBatches[0] || null
     const olderManualBatches = manualBatches.slice(1)
 
@@ -1323,134 +1534,40 @@ function ImportTab() {
         profile: null,
         draft: clonePersistedCategoryWorkspaceDraft(manualDraftRecord?.snapshot?.category_workspace_draft),
         categorySummary: summarizeCategoryWorkspaceDraft(clonePersistedCategoryWorkspaceDraft(manualDraftRecord?.snapshot?.category_workspace_draft)),
+        ruleSuggestionReview: null,
+        hasImportedCategories: !!latestManualBatch?.has_imported_categories,
         batches: latestManualBatch ? [latestManualBatch] : [],
         latestBatch: latestManualBatch,
         manualDraftRecord,
       })
     }
 
-    if (olderManualBatches.length > 0) {
+    const unknownSourceBatches = [...olderManualBatches, ...fallbackUnknownBatches]
+      .sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
+
+    if (unknownSourceBatches.length > 0) {
       savedSourceRows.push({
         key: 'unknown-source',
         kind: 'unknown',
         profile: null,
         draft: null,
         categorySummary: { sourceValues: [], totalCount: 0, remainingCount: 0 },
-        batches: olderManualBatches,
-        latestBatch: olderManualBatches[0],
+        ruleSuggestionReview: null,
+        hasImportedCategories: unknownSourceBatches.some(batch => batch.has_imported_categories),
+        batches: unknownSourceBatches,
+        latestBatch: unknownSourceBatches[0],
         manualDraftRecord: null,
       })
     }
-    return savedSourceRows.sort((a, b) => String(b.latestBatch?.imported_at || '').localeCompare(String(a.latestBatch?.imported_at || '')))
+    return savedSourceRows.sort((a, b) => {
+      const priority = row => row.kind === 'manual' ? 0 : 1
+      const priorityDiff = priority(a) - priority(b)
+      if (priorityDiff !== 0) return priorityDiff
+      return String(b.latestBatch?.imported_at || '').localeCompare(String(a.latestBatch?.imported_at || ''))
+    })
   }, [profiles, batches, manualDraftRecord])
 
-  const columnSamples = useMemo(() => {
-    if (!preview?.headers?.length || !preview?.rows?.length) return {}
-    const rows = preview.rows.slice(skipRows)
-    return preview.headers.reduce((acc, header) => {
-      acc[header] = rows
-        .map(row => String(row?.[header] ?? '').trim())
-        .filter(Boolean)
-      return acc
-    }, {})
-  }, [preview, skipRows])
-
-  const columnAnalysis = useMemo(() => {
-    if (!preview?.headers?.length) {
-      return {
-        dateCandidates: [],
-        amountCandidates: [],
-        categoryCandidates: [],
-        accountCandidates: [],
-        debitCandidates: [],
-        creditCandidates: [],
-        directionCandidates: [],
-        pendingCandidates: [],
-        dateAnalysisByHeader: {},
-        amountAnalysisByHeader: {},
-      }
-    }
-
-    const analyses = {
-      dateCandidates: [],
-      amountCandidates: [],
-      categoryCandidates: [],
-      accountCandidates: [],
-      debitCandidates: [],
-      creditCandidates: [],
-      directionCandidates: [],
-      pendingCandidates: [],
-      dateAnalysisByHeader: {},
-      amountAnalysisByHeader: {},
-    }
-
-    preview.headers.forEach(header => {
-      const samples = columnSamples[header] || []
-      const sampleCount = samples.length
-      const headerBoostDate = scoreHeaderName(header, 'date')
-      const dateAnalysis = analyzeDateSamples(samples)
-      const dateScore = dateAnalysis.matchedCount + dateAnalysis.decisiveCount + (headerBoostDate * 2)
-      analyses.dateAnalysisByHeader[header] = { ...dateAnalysis, sampleCount, score: dateScore }
-      if ((sampleCount > 0 && dateAnalysis.matchedCount >= Math.max(2, Math.ceil(sampleCount * 0.6))) || headerBoostDate > 0) {
-        analyses.dateCandidates.push({ header, score: dateScore })
-      }
-
-      const amountMatches = samples.filter(looksLikeAmountSample).length
-      const amountRatio = sampleCount ? amountMatches / sampleCount : 0
-      const amountBoost = scoreHeaderName(header, 'amount')
-      const amountScore = amountMatches + (amountBoost * 2)
-      const amountFormat = analyzeAmountSamples(samples)
-      analyses.amountAnalysisByHeader[header] = { sampleCount, amountMatches, amountRatio, score: amountScore, ...amountFormat }
-      if ((sampleCount > 0 && amountRatio >= 0.7) || amountBoost > 0) {
-        analyses.amountCandidates.push({ header, score: amountScore })
-      }
-
-      const categoryBoost = scoreHeaderName(header, 'category')
-      if (categoryBoost > 0) {
-        analyses.categoryCandidates.push({ header, score: categoryBoost })
-      }
-
-      const accountBoost = scoreHeaderName(header, 'account')
-      if (accountBoost > 0) {
-        analyses.accountCandidates.push({ header, score: accountBoost })
-      }
-
-      const debitBoost = scoreHeaderName(header, 'debit')
-      const debitScore = amountMatches + (debitBoost * 3)
-      if ((sampleCount > 0 && amountRatio >= 0.7 && debitBoost > 0) || debitBoost > 0) {
-        analyses.debitCandidates.push({ header, score: debitScore })
-      }
-
-      const creditBoost = scoreHeaderName(header, 'credit')
-      const creditScore = amountMatches + (creditBoost * 3)
-      if ((sampleCount > 0 && amountRatio >= 0.7 && creditBoost > 0) || creditBoost > 0) {
-        analyses.creditCandidates.push({ header, score: creditScore })
-      }
-
-      const directionMatches = samples.filter(looksLikeDirectionSample).length
-      const directionRatio = sampleCount ? directionMatches / sampleCount : 0
-      const directionBoost = scoreHeaderName(header, 'direction')
-      const directionScore = directionMatches + (directionBoost * 2)
-      if ((sampleCount > 0 && directionRatio >= 0.6) || directionBoost > 0) {
-        analyses.directionCandidates.push({ header, score: directionScore })
-      }
-
-      const pendingMatches = samples.filter(looksLikePendingSample).length
-      const pendingRatio = sampleCount ? pendingMatches / sampleCount : 0
-      const pendingBoost = scoreHeaderName(header, 'pending')
-      const pendingScore = pendingMatches + (pendingBoost * 2)
-      if ((sampleCount > 0 && pendingRatio >= 0.6) || pendingBoost > 0) {
-        analyses.pendingCandidates.push({ header, score: pendingScore })
-      }
-    })
-
-    for (const key of ['dateCandidates', 'amountCandidates', 'categoryCandidates', 'accountCandidates', 'debitCandidates', 'creditCandidates', 'directionCandidates', 'pendingCandidates']) {
-      analyses[key].sort((a, b) => b.score - a.score || a.header.localeCompare(b.header))
-      analyses[key] = analyses[key].map(entry => entry.header)
-    }
-
-    return analyses
-  }, [columnSamples, preview])
+  const columnAnalysis = useMemo(() => analyzeImportColumns(preview, skipRows), [preview, skipRows])
 
   const selectedDateAnalysis = colDate ? columnAnalysis.dateAnalysisByHeader[colDate] : null
   const selectedAmountAnalysis = colAmount ? columnAnalysis.amountAnalysisByHeader[colAmount] : null
@@ -1462,14 +1579,22 @@ function ImportTab() {
     if (!colCategory || !preview?.column_distinct_meta) return null
     return preview.column_distinct_meta[colCategory] || null
   }, [colCategory, preview])
+  const seededImportCategoryDraft = useMemo(
+    () => (colCategory && sourceCategoryValues.length > 0
+      ? createCategoryImportDraftState(sourceCategoryValues, categories)
+      : null),
+    [colCategory, sourceCategoryValues, categories],
+  )
+  const currentImportCategorySummary = useMemo(
+    () => summarizeCategoryWorkspaceDraft(importCategoryDraft || seededImportCategoryDraft),
+    [importCategoryDraft, seededImportCategoryDraft],
+  )
   const activeDraftCategoryCount = importCategoryDraft?.snapshot?.sourceOrder?.length
   const processedCategoryCount = importCategoryDraft
-    ? Math.max(0, sourceCategoryValues.length - (activeDraftCategoryCount || 0))
+    ? Math.max(0, currentImportCategorySummary.totalCount - (activeDraftCategoryCount || 0))
     : 0
-  const remainingCategoryCount = importCategoryDraft
-    ? Math.max(0, activeDraftCategoryCount || 0)
-    : sourceCategoryValues.length
-  const hasCurrentImportCategoryWorkspace = colCategory && sourceCategoryValues.length > 0
+  const remainingCategoryCount = currentImportCategorySummary.remainingCount
+  const hasCurrentImportCategoryWorkspace = colCategory && currentImportCategorySummary.totalCount > 0
   const currentImportCategoryActionLabel = getCategoryWorkspaceActionLabel(remainingCategoryCount)
 
   const dateSelectHint = selectedDateAnalysis
@@ -1500,9 +1625,13 @@ function ImportTab() {
   const accountSelectHint = columnAnalysis.accountCandidates.length > 0 && !colAccount && !accountId && !singleAccountNew.enabled
     ? formatLikelyMatchLabel(columnAnalysis.accountCandidates.length)
     : ''
+  function clearMappingSuggestion(field) {
+    setMappingSuggestions(prev => prev[field] ? { ...prev, [field]: '' } : prev)
+  }
 
   function handleDateColumnChange(nextValue) {
     setDateFormatLocked(false)
+    if (nextValue) clearMappingSuggestion('date')
     setColDate(nextValue)
   }
 
@@ -1510,11 +1639,15 @@ function ImportTab() {
     setShowCategoryWorkspace(false)
     setShowCategoryImportHelp(false)
     setImportCategoryDraft(null)
+    if (nextValue) clearMappingSuggestion('category')
     setColCategory(nextValue)
   }
 
   function openCurrentImportCategoryWorkspace() {
-    setImportCategoryDraft(prev => prev || createCategoryImportDraftState(sourceCategoryValues, categories))
+    const nextDraft = sanitizeWorkspaceDraftForOpen(
+      importCategoryDraft || seededImportCategoryDraft || createCategoryImportDraftState(sourceCategoryValues, categories),
+    )
+    setImportCategoryDraft(nextDraft)
     setShowCategoryWorkspace(true)
   }
   useEffect(() => {
@@ -1524,11 +1657,11 @@ function ImportTab() {
         if (!(val in next)) {
           const match = accounts.find(a => a.name.toLowerCase() === val.toLowerCase())
           next[val] = {
-            accountId:  match ? match.id : '',
-            createNew:  false,
-            newName:    val,
-            newType:    'depository',
-            skip:       false,
+            accountId: match ? match.id : '',
+            createNew: false,
+            newName: val,
+            newType: 'depository',
+            skip: false,
           }
         }
       }
@@ -1540,29 +1673,29 @@ function ImportTab() {
           const byName = accounts.find(a => a.name.toLowerCase() === csvVal.toLowerCase())
           next[csvVal] = byName
             ? {
-                ...entry,
-                accountId: byName.id,
-                createNew: false,
-                newName: byName.name,
-                newType: byName.type || entry.newType || 'depository',
-                skip: false,
-              }
+              ...entry,
+              accountId: byName.id,
+              createNew: false,
+              newName: byName.name,
+              newType: byName.type || entry.newType || 'depository',
+              skip: false,
+            }
             : {
-                accountId: '',
-                createNew: false,
-                newName: csvVal,
-                newType: entry.newType || 'depository',
-                skip: false,
-              }
+              accountId: '',
+              createNew: false,
+              newName: csvVal,
+              newType: entry.newType || 'depository',
+              skip: false,
+            }
         }
         if (entry.createNew && entry.newName && !accounts.some(a => a.name.toLowerCase() === entry.newName.trim().toLowerCase()) && entry.newName !== csvVal) {
           next[csvVal] = {
-                accountId: '',
-                createNew: false,
-                newName: csvVal,
-                newType: entry.newType || 'depository',
-                skip: false,
-              }
+            accountId: '',
+            createNew: false,
+            newName: csvVal,
+            newType: entry.newType || 'depository',
+            skip: false,
+          }
         }
       }
       return next
@@ -1602,7 +1735,7 @@ function ImportTab() {
       let rawAmountStr = null
       try {
         if (amtConv === 'two_column' && colDebit && colCredit) {
-          const dRaw = String(row[colDebit]  ?? '').replace(/[,$\s]/g, '').replace(/[()]/g, '-')
+          const dRaw = String(row[colDebit] ?? '').replace(/[,$\s]/g, '').replace(/[()]/g, '-')
           const cRaw = String(row[colCredit] ?? '').replace(/[,$\s]/g, '').replace(/[()]/g, '-')
           const d = parseFloat(dRaw), c = parseFloat(cRaw)
           if (!isNaN(d) && d !== 0) amount = d
@@ -1619,13 +1752,13 @@ function ImportTab() {
           const val = parseFloat(cleaned)
           if (!isNaN(val)) amount = -val
         }
-      } catch (_) {}
+      } catch (_) { }
       return {
         i,
-        rawDate:  colDate    ? String(row[colDate]    ?? '').trim() : null,
-        rawDesc:  colDesc    ? String(row[colDesc]    ?? '').trim() : null,
-        rawCat:   colCategory ? String(row[colCategory] ?? '').trim() : null,
-        rawAcct:  colAccount ? String(row[colAccount] ?? '').trim() : null,
+        rawDate: colDate ? String(row[colDate] ?? '').trim() : null,
+        rawDesc: colDesc ? String(row[colDesc] ?? '').trim() : null,
+        rawCat: colCategory ? String(row[colCategory] ?? '').trim() : null,
+        rawAcct: colAccount ? String(row[colAccount] ?? '').trim() : null,
         rawAmountStr,
         amount,
       }
@@ -1688,29 +1821,129 @@ function ImportTab() {
     return snapshot
   }
 
+  function queueMappingBaselineCapture() {
+    setPendingMappingBaselineCapture(true)
+  }
+
+  function applyInferredMappingSuggestions(inferredMapping) {
+    const columnMap = inferredMapping?.columnMap || {}
+    setMappingSuggestions({
+      date: columnMap.date || '',
+      amount: columnMap.amount || '',
+      debit: columnMap.debit || '',
+      credit: columnMap.credit || '',
+      direction: columnMap.direction || '',
+      description: columnMap.description || '',
+      category: columnMap.category || '',
+      notes: columnMap.notes || '',
+      pending: columnMap.pending || '',
+      account: columnMap.account || '',
+    })
+  }
+
+  function buildProfileMappingSuggestions(previewLike, {
+    skipRowsValue = 0,
+    amountConvention = amtConv,
+    currentValues = {},
+  } = {}) {
+    if (!previewLike?.headers?.length) return getBlankMappingSuggestions()
+    const inferredMapping = inferUnambiguousImportMappingFromPreview(previewLike, skipRowsValue)
+    const nextSuggestions = getBlankMappingSuggestions()
+
+    const assignSuggestion = (field, currentValue) => {
+      const inferredValue = inferredMapping?.columnMap?.[field] || ''
+      if (!currentValue && inferredValue && previewLike.headers.includes(inferredValue)) {
+        nextSuggestions[field] = inferredValue
+      }
+    }
+
+    assignSuggestion('date', currentValues.date)
+    assignSuggestion('description', currentValues.description)
+    assignSuggestion('category', currentValues.category)
+    assignSuggestion('notes', currentValues.notes)
+    assignSuggestion('pending', currentValues.pending)
+    assignSuggestion('account', currentValues.account)
+
+    if (amountConvention === 'two_column') {
+      assignSuggestion('debit', currentValues.debit)
+      assignSuggestion('credit', currentValues.credit)
+    } else if (amountConvention === 'single_unsigned') {
+      assignSuggestion('amount', currentValues.amount)
+      assignSuggestion('direction', currentValues.direction)
+    } else {
+      assignSuggestion('amount', currentValues.amount)
+    }
+
+    return nextSuggestions
+  }
+
+  function getCurrentManualSourceSnapshot(previewLike = preview) {
+    const savedDraft = loadSavedImportDraft(previewLike, dbInstanceId, preferenceSubjectId)
+    if (savedDraft) return savedDraft
+    if (previewLike?.config_snapshot) {
+      return {
+        ...previewLike.config_snapshot,
+        skip_accounts: [],
+      }
+    }
+    return null
+  }
+
+  function hasMappingChanges() {
+    if (!mappingBaselineSnapshot) return false
+    return stableSerialize(buildImportSnapshot()) !== mappingBaselineSnapshot
+  }
+
   function resetToManualImportMapping() {
     setSelectedProfile('')
     setShowCategoryWorkspace(false)
     setShowCategoryImportHelp(false)
-    applySnapshot({
-      column_map: {},
-      category_assignments: {},
-      account_map: {},
-      skip_accounts: [],
-      account_new: {},
-      account_id: null,
-      single_account_new: null,
-      date_format: '%m/%d/%Y',
-      amount_convention: 'single_signed',
-      skip_rows: 0,
-      apply_categorization: true,
-      category_workspace_draft: null,
-    })
+    applySnapshot(getBlankImportSnapshot())
+    setMappingSuggestions(getBlankMappingSuggestions())
     setDateFormatLocked(false)
+  }
+
+  function resetToSuggestedImportMapping(profileId = '', previewLike = preview) {
+    const inferredMapping = inferUnambiguousImportMappingFromPreview(previewLike, 0)
+    const inferredCharacteristics = inferImportFileCharacteristicsFromPreview(previewLike, 0)
+    setSelectedProfile(profileId || '')
+    setShowCategoryWorkspace(false)
+    setShowCategoryImportHelp(false)
+    setShowMappingSourceChooser(false)
+    setAccountId('')
+    setDateFormat(inferredCharacteristics.dateFormat || '%m/%d/%Y')
+    setDateFormatLocked(false)
+    setAmtConv(inferredCharacteristics.amountConvention || 'single_signed')
+    setSkipRows(0)
+    setApplyCat(true)
+    setColDate(null)
+    setColAmount(null)
+    setColDebit(null)
+    setColCredit(null)
+    setColDir(null)
+    setColDesc(null)
+    setColCategory(null)
+    setColNotes(null)
+    setColPending(null)
+    setColAccount(null)
+    applyInferredMappingSuggestions(inferredMapping)
+    setAccountMap({})
+    setCategoryAssignments({})
+    setCategoryMappingRows([])
+    setCategoryMappingSummary(null)
+    setImportCategoryDraft(null)
+    setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
+  }
+
+  function resetToInferredImportMapping(profileId, previewLike = preview) {
+    resetToSuggestedImportMapping(profileId, previewLike)
   }
 
   function resetImportMappingState() {
     setSelectedProfile('')
+    setShowMappingSourceChooser(false)
+    setMappingBaselineSnapshot('')
+    setPendingMappingBaselineCapture(false)
     setAccountId('')
     setDateFormat('%m/%d/%Y')
     setDateFormatLocked(false)
@@ -1727,6 +1960,7 @@ function ImportTab() {
     setColNotes(null)
     setColPending(null)
     setColAccount(null)
+    setMappingSuggestions(getBlankMappingSuggestions())
     setAccountMap({})
     setCategoryAssignments({})
     setCategoryMappingRows([])
@@ -1737,21 +1971,15 @@ function ImportTab() {
     setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
   }
 
-  function applyProfile(profileId, options = {}) {
-    const { bypassMismatchWarning = false, previewLike = preview } = options
+  function performApplyProfile(profileId, previewLike = preview) {
     const p = profiles.find(x => x.id === profileId)
     if (!p) {
       if (!profileId) resetToManualImportMapping()
       else setSelectedProfile(profileId)
       return !profileId
     }
-    if (!bypassMismatchWarning && profileHeaderClearlyMismatches(p, previewLike)) {
-      const proceed = window.confirm(
-        `This data source was saved for a different CSV header and may not match this file.\n\nUse "${p.name}" anyway?`
-      )
-      if (!proceed) return false
-    }
     setSelectedProfile(profileId)
+    setMappingSuggestions(getBlankMappingSuggestions())
     const cm = p.column_map || {}
     const existingSingleAccount = cm.single_account_new?.name
       ? accounts.find(a => a.name.toLowerCase() === cm.single_account_new.name.toLowerCase())
@@ -1766,6 +1994,22 @@ function ImportTab() {
     setColDate(cm.date || null); setColAmount(cm.amount || null); setColDebit(cm.debit || null)
     setColCredit(cm.credit || null); setColDir(cm.direction || null)
     setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColPending(cm.pending || null)
+    setMappingSuggestions(buildProfileMappingSuggestions(previewLike, {
+      skipRowsValue: p.skip_rows || 0,
+      amountConvention: p.amount_convention || 'single_signed',
+      currentValues: {
+        date: cm.date || '',
+        amount: cm.amount || '',
+        debit: cm.debit || '',
+        credit: cm.credit || '',
+        direction: cm.direction || '',
+        description: cm.description || '',
+        category: cm.category || '',
+        notes: cm.notes || '',
+        pending: cm.pending || '',
+        account: cm.account || '',
+      },
+    }))
     setCategoryAssignments(cm.category_assignments || {})
     setImportCategoryDraft(clonePersistedCategoryWorkspaceDraft(cm.category_workspace_draft))
     setSingleAccountNew(cm.single_account_new && !existingSingleAccount
@@ -1809,6 +2053,25 @@ function ImportTab() {
     return true
   }
 
+  function applyProfile(profileId, options = {}) {
+    const { bypassMismatchWarning = false, previewLike = preview, mismatchContext = 'mappingSwitch' } = options
+    const p = profiles.find(x => x.id === profileId)
+    if (!p) return performApplyProfile(profileId, previewLike)
+
+    if (!bypassMismatchWarning && profileHeaderClearlyMismatches(p, previewLike)) {
+      setShowProfileMismatchChooser(false)
+      setPendingProfileMismatch({
+        profileId,
+        profileName: p.name,
+        previewLike,
+        context: mismatchContext,
+      })
+      return 'pending'
+    }
+
+    return performApplyProfile(profileId, previewLike)
+  }
+
   function applySnapshot(snap) {
     if (!snap) return
     const cm = snap.column_map || {}
@@ -1824,6 +2087,22 @@ function ImportTab() {
     setColDate(cm.date || null); setColAmount(cm.amount || null); setColDebit(cm.debit || null)
     setColCredit(cm.credit || null); setColDir(cm.direction || null)
     setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColPending(cm.pending || null); setColAccount(cm.account || null)
+    setMappingSuggestions(buildProfileMappingSuggestions(preview, {
+      skipRowsValue: snap.skip_rows || 0,
+      amountConvention: snap.amount_convention || 'single_signed',
+      currentValues: {
+        date: cm.date || '',
+        amount: cm.amount || '',
+        debit: cm.debit || '',
+        credit: cm.credit || '',
+        direction: cm.direction || '',
+        description: cm.description || '',
+        category: cm.category || '',
+        notes: cm.notes || '',
+        pending: cm.pending || '',
+        account: cm.account || '',
+      },
+    }))
     setCategoryAssignments((snap.category_assignments || cm.category_assignments || {}))
     setImportCategoryDraft(restoredCategoryDraft)
     setAccountId(existingSingleAccount ? existingSingleAccount.id : (existingAssignedAccount?.id || ''))
@@ -1862,6 +2141,57 @@ function ImportTab() {
     return true
   }
 
+  function switchMappingDataSource(nextSourceId) {
+    if (!preview) return false
+    const nextIsManual = !nextSourceId || nextSourceId === MANUAL_DATA_SOURCE_VALUE
+    const currentIsManual = !selectedProfile
+    const sourceChanged = nextIsManual ? !currentIsManual : selectedProfile !== nextSourceId
+    if (!sourceChanged) {
+      setShowMappingSourceChooser(false)
+      return true
+    }
+    if (hasMappingChanges()) {
+      setPendingMappingSourceSwitch({ nextSourceId })
+      return false
+    }
+
+    if (nextIsManual) {
+      selectUploadSource(MANUAL_DATA_SOURCE_VALUE, { persist: false })
+      const manualSnapshot = getCurrentManualSourceSnapshot(preview)
+      if (manualSnapshot) applySnapshot(manualSnapshot)
+      else resetToManualImportMapping()
+    } else {
+      const applied = applyProfile(nextSourceId, { previewLike: preview, mismatchContext: 'mappingSwitch' })
+      if (applied !== true) return false
+      selectUploadSource(nextSourceId)
+    }
+
+    setShowMappingSourceChooser(false)
+    queueMappingBaselineCapture()
+    return true
+  }
+
+  function confirmMappingSourceSwitch() {
+    const nextSourceId = pendingMappingSourceSwitch?.nextSourceId
+    setPendingMappingSourceSwitch(null)
+    if (nextSourceId === undefined || nextSourceId === null) return
+    const nextIsManual = !nextSourceId || nextSourceId === MANUAL_DATA_SOURCE_VALUE
+
+    if (nextIsManual) {
+      selectUploadSource(MANUAL_DATA_SOURCE_VALUE, { persist: false })
+      const manualSnapshot = getCurrentManualSourceSnapshot(preview)
+      if (manualSnapshot) applySnapshot(manualSnapshot)
+      else resetToManualImportMapping()
+    } else {
+      const applied = applyProfile(nextSourceId, { previewLike: preview, mismatchContext: 'mappingSwitch' })
+      if (applied !== true) return
+      selectUploadSource(nextSourceId)
+    }
+
+    setShowMappingSourceChooser(false)
+    queueMappingBaselineCapture()
+  }
+
   async function handleFile(file) {
     if (!file || !uploadChoiceReady) return
     setLoading(true)
@@ -1875,31 +2205,135 @@ function ImportTab() {
       setCategoryMappingSummary(null)
       const savedDraft = loadSavedImportDraft(result, dbInstanceId, preferenceSubjectId)
       if (selectedUploadSource && selectedUploadSource !== MANUAL_DATA_SOURCE_VALUE) {
-        const applied = applyProfile(selectedUploadSource, { previewLike: result })
-        if (!applied) {
+        const applied = applyProfile(selectedUploadSource, { previewLike: result, mismatchContext: 'upload' })
+        if (applied === 'pending') {
+          return
+        }
+        if (applied !== true) {
           setPreview(null)
           return
         }
       } else if (savedDraft) {
         setSelectedProfile('')
+        setMappingSuggestions(getBlankMappingSuggestions())
         applySnapshot(savedDraft)
       } else if (result.config_snapshot) {
+        setMappingSuggestions(getBlankMappingSuggestions())
         applySnapshot({
           ...result.config_snapshot,
           skip_accounts: [],
         })
+      } else {
+        const inferredMapping = inferUnambiguousImportMappingFromPreview(result, 0)
+        const inferredCharacteristics = inferImportFileCharacteristicsFromPreview(result, 0)
+        setDateFormat(inferredCharacteristics.dateFormat || '%m/%d/%Y')
+        setAmtConv(inferredCharacteristics.amountConvention || 'single_signed')
+        setColDate(null)
+        setColAmount(null)
+        setColDebit(null)
+        setColCredit(null)
+        setColDir(null)
+        setColDesc(null)
+        setColCategory(null)
+        setColNotes(null)
+        setColPending(null)
+        setColAccount(null)
+        applyInferredMappingSuggestions(inferredMapping)
       }
       // If header wasn't on the first line, open advanced + raw file so user can see why
       if ((result.header_row_index ?? 0) > 0) {
         setShowAdvanced(true)
         setShowRaw(true)
       }
+      queueMappingBaselineCapture()
       setStage('mapping')
     } catch (e) {
       const msg = e?.message || e?.detail || 'Unable to parse CSV file.'
-      alert('Failed to parse CSV: ' + msg)
+      setNoticeDialog({
+        title: 'Failed to parse CSV',
+        description: msg,
+      })
     } finally { setLoading(false) }
   }
+
+  function handleProfileMismatchConfirm() {
+    if (!pendingProfileMismatch?.profileId) return
+    const { profileId, previewLike, context } = pendingProfileMismatch
+    setPendingProfileMismatch(null)
+    setShowProfileMismatchChooser(false)
+    resetToInferredImportMapping(profileId, previewLike)
+
+    if (context === 'upload') {
+      setStage('mapping')
+      queueMappingBaselineCapture()
+    } else if (context === 'mappingSwitch') {
+      selectUploadSource(profileId)
+      setShowMappingSourceChooser(false)
+      queueMappingBaselineCapture()
+    }
+  }
+
+  function handleProfileMismatchCancel() {
+    const context = pendingProfileMismatch?.context
+    setPendingProfileMismatch(null)
+    setShowProfileMismatchChooser(false)
+    if (context === 'upload') {
+      setPreview(null)
+    }
+  }
+
+  function handleProfileMismatchChangeDataSource() {
+    setShowProfileMismatchChooser(true)
+  }
+
+  function handleProfileMismatchChooserBack() {
+    setShowProfileMismatchChooser(false)
+  }
+
+  function handleProfileMismatchSelectSource(nextSourceId) {
+    const pending = pendingProfileMismatch
+    if (!pending) return
+    const { previewLike, context } = pending
+
+    if (!nextSourceId || nextSourceId === MANUAL_DATA_SOURCE_VALUE) {
+      setPendingProfileMismatch(null)
+      setShowProfileMismatchChooser(false)
+      selectUploadSource(MANUAL_DATA_SOURCE_VALUE, { persist: false })
+      resetToSuggestedImportMapping('', previewLike)
+      if (context === 'upload') {
+        setStage('mapping')
+      } else {
+        setShowMappingSourceChooser(false)
+      }
+      queueMappingBaselineCapture()
+      return
+    }
+
+    const applied = applyProfile(nextSourceId, { previewLike, mismatchContext: context })
+    if (applied !== true) return
+
+    setPendingProfileMismatch(null)
+    setShowProfileMismatchChooser(false)
+    selectUploadSource(nextSourceId)
+
+    if (context === 'upload') {
+      setStage('mapping')
+    } else {
+      setShowMappingSourceChooser(false)
+    }
+    queueMappingBaselineCapture()
+  }
+
+  useEffect(() => {
+    if (!pendingMappingBaselineCapture || stage !== 'mapping' || !preview) return
+    setMappingBaselineSnapshot(stableSerialize(buildImportSnapshot()))
+    setPendingMappingBaselineCapture(false)
+  }, [
+    pendingMappingBaselineCapture, stage, preview,
+    selectedProfile, accountId, dateFormat, amtConv, skipRows, applyCat,
+    colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount,
+    singleAccountNew, accountMap, categoryAssignments, importCategoryDraft,
+  ])
 
   function handleDrop(e) {
     e.preventDefault()
@@ -1908,8 +2342,10 @@ function ImportTab() {
   }
 
   function getColumnMap() {
-    return { date: colDate, amount: colAmount, debit: colDebit, credit: colCredit,
-             direction: colDir, description: colDesc, category: colCategory, notes: colNotes, pending: colPending, account: colAccount }
+    return {
+      date: colDate, amount: colAmount, debit: colDebit, credit: colCredit,
+      direction: colDir, description: colDesc, category: colCategory, notes: colNotes, pending: colPending, account: colAccount
+    }
   }
 
   function canImport() {
@@ -1958,14 +2394,14 @@ function ImportTab() {
       issues.push('Map required columns.')
     }
 
-      if (colAccount) {
-        let unresolvedCount = 0
-        let singleMessage = ''
-        for (const value of remainingAccountValues) {
-          const mapping = accountMap[value]
-          if (!mapping) {
-            unresolvedCount += 1
-            singleMessage = `Choose an account for "${value}".`
+    if (colAccount) {
+      let unresolvedCount = 0
+      let singleMessage = ''
+      for (const value of remainingAccountValues) {
+        const mapping = accountMap[value]
+        if (!mapping) {
+          unresolvedCount += 1
+          singleMessage = `Choose an account for "${value}".`
           continue
         }
         if (mapping.skip) continue
@@ -2038,19 +2474,19 @@ function ImportTab() {
       }
       const columnMap = getColumnMap()
       const result = await api.runImport(preview.file, {
-        profile_id:           selectedProfile || null,
-        filename:             preview.filename,
-        account_id:           colAccount || singleAccountNew.enabled ? null : accountId,
-        single_account_new:   (!colAccount && singleAccountNew.enabled)
+        profile_id: selectedProfile || null,
+        filename: preview.filename,
+        account_id: colAccount || singleAccountNew.enabled ? null : accountId,
+        single_account_new: (!colAccount && singleAccountNew.enabled)
           ? { name: singleAccountNew.name.trim(), type: singleAccountNew.type || 'depository' }
           : null,
-        account_map:          finalAccountMap,
-        skip_accounts:        skipAccounts,
-        new_accounts:         newAccounts?.length ? newAccounts : null,
-        date_format:          dateFormat,
-        amount_convention:    amtConv,
-        column_map:           columnMap,
-        skip_rows:            skipRows,
+        account_map: finalAccountMap,
+        skip_accounts: skipAccounts,
+        new_accounts: newAccounts?.length ? newAccounts : null,
+        date_format: dateFormat,
+        amount_convention: amtConv,
+        column_map: columnMap,
+        skip_rows: skipRows,
         apply_categorization: applyCat,
       })
       setImportResult(result)
@@ -2058,20 +2494,20 @@ function ImportTab() {
       refreshTaskBadge()
       const refreshedAccounts = await api.getAccounts()
       setAccounts(refreshedAccounts)
+      let nextImportCategoryDraft = importCategoryDraft
+      if (!nextImportCategoryDraft && colCategory && sourceCategoryValues.length > 0) {
+        nextImportCategoryDraft = createCategoryImportDraftState(sourceCategoryValues, categories)
+        setImportCategoryDraft(nextImportCategoryDraft)
+      }
       // For profileless imports, persist the category workspace draft into the
       // batch record so it survives beyond the current session and appears on
       // the history row immediately. If the user never opened the workspace
       // before importing, importCategoryDraft is null — eagerly create it from
       // the source values so the button appears on the batch card right away.
       if (!selectedProfile && result.batch_id) {
-        let draftToSave = importCategoryDraft
-        if (!draftToSave && colCategory && sourceCategoryValues.length > 0) {
-          draftToSave = createCategoryImportDraftState(sourceCategoryValues, categories)
-          setImportCategoryDraft(draftToSave)
-        }
-        const categoryWorkspaceDraft = clonePersistedCategoryWorkspaceDraft(draftToSave)
+        const categoryWorkspaceDraft = clonePersistedCategoryWorkspaceDraft(nextImportCategoryDraft)
         if (categoryWorkspaceDraft) {
-          api.saveBatchCategoryWorkspaceDraft(result.batch_id, categoryWorkspaceDraft).catch(() => {})
+          api.saveBatchCategoryWorkspaceDraft(result.batch_id, categoryWorkspaceDraft).catch(() => { })
         }
       }
       // Force the tree row open so the completed file card is visible immediately,
@@ -2083,68 +2519,16 @@ function ImportTab() {
       }))
       api.listBatches().then(setBatches)
       if (selectedProfile) {
-        await autoSaveProfile(refreshedAccounts).catch(() => {})
+        await autoSaveProfile(refreshedAccounts, nextImportCategoryDraft).catch(() => { })
       }
       setStage(result.trailing_non_transaction_suspected ? 'review-data' : 'done')
-    } catch (e) { alert('Import failed: ' + e.message) }
-    finally { setLoading(false) }
-  }
-
-  function buildProfileBody(name) {
-    const cm = getColumnMap()
-    const categoryWorkspaceDraft = clonePersistedCategoryWorkspaceDraft(importCategoryDraft)
-    if (categoryWorkspaceDraft) cm.category_workspace_draft = categoryWorkspaceDraft
-    if (!colAccount && singleAccountNew.enabled && singleAccountNew.name.trim()) {
-      cm.single_account_new = {
-        name: singleAccountNew.name.trim(),
-        type: singleAccountNew.type || 'depository',
-      }
-    }
-    if (colAccount && Object.keys(accountMap).length > 0) {
-      const assignments = {}, skips = [], newAccts = {}
-      for (const [csvVal, m] of Object.entries(accountMap)) {
-        if (m.skip) {
-          skips.push(csvVal)
-        } else if (m.createNew && m.newName?.trim()) {
-          newAccts[csvVal] = { name: m.newName.trim(), type: m.newType || 'depository' }
-        } else if (m.accountId) {
-          assignments[csvVal] = m.accountId
-        }
-      }
-      if (Object.keys(assignments).length > 0) cm.account_assignments = assignments
-      if (skips.length > 0)                    cm.account_skips       = skips
-      if (Object.keys(newAccts).length > 0)    cm.account_new         = newAccts
-    }
-    return {
-      name:                 name.trim(),
-      filename_pattern:     preview.filename.replace(/[_\-\d.]+\.(csv)$/i, '').trim() || null,
-      header_fingerprint:   preview.header_fingerprint || null,
-      column_map:           cm,
-      account_id:           (!colAccount && !singleAccountNew.enabled && accountId) ? accountId : null,
-      date_format:          dateFormat,
-      amount_convention:    amtConv,
-      skip_rows:            skipRows,
-      apply_categorization: applyCat,
-    }
-  }
-
-  async function saveProfile(name) {
-    const body = buildProfileBody(name)
-    if (selectedProfile) {
-      await api.updateImportProfile(selectedProfile, body)
-      api.getImportProfiles().then(setProfiles)
-    } else {
-      const r = await api.createImportProfile(body)
-      api.getImportProfiles().then(updated => {
-        setProfiles(updated)
-        setSelectedProfile(r.id)
-        selectUploadSource(r.id)
+    } catch (e) {
+      setNoticeDialog({
+        title: 'Import failed',
+        description: e.message,
       })
     }
-    clearSavedImportDraft(dbInstanceId, preferenceSubjectId)
-    setManualDraftRecord(loadSavedImportDraftRecord(dbInstanceId, preferenceSubjectId))
-    setShowSaveProfile(false)
-    setSaveProfileName('')
+    finally { setLoading(false) }
   }
 
   async function createUploadDataSource() {
@@ -2159,7 +2543,10 @@ function ImportTab() {
       setShowUploadSourceCreate(false)
       setUploadSourceDraftName('')
     } catch (err) {
-      alert(err?.message || 'Could not create the data source.')
+      setNoticeDialog({
+        title: 'Could not create the data source',
+        description: err?.message || 'Please try again.',
+      })
     } finally {
       setCreatingUploadSource(false)
     }
@@ -2180,7 +2567,7 @@ function ImportTab() {
         .filter(b => !b.profile_id)
         .sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))[0]
       if (newProfileId && latestManualBatch) {
-        await api.setBatchProfile(latestManualBatch.id, newProfileId).catch(() => {})
+        await api.setBatchProfile(latestManualBatch.id, newProfileId).catch(() => { })
       }
       const updatedProfiles = await api.getImportProfiles()
       setProfiles(updatedProfiles)
@@ -2199,7 +2586,10 @@ function ImportTab() {
       // Deliberately not switching the upload source selector to the new profile —
       // the user is reviewing a completed import and hasn't asked to start a new one.
     } catch (error) {
-      alert(error?.message || 'Could not save the temporary draft as a data source.')
+      setNoticeDialog({
+        title: 'Could not save the temporary draft as a data source',
+        description: error?.message || 'Please try again.',
+      })
     } finally {
       setSavingManualDraftSource(false)
     }
@@ -2218,13 +2608,38 @@ function ImportTab() {
       await api.updateImportProfile(profileId, { filename_pattern: nextValue || null })
     } catch (error) {
       api.getImportProfiles().then(setProfiles)
-      alert(error?.message || 'Could not save the data source description.')
+      setNoticeDialog({
+        title: 'Could not save the data source description',
+        description: error?.message || 'Please try again.',
+      })
+    }
+  }
+
+  async function saveSourceName(profileId) {
+    const profile = profiles.find(item => item.id === profileId)
+    const nextValue = sourceNameDraft.trim()
+    setEditingSourceNameKey('')
+    setSourceNameDraft('')
+    if (!profile || !nextValue || nextValue === profile.name) return
+    setProfiles(prev => prev.map(item => (
+      item.id === profileId
+        ? { ...item, name: nextValue }
+        : item
+    )))
+    try {
+      await api.updateImportProfile(profileId, { name: nextValue })
+    } catch (error) {
+      api.getImportProfiles().then(setProfiles)
+      setNoticeDialog({
+        title: 'Could not rename the data source',
+        description: error?.message || 'Please try again.',
+      })
     }
   }
 
   // Silently update the active profile after a successful import so account
   // mappings (including new accounts and skips) are never lost
-  async function autoSaveProfile(refreshedAccounts) {
+  async function autoSaveProfile(refreshedAccounts, draftOverride = null) {
     if (!selectedProfile) return
     const p = profiles.find(x => x.id === selectedProfile)
     if (!p) return
@@ -2242,14 +2657,18 @@ function ImportTab() {
       }
     }
     const savedMap = accountMap
-    const cm = getColumnMap()
-    const categoryWorkspaceDraft = clonePersistedCategoryWorkspaceDraft(importCategoryDraft)
+    const existingProfileMap = { ...(p.column_map || {}) }
+    const cm = { ...existingProfileMap, ...getColumnMap() }
+    const categoryWorkspaceDraft = clonePersistedCategoryWorkspaceDraft(draftOverride || importCategoryDraft)
     if (categoryWorkspaceDraft) cm.category_workspace_draft = categoryWorkspaceDraft
+    else delete cm.category_workspace_draft
     if (!colAccount && singleAccountNew.enabled && singleAccountNew.name.trim()) {
       cm.single_account_new = {
         name: singleAccountNew.name.trim(),
         type: singleAccountNew.type || 'depository',
       }
+    } else {
+      delete cm.single_account_new
     }
     const assignments = {}, skips = [], newAccts = {}
     for (const [csvVal, m] of Object.entries(resolvedMap)) {
@@ -2262,7 +2681,6 @@ function ImportTab() {
       }
     }
     const currentFileValues = new Set(distinctAccountValues)
-    const existingProfileMap = p.column_map || {}
     const mergedAssignments = { ...(existingProfileMap.account_assignments || {}) }
     const mergedNewAccounts = { ...(existingProfileMap.account_new || {}) }
     const mergedSkipSet = new Set(existingProfileMap.account_skips || [])
@@ -2290,14 +2708,16 @@ function ImportTab() {
     else delete cm.account_new
 
     const body = {
-      name:                 p.name,
-      filename_pattern:     preview.filename.replace(/[_\-\d.]+\.(csv)$/i, '').trim() || null,
-      header_fingerprint:   preview.header_fingerprint || null,
-      column_map:           cm,
-      account_id:           (!colAccount && !singleAccountNew.enabled && accountId) ? accountId : null,
-      date_format:          dateFormat,
-      amount_convention:    amtConv,
-      skip_rows:            skipRows,
+      name: p.name,
+      filename_pattern: inferFilenamePattern(preview.filename) || null,
+      header_fingerprint: preview.header_fingerprint || null,
+      template_filename: preview.filename || null,
+      template_file_hash: preview.file_content_hash || null,
+      column_map: cm,
+      account_id: (!colAccount && !singleAccountNew.enabled && accountId) ? accountId : null,
+      date_format: dateFormat,
+      amount_convention: amtConv,
+      skip_rows: skipRows,
       apply_categorization: applyCat,
     }
     await api.updateImportProfile(selectedProfile, body)
@@ -2312,15 +2732,16 @@ function ImportTab() {
   function resetImport() {
     setStage('upload'); setPreview(null); setImportResult(null)
     setAccountMap({})
-    setShowValidationViewer(false)
+    setRejectedRowsViewer(null)
+    setDuplicateRowsViewer(null)
+    setDuplicateImporting(false)
     setColPending(null)
     setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
     setCategoryAssignments({}); setCategoryMappingRows([]); setCategoryMappingSummary(null)
     setShowCategoryWorkspace(false)
     setShowCategoryImportHelp(false)
     setImportCategoryDraft(null)
-    setShowRaw(false); setShowAdvanced(false); setShowSaveProfile(false)
-    setSaveProfileName('')
+    setShowRaw(false); setShowAdvanced(false)
     resetImportMappingState()
   }
 
@@ -2336,10 +2757,9 @@ function ImportTab() {
     setUndoEdited(await api.getBatchEdited(batch.id)); setUndoLoading(false)
   }
 
-  async function confirmUndo(force) {
-    const batch = undoTarget
+  async function performBatchUndo(batch, force = false) {
+    if (!batch?.id) return
     await api.undoBatch(batch.id, force)
-    setUndoTarget(null); setUndoEdited([]);
 
     // If the undone batch is the one currently shown in the Import complete box,
     // clear it so the card disappears immediately without waiting for a refresh.
@@ -2369,9 +2789,10 @@ function ImportTab() {
         if (profile) {
           const nextColumnMap = { ...(profile.column_map || {}) }
           delete nextColumnMap.category_workspace_draft
+          delete nextColumnMap.rule_suggestion_review
           api.updateImportProfile(batch.profile_id, { column_map: nextColumnMap })
             .then(() => api.getImportProfiles().then(setProfiles))
-            .catch(() => {})
+            .catch(() => { })
         }
       }
     }
@@ -2380,9 +2801,18 @@ function ImportTab() {
     refreshTaskBadge()
   }
 
-  function openRuleSuggestionReview(batchId) {
-    if (!batchId) return
-    navigate(`/import-export/batches/${batchId}/rule-suggestions`)
+  async function confirmUndo(force) {
+    const batch = undoTarget
+    setUndoTarget(null); setUndoEdited([]);
+    await performBatchUndo(batch, force)
+  }
+
+  function openRuleSuggestionReview({ batchId = '', profileId = '' } = {}) {
+    if (profileId) {
+      navigate(`/import-export/profiles/${profileId}/rule-suggestions`)
+      return
+    }
+    if (batchId) navigate(`/import-export/batches/${batchId}/rule-suggestions`)
   }
 
   function getRuleSuggestionProgressLabel(batch) {
@@ -2390,6 +2820,10 @@ function ImportTab() {
     if (!review?.generated_at) return ''
     if (!review.total_count) return 'No suggestions found'
     return `${review.reviewed_count || 0}/${review.total_count} reviewed`
+  }
+
+  function getRuleSuggestionActionLabel(review) {
+    return review?.generated_at ? 'Review rules' : 'Generate rules'
   }
 
   function canApplyCategoryMappings() {
@@ -2401,7 +2835,32 @@ function ImportTab() {
   }
 
   function advancePastDataReview() {
+    setShowRaw(false)
     setStage('done')
+  }
+
+  async function cancelTrailingDataReview() {
+    const batchId = importResult?.batch_id
+    if (!batchId) {
+      setShowRaw(false)
+      resetImport()
+      return
+    }
+    const batch = batches.find(candidate => candidate.id === batchId)
+      || { id: batchId, profile_id: selectedProfile || null }
+    setLoading(true)
+    try {
+      await performBatchUndo(batch, false)
+      setShowRaw(false)
+      resetImport()
+    } catch (error) {
+      setNoticeDialog({
+        title: 'Could not cancel that import',
+        description: error?.message || 'Please try again.',
+      })
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function applyImportedCategoryMappings() {
@@ -2420,7 +2879,10 @@ function ImportTab() {
       setImportResult(prev => ({ ...prev, category_mapping_result: result }))
       setStage('done')
     } catch (e) {
-      alert('Failed to apply imported category mappings: ' + e.message)
+      setNoticeDialog({
+        title: 'Failed to apply imported category mappings',
+        description: e.message,
+      })
     } finally {
       setLoading(false)
     }
@@ -2484,20 +2946,36 @@ function ImportTab() {
       return true
     } catch (error) {
       api.getImportProfiles().then(setProfiles)
-      alert(error?.message || 'Could not save the data source category mappings.')
+      setNoticeDialog({
+        title: 'Could not save the data source category mappings',
+        description: error?.message || 'Please try again.',
+      })
       return false
     }
+  }
+
+  function sanitizeWorkspaceDraftForOpen(draft) {
+    return sanitizeCategoryImportDraftAgainstExistingCategories(draft, categories)
+  }
+
+  function draftsMatch(left, right) {
+    return JSON.stringify(left || null) === JSON.stringify(right || null)
   }
 
   function openSourceCategoryWorkspace(profileId) {
     const draft = profileId === MANUAL_DATA_SOURCE_VALUE
       ? clonePersistedCategoryWorkspaceDraft(manualDraftRecord?.snapshot?.category_workspace_draft)
       : clonePersistedCategoryWorkspaceDraft(profiles.find(item => item.id === profileId)?.column_map?.category_workspace_draft)
-    if (!draft?.snapshot) return
+    const sanitizedDraft = sanitizeWorkspaceDraftForOpen(draft)
+    if (!sanitizedDraft?.snapshot) return
+    if (!draftsMatch(draft, sanitizedDraft)) {
+      if (profileId === MANUAL_DATA_SOURCE_VALUE) persistManualDraftCategoryWorkspaceDraft(sanitizedDraft)
+      else persistProfileCategoryWorkspaceDraft(profileId, sanitizedDraft).catch(() => { })
+    }
     setSourceWorkspaceProfileId(profileId)
     setSourceWorkspaceBatchId('')
     setSourceWorkspaceSourceValues([])
-    setSourceWorkspaceDraft(draft)
+    setSourceWorkspaceDraft(sanitizedDraft)
     setShowCategoryWorkspace(true)
   }
 
@@ -2514,15 +2992,22 @@ function ImportTab() {
     try {
       const { draft } = await api.getBatchCategoryWorkspaceDraft(batchId)
       const cloned = clonePersistedCategoryWorkspaceDraft(draft)
-      if (!cloned?.snapshot) return
-      const stableSourceValues = collectCategoryWorkspaceSourceValues(cloned)
+      const sanitizedDraft = sanitizeWorkspaceDraftForOpen(cloned)
+      if (!sanitizedDraft?.snapshot) return
+      if (!draftsMatch(cloned, sanitizedDraft)) {
+        api.saveBatchCategoryWorkspaceDraft(batchId, clonePersistedCategoryWorkspaceDraft(sanitizedDraft)).catch(() => { })
+      }
+      const stableSourceValues = collectCategoryWorkspaceSourceValues(sanitizedDraft)
       setSourceWorkspaceProfileId('')
       setSourceWorkspaceBatchId(batchId)
       setSourceWorkspaceSourceValues(stableSourceValues)
-      setSourceWorkspaceDraft(cloned)
+      setSourceWorkspaceDraft(sanitizedDraft)
       setShowCategoryWorkspace(true)
     } catch {
-      alert('Could not load category workspace for this import.')
+      setNoticeDialog({
+        title: 'Could not load category workspace for this import',
+        description: 'Please try opening the category workspace again.',
+      })
     } finally {
       setLoading(false)
     }
@@ -2554,7 +3039,7 @@ function ImportTab() {
     setSourceWorkspaceDraft(null)
     if (batchId && draft) {
       const persistedDraft = clonePersistedCategoryWorkspaceDraft(draft)
-      api.saveBatchCategoryWorkspaceDraft(batchId, persistedDraft).catch(() => {})
+      api.saveBatchCategoryWorkspaceDraft(batchId, persistedDraft).catch(() => { })
     } else if (profileId && draft) {
       if (profileId === MANUAL_DATA_SOURCE_VALUE) persistManualDraftCategoryWorkspaceDraft(draft)
       else persistProfileCategoryWorkspaceDraft(profileId, draft)
@@ -2644,7 +3129,7 @@ function ImportTab() {
       setSourceWorkspaceDraft(nextDraft)
       if (sourceWorkspaceBatchId) {
         const persistedDraft = clonePersistedCategoryWorkspaceDraft(nextDraft)
-        await api.saveBatchCategoryWorkspaceDraft(sourceWorkspaceBatchId, persistedDraft).catch(() => {})
+        await api.saveBatchCategoryWorkspaceDraft(sourceWorkspaceBatchId, persistedDraft).catch(() => { })
         api.listBatches().then(setBatches)
       } else if (sourceWorkspaceProfileId === MANUAL_DATA_SOURCE_VALUE) {
         persistManualDraftCategoryWorkspaceDraft(nextDraft)
@@ -2661,8 +3146,172 @@ function ImportTab() {
     }
   }
 
+  function openRejectedRowsViewer({
+    source,
+    title,
+    allowRawViewer = false,
+  }) {
+    const summary = summarizeImportOutcome(source)
+    if (summary.rejectedCount <= 0) return
+    setRejectedRowsViewer({
+      headers: summary.rejectedHeaders,
+      rows: summary.rejectedRows,
+      count: summary.rejectedCount,
+      title,
+      allowRawViewer,
+    })
+  }
+
+  async function openDuplicateRowsViewer({
+    source,
+    title,
+  }) {
+    const summary = summarizeImportOutcome(source)
+    if (summary.dedupedCount <= 0) return
+    const batchId = source?.batch_id || source?.id || ''
+    if (!batchId) return
+    const requestId = duplicateViewerRequestRef.current + 1
+    duplicateViewerRequestRef.current = requestId
+    try {
+      const result = await api.getBatchDuplicates(batchId)
+      if (duplicateViewerRequestRef.current !== requestId) return
+      setDuplicateRowsViewer({
+        batchId,
+        headers: Array.isArray(result.headers) ? result.headers : [],
+        rows: Array.isArray(result.rows) ? result.rows : [],
+        count: Number(result.count || summary.dedupedCount) || 0,
+        title,
+        loading: false,
+        error: '',
+      })
+    } catch (error) {
+      if (duplicateViewerRequestRef.current !== requestId) return
+      setDuplicateRowsViewer({
+        batchId,
+        headers: [],
+        rows: [],
+        count: summary.dedupedCount,
+        title,
+        loading: false,
+        error: error?.message || 'Could not load duplicate rows.',
+      })
+    }
+  }
+
+  async function syncDuplicateImportState(batchId) {
+    const refreshedBatches = await api.listBatches()
+    setBatches(refreshedBatches)
+    const updatedBatch = refreshedBatches.find(item => item.id === batchId) || null
+    if (updatedBatch && importResult?.batch_id === batchId) {
+      const updatedSummary = summarizeImportOutcome(updatedBatch)
+      setImportResult(prev => prev ? {
+        ...prev,
+        imported: updatedSummary.importedCount,
+        deduped: updatedSummary.dedupedCount,
+        duplicate_count: updatedSummary.dedupedCount,
+        import_summary: updatedBatch.import_summary,
+      } : prev)
+    }
+    if (!updatedBatch) {
+      setDuplicateRowsViewer(null)
+      return
+    }
+    const updatedSummary = summarizeImportOutcome(updatedBatch)
+    if (updatedSummary.dedupedCount > 0) {
+      setDuplicateRowsViewer(prev => prev ? {
+        ...prev,
+        count: updatedSummary.dedupedCount,
+        loading: true,
+        error: '',
+      } : prev)
+      try {
+        const result = await api.getBatchDuplicates(batchId)
+        setDuplicateRowsViewer(prev => prev ? {
+          ...prev,
+          headers: Array.isArray(result.headers) ? result.headers : [],
+          rows: Array.isArray(result.rows) ? result.rows : [],
+          count: Number(result.count || updatedSummary.dedupedCount) || 0,
+          loading: false,
+          error: '',
+        } : prev)
+      } catch (error) {
+        setDuplicateRowsViewer(prev => prev ? {
+          ...prev,
+          headers: [],
+          rows: [],
+          loading: false,
+          error: error?.message || 'Could not refresh duplicate rows.',
+        } : prev)
+      }
+    } else {
+      setDuplicateRowsViewer(null)
+    }
+  }
+
+  async function importSelectedDuplicates(batchId, rowNumbers = [], importAll = false) {
+    if (!batchId) return
+    setDuplicateImporting(true)
+    try {
+      const result = await api.importBatchDuplicates(batchId, {
+        import_all: importAll,
+        row_numbers: importAll ? null : rowNumbers,
+      })
+      await syncDuplicateImportState(batchId)
+      if (result.not_importable_count > 0) {
+        setNoticeDialog({
+          title: 'Some duplicate rows could not be imported',
+          description: `${result.not_importable_count} selected duplicate row${result.not_importable_count === 1 ? '' : 's'} could not be imported from this saved batch.`,
+        })
+      }
+    } catch (error) {
+      setNoticeDialog({
+        title: 'Could not import duplicate rows',
+        description: error?.message || 'Please try again.',
+      })
+    } finally {
+      setDuplicateImporting(false)
+    }
+  }
+
+  function requestDuplicateImportConfirmation(batchId, rowNumbers = [], importAll = false, count = 0) {
+    if (!batchId) return
+    if (!importAll && (!Array.isArray(rowNumbers) || rowNumbers.length === 0)) return
+    setPendingDuplicateImport({
+      batchId,
+      rowNumbers,
+      importAll,
+      count: importAll ? Number(count || 0) : rowNumbers.length,
+    })
+  }
+
+  async function confirmDuplicateImport() {
+    if (!pendingDuplicateImport) return
+    const current = pendingDuplicateImport
+    setPendingDuplicateImport(null)
+    await importSelectedDuplicates(current.batchId, current.rowNumbers, current.importAll)
+  }
+
   return (
     <div style={{ width: '100%', maxWidth: IMPORT_CONFIG_MAX_WIDTH }}>
+      {noticeDialog ? (
+        <AppNoticeDialog
+          title={noticeDialog.title}
+          description={noticeDialog.description}
+          onClose={() => setNoticeDialog(null)}
+        />
+      ) : null}
+
+      {pendingMappingSourceSwitch ? (
+        <AppConfirmDialog
+          title="Change data source?"
+          description="Current mapping changes on this screen will be replaced."
+          confirmLabel="Change data source"
+          onConfirm={confirmMappingSourceSwitch}
+          onCancel={() => setPendingMappingSourceSwitch(null)}
+          width="min(500px, 100%)"
+        />
+      ) : null}
+
       {showCategoryWorkspace && (preview || sourceWorkspaceProfileId || sourceWorkspaceBatchId) ? (
         <CategoryImportWorkspace
           sourceValues={sourceWorkspaceProfileId
@@ -2672,18 +3321,18 @@ function ImportTab() {
               : sourceCategoryValues}
           sourceMeta={sourceWorkspaceProfileId
             ? {
-                total_count: activeSourceWorkspaceSummary.totalCount,
-                displayed_count: activeSourceWorkspaceSummary.totalCount,
-                truncated: false,
-                limit: activeSourceWorkspaceSummary.totalCount,
-              }
+              total_count: activeSourceWorkspaceSummary.totalCount,
+              displayed_count: activeSourceWorkspaceSummary.totalCount,
+              truncated: false,
+              limit: activeSourceWorkspaceSummary.totalCount,
+            }
             : sourceWorkspaceBatchId
               ? {
-                  total_count: sourceWorkspaceSourceValues.length,
-                  displayed_count: sourceWorkspaceSourceValues.length,
-                  truncated: false,
-                  limit: sourceWorkspaceSourceValues.length,
-                }
+                total_count: sourceWorkspaceSourceValues.length,
+                displayed_count: sourceWorkspaceSourceValues.length,
+                truncated: false,
+                limit: sourceWorkspaceSourceValues.length,
+              }
               : sourceCategoryMeta}
           existingCategories={categories}
           initialDraftState={sourceWorkspaceProfileId || sourceWorkspaceBatchId ? sourceWorkspaceDraft : importCategoryDraft}
@@ -2705,15 +3354,41 @@ function ImportTab() {
         />
       )}
 
-      {showValidationViewer && importResult ? (
-        <ValidationErrorsDialog
-          errors={importResult.errors}
-          count={Number(importResult.validation_error_count || 0)}
-          onClose={() => setShowValidationViewer(false)}
-          onOpenRawViewer={() => {
-            setShowValidationViewer(false)
+      {rejectedRowsViewer ? (
+        <RejectedRowsDialog
+          headers={rejectedRowsViewer.headers}
+          rows={rejectedRowsViewer.rows}
+          count={rejectedRowsViewer.count}
+          title={rejectedRowsViewer.title}
+          onClose={() => setRejectedRowsViewer(null)}
+          onOpenRawViewer={rejectedRowsViewer.allowRawViewer ? () => {
+            setRejectedRowsViewer(null)
             setShowRaw(true)
-          }}
+          } : undefined}
+        />
+      ) : null}
+
+      {duplicateRowsViewer ? (
+        <DuplicateRowsDialog
+          headers={duplicateRowsViewer.headers}
+          rows={duplicateRowsViewer.rows}
+          count={duplicateRowsViewer.count}
+          title={duplicateRowsViewer.title}
+          loading={!!duplicateRowsViewer.loading}
+          error={duplicateRowsViewer.error || ''}
+          importing={duplicateImporting}
+          onClose={() => setDuplicateRowsViewer(null)}
+          onImportSelected={rowNumbers => requestDuplicateImportConfirmation(duplicateRowsViewer.batchId, rowNumbers, false, rowNumbers.length)}
+          onImportAll={() => requestDuplicateImportConfirmation(duplicateRowsViewer.batchId, [], true, duplicateRowsViewer.count)}
+        />
+      ) : null}
+
+      {pendingDuplicateImport ? (
+        <DuplicateImportConfirmDialog
+          pending={pendingDuplicateImport}
+          importing={duplicateImporting}
+          onCancel={() => setPendingDuplicateImport(null)}
+          onConfirm={confirmDuplicateImport}
         />
       ) : null}
 
@@ -2724,13 +3399,63 @@ function ImportTab() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>
                   Data source:{' '}
-                  <span style={{
-                    color: uploadUsesManualDraft ? 'var(--muted)' : 'var(--text)',
-                    fontWeight: uploadUsesManualDraft ? 500 : 600,
-                    fontStyle: uploadUsesManualDraft ? 'italic' : 'normal',
-                  }}>
-                    {uploadUsesManualDraft ? 'temporary draft' : uploadSelectionLabel}
-                  </span>
+                  {uploadUsesManualDraft ? (
+                    <span style={{
+                      color: 'var(--muted)',
+                      fontWeight: 500,
+                      fontStyle: 'italic',
+                    }}>
+                      temporary draft
+                    </span>
+                  ) : editingSourceNameKey === getSourceNameEditKey('upload', selectedUploadSource) ? (
+                    <TransientTextInput
+                      value={sourceNameDraft}
+                      onChange={setSourceNameDraft}
+                      onCommit={() => saveSourceName(selectedUploadSource)}
+                      onCancel={() => {
+                        setEditingSourceNameKey('')
+                        setSourceNameDraft('')
+                      }}
+                      restoreOnEscape
+                      onBlurCommit={false}
+                      placeholder="Data source name"
+                      style={{
+                        width: 220,
+                        maxWidth: '100%',
+                        background: 'var(--surface2)',
+                        color: 'var(--text)',
+                        border: '1px solid var(--accent)',
+                        borderRadius: 999,
+                        padding: '4px 10px',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        outline: 'none',
+                      }}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingSourceDescriptionId('')
+                        setSourceDescriptionDraft('')
+                        setEditingSourceNameKey(getSourceNameEditKey('upload', selectedUploadSource))
+                        setSourceNameDraft(uploadSelectionLabel)
+                      }}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        padding: 0,
+                        margin: 0,
+                        color: 'var(--text)',
+                        fontWeight: 600,
+                        fontSize: 13,
+                        cursor: 'pointer',
+                      }}
+                      title="Click to rename this data source"
+                    >
+                      {uploadSelectionLabel}
+                    </button>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -2766,7 +3491,7 @@ function ImportTab() {
                   borderRadius: 12,
                   padding: '48px 32px',
                   textAlign: 'center',
-                  cursor: uploadChoiceReady ? 'pointer' : 'not-allowed',
+                  cursor: uploadChoiceReady ? 'pointer' : 'default',
                   background: uploadChoiceReady ? 'var(--surface2)' : 'color-mix(in srgb, var(--surface2) 65%, var(--surface))',
                   marginBottom: 24,
                   opacity: uploadChoiceReady ? 1 : 0.72,
@@ -2779,49 +3504,37 @@ function ImportTab() {
                 }}
               >
                 {!uploadChoiceReady ? (
-                  <div style={{ display: 'grid', justifyItems: 'start', width: 'fit-content', maxWidth: '100%', margin: '0 auto 28px', textAlign: 'left' }}>
+                  <div style={{ display: 'grid', justifyItems: 'center', gap: 12, width: 'min(760px, 100%)', maxWidth: '100%', margin: '0 auto 28px', textAlign: 'center' }}>
+                    <div style={{ display: 'grid', gap: 6, justifyItems: 'center' }}>
+                      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>
+                        Choose a data source to continue
+                      </div>
+                      <div style={{ maxWidth: 520, fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+                        Select a saved data source, create a new one, or press Skip to use a temporary draft.
+                      </div>
+                    </div>
                     <div style={{
-                      position: 'relative',
-                      display: 'inline-block',
-                      maxWidth: '100%',
+                      display: 'grid',
+                      gap: 12,
+                      width: '100%',
                       borderRadius: 12,
                       border: '1px solid var(--border)',
                       background: 'var(--surface)',
-                      padding: '12px 106px 12px 12px',
+                      padding: '14px 16px',
+                      boxShadow: '0 10px 30px rgba(0,0,0,0.14)',
                     }}>
-                      <button
-                        type="button"
-                        onClick={() => selectUploadSource(MANUAL_DATA_SOURCE_VALUE, { persist: false })}
-                        title="Use a temporary draft instead of a saved data source"
-                        style={{
-                          position: 'absolute',
-                          top: -1,
-                          right: -1,
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          minWidth: 0,
-                          height: 28,
-                          padding: '0 9px',
-                          background: uploadUsesManualDraft
-                            ? 'color-mix(in srgb, var(--accent) 10%, var(--surface2))'
-                            : 'color-mix(in srgb, var(--surface) 35%, var(--surface2))',
-                          color: uploadUsesManualDraft ? 'var(--accent2)' : 'var(--muted)',
-                          border: 'none',
-                          borderLeft: '1px solid color-mix(in srgb, var(--border) 92%, transparent)',
-                          borderBottom: '1px solid color-mix(in srgb, var(--border) 92%, transparent)',
-                          borderTopRightRadius: 12,
-                          borderBottomLeftRadius: 10,
-                          fontSize: 11,
-                          fontWeight: 600,
-                          letterSpacing: '0.01em',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Skip
-                      </button>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                        Available choices
+                      </div>
                       {profiles.length > 0 ? (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'center' }}>
+                          <DataSourcePill
+                            label="Skip"
+                            selected={uploadUsesManualDraft}
+                            onClick={() => selectUploadSource(MANUAL_DATA_SOURCE_VALUE, { persist: false })}
+                            title="Use a temporary draft instead of a saved data source"
+                            showMarker={false}
+                          />
                           {profiles.map(profile => (
                             <DataSourcePill
                               key={profile.id}
@@ -2867,11 +3580,18 @@ function ImportTab() {
                           )}
                         </div>
                       ) : (
-                        <div style={{ display: 'grid', width: 'calc(100% + 118px)', marginLeft: -12, justifyItems: 'center', gap: 12 }}>
+                        <div style={{ display: 'grid', justifyItems: 'center', gap: 12 }}>
                           <div style={{ width: '100%', textAlign: 'center', fontSize: 13, color: 'var(--muted)' }}>
                             {'<'}<span style={{ fontStyle: 'italic' }}>empty</span>{'>'}
                           </div>
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, width: '100%', justifyContent: 'center' }}>
+                            <DataSourcePill
+                              label="Skip"
+                              selected={uploadUsesManualDraft}
+                              onClick={() => selectUploadSource(MANUAL_DATA_SOURCE_VALUE, { persist: false })}
+                              title="Use a temporary draft instead of a saved data source"
+                              showMarker={false}
+                            />
                             {showUploadSourceCreate ? (
                               <div style={{ display: 'inline-flex', alignItems: 'center' }}>
                                 <TransientTextInput
@@ -2914,8 +3634,13 @@ function ImportTab() {
                 ) : null}
                 <div style={{ fontSize: 32, marginBottom: 12 }}>{uploadChoiceReady ? '📂' : '🧭'}</div>
                 <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>
-                  {uploadChoiceReady ? 'Drop a CSV file here, or click to browse' : '.csv file source'}
+                  {uploadChoiceReady ? 'Drop a CSV file here, or click to browse' : 'Upload will be enabled after you choose a data source'}
                 </div>
+                {!uploadChoiceReady ? (
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                    Pick a saved source above, create a new one, or press Skip for a temporary draft.
+                  </div>
+                ) : null}
                 <input
                   ref={fileInputRef}
                   id="csv-file-input"
@@ -2941,7 +3666,7 @@ function ImportTab() {
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>⚠️ This file has been previously imported</div>
               <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
                 This exact file was imported on{' '}
-                {preview.previous_batch?.imported_at?.slice(0,16).replace('T',' ')}.
+                {preview.previous_batch?.imported_at?.slice(0, 16).replace('T', ' ')}.
                 {colAccount
                   ? ' Accounts listed below were already imported from this file and cannot be imported again. Accounts not listed can still be imported now.'
                   : ' Undo the earlier import first before importing it again.'}
@@ -2963,8 +3688,8 @@ function ImportTab() {
                 {preview.filename}
                 <button
                   type="button"
-                  onClick={returnToUploadSourceChooser}
-                  title="Cancel this import and choose a different data source"
+                  onClick={() => setShowMappingSourceChooser(open => !open)}
+                  title="Change data source"
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
@@ -2990,10 +3715,50 @@ function ImportTab() {
               </span>
             </div>
 
+            {showMappingSourceChooser ? (
+              <div style={{ display: 'grid', gap: 10, marginBottom: 12, padding: '10px 12px', borderRadius: 12, border: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 52%, var(--surface))' }}>
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                  Choose a different data source for this file.
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                  <DataSourcePill
+                    label="Temporary draft"
+                    selected={!selectedProfile}
+                    onClick={() => switchMappingDataSource(MANUAL_DATA_SOURCE_VALUE)}
+                    title="Use a temporary draft for this file"
+                  />
+                  {profiles.map(profile => (
+                    <DataSourcePill
+                      key={profile.id}
+                      label={profile.name}
+                      selected={selectedProfile === profile.id}
+                      onClick={() => switchMappingDataSource(profile.id)}
+                      title="Use this saved data source"
+                    />
+                  ))}
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    onClick={returnToUploadSourceChooser}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      margin: 0,
+                      fontSize: 12,
+                      color: 'var(--muted)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Start over
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: 0 }} />
-              <Link to="/settings" style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap', textDecoration: 'none', flexShrink: 0 }}
-                title="Edit or delete data sources in Settings">Manage ↗</Link>
               <button onClick={() => setShowRaw(v => !v)} style={{
                 background: showRaw ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))' : 'var(--surface2)',
                 border: `1px solid ${showRaw ? 'var(--accent)' : 'var(--border)'}`,
@@ -3080,180 +3845,263 @@ function ImportTab() {
               </div>
             )}
 
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Column mapping</div>
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-              gap: '24px 30px',
-              marginBottom: 14,
-            }}>
-              <ColSelect
-                label="Date"
-                headers={columnAnalysis.dateCandidates}
-                allHeaders={preview.headers}
-                value={colDate}
-                onChange={handleDateColumnChange}
-                required
-                hint={dateSelectHint}
-                tone={selectedDateAnalysis && !selectedDateAnalysis.guessedFormat && selectedDateAnalysis.sampleCount ? 'danger' : 'muted'}
-              />
-              {amtConv === 'two_column' ? (
-                <ColSelect
-                  label="Debit column"
-                  headers={columnAnalysis.debitCandidates}
-                  allHeaders={preview.headers}
-                  value={colDebit}
-                  onChange={setColDebit}
-                  required
-                  hint={columnAnalysis.debitCandidates.length > 0 && !colDebit ? formatLikelyMatchLabel(columnAnalysis.debitCandidates.length) : ''}
-                />
-              ) : (
-                <ColSelect
-                  label="Amount"
-                  headers={columnAnalysis.amountCandidates}
-                  allHeaders={preview.headers}
-                  value={colAmount}
-                  onChange={setColAmount}
-                  required
-                  hint={amountSelectHint}
-                  tone={selectedAmountAnalysis && selectedAmountAnalysis.sampleCount > 0 && selectedAmountAnalysis.amountMatches === 0 ? 'danger' : 'muted'}
-                />
-              )}
-              <ColSelect
-                label="Pending"
-                headers={columnAnalysis.pendingCandidates}
-                allHeaders={preview.headers}
-                value={colPending}
-                onChange={setColPending}
-                hint={columnAnalysis.pendingCandidates.length > 0 && !colPending ? formatLikelyMatchLabel(columnAnalysis.pendingCandidates.length) : ''}
-              />
-
-              {amtConv === 'two_column' && (
-                <ColSelect
-                  label="Credit column"
-                  headers={columnAnalysis.creditCandidates}
-                  allHeaders={preview.headers}
-                  value={colCredit}
-                  onChange={setColCredit}
-                  required
-                  hint={columnAnalysis.creditCandidates.length > 0 && !colCredit ? formatLikelyMatchLabel(columnAnalysis.creditCandidates.length) : ''}
-                />
-              )}
-              {amtConv === 'single_unsigned' && (
-                <ColSelect
-                  label="Direction column"
-                  headers={columnAnalysis.directionCandidates}
-                  allHeaders={preview.headers}
-                  value={colDir}
-                  onChange={setColDir}
-                  hint={columnAnalysis.directionCandidates.length > 0 && !colDir ? formatLikelyMatchLabel(columnAnalysis.directionCandidates.length) : ''}
-                />
-              )}
-              <ColSelect label="Merchant" headers={preview.headers} value={colDesc} onChange={setColDesc} required />
-              <div style={{ position: 'relative' }}>
-                <ColSelect
-                  label="Category"
-                  headers={columnAnalysis.categoryCandidates}
-                  allHeaders={preview.headers}
-                  value={colCategory}
-                  onChange={handleCategoryColumnChange}
-                  hint={categorySelectHint}
-                />
-                {colCategory && sourceCategoryValues.length > 0 ? (
-                  <div style={{ position: 'absolute', width: 'calc(100% - 28px)', right: 0, top: 'calc(100% + 4px)', display: 'grid', justifyItems: 'end', gap: 6, zIndex: 1 }}>
-                    <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, maxWidth: '100%' }}>
-                      <button
-                        type="button"
-                        onClick={openCurrentImportCategoryWorkspace}
-                        style={{
-                          width: 'auto',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: 10,
-                          background: remainingCategoryCount > 0
-                            ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
-                            : 'color-mix(in srgb, var(--surface2) 80%, var(--surface))',
-                          color: remainingCategoryCount > 0 ? 'var(--accent2)' : 'var(--muted)',
-                          border: `1px solid ${remainingCategoryCount > 0 ? 'color-mix(in srgb, var(--accent) 34%, var(--border))' : 'var(--border)'}`,
-                          borderRadius: 999,
-                          padding: '5px 10px',
-                          fontSize: 11,
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          boxShadow: remainingCategoryCount > 0 ? '0 1px 1px rgba(0,0,0,0.04)' : 'none',
-                        }}
-                      >
-                        <span>{currentImportCategoryActionLabel}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowCategoryImportHelp(prev => !prev)}
-                        style={{
-                          width: 22,
-                          height: 22,
-                          borderRadius: 999,
-                          border: '1px solid var(--border)',
-                          background: 'color-mix(in srgb, var(--surface2) 80%, var(--surface))',
+            <ImportColumnMappingSection
+              fields={[
+                {
+                  key: 'date',
+                  label: 'Date',
+                  headers: columnAnalysis.dateCandidates,
+                  allHeaders: preview.headers,
+                  value: colDate,
+                  onChange: handleDateColumnChange,
+                  suggestedValue: mappingSuggestions.date,
+                  onAcceptSuggestion: handleDateColumnChange,
+                  required: true,
+                  hint: dateSelectHint,
+                  tone: selectedDateAnalysis && !selectedDateAnalysis.guessedFormat && selectedDateAnalysis.sampleCount ? 'danger' : 'muted',
+                },
+                amtConv === 'two_column'
+                  ? {
+                      key: 'debit',
+                      label: 'Debit column',
+                      headers: columnAnalysis.debitCandidates,
+                      allHeaders: preview.headers,
+                      value: colDebit,
+                      onChange: nextValue => {
+                        if (nextValue) clearMappingSuggestion('debit')
+                        setColDebit(nextValue)
+                      },
+                      suggestedValue: mappingSuggestions.debit,
+                      onAcceptSuggestion: nextValue => {
+                        clearMappingSuggestion('debit')
+                        setColDebit(nextValue)
+                      },
+                      required: true,
+                      hint: columnAnalysis.debitCandidates.length > 0 && !colDebit ? formatLikelyMatchLabel(columnAnalysis.debitCandidates.length) : '',
+                    }
+                  : {
+                      key: 'amount',
+                      label: 'Amount',
+                      headers: columnAnalysis.amountCandidates,
+                      allHeaders: preview.headers,
+                      value: colAmount,
+                      onChange: nextValue => {
+                        if (nextValue) clearMappingSuggestion('amount')
+                        setColAmount(nextValue)
+                      },
+                      suggestedValue: mappingSuggestions.amount,
+                      onAcceptSuggestion: nextValue => {
+                        clearMappingSuggestion('amount')
+                        setColAmount(nextValue)
+                      },
+                      required: true,
+                      hint: amountSelectHint,
+                      tone: selectedAmountAnalysis && selectedAmountAnalysis.sampleCount > 0 && selectedAmountAnalysis.amountMatches === 0 ? 'danger' : 'muted',
+                    },
+                {
+                  key: 'pending',
+                  label: 'Pending',
+                  headers: columnAnalysis.pendingCandidates,
+                  allHeaders: preview.headers,
+                  value: colPending,
+                  onChange: nextValue => {
+                    if (nextValue) clearMappingSuggestion('pending')
+                    setColPending(nextValue)
+                  },
+                  suggestedValue: mappingSuggestions.pending,
+                  onAcceptSuggestion: nextValue => {
+                    clearMappingSuggestion('pending')
+                    setColPending(nextValue)
+                  },
+                  hint: columnAnalysis.pendingCandidates.length > 0 && !colPending ? formatLikelyMatchLabel(columnAnalysis.pendingCandidates.length) : '',
+                },
+                amtConv === 'two_column'
+                  ? {
+                      key: 'credit',
+                      label: 'Credit column',
+                      headers: columnAnalysis.creditCandidates,
+                      allHeaders: preview.headers,
+                      value: colCredit,
+                      onChange: nextValue => {
+                        if (nextValue) clearMappingSuggestion('credit')
+                        setColCredit(nextValue)
+                      },
+                      suggestedValue: mappingSuggestions.credit,
+                      onAcceptSuggestion: nextValue => {
+                        clearMappingSuggestion('credit')
+                        setColCredit(nextValue)
+                      },
+                      required: true,
+                      hint: columnAnalysis.creditCandidates.length > 0 && !colCredit ? formatLikelyMatchLabel(columnAnalysis.creditCandidates.length) : '',
+                    }
+                  : null,
+                amtConv === 'single_unsigned'
+                  ? {
+                      key: 'direction',
+                      label: 'Direction column',
+                      headers: columnAnalysis.directionCandidates,
+                      allHeaders: preview.headers,
+                      value: colDir,
+                      onChange: nextValue => {
+                        if (nextValue) clearMappingSuggestion('direction')
+                        setColDir(nextValue)
+                      },
+                      suggestedValue: mappingSuggestions.direction,
+                      onAcceptSuggestion: nextValue => {
+                        clearMappingSuggestion('direction')
+                        setColDir(nextValue)
+                      },
+                      hint: columnAnalysis.directionCandidates.length > 0 && !colDir ? formatLikelyMatchLabel(columnAnalysis.directionCandidates.length) : '',
+                    }
+                  : null,
+                {
+                  key: 'description',
+                  label: 'Merchant',
+                  headers: columnAnalysis.merchantCandidates,
+                  allHeaders: preview.headers,
+                  value: colDesc,
+                  onChange: nextValue => {
+                    if (nextValue) clearMappingSuggestion('description')
+                    setColDesc(nextValue)
+                  },
+                  suggestedValue: mappingSuggestions.description,
+                  onAcceptSuggestion: nextValue => {
+                    clearMappingSuggestion('description')
+                    setColDesc(nextValue)
+                  },
+                  required: true,
+                  hint: columnAnalysis.merchantCandidates.length > 0 && !colDesc ? formatLikelyMatchLabel(columnAnalysis.merchantCandidates.length) : '',
+                },
+                {
+                  key: 'category',
+                  label: 'Category',
+                  headers: columnAnalysis.categoryCandidates,
+                  allHeaders: preview.headers,
+                  value: colCategory,
+                  onChange: handleCategoryColumnChange,
+                  suggestedValue: mappingSuggestions.category,
+                  onAcceptSuggestion: handleCategoryColumnChange,
+                  hint: categorySelectHint,
+                  after: colCategory && sourceCategoryValues.length > 0 ? (
+                    <div style={{ position: 'absolute', width: 'calc(100% - 28px)', right: 0, top: 'calc(100% + 4px)', display: 'grid', justifyItems: 'end', gap: 6, zIndex: 1 }}>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, maxWidth: '100%' }}>
+                        <button
+                          type="button"
+                          onClick={openCurrentImportCategoryWorkspace}
+                          style={{
+                            width: 'auto',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 10,
+                            background: remainingCategoryCount > 0
+                              ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
+                              : 'color-mix(in srgb, var(--surface2) 80%, var(--surface))',
+                            color: remainingCategoryCount > 0 ? 'var(--accent2)' : 'var(--muted)',
+                            border: `1px solid ${remainingCategoryCount > 0 ? 'color-mix(in srgb, var(--accent) 34%, var(--border))' : 'var(--border)'}`,
+                            borderRadius: 999,
+                            padding: '5px 10px',
+                            fontSize: 11,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            boxShadow: remainingCategoryCount > 0 ? '0 1px 1px rgba(0,0,0,0.04)' : 'none',
+                          }}
+                        >
+                          <span>{currentImportCategoryActionLabel}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowCategoryImportHelp(prev => !prev)}
+                          style={{
+                            width: 22,
+                            height: 22,
+                            borderRadius: 999,
+                            border: '1px solid var(--border)',
+                            background: 'color-mix(in srgb, var(--surface2) 80%, var(--surface))',
+                            color: 'var(--muted)',
+                            fontSize: 12,
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            lineHeight: 1,
+                            flexShrink: 0,
+                          }}
+                          title="Add categories from the file to the list of choices"
+                        >
+                          ?
+                        </button>
+                      </div>
+                      {showCategoryImportHelp ? (
+                        <div style={{
+                          padding: '8px 10px',
+                          borderRadius: 12,
+                          border: '1px solid color-mix(in srgb, var(--accent) 18%, var(--border))',
+                          background: 'color-mix(in srgb, var(--surface2) 82%, var(--surface))',
                           color: 'var(--muted)',
-                          fontSize: 12,
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                          lineHeight: 1,
-                          flexShrink: 0,
-                        }}
-                        title="Add categories from the file to the list of choices"
-                      >
-                        ?
-                      </button>
+                          fontSize: 10.5,
+                          lineHeight: 1.45,
+                        }}>
+                          Useful when the file contains categories you wish to use in this system. It can be ignored if the categories in the file are not meaningful.
+                        </div>
+                      ) : null}
+                      {sourceCategoryMeta?.truncated ? (
+                        <div style={{
+                          padding: '7px 10px',
+                          borderRadius: 12,
+                          border: '1px solid color-mix(in srgb, #f59e0b 34%, var(--border))',
+                          background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
+                          color: 'color-mix(in srgb, #f59e0b 72%, var(--text))',
+                          fontSize: 10.5,
+                          lineHeight: 1.4,
+                        }}>
+                          This column has {sourceCategoryMeta.total_count} unique values. Showing the first {sourceCategoryMeta.limit}.
+                        </div>
+                      ) : null}
                     </div>
-                    {showCategoryImportHelp ? (
-                      <div style={{
-                        padding: '8px 10px',
-                        borderRadius: 12,
-                        border: '1px solid color-mix(in srgb, var(--accent) 18%, var(--border))',
-                        background: 'color-mix(in srgb, var(--surface2) 82%, var(--surface))',
-                        color: 'var(--muted)',
-                        fontSize: 10.5,
-                        lineHeight: 1.45,
-                      }}>
-                        Useful when the file contains categories you wish to use in this system. It can be ignored if the categories in the file are not meaningful.
-                      </div>
-                    ) : null}
-                    {sourceCategoryMeta?.truncated ? (
-                      <div style={{
-                        padding: '7px 10px',
-                        borderRadius: 12,
-                        border: '1px solid color-mix(in srgb, #f59e0b 34%, var(--border))',
-                        background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
-                        color: 'color-mix(in srgb, #f59e0b 72%, var(--text))',
-                        fontSize: 10.5,
-                        lineHeight: 1.4,
-                      }}>
-                        This column has {sourceCategoryMeta.total_count} unique values. Showing the first {sourceCategoryMeta.limit}.
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-
-              <ColSelect label="Notes" headers={preview.headers} value={colNotes} onChange={setColNotes} />
-              <AccountHandlingPicker
-                headers={columnAnalysis.accountCandidates}
-                allHeaders={preview.headers}
-                accounts={accounts}
-                colAccount={colAccount}
-                accountId={accountId}
-                singleAccountNew={singleAccountNew}
-                isRequired={!colAccount && !accountId && !singleAccountNew.enabled}
-                hint={accountSelectHint}
-                onChange={({ col, acct, createNew }) => {
+                  ) : null,
+                },
+                {
+                  key: 'notes',
+                  label: 'Notes',
+                  headers: preview.headers,
+                  allHeaders: preview.headers,
+                  value: colNotes,
+                  onChange: nextValue => {
+                    if (nextValue) clearMappingSuggestion('notes')
+                    setColNotes(nextValue)
+                  },
+                  suggestedValue: mappingSuggestions.notes,
+                  onAcceptSuggestion: nextValue => {
+                    clearMappingSuggestion('notes')
+                    setColNotes(nextValue)
+                  },
+                },
+              ]}
+              accountField={{
+                headers: columnAnalysis.accountCandidates,
+                allHeaders: preview.headers,
+                accounts,
+                colAccount,
+                accountId,
+                singleAccountNew,
+                suggestedColumn: mappingSuggestions.account,
+                onAcceptSuggestedColumn: nextValue => {
+                  clearMappingSuggestion('account')
+                  setColAccount(nextValue)
+                  setAccountMap({})
+                  setAccountId('')
+                  setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
+                },
+                isRequired: !colAccount && !accountId && !singleAccountNew.enabled,
+                hint: accountSelectHint,
+                onChange: ({ col, acct, createNew }) => {
                   if (col !== undefined) {
+                    if (col) clearMappingSuggestion('account')
                     setColAccount(col)
                     setAccountMap({})
                     setAccountId('')
                     setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
                   } else {
+                    if (acct || createNew) clearMappingSuggestion('account')
                     setColAccount(null)
                     setAccountMap({})
                     setAccountId(acct)
@@ -3261,9 +4109,9 @@ function ImportTab() {
                       ? { enabled: true, name: '', type: 'depository' }
                       : { enabled: false, name: '', type: 'depository' })
                   }
-                }}
-              />
-            </div>
+                },
+              }}
+            />
             {!colAccount && singleAccountNew.enabled && (
               <div style={{
                 marginTop: -7, marginBottom: 14, marginLeft: 42, padding: '8px 10px',
@@ -3293,11 +4141,9 @@ function ImportTab() {
                     padding: '4px 8px', fontSize: 11,
                   }}
                 >
-                  <option value="depository">Checking</option>
-                  <option value="credit">Credit</option>
-                  <option value="investment">Invest.</option>
-                  <option value="loan">Loan</option>
-                  <option value="other">Other</option>
+                  {ACCOUNT_TYPE_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
                 </select>
                 {accounts.some(a => a.name.toLowerCase() === singleAccountNew.name.trim().toLowerCase()) && (
                   <div style={{ width: '100%', fontSize: 11, color: 'var(--danger)' }}>
@@ -3307,96 +4153,11 @@ function ImportTab() {
               </div>
             )}
 
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
                 <input type="checkbox" checked={applyCat} onChange={e => setApplyCat(e.target.checked)} />
                 Apply categorization rules on import
               </label>
-              {!selectedProfile && (
-                showSaveProfile ? (
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    flexWrap: 'wrap',
-                    justifyContent: 'flex-end',
-                  }}>
-                    <TransientTextInput
-                      value={saveProfileName}
-                      onChange={setSaveProfileName}
-                      placeholder="Data source name"
-                      onCommit={() => {
-                        if (saveProfileName.trim()) saveProfile(saveProfileName)
-                      }}
-                      onCancel={() => {
-                        setSaveProfileName('')
-                        setShowSaveProfile(false)
-                      }}
-                      restoreOnEscape
-                      onBlurCommit={false}
-                      style={{
-                        width: 220,
-                        maxWidth: '100%',
-                        background: 'var(--surface)',
-                        color: 'var(--text)',
-                        border: '1px solid var(--accent)',
-                        borderRadius: 999,
-                        padding: '6px 12px',
-                        fontSize: 13,
-                        outline: 'none',
-                      }}
-                    />
-                    <button
-                      onClick={() => saveProfileName.trim() && saveProfile(saveProfileName)}
-                      disabled={!saveProfileName.trim()}
-                      style={{
-                        background: 'var(--accent)',
-                        color: '#fff',
-                        border: 'none',
-                        borderRadius: 999,
-                        padding: '6px 14px',
-                        fontSize: 12,
-                        cursor: saveProfileName.trim() ? 'pointer' : 'not-allowed',
-                        opacity: saveProfileName.trim() ? 1 : 0.5,
-                        fontWeight: 600,
-                      }}
-                    >
-                      Add
-                    </button>
-                    <button
-                      onClick={() => {
-                        setSaveProfileName('')
-                        setShowSaveProfile(false)
-                      }}
-                      style={{
-                        background: 'none',
-                        border: '1px solid var(--border)',
-                        borderRadius: 999,
-                        padding: '6px 12px',
-                        fontSize: 12,
-                        color: 'var(--muted)',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => { setSaveProfileName(''); setShowSaveProfile(true) }}
-                    style={{
-                      background: hasImportWorkToSave ? 'color-mix(in srgb, var(--accent) 16%, var(--surface2))' : 'none',
-                      border: `1px solid ${hasImportWorkToSave ? 'var(--accent)' : 'var(--border)'}`,
-                      borderRadius: 6, padding: '5px 12px', fontSize: 12,
-                      cursor: 'pointer', color: hasImportWorkToSave ? 'var(--accent2)' : 'var(--muted)',
-                      fontWeight: hasImportWorkToSave ? 600 : 400,
-                      boxShadow: hasImportWorkToSave ? '0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent)' : 'none',
-                    }}
-                  >
-                    ＋ Save as data source
-                  </button>
-                )
-              )}
             </div>
           </Card>
 
@@ -3501,11 +4262,9 @@ function ImportTab() {
                         </div>
                         <select value={m.newType} onChange={e => update({ newType: e.target.value })}
                           style={{ width: 76, background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 5px', fontSize: 11 }}>
-                          <option value="depository">Checking</option>
-                          <option value="credit">Credit</option>
-                          <option value="investment">Invest.</option>
-                          <option value="loan">Loan</option>
-                          <option value="other">Other</option>
+                          {ACCOUNT_TYPE_OPTIONS.map(option => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
                         </select>
                         <button onClick={() => update({ createNew: false, accountId: '' })}
                           style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 13, padding: '2px', flexShrink: 0 }}>✕</button>
@@ -3552,7 +4311,7 @@ function ImportTab() {
                   {r.amount !== null
                     ? formatTransactionAmount(r.amount)
                     : r.rawAmountStr
-                      ? <span title={`Can't parse: "${r.rawAmountStr}"`} style={{ opacity: 0.6 }}>?{r.rawAmountStr.slice(0,10)}</span>
+                      ? <span title={`Can't parse: "${r.rawAmountStr}"`} style={{ opacity: 0.6 }}>?{r.rawAmountStr.slice(0, 10)}</span>
                       : <span style={{ opacity: 0.4 }}>—</span>
                   }
                 </span>
@@ -3729,27 +4488,17 @@ function ImportTab() {
                 <div>
                   <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 6 }}>Review imported file tail</div>
                   <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-                    This CSV appears to have non-transaction data after the rows that imported. Please inspect the raw file viewer, then confirm whether it looks correct before continuing.
+                    The raw file viewer contains the start of what may be a trailer record. If the ending text is expected, choose Continue. If not, choose Cancel and nothing will be imported from the file.
                   </div>
                 </div>
               </div>
             </div>
             <div style={{ padding: 22, display: 'grid', gap: 14 }}>
-              <div style={{
-                fontSize: 13,
-                color: 'var(--muted)',
-                background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
-                border: '1px solid #f59e0b',
-                borderRadius: 10,
-                padding: '10px 12px',
-              }}>
-                The raw file viewer is already open on the file tail. If the ending text is expected, choose Continue. If not, close this and undo the import from Recent imports.
-              </div>
-              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                <Button variant="ghost" onClick={() => setStage('done')}>
-                  Not OK
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+                <Button variant="ghost" onClick={cancelTrailingDataReview} disabled={loading}>
+                  Cancel
                 </Button>
-                <Button onClick={advancePastDataReview}>
+                <Button onClick={advancePastDataReview} disabled={loading}>
                   Continue
                 </Button>
               </div>
@@ -3760,55 +4509,96 @@ function ImportTab() {
 
       {stage === 'done' && importResult && (
         <Card>
-          <div style={{ fontSize: 18, marginBottom: 8 }}>✅ Import complete</div>
-          <div style={{ fontSize: 14, color: 'var(--muted)', marginBottom: 4 }}>
-            {importResult.imported} transactions imported.
-          </div>
-          {importResult.skipped > 0 && (() => {
-            const nonTransactionRows = importResult.trailing_non_transaction_suspected ? (importResult.trailing_error_count || 0) : 0
-            const validationErrors = Number(importResult.validation_error_count || 0)
+          {(() => {
+            const summary = summarizeImportOutcome(importResult)
             const parts = []
-            if (importResult.account_skipped > 0) {
+            if (summary.accountSkippedCount > 0) {
               parts.push(
-                <span key="skipped-accounts">{importResult.account_skipped} from skipped accounts</span>
+                <span key="skipped-accounts">{summary.accountSkippedCount} from skipped accounts</span>
               )
             }
-            if (validationErrors > 0) {
+            if (summary.rejectedCount > 0) {
               parts.push(
-                (
-                  <button
-                    key="validation-errors"
-                    type="button"
-                    onClick={() => setShowValidationViewer(true)}
-                    style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent2)', textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit' }}
-                  >
-                    {validationErrors} validation error{validationErrors === 1 ? '' : 's'}
-                  </button>
-                )
+                <button
+                  key="rejected-rows"
+                  type="button"
+                  onClick={() => openRejectedRowsViewer({
+                    source: importResult,
+                    title: 'this import',
+                    allowRawViewer: true,
+                  })}
+                  style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent2)', textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit' }}
+                >
+                  {summary.rejectedCount} rejected row{summary.rejectedCount === 1 ? '' : 's'}
+                </button>
               )
             }
-            if (nonTransactionRows > 0) {
+            if (summary.zeroAmountCount > 0) {
               parts.push(
-                <span key="non-transaction-rows">{nonTransactionRows} non-transaction rows</span>
+                <span key="zero-amount-rows">{summary.zeroAmountCount} zero amount</span>
               )
             }
+            if (summary.validationErrorCount > 0) {
+              parts.push(
+                <span key="validation-errors">{summary.validationErrorCount} validation error{summary.validationErrorCount === 1 ? '' : 's'}</span>
+              )
+            }
+            if (summary.trailingNonTransactionCount > 0) {
+              parts.push(
+                <span key="non-transaction-rows">{summary.trailingNonTransactionCount} non-transaction rows</span>
+              )
+            }
+            if (summary.otherSkippedCount > 0) {
+              parts.push(
+                <span key="other-skipped">{summary.otherSkippedCount} other skipped</span>
+              )
+            }
+
             return (
-              <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
-                {importResult.skipped} rows not imported
-                {parts.length > 0 ? (
-                  <>
-                    {' ('}
-                    {parts.map((part, index) => (
-                      <span key={index}>
-                        {index > 0 ? ', ' : ''}
-                        {part}
-                      </span>
-                    ))}
-                    {')'}
-                  </>
+              <>
+                <div style={{ fontSize: 18, marginBottom: 8 }}>✅ Import complete</div>
+                <div style={{ fontSize: 14, color: 'var(--muted)', marginBottom: 4 }}>
+                  {summary.importedCount} transactions imported.
+                </div>
+                {summary.totalRows > 0 ? (
+                  <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
+                    {summary.totalRows} rows reviewed: {summary.importedCount} imported, {summary.skippedCount} not imported, {summary.dedupedCount} deduped.
+                  </div>
                 ) : null}
-                .
-              </div>
+                {summary.dedupedCount > 0 ? (
+                  <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => openDuplicateRowsViewer({
+                        source: importResult,
+                        title: 'this import',
+                      })}
+                      style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent2)', textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit' }}
+                    >
+                      {summary.dedupedCount} duplicate row{summary.dedupedCount === 1 ? '' : 's'}
+                    </button>
+                    {' '}matched existing FinTrack transactions and were not imported automatically.
+                  </div>
+                ) : null}
+                {summary.skippedCount > 0 ? (
+                  <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
+                    {summary.skippedCount} rows not imported
+                    {parts.length > 0 ? (
+                      <>
+                        {' ('}
+                        {parts.map((part, index) => (
+                          <span key={index}>
+                            {index > 0 ? ', ' : ''}
+                            {part}
+                          </span>
+                        ))}
+                        {')'}
+                      </>
+                    ) : null}
+                    .
+                  </div>
+                ) : null}
+              </>
             )
           })()}
           {categoryMappingSummary && (
@@ -3837,12 +4627,18 @@ function ImportTab() {
                   <Button
                     small
                     variant={remainingCategoryCount > 0 ? 'primary' : 'ghost'}
-                    onClick={openCurrentImportCategoryWorkspace}
+                    onClick={() => {
+                      if (selectedProfile) openSourceCategoryWorkspace(selectedProfile)
+                      else openCurrentImportCategoryWorkspace()
+                    }}
                   >
                     {currentImportCategoryActionLabel}
                   </Button>
                 ) : null}
-                <Button small onClick={() => openRuleSuggestionReview(importResult.batch_id)}>
+                <Button small onClick={() => openRuleSuggestionReview({
+                  batchId: importResult.batch_id,
+                  profileId: selectedProfile || '',
+                })}>
                   Generate rules from imported data
                 </Button>
               </div>
@@ -3873,270 +4669,504 @@ function ImportTab() {
         </Card>
       )}
 
-      <SectionTitle>Data sources</SectionTitle>
-      <Card style={{ padding: 0, overflow: 'hidden', width: '100%' }}>
-        {dataSourceRows.length === 0 ? <EmptyState message="No data sources or temporary drafts yet" /> : (
-          <>
-            {dataSourceRows.map(row => {
-              const isManual = row.kind === 'manual'
-              const isUnknown = row.kind === 'unknown'
-              const isUnsaved = isManual || isUnknown
-              const hasCategoryWorkspace = row.categorySummary.totalCount > 0
-              const categoryActionLabel = getCategoryWorkspaceActionLabel(row.categorySummary.remainingCount)
-              const rowExpanded = !!expandedSourceRows[row.key]
-              const canExpand = row.batches.length > 0
-              const importedFileCountLabel = row.batches.length === 1 ? '1 imported file' : `${row.batches.length} imported files`
+      {stage !== 'mapping' && (
+        <>
+          <div style={{ marginTop: 28, marginBottom: 6 }}>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ fontSize: 16, fontWeight: 600 }}>Data sources</div>
+              <button
+                type="button"
+                onClick={() => setShowDataSourceManager(true)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minHeight: 24,
+                  padding: '2px 9px',
+                  borderRadius: 999,
+                  border: '1px solid color-mix(in srgb, var(--border) 92%, transparent)',
+                  background: 'color-mix(in srgb, var(--surface2) 78%, var(--surface))',
+                  color: 'var(--muted)',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  boxShadow: '0 1px 1px rgba(15, 23, 42, 0.04)',
+                  whiteSpace: 'nowrap',
+                  position: 'relative',
+                  top: -5,
+                }}
+              >
+                Manage sources
+              </button>
+            </div>
+          </div>
+          <Card style={{ padding: 0, overflow: 'hidden', width: '100%' }}>
+            {dataSourceRows.length === 0 ? <EmptyState message="No data sources or temporary drafts yet" /> : (
+              <>
+                {dataSourceRows.map(row => {
+                  const isManual = row.kind === 'manual'
+                  const isUnknown = row.kind === 'unknown'
+                  const isUnsaved = isManual || isUnknown
+                  const hasCategoryWorkspace = row.categorySummary.totalCount > 0
+                  const categoryActionLabel = getCategoryWorkspaceActionLabel(row.categorySummary.remainingCount)
+                  const rowExpanded = !!expandedSourceRows[row.key]
+                  const canExpand = row.batches.length > 0
+                  const importedFileCountLabel = row.batches.length === 1 ? '1 imported file' : `${row.batches.length} imported files`
+                  const sourceRuleProgressLabel = getRuleSuggestionProgressLabel({ rule_suggestion_review: row.ruleSuggestionReview })
 
-              return (
-                <div key={row.key}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '12px 16px', fontSize: 13, borderBottom: rowExpanded ? 'none' : '1px solid var(--border)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                      {canExpand ? (
-                        <button
-                          type="button"
-                          onClick={() => setExpandedSourceRows(prev => {
-                            const nextState = prev && typeof prev === 'object' ? prev : {}
-                            return { ...nextState, [row.key]: !nextState[row.key] }
-                          })}
-                          style={{ width: 20, height: 20, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface2)', color: 'var(--muted)', cursor: 'pointer', padding: 0, fontSize: 12, lineHeight: 1 }}
-                          title={rowExpanded ? 'Hide recent imports' : 'Show recent imports'}
-                        >
-                          {rowExpanded ? '−' : '+'}
-                        </button>
-                      ) : <span style={{ width: 20, height: 20 }} />}
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontStyle: isUnsaved ? 'italic' : 'normal', color: isUnsaved ? 'var(--muted)' : 'var(--text)' }}>
-                          {isManual ? 'temporary draft' : isUnknown ? 'unknown data source' : row.profile.name}
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 3, fontSize: 11, color: 'var(--muted)' }}>
-                          {isManual ? (
-                            row.manualDraftRecord?.filenamePattern ? <span>{row.manualDraftRecord.filenamePattern}</span> : null
-                          ) : isUnknown ? null : editingSourceDescriptionId === row.profile.id ? (
-                            <TransientTextInput
-                              value={sourceDescriptionDraft}
-                              onChange={setSourceDescriptionDraft}
-                              onCommit={() => saveSourceDescription(row.profile.id)}
-                              onCancel={() => {
-                                setEditingSourceDescriptionId('')
-                                setSourceDescriptionDraft('')
-                              }}
-                              restoreOnEscape
-                              onBlurCommit={false}
-                              placeholder="Description"
-                              style={{
-                                width: 190,
-                                maxWidth: '100%',
-                                background: 'var(--surface2)',
-                                color: 'var(--text)',
-                                border: '1px solid var(--accent)',
-                                borderRadius: 999,
-                                padding: '4px 10px',
-                                fontSize: 11,
-                                outline: 'none',
-                              }}
-                            />
-                          ) : (
+                  return (
+                    <div key={row.key}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '12px 16px', fontSize: 13, borderBottom: rowExpanded ? 'none' : '1px solid var(--border)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                          {canExpand ? (
                             <button
                               type="button"
-                              onClick={() => {
-                                setEditingSourceDescriptionId(row.profile.id)
-                                setSourceDescriptionDraft(row.profile.filename_pattern || '')
-                              }}
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                padding: 0,
-                                margin: 0,
-                                color: 'var(--muted)',
-                                fontSize: 11,
-                                cursor: 'pointer',
-                              }}
-                              title={row.profile.filename_pattern ? 'Click to edit description' : 'Click to add description'}
+                              onClick={() => setExpandedSourceRows(prev => {
+                                const nextState = prev && typeof prev === 'object' ? prev : {}
+                                return { ...nextState, [row.key]: !nextState[row.key] }
+                              })}
+                              style={{ width: 20, height: 20, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface2)', color: 'var(--muted)', cursor: 'pointer', padding: 0, fontSize: 12, lineHeight: 1 }}
+                              title={rowExpanded ? 'Hide recent imports' : 'Show recent imports'}
                             >
-                              {row.profile.filename_pattern || 'add description'}
+                              {rowExpanded ? '−' : '+'}
                             </button>
-                          )}
-                          <span>{importedFileCountLabel}</span>
-                          <span style={{ marginLeft: 12 }}>{row.latestBatch ? `Last used ${row.latestBatch.imported_at.slice(0,16).replace('T',' ')}` : 'Not used yet'}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
-                      {hasCategoryWorkspace && !isUnknown ? (
-                        <button
-                          type="button"
-                          onClick={() => openSourceCategoryWorkspace(isManual ? MANUAL_DATA_SOURCE_VALUE : row.profile.id)}
-                          style={{
-                            background: row.categorySummary.remainingCount > 0
-                              ? 'color-mix(in srgb, var(--accent) 10%, var(--surface2))'
-                              : 'var(--surface2)',
-                            color: row.categorySummary.remainingCount > 0 ? 'var(--accent2)' : 'var(--muted)',
-                            border: `1px solid ${row.categorySummary.remainingCount > 0 ? 'color-mix(in srgb, var(--accent) 28%, var(--border))' : 'var(--border)'}`,
-                            borderRadius: 6,
-                            padding: '4px 10px',
-                            fontSize: 12,
-                            fontWeight: row.categorySummary.remainingCount > 0 ? 600 : 500,
-                            cursor: 'pointer',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {categoryActionLabel}
-                        </button>
-                      ) : null}
-                      {isManual && row.manualDraftRecord ? (
-                        showManualDraftSave ? (
-                          <TransientTextInput
-                            value={manualDraftSaveName}
-                            onChange={setManualDraftSaveName}
-                            onCommit={saveManualDraftAsDataSource}
-                            onCancel={() => {
-                              setShowManualDraftSave(false)
-                              setManualDraftSaveName('')
-                            }}
-                            restoreOnEscape
-                            onBlurCommit={false}
-                            placeholder="Data source name"
-                            style={{
-                              width: 180,
-                              maxWidth: '100%',
-                              background: 'var(--surface2)',
-                              color: 'var(--text)',
-                              border: '1px solid var(--accent)',
-                              borderRadius: 999,
-                              padding: '5px 12px',
-                              fontSize: 12,
-                              outline: 'none',
-                            }}
-                          />
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setShowManualDraftSave(true)}
-                            style={{
-                              background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
-                              color: 'var(--accent2)',
-                              border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
-                              borderRadius: 6,
-                              padding: '4px 10px',
-                              fontSize: 12,
-                              fontWeight: 600,
-                              cursor: 'pointer',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            Save as data source
-                          </button>
-                        )
-                      ) : null}
-                    </div>
-                  </div>
-
-                  {canExpand && rowExpanded ? (
-                    <div style={{ borderTop: '2px solid color-mix(in srgb, var(--border) 92%, var(--accent))', borderBottom: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 36%, var(--surface))', boxShadow: 'inset 0 1px 0 color-mix(in srgb, white 5%, transparent)' }}>
-                      {row.batches.map(b => (
-                        <div key={b.id}>
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 70px 240px', padding: '10px 16px 10px 46px', alignItems: 'start', fontSize: 13, borderBottom: (b.accounts?.length || b.deduped_count > 0) ? 'none' : '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
-                            <div>
-                              <div>{b.filename}</div>
-                              {b.has_imported_categories && getRuleSuggestionProgressLabel(b) ? (
-                                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>
-                                  {getRuleSuggestionProgressLabel(b)}
-                                </div>
-                              ) : null}
-                            </div>
-                            <span style={{ fontSize: 12, color: 'var(--muted)' }}>{b.imported_at.slice(0,16).replace('T',' ')}</span>
-                            <span style={{ textAlign: 'center' }}>{b.row_count} rows</span>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
-                              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                                {b.has_imported_categories ? (
-                                  <button
-                                    onClick={() => openRuleSuggestionReview(b.id)}
-                                    style={{
-                                      background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
-                                      border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
-                                      borderRadius: 6,
-                                      color: 'var(--accent2)',
-                                      cursor: 'pointer',
-                                      fontSize: 12,
-                                      fontWeight: 600,
-                                      padding: '3px 8px',
-                                    }}
-                                  >
-                                    {b.rule_suggestion_review?.generated_at ? 'View rules' : 'Generate rules'}
-                                  </button>
-                                ) : null}
-                                <button onClick={() => handleUndoClick(b)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}>Undo</button>
-                              </div>
-                              {isUnsaved && b.category_workspace_summary ? (
-                                <button
-                                  onClick={() => openBatchCategoryWorkspace(b.id)}
-                                  style={{
-                                    background: b.category_workspace_summary.remaining_count > 0
-                                      ? 'color-mix(in srgb, var(--accent) 10%, var(--surface2))'
-                                      : 'var(--surface2)',
-                                    border: `1px solid ${b.category_workspace_summary.remaining_count > 0 ? 'color-mix(in srgb, var(--accent) 28%, var(--border))' : 'var(--border)'}`,
-                                    borderRadius: 6,
-                                    color: b.category_workspace_summary.remaining_count > 0 ? 'var(--accent2)' : 'var(--muted)',
-                                    cursor: 'pointer',
-                                    fontSize: 12,
-                                    fontWeight: b.category_workspace_summary.remaining_count > 0 ? 600 : 500,
-                                    padding: '3px 8px',
-                                    whiteSpace: 'nowrap',
+                          ) : <span style={{ width: 20, height: 20 }} />}
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontStyle: isUnsaved ? 'italic' : 'normal', color: isUnsaved ? 'var(--muted)' : 'var(--text)' }}>
+                              {isManual ? 'temporary draft' : isUnknown ? 'unknown data source' : editingSourceNameKey === getSourceNameEditKey('list', row.profile.id) ? (
+                                <TransientTextInput
+                                  value={sourceNameDraft}
+                                  onChange={setSourceNameDraft}
+                                  onCommit={() => saveSourceName(row.profile.id)}
+                                  onCancel={() => {
+                                    setEditingSourceNameKey('')
+                                    setSourceNameDraft('')
                                   }}
+                                  restoreOnEscape
+                                  onBlurCommit={false}
+                                  placeholder="Data source name"
+                                  style={{
+                                    width: 220,
+                                    maxWidth: '100%',
+                                    background: 'var(--surface2)',
+                                    color: 'var(--text)',
+                                    border: '1px solid var(--accent)',
+                                    borderRadius: 999,
+                                    padding: '4px 10px',
+                                    fontSize: 13,
+                                    fontWeight: 500,
+                                    outline: 'none',
+                                  }}
+                                />
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingSourceDescriptionId('')
+                                    setSourceDescriptionDraft('')
+                                    setEditingSourceNameKey(getSourceNameEditKey('list', row.profile.id))
+                                    setSourceNameDraft(row.profile.name || '')
+                                  }}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    padding: 0,
+                                    margin: 0,
+                                    color: 'inherit',
+                                    font: 'inherit',
+                                    fontStyle: 'normal',
+                                    cursor: 'pointer',
+                                    textAlign: 'left',
+                                  }}
+                                  title="Click to rename this data source"
                                 >
-                                  {getCategoryWorkspaceActionLabel(b.category_workspace_summary.remaining_count)}
+                                  {row.profile.name}
                                 </button>
+                              )}
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 3, fontSize: 11, color: 'var(--muted)' }}>
+                              {isManual ? (
+                                row.manualDraftRecord?.filenamePattern ? <span>{row.manualDraftRecord.filenamePattern}</span> : null
+                              ) : isUnknown ? null : editingSourceDescriptionId === row.profile.id ? (
+                                <TransientTextInput
+                                  value={sourceDescriptionDraft}
+                                  onChange={setSourceDescriptionDraft}
+                                  onCommit={() => saveSourceDescription(row.profile.id)}
+                                  onCancel={() => {
+                                    setEditingSourceDescriptionId('')
+                                    setSourceDescriptionDraft('')
+                                  }}
+                                  restoreOnEscape
+                                  onBlurCommit={false}
+                                  placeholder="Description"
+                                  style={{
+                                    width: 190,
+                                    maxWidth: '100%',
+                                    background: 'var(--surface2)',
+                                    color: 'var(--text)',
+                                    border: '1px solid var(--accent)',
+                                    borderRadius: 999,
+                                    padding: '4px 10px',
+                                    fontSize: 11,
+                                    outline: 'none',
+                                  }}
+                                />
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingSourceNameKey('')
+                                    setSourceNameDraft('')
+                                    setEditingSourceDescriptionId(row.profile.id)
+                                    setSourceDescriptionDraft(row.profile.filename_pattern || '')
+                                  }}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    padding: 0,
+                                    margin: 0,
+                                    color: 'var(--muted)',
+                                    fontSize: 11,
+                                    cursor: 'pointer',
+                                  }}
+                                  title={row.profile.filename_pattern ? 'Click to edit description' : 'Click to add description'}
+                                >
+                                  {row.profile.filename_pattern || 'add description'}
+                                </button>
+                              )}
+                              <span>{importedFileCountLabel}</span>
+                              <span style={{ marginLeft: 12 }}>{row.latestBatch ? `Last used ${row.latestBatch.imported_at.slice(0, 16).replace('T', ' ')}` : 'Not used yet'}</span>
+                              {!isUnsaved && row.hasImportedCategories && sourceRuleProgressLabel ? (
+                                <span>{sourceRuleProgressLabel}</span>
                               ) : null}
                             </div>
                           </div>
-                          {(b.accounts?.length > 0 || b.deduped_count > 0) && (
-                            <div style={{ padding: '4px 16px 10px 58px', borderBottom: '1px solid color-mix(in srgb, var(--border) 80%, transparent)', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                              {b.accounts.map((a, i) => {
-                                const label = a.was_skipped ? a.csv_value : a.account_name
-                                const count = Number(a.row_count || 0)
-                                const truncated = label?.length > 22 ? label.slice(0, 20) + '…' : label
-                                return (
-                                  <span key={i} title={label} style={{
-                                    display: 'inline-flex', alignItems: 'center', gap: 4,
-                                    fontSize: 11, padding: '2px 7px', borderRadius: 99,
-                                    background: a.was_skipped
-                                      ? 'var(--surface2)'
-                                      : 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
-                                    color: a.was_skipped ? 'var(--muted)' : 'var(--text)',
-                                    border: '1px solid var(--border)',
-                                  }}>
-                                    <span style={{ color: a.was_skipped ? 'var(--muted)' : 'var(--success)', fontWeight: 600 }}>
-                                      {a.was_skipped ? '✕' : '✓'}
-                                    </span>
-                                    {truncated}
-                                    {count > 0 && <span style={{ color: 'var(--muted)' }}>{count}</span>}
-                                  </span>
-                                )
-                              })}
-                              {b.deduped_count > 0 && (
-                                <span title={`${b.deduped_count} duplicate rows skipped`} style={{
-                                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                                  fontSize: 11, padding: '2px 7px', borderRadius: 99,
-                                  background: 'var(--surface2)',
-                                  color: 'var(--muted)',
-                                  border: '1px solid var(--border)',
-                                }}>
-                                  <span style={{ fontWeight: 600 }}>⊘</span>
-                                  {b.deduped_count} duplicates
-                                </span>
-                              )}
-                            </div>
-                          )}
                         </div>
-                      ))}
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
+                          {hasCategoryWorkspace && !isUnknown ? (
+                            <button
+                              type="button"
+                              onClick={() => openSourceCategoryWorkspace(isManual ? MANUAL_DATA_SOURCE_VALUE : row.profile.id)}
+                              style={{
+                                background: row.categorySummary.remainingCount > 0
+                                  ? 'color-mix(in srgb, var(--accent) 10%, var(--surface2))'
+                                  : 'var(--surface2)',
+                                color: row.categorySummary.remainingCount > 0 ? 'var(--accent2)' : 'var(--muted)',
+                                border: `1px solid ${row.categorySummary.remainingCount > 0 ? 'color-mix(in srgb, var(--accent) 28%, var(--border))' : 'var(--border)'}`,
+                                borderRadius: 6,
+                                padding: '4px 10px',
+                                fontSize: 12,
+                                fontWeight: row.categorySummary.remainingCount > 0 ? 600 : 500,
+                                cursor: 'pointer',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {categoryActionLabel}
+                            </button>
+                          ) : null}
+                          {!isUnsaved && row.hasImportedCategories ? (
+                            <button
+                              type="button"
+                              onClick={() => openRuleSuggestionReview({ profileId: row.profile.id })}
+                              style={{
+                                background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
+                                border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
+                                borderRadius: 6,
+                                color: 'var(--accent2)',
+                                cursor: 'pointer',
+                                fontSize: 12,
+                                fontWeight: 600,
+                                padding: '4px 10px',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {getRuleSuggestionActionLabel(row.ruleSuggestionReview)}
+                            </button>
+                          ) : null}
+                          {isManual && row.manualDraftRecord ? (
+                            showManualDraftSave ? (
+                              <TransientTextInput
+                                value={manualDraftSaveName}
+                                onChange={setManualDraftSaveName}
+                                onCommit={saveManualDraftAsDataSource}
+                                onCancel={() => {
+                                  setShowManualDraftSave(false)
+                                  setManualDraftSaveName('')
+                                }}
+                                restoreOnEscape
+                                onBlurCommit={false}
+                                placeholder="Data source name"
+                                style={{
+                                  width: 180,
+                                  maxWidth: '100%',
+                                  background: 'var(--surface2)',
+                                  color: 'var(--text)',
+                                  border: '1px solid var(--accent)',
+                                  borderRadius: 999,
+                                  padding: '5px 12px',
+                                  fontSize: 12,
+                                  outline: 'none',
+                                }}
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setShowManualDraftSave(true)}
+                                style={{
+                                  background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
+                                  color: 'var(--accent2)',
+                                  border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
+                                  borderRadius: 6,
+                                  padding: '4px 10px',
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                Save as data source
+                              </button>
+                            )
+                          ) : null}
+                        </div>
+                      </div>
+
+                      {canExpand && rowExpanded ? (
+                        <div style={{ borderTop: '2px solid color-mix(in srgb, var(--border) 92%, var(--accent))', borderBottom: '1px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 36%, var(--surface))', boxShadow: 'inset 0 1px 0 color-mix(in srgb, white 5%, transparent)' }}>
+                          {row.batches.map(b => {
+                            const summary = summarizeImportOutcome(b)
+                            return (
+                              <div key={b.id}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 90px 260px', padding: '10px 16px 10px 46px', alignItems: 'start', fontSize: 13, borderBottom: (b.accounts?.length || summary.rejectedCount > 0 || summary.dedupedCount > 0) ? 'none' : '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
+                                  <div>
+                                    <div>{b.filename}</div>
+                                    {isUnsaved && b.has_imported_categories && getRuleSuggestionProgressLabel(b) ? (
+                                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>
+                                        {getRuleSuggestionProgressLabel(b)}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>{b.imported_at.slice(0, 16).replace('T', ' ')}</span>
+                                  <span style={{ textAlign: 'center' }}>{b.row_count} rows</span>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+                                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                                      {isUnsaved && b.has_imported_categories ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => openRuleSuggestionReview({ batchId: b.id })}
+                                          style={{
+                                            background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
+                                            border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
+                                            borderRadius: 6,
+                                            color: 'var(--accent2)',
+                                            cursor: 'pointer',
+                                            fontSize: 12,
+                                            fontWeight: 600,
+                                            padding: '3px 8px',
+                                          }}
+                                        >
+                                          {getRuleSuggestionActionLabel(b.rule_suggestion_review)}
+                                        </button>
+                                      ) : null}
+                                      <button onClick={() => handleUndoClick(b)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}>Undo</button>
+                                    </div>
+                                    {isUnsaved && b.category_workspace_summary ? (
+                                      <button
+                                        onClick={() => openBatchCategoryWorkspace(b.id)}
+                                        style={{
+                                          background: b.category_workspace_summary.remaining_count > 0
+                                            ? 'color-mix(in srgb, var(--accent) 10%, var(--surface2))'
+                                            : 'var(--surface2)',
+                                          border: `1px solid ${b.category_workspace_summary.remaining_count > 0 ? 'color-mix(in srgb, var(--accent) 28%, var(--border))' : 'var(--border)'}`,
+                                          borderRadius: 6,
+                                          color: b.category_workspace_summary.remaining_count > 0 ? 'var(--accent2)' : 'var(--muted)',
+                                          cursor: 'pointer',
+                                          fontSize: 12,
+                                          fontWeight: b.category_workspace_summary.remaining_count > 0 ? 600 : 500,
+                                          padding: '3px 8px',
+                                          whiteSpace: 'nowrap',
+                                        }}
+                                      >
+                                        {getCategoryWorkspaceActionLabel(b.category_workspace_summary.remaining_count)}
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                </div>
+                                {(b.accounts?.length > 0 || summary.rejectedCount > 0 || summary.dedupedCount > 0) && (
+                                  <div style={{ padding: '4px 16px 10px 58px', borderBottom: '1px solid color-mix(in srgb, var(--border) 80%, transparent)', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                                    {b.accounts.map((a, i) => {
+                                      const label = a.was_skipped ? a.csv_value : a.account_name
+                                      const count = Number(a.row_count || 0)
+                                      const truncated = label?.length > 22 ? label.slice(0, 20) + '…' : label
+                                      return (
+                                        <span key={i} title={label} style={{
+                                          display: 'inline-flex', alignItems: 'center', gap: 4,
+                                          fontSize: 11, padding: '2px 7px', borderRadius: 99,
+                                          background: a.was_skipped
+                                            ? 'var(--surface2)'
+                                            : 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
+                                          color: a.was_skipped ? 'var(--muted)' : 'var(--text)',
+                                          border: '1px solid var(--border)',
+                                        }}>
+                                          <span style={{ color: a.was_skipped ? 'var(--muted)' : 'var(--success)', fontWeight: 600 }}>
+                                            {a.was_skipped ? '✕' : '✓'}
+                                          </span>
+                                          {truncated}
+                                          {count > 0 && <span style={{ color: 'var(--muted)' }}>{count}</span>}
+                                        </span>
+                                      )
+                                    })}
+                                    {summary.rejectedCount > 0 ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => openRejectedRowsViewer({
+                                          source: b,
+                                          title: b.filename,
+                                        })}
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: 4,
+                                          fontSize: 11,
+                                          padding: '2px 7px',
+                                          borderRadius: 99,
+                                          background: 'var(--surface2)',
+                                          color: 'var(--muted)',
+                                          border: '1px solid var(--border)',
+                                          cursor: 'pointer',
+                                        }}
+                                      >
+                                        {summary.rejectedCount} rejected
+                                      </button>
+                                    ) : null}
+                                    {summary.dedupedCount > 0 ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => openDuplicateRowsViewer({
+                                          source: b,
+                                          title: b.filename,
+                                        })}
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: 4,
+                                          fontSize: 11,
+                                          padding: '2px 7px',
+                                          borderRadius: 99,
+                                          background: 'var(--surface2)',
+                                          color: 'var(--muted)',
+                                          border: '1px solid var(--border)',
+                                          cursor: 'pointer',
+                                        }}
+                                      >
+                                        {summary.dedupedCount} duplicates
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      ) : null}
                     </div>
-                  ) : null}
+                  )
+                })}
+              </>
+            )}
+          </Card>
+        </>
+      )}
+
+      {showDataSourceManager ? (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 320,
+            background: 'rgba(15, 23, 42, 0.42)',
+          }}
+        >
+          {(() => {
+            const managerPanelStyle = getFloatingPanelSurfaceStyle({
+              active: !dataSourceManagerEditing,
+              radius: 16,
+            })
+            return (
+              <div
+                ref={dataSourceManagerRef}
+                onClick={event => event.stopPropagation()}
+                style={{
+                  width: 'min(1040px, calc(100vw - 96px))',
+                  minHeight: 380,
+                  maxHeight: '78vh',
+                  position: 'fixed',
+                  left: (dataSourceManagerPos || getDataSourceManagerDefaultPosition()).x,
+                  top: (dataSourceManagerPos || getDataSourceManagerDefaultPosition()).y,
+                  overflow: 'hidden',
+                  display: 'grid',
+                  gridTemplateRows: 'auto minmax(0, 1fr)',
+                  userSelect: dataSourceManagerDragging ? 'none' : 'auto',
+                  ...managerPanelStyle,
+                }}
+              >
+                <div
+                  onMouseDown={startDataSourceManagerDrag}
+                  style={{
+                    padding: '16px 20px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    borderBottom: '1px solid var(--border)',
+                    background: getFloatingPanelHeaderBackground(!dataSourceManagerEditing),
+                    cursor: dataSourceManagerEditing ? 'default' : (dataSourceManagerDragging ? 'grabbing' : 'grab'),
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: 17, fontWeight: 600 }}>Manage data sources</div>
+                    <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
+                      Edit saved CSV data sources without leaving Import / Export.
+                      {!dataSourceManagerEditing ? ' Drag to move.' : ''}
+                    </div>
+                  </div>
+                  {!dataSourceManagerEditing ? (
+                    <Button
+                      variant="ghost"
+                      onMouseDown={event => event.stopPropagation()}
+                      onClick={closeDataSourceManager}
+                    >
+                      Close
+                    </Button>
+                  ) : <div style={{ width: 74 }} />}
                 </div>
-              )
-            })}
-          </>
-        )}
-      </Card>
+                <div style={{ overflow: 'auto', background: 'color-mix(in srgb, var(--surface2) 30%, var(--surface))' }}>
+                  <ImportProfilesManager
+                    embedded
+                    onEditingChange={setDataSourceManagerEditing}
+                    onDataChange={handleManagerDataChange}
+                  />
+                </div>
+              </div>
+            )
+          })()}
+        </div>
+      ) : null}
+
+      {pendingProfileMismatch ? (
+        <DataSourceMismatchDialog
+          profileName={pendingProfileMismatch.profileName}
+          chooserOpen={showProfileMismatchChooser}
+          profiles={profiles}
+          selectedProfileId={showProfileMismatchChooser ? pendingProfileMismatch.profileId : ''}
+          onSelectProfile={handleProfileMismatchSelectSource}
+          onSelectTemporaryDraft={() => handleProfileMismatchSelectSource(MANUAL_DATA_SOURCE_VALUE)}
+          onCloseChooser={handleProfileMismatchChooserBack}
+          onConfirm={handleProfileMismatchConfirm}
+          onCancel={handleProfileMismatchCancel}
+          onChangeDataSource={handleProfileMismatchChangeDataSource}
+        />
+      ) : null}
 
       {undoTarget && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -4184,25 +5214,25 @@ function ExportTab() {
   }
 
   function downloadCsv() {
-    const accountSel  = filters.selections.filter(s => s.type === 'account').map(s => s.id)
-    const ownerSel    = filters.selections.filter(s => s.type === 'owner').map(s => s.id)
-    const groupSel    = filters.selections.filter(s => s.type === 'group').map(s => s.id)
+    const accountSel = filters.selections.filter(s => s.type === 'account').map(s => s.id)
+    const ownerSel = filters.selections.filter(s => s.type === 'owner').map(s => s.id)
+    const groupSel = filters.selections.filter(s => s.type === 'group').map(s => s.id)
     const categorySel = filters.selections.filter(s => s.type === 'category').map(s => s.id)
     window.open(api.exportTransactionsCsv({
       columns: [...selectedCols].join(','),
-      date_start:   filters.date?.start || undefined, date_end: filters.date?.end || undefined,
-      account_ids:  accountSel.length  ? accountSel.join(',')  : undefined,
-      owner_ids:    ownerSel.length    ? ownerSel.join(',')    : undefined,
-      group_ids:    groupSel.length    ? groupSel.join(',')    : undefined,
+      date_start: filters.date?.start || undefined, date_end: filters.date?.end || undefined,
+      account_ids: accountSel.length ? accountSel.join(',') : undefined,
+      owner_ids: ownerSel.length ? ownerSel.join(',') : undefined,
+      group_ids: groupSel.length ? groupSel.join(',') : undefined,
       category_ids: categorySel.length ? categorySel.join(',') : undefined,
     }), '_blank')
   }
 
   return (
     <div>
-      <SectionTitle>Export transactions as CSV</SectionTitle>
+      <SectionTitle>Export transactions to a .csv file</SectionTitle>
       <Card>
-        <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14 }}>Exports transactions matching current filter bar settings. Select columns:</div>
+        <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14 }}>Select columns to include:</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 16 }}>
           {EXPORT_COLUMNS.map(col => (
             <label key={col.key} style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer', fontSize: 13 }}>
@@ -4210,10 +5240,14 @@ function ExportTab() {
             </label>
           ))}
         </div>
-        <Button onClick={downloadCsv} disabled={selectedCols.size === 0}>⬇ Download CSV</Button>
-        <span style={{ fontSize: 12, marginLeft: 12, color: filters.date || filters.selections.length > 0 ? 'var(--accent2)' : 'var(--muted)' }}>
-          {filters.date || filters.selections.length > 0 ? 'Active filters will be applied' : 'All transactions'}
-        </span>
+        <div style={{ display: 'grid', gap: 8, justifyItems: 'start' }}>
+          <Button onClick={downloadCsv} disabled={selectedCols.size === 0}>Generate File</Button>
+          {filters.date || filters.selections.length > 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--accent2)' }}>
+              Only transactions matching the current filter will be exported.
+            </div>
+          ) : null}
+        </div>
       </Card>
     </div>
   )
@@ -4221,21 +5255,24 @@ function ExportTab() {
 
 function BackupRestoreTab() {
   const [backupRecipients, setBackupRecipients] = useState([])
-  const [restoreFile,  setRestoreFile]  = useState(null)
-  const [credsFile,    setCredsFile]    = useState(null)
+  const [credentialBackupStatus, setCredentialBackupStatus] = useState({ has_credentials: false, credential_count: 0 })
+  const [restoreFile, setRestoreFile] = useState(null)
+  const [credsFile, setCredsFile] = useState(null)
   const [restoreInspection, setRestoreInspection] = useState(null)
   const [inspectError, setInspectError] = useState('')
   const [inspectingRestore, setInspectingRestore] = useState(false)
   const [privateKeyFile, setPrivateKeyFile] = useState(null)
   const [privateKeyPassphrase, setPrivateKeyPassphrase] = useState('')
-  const [restoring,    setRestoring]    = useState(false)
-  const [restoreMsg,   setRestoreMsg]   = useState(null)
+  const [restoring, setRestoring] = useState(false)
+  const [restoreMsg, setRestoreMsg] = useState(null)
   const [restoreSuccess, setRestoreSuccess] = useState(null)
   const [pendingConfirm, setPendingConfirm] = useState(null)
   const enabledRecipients = backupRecipients.filter(r => r.enabled)
+  const hasStoredCredentials = !!credentialBackupStatus?.has_credentials
 
   useEffect(() => {
-    api.getBackupRecipients().then(setBackupRecipients).catch(() => {})
+    api.getBackupRecipients().then(setBackupRecipients).catch(() => { })
+    api.getCredentialsBackupStatus().then(setCredentialBackupStatus).catch(() => { })
   }, [])
 
   function startDownload(url) {
@@ -4318,12 +5355,12 @@ function BackupRestoreTab() {
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Data backup</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>All categories, rules, owners, accounts, transactions. No Plaid tokens.</div>
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-            <Button onClick={() => startDownload(api.exportBackup(false))}>Generate backup</Button>
+            <Button variant="ghost" onClick={() => startDownload(api.exportBackup(false))}>Generate backup</Button>
             <Button variant="ghost" disabled={enabledRecipients.length === 0} onClick={() => startDownload(api.exportBackup(true))}>Generate encrypted backup</Button>
           </div>
           {enabledRecipients.length === 0 ? (
             <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
-              Add an enabled backup recipient in Settings to create encrypted backups.
+              Add an enabled backup recipient in Settings to enable encrypted backup creation.
             </div>
           ) : (
             <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
@@ -4333,12 +5370,44 @@ function BackupRestoreTab() {
         </div>
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Credentials backup</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-            <a href={api.exportCredentials()} download="fintrack_credentials.zip"><Button>Generate credentials backup</Button></a>
-            <div style={{ display: 'inline-block', fontSize: 13, background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))', border: '1px solid #f59e0b', borderRadius: 6, padding: '8px 12px' }}>
-              ⚠️ Contains Plaid access tokens — treat like a password.
-            </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', opacity: hasStoredCredentials ? 1 : 0.58 }}>
+            <a
+              href={hasStoredCredentials ? api.exportCredentials(false) : undefined}
+              download={hasStoredCredentials ? 'fintrack_credentials.zip' : undefined}
+              onClick={event => {
+                if (!hasStoredCredentials) event.preventDefault()
+              }}
+            >
+              <Button disabled={!hasStoredCredentials}>Generate credentials backup</Button>
+            </a>
+            <a
+              href={hasStoredCredentials && enabledRecipients.length > 0 ? api.exportCredentials(true) : undefined}
+              download={hasStoredCredentials && enabledRecipients.length > 0 ? 'fintrack_credentials.encrypted.zip' : undefined}
+              onClick={event => {
+                if (!hasStoredCredentials || enabledRecipients.length === 0) event.preventDefault()
+              }}
+            >
+              <Button variant="ghost" disabled={!hasStoredCredentials || enabledRecipients.length === 0}>Generate encrypted credentials backup</Button>
+            </a>
           </div>
+          {!hasStoredCredentials ? (
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+              No stored Plaid credentials exist to back up.
+            </div>
+          ) : enabledRecipients.length === 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+              Add an enabled backup recipient in Settings to enable encrypted backup creation.
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+              Encrypted credentials backups will be readable by: {enabledRecipients.map(r => r.label).join(', ')}.
+            </div>
+          )}
+          {hasStoredCredentials ? (
+            <div style={{ display: 'inline-block', fontSize: 13, background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))', border: '1px solid #f59e0b', borderRadius: 6, padding: '8px 12px', marginTop: 10 }}>
+              ⚠️ Plain credentials backups contain Plaid access tokens.
+            </div>
+          ) : null}
         </div>
       </Card>
 
@@ -4445,7 +5514,6 @@ function BackupRestoreTab() {
         </div>
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Restore Plaid credentials</div>
-          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>Only needed after restoring to a new machine.</div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <input type="file" accept=".json,.zip,application/json,application/zip" onChange={e => setCredsFile(e.target.files[0])} style={{ fontSize: 13 }} />
             <Button variant="ghost" disabled={!credsFile || restoring} onClick={() => requestRestore('credentials')}>
@@ -4573,9 +5641,9 @@ export default function ImportExport() {
       </div>
       <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
         <div style={{ display: 'flex', marginBottom: 24, borderBottom: '1px solid var(--border)' }}>
-        {[['import', 'Import'], ['export', 'Export'], ['backup', 'Backup / Restore']].map(([id, label]) => (
-          <button key={id} onClick={() => setTab(id)} style={{ padding: '8px 24px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, color: tab === id ? 'var(--text)' : 'var(--muted)', borderBottom: tab === id ? '2px solid var(--accent)' : '2px solid transparent', fontWeight: tab === id ? 500 : 400 }}>{label}</button>
-        ))}
+          {[['import', 'Import'], ['export', 'Export'], ['backup', 'Backup / Restore']].map(([id, label]) => (
+            <button key={id} onClick={() => setTab(id)} style={{ padding: '8px 24px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, color: tab === id ? 'var(--text)' : 'var(--muted)', borderBottom: tab === id ? '2px solid var(--accent)' : '2px solid transparent', fontWeight: tab === id ? 500 : 400 }}>{label}</button>
+          ))}
         </div>
         {tab === 'import' && <ImportErrorBoundary><ImportTab /></ImportErrorBoundary>}
         {tab === 'export' && <ExportTab />}

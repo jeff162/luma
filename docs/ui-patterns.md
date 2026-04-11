@@ -48,6 +48,8 @@ Baseline interaction expectations:
 
 - selectors and dialogs should render above surrounding content
 
+- when multiple floating panels are open, the active/topmost one should carry the strongest edge and elevation while older panels remain readable but visually recede
+
 - inline edit states should preserve layout stability whenever possible
 
 If the user can already see the data they need to change, prefer enabling the change in place unless there is a strong reason to route it elsewhere.
@@ -67,6 +69,8 @@ Shared controls should be treated as finished product surfaces, not reused snip
 - Keep look and feel consistent across pages. Similar data structures should use the same spacing, controls, and interaction patterns so the app feels like one coherent tool rather than a set of isolated screens.
 
 - Treat repeated UI elements as shared product language. Trees, pills, menus, inline editors, overlays, tables, selectors, and other controls that appear on more than one page should keep the same look, spacing, and behavior unless there is a very strong reason to diverge.
+
+- Shared form controls and dialog footers should come from shared primitives where possible so cancel/save rows and everyday input chrome do not drift across pages.
 
 - When a UI behavior is meant to be shared, implement the shared behavior first. Do not land a one-sided or page-specific version and plan to “sync it up” later unless the narrower scope is intentional and explicitly documented.
 
@@ -184,9 +188,11 @@ When a file-upload action is important, prefer a visible drop zone over a bare 
 
 ## Confirmation and completion flows
 
-Do not rely on browser `confirm()` dialogs when the rest of the app has a clear UI style.
+Do not rely on browser `confirm()`, `alert()`, or `prompt()` dialogs when the rest of the app has a clear UI style.
 
 - Use in-app confirmation overlays for destructive actions like restore.
+
+- Use the shared app dialog primitives for notice, confirmation, and short text-entry flows so copy, button layout, and dismissal behavior stay consistent.
 
 - Confirmation and completion steps in the same flow should use the same visual language.
 
@@ -207,6 +213,8 @@ CSV import has a few special rules:
 - Use post-import mapping flows for imported category text instead of forcing everything into the initial import form.
 
 - Mapping screens should allow partial completion when that is a valid workflow.
+
+- The column-mapping field section should be shared between the import preview and saved data source editing so suggestion pills, required states, and account mapping behavior stay aligned.
 
 ### Import mapping persistence
 
@@ -261,4 +269,3 @@ Add to this document when:
 - repeated review comments or UI tweaks point to a missing convention
 
 Do not add one-off exceptions unless they are likely to become reusable.
-

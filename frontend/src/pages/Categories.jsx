@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { PageHeader, Spinner, EmptyState, CategoryMarker } from '../components/ui.jsx'
+import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button } from '../components/ui.jsx'
 import CategoryPicker from '../components/CategoryPicker.jsx'
 import {
   BulkMoveToast,
@@ -85,34 +85,21 @@ function DeleteCategoryDialog({ category, preview, categories, replacementId, on
   const canConfirm = mode === 'unassigned' || !!replacementId
 
   return (
-    <div style={{
-      position: 'fixed',
-      inset: 0,
-      zIndex: 900,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: 24,
-      background: 'rgba(15, 23, 42, 0.28)',
-      backdropFilter: 'blur(2px)',
-    }}>
-      <div
+    <OverlayBackdrop zIndex={900} tint="rgba(15, 23, 42, 0.28)">
+      <FloatingPanel
         ref={ref}
         style={{
           width: 'min(560px, 100%)',
-          background: 'var(--surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 14,
-          boxShadow: '0 16px 40px rgba(0,0,0,0.2)',
-          overflow: 'hidden',
         }}
       >
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-          <div style={{ fontSize: 16, fontWeight: 600 }}>Delete category</div>
-          <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
-            "{category?.name}" is assigned to {preview?.txn_count} transaction{preview?.txn_count === 1 ? '' : 's'}.
+        <FloatingPanelHeader style={{ padding: '16px 20px' }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 600 }}>Delete category</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
+              "{category?.name}" is assigned to {preview?.txn_count} transaction{preview?.txn_count === 1 ? '' : 's'}.
+            </div>
           </div>
-        </div>
+        </FloatingPanelHeader>
 
         <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
@@ -161,41 +148,16 @@ function DeleteCategoryDialog({ category, preview, categories, replacementId, on
           </label>
         </div>
 
-        <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', background: 'var(--surface2)', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button
-            onClick={onCancel}
-            style={{
-              background: 'transparent',
-              color: 'var(--muted)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              padding: '8px 14px',
-              fontSize: 13,
-              cursor: 'pointer',
-            }}
-          >
+        <DialogActions>
+          <Button variant="ghost" onClick={onCancel}>
             Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={!canConfirm || saving}
-            style={{
-              background: canConfirm && !saving ? 'color-mix(in srgb, var(--accent) 88%, #ffffff 12%)' : 'var(--surface)',
-              color: canConfirm && !saving ? '#fff' : 'var(--muted)',
-              border: canConfirm && !saving ? 'none' : '1px solid var(--border)',
-              borderRadius: 8,
-              padding: '8px 16px',
-              fontSize: 13,
-              fontWeight: 500,
-              cursor: !canConfirm || saving ? 'not-allowed' : 'pointer',
-              opacity: !canConfirm || saving ? 0.6 : 1,
-            }}
-          >
+          </Button>
+          <Button onClick={onConfirm} disabled={!canConfirm || saving}>
             {saving ? 'Deleting…' : 'Delete category'}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogActions>
+      </FloatingPanel>
+    </OverlayBackdrop>
   )
 }
 
@@ -1391,7 +1353,7 @@ export default function Categories() {
         ...txn,
         category_id: catId,
         category_name: cat?.name ?? null,
-        category_color: cat?.color ?? null,
+        category_color: null,
         category_overridden: 1,
       } : txn
     ))

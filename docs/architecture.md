@@ -64,6 +64,8 @@ The frontend mixes page-specific screens with a small set of shared interaction�
 
 - **`detailShared.jsx`:** shared detail-panel shell, chart, and lazy-loading behavior
 
+- **`components/ui.jsx`:** shared visual primitives for cards, buttons, floating panels, overlays, form control styling, and everyday confirm/notice/text-entry dialogs
+
 - **`lib/uiInteractions.js`:** shared interaction hooks for dismissible layers, popups, escape handling, and transient text editing
 
 - **`components/TransientTextInput.jsx`:** shared single-field transient edit control used when Enter/blur should commit and Escape should cancel back to the pre-edit value
@@ -110,13 +112,21 @@ For many inline edits, the UI updates first and the API call is fire-and-forget.
 
 - **Handles:** CSV preview/import, saved import profiles, undoable import batches, CSV export, data backup/restore, and credentials backup/restore
 
+- **Import history contract:** recent-import batch rows expose lightweight summary data; large duplicate-review payloads are fetched separately when the duplicate viewer is opened
+
+- **Saved-data-source behavior:** saved data sources keep shared pending imported-category review and shared rule-suggestion review across all attached files; profileless and unknown-source imports keep those review flows per file instead
+
+- **Template-file behavior:** the saved-data-source editor remembers which CSV filename/hash last served as its template, but the user still explicitly chooses a template file when they want live column choices for editing
+
+- **Delete fallback:** deleting a saved data source moves its files back into the unknown-source bucket and rebuilds per-file pending category review from the imported file data
+
 - **Note:** the module is large because the import/export workflow is concentrated in a single feature area
 
 ### Detail panels
 
 - **Panels:** payee detail, category detail, account detail
 
-- **Shared behavior:** draggable shell, monthly bar charts, month selection, lazy-loaded transaction lists, and remembered floating position
+- **Shared behavior:** draggable shell, monthly bar charts, month selection, lazy-loaded transaction lists, and page-driven default placement when multiple panels are open
 
 - **Shared implementation:** `frontend/src/components/detailShared.jsx`
 
@@ -213,4 +223,3 @@ Where commands differ, the repo should provide script wrappers or document the 
 - **Shared detail-panel behavior:** update `detailShared.jsx`
 
 - **User-facing setup or behavior changes:** update `README.md` and possibly `CHANGELOG.md`
-

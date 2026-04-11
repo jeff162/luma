@@ -124,6 +124,8 @@ Groups also carry important reporting behavior:
 
 - **`exclude\_from\_totals`:** removes that group and all descendants from charts and totals
 
+- category appearance is derived in the UI from stable ids/names rather than stored as user-managed color metadata
+
 This is used for things like transfers and credit-card-payment categories.
 
 ## Rules
@@ -164,6 +166,26 @@ CSV import creates supporting records for workflow and recovery:
 
 Imports also use content hashing for duplicate detection.
 
+Important import-batch behavior:
+
+- duplicate detection only blocks rows that match transactions already in FinTrack before the import starts
+
+- duplicate rows within the same CSV are allowed
+
+- saved data sources keep their pending imported-category workspace and rule-suggestion review on the profile so multiple files contribute to one shared review queue
+
+- saved data source names must be unique after trimming and case-folding so source pickers never show ambiguous duplicate labels
+
+- saved data sources remember the last template filename/hash used while editing them, but loading a fresh template file remains an explicit user action
+
+- profileless imports and unknown-source imports keep those pending category/rule review flows on the individual batch instead of merging them
+
+- batch summaries keep lightweight counts and small rejected-row samples
+
+- detailed duplicate-row review data is stored separately and loaded on demand so long-lived import history stays compact
+
+- deleting a saved data source discards its shared review state and rebuilds per-batch category fallback from the imported category values in each affected batch
+
 ## Backups
 
 Backup/restore deals with two different classes of data:
@@ -199,4 +221,3 @@ A few behavior rules matter across the whole app:
 - category grouping is only two levels deep
 
 If any of these assumptions change, both backend queries and frontend UI logic will likely need coordinated updates.
-

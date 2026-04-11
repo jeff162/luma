@@ -37,6 +37,8 @@ build/
 node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/playwright-report/
+frontend/test-results/
 
 # ── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
@@ -55,4 +57,3 @@ logs/
 
 # ── project zip files from make_dist ─────────────────────────────────────────
 fintrack-dist-*.zip
-

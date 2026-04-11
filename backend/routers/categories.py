@@ -128,7 +128,6 @@ def _collect_delete_impact(conn, affected_ids: list[str]) -> dict:
 
 class CategoryCreate(BaseModel):
     name:          str
-    color:         str = "#888888"
     parent_id:     Optional[str] = None
     category_type: Optional[str] = None
     sort_order:    Optional[int] = None
@@ -147,7 +146,6 @@ def list_categories():
                 id,
                 parent_id,
                 name,
-                color,
                 COALESCE(category_type, CASE WHEN parent_id IS NULL THEN 'expense' END) AS category_type,
                 sort_order,
                 exclude_from_totals
@@ -188,7 +186,6 @@ def list_categories_flat():
                 id,
                 parent_id,
                 name,
-                color,
                 owner_id,
                 COALESCE(category_type, CASE WHEN parent_id IS NULL THEN 'expense' END) AS category_type,
                 sort_order,
@@ -298,10 +295,10 @@ def create_category(body: CategoryCreate):
 
         conn.execute(
             """
-            INSERT INTO category (id, parent_id, name, color, category_type, sort_order)
-            VALUES (?,?,?,?,?,?)
+            INSERT INTO category (id, parent_id, name, category_type, sort_order)
+            VALUES (?,?,?,?,?)
             """,
-            (cid, body.parent_id, body.name, body.color, category_type, sort_order),
+            (cid, body.parent_id, body.name, category_type, sort_order),
         )
     return {
         "id": cid,
@@ -423,7 +420,6 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
 class CategoryUpdate(BaseModel):
     name:                 Optional[str] = None
     parent_id:            Optional[str] = None
-    color:                Optional[str] = None
     owner_id:             Optional[str] = None
     category_type:        Optional[str] = None
     sort_order:           Optional[int] = None
@@ -442,7 +438,6 @@ def update_category(category_id: str, body: CategoryUpdate):
         fields, params = [], []
         if body.name                is not None: fields.append("name = ?");                 params.append(body.name)
         if body.parent_id           is not None: fields.append("parent_id = ?");            params.append(body.parent_id)
-        if body.color               is not None: fields.append("color = ?");                params.append(body.color)
         if body.owner_id            is not None: fields.append("owner_id = ?");             params.append(body.owner_id)
         if body.category_type       is not None: fields.append("category_type = ?");        params.append(body.category_type)
         if body.sort_order          is not None: fields.append("sort_order = ?");           params.append(body.sort_order)

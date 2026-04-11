@@ -3,8 +3,8 @@
 
 # Contributing
 
-FinTrack is currently a small, fast-moving project. This guide records the main
-conventions contributors should follow when changing the application.
+This guide records the main conventions contributors should follow when
+changing the application.
 
 ## Contents
 
@@ -46,16 +46,15 @@ npm install
 npm run dev
 ```
 
-### Developer-only reset tools
+Many contributors may use WSL on Windows, so shell examples and local tooling should stay WSL-friendly where practical.
 
-To enable the use of some useful developer features for testing, add this to
-`.env`:
+### Developer flag
+
+Set in `.env` to expose Developer options on the main Settings page:
 
 ```bash
 FINTRACK_DEVELOPER_OPTIONS=true
 ```
-
-This exposes a **Developer options** section on the main Settings page.
 
 ## Useful checks
 
@@ -75,6 +74,45 @@ py -3.12 -m py_compile main.py
 
 For larger backend changes, also start the app and exercise the affected flow
 manually.
+
+### UI checks
+
+Playwright is available for local UI verification from `frontend/`:
+
+```bash
+cd frontend
+npm run ui:test
+npm run ui:test -- --headed
+npm run ui:codegen
+```
+
+The Playwright config reads the frontend dev-server port from the repo-root
+`.env` via `FRONTEND_PORT`. If needed, `PLAYWRIGHT_BASE_URL` can override the
+target URL explicitly for one run.
+
+## Hooks and lint
+
+Running `npm install` in `frontend/` installs the repo pre-commit hook via the
+frontend `postinstall` script.
+
+If you need to install or refresh the hook manually, run:
+
+```bash
+./scripts/install-hooks.sh
+```
+
+That hook does not run the full frontend build or Playwright suite. It checks
+comment/documentation lint only for staged files:
+
+- staged `frontend/*` files run `node frontend/scripts/check-comments.js`
+- staged `backend/*.py` files run `python backend/scripts/check_comments.py`
+
+You can run the same combined check manually from `frontend/`:
+
+```bash
+cd frontend
+npm run lint
+```
 
 ## Project conventions
 

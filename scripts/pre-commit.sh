@@ -33,7 +33,7 @@ fi
 # Backend
 if [ -n "$BACKEND_FILES" ]; then
   echo "Checking backend comments..."
-  python backend/scripts/check_comments.py $BACKEND_FILES
+  node scripts/run_backend_comment_check.js $BACKEND_FILES
   if [ $? -ne 0 ]; then STATUS=1; fi
 fi
 

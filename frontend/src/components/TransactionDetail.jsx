@@ -32,11 +32,11 @@ const inputStyle = {
  * locally editable, but it can also branch straight into rule creation when a manual recategorization looks
  * like the start of a repeatable pattern.
  */
-export default function TransactionDetail({ txn, categories, onClose, onRulePrompt: externalRulePrompt }) {
+export default function TransactionDetail({ txn, categories, onClose, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true }) {
   const { filters } = useFilters()
   const dateStart = filters.date?.start || null
   const dateEnd   = filters.date?.end   || null
-  const { pos, dragging, panelRef, onDragStart } = useDetailPanelChrome(onClose)
+  const { pos, dragging, panelRef, onDragStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
   const [trend, setTrend]               = useState([])
   const [displayName, setDisplayName]   = useState(getTxnMerchantLabel(txn))
   const [selectedMonth, setSelectedMonth] = useState(null)
@@ -48,10 +48,6 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
   useEffect(() => {
     setDetailCategories(categories)
   }, [categories])
-
-  useEffect(() => {
-    if (!editingName) setDisplayName(getTxnMerchantLabel(txn))
-  }, [txn.display_name, txn.merchant_name, txn.raw_name, editingName])
   const loadMonthPage = useCallback((month, offset, limit) => (
     api.getTransactions({
       month,
@@ -87,7 +83,7 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
         ...t,
         category_id:    cat?.id    ?? null,
         category_name:  cat?.name  ?? null,
-        category_color: cat?.color ?? null,
+        category_color: null,
         category_overridden: 1,
       }
     ))
@@ -117,6 +113,10 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
       setMonthTxns(prev => prev.map(row => row.id === txn.id ? { ...row, display_name: nextName } : row))
     },
   })
+
+  useEffect(() => {
+    if (!editingName) setDisplayName(getTxnMerchantLabel(txn))
+  }, [txn.display_name, txn.merchant_name, txn.raw_name, editingName])
 
   const selectedMonthRow = trend.find(r => r.month === selectedMonth)
   const monthSectionHeight = getDetailMonthSectionHeight(trend)
@@ -178,6 +178,7 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
         onDragStart={onDragStart}
         onClose={onClose}
         header={header}
+        isTopmost={isTopmost}
       >
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
             Spending at {payee}{dateStart || dateEnd ? '' : ' — all time'}

@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
-import { Card, PageHeader, Button, Spinner, EmptyState } from '../components/ui.jsx'
+import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, AppConfirmDialog } from '../components/ui.jsx'
 import { PASSWORD_POLICIES, passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import { SECURITY_PROFILES, getSecurityProfile } from '../lib/securityProfiles.js'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
@@ -20,280 +20,6 @@ function clearBrowserStoredState() {
   try {
     window.sessionStorage.clear()
   } catch {}
-}
-
-const AMOUNT_CONVENTIONS = [
-  { value: 'single_signed',   label: 'Single column — negative = debit' },
-  { value: 'single_unsigned', label: 'Single column — always positive + direction column' },
-  { value: 'two_column',      label: 'Two columns — separate debit / credit' },
-]
-
-const DATE_FORMATS = [
-  { value: '%m/%d/%Y', label: 'MM/DD/YYYY' },
-  { value: '%Y-%m-%d', label: 'YYYY-MM-DD' },
-  { value: '%d/%m/%Y', label: 'DD/MM/YYYY' },
-  { value: '%m-%d-%Y', label: 'MM-DD-YYYY' },
-  { value: '%b %d, %Y', label: 'Mon DD, YYYY' },
-]
-
-function ProfileForm({ profile, accounts, onSave, onCancel }) {
-  const isNew = !profile?.id
-  const [name,       setName]       = useState(profile?.name || '')
-  const [filePattern,setFilePattern]= useState(profile?.filename_pattern || '')
-  const [headerFp,   setHeaderFp]   = useState(profile?.header_fingerprint || '')
-  const [accountId,  setAccountId]  = useState(profile?.account_id || '')
-  const [dateFormat, setDateFormat] = useState(profile?.date_format || '%m/%d/%Y')
-  const [amtConv,    setAmtConv]    = useState(profile?.amount_convention || 'single_signed')
-  const [skipRows,   setSkipRows]   = useState(profile?.skip_rows ?? 0)
-  const [applyCat,   setApplyCat]   = useState(profile?.apply_categorization !== false)
-  const [notes,      setNotes]      = useState(profile?.notes || '')
-  const cm = profile?.column_map || {}
-  const [colDate,   setColDate]   = useState(cm.date || '')
-  const [colAmount, setColAmount] = useState(cm.amount || '')
-  const [colDebit,  setColDebit]  = useState(cm.debit || '')
-  const [colCredit, setColCredit] = useState(cm.credit || '')
-  const [colDir,    setColDir]    = useState(cm.direction || '')
-  const [colDesc,   setColDesc]   = useState(cm.description || '')
-  const [colNotes,  setColNotes]  = useState(cm.notes || '')
-
-  const inputStyle = {
-    background: 'var(--surface)', color: 'var(--text)',
-    border: '1px solid var(--border)', borderRadius: 6,
-    padding: '6px 10px', fontSize: 13, width: '100%', outline: 'none',
-  }
-  const selStyle = { ...inputStyle, cursor: 'pointer' }
-
-  function handleSave() {
-    if (!name.trim() || !colDate.trim() || !colDesc.trim()) return
-    const column_map = {
-      date: colDate, description: colDesc,
-      ...(amtConv === 'two_column'
-        ? { debit: colDebit, credit: colCredit }
-        : { amount: colAmount }),
-      ...(amtConv === 'single_unsigned' && colDir ? { direction: colDir } : {}),
-      ...(colNotes ? { notes: colNotes } : {}),
-    }
-    onSave({
-      name: name.trim(),
-      filename_pattern:   filePattern.trim() || null,
-      header_fingerprint: headerFp.trim()    || null,
-      column_map, account_id: accountId || null,
-      date_format: dateFormat, amount_convention: amtConv,
-      skip_rows: parseInt(skipRows) || 0,
-      apply_categorization: applyCat,
-      notes: notes.trim() || null,
-    })
-  }
-
-  return (
-    <div style={{
-      padding: '16px', background: 'var(--surface2)',
-      borderBottom: '1px solid var(--border)',
-      display: 'flex', flexDirection: 'column', gap: 12,
-    }}>
-      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)' }}>
-        {isNew ? 'New data source' : `Edit: ${profile.name}`}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        <div>
-          <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
-            Data source name *
-          </label>
-          <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Chase Checking" style={inputStyle} />
-        </div>
-        <div>
-          <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
-            Default account
-          </label>
-          <select value={accountId} onChange={e => setAccountId(e.target.value)} style={selStyle}>
-            <option value="">— None —</option>
-            {accounts.map(a => <option key={a.id} value={a.id}>{a.name}{a.mask ? ` ···${a.mask}` : ''}</option>)}
-          </select>
-        </div>
-        <div>
-          <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
-            Filename pattern (auto-detect)
-          </label>
-          <input value={filePattern} onChange={e => setFilePattern(e.target.value)}
-            placeholder="e.g. Chase" style={inputStyle} />
-        </div>
-        <div>
-          <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
-            Header fingerprint (auto-detect)
-          </label>
-          <input value={headerFp} onChange={e => setHeaderFp(e.target.value)}
-            placeholder="Paste header row from CSV" style={inputStyle} />
-        </div>
-        <div>
-          <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Date format</label>
-          <select value={dateFormat} onChange={e => setDateFormat(e.target.value)} style={selStyle}>
-            {DATE_FORMATS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
-          </select>
-        </div>
-        <div>
-          <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Amount convention</label>
-          <select value={amtConv} onChange={e => setAmtConv(e.target.value)} style={selStyle}>
-            {AMOUNT_CONVENTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-          </select>
-        </div>
-      </div>
-
-      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginTop: 4 }}>
-        Column names (enter the exact column header from the CSV)
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-        <div>
-          <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Date column *</label>
-          <input value={colDate} onChange={e => setColDate(e.target.value)} placeholder="e.g. Transaction Date" style={inputStyle} />
-        </div>
-        <div>
-          <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Description column *</label>
-          <input value={colDesc} onChange={e => setColDesc(e.target.value)} placeholder="e.g. Description" style={inputStyle} />
-        </div>
-        <div>
-          <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Notes column</label>
-          <input value={colNotes} onChange={e => setColNotes(e.target.value)} placeholder="optional" style={inputStyle} />
-        </div>
-        {amtConv === 'two_column' ? (
-          <>
-            <div>
-              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Debit column *</label>
-              <input value={colDebit} onChange={e => setColDebit(e.target.value)} placeholder="e.g. Debit" style={inputStyle} />
-            </div>
-            <div>
-              <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Credit column *</label>
-              <input value={colCredit} onChange={e => setColCredit(e.target.value)} placeholder="e.g. Credit" style={inputStyle} />
-            </div>
-          </>
-        ) : (
-          <div>
-            <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Amount column *</label>
-            <input value={colAmount} onChange={e => setColAmount(e.target.value)} placeholder="e.g. Amount" style={inputStyle} />
-          </div>
-        )}
-        {amtConv === 'single_unsigned' && (
-          <div>
-            <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Direction column</label>
-            <input value={colDir} onChange={e => setColDir(e.target.value)} placeholder="e.g. Type" style={inputStyle} />
-          </div>
-        )}
-      </div>
-
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-          <input type="checkbox" checked={applyCat} onChange={e => setApplyCat(e.target.checked)} />
-          Apply categorization rules by default
-        </label>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <Button small onClick={handleSave} disabled={!name.trim() || !colDate.trim() || !colDesc.trim()}>
-            {isNew ? 'Create data source' : 'Save changes'}
-          </Button>
-          <Button small variant="ghost" onClick={onCancel}>Cancel</Button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function ImportProfilesSection() {
-  const [profiles,  setProfiles]  = useState([])
-  const [accounts,  setAccounts]  = useState([])
-  const [loading,   setLoading]   = useState(true)
-  const [showAdd,   setShowAdd]   = useState(false)
-  const [editId,    setEditId]    = useState(null)
-
-  useEffect(() => {
-    Promise.all([api.getImportProfiles(), api.getAccounts()]).then(([p, a]) => {
-      setProfiles(p); setAccounts(a); setLoading(false)
-    })
-  }, [])
-
-  async function handleSave(data) {
-    if (editId) {
-      await api.updateImportProfile(editId, data)
-      setEditId(null)
-    } else {
-      await api.createImportProfile(data)
-      setShowAdd(false)
-    }
-    api.getImportProfiles().then(setProfiles)
-  }
-
-  async function handleDelete(id) {
-    if (!confirm('Delete this data source?')) return
-    await api.deleteImportProfile(id)
-    setProfiles(prev => prev.filter(p => p.id !== id))
-  }
-
-  const amtLabel = v => AMOUNT_CONVENTIONS.find(c => c.value === v)?.label.split(' — ')[0] || v
-
-  return (
-    <Card style={{ padding: 0, overflow: 'hidden' }}>
-      {showAdd && (
-        <ProfileForm accounts={accounts} onSave={handleSave} onCancel={() => setShowAdd(false)} />
-      )}
-
-      {loading ? <Spinner /> : profiles.length === 0 && !showAdd ? (
-        <div style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
-          <div>
-            {'<'}<span style={{ fontStyle: 'italic' }}>empty</span>{'>'}
-          </div>
-          <button onClick={() => setShowAdd(true)} style={{
-            marginTop: 10,
-            background: 'var(--accent)', color: '#fff',
-            border: 'none', borderRadius: 6, padding: '5px 12px', fontSize: 13, cursor: 'pointer',
-          }}>+ Create first data source</button>
-        </div>
-      ) : (
-        <>
-          {profiles.map(p => (
-            <div key={p.id}>
-              {editId === p.id ? (
-                <ProfileForm profile={p} accounts={accounts} onSave={handleSave} onCancel={() => setEditId(null)} />
-              ) : (
-                <div style={{
-                  display: 'grid', gridTemplateColumns: '1fr 140px 130px 100px',
-                  padding: '10px 16px', alignItems: 'center', fontSize: 13,
-                  borderBottom: '1px solid var(--border)',
-                }}>
-                  <div>
-                    <div style={{ fontWeight: 500 }}>{p.name}</div>
-                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
-                      {p.filename_pattern && <span>📁 {p.filename_pattern} · </span>}
-                      {p.account_name && <span>🏦 {p.account_name}</span>}
-                    </div>
-                  </div>
-                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>{p.date_format}</span>
-                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>{amtLabel(p.amount_convention)}</span>
-                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                    <button onClick={() => setEditId(p.id)} style={{
-                      background: 'none', border: '1px solid var(--border)',
-                      borderRadius: 6, color: 'var(--muted)', cursor: 'pointer',
-                      fontSize: 12, padding: '3px 8px',
-                    }}>Edit</button>
-                    <button onClick={() => handleDelete(p.id)} style={{
-                      background: 'none', border: 'none',
-                      color: 'var(--danger)', cursor: 'pointer', fontSize: 14, padding: '2px 6px',
-                    }}>×</button>
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
-          {!showAdd && (
-            <div
-              onClick={() => setShowAdd(true)}
-              style={{
-                padding: '10px 16px', textAlign: 'center', cursor: 'pointer',
-                fontSize: 13, color: 'var(--muted)', borderTop: '1px solid var(--border)',
-              }}
-            >+ New data source</div>
-          )}
-        </>
-      )}
-    </Card>
-  )
 }
 
 function AuthModeSection({ authEnabled, onEnabled, embedded = false }) {
@@ -423,6 +149,7 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
   const [savingUserId, setSavingUserId] = useState(null)
   const [deletingUserId, setDeletingUserId] = useState(null)
   const [editingUserId, setEditingUserId] = useState(null)
+  const [pendingDeleteUser, setPendingDeleteUser] = useState(null)
   const [error, setError] = useState('')
   const [form, setForm] = useState({
     username: '',
@@ -537,7 +264,7 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
   }
 
   async function handleDeleteUser(user) {
-    if (!confirm(`Delete ${user.display_name || user.username}? This removes their sign-in account from this FinTrack instance.`)) return
+    setPendingDeleteUser(null)
     setDeletingUserId(user.id)
     setError('')
     try {
@@ -556,12 +283,25 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
   if (!viewer || viewer.role !== 'admin') return null
 
   const inputStyle = {
-    background: 'var(--surface)', color: 'var(--text)',
-    border: '1px solid var(--border)', borderRadius: 6,
-    padding: '7px 10px', fontSize: 13, width: '100%', outline: 'none',
+    ...getFormControlStyle({ size: 'md', surface: 'base' }),
+    width: '100%',
   }
 
   return (
+      <>
+      {pendingDeleteUser ? (
+        <AppConfirmDialog
+          title="Delete user?"
+          description={`Delete ${pendingDeleteUser.display_name || pendingDeleteUser.username}? This removes their sign-in account from this FinTrack instance.`}
+          confirmLabel="Delete user"
+          confirmVariant="danger"
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={() => handleDeleteUser(pendingDeleteUser)}
+          onCancel={() => setPendingDeleteUser(null)}
+          width="min(520px, 100%)"
+        />
+      ) : null}
+
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
           <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
@@ -571,19 +311,19 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
 
         <form onSubmit={handleCreate} style={{ padding: 16, borderBottom: '1px solid var(--border)', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 120px auto', gap: 10, alignItems: 'end' }}>
           <div>
-            <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Username</label>
+            <FormLabel style={{ marginBottom: 4 }}>Username</FormLabel>
             <input value={form.username} onChange={e => setForm(prev => ({ ...prev, username: e.target.value }))} style={inputStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Display name</label>
+            <FormLabel style={{ marginBottom: 4 }}>Display name</FormLabel>
             <input value={form.display_name} onChange={e => setForm(prev => ({ ...prev, display_name: e.target.value }))} style={inputStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Password</label>
+            <FormLabel style={{ marginBottom: 4 }}>Password</FormLabel>
             <input type="password" value={form.password} onChange={e => setForm(prev => ({ ...prev, password: e.target.value }))} style={inputStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Role</label>
+            <FormLabel style={{ marginBottom: 4 }}>Role</FormLabel>
             <select value={form.role} onChange={e => setForm(prev => ({ ...prev, role: e.target.value }))} style={{ ...inputStyle, cursor: 'pointer' }}>
               <option value="member">Member</option>
               <option value="admin">Admin</option>
@@ -603,8 +343,12 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
           </div>
         )}
 
-        <div ref={userTableHeaderRef} style={{ display: 'grid', gridTemplateColumns: '1.4fr 120px 1fr 1fr auto', padding: '8px 16px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)', gap: 10 }}>
-          <span>User</span><span>Role</span><span>Status</span><span>Last login</span><span />
+        <div ref={userTableHeaderRef} style={{ display: 'grid', gridTemplateColumns: '1.4fr 120px 1fr 1fr auto', padding: '8px 16px', borderBottom: '1px solid var(--border)', gap: 10 }}>
+          <SectionEyebrow>User</SectionEyebrow>
+          <SectionEyebrow>Role</SectionEyebrow>
+          <SectionEyebrow>Status</SectionEyebrow>
+          <SectionEyebrow>Last login</SectionEyebrow>
+          <span />
         </div>
         {users.map(user => (
           editingUserId === user.id ? (
@@ -618,26 +362,26 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
             >
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 120px 120px', gap: 10 }}>
                 <div>
-                  <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Username</label>
+                  <FormLabel style={{ marginBottom: 4 }}>Username</FormLabel>
                   <input value={editForm.username} onChange={e => setEditForm(prev => ({ ...prev, username: e.target.value }))} style={inputStyle} />
                 </div>
                 <div>
-                  <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Display name</label>
+                  <FormLabel style={{ marginBottom: 4 }}>Display name</FormLabel>
                   <input value={editForm.display_name} onChange={e => setEditForm(prev => ({ ...prev, display_name: e.target.value }))} style={inputStyle} />
                 </div>
                 <div>
-                  <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>New password</label>
+                  <FormLabel style={{ marginBottom: 4 }}>New password</FormLabel>
                   <input type="password" value={editForm.password} onChange={e => setEditForm(prev => ({ ...prev, password: e.target.value }))} placeholder="Leave blank to keep current" style={inputStyle} />
                 </div>
                 <div>
-                  <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Role</label>
+                  <FormLabel style={{ marginBottom: 4 }}>Role</FormLabel>
                   <select value={editForm.role} onChange={e => setEditForm(prev => ({ ...prev, role: e.target.value }))} style={{ ...inputStyle, cursor: 'pointer' }}>
                     <option value="member">Member</option>
                     <option value="admin">Admin</option>
                   </select>
                 </div>
                 <div>
-                  <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Status</label>
+                  <FormLabel style={{ marginBottom: 4 }}>Status</FormLabel>
                   <select value={editForm.status} onChange={e => setEditForm(prev => ({ ...prev, status: e.target.value }))} style={{ ...inputStyle, cursor: 'pointer' }}>
                     <option value="active">Active</option>
                     <option value="disabled">Disabled</option>
@@ -657,7 +401,7 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
                 </Button>
                 <Button small variant="ghost" onClick={cancelEditing}>Cancel</Button>
                 {viewer?.id !== user.id && (
-                  <Button small variant="ghost" onClick={() => handleDeleteUser(user)} disabled={deletingUserId === user.id}>
+                  <Button small variant="ghost" onClick={() => setPendingDeleteUser(user)} disabled={deletingUserId === user.id}>
                     {deletingUserId === user.id ? 'Deleting...' : 'Delete user'}
                   </Button>
                 )}
@@ -691,6 +435,7 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
           )
         ))}
       </Card>
+      </>
   )
 }
 
@@ -847,9 +592,8 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange, embedd
   if (!currentUser) return null
 
   const inputStyle = {
-    background: 'var(--surface)', color: 'var(--text)',
-    border: '1px solid var(--border)', borderRadius: 6,
-    padding: '7px 10px', fontSize: 13, width: '100%', outline: 'none',
+    ...getFormControlStyle({ size: 'md', surface: 'base' }),
+    width: '100%',
   }
 
   return (
@@ -874,18 +618,18 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange, embedd
         </div>
 
         {setup && !currentUser.two_factor_enabled && (
-          <form onSubmit={confirmSetup} style={{ display: 'grid', gap: 12, padding: 14, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface2)', marginBottom: 14 }}>
+          <InsetPanel as="form" onSubmit={confirmSetup} style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
               Add this secret to your authenticator app, then enter the current 6-digit code to confirm.
             </div>
             <div>
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Manual setup key</div>
+              <FormLabel style={{ marginBottom: 4 }}>Manual setup key</FormLabel>
               <div style={{ fontFamily: 'monospace', fontSize: 14, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, wordBreak: 'break-all' }}>
                 {setup.secret}
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Provisioning URI</div>
+              <FormLabel style={{ marginBottom: 4 }}>Provisioning URI</FormLabel>
               <div style={{ fontFamily: 'monospace', fontSize: 11, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, wordBreak: 'break-all' }}>
                 {setup.otpauth_uri}
               </div>
@@ -905,12 +649,12 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange, embedd
                 Cancel
               </Button>
             </div>
-          </form>
+          </InsetPanel>
         )}
 
         {currentUser.two_factor_enabled && (
           <div style={{ display: 'grid', gap: 12 }}>
-            <form onSubmit={turnOff2fa} style={{ display: 'grid', gap: 12, padding: 14, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface2)' }}>
+            <InsetPanel as="form" onSubmit={turnOff2fa}>
               <div style={{ fontSize: 13, color: 'var(--muted)' }}>
                 Enter a current authenticator code to disable 2FA for this account.
               </div>
@@ -926,9 +670,9 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange, embedd
                   {saving ? 'Disabling...' : 'Disable 2FA'}
                 </Button>
               </div>
-            </form>
+            </InsetPanel>
 
-            <form onSubmit={regenerateCodes} style={{ display: 'grid', gap: 12, padding: 14, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface2)' }}>
+            <InsetPanel as="form" onSubmit={regenerateCodes}>
               <div style={{ fontSize: 13, color: 'var(--muted)' }}>
                 Regenerate your recovery codes. This invalidates the current set immediately.
               </div>
@@ -944,7 +688,7 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange, embedd
                   {saving ? 'Regenerating...' : 'Regenerate recovery codes'}
                 </Button>
               </div>
-            </form>
+            </InsetPanel>
           </div>
         )}
 
@@ -1016,7 +760,7 @@ function PlaidTokenProtectionSection({ embedded = false }) {
 
   return (
       <Card style={{ padding: 20 }}>
-        <div style={{ display: 'grid', gap: 12, padding: 14, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface2)' }}>
+        <InsetPanel>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <div>
               <div style={{ fontSize: 14, fontWeight: 600 }}>Sensitive token protection</div>
@@ -1038,7 +782,7 @@ function PlaidTokenProtectionSection({ embedded = false }) {
           <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
             This only protects Plaid tokens on disk. It does not change what FinTrack can display after you sign in.
           </div>
-        </div>
+        </InsetPanel>
         {error && (
           <div style={{ marginTop: 14, color: '#ef4444', fontSize: 13 }}>
             {error}
@@ -1213,6 +957,7 @@ function BackupRecipientsSection() {
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
+  const [pendingDeleteRecipient, setPendingDeleteRecipient] = useState(null)
   const [form, setForm] = useState({ label: '', public_key: '' })
   const fileInputRef = useRef(null)
   async function load() {
@@ -1281,7 +1026,7 @@ function BackupRecipientsSection() {
   }
 
   async function removeRecipient(recipient) {
-    if (!confirm(`Delete backup recipient "${recipient.label}"?`)) return
+    setPendingDeleteRecipient(null)
     try {
       await api.deleteBackupRecipient(recipient.id)
       setRecipients(prev => prev.filter(item => item.id !== recipient.id))
@@ -1291,12 +1036,25 @@ function BackupRecipientsSection() {
   }
 
   const inputStyle = {
-    background: 'var(--surface)', color: 'var(--text)',
-    border: '1px solid var(--border)', borderRadius: 6,
-    padding: '7px 10px', fontSize: 13, width: '100%', outline: 'none',
+    ...getFormControlStyle({ size: 'md', surface: 'base' }),
+    width: '100%',
   }
 
   return (
+      <>
+      {pendingDeleteRecipient ? (
+        <AppConfirmDialog
+          title="Delete backup recipient?"
+          description={`Delete backup recipient "${pendingDeleteRecipient.label}"?`}
+          confirmLabel="Delete"
+          confirmVariant="danger"
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={() => removeRecipient(pendingDeleteRecipient)}
+          onCancel={() => setPendingDeleteRecipient(null)}
+          width="min(500px, 100%)"
+        />
+      ) : null}
+
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '14px 16px 0', color: 'var(--muted)', fontSize: 13 }}>
           RSA public keys used to encrypt backup files. The private key that matches the selected public key is required during restore; only public keys are stored.
@@ -1394,7 +1152,7 @@ function BackupRecipientsSection() {
             </label>
             <button
               type="button"
-              onClick={() => removeRecipient(recipient)}
+              onClick={() => setPendingDeleteRecipient(recipient)}
               style={{
                 background: 'none',
                 border: 'none',
@@ -1413,6 +1171,7 @@ function BackupRecipientsSection() {
         ))
       )}
     </Card>
+    </>
   )
 }
 
@@ -1559,11 +1318,11 @@ function EnvironmentSection({ authEnabled, currentUser }) {
     <Card style={{ padding: 0, overflow: 'hidden' }}>
       {loading ? <Spinner /> : (
         <form onSubmit={handleSave} style={{ display: 'grid', gap: 14, padding: 16 }}>
-          <div style={{ display: 'grid', gap: 10, padding: 14, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface2)' }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)' }}>Plaid credentials</div>
+          <InsetPanel style={{ gap: 10 }}>
+            <SectionEyebrow style={{ fontSize: 13, fontWeight: 600, textTransform: 'none', letterSpacing: '0.03em' }}>Plaid credentials</SectionEyebrow>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 160px', gap: 10 }}>
               <div>
-                <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Plaid client ID</label>
+                <FormLabel style={{ marginBottom: 4 }}>Plaid client ID</FormLabel>
                 <input
                   value={settings.plaid_client_id}
                   onChange={e => setSettings(prev => ({ ...prev, plaid_client_id: e.target.value }))}
@@ -1572,7 +1331,7 @@ function EnvironmentSection({ authEnabled, currentUser }) {
                 />
               </div>
               <div>
-                <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Plaid secret</label>
+                <FormLabel style={{ marginBottom: 4 }}>Plaid secret</FormLabel>
                 <input
                   type="password"
                   value={settings.plaid_secret}
@@ -1582,7 +1341,7 @@ function EnvironmentSection({ authEnabled, currentUser }) {
                 />
               </div>
               <div>
-                <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Plaid environment</label>
+                <FormLabel style={{ marginBottom: 4 }}>Plaid environment</FormLabel>
                 <select
                   value={settings.plaid_env}
                   onChange={e => setSettings(prev => ({ ...prev, plaid_env: e.target.value }))}
@@ -1594,10 +1353,10 @@ function EnvironmentSection({ authEnabled, currentUser }) {
                 </select>
               </div>
             </div>
-          </div>
+          </InsetPanel>
 
-          <div style={{ display: 'grid', gap: 10, padding: 14, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface2)' }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)' }}>Backend/Frontend console logging</div>
+          <InsetPanel style={{ gap: 10 }}>
+            <SectionEyebrow style={{ fontSize: 13, fontWeight: 600, textTransform: 'none', letterSpacing: '0.03em' }}>Backend/Frontend console logging</SectionEyebrow>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
               <input
                 type="checkbox"
@@ -1606,7 +1365,7 @@ function EnvironmentSection({ authEnabled, currentUser }) {
               />
               Enable log files at startup
             </label>
-          </div>
+          </InsetPanel>
 
           <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
             These settings are stored in <code>{settings.env_file_path || '.env'}</code> and require restarting the backend to take effect.
@@ -1638,6 +1397,7 @@ function DeveloperOptionsSection({ authEnabled }) {
   const [workingAction, setWorkingAction] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [pendingActionConfirm, setPendingActionConfirm] = useState(null)
 
   async function runAction(actionKey, work) {
     setWorkingAction(actionKey)
@@ -1652,8 +1412,92 @@ function DeveloperOptionsSection({ authEnabled }) {
     }
   }
 
+  function requestActionConfirm(actionKey) {
+    const confirmConfig = {
+      all: {
+        title: 'Clear all stored state?',
+        description: authEnabled
+          ? 'Clear browser-local state, saved preferences, and import memory, then reload?'
+          : 'Clear browser-local state, saved preferences, import memory, and local user profiles, then reload?',
+      },
+      browser: {
+        title: 'Clear browser-local state?',
+        description: 'Clear browser-local FinTrack state for this browser and reload?',
+      },
+      preferences: {
+        title: 'Clear saved preferences?',
+        description: 'Clear saved user/profile preferences and reload?',
+      },
+      importMemory: {
+        title: 'Clear import memory?',
+        description: 'Clear saved data sources and import snapshots, then reload?',
+      },
+      profiles: {
+        title: 'Clear local user profiles?',
+        description: 'Clear all local user profiles and reload?',
+      },
+    }[actionKey]
+    if (!confirmConfig) return
+    setPendingActionConfirm({ actionKey, ...confirmConfig })
+  }
+
+  function executeConfirmedAction(actionKey) {
+    if (actionKey === 'all') {
+      return runAction('all', async () => {
+        await api.clearUserPreferences()
+        await api.clearImportMemory()
+        if (!authEnabled) await api.clearLocalPreferenceProfiles()
+        clearBrowserStoredState()
+        window.location.reload()
+      })
+    }
+    if (actionKey === 'browser') {
+      return runAction('browser', async () => {
+        clearBrowserStoredState()
+        window.location.reload()
+      })
+    }
+    if (actionKey === 'preferences') {
+      return runAction('preferences', async () => {
+        await api.clearUserPreferences()
+        window.location.reload()
+      })
+    }
+    if (actionKey === 'importMemory') {
+      return runAction('importMemory', async () => {
+        await api.clearImportMemory()
+        window.location.reload()
+      })
+    }
+    if (actionKey === 'profiles') {
+      return runAction('profiles', async () => {
+        await api.clearLocalPreferenceProfiles()
+        clearBrowserStoredState()
+        window.location.reload()
+      })
+    }
+    return Promise.resolve()
+  }
+
   return (
     <Card style={{ display: 'grid', gap: 16, position: 'relative', paddingTop: 18, overflow: 'hidden' }}>
+      {pendingActionConfirm ? (
+        <AppConfirmDialog
+          title={pendingActionConfirm.title}
+          description={pendingActionConfirm.description}
+          confirmLabel="Clear"
+          confirmVariant="danger"
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={() => {
+            const actionKey = pendingActionConfirm.actionKey
+            setPendingActionConfirm(null)
+            executeConfirmedAction(actionKey)
+          }}
+          onCancel={() => setPendingActionConfirm(null)}
+          width="min(560px, 100%)"
+        />
+      ) : null}
+
       <Button
         small
         variant="ghost"
@@ -1669,17 +1513,7 @@ function DeveloperOptionsSection({ authEnabled }) {
         title={authEnabled
           ? "Clears browser state, saved preferences, and import memory, then reloads the app."
           : "Clears browser state, saved preferences, import memory, and local user profiles, then reloads the app."}
-        onClick={() => runAction('all', async () => {
-          const confirmMessage = authEnabled
-            ? 'Clear browser-local state, saved preferences, and import memory, then reload?'
-            : 'Clear browser-local state, saved preferences, import memory, and local user profiles, then reload?'
-          if (!window.confirm(confirmMessage)) return
-          await api.clearUserPreferences()
-          await api.clearImportMemory()
-          if (!authEnabled) await api.clearLocalPreferenceProfiles()
-          clearBrowserStoredState()
-          window.location.reload()
-        })}
+        onClick={() => requestActionConfirm('all')}
         disabled={!!workingAction}
       >
         {workingAction === 'all' ? 'Clearing…' : 'Clear all'}
@@ -1701,11 +1535,7 @@ function DeveloperOptionsSection({ authEnabled }) {
             small
             variant="ghost"
             title="Clears this browser's localStorage and sessionStorage, then reloads the app."
-            onClick={() => runAction('browser', async () => {
-              if (!window.confirm('Clear browser-local FinTrack state for this browser and reload?')) return
-              clearBrowserStoredState()
-              window.location.reload()
-            })}
+            onClick={() => requestActionConfirm('browser')}
             disabled={!!workingAction}
           >
             {workingAction === 'browser' ? 'Clearing…' : 'Clear browser state'}
@@ -1723,11 +1553,7 @@ function DeveloperOptionsSection({ authEnabled }) {
             small
             variant="ghost"
             title="Clears saved user or local-profile preferences stored by the backend, then reloads the app."
-            onClick={() => runAction('preferences', async () => {
-              if (!window.confirm('Clear saved user/profile preferences and reload?')) return
-              await api.clearUserPreferences()
-              window.location.reload()
-            })}
+            onClick={() => requestActionConfirm('preferences')}
             disabled={!!workingAction}
           >
             {workingAction === 'preferences' ? 'Clearing…' : 'Clear preferences'}
@@ -1745,11 +1571,7 @@ function DeveloperOptionsSection({ authEnabled }) {
             small
             variant="ghost"
             title="Clears saved CSV data sources and remembered import snapshots in the backend, then reloads the app."
-            onClick={() => runAction('importMemory', async () => {
-              if (!window.confirm('Clear saved data sources and import snapshots, then reload?')) return
-              await api.clearImportMemory()
-              window.location.reload()
-            })}
+            onClick={() => requestActionConfirm('importMemory')}
             disabled={!!workingAction}
           >
             {workingAction === 'importMemory' ? 'Clearing…' : 'Clear import memory'}
@@ -1769,12 +1591,7 @@ function DeveloperOptionsSection({ authEnabled }) {
                 small
                 variant="ghost"
                 title="Deletes local-mode user profile records from the control database, then reloads the app."
-                onClick={() => runAction('profiles', async () => {
-                  if (!window.confirm('Clear all local user profiles and reload?')) return
-                  await api.clearLocalPreferenceProfiles()
-                  clearBrowserStoredState()
-                  window.location.reload()
-                })}
+                onClick={() => requestActionConfirm('profiles')}
                 disabled={!!workingAction}
               >
                 {workingAction === 'profiles' ? 'Clearing…' : 'Clear local profiles'}
@@ -1879,14 +1696,6 @@ export default function Settings() {
 
       <div data-browser-context-passthrough="true" ref={settingsScrollRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 28px 24px' }}>
       <div style={{ width: SETTINGS_CONTENT_WIDTH, margin: '0 auto' }}>
-
-      <StickySection
-        title="CSV data sources"
-        scrollContainerRef={settingsScrollRef}
-        {...bindSection('importProfiles')}
-      >
-        <ImportProfilesSection />
-      </StickySection>
 
       <StickySection
         title="Backup recipients"

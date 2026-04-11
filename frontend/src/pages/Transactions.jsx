@@ -8,7 +8,7 @@ import { refreshTaskBadge } from '../App.jsx'
 import { formatDate } from '../lib/utils.js'
 import AmountDisplay from '../components/AmountDisplay.jsx'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
-import { Card, PageHeader, Spinner, EmptyState, Input } from '../components/ui.jsx'
+import { Card, PageHeader, Spinner, EmptyState, Input, OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from '../components/ui.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
@@ -192,23 +192,9 @@ function RuleActionModal({ state, onClose, onSaved }) {
       }
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 950,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: 'rgba(10, 15, 26, 0.32)',
-      backdropFilter: 'blur(2px)',
-      padding: 24,
-    }}>
-      <div style={{
-        background: 'var(--surface)', border: '1px solid var(--border)',
-        borderRadius: 14, width: 640, maxWidth: '94vw', maxHeight: '90vh',
-        overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.28)',
-      }}>
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '14px 20px', borderBottom: '1px solid var(--border)',
-          background: 'var(--surface2)',
-        }}>
+    <OverlayBackdrop zIndex={950} tint="rgba(10, 15, 26, 0.32)">
+      <FloatingPanel style={{ width: 640, maxWidth: '94vw', maxHeight: '90vh' }}>
+        <FloatingPanelHeader style={{ padding: '14px 20px' }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>
             {state.mode === 'edit' ? 'Edit matching rule' : 'Create rule'}
           </div>
@@ -216,7 +202,7 @@ function RuleActionModal({ state, onClose, onSaved }) {
             background: 'none', border: 'none', color: 'var(--muted)',
             cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: 2,
           }}>×</button>
-        </div>
+        </FloatingPanelHeader>
         <div style={{ maxHeight: 'calc(90vh - 56px)', overflowY: 'auto' }}>
           {loading || !initialValues ? (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
@@ -235,8 +221,8 @@ function RuleActionModal({ state, onClose, onSaved }) {
             />
           )}
         </div>
-      </div>
-    </div>
+      </FloatingPanel>
+    </OverlayBackdrop>
   )
 }
 
@@ -249,9 +235,7 @@ export default function Transactions() {
   const [data, setData]             = useState({ transactions: [], total: 0, offset: 0, limit: TRANSACTIONS_BASE_PAGE_SIZE })
   const [initialLoading, setInitialLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
-  const [detailTxn, setDetailTxn]   = useState(null)
-  const [detailCategory, setDetailCategory] = useState(null)
-  const [detailAccount, setDetailAccount]   = useState(null)
+  const [detailPanels, setDetailPanels] = useState([])
   const [editId, setEditId]         = useState(null)
   const { menu, onContextMenu, close: closeMenu } = useContextMenu()
   const [noteTarget, setNoteTarget] = useState(null)
@@ -267,6 +251,19 @@ export default function Transactions() {
   const resizeState = useRef(null)
 
   const [cols, setCols] = useState(() => defaultColumnConfig())
+  const multiDetailMode = detailPanels.length > 1
+
+  function openDetailPanel(type, item) {
+    if (!item?.id) return
+    setDetailPanels(prev => [
+      ...prev.filter(panel => !(panel.type === type && panel.item?.id === item.id)),
+      { type, item },
+    ])
+  }
+
+  function closeDetailPanel(type, id) {
+    setDetailPanels(prev => prev.filter(panel => !(panel.type === type && panel.item?.id === id)))
+  }
 
   function handleColUpdate(newCols) {
     setCols(newCols)
@@ -308,6 +305,16 @@ export default function Transactions() {
   useEffect(() => {
     api.getCategories().then(setCategories)
   }, [])
+
+  useEffect(() => {
+    setDetailPanels(current => current.map(panel => {
+      if (panel.type !== 'category') return panel
+      const nextCategory = categories.find(category => category.id === panel.item?.id)
+      return nextCategory
+        ? { ...panel, item: { ...panel.item, name: nextCategory.name, color: nextCategory.color } }
+        : panel
+    }))
+  }, [categories])
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -364,7 +371,11 @@ export default function Transactions() {
       const transactions = append
         ? [...prev.transactions, ...response.transactions]
         : response.transactions
-      setDetailTxn(current => current ? transactions.find(t => t.id === current.id) || current : current)
+      setDetailPanels(current => current.map(panel => (
+        panel.type === 'txn'
+          ? { ...panel, item: transactions.find(t => t.id === panel.item?.id) || panel.item }
+          : panel
+      )))
       return {
         ...response,
         transactions,
@@ -440,7 +451,7 @@ export default function Transactions() {
             ...t,
             category_id:         catId,
             category_name:       cat?.name  ?? null,
-            category_color:      cat?.color ?? null,
+            category_color:      null,
             category_overridden: 1,
           } : t
         ),
@@ -554,7 +565,7 @@ export default function Transactions() {
         return (
           <MerchantCell
             txn={txn}
-            onOpenDetail={setDetailTxn}
+            onOpenDetail={detailTxn => openDetailPanel('txn', detailTxn)}
             onRename={(id, name) => setData(prev => ({
               ...prev,
               transactions: prev.transactions.map(t => t.id === id ? { ...t, display_name: name } : t),
@@ -573,10 +584,9 @@ export default function Transactions() {
             onSave={(txnId, catId, catObj) => saveCategory(txnId, catId, catObj)}
             onAddCategory={addCategory}
             onRulePrompt={setRulePrompt}
-            onOpenDetail={txn.category_id ? () => setDetailCategory({
+            onOpenDetail={txn.category_id ? () => openDetailPanel('category', {
               id:    txn.category_id,
               name:  txn.category_name,
-              color: txn.category_color,
             }) : undefined}
           />
         )
@@ -598,7 +608,7 @@ export default function Transactions() {
             <button
               onClick={e => {
                 e.stopPropagation()
-                setDetailAccount({ id: txn.account_id, name: txn.account_name, mask: txn.account_mask })
+                openDetailPanel('account', { id: txn.account_id, name: txn.account_name, mask: txn.account_mask })
               }}
               title="View account detail"
               style={{
@@ -806,7 +816,7 @@ export default function Transactions() {
           <ContextMenu
             menu={menu}
             onClose={closeMenu}
-            onOpenDetail={txn => { setDetailTxn(txn); closeMenu() }}
+            onOpenDetail={txn => { openDetailPanel('txn', txn); closeMenu() }}
             onEditNote={txn => { setNoteTarget(txn); closeMenu() }}
             onOpenRule={openRuleFromTransaction}
             ruleActionLabel={
@@ -839,29 +849,48 @@ export default function Transactions() {
           </div>
         )}
 
-        {detailTxn && (
-          <TransactionDetail
-            txn={detailTxn}
-            categories={categories}
-            onClose={() => setDetailTxn(null)}
-          />
-        )}
-
-        {detailCategory && (
-          <CategoryDetail
-            category={detailCategory}
-            categories={categories}
-            onClose={() => setDetailCategory(null)}
-          />
-        )}
-
-        {detailAccount && (
-          <AccountDetail
-            account={detailAccount}
-            categories={categories}
-            onClose={() => setDetailAccount(null)}
-          />
-        )}
+        {detailPanels.map((panel, index) => {
+          if (panel.type === 'txn') {
+            return (
+              <TransactionDetail
+                key={`txn:${panel.item.id}`}
+                txn={panel.item}
+                categories={categories}
+                forceFloating={multiDetailMode}
+                stackIndex={index}
+                isTopmost={index === detailPanels.length - 1}
+                onClose={() => closeDetailPanel('txn', panel.item.id)}
+              />
+            )
+          }
+          if (panel.type === 'category') {
+            return (
+              <CategoryDetail
+                key={`category:${panel.item.id}`}
+                category={panel.item}
+                categories={categories}
+                forceFloating={multiDetailMode}
+                stackIndex={index}
+                isTopmost={index === detailPanels.length - 1}
+                onClose={() => closeDetailPanel('category', panel.item.id)}
+              />
+            )
+          }
+          if (panel.type === 'account') {
+            return (
+              <AccountDetail
+                key={`account:${panel.item.id}`}
+                account={panel.item}
+                categories={categories}
+                forceFloating={multiDetailMode}
+                stackIndex={index}
+                isTopmost={index === detailPanels.length - 1}
+                onClose={() => closeDetailPanel('account', panel.item.id)}
+              />
+            )
+          }
+          return null
+        })}
 
         {rulePrompt && (
           <RuleSuggestionToast

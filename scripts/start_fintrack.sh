@@ -96,6 +96,7 @@ open_in_terminal() {
   local script_path="$1"
   local title="$2"
   local log_path="$3"
+
   local env_prefix=()
   local bash_command="bash \"$script_path\"; exec bash"
 
@@ -103,7 +104,19 @@ open_in_terminal() {
     env_prefix=(env FINTRACK_LOG_PATH="$log_path")
     bash_command="FINTRACK_LOG_PATH=\"$log_path\" bash \"$script_path\"; exec bash"
   fi
+
+  #  WSL detection
+  if grep -qi microsoft /proc/version 2>/dev/null; then
+    if command -v wt.exe >/dev/null 2>&1; then
+      wt.exe -w 0 new-tab --title "$title" wsl.exe bash -ic "\"$script_path\"" \
+        || wt.exe new-tab --title "$title" wsl.exe bash -ic "\"$script_path\""
+    else
+      cmd.exe /c start "" wt.exe new-tab --title "$title" wsl.exe bash -ic "\"$script_path\""
+    fi
+    return 0
+  fi
   
+  #  Native Linux
   if command -v x-terminal-emulator >/dev/null 2>&1; then
     x-terminal-emulator -T "$title" -e "${env_prefix[@]}" bash "$script_path" &
     return 0
@@ -120,6 +133,7 @@ open_in_terminal() {
     xterm -T "$title" -e "${env_prefix[@]}" bash "$script_path" &
     return 0
   fi
+
   return 1
 }
 
@@ -140,11 +154,11 @@ BACKEND_READY_TIMEOUT="$(get_positive_int "$(get_env_value "$ENV_PATH" FINTRACK_
 BACKEND_HEALTH_URL="http://127.0.0.1:${BACKEND_PORT}/api/health"
 
 if port_in_use "$BACKEND_PORT"; then
-  echo "Backend port $BACKEND_PORT is already in use. Stop the running backend before running start_fintrack again."
+  echo "Backend port $BACKEND_PORT is already in use."
   exit 1
 fi
 if port_in_use "$FRONTEND_PORT"; then
-  echo "Frontend port $FRONTEND_PORT is already in use. Stop the running frontend before running start_fintrack again."
+  echo "Frontend port $FRONTEND_PORT is already in use."
   exit 1
 fi
 
@@ -160,41 +174,22 @@ if open_in_terminal "$BACKEND_SCRIPT" "FinTrack Backend" "$BACKEND_TERMINAL_LOG"
   echo "Started backend in a new terminal window."
 else
   echo "Could not open a new terminal window for the backend."
-  if [[ "$USE_LOG_FILES" == "1" ]]; then
-    echo "Starting backend in the background and writing to scripts/backend.log"
-    FINTRACK_LOG_PATH="$BACKEND_LOG" bash "$BACKEND_SCRIPT" &
-  else
-    echo "Starting backend in the background."
-    bash "$BACKEND_SCRIPT" &
-  fi
+  bash "$BACKEND_SCRIPT" &
 fi
 
 echo "Waiting for backend to respond on $BACKEND_HEALTH_URL ..."
 if wait_backend_ready "$BACKEND_HEALTH_URL" "$BACKEND_READY_TIMEOUT"; then
   echo "Backend is ready."
 else
-  echo "Backend did not become ready within $BACKEND_READY_TIMEOUT seconds. Starting the frontend anyway."
+  echo "Backend did not become ready in time."
 fi
 
 if open_in_terminal "$FRONTEND_SCRIPT" "FinTrack Frontend" "$FRONTEND_TERMINAL_LOG"; then
   echo "Started frontend in a new terminal window."
 else
   echo "Could not open a new terminal window for the frontend."
-  if [[ "$USE_LOG_FILES" == "1" ]]; then
-    echo "Starting frontend in the background and writing to scripts/frontend.log"
-    FINTRACK_LOG_PATH="$FRONTEND_LOG" bash "$FRONTEND_SCRIPT" &
-  else
-    echo "Starting frontend in the background."
-    bash "$FRONTEND_SCRIPT" &
-  fi
+  bash "$FRONTEND_SCRIPT" &
 fi
 
 echo
 echo "FinTrack launch requested."
-if [[ "$USE_LOG_FILES" == "1" ]]; then
-  echo "Logs are overwritten on each launch:"
-  echo "  $BACKEND_LOG"
-  echo "  $FRONTEND_LOG"
-else
-  echo "Log files are disabled by FINTRACK_USE_LOG_FILES in .env."
-fi

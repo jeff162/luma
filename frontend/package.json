@@ -6,9 +6,14 @@
     "dev": "vite --host",
     "build": "vite build",
     "preview": "vite preview",
+    "ui:test": "playwright test --config=playwright.config.js",
+    "ui:test:headed": "playwright test --config=playwright.config.js --headed",
+    "ui:test:debug": "playwright test --config=playwright.config.js --debug",
+    "ui:test:file": "playwright test --config=playwright.config.js",
+    "ui:codegen": "node scripts/runPlaywrightCodegen.js",
     "lint": "npm run lint:frontend && npm run lint:backend",
     "lint:frontend": "node scripts/check-comments.js",
-    "lint:backend": "python ../backend/scripts/check_comments.py",
+    "lint:backend": "node ../scripts/run_backend_comment_check.js",
     "postinstall": "bash ../scripts/install-hooks.sh || sh ../scripts/install-hooks.sh"
   },
   "dependencies": {
@@ -19,6 +24,7 @@
     "recharts": "^2.12.7"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",

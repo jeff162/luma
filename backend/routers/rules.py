@@ -157,7 +157,7 @@ def list_rules(search: Optional[str] = Query(None)):
                 cr.owner_id,
                 cr.account_id,
                 c.name  AS category_name,
-                c.color AS category_color,
+                NULL    AS category_color,
                 p.name  AS parent_name,
                 o.name  AS owner_name,
                 o.color AS owner_color,

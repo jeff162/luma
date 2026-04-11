@@ -4,6 +4,7 @@
 import { forwardRef, useState, useEffect, useImperativeHandle, useLayoutEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
 import CategoryPicker from './CategoryPicker.jsx'
+import { Button, DialogActions, SectionEyebrow, getFormControlStyle } from './ui.jsx'
 import {
   getSharedPillCornerRemoveButtonStyle,
   getSharedPillLabelStyle,
@@ -49,9 +50,8 @@ function NumberInput({ value, onChange, placeholder, width = 88 }) {
       onChange={e => onChange(e.target.value === '' ? null : parseFloat(e.target.value))}
       placeholder={placeholder}
       style={{
-        width, background: 'var(--surface2)', color: 'var(--text)',
-        border: '1px solid var(--border)', borderRadius: 6,
-        padding: '6px 8px', fontSize: 13, outline: 'none',
+        width,
+        ...getFormControlStyle({ size: 'md' }),
       }}
     />
   )
@@ -63,9 +63,8 @@ function OpSelect({ value, onChange, options }) {
       value={value}
       onChange={e => onChange(e.target.value)}
       style={{
-        background: 'var(--surface2)', color: 'var(--text)',
-        border: '1px solid var(--border)', borderRadius: 6,
-        padding: '6px 6px', fontSize: 13, cursor: 'pointer', outline: 'none',
+        ...getFormControlStyle({ size: 'md', clickable: true }),
+        padding: '6px 6px',
       }}
     >
       {options.map(o => <option key={o} value={o}>{o}</option>)}
@@ -654,13 +653,10 @@ const RuleForm = forwardRef(function RuleForm({
                 flex: '1 1 280px',
                 maxWidth: 420,
                 boxSizing: 'border-box',
-                background: 'var(--surface2)',
-                color: 'var(--text)',
+                ...getFormControlStyle({ size: 'md', accent: true }),
                 border: '1px solid color-mix(in srgb, var(--accent) 22%, var(--border))',
                 borderRadius: 999,
                 padding: '7px 12px',
-                fontSize: 13,
-                outline: 'none',
               }}
             />
             <MatchCountInline
@@ -722,7 +718,7 @@ const RuleForm = forwardRef(function RuleForm({
                 cancelKeywordEdit(event.currentTarget, keywordConditionRef, true)
               }}
               placeholder="e.g. starbucks"
-              style={{ width: '100%', boxSizing: 'border-box', background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 10px', fontSize: 13, outline: 'none' }}
+              style={{ width: '100%', boxSizing: 'border-box', ...getFormControlStyle({ size: 'md' }) }}
             />
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>Case-insensitive substring match</div>
           </ConditionChip>
@@ -750,7 +746,7 @@ const RuleForm = forwardRef(function RuleForm({
               onActivate={() => setOwnOpen(true)}
               onClear={() => { setOwnerId(''); setOwnOpen(false) }}
             >
-              <select value={ownerId} onChange={e => setOwnerId(e.target.value)} style={{ width: '100%', background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 10px', fontSize: 13 }}>
+              <select value={ownerId} onChange={e => setOwnerId(e.target.value)} style={{ width: '100%', ...getFormControlStyle({ size: 'md', clickable: true }) }}>
                 <option value="">— Select owner —</option>
                 {owners.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
               </select>
@@ -766,7 +762,7 @@ const RuleForm = forwardRef(function RuleForm({
               onActivate={() => setAccOpen(true)}
               onClear={() => { setAccountId(''); setAccOpen(false) }}
             >
-              <select value={accountId} onChange={e => setAccountId(e.target.value)} style={{ width: '100%', background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 10px', fontSize: 13 }}>
+              <select value={accountId} onChange={e => setAccountId(e.target.value)} style={{ width: '100%', ...getFormControlStyle({ size: 'md', clickable: true }) }}>
                 <option value="">— Select account —</option>
                 {accounts.map(a => <option key={a.id} value={a.id}>{a.name}{a.mask ? ` ···${a.mask}` : ''}</option>)}
               </select>
@@ -780,9 +776,9 @@ const RuleForm = forwardRef(function RuleForm({
         <div style={sectionHeadStyle}>Then These Actions Apply…</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', letterSpacing: '0.03em', marginBottom: 6 }}>
+            <SectionEyebrow style={{ letterSpacing: '0.03em', marginBottom: 6 }}>
               Assign Category
-            </div>
+            </SectionEyebrow>
             <div style={{ display: 'flex' }}>
               <CategoryPicker value={catId} categories={categories} onChange={setCatId} onCategoryCreated={() => api.getCategories()} />
             </div>
@@ -816,7 +812,7 @@ const RuleForm = forwardRef(function RuleForm({
                 }
               }}
               placeholder="Clean display name, e.g. Whole Foods"
-              style={{ width: '100%', boxSizing: 'border-box', background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 10px', fontSize: 13, outline: 'none' }}
+              style={{ width: '100%', boxSizing: 'border-box', ...getFormControlStyle({ size: 'md' }) }}
             />
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>Sets the display name when this rule fires on future transactions</div>
           </ConditionChip>
@@ -843,20 +839,24 @@ const RuleForm = forwardRef(function RuleForm({
               </label>
             </div>
           ) : null}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+          <DialogActions
+            style={{
+              padding: 0,
+              borderTop: 'none',
+              background: 'transparent',
+              alignItems: 'center',
+              marginTop: 12,
+            }}
+            align="end"
+          >
             {error && <span style={{ fontSize: 12, color: 'var(--danger)', flex: 1 }}>{error}</span>}
             <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
               {onCancel && (
-                <button onClick={onCancel} style={{ background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 16px', fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+                <Button variant="ghost" onClick={onCancel}>Cancel</Button>
               )}
-              <button onClick={handleSave} disabled={saving || !canSave} style={{
-                background: canSave ? 'var(--accent)' : 'var(--surface)', color: canSave ? '#fff' : 'var(--muted)',
-                border: canSave ? 'none' : '1px solid var(--border)', borderRadius: 8,
-                padding: '8px 20px', fontSize: 13, fontWeight: 500,
-                cursor: saving || !canSave ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1,
-              }}>{saving ? 'Saving…' : saveLabel}</button>
+              <Button onClick={handleSave} disabled={saving || !canSave}>{saving ? 'Saving…' : saveLabel}</Button>
             </div>
-          </div>
+          </DialogActions>
         </div>
       )}
     </div>

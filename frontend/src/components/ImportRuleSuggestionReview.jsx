@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { api } from '../lib/api.js'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { formatTransactionAmount, getTransactionAmountColor } from '../lib/moneyDisplay.js'
 import { Button, Spinner } from './ui.jsx'
@@ -1073,7 +1072,7 @@ function EditableKeyword({ value, editing, draftValue, onBeginEdit, onChange, on
 }
 
 export default function ImportRuleSuggestionReview({
-  batchId,
+  onLoadSuggestionMatches,
   ruleSuggestionState,
   selectedOwnerIds,
   reviewFilter,
@@ -1602,7 +1601,7 @@ export default function ImportRuleSuggestionReview({
   }
 
   async function openMatchingTransactionsViewer(suggestion) {
-    if (!batchId) return
+    if (!onLoadSuggestionMatches) return
     const resolvedSuggestion = getResolvedSuggestion(suggestion)
     setMatchViewerState({
       open: true,
@@ -1618,7 +1617,7 @@ export default function ImportRuleSuggestionReview({
       rows: [],
     })
     try {
-      const result = await api.getBatchRuleSuggestionMatches(batchId, {
+      const result = await onLoadSuggestionMatches({
         keyword: resolvedSuggestion.keyword,
         reference_target_category_id: resolvedSuggestion.target_category_id || null,
         owner_id: resolvedSuggestion.owner_id || null,

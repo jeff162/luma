@@ -4,7 +4,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../lib/api.js'
-import { Badge, CategoryMarker } from './ui.jsx'
+import { Badge, Button, CategoryMarker, SectionEyebrow, getFormControlStyle } from './ui.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import TransientTextInput from './TransientTextInput.jsx'
 
@@ -136,7 +136,7 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
                 restoreOnEscape
                 onBlurCommit={false}
                 placeholder="New group name..."
-                style={{ flex: 1, background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 8px', fontSize: 13, outline: 'none' }}
+                style={{ flex: 1, ...getFormControlStyle({ size: 'md' }) }}
               />
               <button
                 type="button"
@@ -144,13 +144,10 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
                 title="Choose an existing group instead"
                 style={{
                   flexShrink: 0,
-                  background: 'var(--surface2)',
+                  ...getFormControlStyle({ size: 'md', clickable: true }),
                   color: 'var(--muted)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 6,
                   padding: '6px 9px',
                   fontSize: 11,
-                  cursor: 'pointer',
                   lineHeight: 1,
                 }}
               >
@@ -180,7 +177,7 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
             </div>
           </>
         ) : (
-          <select value={groupId} onChange={e => setGroupId(e.target.value)} style={{ background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', fontSize: 12 }}>
+          <select value={groupId} onChange={e => setGroupId(e.target.value)} style={{ ...getFormControlStyle({ size: 'sm', clickable: true }) }}>
             <option value="">Group name...</option>
             {groups.map(g => <option key={g.id} value={g.id}>{g.category_type === 'income' ? 'Income' : 'Expense'} • {g.name}</option>)}
             <option value="__new_group__">New group...</option>
@@ -188,7 +185,7 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
         )
       ) : null}
       {mode === 'group' && (
-        <select value={categoryType} onChange={e => setCategoryType(e.target.value)} style={{ background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', fontSize: 12 }}>
+        <select value={categoryType} onChange={e => setCategoryType(e.target.value)} style={{ ...getFormControlStyle({ size: 'sm', clickable: true }) }}>
           <option value="expense">Expense</option>
           <option value="income">Income</option>
         </select>
@@ -203,12 +200,19 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
           restoreOnEscape
           onBlurCommit={false}
           placeholder={mode === 'group' ? 'Group name…' : 'Category name…'}
-          style={{ background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 8px', fontSize: 13, outline: 'none' }}
+          style={{ ...getFormControlStyle({ size: 'md' }) }}
         />
       ) : null}
       <div style={{ display: 'flex', gap: 6 }}>
-        <button onClick={handleSave} disabled={saving || (!creatingNewGroup && !name.trim()) || (creatingNewGroup && !newGroupName.trim())} style={{ flex: 1, background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 0', fontSize: 12, cursor: saving || (!creatingNewGroup && !name.trim()) || (creatingNewGroup && !newGroupName.trim()) ? 'not-allowed' : 'pointer', opacity: saving || (!creatingNewGroup && !name.trim()) || (creatingNewGroup && !newGroupName.trim()) ? 0.5 : 1 }}>{saving ? 'Saving…' : 'Create'}</button>
-        <button onClick={onCancel} style={{ background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+        <Button
+          small
+          onClick={handleSave}
+          disabled={saving || (!creatingNewGroup && !name.trim()) || (creatingNewGroup && !newGroupName.trim())}
+          style={{ flex: 1, justifyContent: 'center' }}
+        >
+          {saving ? 'Saving…' : 'Create'}
+        </Button>
+        <Button small variant="ghost" onClick={onCancel}>Cancel</Button>
       </div>
     </div>
   )
@@ -636,10 +640,10 @@ export default function CategoryPicker({
                 const creatingHere = creating?.type === 'leaf' && creating.groupId === group.id
                 return (
                   <div key={group.id}>
-                    <div style={{ padding: '5px 10px 1px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <SectionEyebrow style={{ padding: '5px 10px 1px', display: 'flex', alignItems: 'center', gap: 7 }}>
                       <CategoryMarker kind="group" />
                       <span>{group.name}</span>
-                    </div>
+                    </SectionEyebrow>
                     {groupCategories.map(c => {
                       const active = trimmedQuery && displayedIndexById.get(c.id) === cursor
                       const selectedRow = value === c.id

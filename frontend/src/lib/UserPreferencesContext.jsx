@@ -24,6 +24,11 @@ export function UserPreferencesProvider({ children }) {
   const [preferences, setPreferences] = useState({})
   const [preferencesReady, setPreferencesReady] = useState(false)
   const mountedRef = useRef(true)
+  const preferencesRef = useRef({})
+
+  useEffect(() => {
+    preferencesRef.current = preferences
+  }, [preferences])
 
   useEffect(() => {
     mountedRef.current = true
@@ -56,31 +61,39 @@ export function UserPreferencesProvider({ children }) {
   }, [])
 
   const setPreference = useCallback((key, nextValueOrUpdater) => {
-    let previousValue
-    let hadPreviousValue = false
-    let resolvedNextValue
+    const currentPreferences = preferencesRef.current
+    const hadPreviousValue = Object.prototype.hasOwnProperty.call(currentPreferences, key)
+    const previousValue = currentPreferences[key]
+    const resolvedNextValue = typeof nextValueOrUpdater === 'function'
+      ? nextValueOrUpdater(previousValue)
+      : nextValueOrUpdater
 
-    setPreferences(prev => {
-      hadPreviousValue = Object.prototype.hasOwnProperty.call(prev, key)
-      previousValue = prev[key]
-      resolvedNextValue = typeof nextValueOrUpdater === 'function'
-        ? nextValueOrUpdater(previousValue)
-        : nextValueOrUpdater
+    if (hadPreviousValue && Object.is(previousValue, resolvedNextValue)) {
+      return Promise.resolve(true)
+    }
 
-      if (hadPreviousValue && Object.is(previousValue, resolvedNextValue)) {
-        return prev
-      }
-
-      return {
-        ...prev,
-        [key]: resolvedNextValue,
-      }
-    })
+    const optimisticPreferences = {
+      ...currentPreferences,
+      [key]: resolvedNextValue,
+    }
+    preferencesRef.current = optimisticPreferences
+    setPreferences(optimisticPreferences)
 
     return api.saveUserPreference(key, resolvedNextValue)
       .then(() => true)
       .catch(() => {
         if (mountedRef.current) {
+          const rollbackPreferences = hadPreviousValue
+            ? {
+                ...preferencesRef.current,
+                [key]: previousValue,
+              }
+            : (() => {
+                const next = { ...preferencesRef.current }
+                delete next[key]
+                return next
+              })()
+          preferencesRef.current = rollbackPreferences
           setPreferences(prev => {
             // Only roll back the failed optimistic write if a newer local change has not already replaced it.
             if (hadPreviousValue && Object.is(prev[key], resolvedNextValue)) {

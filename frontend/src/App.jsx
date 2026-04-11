@@ -19,6 +19,7 @@ import Tasks from './pages/Tasks.jsx'
 import { api, setLocalPreferenceProfileId } from './lib/api.js'
 import { UserPreferencesProvider } from './lib/UserPreferencesContext.jsx'
 import { useDismissibleLayer } from './lib/uiInteractions.js'
+import { AppConfirmDialog } from './components/ui.jsx'
 import TransientTextInput from './components/TransientTextInput.jsx'
 
 class AppErrorBoundary extends Component {
@@ -457,6 +458,7 @@ export default function App() {
   const [previousLocalProfile, setPreviousLocalProfile] = useState(null)
   const [localProfilePickerDismissible, setLocalProfilePickerDismissible] = useState(false)
   const [creatingLocalProfile, setCreatingLocalProfile] = useState(false)
+  const [pendingLocalProfileDelete, setPendingLocalProfileDelete] = useState(null)
   const [localProfileError, setLocalProfileError] = useState('')
   const [navProfileMenu, setNavProfileMenu] = useState(null)
   const [navProfileEditing, setNavProfileEditing] = useState(false)
@@ -689,7 +691,13 @@ export default function App() {
   }
 
   async function handleDeleteLocalProfile(profile) {
-    if (!confirm(`Delete user profile "${profile.name}"?`)) return
+    setPendingLocalProfileDelete(profile)
+  }
+
+  async function confirmDeleteLocalProfile() {
+    if (!pendingLocalProfileDelete) return
+    const profile = pendingLocalProfileDelete
+    setPendingLocalProfileDelete(null)
     await api.deleteLocalPreferenceProfile(profile.id)
     setLocalProfiles(prev => prev.filter(item => item.id !== profile.id))
     const deletedCurrentProfile =
@@ -787,6 +795,18 @@ export default function App() {
       <UserPreferencesProvider key={authEnabled ? `user:${currentUser?.id || currentUser?.username || ''}` : `local:${activeLocalProfile?.id || ''}`}>
         <FilterProvider>
         <style>{GLOBAL_SCROLLBAR_STYLES}</style>
+        {pendingLocalProfileDelete ? (
+          <AppConfirmDialog
+            title="Delete user profile?"
+            description={`Delete user profile "${pendingLocalProfileDelete.name}"?`}
+            confirmLabel="Delete"
+            confirmVariant="danger"
+            borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+            onConfirm={confirmDeleteLocalProfile}
+            onCancel={() => setPendingLocalProfileDelete(null)}
+            width="min(480px, 100%)"
+          />
+        ) : null}
         <div style={s.shell}>
           <nav style={s.nav}>
             <div style={s.logo}>FinTrack</div>
@@ -903,6 +923,7 @@ export default function App() {
                 <Route path="/rules" element={<Rules />} />
                 <Route path="/accounts" element={<Accounts />} />
                 <Route path="/import-export/batches/:batchId/rule-suggestions" element={<ImportRuleSuggestions />} />
+                <Route path="/import-export/profiles/:profileId/rule-suggestions" element={<ImportRuleSuggestions />} />
                 <Route path="/import-export" element={<ImportExport />} />
                 <Route path="/tasks" element={<Tasks />} />
                 <Route path="/settings" element={<Settings />} />

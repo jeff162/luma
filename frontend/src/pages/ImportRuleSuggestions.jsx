@@ -35,12 +35,14 @@ function buildReviewSummary(suggestions) {
 }
 
 export default function ImportRuleSuggestions() {
-  const { batchId } = useParams()
+  const { batchId, profileId } = useParams()
   const navigate = useNavigate()
+  const isProfileContext = !!profileId
   const [owners, setOwners] = useState([])
   const [accounts, setAccounts] = useState([])
   const [categories, setCategories] = useState([])
   const [batches, setBatches] = useState([])
+  const [profiles, setProfiles] = useState([])
   const [loadingBatchContext, setLoadingBatchContext] = useState(true)
   const [batchContextError, setBatchContextError] = useState('')
   const [ruleSuggestionState, setRuleSuggestionState] = useState({
@@ -67,6 +69,29 @@ export default function ImportRuleSuggestions() {
     () => batches.find(item => item.id === batchId) || null,
     [batches, batchId],
   )
+  const profile = useMemo(
+    () => profiles.find(item => item.id === profileId) || null,
+    [profiles, profileId],
+  )
+  const profileBatches = useMemo(
+    () => batches.filter(item => item.profile_id === profileId),
+    [batches, profileId],
+  )
+  const loadSuggestionsForContext = (ownerIds = []) => (
+    isProfileContext
+      ? api.getProfileRuleSuggestions(profileId, ownerIds)
+      : api.getBatchRuleSuggestions(batchId, ownerIds)
+  )
+  const updateSuggestionReviewForContext = payload => (
+    isProfileContext
+      ? api.updateProfileRuleSuggestionReview(profileId, payload)
+      : api.updateBatchRuleSuggestionReview(batchId, payload)
+  )
+  const loadSuggestionMatchesForContext = payload => (
+    isProfileContext
+      ? api.getProfileRuleSuggestionMatches(profileId, payload)
+      : api.getBatchRuleSuggestionMatches(batchId, payload)
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -78,12 +103,14 @@ export default function ImportRuleSuggestions() {
       api.getAccounts(),
       api.getCategories(),
       api.listBatches(),
-    ]).then(([nextOwners, nextAccounts, nextCategories, nextBatches]) => {
+      api.getImportProfiles(),
+    ]).then(([nextOwners, nextAccounts, nextCategories, nextBatches, nextProfiles]) => {
       if (cancelled) return
       setOwners(nextOwners)
       setAccounts(nextAccounts)
       setCategories(nextCategories)
       setBatches(nextBatches)
+      setProfiles(nextProfiles)
     }).catch(err => {
       if (cancelled) return
       setBatchContextError(err.message || 'Unable to load import context.')
@@ -97,12 +124,12 @@ export default function ImportRuleSuggestions() {
 
   useEffect(() => {
     let cancelled = false
-    if (!batchId) return undefined
+    if (!batchId && !profileId) return undefined
 
     async function loadRuleSuggestions() {
       setRuleSuggestionState(prev => ({ ...prev, loading: true, error: '' }))
       try {
-        const result = await api.getBatchRuleSuggestions(batchId, selectedOwnerIds)
+        const result = await loadSuggestionsForContext(selectedOwnerIds)
         if (cancelled) return
         setRuleSuggestionState({
           loading: false,
@@ -131,7 +158,7 @@ export default function ImportRuleSuggestions() {
 
     loadRuleSuggestions()
     return () => { cancelled = true }
-  }, [batchId, selectedOwnerIds])
+  }, [batchId, profileId, selectedOwnerIds])
 
   useEffect(() => {
     const availableOwnerIds = new Set(owners.map(owner => owner.id))
@@ -148,7 +175,7 @@ export default function ImportRuleSuggestions() {
   }
 
   async function reloadSuggestions() {
-    const result = await api.getBatchRuleSuggestions(batchId, selectedOwnerIds)
+    const result = await loadSuggestionsForContext(selectedOwnerIds)
     setRuleSuggestionState({
       loading: false,
       error: '',
@@ -197,7 +224,7 @@ export default function ImportRuleSuggestions() {
     // Accepted suggestions may have created or linked rules, so undo has to replay
     // the server-side review state instead of only rolling back local UI state.
     for (const [suggestionId, prev] of Object.entries(snapshot)) {
-      await api.updateBatchRuleSuggestionReview(batchId, {
+      await updateSuggestionReviewForContext({
         suggestion_id: suggestionId,
         status: prev.review_status,
       }).catch(() => {})
@@ -212,7 +239,7 @@ export default function ImportRuleSuggestions() {
   async function setSuggestionStatus(suggestion, status) {
     setEditingSuggestionId(null)
     pushUndo([suggestion.id])
-    const result = await api.updateBatchRuleSuggestionReview(batchId, {
+    const result = await updateSuggestionReviewForContext({
       suggestion_id: suggestion.id,
       status,
       merchant_label: suggestion.merchant_label,
@@ -234,7 +261,7 @@ export default function ImportRuleSuggestions() {
     try {
       let lastResult = null
       for (const suggestion of suggestions) {
-        lastResult = await api.updateBatchRuleSuggestionReview(batchId, {
+        lastResult = await updateSuggestionReviewForContext({
           suggestion_id: suggestion.id,
           status,
           merchant_label: suggestion.merchant_label,
@@ -262,7 +289,7 @@ export default function ImportRuleSuggestions() {
     const { applyToExisting, ...ruleData } = data
     pushUndo([suggestion.id])
     const createdRule = await api.createRule(ruleData)
-    const result = await api.updateBatchRuleSuggestionReview(batchId, {
+    const result = await updateSuggestionReviewForContext({
       suggestion_id: suggestion.id,
       status: 'accepted',
       rule_id: createdRule?.id || null,
@@ -303,7 +330,7 @@ export default function ImportRuleSuggestions() {
       ruleId = createdRule?.id || null
     }
 
-    const result = await api.updateBatchRuleSuggestionReview(batchId, {
+    const result = await updateSuggestionReviewForContext({
       suggestion_id: suggestion.id,
       status: 'accepted',
       rule_id: ruleId,
@@ -362,7 +389,7 @@ export default function ImportRuleSuggestions() {
           owner_id: suggestion.owner_id || null,
           account_id: suggestion.account_id || null,
         })
-        lastResult = await api.updateBatchRuleSuggestionReview(batchId, {
+        lastResult = await updateSuggestionReviewForContext({
           suggestion_id: suggestion.id,
           status: 'accepted',
           rule_id: createdRule?.id || null,
@@ -388,6 +415,21 @@ export default function ImportRuleSuggestions() {
     }
   }
 
+  const contextMissing = isProfileContext ? !profile : !batch
+  const contextHasImportedCategories = isProfileContext
+    ? profileBatches.some(item => item.has_imported_categories)
+    : !!batch?.has_imported_categories
+  const contextTitle = isProfileContext
+    ? (profile?.name || 'Data source')
+    : (batch?.filename || 'Import')
+  const contextSummary = isProfileContext
+    ? `${profileBatches.length} imported file${profileBatches.length === 1 ? '' : 's'}`
+    : `Imported ${formatImportedAt(batch?.imported_at)}${formatImportSummary(batch) ? ` · ${formatImportSummary(batch)}` : ''}`
+  const emptyStateTitle = isProfileContext ? 'Data source not found' : 'Import not found'
+  const emptyStateDescription = isProfileContext
+    ? 'This data source may have been deleted or no longer has imported files attached.'
+    : 'This import may have been undone or is no longer available in Recent imports.'
+
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '20px 32px 0', flexShrink: 0 }}>
@@ -412,21 +454,23 @@ export default function ImportRuleSuggestions() {
             <Card>
               <div style={{ fontSize: 14, color: 'var(--danger)' }}>{batchContextError}</div>
             </Card>
-          ) : !batch ? (
+          ) : contextMissing ? (
             <Card>
-              <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Import not found</div>
+              <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{emptyStateTitle}</div>
               <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14 }}>
-                This import may have been undone or is no longer available in Recent imports.
+                {emptyStateDescription}
               </div>
               <Button onClick={() => navigate('/import-export')}>
                 Return to Import / Export
               </Button>
             </Card>
-          ) : !batch.has_imported_categories ? (
+          ) : !contextHasImportedCategories ? (
             <Card>
               <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No categorized rows were imported</div>
               <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-                This import does not contain categorized rows that can be used to infer rules.
+                {isProfileContext
+                  ? 'This data source does not have uncategorized imported rows that can be used to infer rules.'
+                  : 'This import does not contain uncategorized imported rows that can be used to infer rules.'}
               </div>
             </Card>
           ) : (
@@ -434,9 +478,9 @@ export default function ImportRuleSuggestions() {
               <Card style={{ display: 'grid', gap: 10 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
                   <div>
-                    <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>{batch.filename}</div>
+                    <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>{contextTitle}</div>
                     <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-                      Imported {formatImportedAt(batch.imported_at)}{formatImportSummary(batch) ? ` · ${formatImportSummary(batch)}` : ''}
+                      {contextSummary}
                     </div>
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--muted)' }}>
@@ -446,12 +490,14 @@ export default function ImportRuleSuggestions() {
                   </div>
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-                  Generate categorization rules from the category assignments from the transactions in the file.
+                  {isProfileContext
+                    ? 'Generate categorization rules from the uncategorized imported rows attached to this data source.'
+                    : 'Generate categorization rules from the uncategorized imported rows in this file.'}
                 </div>
               </Card>
 
               <ImportRuleSuggestionReview
-                batchId={batchId}
+                onLoadSuggestionMatches={loadSuggestionMatchesForContext}
                 ruleSuggestionState={ruleSuggestionState}
                 selectedOwnerIds={selectedOwnerIds}
                 reviewFilter={reviewFilter}

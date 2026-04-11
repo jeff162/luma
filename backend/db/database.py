@@ -91,7 +91,7 @@ def get_db(db_path: str | None = None):
 # Migrations are additive startup upgrades for existing databases only; fresh installs
 # are created directly at `CURRENT_VERSION` and should not replay the migration chain.
 
-CURRENT_VERSION = 1
+CURRENT_VERSION = 4
 
 MIGRATIONS = {}
 
@@ -162,6 +162,44 @@ def m1_baseline(conn):
     pass
 
 
+@migration(2)
+def m2_import_batch_duplicates(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS import_batch_duplicate (
+            batch_id                  TEXT NOT NULL REFERENCES import_batch(id) ON DELETE CASCADE,
+            row_number                INTEGER NOT NULL,
+            reason                    TEXT NOT NULL,
+            values_json               TEXT,
+            matched_transaction_json  TEXT,
+            txn_payload_json          TEXT,
+            PRIMARY KEY (batch_id, row_number)
+        );
+        CREATE INDEX IF NOT EXISTS idx_import_batch_duplicate_batch ON import_batch_duplicate(batch_id);
+    """)
+
+
+@migration(3)
+def m3_drop_category_color(conn):
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(category)").fetchall()
+    }
+    if "color" in columns:
+        conn.execute("ALTER TABLE category DROP COLUMN color")
+
+
+@migration(4)
+def m4_profile_template_file_metadata(conn):
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(csv_import_profile)").fetchall()
+    }
+    if "template_filename" not in columns:
+        conn.execute("ALTER TABLE csv_import_profile ADD COLUMN template_filename TEXT")
+    if "template_file_hash" not in columns:
+        conn.execute("ALTER TABLE csv_import_profile ADD COLUMN template_file_hash TEXT")
+
+
 def init_db(db_path: str | None = None):
     resolved_path = _normalize_db_path(db_path)
     with get_db(resolved_path) as conn:
@@ -191,7 +229,6 @@ def init_db(db_path: str | None = None):
                 id                  TEXT PRIMARY KEY,
                 parent_id           TEXT REFERENCES category(id) ON DELETE SET NULL,
                 name                TEXT NOT NULL,
-                color               TEXT NOT NULL DEFAULT '#9E9E9E',
                 category_type       TEXT,
                 sort_order          INTEGER NOT NULL DEFAULT 0,
                 exclude_from_totals INTEGER NOT NULL DEFAULT 0,
@@ -272,6 +309,8 @@ def init_db(db_path: str | None = None):
                 name                 TEXT NOT NULL,
                 filename_pattern     TEXT,
                 header_fingerprint   TEXT,
+                template_filename    TEXT,
+                template_file_hash   TEXT,
                 column_map           TEXT NOT NULL DEFAULT '{}',
                 account_id           TEXT REFERENCES account(id) ON DELETE SET NULL,
                 date_format          TEXT NOT NULL DEFAULT '%Y-%m-%d',
@@ -306,6 +345,17 @@ def init_db(db_path: str | None = None):
             );
             CREATE INDEX IF NOT EXISTS idx_iba_account ON import_batch_account(account_id);
             CREATE INDEX IF NOT EXISTS idx_iba_batch   ON import_batch_account(batch_id);
+
+            CREATE TABLE IF NOT EXISTS import_batch_duplicate (
+                batch_id                  TEXT NOT NULL REFERENCES import_batch(id) ON DELETE CASCADE,
+                row_number                INTEGER NOT NULL,
+                reason                    TEXT NOT NULL,
+                values_json               TEXT,
+                matched_transaction_json  TEXT,
+                txn_payload_json          TEXT,
+                PRIMARY KEY (batch_id, row_number)
+            );
+            CREATE INDEX IF NOT EXISTS idx_import_batch_duplicate_batch ON import_batch_duplicate(batch_id);
 
             CREATE TABLE IF NOT EXISTS backup_recipient (
                 id          TEXT PRIMARY KEY,

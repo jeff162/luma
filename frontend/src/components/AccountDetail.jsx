@@ -17,7 +17,7 @@ import {
   usePagedMonthTransactions,
 } from './detailShared.jsx'
 
-export default function AccountDetail({ account, categories = [], onClose }) {
+export default function AccountDetail({ account, categories = [], onClose, forceFloating = false, stackIndex = 0, initialPosition = null, isTopmost = true }) {
   /*
    * This panel is mostly a thin account-specific wrapper around the shared detail-sheet chrome:
    * the chart picks the month, and the month list stays locally editable so inline category changes
@@ -26,7 +26,7 @@ export default function AccountDetail({ account, categories = [], onClose }) {
   const { filters } = useFilters()
   const dateStart = filters.date?.start || null
   const dateEnd   = filters.date?.end   || null
-  const { pos, dragging, panelRef, onDragStart } = useDetailPanelChrome(onClose)
+  const { pos, dragging, panelRef, onDragStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex, initialPosition })
   const [trend, setTrend]           = useState([])
   const [selectedMonth, setSelectedMonth] = useState(null)
   const [trendLoading, setTrendLoading] = useState(true)
@@ -58,7 +58,7 @@ export default function AccountDetail({ account, categories = [], onClose }) {
         ...t,
         category_id: catId,
         category_name: cat?.name ?? null,
-        category_color: cat?.color ?? null,
+        category_color: null,
         category_overridden: 1,
       } : t
     )))
@@ -96,6 +96,7 @@ export default function AccountDetail({ account, categories = [], onClose }) {
       onDragStart={onDragStart}
       onClose={onClose}
       header={header}
+      isTopmost={isTopmost}
     >
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
             Monthly spending — {displayName}

@@ -587,7 +587,7 @@ function OwnerSplitPanel({ owners, sharedOwnerId, ownerSplitData, onDrill }) {
                       <div style={{
                         width: `${maxVal > 0 ? (val / maxVal) * 100 : 0}%`,
                         height: '100%',
-                        background: shared ? anyRow.group_color : 'var(--accent)',
+                        background: shared ? 'var(--accent2)' : 'var(--accent)',
                         borderRadius: 3,
                         opacity: shared ? 0.6 : 1,
                       }} />
@@ -623,7 +623,7 @@ export default function Dashboard() {
   const [catRows, setCatRows]     = useState([])
   const [txnData, setTxnData]     = useState([])
   const [groupTxnData, setGroupTxnData] = useState([])
-  const [detailTxn, setDetailTxn]       = useState(null)
+  const [detailTxns, setDetailTxns]     = useState([])
   const [categories, setCategories]     = useState([])
   const [rulePrompt, setRulePrompt]     = useState(null)
   const [trend, setTrend]         = useState([])
@@ -648,6 +648,19 @@ export default function Dashboard() {
 
   const [loading,      setLoading]      = useState(true)
   const [drillLoading, setDrillLoading] = useState(false)
+  const multiDetailMode = detailTxns.length > 1
+
+  function openTransactionDetail(txn) {
+    if (!txn?.id) return
+    setDetailTxns(prev => [
+      ...prev.filter(item => item.id !== txn.id),
+      txn,
+    ])
+  }
+
+  function closeTransactionDetail(txnId) {
+    setDetailTxns(prev => prev.filter(item => item.id !== txnId))
+  }
 
   const dateStart = filters.date?.start || null
   const dateEnd   = filters.date?.end   || null
@@ -1033,7 +1046,7 @@ export default function Dashboard() {
                             <span style={{ color: 'var(--muted)', fontSize: 13 }}>{formatDate(txn.date)}</span>
                             <MerchantCell
                               txn={txn}
-                              onOpenDetail={setDetailTxn}
+                              onOpenDetail={openTransactionDetail}
                               onRename={(id, name) => setTxnData(prev =>
                                 prev.map(x => x.id === id ? { ...x, display_name: name } : x)
                               )}
@@ -1047,7 +1060,7 @@ export default function Dashboard() {
                                 setTxnData(prev => prev.map(x => x.id === txnId ? {
                                   ...x, category_id: catId,
                                   category_name: cat?.name ?? null,
-                                  category_color: cat?.color ?? null,
+                                  category_color: null,
                                   category_overridden: 1,
                                 } : x))
                                 api.overrideCategory(txnId, catId)
@@ -1110,7 +1123,7 @@ export default function Dashboard() {
                         <span style={{ color: 'var(--muted)', fontSize: 12 }}>{formatDate(t.date)}</span>
                         <MerchantCell
                           txn={t}
-                          onOpenDetail={setDetailTxn}
+                          onOpenDetail={openTransactionDetail}
                           onRename={(id, name) => setGroupTxnData(prev =>
                             prev.map(x => x.id === id ? { ...x, display_name: name } : x)
                           )}
@@ -1127,7 +1140,7 @@ export default function Dashboard() {
                               ...x,
                               category_id: catId,
                               category_name: cat?.name ?? null,
-                              category_color: cat?.color ?? null,
+                              category_color: null,
                               category_overridden: 1,
                             } : x))
                             api.overrideCategory(txnId, catId)
@@ -1226,13 +1239,17 @@ export default function Dashboard() {
         </>
       )}
       </div>
-      {detailTxn && (
+      {detailTxns.map((txn, index) => (
         <TransactionDetail
-          txn={detailTxn}
+          key={txn.id}
+          txn={txn}
           categories={categories}
-          onClose={() => setDetailTxn(null)}
+          forceFloating={multiDetailMode}
+          stackIndex={index}
+          isTopmost={index === detailTxns.length - 1}
+          onClose={() => closeTransactionDetail(txn.id)}
         />
-      )}
+      ))}
       {rulePrompt && (
         <RuleSuggestionToast
           prompt={rulePrompt}

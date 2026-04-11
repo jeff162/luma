@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
-import { Badge } from './ui.jsx'
+import { Badge, OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from './ui.jsx'
 import RuleForm from './RuleForm.jsx'
 
 const TIMEOUT_MS = 8000
@@ -68,30 +68,15 @@ function RuleModal({ prompt, onSave, onCancel }) {
   }
 
   return (
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 900,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'rgba(0,0,0,0.5)',
-      }}
-    >
-      <div
-        style={{
-          background: 'var(--surface)', border: '1px solid var(--border)',
-          borderRadius: 14, width: 540, maxWidth: '94vw', maxHeight: '90vh',
-          overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.45)',
-        }}
-      >
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '16px 20px', borderBottom: '1px solid var(--border)',
-        }}>
+    <OverlayBackdrop zIndex={900} tint="rgba(0,0,0,0.5)" blur={0}>
+      <FloatingPanel style={{ width: 540, maxWidth: '94vw', maxHeight: '90vh', overflowY: 'auto' }}>
+        <FloatingPanelHeader style={{ padding: '16px 20px' }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>⚙️ Create categorization rule</div>
           <button onClick={onCancel} style={{
             background: 'none', border: 'none', color: 'var(--muted)',
             cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: 2,
           }}>×</button>
-        </div>
+        </FloatingPanelHeader>
 
         {loading ? (
           <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>Loading…</div>
@@ -115,8 +100,8 @@ function RuleModal({ prompt, onSave, onCancel }) {
             transactionData={prompt.transactionData}
           />
         )}
-      </div>
-    </div>
+      </FloatingPanel>
+    </OverlayBackdrop>
   )
 }
 

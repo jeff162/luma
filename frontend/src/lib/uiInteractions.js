@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 
 /*
  * These hooks centralize the app's dismissal and inline-edit conventions so popovers, menus, and text edits
@@ -67,6 +67,9 @@ export function useDismissiblePopup({
   disabled = false,
   blurOnEscape = true,
   escapeBehavior = ESCAPE_BEHAVIOR.DISMISS_POPUP,
+  preferredPopupHeight = null,
+  viewportPadding = 8,
+  popupGap = 4,
 }) {
   const [openUp, setOpenUp] = useState(false)
 
@@ -94,15 +97,69 @@ export function useDismissiblePopup({
     setOpen(false)
   }, { enabled: open, escapeBehavior })
 
-  useEffect(() => {
-    if (!open || !popupRef.current || !anchorRef.current) return
+  useLayoutEffect(() => {
+    if (!open || !anchorRef.current) return
     const anchorRect = anchorRef.current.getBoundingClientRect()
-    const popupHeight = popupRef.current.offsetHeight
-    // Measure after render so variable-height popups can flip above the anchor without hard-coded breakpoints.
-    setOpenUp(anchorRect.bottom + popupHeight > window.innerHeight - 8)
-  }, [anchorRef, open, popupRef, ...placementDeps])
+    const popupHeight = preferredPopupHeight || popupRef.current?.offsetHeight || 0
+    const spaceBelow = window.innerHeight - anchorRect.bottom - popupGap - viewportPadding
+    const spaceAbove = anchorRect.top - popupGap - viewportPadding
+    const shouldOpenUp = popupHeight
+      ? (spaceBelow < popupHeight && spaceAbove > spaceBelow)
+      : (spaceBelow < spaceAbove)
+    setOpenUp(shouldOpenUp)
+  }, [anchorRef, open, popupRef, popupGap, preferredPopupHeight, viewportPadding, ...placementDeps])
 
   return { openUp }
+}
+
+export function useAnchoredPopupLayout({
+  open,
+  anchorRef,
+  openUp,
+  minWidth = 220,
+  viewportPadding = 8,
+  popupGap = 4,
+} = {}) {
+  const [popupLayout, setPopupLayout] = useState(null)
+
+  useLayoutEffect(() => {
+    if (!open || !anchorRef.current) return undefined
+
+    function updatePopupLayout() {
+      const rect = anchorRef.current?.getBoundingClientRect()
+      if (!rect) return
+
+      const width = Math.min(
+        Math.max(minWidth, rect.width),
+        Math.max(minWidth, window.innerWidth - (viewportPadding * 2)),
+      )
+      const left = Math.max(
+        viewportPadding,
+        Math.min(rect.left, window.innerWidth - width - viewportPadding),
+      )
+      const spaceBelow = Math.max(120, window.innerHeight - rect.bottom - popupGap - viewportPadding)
+      const spaceAbove = Math.max(120, rect.top - popupGap - viewportPadding)
+
+      setPopupLayout({
+        left,
+        width,
+        maxHeight: openUp ? spaceAbove : spaceBelow,
+        ...(openUp
+          ? { bottom: Math.max(viewportPadding, window.innerHeight - rect.top + popupGap) }
+          : { top: Math.max(viewportPadding, rect.bottom + popupGap) }),
+      })
+    }
+
+    updatePopupLayout()
+    window.addEventListener('resize', updatePopupLayout)
+    window.addEventListener('scroll', updatePopupLayout, true)
+    return () => {
+      window.removeEventListener('resize', updatePopupLayout)
+      window.removeEventListener('scroll', updatePopupLayout, true)
+    }
+  }, [anchorRef, minWidth, open, openUp, popupGap, viewportPadding])
+
+  return popupLayout
 }
 
 export function useDismissibleLayer({

@@ -219,6 +219,7 @@ export const api = {
   },
   listBatches:      ()      => request('/import-export/batches'),
   getBatchEdited:   (id)    => request(`/import-export/batches/${id}/edited`),
+  getBatchDuplicates: (id)  => request(`/import-export/batches/${id}/duplicates`),
   getBatchCategoryMappings: (id) => request(`/import-export/batches/${id}/category-mappings`),
   getBatchRuleSuggestions: (id, ownerIds = []) => {
     const q = new URLSearchParams()
@@ -226,13 +227,29 @@ export const api = {
     const suffix = q.toString() ? `?${q}` : ''
     return request(`/import-export/batches/${id}/rule-suggestions${suffix}`)
   },
+  getProfileRuleSuggestions: (id, ownerIds = []) => {
+    const q = new URLSearchParams()
+    if (ownerIds?.length) q.set('owner_ids', ownerIds.join(','))
+    const suffix = q.toString() ? `?${q}` : ''
+    return request(`/import-export/profiles/${id}/rule-suggestions${suffix}`)
+  },
   getBatchRuleSuggestionMatches: (id, payload) =>
     request(`/import-export/batches/${id}/rule-suggestions/matches`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  getProfileRuleSuggestionMatches: (id, payload) =>
+    request(`/import-export/profiles/${id}/rule-suggestions/matches`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   updateBatchRuleSuggestionReview: (id, payload) =>
     request(`/import-export/batches/${id}/rule-suggestions/review`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateProfileRuleSuggestionReview: (id, payload) =>
+    request(`/import-export/profiles/${id}/rule-suggestions/review`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -244,6 +261,8 @@ export const api = {
     request(`/import-export/batches/${id}/category-workspace-draft`),
   setBatchProfile: (id, profileId) =>
     request(`/import-export/batches/${id}/profile`, { method: 'PATCH', body: JSON.stringify({ profile_id: profileId }) }),
+  importBatchDuplicates: (id, payload) =>
+    request(`/import-export/batches/${id}/duplicates/import`, { method: 'POST', body: JSON.stringify(payload) }),
   undoBatch:        (id, force = false) =>
     request(`/import-export/batches/${id}${force ? '?force=true' : ''}`, { method: 'DELETE' }),
   getImportProfiles:    ()      => request('/import-export/profiles'),
@@ -257,11 +276,12 @@ export const api = {
     return `/api/import-export/transactions.csv?${q}`
   },
   getBackupRecipients: () => request('/import-export/backup/recipients'),
+  getCredentialsBackupStatus: () => request('/import-export/backup/credentials/status'),
   createBackupRecipient: (data) => request('/import-export/backup/recipients', { method: 'POST', body: JSON.stringify(data) }),
   updateBackupRecipient: (id, data) => request(`/import-export/backup/recipients/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteBackupRecipient: (id) => request(`/import-export/backup/recipients/${id}`, { method: 'DELETE' }),
   exportBackup:      (encrypted = false)  => `/api/import-export/backup${encrypted ? '?encrypted=true' : ''}`,
-  exportCredentials: ()  => '/api/import-export/backup/credentials',
+  exportCredentials: (encrypted = false)  => `/api/import-export/backup/credentials${encrypted ? '?encrypted=true' : ''}`,
   inspectBackupFile: async (file) => {
     const fd = new FormData()
     fd.append('file', file)

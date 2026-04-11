@@ -4,7 +4,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { refreshTaskBadge } from '../App.jsx'
-import { Card, Button, Spinner, EmptyState } from '../components/ui.jsx'
+import { Card, Button, Spinner, EmptyState, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog } from '../components/ui.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import { useDismissibleLayer, useDismissiblePopup, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from '../components/TransientTextInput.jsx'
@@ -687,7 +687,7 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabl
   )
 }
 
-function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete, onCancelDelete, onOpenDetail, onCreateOwnerForAccount, onRenameOwner, onDeleteOwner, interactionDisabled = false }) {
+function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete, onCancelDelete, onOpenDetail, onCreateOwnerForAccount, onRequestRenameOwner, onRequestDeleteOwner, interactionDisabled = false }) {
   const [savingName, setSavingName] = useState(false)
   const [creatingOwner, setCreatingOwner] = useState(false)
   const [ownerDraft, setOwnerDraft] = useState('')
@@ -811,11 +811,8 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
     if (!account.owner_id) return
     const current = owners.find(o => o.id === account.owner_id)
     if (isSharedOwner(current)) return
-    const next = window.prompt('Rename owner', current?.name || account.owner_name || '')
     setOwnerMenu(null)
-    if (!next || !next.trim()) return
-    const trimmed = next.trim()
-    await onRenameOwner(account.owner_id, trimmed)
+    onRequestRenameOwner(current || { id: account.owner_id, name: account.owner_name || '' })
   }
 
   async function handleDeleteOwner() {
@@ -823,8 +820,7 @@ function AccountRow({ account, owners, onSave, onRequestDelete, confirmingDelete
     const current = owners.find(o => o.id === account.owner_id)
     if (isSharedOwner(current)) return
     setOwnerMenu(null)
-    if (!window.confirm(`Delete owner "${current?.name || account.owner_name || 'owner'}"? Their accounts and categories will become unassigned.`)) return
-    await onDeleteOwner(current || { id: account.owner_id, name: account.owner_name || 'owner' })
+    onRequestDeleteOwner(current || { id: account.owner_id, name: account.owner_name || 'owner' })
   }
 
   const displayOwnerId = account.owner_id || ''
@@ -1173,10 +1169,13 @@ export default function Accounts() {
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  const [noticeDialog, setNoticeDialog] = useState(null)
+  const [pendingOwnerDelete, setPendingOwnerDelete] = useState(null)
+  const [ownerRenameDialog, setOwnerRenameDialog] = useState(null)
   const [showCreateAccount, setShowCreateAccount] = useState(false)
   const [creatingAccount, setCreatingAccount] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
-  const [detailAccount, setDetailAccount] = useState(null)
+  const [detailAccounts, setDetailAccounts] = useState([])
   const [dbInstanceId, setDbInstanceId] = useState('')
   const [userId, setUserId] = useState('')
   const [ownersPanelExpanded, setOwnersPanelExpanded] = useState(false)
@@ -1184,6 +1183,32 @@ export default function Accounts() {
   const listRef = useRef(null)
   const accountsPanelRef = useRef(null)
   const [accountsPanelWidth, setAccountsPanelWidth] = useState(null)
+
+  function openAccountDetail(account) {
+    if (!account?.id) return
+    setDetailAccounts(prev => [
+      ...prev.filter(item => item.id !== account.id),
+      account,
+    ])
+  }
+
+  function closeAccountDetail(accountId) {
+    setDetailAccounts(prev => prev.filter(item => item.id !== accountId))
+  }
+
+  function getAccountDetailInitialPosition() {
+    if (!accountsPanelRef.current || typeof window === 'undefined') return null
+    const rect = accountsPanelRef.current.getBoundingClientRect()
+    const panelWidth = Math.min(820, window.innerWidth - 32)
+    const gutter = 20
+    const fitsToRight = rect.right + gutter + panelWidth <= window.innerWidth - 16
+    const fallbackOffset = Math.min(Math.max(rect.width * 0.42, 260), 420)
+    const maxVisibleX = Math.max(16, window.innerWidth - panelWidth - 16)
+    return {
+      x: fitsToRight ? rect.right + gutter : Math.min(rect.left + fallbackOffset, maxVisibleX),
+      y: Math.max(96, Math.round(rect.top)),
+    }
+  }
 
   const loadData = () => {
     setLoading(true)
@@ -1197,6 +1222,15 @@ export default function Accounts() {
   }
 
   useEffect(() => { loadData() }, [])
+
+  useEffect(() => {
+    setDetailAccounts(current => current.map(detail => {
+      const nextAccount = accounts.find(account => account.id === detail.id)
+      return nextAccount
+        ? { ...detail, name: nextAccount.name, mask: nextAccount.mask }
+        : detail
+    }))
+  }, [accounts])
 
   useEffect(() => {
     let cancelled = false
@@ -1284,7 +1318,10 @@ export default function Accounts() {
         handler.open()
       }
     } catch (e) {
-      alert('Could not start Plaid Link: ' + e.message)
+      setNoticeDialog({
+        title: 'Could not start Plaid Link',
+        description: e.message,
+      })
     }
   }
 
@@ -1313,7 +1350,10 @@ export default function Accounts() {
       setSyncResult(result)
       loadData()
     } catch (e) {
-      alert('Sync failed: ' + e.message)
+      setNoticeDialog({
+        title: 'Sync failed',
+        description: e.message,
+      })
     } finally {
       setSyncing(false)
     }
@@ -1370,7 +1410,6 @@ export default function Accounts() {
   }
 
   async function deleteOwner(owner) {
-    if (!confirm(`Delete owner "${owner.name}"? Their accounts and categories will become unassigned.`)) return
     await api.deleteOwner(owner.id)
     loadData()
     refreshTaskBadge()
@@ -1397,9 +1436,62 @@ export default function Accounts() {
   const ownerCount = owners.length
   const unownedCount = accounts.filter(a => !a.owner_id).length
   const hasPlaidConnected = accounts.some(a => a.plaid_item_id && a.plaid_item_id !== 'csv_import' && a.plaid_item_id !== 'manual')
+  const renameOwnerName = ownerRenameDialog?.name || ''
+
+  async function confirmOwnerRename() {
+    if (!ownerRenameDialog?.id || !renameOwnerName.trim()) return
+    const ownerId = ownerRenameDialog.id
+    const nextName = renameOwnerName.trim()
+    setOwnerRenameDialog(null)
+    await saveOwner(ownerId, { name: nextName })
+  }
+
+  async function confirmOwnerDelete() {
+    if (!pendingOwnerDelete) return
+    const owner = pendingOwnerDelete
+    setPendingOwnerDelete(null)
+    await deleteOwner(owner)
+  }
 
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {noticeDialog ? (
+        <AppNoticeDialog
+          title={noticeDialog.title}
+          description={noticeDialog.description}
+          onClose={() => setNoticeDialog(null)}
+        />
+      ) : null}
+
+      {ownerRenameDialog ? (
+        <AppTextEntryDialog
+          title="Rename owner"
+          description="Choose the name this owner should use across accounts and categories."
+          label="Owner name"
+          value={renameOwnerName}
+          onChange={value => setOwnerRenameDialog(prev => prev ? { ...prev, name: value } : prev)}
+          placeholder="Owner name"
+          confirmLabel="Save"
+          confirmDisabled={!renameOwnerName.trim()}
+          onConfirm={confirmOwnerRename}
+          onCancel={() => setOwnerRenameDialog(null)}
+          width="min(460px, 100%)"
+        />
+      ) : null}
+
+      {pendingOwnerDelete ? (
+        <AppConfirmDialog
+          title="Delete owner?"
+          description={`Delete "${pendingOwnerDelete.name || 'owner'}"? Their accounts and categories will become unassigned.`}
+          confirmLabel="Delete"
+          confirmVariant="danger"
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={confirmOwnerDelete}
+          onCancel={() => setPendingOwnerDelete(null)}
+          width="min(500px, 100%)"
+        />
+      ) : null}
+
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
         <div style={{
           display: 'flex',
@@ -1483,10 +1575,13 @@ export default function Accounts() {
                     onRequestDelete={requestDelete}
                     confirmingDelete={confirmDeleteId === acc.id}
                     onCancelDelete={cancelOrConfirmDelete}
-                    onOpenDetail={setDetailAccount}
+                    onOpenDetail={openAccountDetail}
                     onCreateOwnerForAccount={createOwnerForAccount}
-                    onRenameOwner={async (ownerId, name) => saveOwner(ownerId, { name })}
-                    onDeleteOwner={deleteOwner}
+                    onRequestRenameOwner={owner => setOwnerRenameDialog({
+                      id: owner.id,
+                      name: owner.name || '',
+                    })}
+                    onRequestDeleteOwner={owner => setPendingOwnerDelete(owner)}
                     interactionDisabled={showCreateAccount}
                   />
                 ))}
@@ -1603,20 +1698,25 @@ export default function Accounts() {
           owners={owners}
           onCreateOwner={createOwner}
           onSaveOwner={saveOwner}
-          onDeleteOwner={deleteOwner}
+          onDeleteOwner={owner => setPendingOwnerDelete(owner)}
           disabled={showCreateAccount}
           width={accountsPanelWidth}
           expanded={ownersPanelExpanded}
           onExpandedChange={setOwnersPanelExpanded}
         />
 
-        {detailAccount && (
+        {detailAccounts.map((account, index) => (
           <AccountDetail
-            account={detailAccount}
+            key={account.id}
+            account={account}
             categories={categories}
-            onClose={() => setDetailAccount(null)}
+            forceFloating
+            stackIndex={index}
+            initialPosition={getAccountDetailInitialPosition()}
+            isTopmost={index === detailAccounts.length - 1}
+            onClose={() => closeAccountDetail(account.id)}
           />
-        )}
+        ))}
       </div>
     </div>
   )

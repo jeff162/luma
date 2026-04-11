@@ -12,8 +12,8 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, LabelList,
 } from 'recharts'
-import { api } from '../lib/api.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
+import { getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground } from './ui.jsx'
 
 export const DETAIL_PAGE_SIZE = 100
 export const DETAIL_PANEL_WIDTH = 'min(820px, calc(100vw - 32px))'
@@ -22,22 +22,8 @@ export const DETAIL_MONTH_SECTION_MIN_HEIGHT = 420
 export const DETAIL_WINDOW_MONTHS = 18
 export const DETAIL_TOP_PADDING = '120px'
 export const DETAIL_MAX_VISIBLE_ROWS = 7
+export const DETAIL_STACK_OFFSET = 28
 const DETAIL_SECTION_OVERHEAD = 108
-const DETAIL_POSITION_STORAGE_KEY_PREFIX = 'fintrack.detailPanelPosition'
-const DETAIL_POSITION_PREF_KEY = 'ui.detailPanel.position'
-
-function getDetailPositionStorageKey(instanceId, userId) {
-  return instanceId && userId ? `${DETAIL_POSITION_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
-}
-
-function clampStoredAnchor(anchor) {
-  if (!anchor) return null
-  return {
-    x: Math.max(0, Math.min(window.innerWidth - 200, Number(anchor.x) || 0)),
-    bottom: Math.max(0, Math.min(window.innerHeight - 60, Number(anchor.bottom) || 0)),
-  }
-}
-
 export function getDetailMonthSectionHeight(trend = []) {
   const maxCount = trend.reduce((max, row) => Math.max(max, Number(row?.count) || 0), 0)
   const visibleRows = Math.max(1, Math.min(DETAIL_MAX_VISIBLE_ROWS, maxCount || 1))
@@ -49,63 +35,48 @@ export function getDetailMonthSectionHeight(trend = []) {
   )
 }
 
-function clampPanelPosition(pos) {
+function clampPanelPosition(pos, rect = null) {
   if (!pos) return null
+  const maxX = Math.max(0, window.innerWidth - (rect?.width || 200))
+  const maxY = Math.max(0, window.innerHeight - (rect?.height || 60))
   return {
-    x: Math.max(0, Math.min(window.innerWidth - 200, pos.x)),
-    y: Math.max(0, Math.min(window.innerHeight - 60, pos.y)),
+    x: Math.max(0, Math.min(maxX, pos.x)),
+    y: Math.max(0, Math.min(maxY, pos.y)),
   }
 }
 
-export function useDetailPanelChrome(onClose) {
-  const [dbInstanceId, setDbInstanceId] = useState('')
-  const [userId, setUserId] = useState('')
-  const savedAnchorRef = useRef(null)
-  const anchoredModeRef = useRef(false)
+function getDefaultPanelPosition(rect, stackIndex = 0) {
+  const topPadding = parseInt(DETAIL_TOP_PADDING, 10) || 120
+  const centeredX = Math.max(16, Math.round((window.innerWidth - rect.width) / 2))
+  const centeredY = Math.max(topPadding, Math.round((window.innerHeight - rect.height) / 2))
+  return {
+    x: centeredX + (stackIndex * DETAIL_STACK_OFFSET),
+    y: centeredY + (stackIndex * DETAIL_STACK_OFFSET),
+  }
+}
+
+function applyPanelStackOffset(pos, stackIndex = 0) {
+  if (!pos) return null
+  return {
+    x: pos.x + (stackIndex * DETAIL_STACK_OFFSET),
+    y: pos.y + (stackIndex * DETAIL_STACK_OFFSET),
+  }
+}
+
+export function useDetailPanelChrome(onClose, options = {}) {
+  const {
+    forceFloating = false,
+    stackIndex = 0,
+    initialPosition = null,
+  } = options
   const [pos, setPos] = useState(null)
   const [dragging, setDragging] = useState(false)
   const panelRef = useRef(null)
   const dragOffset = useRef({ x: 0, y: 0 })
   const hasDragged = useRef(false)
 
-  useEffect(() => {
-    let cancelled = false
-    Promise.all([
-      api.getAuthStatus().catch(() => null),
-      api.getUserPreferences().catch(() => ({ preferences: {} })),
-    ]).then(([status, prefResp]) => {
-      if (cancelled) return
-      const nextDbInstanceId = status?.db_instance_id || ''
-      const nextUserId = status?.preference_profile?.id || status?.user?.id || ''
-      setDbInstanceId(nextDbInstanceId)
-      setUserId(nextUserId)
-      const storageKey = getDetailPositionStorageKey(nextDbInstanceId, nextUserId)
-      savedAnchorRef.current = null
-      anchoredModeRef.current = false
-      setPos(null)
-      const prefValue = prefResp?.preferences?.[DETAIL_POSITION_PREF_KEY]
-      if (prefValue) {
-        savedAnchorRef.current = clampStoredAnchor(prefValue)
-        anchoredModeRef.current = !!savedAnchorRef.current
-        return
-      }
-      if (!storageKey) return
-      try {
-        const raw = window.localStorage.getItem(storageKey)
-        if (!raw) return
-        savedAnchorRef.current = clampStoredAnchor(JSON.parse(raw))
-        anchoredModeRef.current = !!savedAnchorRef.current
-      } catch {
-        savedAnchorRef.current = null
-        anchoredModeRef.current = false
-      }
-    })
-    return () => { cancelled = true }
-  }, [])
-
   function onDragStart(e) {
     if (!panelRef.current) return
-    anchoredModeRef.current = false
     const rect = panelRef.current.getBoundingClientRect()
     dragOffset.current = {
       x: e.clientX - (pos ? pos.x : rect.left),
@@ -117,38 +88,15 @@ export function useDetailPanelChrome(onClose) {
   }
 
   useEffect(() => {
-    if (!savedAnchorRef.current || !panelRef.current || pos) return
+    if (!panelRef.current || pos) return
     const rect = panelRef.current.getBoundingClientRect()
-    const anchor = savedAnchorRef.current
-    setPos(clampPanelPosition({
-      x: anchor.x,
-      y: window.innerHeight - anchor.bottom - rect.height,
-    }))
-  }, [pos])
-
-  useEffect(() => {
-    if (!panelRef.current || !anchoredModeRef.current || !savedAnchorRef.current) return
-    const panel = panelRef.current
-    function syncToAnchor() {
-      if (!panelRef.current || !savedAnchorRef.current || !anchoredModeRef.current) return
-      const rect = panelRef.current.getBoundingClientRect()
-      const anchor = savedAnchorRef.current
-      setPos(prev => {
-        const next = clampPanelPosition({
-          x: anchor.x,
-          y: window.innerHeight - anchor.bottom - rect.height,
-        })
-        if (prev && prev.x === next.x && prev.y === next.y) return prev
-        return next
-      })
+    if (forceFloating && initialPosition) {
+      setPos(clampPanelPosition(applyPanelStackOffset(initialPosition, stackIndex), rect))
+      return
     }
-    // Re-anchor while content loads so the saved bottom-left position still
-    // feels stable even if the panel grows after the first render.
-    const observer = new ResizeObserver(() => syncToAnchor())
-    observer.observe(panel)
-    syncToAnchor()
-    return () => observer.disconnect()
-  }, [pos])
+    if (!forceFloating) return
+    setPos(clampPanelPosition(getDefaultPanelPosition(rect, stackIndex), rect))
+  }, [forceFloating, initialPosition, pos, stackIndex])
 
   useEffect(() => {
     if (!dragging) return
@@ -164,9 +112,12 @@ export function useDetailPanelChrome(onClose) {
         }
         hasDragged.current = true
       }
-      const x = Math.max(0, Math.min(window.innerWidth - 200, e.clientX - dragOffset.current.x))
-      const y = Math.max(0, Math.min(window.innerHeight - 60, e.clientY - dragOffset.current.y))
-      setPos(prev => (prev ? { x, y } : prev))
+      const rect = panelRef.current?.getBoundingClientRect()
+      const next = clampPanelPosition({
+        x: e.clientX - dragOffset.current.x,
+        y: e.clientY - dragOffset.current.y,
+      }, rect)
+      setPos(prev => (prev ? next : prev))
     }
     function onUp() { setDragging(false) }
     window.addEventListener('mousemove', onMove)
@@ -178,36 +129,8 @@ export function useDetailPanelChrome(onClose) {
   }, [dragging, pos])
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    if (!pos) return
-    const storageKey = getDetailPositionStorageKey(dbInstanceId, userId)
-    if (!storageKey) return
-    try {
-      const rect = panelRef.current?.getBoundingClientRect()
-      const anchor = clampStoredAnchor({
-        x: pos.x,
-        bottom: rect ? window.innerHeight - pos.y - rect.height : 0,
-      })
-      window.localStorage.setItem(storageKey, JSON.stringify(anchor))
-      api.saveUserPreference(DETAIL_POSITION_PREF_KEY, anchor).catch(() => {})
-    } catch {
-      // Ignore storage failures; panel still works for the current session.
-    }
-  }, [dbInstanceId, userId, pos])
-
-  useEffect(() => {
     function handleResize() {
-      if (anchoredModeRef.current && savedAnchorRef.current && panelRef.current) {
-        const rect = panelRef.current.getBoundingClientRect()
-        const anchor = clampStoredAnchor(savedAnchorRef.current)
-        savedAnchorRef.current = anchor
-        setPos(clampPanelPosition({
-          x: anchor.x,
-          y: window.innerHeight - anchor.bottom - rect.height,
-        }))
-        return
-      }
-      setPos(prev => clampPanelPosition(prev))
+      setPos(prev => clampPanelPosition(prev, panelRef.current?.getBoundingClientRect()))
     }
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
@@ -526,7 +449,11 @@ export function DetailTrendChart({ trend, selectedMonth, onSelectMonth }) {
   )
 }
 
-export function DetailPanelShell({ pos, dragging, panelRef, onDragStart, onClose, header, children }) {
+export function DetailPanelShell({ pos, dragging, panelRef, onDragStart, onClose, header, children, isTopmost = true }) {
+  const panelSurfaceStyle = getFloatingPanelSurfaceStyle({
+    active: !pos || isTopmost,
+    radius: 12,
+  })
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 400,
@@ -543,20 +470,15 @@ export function DetailPanelShell({ pos, dragging, panelRef, onDragStart, onClose
           position: pos ? 'fixed' : 'relative',
           left: pos ? pos.x : undefined,
           top: pos ? pos.y : undefined,
-          background: 'var(--surface)',
-          border: '1px solid color-mix(in srgb, var(--border) 70%, white 10%)',
-          borderRadius: 12,
           width: DETAIL_PANEL_WIDTH,
           maxWidth: DETAIL_PANEL_WIDTH,
           maxHeight: '85vh',
           display: 'flex',
           flexDirection: 'column',
-          boxShadow: pos
-            ? '0 10px 42px rgba(0,0,0,0.48), 0 0 0 1px rgba(255,255,255,0.05)'
-            : '0 -8px 32px rgba(0,0,0,0.38), 0 0 0 1px rgba(255,255,255,0.04)',
           pointerEvents: 'auto',
           userSelect: dragging ? 'none' : 'auto',
           zIndex: 401,
+          ...panelSurfaceStyle,
         }}
       >
         <div
@@ -564,6 +486,7 @@ export function DetailPanelShell({ pos, dragging, panelRef, onDragStart, onClose
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             padding: '16px 24px', borderBottom: '1px solid var(--border)', flexShrink: 0,
+            background: getFloatingPanelHeaderBackground(isTopmost),
             cursor: dragging ? 'grabbing' : 'grab',
           }}
         >

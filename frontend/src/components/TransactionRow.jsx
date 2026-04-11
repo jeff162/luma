@@ -3,7 +3,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { api } from '../lib/api.js'
-import { CategoryMarker } from './ui.jsx'
+import { Button, CategoryMarker, SectionEyebrow, getFormControlStyle } from './ui.jsx'
 import CategoryDisplay from './CategoryDisplay.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from './TransientTextInput.jsx'
@@ -479,7 +479,7 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
                 restoreOnEscape
                 onBlurCommit={false}
                 placeholder="Name"
-                style={{ background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', fontSize: 13, outline: 'none' }}
+                style={{ ...getFormControlStyle({ size: 'sm' }), fontSize: 13 }}
               />
               {creatingGroup ? (
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -491,34 +491,30 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
                     onCancel={() => { setCreatingGroup(false); setNewParent(''); setNewGroupName('') }}
                     restoreOnEscape
                     onBlurCommit={false}
-                    style={{ flex: 1, background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--accent)', borderRadius: 6, padding: '5px 8px', fontSize: 13, outline: 'none' }}
+                    style={{ flex: 1, ...getFormControlStyle({ size: 'sm', accent: true }), fontSize: 13 }}
                   />
-                  <button onMouseDown={e => { e.preventDefault(); handleNewGroupSave() }}
-                    style={{ background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: newGroupName.trim() ? 'pointer' : 'not-allowed', opacity: newGroupName.trim() ? 1 : 0.5 }}>
+                  <Button small onMouseDown={e => { e.preventDefault(); handleNewGroupSave() }} disabled={!newGroupName.trim()}>
                     Create
-                  </button>
-                  <button onMouseDown={e => { e.preventDefault(); setCreatingGroup(false); setNewParent('') }}
-                    style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', fontSize: 12, cursor: 'pointer', color: 'var(--muted)' }}>
+                  </Button>
+                  <Button small variant="ghost" onMouseDown={e => { e.preventDefault(); setCreatingGroup(false); setNewParent('') }}>
                     ✕
-                  </button>
+                  </Button>
                 </div>
               ) : (
                 <select value={newParent} onChange={e => handleParentChange(e.target.value)}
-                  style={{ background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', fontSize: 13 }}>
+                  style={{ ...getFormControlStyle({ size: 'sm', clickable: true }), fontSize: 13 }}>
                   <option value="">— Top-level group —</option>
                   {topGrps.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
                   <option value="__new_group__">＋ New group…</option>
                 </select>
               )}
               <div style={{ display: 'flex', gap: 6 }}>
-                <button onMouseDown={e => { e.preventDefault(); handleNewSave() }}
-                  style={{ flex: 1, background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 0', fontSize: 13, cursor: newName.trim() ? 'pointer' : 'not-allowed', opacity: newName.trim() ? 1 : 0.5 }}>
+                <Button small onMouseDown={e => { e.preventDefault(); handleNewSave() }} disabled={!newName.trim()} style={{ flex: 1, justifyContent: 'center' }}>
                   Add & assign
-                </button>
-                <button onMouseDown={e => { e.preventDefault(); setShowNew(false) }}
-                  style={{ background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', fontSize: 13, cursor: 'pointer' }}>
+                </Button>
+                <Button small variant="ghost" onMouseDown={e => { e.preventDefault(); setShowNew(false) }}>
                   Back
-                </button>
+                </Button>
               </div>
             </div>
           ) : query.trim() ? (
@@ -539,10 +535,10 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
           ) : (
             groups.map(g => (
               <div key={g.value}>
-                <div style={{ padding: '6px 12px 4px', fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <SectionEyebrow style={{ padding: '6px 12px 4px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
                   <CategoryMarker kind="group" />
                   <span>{g.label}</span>
-                </div>
+                </SectionEyebrow>
                 {g.options.map(o => {
                   const globalIdx = leaves.findIndex(l => l.id === o.value)
                   return (
@@ -588,7 +584,7 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
       transactionId:  txn.id,
       categoryId:    cat.id,
       categoryName:  cat.name,
-      categoryColor: cat.color,
+      categoryColor: null,
       transactionData: {
         amount: txn.amount,
       },
