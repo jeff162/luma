@@ -56,13 +56,14 @@ def exchange_token(body: PublicTokenExchange, request: Request):
                 conn.execute(
                     """
                     INSERT INTO account
-                        (id, plaid_account_id, plaid_item_id, name, institution, type, subtype, mask, owner_id)
-                    VALUES (?,?,?,?,?,?,?,?,?)
+                        (id, plaid_account_id, plaid_item_id, name, display_name, institution, type, subtype, mask, owner_id, parent_account_id, trashed_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,NULL,NULL)
                     """,
                     (
                         str(uuid.uuid4()),
                         acc["plaid_account_id"],
                         item_id,
+                        acc["name"],
                         acc["name"],
                         body.institution_name,
                         acc["type"],

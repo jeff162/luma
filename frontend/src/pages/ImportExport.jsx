@@ -292,6 +292,54 @@ function DataSourceMismatchDialog({
   )
 }
 
+function CompatibleBatchAttachDialog({ prompt, onConfirm, onCancel, attaching = false }) {
+  if (!prompt) return null
+  const batches = Array.isArray(prompt.batches) ? prompt.batches : []
+  return (
+    <OverlayBackdrop zIndex={1200} tint="rgba(15, 23, 42, 0.38)">
+      <FloatingPanel style={{ width: 'min(640px, 100%)' }}>
+        <FloatingPanelHeader style={{ padding: '16px 20px' }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 600 }}>Attach compatible unknown imports?</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+              <span style={{ color: 'var(--text)', fontWeight: 600 }}>{prompt.profileName}</span> looks compatible with {batches.length} uncategorized import{batches.length === 1 ? '' : 's'}.
+            </div>
+          </div>
+        </FloatingPanelHeader>
+        <div style={{ padding: 20, display: 'grid', gap: 14 }}>
+          <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.55 }}>
+            Attach these imports now so they move under the saved data source? You can still leave them under unknown data source and undo or re-import them later instead.
+          </div>
+          <div style={{
+            maxHeight: 240,
+            overflowY: 'auto',
+            border: '1px solid var(--border)',
+            borderRadius: 12,
+            background: 'color-mix(in srgb, var(--surface2) 72%, var(--surface))',
+          }}>
+            {batches.map(batch => (
+              <div key={batch.id} style={{ padding: '10px 12px', borderBottom: '1px solid color-mix(in srgb, var(--border) 72%, transparent)' }}>
+                <div style={{ fontSize: 13, fontWeight: 500 }}>{batch.filename}</div>
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
+                  {formatImportBatchTimestamp(batch.imported_at)} · {batch.row_count} rows
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <DialogActions>
+          <Button variant="ghost" onClick={onCancel} disabled={attaching}>
+            Leave separate
+          </Button>
+          <Button onClick={onConfirm} disabled={attaching}>
+            {attaching ? 'Attaching…' : `Attach ${batches.length} import${batches.length === 1 ? '' : 's'}`}
+          </Button>
+        </DialogActions>
+      </FloatingPanel>
+    </OverlayBackdrop>
+  )
+}
+
 function SectionTitle({ children }) {
   return <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6, marginTop: 28 }}>{children}</div>
 }
@@ -418,6 +466,14 @@ function summarizeImportOutcome(source) {
     rejectedRows,
     duplicateHeaders,
     duplicateRows,
+  }
+}
+
+function getUndoTargetForSource(source) {
+  if (!source) return null
+  return {
+    ...source,
+    id: source.id || source.batch_id || '',
   }
 }
 
@@ -942,6 +998,33 @@ function buildProfileBodyFromSnapshot(name, draftRecord) {
   }
 }
 
+function buildDraftRecordFromPreview(previewLike, snapshot) {
+  if (!previewLike || !snapshot) return null
+  const { headerFingerprint, filenamePattern } = deriveImportSourceHints(previewLike)
+  return {
+    headerFingerprint,
+    filenamePattern,
+    templateFilename: previewLike?.filename || '',
+    templateFileHash: previewLike?.file_content_hash || '',
+    snapshot,
+  }
+}
+
+function doesDraftMatchPreview(draftRecord, previewLike) {
+  if (!draftRecord || !previewLike) return false
+  const draftFileHash = String(draftRecord.templateFileHash || '').trim()
+  const previewFileHash = String(previewLike.file_content_hash || '').trim()
+  if (draftFileHash && previewFileHash) return draftFileHash === previewFileHash
+  const draftHeader = String(draftRecord.headerFingerprint || '').trim()
+  const previewHeader = String(previewLike.header_fingerprint || '').trim()
+  return !!draftHeader && !!previewHeader && draftHeader === previewHeader
+}
+
+function formatImportBatchTimestamp(value) {
+  const normalized = String(value || '').trim()
+  return normalized ? normalized.slice(0, 16).replace('T', ' ') : ''
+}
+
 function clonePersistedCategoryWorkspaceDraft(draft) {
   if (!draft?.snapshot) return null
   if (draft?.snapshot?.mappings) return null
@@ -1230,6 +1313,8 @@ function ImportTab() {
   const [showManualDraftSave, setShowManualDraftSave] = useState(false)
   const [manualDraftSaveName, setManualDraftSaveName] = useState('')
   const [savingManualDraftSource, setSavingManualDraftSource] = useState(false)
+  const [compatibleBatchPrompt, setCompatibleBatchPrompt] = useState(null)
+  const [attachingCompatibleBatches, setAttachingCompatibleBatches] = useState(false)
   const [showDataSourceManager, setShowDataSourceManager] = useState(false)
   const [dataSourceManagerEditing, setDataSourceManagerEditing] = useState(false)
   const [dataSourceManagerPos, setDataSourceManagerPos] = useState(null)
@@ -1525,9 +1610,7 @@ function ImportTab() {
     const latestManualBatch = manualBatches[0] || null
     const olderManualBatches = manualBatches.slice(1)
 
-    if (manualDraftRecord || latestManualBatch) {
-      // Keep the newest profileless import surfaced as the active temporary draft;
-      // older profileless batches move to "unknown source" so save-as-profile targets stay unambiguous.
+    if (latestManualBatch) {
       savedSourceRows.push({
         key: 'manual-draft',
         kind: 'manual',
@@ -1536,13 +1619,16 @@ function ImportTab() {
         categorySummary: summarizeCategoryWorkspaceDraft(clonePersistedCategoryWorkspaceDraft(manualDraftRecord?.snapshot?.category_workspace_draft)),
         ruleSuggestionReview: null,
         hasImportedCategories: !!latestManualBatch?.has_imported_categories,
-        batches: latestManualBatch ? [latestManualBatch] : [],
+        batches: [latestManualBatch],
         latestBatch: latestManualBatch,
         manualDraftRecord,
       })
     }
 
-    const unknownSourceBatches = [...olderManualBatches, ...fallbackUnknownBatches]
+    const unknownSourceBatches = [
+      ...olderManualBatches,
+      ...fallbackUnknownBatches,
+    ]
       .sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
 
     if (unknownSourceBatches.length > 0) {
@@ -1819,6 +1905,56 @@ function ImportTab() {
     }
     if (categoryWorkspaceDraft) snapshot.category_workspace_draft = categoryWorkspaceDraft
     return snapshot
+  }
+
+  function buildCurrentManualDraftRecord(previewLike = preview) {
+    if (!previewLike) return null
+    return buildDraftRecordFromPreview(previewLike, buildImportSnapshot())
+  }
+
+  function openManualDraftSaveEditor(defaultName = '') {
+    setShowManualDraftSave(true)
+    setManualDraftSaveName(current => current || defaultName)
+  }
+
+  async function maybePromptCompatibleUnknownImports(profileId) {
+    if (!profileId) return
+    try {
+      const response = await api.getCompatibleImportBatches(profileId)
+      const compatibleBatches = Array.isArray(response?.batches) ? response.batches : []
+      if (compatibleBatches.length > 0) {
+        setCompatibleBatchPrompt({
+          profileId,
+          profileName: response?.profile_name || profiles.find(profile => profile.id === profileId)?.name || 'Saved data source',
+          batches: compatibleBatches,
+        })
+      }
+    } catch {
+      // Leave compatible imports untouched if the suggestion lookup fails.
+    }
+  }
+
+  async function attachCompatibleUnknownImports() {
+    const prompt = compatibleBatchPrompt
+    if (!prompt?.profileId || !prompt?.batches?.length) {
+      setCompatibleBatchPrompt(null)
+      return
+    }
+    setAttachingCompatibleBatches(true)
+    try {
+      for (const batch of prompt.batches) {
+        await api.setBatchProfile(batch.id, prompt.profileId)
+      }
+      setBatches(await api.listBatches())
+      setCompatibleBatchPrompt(null)
+    } catch (error) {
+      setNoticeDialog({
+        title: 'Could not attach compatible imports',
+        description: error?.message || 'Please try again.',
+      })
+    } finally {
+      setAttachingCompatibleBatches(false)
+    }
   }
 
   function queueMappingBaselineCapture() {
@@ -2348,35 +2484,7 @@ function ImportTab() {
     }
   }
 
-  function canImport() {
-    if (!colDate || !colDesc) return false
-    if (amtConv === 'two_column' && !(colDebit && colCredit)) return false
-    if (amtConv !== 'two_column' && !colAmount) return false
-    if (colAccount) {
-      const allMappingsReady = remainingAccountValues.every(v => {
-        const m = accountMap[v]; if (!m) return false; if (m.skip) return true
-        if (m.createNew) {
-          const name = m.newName.trim()
-          if (!name) return false
-          // Force the user to pick the existing account instead of accidentally
-          // creating a duplicate account during import.
-          if (accounts.some(a => a.name.toLowerCase() === name.toLowerCase())) return false
-          return true
-        }
-        return !!m.accountId
-      })
-      return allMappingsReady && importableRowCount > 0
-    }
-    if (singleAccountNew.enabled) {
-      const name = singleAccountNew.name.trim()
-      if (!name) return false
-      if (accounts.some(a => a.name.toLowerCase() === name.toLowerCase())) return false
-      return importableRowCount > 0
-    }
-    return !!accountId && importableRowCount > 0
-  }
-
-  function getImportDisabledReason() {
+  function getMappingDisabledReason() {
     const missingRequiredColumns = []
     if (!colDate) missingRequiredColumns.push('date')
     if (!colDesc) missingRequiredColumns.push('merchant')
@@ -2444,6 +2552,41 @@ function ImportTab() {
 
     if (!colAccount && !singleAccountNew.enabled && !accountId) {
       issues.push('Choose the account to import into.')
+    }
+
+    return issues.join(' ')
+  }
+
+  function canCreateDataSourceFromCurrentMapping() {
+    return !!preview && !selectedProfile && !getMappingDisabledReason()
+  }
+
+  function getCreateDataSourceDisabledReason() {
+    return getMappingDisabledReason()
+  }
+
+  function canImport() {
+    if (getMappingDisabledReason()) return false
+
+    if (importableRowCount <= 0 && !(preview?.previous_batch && colAccount && remainingAccountValues.length === 0) && !(preview?.previous_batch && !colAccount)) {
+      return false
+    }
+
+    if (preview?.previous_batch && !colAccount) return false
+    if (preview?.previous_batch && colAccount && remainingAccountValues.length === 0) return false
+    return true
+  }
+
+  function getImportDisabledReason() {
+    const issues = []
+    const mappingReason = getMappingDisabledReason()
+    if (mappingReason) issues.push(mappingReason)
+
+    if (preview?.previous_batch && !colAccount) {
+      issues.push('This file has already been imported. Undo the earlier import first.')
+    }
+    if (preview?.previous_batch && colAccount && remainingAccountValues.length === 0) {
+      issues.push('All accounts in this file were already imported.')
     }
 
     if (importableRowCount <= 0 && !(preview?.previous_batch && colAccount && remainingAccountValues.length === 0) && !(preview?.previous_batch && !colAccount)) {
@@ -2552,22 +2695,23 @@ function ImportTab() {
     }
   }
 
-  async function saveManualDraftAsDataSource() {
+  async function saveManualDraftAsDataSource(options = {}) {
+    const {
+      draftRecord = manualDraftRecord,
+      activateAfterSave = false,
+    } = options
     const nextName = manualDraftSaveName.trim()
-    const body = buildProfileBodyFromSnapshot(nextName, manualDraftRecord)
+    const body = buildProfileBodyFromSnapshot(nextName, draftRecord)
     if (!body || !nextName || savingManualDraftSource) return
     setSavingManualDraftSource(true)
     try {
       const response = await api.createImportProfile(body)
       const newProfileId = response?.id
-      // Link the most recent profileless batch to the new profile so its file
-      // card moves under the new data source row rather than staying in
-      // "temporary draft" or "unknown data source".
-      const latestManualBatch = batches
-        .filter(b => !b.profile_id)
-        .sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))[0]
-      if (newProfileId && latestManualBatch) {
-        await api.setBatchProfile(latestManualBatch.id, newProfileId).catch(() => { })
+      const currentTemporaryDraftBatch = batches
+        .filter(batch => !batch.profile_id && !batch.unknown_source_fallback)
+        .sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))[0] || null
+      if (newProfileId && currentTemporaryDraftBatch) {
+        await api.setBatchProfile(currentTemporaryDraftBatch.id, newProfileId).catch(() => { })
       }
       const updatedProfiles = await api.getImportProfiles()
       setProfiles(updatedProfiles)
@@ -2575,16 +2719,24 @@ function ImportTab() {
       setManualDraftRecord(loadSavedImportDraftRecord(dbInstanceId, preferenceSubjectId))
       setShowManualDraftSave(false)
       setManualDraftSaveName('')
-      // Open the new profile row so the moved file card is visible in its new home.
       if (newProfileId) {
+        const shouldAdoptCurrentPreview = !selectedProfile && doesDraftMatchPreview(draftRecord, preview)
+        selectUploadSource(newProfileId)
+        if (shouldAdoptCurrentPreview) {
+          setSelectedProfile(newProfileId)
+        }
         setExpandedSourceRows(prev => ({
           ...(prev && typeof prev === 'object' ? prev : {}),
           [`profile:${newProfileId}`]: true,
         }))
+        if (activateAfterSave || shouldAdoptCurrentPreview) {
+          queueMappingBaselineCapture()
+        }
       }
-      api.listBatches().then(setBatches)
-      // Deliberately not switching the upload source selector to the new profile —
-      // the user is reviewing a completed import and hasn't asked to start a new one.
+      setBatches(await api.listBatches())
+      if (newProfileId) {
+        await maybePromptCompatibleUnknownImports(newProfileId)
+      }
     } catch (error) {
       setNoticeDialog({
         title: 'Could not save the temporary draft as a data source',
@@ -3392,6 +3544,15 @@ function ImportTab() {
         />
       ) : null}
 
+      {compatibleBatchPrompt ? (
+        <CompatibleBatchAttachDialog
+          prompt={compatibleBatchPrompt}
+          attaching={attachingCompatibleBatches}
+          onConfirm={attachCompatibleUnknownImports}
+          onCancel={() => setCompatibleBatchPrompt(null)}
+        />
+      ) : null}
+
       {stage === 'upload' && (
         <>
           <div style={{ width: '100%', display: 'grid', gap: 18 }}>
@@ -3506,10 +3667,17 @@ function ImportTab() {
                 {!uploadChoiceReady ? (
                   <div style={{ display: 'grid', justifyItems: 'center', gap: 12, width: 'min(760px, 100%)', maxWidth: '100%', margin: '0 auto 28px', textAlign: 'center' }}>
                     <div style={{ display: 'grid', gap: 6, justifyItems: 'center' }}>
-                      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>
-                        Choose a data source to continue
-                      </div>
-                      <div style={{ maxWidth: 520, fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+                      <div style={{
+                        maxWidth: 620,
+                        padding: '8px 16px',
+                        borderRadius: 16,
+                        border: '1px solid color-mix(in srgb, var(--border) 52%, transparent)',
+                        background: 'color-mix(in srgb, #000 16%, var(--surface))',
+                        fontSize: 13,
+                        fontWeight: 500,
+                        color: 'color-mix(in srgb, var(--text) 84%, var(--muted))',
+                        lineHeight: 1.45,
+                      }}>
                         Select a saved data source, create a new one, or press Skip to use a temporary draft.
                       </div>
                     </div>
@@ -3634,13 +3802,8 @@ function ImportTab() {
                 ) : null}
                 <div style={{ fontSize: 32, marginBottom: 12 }}>{uploadChoiceReady ? '📂' : '🧭'}</div>
                 <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>
-                  {uploadChoiceReady ? 'Drop a CSV file here, or click to browse' : 'Upload will be enabled after you choose a data source'}
+                  {uploadChoiceReady ? 'Drop a CSV file here, or click to browse' : 'Choose a data source or select skip to begin'}
                 </div>
-                {!uploadChoiceReady ? (
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    Pick a saved source above, create a new one, or press Skip for a temporary draft.
-                  </div>
-                ) : null}
                 <input
                   ref={fileInputRef}
                   id="csv-file-input"
@@ -3862,42 +4025,42 @@ function ImportTab() {
                 },
                 amtConv === 'two_column'
                   ? {
-                      key: 'debit',
-                      label: 'Debit column',
-                      headers: columnAnalysis.debitCandidates,
-                      allHeaders: preview.headers,
-                      value: colDebit,
-                      onChange: nextValue => {
-                        if (nextValue) clearMappingSuggestion('debit')
-                        setColDebit(nextValue)
-                      },
-                      suggestedValue: mappingSuggestions.debit,
-                      onAcceptSuggestion: nextValue => {
-                        clearMappingSuggestion('debit')
-                        setColDebit(nextValue)
-                      },
-                      required: true,
-                      hint: columnAnalysis.debitCandidates.length > 0 && !colDebit ? formatLikelyMatchLabel(columnAnalysis.debitCandidates.length) : '',
-                    }
-                  : {
-                      key: 'amount',
-                      label: 'Amount',
-                      headers: columnAnalysis.amountCandidates,
-                      allHeaders: preview.headers,
-                      value: colAmount,
-                      onChange: nextValue => {
-                        if (nextValue) clearMappingSuggestion('amount')
-                        setColAmount(nextValue)
-                      },
-                      suggestedValue: mappingSuggestions.amount,
-                      onAcceptSuggestion: nextValue => {
-                        clearMappingSuggestion('amount')
-                        setColAmount(nextValue)
-                      },
-                      required: true,
-                      hint: amountSelectHint,
-                      tone: selectedAmountAnalysis && selectedAmountAnalysis.sampleCount > 0 && selectedAmountAnalysis.amountMatches === 0 ? 'danger' : 'muted',
+                    key: 'debit',
+                    label: 'Debit column',
+                    headers: columnAnalysis.debitCandidates,
+                    allHeaders: preview.headers,
+                    value: colDebit,
+                    onChange: nextValue => {
+                      if (nextValue) clearMappingSuggestion('debit')
+                      setColDebit(nextValue)
                     },
+                    suggestedValue: mappingSuggestions.debit,
+                    onAcceptSuggestion: nextValue => {
+                      clearMappingSuggestion('debit')
+                      setColDebit(nextValue)
+                    },
+                    required: true,
+                    hint: columnAnalysis.debitCandidates.length > 0 && !colDebit ? formatLikelyMatchLabel(columnAnalysis.debitCandidates.length) : '',
+                  }
+                  : {
+                    key: 'amount',
+                    label: 'Amount',
+                    headers: columnAnalysis.amountCandidates,
+                    allHeaders: preview.headers,
+                    value: colAmount,
+                    onChange: nextValue => {
+                      if (nextValue) clearMappingSuggestion('amount')
+                      setColAmount(nextValue)
+                    },
+                    suggestedValue: mappingSuggestions.amount,
+                    onAcceptSuggestion: nextValue => {
+                      clearMappingSuggestion('amount')
+                      setColAmount(nextValue)
+                    },
+                    required: true,
+                    hint: amountSelectHint,
+                    tone: selectedAmountAnalysis && selectedAmountAnalysis.sampleCount > 0 && selectedAmountAnalysis.amountMatches === 0 ? 'danger' : 'muted',
+                  },
                 {
                   key: 'pending',
                   label: 'Pending',
@@ -3917,42 +4080,42 @@ function ImportTab() {
                 },
                 amtConv === 'two_column'
                   ? {
-                      key: 'credit',
-                      label: 'Credit column',
-                      headers: columnAnalysis.creditCandidates,
-                      allHeaders: preview.headers,
-                      value: colCredit,
-                      onChange: nextValue => {
-                        if (nextValue) clearMappingSuggestion('credit')
-                        setColCredit(nextValue)
-                      },
-                      suggestedValue: mappingSuggestions.credit,
-                      onAcceptSuggestion: nextValue => {
-                        clearMappingSuggestion('credit')
-                        setColCredit(nextValue)
-                      },
-                      required: true,
-                      hint: columnAnalysis.creditCandidates.length > 0 && !colCredit ? formatLikelyMatchLabel(columnAnalysis.creditCandidates.length) : '',
-                    }
+                    key: 'credit',
+                    label: 'Credit column',
+                    headers: columnAnalysis.creditCandidates,
+                    allHeaders: preview.headers,
+                    value: colCredit,
+                    onChange: nextValue => {
+                      if (nextValue) clearMappingSuggestion('credit')
+                      setColCredit(nextValue)
+                    },
+                    suggestedValue: mappingSuggestions.credit,
+                    onAcceptSuggestion: nextValue => {
+                      clearMappingSuggestion('credit')
+                      setColCredit(nextValue)
+                    },
+                    required: true,
+                    hint: columnAnalysis.creditCandidates.length > 0 && !colCredit ? formatLikelyMatchLabel(columnAnalysis.creditCandidates.length) : '',
+                  }
                   : null,
                 amtConv === 'single_unsigned'
                   ? {
-                      key: 'direction',
-                      label: 'Direction column',
-                      headers: columnAnalysis.directionCandidates,
-                      allHeaders: preview.headers,
-                      value: colDir,
-                      onChange: nextValue => {
-                        if (nextValue) clearMappingSuggestion('direction')
-                        setColDir(nextValue)
-                      },
-                      suggestedValue: mappingSuggestions.direction,
-                      onAcceptSuggestion: nextValue => {
-                        clearMappingSuggestion('direction')
-                        setColDir(nextValue)
-                      },
-                      hint: columnAnalysis.directionCandidates.length > 0 && !colDir ? formatLikelyMatchLabel(columnAnalysis.directionCandidates.length) : '',
-                    }
+                    key: 'direction',
+                    label: 'Direction column',
+                    headers: columnAnalysis.directionCandidates,
+                    allHeaders: preview.headers,
+                    value: colDir,
+                    onChange: nextValue => {
+                      if (nextValue) clearMappingSuggestion('direction')
+                      setColDir(nextValue)
+                    },
+                    suggestedValue: mappingSuggestions.direction,
+                    onAcceptSuggestion: nextValue => {
+                      clearMappingSuggestion('direction')
+                      setColDir(nextValue)
+                    },
+                    hint: columnAnalysis.directionCandidates.length > 0 && !colDir ? formatLikelyMatchLabel(columnAnalysis.directionCandidates.length) : '',
+                  }
                   : null,
                 {
                   key: 'description',
@@ -4158,6 +4321,71 @@ function ImportTab() {
                 <input type="checkbox" checked={applyCat} onChange={e => setApplyCat(e.target.checked)} />
                 Apply categorization rules on import
               </label>
+              {!selectedProfile ? (
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  {showManualDraftSave ? (
+                    <>
+                      <TransientTextInput
+                        value={manualDraftSaveName}
+                        onChange={setManualDraftSaveName}
+                        onCommit={() => saveManualDraftAsDataSource({
+                          draftRecord: buildCurrentManualDraftRecord(),
+                          activateAfterSave: true,
+                        })}
+                        onCancel={() => {
+                          setShowManualDraftSave(false)
+                          setManualDraftSaveName('')
+                        }}
+                        restoreOnEscape
+                        onBlurCommit={false}
+                        placeholder="Data source name"
+                        style={{
+                          width: 200,
+                          maxWidth: '100%',
+                          background: 'var(--surface2)',
+                          color: 'var(--text)',
+                          border: '1px solid var(--accent)',
+                          borderRadius: 999,
+                          padding: '5px 12px',
+                          fontSize: 12,
+                          outline: 'none',
+                        }}
+                      />
+                      <Button
+                        small
+                        onClick={() => saveManualDraftAsDataSource({
+                          draftRecord: buildCurrentManualDraftRecord(),
+                          activateAfterSave: true,
+                        })}
+                        disabled={!manualDraftSaveName.trim() || !canCreateDataSourceFromCurrentMapping() || savingManualDraftSource}
+                      >
+                        {savingManualDraftSource ? 'Creating…' : 'Create'}
+                      </Button>
+                      <Button
+                        small
+                        variant="ghost"
+                        onClick={() => {
+                          setShowManualDraftSave(false)
+                          setManualDraftSaveName('')
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </>
+                  ) : (
+                    <span title={!canCreateDataSourceFromCurrentMapping() && !loading ? getCreateDataSourceDisabledReason() : ''}>
+                      <Button
+                        small
+                        variant="ghost"
+                        onClick={() => openManualDraftSaveEditor(inferFilenamePattern(preview?.filename) || '')}
+                        disabled={!canCreateDataSourceFromCurrentMapping() || loading}
+                      >
+                        Create data source
+                      </Button>
+                    </span>
+                  )}
+                </div>
+              ) : null}
             </div>
           </Card>
 
@@ -4665,7 +4893,17 @@ function ImportTab() {
               {importResult.errors.map((e, i) => <div key={i} style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 3 }}>Row {e.row}: {e.reason}</div>)}
             </div>
           )}
-          <Button onClick={resetImport}>Import another file</Button>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {importResult?.batch_id ? (
+              <Button
+                variant="danger"
+                onClick={() => handleUndoClick(getUndoTargetForSource(importResult))}
+              >
+                Undo import
+              </Button>
+            ) : null}
+            <Button onClick={resetImport}>Import another file</Button>
+          </div>
         </Card>
       )}
 
@@ -4835,7 +5073,11 @@ function ImportTab() {
                                 </button>
                               )}
                               <span>{importedFileCountLabel}</span>
-                              <span style={{ marginLeft: 12 }}>{row.latestBatch ? `Last used ${row.latestBatch.imported_at.slice(0, 16).replace('T', ' ')}` : 'Not used yet'}</span>
+                              {row.latestBatch ? (
+                                <span style={{ marginLeft: 12 }}>
+                                  Last used {row.latestBatch.imported_at.slice(0, 16).replace('T', ' ')}
+                                </span>
+                              ) : null}
                               {!isUnsaved && row.hasImportedCategories && sourceRuleProgressLabel ? (
                                 <span>{sourceRuleProgressLabel}</span>
                               ) : null}
@@ -4911,7 +5153,7 @@ function ImportTab() {
                             ) : (
                               <button
                                 type="button"
-                                onClick={() => setShowManualDraftSave(true)}
+                                onClick={() => openManualDraftSaveEditor(manualDraftRecord?.filenamePattern || '')}
                                 style={{
                                   background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
                                   color: 'var(--accent2)',

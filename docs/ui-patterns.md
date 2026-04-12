@@ -114,6 +114,8 @@ Tree views should use the same visual grammar wherever they appear.
 
 - Expand/collapse controls should stay close to the label they affect.
 
+- On the Accounts page, merged child accounts should read as a lightweight second level under the parent account rather than as a second flat table with repeated owner/type columns.
+
 ## Section toggles
 
 Settings uses collapsible top-level sections.
@@ -143,6 +145,10 @@ For account rows, owner rows, and similar editable lists:
 - Keep row height stable between display and edit states so the list does not jump.
 
 - Destructive actions should stay near the row they affect and use the same red `x` pattern used elsewhere.
+
+- Account merge behavior should stay in-place on the Accounts page: drag handles start the regrouping gesture, eligible drop targets stay visually clear, and child rows hide owner/type fields instead of duplicating parent metadata.
+
+- Sending a merged child account away should use the app trash flow rather than immediate hard deletion, with recovery managed from Settings.
 
 Inline row creation should usually happen inside the existing list, not in a detached panel above it.
 

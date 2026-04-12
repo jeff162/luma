@@ -2,32 +2,236 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Account records anchor ownership and import behavior across the app.
+Account records now serve two related account-lifecycle models.
 
-This router keeps account edits aligned with transaction history by treating the
-account owner as the default owner for imported rows, while only auto-assigning
-an owner when the household model makes that choice unambiguous.
+- Active root accounts are the selectable/reportable physical accounts the rest of the app works with.
+- Child accounts keep historical account numbers visible on the Accounts page while sharing a parent display name elsewhere.
+- Trashed child accounts stay recoverable until the trash is emptied, at which point their references are folded into the parent.
 """
 
+import json
 import uuid
+from datetime import datetime
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+
 from backend.db.database import SHARED_OWNER_NAME, get_db
 
 router = APIRouter()
 
 
 class AccountCreate(BaseModel):
-    name:     str
-    type:     Optional[str] = None
+    name: str
+    type: Optional[str] = None
     owner_id: Optional[str] = None
 
 
 class AccountUpdate(BaseModel):
     owner_id: Optional[str] = None
-    name:     Optional[str] = None
-    type:     Optional[str] = None
+    name: Optional[str] = None
+    type: Optional[str] = None
+
+
+class AccountAttachRequest(BaseModel):
+    parent_account_id: str
+
+
+def _normalize_match_value(value: Optional[str]) -> str:
+    return (value or "").strip().lower()
+
+
+def _get_account_row(conn, account_id: str):
+    return conn.execute(
+        """
+        SELECT
+            a.id,
+            a.name,
+            a.display_name,
+            a.institution,
+            a.type,
+            a.subtype,
+            a.mask,
+            a.owner_id,
+            a.parent_account_id,
+            a.trashed_at,
+            a.plaid_item_id,
+            o.name AS owner_name,
+            o.color AS owner_color
+        FROM account a
+        LEFT JOIN owner o ON o.id = a.owner_id
+        WHERE a.id = ?
+        """,
+        (account_id,),
+    ).fetchone()
+
+
+def _list_account_rows(conn, *, include_children: bool, include_trashed: bool):
+    clauses = []
+    params: list[str] = []
+    if not include_children:
+        clauses.append("a.parent_account_id IS NULL")
+    if not include_trashed:
+        clauses.append("a.trashed_at IS NULL")
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    return conn.execute(
+        f"""
+        SELECT
+            a.id,
+            a.name,
+            a.display_name,
+            a.institution,
+            a.type,
+            a.subtype,
+            a.mask,
+            a.owner_id,
+            a.parent_account_id,
+            a.trashed_at,
+            a.plaid_item_id,
+            o.name AS owner_name,
+            o.color AS owner_color
+        FROM account a
+        LEFT JOIN owner o ON o.id = a.owner_id
+        {where}
+        ORDER BY
+            CASE WHEN a.parent_account_id IS NULL THEN 0 ELSE 1 END,
+            LOWER(COALESCE(a.display_name, a.name)),
+            LOWER(a.name),
+            a.id
+        """,
+        params,
+    ).fetchall()
+
+
+def _get_child_count(conn, account_id: str) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) FROM account WHERE parent_account_id = ? AND trashed_at IS NULL",
+        (account_id,),
+    ).fetchone()[0]
+
+
+def _assert_owner_exists(conn, owner_id: Optional[str]) -> Optional[str]:
+    owner_val = owner_id.strip() if owner_id else None
+    if not owner_val:
+        return None
+    owner = conn.execute("SELECT id FROM owner WHERE id = ?", (owner_val,)).fetchone()
+    if not owner:
+        raise HTTPException(status_code=404, detail="Owner not found")
+    return owner_val
+
+
+def _set_root_display_name(conn, account_id: str, display_name: str):
+    conn.execute(
+        "UPDATE account SET display_name = ? WHERE id = ?",
+        (display_name, account_id),
+    )
+    conn.execute(
+        "UPDATE account SET display_name = ? WHERE parent_account_id = ?",
+        (display_name, account_id),
+    )
+
+
+def _replace_account_reference_in_profile_column_maps(conn, source_account_id: str, target_account_id: str):
+    rows = conn.execute(
+        "SELECT id, column_map FROM csv_import_profile"
+    ).fetchall()
+    for row in rows:
+        column_map = {}
+        try:
+            parsed = json.loads(row["column_map"] or "{}")
+            if isinstance(parsed, dict):
+                column_map = parsed
+        except Exception:
+            continue
+        assignments = column_map.get("account_assignments")
+        if not isinstance(assignments, dict):
+            continue
+        changed = False
+        next_assignments = {}
+        for csv_value, account_id in assignments.items():
+            if account_id == source_account_id:
+                next_assignments[csv_value] = target_account_id
+                changed = True
+            else:
+                next_assignments[csv_value] = account_id
+        if changed:
+            column_map["account_assignments"] = next_assignments
+            conn.execute(
+                "UPDATE csv_import_profile SET column_map = ? WHERE id = ?",
+                (json.dumps(column_map), row["id"]),
+            )
+
+
+def _replace_account_reference_in_batch_snapshots(conn, source_account_id: str, target_account_id: str):
+    rows = conn.execute(
+        "SELECT id, config_snapshot FROM import_batch WHERE config_snapshot IS NOT NULL AND TRIM(config_snapshot) <> ''"
+    ).fetchall()
+    for row in rows:
+        snapshot = {}
+        try:
+            parsed = json.loads(row["config_snapshot"] or "{}")
+            if isinstance(parsed, dict):
+                snapshot = parsed
+        except Exception:
+            continue
+
+        changed = False
+        if snapshot.get("account_id") == source_account_id:
+            snapshot["account_id"] = target_account_id
+            changed = True
+        account_map = snapshot.get("account_map")
+        if isinstance(account_map, dict):
+            next_account_map = {}
+            map_changed = False
+            for csv_value, account_id in account_map.items():
+                if account_id == source_account_id:
+                    next_account_map[csv_value] = target_account_id
+                    map_changed = True
+                else:
+                    next_account_map[csv_value] = account_id
+            if map_changed:
+                snapshot["account_map"] = next_account_map
+                changed = True
+
+        if changed:
+            conn.execute(
+                "UPDATE import_batch SET config_snapshot = ? WHERE id = ?",
+                (json.dumps(snapshot), row["id"]),
+            )
+
+
+def _finalize_trashed_account(conn, account_row):
+    source_account_id = account_row["id"]
+    target_account_id = account_row["parent_account_id"]
+    if target_account_id:
+        conn.execute(
+            "UPDATE txn SET account_id = ? WHERE account_id = ?",
+            (target_account_id, source_account_id),
+        )
+        conn.execute(
+            "UPDATE category_rule SET account_id = ? WHERE account_id = ?",
+            (target_account_id, source_account_id),
+        )
+        conn.execute(
+            "UPDATE csv_import_profile SET account_id = ? WHERE account_id = ?",
+            (target_account_id, source_account_id),
+        )
+        conn.execute(
+            "UPDATE import_batch_account SET account_id = ? WHERE account_id = ?",
+            (target_account_id, source_account_id),
+        )
+        _replace_account_reference_in_profile_column_maps(conn, source_account_id, target_account_id)
+        _replace_account_reference_in_batch_snapshots(conn, source_account_id, target_account_id)
+    else:
+        conn.execute("DELETE FROM txn WHERE account_id = ?", (source_account_id,))
+        conn.execute("DELETE FROM category_rule WHERE account_id = ?", (source_account_id,))
+        conn.execute("UPDATE csv_import_profile SET account_id = NULL WHERE account_id = ?", (source_account_id,))
+        conn.execute("UPDATE import_batch_account SET account_id = NULL WHERE account_id = ?", (source_account_id,))
+        _replace_account_reference_in_profile_column_maps(conn, source_account_id, "")
+        _replace_account_reference_in_batch_snapshots(conn, source_account_id, "")
+
+    conn.execute("DELETE FROM account WHERE id = ?", (source_account_id,))
 
 
 def resolve_default_owner_id(conn, owner_id: Optional[str]) -> Optional[str]:
@@ -51,14 +255,34 @@ def resolve_default_owner_id(conn, owner_id: Optional[str]) -> Optional[str]:
 
 
 @router.get("")
-def list_accounts():
+def list_accounts(include_children: bool = False, include_trashed: bool = False):
+    with get_db() as conn:
+        rows = _list_account_rows(conn, include_children=include_children, include_trashed=include_trashed)
+    return [dict(r) for r in rows]
+
+
+@router.get("/trash")
+def list_trashed_accounts():
     with get_db() as conn:
         rows = conn.execute(
-            """SELECT a.id, a.name, a.institution, a.type, a.subtype, a.mask,
-                      a.owner_id, a.plaid_item_id, o.name AS owner_name, o.color AS owner_color
-               FROM account a
-               LEFT JOIN owner o ON o.id = a.owner_id
-               ORDER BY a.name"""
+            """
+            SELECT
+                a.id,
+                a.name,
+                a.display_name,
+                a.type,
+                a.owner_id,
+                a.parent_account_id,
+                a.trashed_at,
+                p.name AS parent_name,
+                p.display_name AS parent_display_name,
+                o.name AS owner_name
+            FROM account a
+            LEFT JOIN account p ON p.id = a.parent_account_id
+            LEFT JOIN owner o ON o.id = a.owner_id
+            WHERE a.trashed_at IS NOT NULL
+            ORDER BY a.trashed_at DESC, LOWER(a.name), a.id
+            """
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -77,45 +301,46 @@ def create_account(body: AccountCreate):
         conn.execute(
             """
             INSERT INTO account
-                (id, plaid_account_id, plaid_item_id, name, institution, type, subtype, mask, owner_id)
-            VALUES (?, NULL, 'manual', ?, NULL, ?, NULL, NULL, ?)
+                (id, plaid_account_id, plaid_item_id, name, display_name, institution, type, subtype, mask, owner_id, parent_account_id, trashed_at)
+            VALUES (?, NULL, 'manual', ?, ?, NULL, ?, NULL, NULL, ?, NULL, NULL)
             """,
-            (account_id, name, account_type, owner_id),
+            (account_id, name, name, account_type, owner_id),
         )
-        row = conn.execute(
-            """SELECT a.id, a.name, a.institution, a.type, a.subtype, a.mask,
-                      a.owner_id, a.plaid_item_id, o.name AS owner_name, o.color AS owner_color
-               FROM account a
-               LEFT JOIN owner o ON o.id = a.owner_id
-               WHERE a.id = ?""",
-            (account_id,),
-        ).fetchone()
+        row = _get_account_row(conn, account_id)
     return dict(row)
 
 
 @router.patch("/{account_id}")
 def update_account(account_id: str, body: AccountUpdate):
     with get_db() as conn:
-        acc = conn.execute(
-            "SELECT id FROM account WHERE id = ?", (account_id,)
-        ).fetchone()
+        acc = _get_account_row(conn, account_id)
         if not acc:
             raise HTTPException(status_code=404, detail="Account not found")
 
+        has_children = _get_child_count(conn, account_id) > 0
+        grouped = bool(acc["parent_account_id"]) or has_children
+
         if body.name is not None and body.name.strip():
+            next_name = body.name.strip()
             conn.execute(
                 "UPDATE account SET name = ? WHERE id = ?",
-                (body.name.strip(), account_id),
+                (next_name, account_id),
             )
+            if not acc["parent_account_id"]:
+                _set_root_display_name(conn, account_id, next_name)
 
         if body.type is not None and body.type.strip():
+            if grouped:
+                raise HTTPException(status_code=400, detail="Ungroup this account before changing its type")
             conn.execute(
                 "UPDATE account SET type = ? WHERE id = ?",
                 (body.type.strip(), account_id),
             )
 
         if body.owner_id is not None:
-            owner_val = body.owner_id if body.owner_id != "" else None
+            if grouped:
+                raise HTTPException(status_code=400, detail="Ungroup this account before changing its owner")
+            owner_val = _assert_owner_exists(conn, body.owner_id if body.owner_id != "" else None)
             conn.execute(
                 "UPDATE account SET owner_id = ? WHERE id = ?",
                 (owner_val, account_id),
@@ -129,14 +354,112 @@ def update_account(account_id: str, body: AccountUpdate):
     return {"ok": True}
 
 
+@router.post("/{account_id}/attach")
+def attach_account(account_id: str, body: AccountAttachRequest):
+    with get_db() as conn:
+        account = _get_account_row(conn, account_id)
+        parent = _get_account_row(conn, body.parent_account_id)
+        if not account or not parent:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if account["trashed_at"] or parent["trashed_at"]:
+            raise HTTPException(status_code=400, detail="Restore trashed accounts before regrouping them")
+        if account["id"] == parent["id"]:
+            raise HTTPException(status_code=400, detail="An account cannot be merged into itself")
+        if parent["parent_account_id"]:
+            raise HTTPException(status_code=400, detail="Only top-level accounts can accept merged children")
+        if _get_child_count(conn, account_id) > 0:
+            raise HTTPException(status_code=400, detail="Ungroup this account's children before merging it")
+        if _normalize_match_value(account["owner_id"]) != _normalize_match_value(parent["owner_id"]):
+            raise HTTPException(status_code=400, detail="Only accounts with the same owner can be merged")
+        if _normalize_match_value(account["type"]) != _normalize_match_value(parent["type"]):
+            raise HTTPException(status_code=400, detail="Only accounts with the same type can be merged")
+
+        conn.execute(
+            "UPDATE account SET parent_account_id = ?, display_name = ?, trashed_at = NULL WHERE id = ?",
+            (parent["id"], parent["display_name"] or parent["name"], account["id"]),
+        )
+    return {"ok": True}
+
+
+@router.post("/{account_id}/detach")
+def detach_account(account_id: str):
+    with get_db() as conn:
+        account = _get_account_row(conn, account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        conn.execute(
+            "UPDATE account SET parent_account_id = NULL, display_name = name, trashed_at = NULL WHERE id = ?",
+            (account_id,),
+        )
+    return {"ok": True}
+
+
+@router.post("/{account_id}/trash")
+def trash_account(account_id: str):
+    with get_db() as conn:
+        account = _get_account_row(conn, account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if account["trashed_at"]:
+            return {"ok": True}
+        if not account["parent_account_id"]:
+            raise HTTPException(status_code=400, detail="Only merged child accounts can be sent to trash")
+        conn.execute(
+            "UPDATE account SET trashed_at = ? WHERE id = ?",
+            (datetime.utcnow().isoformat(), account_id),
+        )
+    return {"ok": True}
+
+
+@router.post("/{account_id}/restore")
+def restore_account(account_id: str):
+    with get_db() as conn:
+        account = _get_account_row(conn, account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if not account["trashed_at"]:
+            return {"ok": True}
+
+        if account["parent_account_id"]:
+            parent = _get_account_row(conn, account["parent_account_id"])
+            if parent and not parent["trashed_at"]:
+                conn.execute(
+                    "UPDATE account SET trashed_at = NULL, display_name = ? WHERE id = ?",
+                    (parent["display_name"] or parent["name"], account_id),
+                )
+                return {"ok": True}
+
+        conn.execute(
+            "UPDATE account SET parent_account_id = NULL, display_name = name, trashed_at = NULL WHERE id = ?",
+            (account_id,),
+        )
+    return {"ok": True}
+
+
+@router.post("/trash/empty")
+def empty_account_trash():
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, parent_account_id
+            FROM account
+            WHERE trashed_at IS NOT NULL
+            ORDER BY trashed_at ASC, id ASC
+            """
+        ).fetchall()
+        for row in rows:
+            _finalize_trashed_account(conn, row)
+    return {"ok": True, "emptied": len(rows)}
+
+
 @router.delete("/{account_id}")
 def delete_account(account_id: str):
     with get_db() as conn:
-        acc = conn.execute(
-            "SELECT id FROM account WHERE id = ?", (account_id,)
-        ).fetchone()
+        acc = _get_account_row(conn, account_id)
         if not acc:
             raise HTTPException(status_code=404, detail="Account not found")
+        if _get_child_count(conn, account_id) > 0:
+            raise HTTPException(status_code=400, detail="Ungroup or trash child accounts before deleting this account")
         conn.execute("DELETE FROM txn WHERE account_id = ?", (account_id,))
         conn.execute("DELETE FROM account WHERE id = ?", (account_id,))
     return {"ok": True}

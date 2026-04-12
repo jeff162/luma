@@ -18,11 +18,24 @@ from backend.db.database import get_db, get_shared_owner_id
 
 router = APIRouter()
 
+EFFECTIVE_ACCOUNT_ID_SQL = "COALESCE((SELECT parent_account_id FROM account WHERE id = t.account_id), t.account_id)"
+
 
 class CategoryOverride(BaseModel):
     # Category edits from the transaction UI can also persist the note field in the same save gesture.
     category_id: str
     notes: Optional[str] = None
+
+
+def _append_effective_account_filter(clauses, params, *, account_id: Optional[str], account_ids: Optional[str]):
+    if account_ids:
+        ids = [i.strip() for i in account_ids.split(',') if i.strip()]
+        placeholders = ','.join('?' * len(ids))
+        clauses.append(f"{EFFECTIVE_ACCOUNT_ID_SQL} IN ({placeholders})")
+        params.extend(ids)
+    elif account_id:
+        clauses.append(f"{EFFECTIVE_ACCOUNT_ID_SQL} = ?")
+        params.append(account_id)
 
 
 @router.get("")
@@ -59,14 +72,7 @@ def list_transactions(
     elif month:
         clauses.append("t.date LIKE ?")
         params.append(f"{month}%")
-    if account_ids:
-        ids = [i.strip() for i in account_ids.split(',') if i.strip()]
-        placeholders = ','.join('?' * len(ids))
-        clauses.append(f"t.account_id IN ({placeholders})")
-        params.extend(ids)
-    elif account_id:
-        clauses.append("t.account_id = ?")
-        params.append(account_id)
+    _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
     if category_id == "__uncategorized__":
         clauses.append("t.category_id IS NULL")
     elif category_id and category_id.startswith("__group__"):
@@ -133,10 +139,10 @@ def list_transactions(
             SELECT
                 t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
                 t.is_pending, t.category_overridden, t.notes,
-                t.account_id,
+                COALESCE(a.parent_account_id, a.id) AS account_id,
                 t.owner_id,
-                a.name        AS account_name,
-                a.mask        AS account_mask,
+                COALESCE(a.display_name, a.name) AS account_name,
+                COALESCE(p.mask, a.mask)         AS account_mask,
                 t.category_id,
                 c.name        AS category_name,
                 NULL          AS category_color,
@@ -144,6 +150,7 @@ def list_transactions(
                 o.color       AS owner_color
             FROM   txn t
             JOIN   account  a ON a.id = t.account_id
+            LEFT JOIN account  p ON p.id = a.parent_account_id
             LEFT JOIN category c ON c.id = t.category_id
             LEFT JOIN owner    o ON o.id = t.owner_id
             {where}
@@ -224,14 +231,7 @@ def spending_by_category(
     clauses = ["t.date LIKE ?", "t.amount > 0", "t.is_pending = 0"]
     params  = [f"{month}%"]
 
-    if account_ids:
-        ids = [i.strip() for i in account_ids.split(',') if i.strip()]
-        placeholders = ','.join('?' * len(ids))
-        clauses.append(f"t.account_id IN ({placeholders})")
-        params.extend(ids)
-    elif account_id:
-        clauses.append("t.account_id = ?")
-        params.append(account_id)
+    _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
 
     where = "WHERE " + " AND ".join(clauses)
 
@@ -287,14 +287,7 @@ def spending_by_group(
     elif month:
         clauses.append("t.date LIKE ?"); params.append(f"{month}%")
 
-    if account_ids:
-        ids = [i.strip() for i in account_ids.split(',') if i.strip()]
-        placeholders = ','.join('?' * len(ids))
-        clauses.append(f"t.account_id IN ({placeholders})")
-        params.extend(ids)
-    elif account_id:
-        clauses.append("t.account_id = ?")
-        params.append(account_id)
+    _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
     if owner_ids:
         ids = [i.strip() for i in owner_ids.split(',') if i.strip()]
         if 'unassigned' in ids:
@@ -378,14 +371,7 @@ def spending_by_category_in_group(
     )
     params.extend([group_id, group_id])
 
-    if account_ids:
-        ids = [i.strip() for i in account_ids.split(',') if i.strip()]
-        placeholders = ','.join('?' * len(ids))
-        clauses.append(f"t.account_id IN ({placeholders})")
-        params.extend(ids)
-    elif account_id:
-        clauses.append("t.account_id = ?")
-        params.append(account_id)
+    _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
 
     if owner_ids:
         ids = [i.strip() for i in owner_ids.split(',') if i.strip()]
@@ -454,14 +440,7 @@ def monthly_trend(
             clauses.append("t.category_id = ?")
             params.append(category_id)
 
-    if account_ids:
-        ids = [i.strip() for i in account_ids.split(',') if i.strip()]
-        placeholders = ','.join('?' * len(ids))
-        clauses.append(f"t.account_id IN ({placeholders})")
-        params.extend(ids)
-    elif account_id:
-        clauses.append("t.account_id = ?")
-        params.append(account_id)
+    _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
 
     if date_start:
         clauses.append("t.date >= ?")
@@ -517,14 +496,7 @@ def monthly_by_group(
     ]
     params = [f"-{months}"]
 
-    if account_ids:
-        ids = [i.strip() for i in account_ids.split(',') if i.strip()]
-        placeholders = ','.join('?' * len(ids))
-        clauses.append(f"t.account_id IN ({placeholders})")
-        params.extend(ids)
-    elif account_id:
-        clauses.append("t.account_id = ?")
-        params.append(account_id)
+    _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
 
     if group_id:
         clauses.append("(c.parent_id = ? OR (c.parent_id IS NULL AND c.id = ?))")

@@ -91,7 +91,7 @@ def get_db(db_path: str | None = None):
 # Migrations are additive startup upgrades for existing databases only; fresh installs
 # are created directly at `CURRENT_VERSION` and should not replay the migration chain.
 
-CURRENT_VERSION = 4
+CURRENT_VERSION = 5
 
 MIGRATIONS = {}
 
@@ -200,6 +200,23 @@ def m4_profile_template_file_metadata(conn):
         conn.execute("ALTER TABLE csv_import_profile ADD COLUMN template_file_hash TEXT")
 
 
+@migration(5)
+def m5_account_display_name_and_trash(conn):
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(account)").fetchall()
+    }
+    if "display_name" not in columns:
+        conn.execute("ALTER TABLE account ADD COLUMN display_name TEXT")
+    if "parent_account_id" not in columns:
+        conn.execute("ALTER TABLE account ADD COLUMN parent_account_id TEXT REFERENCES account(id) ON DELETE SET NULL")
+    if "trashed_at" not in columns:
+        conn.execute("ALTER TABLE account ADD COLUMN trashed_at TEXT")
+    conn.execute("UPDATE account SET display_name = name WHERE display_name IS NULL OR TRIM(display_name) = ''")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_account_parent ON account(parent_account_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_account_trashed ON account(trashed_at)")
+
+
 def init_db(db_path: str | None = None):
     resolved_path = _normalize_db_path(db_path)
     with get_db(resolved_path) as conn:
@@ -262,11 +279,14 @@ def init_db(db_path: str | None = None):
                 plaid_account_id TEXT UNIQUE,
                 plaid_item_id    TEXT NOT NULL,
                 name             TEXT NOT NULL,
+                display_name     TEXT NOT NULL,
                 institution      TEXT,
                 type             TEXT,
                 subtype          TEXT,
                 mask             TEXT,
-                owner_id         TEXT REFERENCES owner(id) ON DELETE SET NULL
+                owner_id         TEXT REFERENCES owner(id) ON DELETE SET NULL,
+                parent_account_id TEXT REFERENCES account(id) ON DELETE SET NULL,
+                trashed_at       TEXT
             );
 
             -- Core transaction table. `txn` not `transaction` (SQLite reserved word).
@@ -467,6 +487,11 @@ def _seed_default_categories(conn: sqlite3.Connection):
     upsert_cat("Parking & Tolls", transport)
     upsert_cat("Public Transit", transport)
     upsert_cat("Rideshare", transport)
+
+    upsert_cat("Hotel", travel)
+    upsert_cat("Air Travel", travel)
+    upsert_cat("Rental Car", travel)
+    upsert_cat("Vacation Food", travel)
 
     upsert_cat("Clothing", shopping)
     upsert_cat("Electronics", shopping)

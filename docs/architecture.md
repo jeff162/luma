@@ -112,6 +112,8 @@ For many inline edits, the UI updates first and the API call is fire-and-forget.
 
 - **Handles:** CSV preview/import, saved import profiles, undoable import batches, CSV export, data backup/restore, and credentials backup/restore
 
+- **Effective-account behavior:** import review, saved-profile summaries, and CSV export resolve grouped child accounts through the parent's display name so historical account numbers still read as one physical account outside the Accounts page
+
 - **Import history contract:** recent-import batch rows expose lightweight summary data; large duplicate-review payloads are fetched separately when the duplicate viewer is opened
 
 - **Saved-data-source behavior:** saved data sources keep shared pending imported-category review and shared rule-suggestion review across all attached files; profileless and unknown-source imports keep those review flows per file instead
@@ -183,6 +185,8 @@ FinTrack uses several distinct storage layers for working state.
 - **Lifespan:** durable application data until changed, deleted, restored, or replaced
 
 - **Contains:** transactions, categories, rules, accounts, owners, saved import profiles, import batches, snapshots, and other import/export data
+
+- **Account lifecycle note:** account rows can participate in a parent/child merge model for reissued account numbers, and child accounts can move through a recoverable trash state before permanent cleanup folds their references into the parent
 
 #### Developer reset tools
 

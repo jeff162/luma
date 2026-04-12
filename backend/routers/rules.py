@@ -161,13 +161,14 @@ def list_rules(search: Optional[str] = Query(None)):
                 p.name  AS parent_name,
                 o.name  AS owner_name,
                 o.color AS owner_color,
-                a.name  AS account_name,
-                a.mask  AS account_mask
+                COALESCE(a.display_name, a.name) AS account_name,
+                COALESCE(ap.mask, a.mask)        AS account_mask
             FROM   category_rule cr
             JOIN   category c  ON c.id  = cr.category_id
             LEFT JOIN category p ON p.id = c.parent_id
             LEFT JOIN owner    o ON o.id = cr.owner_id
             LEFT JOIN account  a ON a.id = cr.account_id
+            LEFT JOIN account ap ON ap.id = a.parent_account_id
             {where}
             ORDER BY
                 cr.keyword ASC,

@@ -78,6 +78,12 @@ Important behavior:
 
 - account ownership affects owner-based reporting and tasks
 
+- `display_name` is the effective label used outside the Accounts page; standalone accounts keep it aligned to `name`, while merged child accounts inherit the parent's display name
+
+- `parent_account_id = NULL` means the row is a top-level selectable account; child accounts keep historical account numbers visible on the Accounts page but resolve through the parent for account filtering, import/export display, and other account-facing surfaces
+
+- `trashed_at != NULL` means the child account is hidden but still recoverable; emptying the trash is the irreversible step that folds remaining references into the parent and deletes the child row
+
 ## Transactions
 
 Transactions are the central fact table.

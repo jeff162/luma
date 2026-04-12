@@ -23,7 +23,11 @@ def get_tasks():
             # Owner-related tasks stay hidden until the household actually uses owner
             # tracking, so a fresh single-user install does not start with noisy warnings.
             unowned = conn.execute("""
-                SELECT COUNT(*) AS n FROM account WHERE owner_id IS NULL
+                SELECT COUNT(*) AS n
+                FROM account
+                WHERE owner_id IS NULL
+                  AND parent_account_id IS NULL
+                  AND trashed_at IS NULL
             """).fetchone()["n"]
 
             if unowned:

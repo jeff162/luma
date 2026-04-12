@@ -139,9 +139,20 @@ export const api = {
       body: JSON.stringify({ category_id, notes }),
     }),
 
-  getAccounts: () => request('/accounts'),
+  getAccounts: (params = {}) => {
+    const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))
+    const suffix = q.toString() ? `?${q}` : ''
+    return request(`/accounts${suffix}`)
+  },
   createAccount: (data) => request('/accounts', { method: 'POST', body: JSON.stringify(data) }),
   deleteAccount: (id) => request(`/accounts/${id}`, { method: 'DELETE' }),
+  attachAccount: (id, parent_account_id) =>
+    request(`/accounts/${id}/attach`, { method: 'POST', body: JSON.stringify({ parent_account_id }) }),
+  detachAccount: (id) => request(`/accounts/${id}/detach`, { method: 'POST' }),
+  trashAccount: (id) => request(`/accounts/${id}/trash`, { method: 'POST' }),
+  restoreAccount: (id) => request(`/accounts/${id}/restore`, { method: 'POST' }),
+  getTrashedAccounts: () => request('/accounts/trash'),
+  emptyAccountTrash: () => request('/accounts/trash/empty', { method: 'POST' }),
 
   getCategoryTree: () => request('/categories'),
   getCategories: () => request('/categories/flat'),
@@ -261,6 +272,8 @@ export const api = {
     request(`/import-export/batches/${id}/category-workspace-draft`),
   setBatchProfile: (id, profileId) =>
     request(`/import-export/batches/${id}/profile`, { method: 'PATCH', body: JSON.stringify({ profile_id: profileId }) }),
+  getCompatibleImportBatches: (profileId) =>
+    request(`/import-export/profiles/${profileId}/compatible-batches`),
   importBatchDuplicates: (id, payload) =>
     request(`/import-export/batches/${id}/duplicates/import`, { method: 'POST', body: JSON.stringify(payload) }),
   undoBatch:        (id, force = false) =>

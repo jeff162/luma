@@ -520,6 +520,117 @@ def _save_profile_column_map(conn, profile_id: str, column_map: dict) -> None:
     )
 
 
+def _normalize_import_source_signature(source: dict) -> dict:
+    column_map = safe_json_dict(source.get("column_map"))
+    account_assignments = {
+        str(key): str(value)
+        for key, value in safe_json_dict(column_map.get("account_assignments")).items()
+        if key and value
+    }
+    account_skips = {
+        str(value)
+        for value in (column_map.get("account_skips") or [])
+        if str(value or "").strip()
+    }
+    account_new = {
+        str(key): {
+            "name": str((value or {}).get("name") or "").strip(),
+            "type": str((value or {}).get("type") or "depository").strip() or "depository",
+        }
+        for key, value in safe_json_dict(column_map.get("account_new")).items()
+        if key
+    }
+    single_account_new = safe_json_dict(column_map.get("single_account_new") or source.get("single_account_new"))
+    if single_account_new:
+        single_account_new = {
+            "name": str(single_account_new.get("name") or "").strip(),
+            "type": str(single_account_new.get("type") or "depository").strip() or "depository",
+        }
+    else:
+        single_account_new = None
+
+    return {
+        "header_fingerprint": str(source.get("header_fingerprint") or "").strip(),
+        "date_format": str(source.get("date_format") or "%m/%d/%Y").strip() or "%m/%d/%Y",
+        "amount_convention": str(source.get("amount_convention") or "single_signed").strip() or "single_signed",
+        "skip_rows": int(source.get("skip_rows") or 0),
+        "apply_categorization": bool(source.get("apply_categorization") is not False),
+        "account_id": str(source.get("account_id") or "").strip(),
+        "column_map": {
+            key: str(column_map.get(key) or "").strip()
+            for key in ("date", "amount", "debit", "credit", "direction", "description", "category", "notes", "pending", "account")
+        },
+        "account_assignments": account_assignments,
+        "account_skips": account_skips,
+        "account_new": account_new,
+        "single_account_new": single_account_new,
+    }
+
+
+def _signatures_are_compatible(profile_signature: dict, batch_signature: dict) -> bool:
+    if not profile_signature.get("header_fingerprint"):
+        return False
+    if profile_signature["header_fingerprint"] != batch_signature.get("header_fingerprint"):
+        return False
+    if profile_signature["date_format"] != batch_signature.get("date_format"):
+        return False
+    if profile_signature["amount_convention"] != batch_signature.get("amount_convention"):
+        return False
+    if profile_signature["skip_rows"] != batch_signature.get("skip_rows"):
+        return False
+    if profile_signature["apply_categorization"] != batch_signature.get("apply_categorization"):
+        return False
+
+    profile_map = profile_signature.get("column_map") or {}
+    batch_map = batch_signature.get("column_map") or {}
+    for key, profile_value in profile_map.items():
+        if profile_value != str(batch_map.get(key) or "").strip():
+            return False
+
+    profile_account_id = profile_signature.get("account_id") or ""
+    batch_account_id = batch_signature.get("account_id") or ""
+    if profile_account_id and batch_account_id and profile_account_id != batch_account_id:
+        return False
+
+    profile_single_account = profile_signature.get("single_account_new")
+    batch_single_account = batch_signature.get("single_account_new")
+    if profile_single_account and batch_single_account and profile_single_account != batch_single_account:
+        return False
+    if profile_single_account and batch_account_id:
+        return False
+    if batch_single_account and profile_account_id:
+        return False
+
+    profile_assignments = profile_signature.get("account_assignments") or {}
+    batch_assignments = batch_signature.get("account_assignments") or {}
+    profile_skips = profile_signature.get("account_skips") or set()
+    batch_skips = batch_signature.get("account_skips") or set()
+    profile_new_accounts = profile_signature.get("account_new") or {}
+    batch_new_accounts = batch_signature.get("account_new") or {}
+
+    shared_assignment_keys = set(profile_assignments) & set(batch_assignments)
+    for key in shared_assignment_keys:
+        if profile_assignments[key] != batch_assignments[key]:
+            return False
+
+    for key in profile_skips & (set(batch_assignments) | set(batch_new_accounts)):
+        return False
+    for key in batch_skips & (set(profile_assignments) | set(profile_new_accounts)):
+        return False
+
+    shared_new_account_keys = set(profile_new_accounts) & set(batch_new_accounts)
+    for key in shared_new_account_keys:
+        if profile_new_accounts[key] != batch_new_accounts[key]:
+            return False
+
+    if set(profile_new_accounts) & set(batch_assignments):
+        return False
+    if set(batch_new_accounts) & set(profile_assignments):
+        return False
+
+    return True
+
+
 def _get_profile_rule_suggestion_review_state(column_map: dict) -> dict:
     return get_rule_suggestion_review_state(column_map if isinstance(column_map, dict) else {})
 
@@ -530,7 +641,7 @@ def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile
             """
             SELECT
                 t.id,
-                t.account_id,
+                COALESCE(a.parent_account_id, t.account_id) AS account_id,
                 t.owner_id,
                 t.amount,
                 t.merchant_name,
@@ -540,7 +651,7 @@ def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile
                 t.category_id,
                 t.category_overridden,
                 t.import_batch_id,
-                a.name AS account_name,
+                COALESCE(a.display_name, a.name) AS account_name,
                 o.name AS owner_name
             FROM txn t
             LEFT JOIN account a ON a.id = t.account_id
@@ -558,7 +669,7 @@ def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile
             """
             SELECT
                 t.id,
-                t.account_id,
+                COALESCE(a.parent_account_id, t.account_id) AS account_id,
                 t.owner_id,
                 t.amount,
                 t.merchant_name,
@@ -568,7 +679,7 @@ def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile
                 t.category_id,
                 t.category_overridden,
                 t.import_batch_id,
-                a.name AS account_name,
+                COALESCE(a.display_name, a.name) AS account_name,
                 o.name AS owner_name
             FROM txn t
             JOIN import_batch b ON b.id = t.import_batch_id
@@ -1183,8 +1294,12 @@ def _load_backup_payload_from_upload(
 @router.get("/profiles")
 def list_profiles():
     with get_db() as conn:
+        trashed_account_ids = {
+            row["id"]
+            for row in conn.execute("SELECT id FROM account WHERE trashed_at IS NOT NULL").fetchall()
+        }
         rows = conn.execute("""
-            SELECT p.*, a.name AS account_name
+            SELECT p.*, COALESCE(a.display_name, a.name) AS account_name
             FROM   csv_import_profile p
             LEFT JOIN account a ON a.id = p.account_id
             ORDER BY p.name
@@ -1193,6 +1308,14 @@ def list_profiles():
     for r in rows:
         d = dict(r)
         d["column_map"] = safe_json_dict(d["column_map"])
+        referenced_account_ids = set()
+        if d.get("account_id"):
+            referenced_account_ids.add(d["account_id"])
+        account_assignments = d["column_map"].get("account_assignments")
+        if isinstance(account_assignments, dict):
+            referenced_account_ids.update(account_id for account_id in account_assignments.values() if account_id)
+        if referenced_account_ids & trashed_account_ids:
+            continue
         result.append(d)
     return result
 
@@ -1462,7 +1585,8 @@ async def preview_csv(file: UploadFile = File(...)):
             if previous_batch:
                 acc_rows = conn.execute("""
                     SELECT iba.csv_value, iba.row_count, iba.was_skipped,
-                           a.id AS account_id, a.name AS account_name
+                           COALESCE(a.parent_account_id, a.id) AS account_id,
+                           COALESCE(a.display_name, a.name) AS account_name
                     FROM   import_batch_account iba
                     LEFT JOIN account a ON a.id = iba.account_id
                     WHERE  iba.batch_id = ? AND iba.was_skipped = 0
@@ -1601,9 +1725,9 @@ async def run_import(
                     new_acc_id = str(uuid.uuid4())
                     conn.execute("""
                         INSERT INTO account
-                          (id, plaid_account_id, plaid_item_id, name, type, subtype, owner_id)
-                        VALUES (?, ?, 'csv_import', ?, ?, ?, ?)
-            """, (new_acc_id, f"csv_{new_acc_id}", single_name, single_type, "checking",
+                          (id, plaid_account_id, plaid_item_id, name, display_name, type, subtype, owner_id, parent_account_id, trashed_at)
+                        VALUES (?, ?, 'csv_import', ?, ?, ?, ?, ?, NULL, NULL)
+            """, (new_acc_id, f"csv_{new_acc_id}", single_name, single_name, single_type, "checking",
                   default_owner_id))
             created_account_ids["__single_account__"] = new_acc_id
         for na in new_accounts_cfg:
@@ -1623,9 +1747,9 @@ async def run_import(
             new_acc_id = str(uuid.uuid4())
             conn.execute("""
                 INSERT INTO account
-                  (id, plaid_account_id, plaid_item_id, name, type, subtype, owner_id)
-                VALUES (?, ?, 'csv_import', ?, ?, ?, ?)
-            """, (new_acc_id, f"csv_{new_acc_id}", acc_name, acc_type, "checking",
+                  (id, plaid_account_id, plaid_item_id, name, display_name, type, subtype, owner_id, parent_account_id, trashed_at)
+                VALUES (?, ?, 'csv_import', ?, ?, ?, ?, ?, NULL, NULL)
+            """, (new_acc_id, f"csv_{new_acc_id}", acc_name, acc_name, acc_type, "checking",
                   default_owner_id))
             created_account_ids[csv_val] = new_acc_id
 
@@ -1772,6 +1896,24 @@ async def run_import(
               (id, profile_id, filename, file_content_hash, row_count, skipped_count, deduped_count, config_snapshot)
             VALUES (?, ?, ?, ?, 0, 0, 0, ?)
         """, (batch_id, profile_id, filename, file_content_hash, json.dumps(config_snapshot)))
+
+        if not profile_id:
+            previous_profileless_batches = conn.execute(
+                """
+                SELECT id, config_snapshot
+                FROM   import_batch
+                WHERE  profile_id IS NULL
+                  AND  id <> ?
+                  AND  status = 'completed'
+                """,
+                (batch_id,),
+            ).fetchall()
+            for prior_batch in previous_profileless_batches:
+                prior_snapshot = safe_json_dict(prior_batch["config_snapshot"])
+                if prior_snapshot.get(UNKNOWN_SOURCE_FALLBACK_KEY):
+                    continue
+                prior_snapshot[UNKNOWN_SOURCE_FALLBACK_KEY] = True
+                save_batch_snapshot(conn, prior_batch["id"], prior_snapshot)
 
         use_account_col = bool(col.account)
         account_counts: dict = {}
@@ -2245,7 +2387,7 @@ def list_batches():
 
             accs = conn.execute("""
                 SELECT iba.csv_value, iba.account_id, iba.row_count, iba.was_skipped,
-                       COALESCE(a.name, iba.csv_value) AS account_name
+                       COALESCE(a.display_name, a.name, iba.csv_value) AS account_name
                 FROM   import_batch_account iba
                 LEFT JOIN account a ON a.id = iba.account_id
                 WHERE  iba.batch_id = ?
@@ -2253,7 +2395,66 @@ def list_batches():
             """, (b["id"],)).fetchall()
             d["accounts"] = [dict(a) for a in accs]
             result.append(d)
-    return result
+        return result
+
+
+@router.get("/profiles/{profile_id}/compatible-batches")
+def get_profile_compatible_batches(profile_id: str):
+    with get_db() as conn:
+        profile = conn.execute(
+            """
+            SELECT id, name, header_fingerprint, column_map, account_id, date_format,
+                   amount_convention, skip_rows, apply_categorization
+            FROM   csv_import_profile
+            WHERE  id = ?
+            """,
+            (profile_id,),
+        ).fetchone()
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+
+        profile_signature = _normalize_import_source_signature(dict(profile))
+        rows = conn.execute(
+            """
+            SELECT id, filename, imported_at, row_count, skipped_count, deduped_count,
+                   file_content_hash, config_snapshot
+            FROM   import_batch
+            WHERE  profile_id IS NULL
+              AND  status = 'completed'
+            ORDER  BY imported_at DESC
+            """
+        ).fetchall()
+
+    compatible_batches = []
+    for row in rows:
+        snapshot = safe_json_dict(row["config_snapshot"])
+        batch_signature = _normalize_import_source_signature({
+            "header_fingerprint": snapshot.get("header_fingerprint"),
+            "column_map": snapshot.get("column_map"),
+            "account_id": snapshot.get("account_id"),
+            "date_format": snapshot.get("date_format"),
+            "amount_convention": snapshot.get("amount_convention"),
+            "skip_rows": snapshot.get("skip_rows"),
+            "apply_categorization": snapshot.get("apply_categorization"),
+            "single_account_new": snapshot.get("single_account_new"),
+        })
+        if not _signatures_are_compatible(profile_signature, batch_signature):
+            continue
+        compatible_batches.append({
+            "id": row["id"],
+            "filename": row["filename"],
+            "imported_at": row["imported_at"],
+            "row_count": row["row_count"],
+            "skipped_count": row["skipped_count"],
+            "deduped_count": row["deduped_count"],
+            "file_content_hash": row["file_content_hash"],
+        })
+
+    return {
+        "profile_id": profile["id"],
+        "profile_name": profile["name"],
+        "batches": compatible_batches,
+    }
 
 
 @router.get("/batches/{batch_id}/edited")
@@ -2600,13 +2801,14 @@ def get_batch_rule_suggestion_matches(batch_id: str, body: BatchRuleSuggestionMa
                 t.imported_category,
                 t.category_id,
                 t.category_overridden,
-                t.account_id,
+                COALESCE(a.parent_account_id, t.account_id) AS account_id,
                 t.owner_id,
-                a.name AS account_name,
-                a.mask AS account_mask,
+                COALESCE(a.display_name, a.name) AS account_name,
+                COALESCE(p.mask, a.mask) AS account_mask,
                 o.name AS owner_name
             FROM txn t
             LEFT JOIN account a ON a.id = t.account_id
+            LEFT JOIN account p ON p.id = a.parent_account_id
             LEFT JOIN owner o ON o.id = t.owner_id
             WHERE t.import_batch_id = ?
               AND t.imported_category IS NOT NULL
@@ -2690,14 +2892,15 @@ def get_profile_rule_suggestion_matches(profile_id: str, body: BatchRuleSuggesti
                 t.imported_category,
                 t.category_id,
                 t.category_overridden,
-                t.account_id,
+                COALESCE(a.parent_account_id, t.account_id) AS account_id,
                 t.owner_id,
-                a.name AS account_name,
-                a.mask AS account_mask,
+                COALESCE(a.display_name, a.name) AS account_name,
+                COALESCE(p.mask, a.mask) AS account_mask,
                 o.name AS owner_name
             FROM txn t
             JOIN import_batch b ON b.id = t.import_batch_id
             LEFT JOIN account a ON a.id = t.account_id
+            LEFT JOIN account p ON p.id = a.parent_account_id
             LEFT JOIN owner o ON o.id = t.owner_id
             WHERE b.profile_id = ?
               AND b.status = 'completed'
@@ -2881,7 +3084,7 @@ EXPORT_COLUMNS = {
     "merchant_name": ("COALESCE(t.display_name, t.merchant_name, t.raw_name)",   "Merchant"),
     "raw_name":      ("t.raw_name",        "Raw description"),
     "amount":        ("t.amount",          "Amount"),
-    "account":       ("a.name",            "Account"),
+    "account":       ("COALESCE(a.display_name, a.name)", "Account"),
     "category":      ("c.name",            "Category"),
     "group":         ("p.name",            "Group"),
     "owner":         ("o.name",            "Owner"),
@@ -2919,7 +3122,9 @@ def export_transactions_csv(
         clauses.append("t.date <= ?"); params.append(date_end)
     if account_ids:
         ids = [i.strip() for i in account_ids.split(",") if i.strip()]
-        clauses.append(f"t.account_id IN ({','.join('?'*len(ids))})"); params.extend(ids)
+        clauses.append(
+            f"COALESCE((SELECT parent_account_id FROM account WHERE id = t.account_id), t.account_id) IN ({','.join('?'*len(ids))})"
+        ); params.extend(ids)
     if owner_ids:
         ids = [i.strip() for i in owner_ids.split(",") if i.strip()]
         clauses.append(f"t.owner_id IN ({','.join('?'*len(ids))})"); params.extend(ids)
@@ -2942,6 +3147,7 @@ def export_transactions_csv(
             SELECT {', '.join(select_exprs)}
             FROM   txn t
             JOIN   account   a ON a.id  = t.account_id
+            LEFT JOIN account ap ON ap.id = a.parent_account_id
             LEFT JOIN category c ON c.id  = t.category_id
             LEFT JOIN category p ON p.id  = c.parent_id
             LEFT JOIN owner    o ON o.id  = t.owner_id
@@ -2972,12 +3178,12 @@ def export_backup(encrypted: bool = Query(False)):
             return [dict(r) for r in conn.execute(q).fetchall()]
 
         payload = {
-            "version":        3,
+            "version":        4,
             "exported_at":    datetime.utcnow().isoformat(),
             "owners":         dump("owner"),
             "accounts":       dump("account",
-                                   "SELECT id, plaid_account_id, plaid_item_id, name, "
-                                   "institution, type, subtype, mask, owner_id FROM account"),
+                                   "SELECT id, plaid_account_id, plaid_item_id, name, display_name, "
+                                   "institution, type, subtype, mask, owner_id, parent_account_id, trashed_at FROM account"),
             "categories":     dump("category"),
             "category_rules": dump("category_rule"),
             "merchant_renames": dump("merchant_rename"),
@@ -3078,7 +3284,7 @@ def restore_backup(body: RestoreRequest):
     Plaid items / access tokens are NOT touched.
     """
     d = body.data
-    if d.get("version") not in (1, 2, 3):
+    if d.get("version") not in (1, 2, 3, 4):
         raise HTTPException(status_code=400, detail="Unrecognised backup version")
 
     owners = [dict(row) for row in d.get("owners", [])]
@@ -3107,9 +3313,15 @@ def restore_backup(body: RestoreRequest):
                 row[key] = None
 
     normalize_nullable_fk(accounts, "owner_id", owner_ids)
+    normalize_nullable_fk(accounts, "parent_account_id", account_ids)
     normalize_nullable_fk(categories, "owner_id", owner_ids)
     normalize_nullable_fk(csv_profiles, "account_id", account_ids)
     normalize_nullable_fk(import_batches, "profile_id", csv_profile_ids)
+
+    for row in accounts:
+        row["display_name"] = (row.get("display_name") or row.get("name") or "").strip()
+        if not row["display_name"]:
+            row["display_name"] = row.get("name") or ""
 
     for row in categories:
         parent_id = row.get("parent_id")
