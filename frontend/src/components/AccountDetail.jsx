@@ -78,7 +78,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
   const monthSectionHeight = getDetailMonthSectionHeight(trend)
   const header = (
     <>
-      <div style={{ fontSize: 17, fontWeight: 600 }}>🏦 {displayName}</div>
+      <div style={{ fontSize: 17, fontWeight: 600 }}>{displayName}</div>
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
         Account spending history
         {dateStart || dateEnd

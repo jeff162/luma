@@ -37,6 +37,7 @@ import {
 import { formatCurrency } from '../lib/utils.js'
 import { formatTransactionAmount, getTransactionAmountColor } from '../lib/moneyDisplay.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
 
 const AMOUNT_CONVENTIONS = [
   { value: 'single_signed', label: 'Single column — negative = debit (Chase, most banks)' },
@@ -73,15 +74,6 @@ const MANUAL_DATA_SOURCE_VALUE = '__skip_for_now__'
 const LAST_IMPORT_DATA_SOURCE_PREF_KEY = 'import.lastDataSourceId'
 const EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY = 'import.expandedDataSourceRows'
 const DATA_SOURCE_MANAGER_POS_PREF_KEY = 'import.dataSourceManagerPos'
-const ACCOUNT_TYPE_OPTIONS = [
-  { value: 'depository', label: 'Checking' },
-  { value: 'credit', label: 'Credit' },
-  { value: 'p2p', label: 'P2P' },
-  { value: 'investment', label: 'Invest.' },
-  { value: 'savings', label: 'Savings' },
-  { value: 'loan', label: 'Loan' },
-  { value: 'other', label: 'Other' },
-]
 
 function getBlankImportSnapshot() {
   return {
@@ -212,6 +204,7 @@ function DataSourceMismatchDialog({
   chooserOpen = false,
   profiles = [],
   selectedProfileId = '',
+  fileHeaderFingerprint = '',
   onSelectProfile,
   onSelectTemporaryDraft,
   onCloseChooser,
@@ -229,7 +222,7 @@ function DataSourceMismatchDialog({
               <>
                 <div style={{ fontSize: 16, fontWeight: 600 }}>Choose a different data source</div>
                 <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
-                  Pick another saved data source or use a temporary draft for this file.
+                  Choose a different data source or skip using a data source with this file.
                 </div>
               </>
             ) : (
@@ -247,7 +240,7 @@ function DataSourceMismatchDialog({
             <div style={{ padding: 20, display: 'grid', gap: 12 }}>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'center' }}>
                 <DataSourcePill
-                  label="Temporary draft"
+                  label="Skip"
                   selected={!selectedProfileId}
                   onClick={onSelectTemporaryDraft}
                   title="Use a temporary draft for this file"
@@ -259,6 +252,11 @@ function DataSourceMismatchDialog({
                     selected={selectedProfileId === profile.id}
                     onClick={() => onSelectProfile?.(profile.id)}
                     title="Use this saved data source"
+                    likelyMatch={
+                      !!fileHeaderFingerprint &&
+                      !!profile.header_fingerprint &&
+                      profile.header_fingerprint === fileHeaderFingerprint
+                    }
                   />
                 ))}
               </div>
@@ -344,7 +342,7 @@ function SectionTitle({ children }) {
   return <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6, marginTop: 28 }}>{children}</div>
 }
 
-function DataSourcePill({ label, selected, onClick, muted, subtle, title, showMarker = true }) {
+function DataSourcePill({ label, selected, onClick, muted, subtle, title, showMarker = true, likelyMatch = false }) {
   return (
     <button
       type="button"
@@ -383,6 +381,22 @@ function DataSourcePill({ label, selected, onClick, muted, subtle, title, showMa
         />
       ) : null}
       {label}
+      {likelyMatch ? (
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 600,
+            color: 'var(--success)',
+            background: 'color-mix(in srgb, var(--success) 14%, transparent)',
+            borderRadius: 999,
+            padding: '1px 5px',
+            marginLeft: 2,
+            flexShrink: 0,
+          }}
+        >
+          possible match
+        </span>
+      ) : null}
     </button>
   )
 }
@@ -1913,8 +1927,8 @@ function ImportTab() {
   }
 
   function openManualDraftSaveEditor(defaultName = '') {
-    setShowManualDraftSave(true)
     setManualDraftSaveName(current => current || defaultName)
+    setShowManualDraftSave(true)
   }
 
   async function maybePromptCompatibleUnknownImports(profileId) {
@@ -2615,6 +2629,9 @@ function ImportTab() {
       } else if (singleAccountNew.enabled) {
         newAccounts = [{ csv_value: '__single_account__', name: singleAccountNew.name.trim(), type: singleAccountNew.type || 'depository' }]
       }
+      // Snapshot before the import so we can tell post-import whether a prior
+      // profileless batch will be displaced into the unknown-source row.
+      const hadPriorManualBatch = !selectedProfile && batches.some(b => !b.profile_id && !b.unknown_source_fallback)
       const columnMap = getColumnMap()
       const result = await api.runImport(preview.file, {
         profile_id: selectedProfile || null,
@@ -2653,13 +2670,16 @@ function ImportTab() {
           api.saveBatchCategoryWorkspaceDraft(result.batch_id, categoryWorkspaceDraft).catch(() => { })
         }
       }
-      // Force the tree row open so the completed file card is visible immediately,
+      // Force the target row open so the completed file card is visible immediately,
       // even if this source was collapsed in the user's saved history view.
+      // For temporary draft imports, also expand unknown-source if a prior batch
+      // is being displaced into it by the new import becoming the active draft.
       const rowKeyToExpand = selectedProfile ? `profile:${selectedProfile}` : 'manual-draft'
-      setExpandedSourceRows(prev => ({
-        ...(prev && typeof prev === 'object' ? prev : {}),
-        [rowKeyToExpand]: true,
-      }))
+      setExpandedSourceRows(prev => {
+        const next = { ...(prev && typeof prev === 'object' ? prev : {}), [rowKeyToExpand]: true }
+        if (hadPriorManualBatch) next['unknown-source'] = true
+        return next
+      })
       api.listBatches().then(setBatches)
       if (selectedProfile) {
         await autoSaveProfile(refreshedAccounts, nextImportCategoryDraft).catch(() => { })
@@ -4304,8 +4324,8 @@ function ImportTab() {
                     padding: '4px 8px', fontSize: 11,
                   }}
                 >
-                  {ACCOUNT_TYPE_OPTIONS.map(option => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
+                  {ACCOUNT_TYPES.map(option => (
+                    <option key={option.value} value={option.value}>{option.shortLabel}</option>
                   ))}
                 </select>
                 {accounts.some(a => a.name.toLowerCase() === singleAccountNew.name.trim().toLowerCase()) && (
@@ -4490,8 +4510,8 @@ function ImportTab() {
                         </div>
                         <select value={m.newType} onChange={e => update({ newType: e.target.value })}
                           style={{ width: 76, background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 5px', fontSize: 11 }}>
-                          {ACCOUNT_TYPE_OPTIONS.map(option => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
+                          {ACCOUNT_TYPES.map(option => (
+                            <option key={option.value} value={option.value}>{option.shortLabel}</option>
                           ))}
                         </select>
                         <button onClick={() => update({ createNew: false, accountId: '' })}
@@ -5153,7 +5173,10 @@ function ImportTab() {
                             ) : (
                               <button
                                 type="button"
-                                onClick={() => openManualDraftSaveEditor(manualDraftRecord?.filenamePattern || '')}
+                                onClick={() => {
+                                  const prefix = inferFilenamePattern(manualDraftRecord?.templateFilename || '')
+                                  openManualDraftSaveEditor(prefix)
+                               }}
                                 style={{
                                   background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
                                   color: 'var(--accent2)',
@@ -5401,6 +5424,7 @@ function ImportTab() {
           chooserOpen={showProfileMismatchChooser}
           profiles={profiles}
           selectedProfileId={showProfileMismatchChooser ? pendingProfileMismatch.profileId : ''}
+          fileHeaderFingerprint={pendingProfileMismatch.previewLike?.header_fingerprint || ''}
           onSelectProfile={handleProfileMismatchSelectSource}
           onSelectTemporaryDraft={() => handleProfileMismatchSelectSource(MANUAL_DATA_SOURCE_VALUE)}
           onCloseChooser={handleProfileMismatchChooserBack}

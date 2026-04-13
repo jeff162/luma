@@ -8,6 +8,7 @@ import { Card, Button, Spinner, AppConfirmDialog, AppNoticeDialog, AppTextEntryD
 import AccountDetail from '../components/AccountDetail.jsx'
 import { useDismissibleLayer, useDismissiblePopup, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from '../components/TransientTextInput.jsx'
+import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
 
 const ACCOUNTS_SECTIONS_PREF_KEY = 'ui.accounts.sections'
 const ACCOUNTS_SECTIONS_STORAGE_KEY_PREFIX = 'fintrack.accounts.sections'
@@ -23,13 +24,6 @@ const ACCOUNT_SECTION_DEFAULTS = {
   accountOwners: true,
 }
 
-const ACCOUNT_TYPES = [
-  { value: 'depository', label: 'Checking / savings' },
-  { value: 'credit', label: 'Credit card' },
-  { value: 'investment', label: 'Investment' },
-  { value: 'loan', label: 'Loan' },
-  { value: 'other', label: 'Other' },
-]
 
 function accountTypeIcon(type) {
   const map = { depository: '🏦', credit: '💳', investment: '📈', loan: '🏠', other: '📁' }
@@ -434,7 +428,7 @@ function DraftAccountRow({ owners, onCreate, onCancel, creating }) {
         </button>
       </div>
       {ownerError && (
-        <div style={{ padding: '0 10px 2px 46px', fontSize: 11, color: 'var(--danger)' }}>
+        <div style={{ padding: '0 10px 2px 10px', fontSize: 11, color: 'var(--danger)' }}>
           {ownerError}
         </div>
       )}
