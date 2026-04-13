@@ -485,9 +485,15 @@ function summarizeImportOutcome(source) {
 
 function getUndoTargetForSource(source) {
   if (!source) return null
+  // importResult and batch records expose count fields under different shapes.
+  // Normalize them here so the undo dialog arithmetic always has real numbers.
+  const summary = summarizeImportOutcome(source)
   return {
     ...source,
     id: source.id || source.batch_id || '',
+    row_count: summary.totalRows,
+    skipped_count: summary.skippedCount,
+    deduped_count: summary.dedupedCount,
   }
 }
 
@@ -4916,7 +4922,7 @@ function ImportTab() {
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             {importResult?.batch_id ? (
               <Button
-                variant="danger"
+                variant="ghost"
                 onClick={() => handleUndoClick(getUndoTargetForSource(importResult))}
               >
                 Undo import
