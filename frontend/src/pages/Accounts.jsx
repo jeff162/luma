@@ -14,29 +14,45 @@ const ACCOUNTS_SECTIONS_PREF_KEY = 'ui.accounts.sections'
 const ACCOUNTS_SECTIONS_STORAGE_KEY_PREFIX = 'fintrack.accounts.sections'
 const LEGACY_ACCOUNT_OWNERS_PREF_KEY = 'ui.accounts.accountOwnersExpanded'
 const LEGACY_ACCOUNT_OWNERS_STORAGE_KEY_PREFIX = 'fintrack.accounts.accountOwnersExpanded'
-const ACCOUNT_ROW_COLUMNS = '22px 24px minmax(0, 1.5fr) minmax(118px, 0.46fr) minmax(138px, 0.56fr) 28px'
+const ACCOUNTS_ORDER_PREF_KEY = 'ui.accounts.order'
+const ACCOUNTS_ORDER_STORAGE_KEY_PREFIX = 'fintrack.accounts.order'
+const ACCOUNTS_COLLAPSED_PREF_KEY = 'ui.accounts.collapsedGroups'
+const ACCOUNTS_COLLAPSED_STORAGE_KEY_PREFIX = 'fintrack.accounts.collapsedGroups'
+const ACCOUNTS_CHILD_ORDER_PREF_KEY = 'ui.accounts.childOrder'
+const ACCOUNTS_CHILD_ORDER_STORAGE_KEY_PREFIX = 'fintrack.accounts.childOrder'
+const ACCOUNTS_SORT_PREF_KEY = 'ui.accounts.sort'
+const ACCOUNTS_SORT_STORAGE_KEY_PREFIX = 'fintrack.accounts.sort'
+const ACCOUNT_ROW_COLUMNS = '22px minmax(0, 1.5fr) minmax(118px, 0.46fr) minmax(138px, 0.56fr) 28px'
+const ACCOUNT_ROW_CHILD_INDENT = 28
 const ACCOUNT_ROW_GAP = 10
-const ACCOUNT_ROW_PADDING = '6px 10px'
-const ACCOUNT_CONTROL_HEIGHT = 26
+const ACCOUNT_ROW_PADDING = '3px 10px'
+const ACCOUNT_CONTROL_HEIGHT = 22
 const ACCOUNT_SECTION_DEFAULTS = {
-  accountList: true,
-  dataSources: true,
-  accountOwners: true,
+  accountList: false,
+  dataSources: false,
+  accountOwners: false,
 }
 
-
-function accountTypeIcon(type) {
-  const map = { depository: '🏦', credit: '💳', investment: '📈', loan: '🏠', other: '📁' }
-  return map[type] || '🏦'
-}
-
-function hasSameMergeFields(source, target) {
-  return (source?.owner_id || '') === (target?.owner_id || '') && (source?.type || 'other') === (target?.type || 'other')
-}
 
 // "Shared" only becomes an assignable owner when there are multiple personal owners; otherwise it would just duplicate the sole-owner default.
 function isSharedOwner(owner) {
   return !!owner?.is_shared || (owner?.name || '').trim().toLowerCase() === 'shared'
+}
+
+// Two accounts are owner-compatible if they share the same owner, or if either owner is the
+// shared owner — a shared account can be grouped with any personal account of the same type
+// since shared ownership often reflects a life-stage change, not a permanent categorization.
+function ownersAreCompatible(source, target, owners) {
+  const sourceOwnerId = source?.owner_id || ''
+  const targetOwnerId = target?.owner_id || ''
+  if (sourceOwnerId === targetOwnerId) return true
+  const sourceOwner = owners.find(o => o.id === sourceOwnerId)
+  const targetOwner = owners.find(o => o.id === targetOwnerId)
+  return isSharedOwner(sourceOwner) || isSharedOwner(targetOwner)
+}
+
+function hasSameMergeFields(source, target, owners) {
+  return ownersAreCompatible(source, target, owners) && (source?.type || '') === (target?.type || '')
 }
 
 function getPersonalOwners(owners) {
@@ -59,6 +75,30 @@ function getAccountsSectionsStorageKey(dbInstanceId, userId) {
 function getLegacyAccountOwnersStorageKey(dbInstanceId, userId) {
   return dbInstanceId && userId
     ? `${LEGACY_ACCOUNT_OWNERS_STORAGE_KEY_PREFIX}.${dbInstanceId}.${userId}`
+    : ''
+}
+
+function getAccountsOrderStorageKey(dbInstanceId, userId) {
+  return dbInstanceId && userId
+    ? `${ACCOUNTS_ORDER_STORAGE_KEY_PREFIX}.${dbInstanceId}.${userId}`
+    : ''
+}
+
+function getAccountsCollapsedStorageKey(dbInstanceId, userId) {
+  return dbInstanceId && userId
+    ? `${ACCOUNTS_COLLAPSED_STORAGE_KEY_PREFIX}.${dbInstanceId}.${userId}`
+    : ''
+}
+
+function getAccountsChildOrderStorageKey(dbInstanceId, userId) {
+  return dbInstanceId && userId
+    ? `${ACCOUNTS_CHILD_ORDER_STORAGE_KEY_PREFIX}.${dbInstanceId}.${userId}`
+    : ''
+}
+
+function getAccountsSortStorageKey(dbInstanceId, userId) {
+  return dbInstanceId && userId
+    ? `${ACCOUNTS_SORT_STORAGE_KEY_PREFIX}.${dbInstanceId}.${userId}`
     : ''
 }
 
@@ -89,10 +129,10 @@ function SectionCard({ title, summary = '', headerCenter = null, expanded, onExp
         type="button"
         onClick={() => onExpandedChange?.(!expanded)}
         style={{
-          display: 'grid',
+          display: 'flex',
+          flexWrap: 'wrap',
           alignItems: 'center',
-          gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)',
-          columnGap: 12,
+          gap: '4px 12px',
           width: '100%',
           background: 'none',
           border: 'none',
@@ -102,25 +142,25 @@ function SectionCard({ title, summary = '', headerCenter = null, expanded, onExp
           textAlign: 'left',
         }}
       >
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0, justifySelf: 'start' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           <span style={{ fontSize: 12, color: 'var(--muted)' }}>{expanded ? '−' : '+'}</span>
           <span style={{ fontSize: 14, fontWeight: 600 }}>{title}</span>
         </span>
-        <span style={{ minWidth: 0, justifySelf: 'center' }}>
-          {headerCenter}
-        </span>
+        {headerCenter ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 1, minWidth: 0 }}>
+            {headerCenter}
+          </span>
+        ) : null}
         {summary ? (
           <span style={{
             fontSize: 12,
             color: 'var(--muted)',
             whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            justifySelf: 'end',
+            marginLeft: 'auto',
           }}>
             {summary}
           </span>
-        ) : <span />}
+        ) : null}
       </button>
       {expanded ? (
         <div style={{ borderTop: '1px solid var(--border)' }}>
@@ -234,10 +274,10 @@ function PillSelect({ value, options, onChange, placeholder = '—', minOpenWidt
             minWidth: menuPos.width,
             width: 'max-content',
             maxWidth: 240,
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
+            background: 'var(--surface2)',
+            border: '1.5px solid color-mix(in srgb, var(--text) 22%, var(--border))',
             borderRadius: 10,
-            boxShadow: '0 10px 24px rgba(0, 0, 0, 0.14)',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.12), 0 12px 40px rgba(0,0,0,0.36)',
             padding: 4,
             zIndex: 200,
             ...(openUp ? { top: Math.max(8, menuPos.top - (listRef.current?.offsetHeight || 0) - 32) } : { top: menuPos.top }),
@@ -362,9 +402,6 @@ function DraftAccountRow({ owners, onCreate, onCancel, creating }) {
         padding: ACCOUNT_ROW_PADDING,
       }}>
         <div />
-        <div style={{ fontSize: 20, lineHeight: 1, textAlign: 'center', transform: 'translateY(-2px)' }}>
-          {accountTypeIcon(type)}
-        </div>
 
         <div style={{ minWidth: 0 }}>
           <TransientTextInput
@@ -764,6 +801,10 @@ function AccountRow({
   account,
   parentAccount = null,
   hasChildren = false,
+  isLastChild = false,
+  isCollapsed = false,
+  onToggleCollapse,
+  restrictedOwnerOptions = null,
   owners,
   onSave,
   onRequestDelete,
@@ -779,9 +820,6 @@ function AccountRow({
   dropActive = false,
   onDragStart,
   onDragEnd,
-  onDragOverTarget,
-  onDragLeaveTarget,
-  onDropOnTarget,
 }) {
   const [savingName, setSavingName] = useState(false)
   const [creatingOwner, setCreatingOwner] = useState(false)
@@ -878,10 +916,14 @@ function AccountRow({
   const displayOwnerId = account.owner_id || ''
   const personalOwners = getPersonalOwners(owners)
   const assignableOwners = getAssignableOwners(owners)
+  // Parents with children may toggle between their personal owner and shared — restricted options
+  // are passed in from the parent to enforce this. Children and plain accounts use all assignable owners.
+  const effectiveOwnerOptions = restrictedOwnerOptions ?? assignableOwners
   const parentDisplayName = parentAccount?.display_name || parentAccount?.name || ''
   const detailAccount = parentAccount || account
   const canShowOwnerControls = !isChild
-  const ownerEditDisabled = interactionDisabled || isChild || hasChildren
+  // Allow owner change on parents-with-children but only between personal owner and shared.
+  const ownerEditDisabled = interactionDisabled || isChild
   const typeEditDisabled = interactionDisabled || isChild || hasChildren
   const canDrag = !interactionDisabled && !dragDisabled
   const deleteDisabled = interactionDisabled || (!isChild && hasChildren)
@@ -933,30 +975,33 @@ function AccountRow({
   return (
     <div
       ref={rowRef}
-      onDragOver={event => {
-        if (!onDragOverTarget || interactionDisabled) return
-        onDragOverTarget(event, account)
-      }}
-      onDragLeave={event => {
-        if (!onDragLeaveTarget || event.currentTarget.contains(event.relatedTarget)) return
-        onDragLeaveTarget(event, account)
-      }}
-      onDrop={event => {
-        if (!onDropOnTarget) return
-        onDropOnTarget(event, account)
-      }}
+      data-account-row
+      data-account-row-id={account.id}
       style={{
         position: 'relative',
         borderBottom: '1px solid var(--border)',
         background: dropActive ? 'color-mix(in srgb, var(--accent) 10%, var(--surface))' : 'transparent',
       }}
     >
+      {isChild && (
+        <div style={{
+          position: 'absolute',
+          left: 10,
+          top: 0,
+          width: 2,
+          height: isLastChild ? '50%' : '100%',
+          background: 'var(--border)',
+          borderRadius: 1,
+          pointerEvents: 'none',
+        }} />
+      )}
       <div style={{
           display: 'grid',
           gridTemplateColumns: ACCOUNT_ROW_COLUMNS,
         gap: ACCOUNT_ROW_GAP,
         alignItems: 'center',
         padding: ACCOUNT_ROW_PADDING,
+        paddingLeft: isChild ? `${10 + ACCOUNT_ROW_CHILD_INDENT}px` : undefined,
       }}>
         <button
           type="button"
@@ -964,7 +1009,7 @@ function AccountRow({
           onDragStart={event => onDragStart?.(event, account)}
           onDragEnd={() => onDragEnd?.()}
           onClick={event => event.preventDefault()}
-          title={canDrag ? (isChild ? 'Drag to regroup or pull out' : 'Drag to merge into another account') : undefined}
+          title={canDrag ? (isChild ? 'Drag to reorder or pull out to top level' : 'Drag to merge or reorder') : undefined}
           style={{
             background: 'none',
             border: 'none',
@@ -978,10 +1023,6 @@ function AccountRow({
         >
           ⋮⋮
         </button>
-
-        <div style={{ fontSize: 20, lineHeight: 1, textAlign: 'center', transform: 'translateY(-2px)', opacity: isChild ? 0.55 : 1 }}>
-          {accountTypeIcon(typeValue)}
-        </div>
 
         <div style={{ minWidth: 0 }}>
           {editingName ? (
@@ -1022,9 +1063,6 @@ function AccountRow({
                 opacity: interactionDisabled ? 0.75 : 1,
               }}
             >
-              {isChild ? (
-                <span style={{ color: 'var(--muted)', flexShrink: 0, fontSize: 12 }}>↳</span>
-              ) : null}
               <span style={{
                 fontWeight: 500,
                 fontSize: 12,
@@ -1060,17 +1098,39 @@ function AccountRow({
               </span>
             </button>
           )}
-          <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {isChild ? (
-              <span>Merged display name: {parentDisplayName || account.display_name || account.name}</span>
-            ) : (
-              <>
-                {account.institution && <span>{account.institution} · </span>}
-                {account.mask && <span>···{account.mask}</span>}
-                {hasChildren ? <span> · {hasChildren === 1 ? '1 merged account' : `${hasChildren} merged accounts`}</span> : null}
-              </>
-            )}
-          </div>
+          {hasChildren && !isChild ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+              <button
+                type="button"
+                onClick={e => { e.stopPropagation(); onToggleCollapse?.() }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  cursor: 'pointer',
+                  color: 'var(--muted)',
+                  fontSize: 10,
+                  lineHeight: 1,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+                title={isCollapsed ? 'Show merged accounts' : 'Hide merged accounts'}
+              >
+                <span style={{ fontSize: 9 }}>{isCollapsed ? '▶' : '▼'}</span>
+                <span>{hasChildren === 1 ? '1 merged account' : `${hasChildren} merged accounts`}</span>
+              </button>
+            </div>
+          ) : (
+            <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {!isChild && (
+                <>
+                  {account.institution && <span>{account.institution} · </span>}
+                  {account.mask && <span>···{account.mask}</span>}
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {isChild ? (
@@ -1088,15 +1148,15 @@ function AccountRow({
         <div ref={ownerAnchorRef} style={{ display: 'flex', justifyContent: 'center', minWidth: 0, position: 'relative' }}>
           {!canShowOwnerControls ? (
             <div style={{ fontSize: 11, color: 'var(--muted)' }} />
-          ) : assignableOwners.length > 0 ? (
+          ) : effectiveOwnerOptions.length > 0 ? (
             <PillSelect
               value={displayOwnerId}
               placeholder="Assign owner"
-              options={assignableOwners.map(o => ({ value: o.id, label: o.name }))}
+              options={effectiveOwnerOptions.map(o => ({ value: o.id, label: o.name }))}
               onChange={changeOwner}
               minOpenWidth={138}
-              createLabel="Create owner..."
-              onCreate={() => {
+              createLabel={restrictedOwnerOptions ? null : 'Create owner...'}
+              onCreate={restrictedOwnerOptions ? null : () => {
                 setOwnerDraft('')
                 setShowOwnerCreate(true)
               }}
@@ -1343,16 +1403,31 @@ export default function Accounts() {
   const [showCreateAccount, setShowCreateAccount] = useState(false)
   const [creatingAccount, setCreatingAccount] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
+  const [listContextMenu, setListContextMenu] = useState(null) // { x, y }
   const [detailAccounts, setDetailAccounts] = useState([])
   const [dbInstanceId, setDbInstanceId] = useState('')
   const [userId, setUserId] = useState('')
   const [sectionExpandedState, setSectionExpandedState] = useState({})
   const [sectionStateLoaded, setSectionStateLoaded] = useState(false)
   const [draggingAccountId, setDraggingAccountId] = useState(null)
-  const [dropTargetAccountId, setDropTargetAccountId] = useState(null)
-  const [rootDropActive, setRootDropActive] = useState(false)
+  const draggingAccountIdRef = useRef(null)
+  const [sortKey, setSortKey] = useState('type') // 'name' | 'type' | 'owner'
+  const [sortDir, setSortDir] = useState('asc')
+  const [sortLoaded, setSortLoaded] = useState(false)
+  // dropIntent: null | { kind: 'merge', targetId: string } | { kind: 'reorder', insertAfterId: string | null }
+  const [dropIntent, setDropIntent] = useState(null)
+  const [dragTooltip, setDragTooltip] = useState(null) // { x, y, message }
   const [movingAccountId, setMovingAccountId] = useState(null)
+  const [accountOrder, setAccountOrder] = useState(null) // null until loaded; array of root account IDs
+  const [accountOrderLoaded, setAccountOrderLoaded] = useState(false)
+  const [collapsedGroups, setCollapsedGroups] = useState(new Set()) // Set of parent account IDs
+  const [collapsedGroupsLoaded, setCollapsedGroupsLoaded] = useState(false)
+  const [childOrder, setChildOrder] = useState({}) // { [parentId]: childId[] }
+  const [childOrderLoaded, setChildOrderLoaded] = useState(false)
+  const dragTooltipTimerRef = useRef(null)
+  const dragScrollRafRef = useRef(null)
   const listRef = useRef(null)
+  const outerScrollRef = useRef(null)
   const accountsPanelRef = useRef(null)
   const [accountsPanelWidth, setAccountsPanelWidth] = useState(null)
 
@@ -1457,6 +1532,73 @@ export default function Accounts() {
 
       setSectionExpandedState(nextSectionState)
       setSectionStateLoaded(true)
+
+      // Load account display order, falling back to localStorage then API order.
+      const orderPrefValue = prefResp?.preferences?.[ACCOUNTS_ORDER_PREF_KEY]
+      const orderStorageKey = getAccountsOrderStorageKey(nextDbInstanceId, nextUserId)
+      let savedOrder = Array.isArray(orderPrefValue) ? orderPrefValue : null
+      if (!savedOrder && orderStorageKey) {
+        try {
+          const raw = window.localStorage.getItem(orderStorageKey)
+          const parsed = raw ? JSON.parse(raw) : null
+          if (Array.isArray(parsed)) savedOrder = parsed
+        } catch {
+          // Ignore storage failures in restricted environments.
+        }
+      }
+      setAccountOrder(savedOrder)
+      setAccountOrderLoaded(true)
+
+      // Load collapsed group state (which parent accounts have their children hidden).
+      const collapsedPrefValue = prefResp?.preferences?.[ACCOUNTS_COLLAPSED_PREF_KEY]
+      const collapsedStorageKey = getAccountsCollapsedStorageKey(nextDbInstanceId, nextUserId)
+      let savedCollapsed = Array.isArray(collapsedPrefValue) ? collapsedPrefValue : null
+      if (!savedCollapsed && collapsedStorageKey) {
+        try {
+          const raw = window.localStorage.getItem(collapsedStorageKey)
+          const parsed = raw ? JSON.parse(raw) : null
+          if (Array.isArray(parsed)) savedCollapsed = parsed
+        } catch {
+          // Ignore storage failures in restricted environments.
+        }
+      }
+      setCollapsedGroups(new Set(savedCollapsed || []))
+      setCollapsedGroupsLoaded(true)
+
+      // Load child display order — a map of parentId → ordered array of child IDs.
+      const childOrderPrefValue = prefResp?.preferences?.[ACCOUNTS_CHILD_ORDER_PREF_KEY]
+      const childOrderStorageKey = getAccountsChildOrderStorageKey(nextDbInstanceId, nextUserId)
+      let savedChildOrder = isObjectLike(childOrderPrefValue) ? childOrderPrefValue : null
+      if (!savedChildOrder && childOrderStorageKey) {
+        try {
+          const raw = window.localStorage.getItem(childOrderStorageKey)
+          const parsed = raw ? JSON.parse(raw) : null
+          if (isObjectLike(parsed)) savedChildOrder = parsed
+        } catch {
+          // Ignore storage failures in restricted environments.
+        }
+      }
+      setChildOrder(savedChildOrder || {})
+      setChildOrderLoaded(true)
+
+      // Load sort preference — key and direction, defaulting to type/asc.
+      const sortPrefValue = prefResp?.preferences?.[ACCOUNTS_SORT_PREF_KEY]
+      const sortStorageKey = getAccountsSortStorageKey(nextDbInstanceId, nextUserId)
+      let savedSort = isObjectLike(sortPrefValue) ? sortPrefValue : null
+      if (!savedSort && sortStorageKey) {
+        try {
+          const raw = window.localStorage.getItem(sortStorageKey)
+          const parsed = raw ? JSON.parse(raw) : null
+          if (isObjectLike(parsed)) savedSort = parsed
+        } catch {
+          // Ignore storage failures in restricted environments.
+        }
+      }
+      if (savedSort?.key) {
+        setSortKey(savedSort.key)
+        setSortDir(savedSort.dir || 'asc')
+      }
+      setSortLoaded(true)
     })
     return () => {
       cancelled = true
@@ -1476,6 +1618,64 @@ export default function Accounts() {
     }
     api.saveUserPreference(ACCOUNTS_SECTIONS_PREF_KEY, sectionExpandedState).catch(() => {})
   }, [dbInstanceId, userId, sectionExpandedState, sectionStateLoaded])
+
+  // Account display order is profile-scoped UI state, persisted the same way as section state.
+  useEffect(() => {
+    if (!accountOrderLoaded || accountOrder === null) return
+    const storageKey = getAccountsOrderStorageKey(dbInstanceId, userId)
+    if (storageKey) {
+      try {
+        window.localStorage.setItem(storageKey, JSON.stringify(accountOrder))
+      } catch {
+        // Ignore storage failures in restricted environments.
+      }
+    }
+    api.saveUserPreference(ACCOUNTS_ORDER_PREF_KEY, accountOrder).catch(() => {})
+  }, [dbInstanceId, userId, accountOrder, accountOrderLoaded])
+
+  // Collapsed group state is profile-scoped UI state, persisted as an array of collapsed parent IDs.
+  useEffect(() => {
+    if (!collapsedGroupsLoaded) return
+    const collapsed = [...collapsedGroups]
+    const storageKey = getAccountsCollapsedStorageKey(dbInstanceId, userId)
+    if (storageKey) {
+      try {
+        window.localStorage.setItem(storageKey, JSON.stringify(collapsed))
+      } catch {
+        // Ignore storage failures in restricted environments.
+      }
+    }
+    api.saveUserPreference(ACCOUNTS_COLLAPSED_PREF_KEY, collapsed).catch(() => {})
+  }, [dbInstanceId, userId, collapsedGroups, collapsedGroupsLoaded])
+
+  // Child display order is profile-scoped UI state, persisted as a map of parentId → childId[].
+  useEffect(() => {
+    if (!childOrderLoaded) return
+    const storageKey = getAccountsChildOrderStorageKey(dbInstanceId, userId)
+    if (storageKey) {
+      try {
+        window.localStorage.setItem(storageKey, JSON.stringify(childOrder))
+      } catch {
+        // Ignore storage failures in restricted environments.
+      }
+    }
+    api.saveUserPreference(ACCOUNTS_CHILD_ORDER_PREF_KEY, childOrder).catch(() => {})
+  }, [dbInstanceId, userId, childOrder, childOrderLoaded])
+
+  // Sort preference is profile-scoped UI state, persisted as { key, dir }.
+  useEffect(() => {
+    if (!sortLoaded) return
+    const value = { key: sortKey, dir: sortDir }
+    const storageKey = getAccountsSortStorageKey(dbInstanceId, userId)
+    if (storageKey) {
+      try {
+        window.localStorage.setItem(storageKey, JSON.stringify(value))
+      } catch {
+        // Ignore storage failures in restricted environments.
+      }
+    }
+    api.saveUserPreference(ACCOUNTS_SORT_PREF_KEY, value).catch(() => {})
+  }, [dbInstanceId, userId, sortKey, sortDir, sortLoaded])
 
   function bindSection(sectionKey) {
     return {
@@ -1621,8 +1821,20 @@ export default function Accounts() {
 
   function clearDragState() {
     setDraggingAccountId(null)
-    setDropTargetAccountId(null)
-    setRootDropActive(false)
+    draggingAccountIdRef.current = null
+    setDropIntent(null)
+    dragInvalidSinceRef.current = null
+    clearTimeout(dragTooltipTimerRef.current)
+    setDragTooltip(null)
+    cancelAnimationFrame(dragScrollRafRef.current)
+    dragScrollRafRef.current = null
+  }
+
+  // If target is a child account, return its parent instead — dropping anywhere on a
+  // parent-child group should be treated as targeting the parent for merge purposes.
+  function resolveDropTarget(target) {
+    if (!target?.parent_account_id) return target
+    return activeAccounts.find(a => a.id === target.parent_account_id) || target
   }
 
   function canAttachAccount(source, target) {
@@ -1630,8 +1842,10 @@ export default function Accounts() {
     if (source.id === target.id) return false
     if (source.trashed_at || target.trashed_at) return false
     if (target.parent_account_id) return false
-    if ((childAccountsByParent.get(source.id) || []).length > 0) return false
-    return hasSameMergeFields(source, target)
+    // Both accounts must have a type and an owner assigned before they can be merged.
+    if (!source.type || !source.owner_id) return false
+    if (!target.type || !target.owner_id) return false
+    return hasSameMergeFields(source, target, owners)
   }
 
   async function attachAccount(source, target) {
@@ -1670,6 +1884,73 @@ export default function Accounts() {
     }
   }
 
+  // Applies a new display order for root accounts, persisting it to preferences.
+  // insertAfterId: the account ID to insert the dragged account after, or null for top.
+  function reorderAccount(accountId, insertAfterId) {
+    setAccountOrder(prev => {
+      const allRootIds = rootAccounts.map(a => a.id)
+      const base = prev ? [
+        ...prev.filter(id => allRootIds.includes(id)),
+        ...allRootIds.filter(id => !prev.includes(id)),
+      ] : allRootIds
+      const without = base.filter(id => id !== accountId)
+      if (insertAfterId === null) return [accountId, ...without]
+      // insertAfterId may be a child account ID; map it to its root for order purposes.
+      const insertAfterRootId = findRootIdForOrderSlot(insertAfterId, rootAccounts, childAccountsByParent)
+      if (insertAfterRootId === null) return [accountId, ...without]
+      const afterIdx = without.indexOf(insertAfterRootId)
+      if (afterIdx === -1) return [...without, accountId]
+      return [...without.slice(0, afterIdx + 1), accountId, ...without.slice(afterIdx + 1)]
+    })
+    clearDragState()
+  }
+
+  // Detaches a child account from its parent and places it at the given position
+  // in the root order. The detach API call happens first; then we update local order.
+  async function detachAndReorder(account, insertAfterId) {
+    // Resolve the drop position to a root anchor now, using pre-detach data, so the
+    // position is correct even after the account list changes on reload.
+    const anchorRootId = findRootIdForOrderSlot(insertAfterId, rootAccounts, childAccountsByParent)
+    setMovingAccountId(account.id)
+    try {
+      await api.detachAccount(account.id)
+      const rows = await reloadAccounts()
+      const allRootIds = rows.filter(a => !a.parent_account_id && !a.trashed_at).map(a => a.id)
+      setAccountOrder(prev => {
+        const base = prev ? [
+          ...prev.filter(id => allRootIds.includes(id)),
+          ...allRootIds.filter(id => !prev.includes(id)),
+        ] : allRootIds
+        const without = base.filter(id => id !== account.id)
+        if (anchorRootId === null) return [account.id, ...without]
+        const afterIdx = without.indexOf(anchorRootId)
+        if (afterIdx === -1) return [...without, account.id]
+        return [...without.slice(0, afterIdx + 1), account.id, ...without.slice(afterIdx + 1)]
+      })
+      refreshTaskBadge()
+    } catch (error) {
+      setNoticeDialog({
+        title: 'Could not ungroup account',
+        description: error.message,
+      })
+    } finally {
+      setMovingAccountId(null)
+      clearDragState()
+    }
+  }
+
+  // Given an account ID (which may be a child or root), returns the root account ID
+  // that controls its position in the order array, or null if not found.
+  function findRootIdForOrderSlot(accountId, currentRootAccounts, currentChildsByParent) {
+    if (!accountId) return null
+    if (currentRootAccounts.find(a => a.id === accountId)) return accountId
+    for (const root of currentRootAccounts) {
+      const children = currentChildsByParent.get(root.id) || []
+      if (children.find(c => c.id === accountId)) return root.id
+    }
+    return null
+  }
+
   async function confirmTrashChildAccount() {
     if (!pendingTrashAccount?.id) return
     const account = pendingTrashAccount
@@ -1695,45 +1976,313 @@ export default function Accounts() {
       return
     }
     setDraggingAccountId(account.id)
+    draggingAccountIdRef.current = account.id
     event.dataTransfer.effectAllowed = 'move'
     event.dataTransfer.setData('text/plain', account.id)
+
+    // Clone the row element as the drag ghost so it looks like the account record.
+    const rowEl = event.currentTarget.closest('[data-account-row]')
+    if (rowEl) {
+      const clone = rowEl.cloneNode(true)
+      clone.style.position = 'fixed'
+      clone.style.top = '-9999px'
+      clone.style.left = '-9999px'
+      clone.style.width = `${rowEl.offsetWidth}px`
+      clone.style.opacity = '0.92'
+      clone.style.pointerEvents = 'none'
+      clone.style.borderRadius = '8px'
+      clone.style.boxShadow = '0 8px 24px rgba(0,0,0,0.22)'
+      clone.style.background = 'var(--surface)'
+      clone.style.border = '1px solid var(--border)'
+      document.body.appendChild(clone)
+      event.dataTransfer.setDragImage(clone, rowEl.offsetWidth / 2, rowEl.offsetHeight / 2)
+      requestAnimationFrame(() => document.body.removeChild(clone))
+    }
   }
 
   function handleAccountDragEnd() {
     clearDragState()
   }
 
-  function handleAccountDragOverTarget(event, target) {
-    if (showCreateAccount || movingAccountId) return
-    if (!draggingAccount || !canAttachAccount(draggingAccount, target)) return
+  // Document-level listener active only during a drag, solely to handle the case where the
+  // pointer moves above the list container — which is outside the list's onDragOver target area.
+  // In that case we need to scroll the outer page container upward to bring the list into view.
+  useEffect(() => {
+    if (!draggingAccountId) return
+    function onDocDragOver(event) {
+      if (!listRef.current || !outerScrollRef.current) return
+      const listRect = listRef.current.getBoundingClientRect()
+      // Only act when the pointer is above the list top — the container handler covers everything else.
+      // Guard: if listRect.top >= 0 the list top is visible, so only act if pointer is above it.
+      // If listRect.top < 0 the list has scrolled off the top, so we always want to scroll up.
+      if (listRect.top >= 0 && event.clientY >= listRect.top) return
+      event.preventDefault()
+      const scrollZone = 80
+      const dist = listRect.top - event.clientY // positive: how far above the list top the pointer is
+      const speed = Math.round(Math.min(dist / scrollZone, 1) * 16)
+      cancelAnimationFrame(dragScrollRafRef.current)
+      dragScrollRafRef.current = null
+      if (speed > 0) {
+        const scroll = () => {
+          if (!outerScrollRef.current) return
+          outerScrollRef.current.scrollTop = Math.max(0, outerScrollRef.current.scrollTop - speed)
+          dragScrollRafRef.current = requestAnimationFrame(scroll)
+        }
+        dragScrollRafRef.current = requestAnimationFrame(scroll)
+      }
+    }
+    document.addEventListener('dragover', onDocDragOver)
+    return () => {
+      document.removeEventListener('dragover', onDocDragOver)
+    }
+  }, [draggingAccountId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const dragInvalidSinceRef = useRef(null)
+
+  // Single dragover handler on the list container. Handles all drag logic:
+  // - auto-scroll (inner list and outer page container)
+  // - target row detection via elementFromPoint to eliminate cursor flash at row gaps
+  // - left-margin detach/reorder projection
+  // - merge vs reorder intent
+  // - invalid-hover tooltip
+  function handleListDragOver(event) {
+    if (!listRef.current || !draggingAccountIdRef.current || showCreateAccount || movingAccountId) return
     event.preventDefault()
-    event.dataTransfer.dropEffect = 'move'
-    setDropTargetAccountId(target.id)
-    setRootDropActive(false)
+
+    const listRect = listRef.current.getBoundingClientRect()
+    const scrollZone = 60
+
+    // --- Inner list scroll ---
+    const distFromTop = event.clientY - listRect.top
+    const distFromBottom = listRect.bottom - event.clientY
+    let speed = 0
+    if (distFromTop < scrollZone) speed = -Math.round((1 - Math.max(0, distFromTop) / scrollZone) * 14)
+    else if (distFromBottom < scrollZone) speed = Math.round((1 - Math.max(0, distFromBottom) / scrollZone) * 14)
+
+    cancelAnimationFrame(dragScrollRafRef.current)
+    dragScrollRafRef.current = null
+    if (speed !== 0) {
+      const scroll = () => {
+        if (!listRef.current) return
+        listRef.current.scrollTop += speed
+        dragScrollRafRef.current = requestAnimationFrame(scroll)
+      }
+      dragScrollRafRef.current = requestAnimationFrame(scroll)
+    }
+
+    // --- Left-margin projection ---
+    // When the pointer is left of the list, project vertical position onto the list.
+    // Always a reorder (never a merge). A child will detach+reorder; a root just reorders.
+    if (event.clientX < listRect.left) {
+      const flat = orderedRootAccounts.flatMap(root => [
+        root,
+        ...(collapsedGroups.has(root.id) ? [] : (childAccountsByParent.get(root.id) || [])),
+      ])
+      let insertAfterId = null
+      for (const a of flat) {
+        const rowEl = listRef.current.querySelector(`[data-account-row-id="${a.id}"]`)
+        if (!rowEl) continue
+        if (rowEl.getBoundingClientRect().bottom < event.clientY) insertAfterId = a.id
+        else break
+      }
+      setDropIntent({ kind: 'reorder', insertAfterId, isDetach: !!draggingAccount?.parent_account_id })
+      dragInvalidSinceRef.current = null
+      clearTimeout(dragTooltipTimerRef.current)
+      setDragTooltip(null)
+      return
+    }
+
+    // --- Target row detection via elementFromPoint ---
+    // Temporarily hide pointer events on the drag ghost/overlay elements so elementFromPoint
+    // finds the actual row underneath. Using a point slightly inside the list bounds.
+    const el = document.elementFromPoint(
+      Math.max(listRect.left + 1, Math.min(event.clientX, listRect.right - 1)),
+      event.clientY,
+    )
+    const rowEl = el?.closest('[data-account-row-id]')
+    const targetId = rowEl?.dataset?.accountRowId
+    const target = targetId ? activeAccounts.find(a => a.id === targetId) : null
+
+    if (!target || !draggingAccount) {
+      // Pointer is over the list container but not over any row (e.g. below all rows).
+      setDropIntent(null)
+      dragInvalidSinceRef.current = null
+      clearTimeout(dragTooltipTimerRef.current)
+      setDragTooltip(null)
+      return
+    }
+
+    // --- Group interior logic ---
+    const targetParentId = target.parent_account_id || null
+    const targetGroupRootId = targetParentId
+      ? targetParentId
+      : ((childAccountsByParent.get(target.id) || []).length > 0 ? target.id : null)
+    const draggingGroupRootId = draggingAccount.parent_account_id || null
+
+    // Within own group — children can be reordered via edge zones; center zone is a no-op.
+    if (draggingGroupRootId && draggingGroupRootId === targetGroupRootId) {
+      event.dataTransfer.dropEffect = 'move'
+      // Edge zones on sibling children allow reordering within the group.
+      if (draggingAccount.parent_account_id && target.parent_account_id) {
+        const rowRect = rowEl.getBoundingClientRect()
+        const relY = event.clientY - rowRect.top
+        const edgeZone = rowRect.height * 0.28
+        if (relY < edgeZone || relY > rowRect.height - edgeZone) {
+          const insertAfterId = relY < edgeZone ? getIdBeforeInOrder(target.id) : target.id
+          setDropIntent({ kind: 'reorder', insertAfterId, childParentId: draggingGroupRootId })
+          dragInvalidSinceRef.current = null
+          clearTimeout(dragTooltipTimerRef.current)
+          setDragTooltip(null)
+          return
+        }
+      }
+      setDropIntent({ kind: 'merge', targetId: draggingGroupRootId })
+      event.dataTransfer.dropEffect = 'move'
+      dragInvalidSinceRef.current = null
+      clearTimeout(dragTooltipTimerRef.current)
+      setDragTooltip(null)
+      return
+    }
+
+    const targetIsInGroup = !!targetGroupRootId
+    const rowRect = rowEl.getBoundingClientRect()
+    const relY = event.clientY - rowRect.top
+    const edgeZone = rowRect.height * 0.28
+    const inTopEdge = !targetIsInGroup && relY < edgeZone
+    const inBottomEdge = !targetIsInGroup && relY > rowRect.height - edgeZone
+
+    if (inTopEdge || inBottomEdge) {
+      event.dataTransfer.dropEffect = 'move'
+      const insertAfterId = inTopEdge ? getIdBeforeInOrder(target.id) : target.id
+      setDropIntent({ kind: 'reorder', insertAfterId })
+      dragInvalidSinceRef.current = null
+      clearTimeout(dragTooltipTimerRef.current)
+      setDragTooltip(null)
+      return
+    }
+
+    const mergeTarget = resolveDropTarget(target)
+    if (canAttachAccount(draggingAccount, mergeTarget)) {
+      event.dataTransfer.dropEffect = 'move'
+      setDropIntent({ kind: 'merge', targetId: mergeTarget.id })
+      dragInvalidSinceRef.current = null
+      clearTimeout(dragTooltipTimerRef.current)
+      setDragTooltip(null)
+      return
+    }
+
+    // Cannot merge — show tooltip after delay.
+    event.dataTransfer.dropEffect = 'none'
+    setDropIntent(null)
+    const sourceMissingType = !draggingAccount.type
+    const sourceMissingOwner = !draggingAccount.owner_id
+    const targetMissingType = !mergeTarget.type
+    const targetMissingOwner = !mergeTarget.owner_id
+    const sourceMissingFields = sourceMissingType || sourceMissingOwner
+    const targetMissingFields = targetMissingType || targetMissingOwner
+    const ownerMismatch = !sourceMissingFields && !targetMissingFields &&
+      !ownersAreCompatible(draggingAccount, mergeTarget, owners)
+    const typeMismatch = !sourceMissingFields && !targetMissingFields &&
+      (draggingAccount.type || '') !== (mergeTarget.type || '')
+    const sourceNeeds = [sourceMissingType ? 'a type' : null, sourceMissingOwner ? 'an owner' : null].filter(Boolean)
+    const targetNeeds = [targetMissingType ? 'a type' : null, targetMissingOwner ? 'an owner' : null].filter(Boolean)
+    const reasons = [
+      sourceNeeds.length ? `this account needs ${sourceNeeds.join(' and ')}` : null,
+      targetNeeds.length && !sourceMissingFields ? `that account needs ${targetNeeds.join(' and ')}` : null,
+      ownerMismatch ? 'different owners' : null,
+      typeMismatch ? 'different account types' : null,
+    ].filter(Boolean).join(', ')
+    if (reasons && dragInvalidSinceRef.current === null) {
+      dragInvalidSinceRef.current = Date.now()
+      clearTimeout(dragTooltipTimerRef.current)
+      dragTooltipTimerRef.current = setTimeout(() => {
+        setDragTooltip({ x: event.clientX, y: event.clientY, message: `Can't merge: ${reasons}` })
+      }, 600)
+    } else if (!reasons) {
+      dragInvalidSinceRef.current = null
+      clearTimeout(dragTooltipTimerRef.current)
+      setDragTooltip(null)
+    }
   }
 
-  function handleAccountDropOnTarget(event, target) {
-    if (!draggingAccount || !canAttachAccount(draggingAccount, target)) return
+  // Single drop handler on the list container.
+  function handleListDrop(event) {
+    if (!draggingAccount) return
+
+    // Left-margin drop.
+    if (dropIntent?.kind === 'reorder' && dropIntent.isDetach) {
+      event.preventDefault()
+      if (draggingAccount.parent_account_id) {
+        detachAndReorder(draggingAccount, dropIntent.insertAfterId)
+      } else {
+        reorderAccount(draggingAccount.id, dropIntent.insertAfterId)
+      }
+      return
+    }
+
+    const listRect = listRef.current?.getBoundingClientRect()
+    if (!listRect || event.clientX < listRect.left) return
+
+    const el = document.elementFromPoint(
+      Math.max(listRect.left + 1, Math.min(event.clientX, listRect.right - 1)),
+      event.clientY,
+    )
+    const rowEl = el?.closest('[data-account-row-id]')
+    const targetId = rowEl?.dataset?.accountRowId
+    const target = targetId ? activeAccounts.find(a => a.id === targetId) : null
+    if (!target) return
+
+    const targetParentId = target.parent_account_id || null
+    const targetGroupRootId = targetParentId
+      ? targetParentId
+      : ((childAccountsByParent.get(target.id) || []).length > 0 ? target.id : null)
+    const draggingGroupRootId = draggingAccount.parent_account_id || null
+
+    // Drop within own group — reorder child if edge zone, otherwise no-op.
+    if (draggingGroupRootId && draggingGroupRootId === targetGroupRootId) {
+      if (dropIntent?.kind === 'reorder' && dropIntent.childParentId) {
+        event.preventDefault()
+        reorderChild(dropIntent.childParentId, draggingAccount.id, dropIntent.insertAfterId)
+      } else {
+        clearDragState()
+      }
+      return
+    }
+
+    const targetIsInGroup = !!targetGroupRootId
+    const rowRect = rowEl.getBoundingClientRect()
+    const relY = event.clientY - rowRect.top
+    const edgeZone = rowRect.height * 0.28
+    const inTopEdge = !targetIsInGroup && relY < edgeZone
+    const inBottomEdge = !targetIsInGroup && relY > rowRect.height - edgeZone
+
+    if (inTopEdge || inBottomEdge) {
+      event.preventDefault()
+      const insertAfterId = inTopEdge ? getIdBeforeInOrder(target.id) : target.id
+      if (draggingAccount.parent_account_id) {
+        detachAndReorder(draggingAccount, insertAfterId)
+      } else {
+        reorderAccount(draggingAccount.id, insertAfterId)
+      }
+      return
+    }
+
+    const mergeTarget = resolveDropTarget(target)
+    if (!canAttachAccount(draggingAccount, mergeTarget)) return
     event.preventDefault()
-    attachAccount(draggingAccount, target)
+    attachAccount(draggingAccount, mergeTarget)
   }
 
-  function handleAccountDragLeaveTarget() {
-    setDropTargetAccountId(null)
-  }
-
-  function handleRootDropZoneDragOver(event) {
-    if (!draggingAccount?.parent_account_id || showCreateAccount || movingAccountId) return
-    event.preventDefault()
-    event.dataTransfer.dropEffect = 'move'
-    setRootDropActive(true)
-    setDropTargetAccountId(null)
-  }
-
-  function handleRootDropZoneDrop(event) {
-    if (!draggingAccount?.parent_account_id) return
-    event.preventDefault()
-    detachAccount(draggingAccount)
+  // Returns the ID of the item that comes just before targetId in the current flat rendered order
+  // (root accounts interleaved with their children), or null if targetId is first.
+  function getIdBeforeInOrder(targetId) {
+    const flat = orderedRootAccounts.flatMap(root => [
+      root,
+      ...(orderedChildrenByParent.get(root.id) || []),
+    ])
+    const idx = flat.findIndex(a => a.id === targetId)
+    if (idx <= 0) return null
+    return flat[idx - 1].id
   }
 
   const activeAccounts = accounts.filter(account => !account.trashed_at)
@@ -1746,6 +2295,87 @@ export default function Accounts() {
     return map
   }, new Map())
   const draggingAccount = draggingAccountId ? activeAccounts.find(account => account.id === draggingAccountId) : null
+
+  // Apply saved display order to root accounts. IDs in accountOrder that no longer exist are
+  // dropped; roots not yet in the order are appended in their API-returned order.
+  // When a column sort is active it overrides the saved order.
+  const typeOrder = Object.fromEntries(ACCOUNT_TYPES.map((t, i) => [t.value, i]))
+  const baseOrderedRoots = accountOrder
+    ? [
+        ...accountOrder.map(id => rootAccounts.find(a => a.id === id)).filter(Boolean),
+        ...rootAccounts.filter(a => !accountOrder.includes(a.id)),
+      ]
+    : rootAccounts
+  const orderedRootAccounts = [...baseOrderedRoots].sort((a, b) => {
+    let cmp = 0
+    if (sortKey === 'name') {
+      cmp = (a.name || '').localeCompare(b.name || '')
+    } else if (sortKey === 'type') {
+      const ai = typeOrder[a.type] ?? 99
+      const bi = typeOrder[b.type] ?? 99
+      cmp = ai - bi
+    } else if (sortKey === 'owner') {
+      cmp = (a.owner_name || '').localeCompare(b.owner_name || '')
+    }
+    return sortDir === 'asc' ? cmp : -cmp
+  })
+
+  // Apply saved child order per parent group. Same pattern as root order.
+  const orderedChildrenByParent = new Map()
+  for (const [parentId, children] of childAccountsByParent.entries()) {
+    const savedIds = childOrder[parentId]
+    if (savedIds && Array.isArray(savedIds)) {
+      orderedChildrenByParent.set(parentId, [
+        ...savedIds.map(id => children.find(c => c.id === id)).filter(Boolean),
+        ...children.filter(c => !savedIds.includes(c.id)),
+      ])
+    } else {
+      orderedChildrenByParent.set(parentId, children)
+    }
+  }
+
+  // Reorder a child within its parent group.
+  function reorderChild(parentId, childId, insertAfterId) {
+    setChildOrder(prev => {
+      const allChildren = childAccountsByParent.get(parentId) || []
+      const allChildIds = allChildren.map(c => c.id)
+      const savedIds = prev[parentId]
+      const base = savedIds ? [
+        ...savedIds.filter(id => allChildIds.includes(id)),
+        ...allChildIds.filter(id => !savedIds.includes(id)),
+      ] : allChildIds
+      const without = base.filter(id => id !== childId)
+      // insertAfterId may be null (insert at top) or the parent ID (also means insert at top,
+      // since the parent is the item before the first child in the flat order).
+      const effectiveInsertAfterId = insertAfterId === parentId ? null : insertAfterId
+      if (effectiveInsertAfterId === null) return { ...prev, [parentId]: [childId, ...without] }
+      const afterIdx = without.indexOf(effectiveInsertAfterId)
+      // If not found among siblings (shouldn't happen but be safe), insert at top.
+      if (afterIdx === -1) return { ...prev, [parentId]: [childId, ...without] }
+      return { ...prev, [parentId]: [...without.slice(0, afterIdx + 1), childId, ...without.slice(afterIdx + 1)] }
+    })
+    clearDragState()
+  }
+
+  // Compute the pixel position of the reorder insert line relative to listRef.
+  // We read from the DOM on each render during a drag — this is intentional since
+  // the drag is already causing re-renders via dropIntent state changes.
+  let insertLineTop = null
+  let insertLineIsDetach = false
+  if (dropIntent?.kind === 'reorder' && listRef.current) {
+    const listRect = listRef.current.getBoundingClientRect()
+    const { insertAfterId } = dropIntent
+    insertLineIsDetach = !!dropIntent.isDetach
+    if (insertAfterId === null) {
+      insertLineTop = 0
+    } else {
+      const rowEl = listRef.current.querySelector(`[data-account-row-id="${insertAfterId}"]`)
+      if (rowEl) {
+        const rowRect = rowEl.getBoundingClientRect()
+        insertLineTop = rowRect.bottom - listRect.top + listRef.current.scrollTop
+      }
+    }
+  }
 
   const ownerCount = owners.length
   const unownedCount = rootAccounts.filter(a => !a.owner_id).length
@@ -1778,6 +2408,26 @@ export default function Accounts() {
 
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {dragTooltip ? (
+        <div style={{
+          position: 'fixed',
+          left: dragTooltip.x + 14,
+          top: dragTooltip.y + 14,
+          zIndex: 400,
+          background: '#ffffff',
+          border: '1.5px solid #000000',
+          borderRadius: 6,
+          padding: '5px 10px',
+          fontSize: 12,
+          color: '#000000',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.35)',
+          pointerEvents: 'none',
+          maxWidth: 260,
+          lineHeight: 1.4,
+        }}>
+          {dragTooltip.message}
+        </div>
+      ) : null}
       {noticeDialog ? (
         <AppNoticeDialog
           title={noticeDialog.title}
@@ -1841,7 +2491,7 @@ export default function Accounts() {
         </div>
       </div>
 
-      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+      <div ref={outerScrollRef} data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
         <div
           onContextMenu={e => {
             if (showCreateAccount) return
@@ -1863,11 +2513,23 @@ export default function Accounts() {
               padding: 6,
             }}>
               <Button small onClick={openCreateAccount}>Add account</Button>
+              {orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0) && (
+                <>
+                  <Button small variant="ghost" style={{ display: 'block', width: '100%', marginTop: 4 }} onClick={() => {
+                    setCollapsedGroups(new Set(orderedRootAccounts.filter(r => (childAccountsByParent.get(r.id) || []).length > 0).map(r => r.id)))
+                    setContextOpen(false)
+                  }}>Collapse all groups</Button>
+                  <Button small variant="ghost" style={{ display: 'block', width: '100%', marginTop: 4 }} onClick={() => {
+                    setCollapsedGroups(new Set())
+                    setContextOpen(false)
+                  }}>Expand all groups</Button>
+                </>
+              )}
             </div>
           )}
         </div>
 
-        {loading ? <Spinner /> : (
+        {loading || !sectionStateLoaded || !sortLoaded ? <Spinner /> : (
           <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start' }}>
             <div ref={accountsPanelRef} style={{ position: 'relative', width: 'fit-content', maxWidth: '100%' }}>
               <SectionCard
@@ -1900,7 +2562,13 @@ export default function Accounts() {
                   </div>
                 ) : (
                   <>
-                    <div style={{
+                    <div
+                      onContextMenu={e => {
+                        if (!orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0)) return
+                        e.preventDefault()
+                        setListContextMenu({ x: e.clientX, y: e.clientY })
+                      }}
+                      style={{
                       display: 'grid',
                       gridTemplateColumns: ACCOUNT_ROW_COLUMNS,
                       gap: ACCOUNT_ROW_GAP,
@@ -1910,40 +2578,120 @@ export default function Accounts() {
                       alignItems: 'center',
                     }}>
                       <span />
-                      <span />
-                      <HeaderPill>Account</HeaderPill>
-                      <HeaderPill style={{ marginLeft: 6 }}>Type</HeaderPill>
-                      <div style={{ display: 'flex', justifyContent: 'center' }}>
-                        <HeaderPill>Owner</HeaderPill>
-                      </div>
+                      {['name', 'type', 'owner'].map((key) => {
+                        const labels = { name: 'Account', type: 'Type', owner: 'Owner' }
+                        const active = sortKey === key
+                        const indicator = sortDir === 'asc' ? ' ↑' : ' ↓'
+                        const el = (
+                          <button
+                            key={key}
+                            type="button"
+                            onClick={() => {
+                              if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+                              else { setSortKey(key); setSortDir('asc') }
+                            }}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              padding: 0,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <HeaderPill style={active ? {
+                              background: 'color-mix(in srgb, var(--accent) 15%, var(--surface2))',
+                              color: 'var(--accent)',
+                              borderColor: 'color-mix(in srgb, var(--accent) 40%, var(--border))',
+                            } : {}}>
+                              {labels[key]}{active ? indicator : ''}
+                            </HeaderPill>
+                          </button>
+                        )
+                        if (key === 'owner') {
+                          return <div key={key} style={{ display: 'flex', justifyContent: 'center' }}>{el}</div>
+                        }
+                        return <span key={key} style={key === 'type' ? { marginLeft: 6 } : {}}>{el}</span>
+                      })}
                       <span />
                     </div>
-                    <div ref={listRef} style={{ maxHeight: 640, overflowY: 'auto' }}>
-                      {draggingAccount?.parent_account_id ? (
+                    <div
+                      ref={listRef}
+                      onDragOver={handleListDragOver}
+                      onDragLeave={event => {
+                        if (!listRef.current?.contains(event.relatedTarget)) {
+                          cancelAnimationFrame(dragScrollRafRef.current)
+                          dragScrollRafRef.current = null
+                        }
+                      }}
+                      onDrop={handleListDrop}
+                      onContextMenu={e => {
+                        if (!orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0)) return
+                        e.preventDefault()
+                        setListContextMenu({ x: e.clientX, y: e.clientY })
+                      }}
+                      style={{ maxHeight: 640, overflowY: 'auto', position: 'relative' }}
+                    >
+                      {listContextMenu && (
                         <div
-                          onDragOver={handleRootDropZoneDragOver}
-                          onDrop={handleRootDropZoneDrop}
                           style={{
-                            margin: '8px 10px 0',
-                            padding: '8px 12px',
+                            position: 'fixed',
+                            left: Math.min(listContextMenu.x, window.innerWidth - 200),
+                            top: Math.min(listContextMenu.y, window.innerHeight - 100),
+                            zIndex: 300,
+                            background: 'var(--surface)',
+                            border: '1px solid var(--border)',
                             borderRadius: 10,
-                            border: `1px dashed ${rootDropActive ? 'var(--accent)' : 'var(--border)'}`,
-                            background: rootDropActive ? 'color-mix(in srgb, var(--accent) 10%, var(--surface2))' : 'color-mix(in srgb, var(--surface2) 60%, var(--surface))',
-                            color: rootDropActive ? 'var(--text)' : 'var(--muted)',
-                            fontSize: 12,
+                            boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
+                            padding: 4,
+                            minWidth: 180,
                           }}
+                          onMouseLeave={() => setListContextMenu(null)}
                         >
-                          Drop here to keep this account on its own again.
+                          <button type="button" onClick={() => {
+                            setCollapsedGroups(new Set(orderedRootAccounts.filter(r => (childAccountsByParent.get(r.id) || []).length > 0).map(r => r.id)))
+                            setListContextMenu(null)
+                          }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
+                            Collapse all groups
+                          </button>
+                          <button type="button" onClick={() => {
+                            setCollapsedGroups(new Set())
+                            setListContextMenu(null)
+                          }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
+                            Expand all groups
+                          </button>
                         </div>
-                      ) : null}
-                      {rootAccounts.map(root => {
-                        const children = childAccountsByParent.get(root.id) || []
-                        const rootDragDisabled = movingAccountId === root.id || children.length > 0
+                      )}
+                      {insertLineTop !== null && (
+                        <div style={{
+                          position: 'absolute',
+                          left: insertLineIsDetach ? 0 : 10,
+                          right: 10,
+                          top: insertLineTop,
+                          height: 2,
+                          borderRadius: 1,
+                          background: 'var(--accent)',
+                          opacity: insertLineIsDetach ? 0.5 : 1,
+                          borderTop: insertLineIsDetach ? '2px dashed var(--accent)' : undefined,
+                          pointerEvents: 'none',
+                          zIndex: 10,
+                        }} />
+                      )}
+                      {orderedRootAccounts.map(root => {
+                        const children = orderedChildrenByParent.get(root.id) || []
+                        const isCollapsed = collapsedGroups.has(root.id)
+                        const rootDragDisabled = movingAccountId === root.id
+                        const groupMergeActive = dropIntent?.kind === 'merge' && dropIntent.targetId === root.id
                         return (
                           <div key={root.id}>
                             <AccountRow
                               account={root}
                               hasChildren={children.length}
+                              isCollapsed={isCollapsed}
+                              onToggleCollapse={() => setCollapsedGroups(prev => {
+                                const next = new Set(prev)
+                                if (next.has(root.id)) next.delete(root.id)
+                                else next.add(root.id)
+                                return next
+                              })}
                               owners={owners}
                               onSave={saveAccount}
                               onRequestDelete={requestDelete}
@@ -1959,18 +2707,16 @@ export default function Accounts() {
                               onRequestTrash={setPendingTrashAccount}
                               interactionDisabled={showCreateAccount || !!movingAccountId}
                               dragDisabled={rootDragDisabled}
-                              dropActive={dropTargetAccountId === root.id}
+                              dropActive={groupMergeActive}
                               onDragStart={handleAccountDragStart}
                               onDragEnd={handleAccountDragEnd}
-                              onDragOverTarget={handleAccountDragOverTarget}
-                              onDragLeaveTarget={handleAccountDragLeaveTarget}
-                              onDropOnTarget={handleAccountDropOnTarget}
                             />
-                            {children.map(child => (
+                            {!isCollapsed && children.map((child, childIdx) => (
                               <AccountRow
                                 key={child.id}
                                 account={child}
                                 parentAccount={root}
+                                isLastChild={childIdx === children.length - 1}
                                 owners={owners}
                                 onSave={saveAccount}
                                 onRequestDelete={requestDelete}
@@ -1986,11 +2732,9 @@ export default function Accounts() {
                                 onRequestTrash={setPendingTrashAccount}
                                 interactionDisabled={showCreateAccount || !!movingAccountId}
                                 dragDisabled={movingAccountId === child.id}
+                                dropActive={groupMergeActive}
                                 onDragStart={handleAccountDragStart}
                                 onDragEnd={handleAccountDragEnd}
-                                onDragOverTarget={handleAccountDragOverTarget}
-                                onDragLeaveTarget={handleAccountDragLeaveTarget}
-                                onDropOnTarget={handleAccountDropOnTarget}
                               />
                             ))}
                           </div>

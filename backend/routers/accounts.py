@@ -17,7 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.db.database import SHARED_OWNER_NAME, get_db
+from backend.db.database import SHARED_OWNER_NAME, SHARED_OWNER_ID, get_db
 
 router = APIRouter()
 
@@ -40,6 +40,13 @@ class AccountAttachRequest(BaseModel):
 
 def _normalize_match_value(value: Optional[str]) -> str:
     return (value or "").strip().lower()
+
+
+def _serialize_account(row) -> dict:
+    """Convert a db row to a dict, adding is_shared for the shared owner account."""
+    d = dict(row)
+    d["is_shared"] = d.get("owner_id") == SHARED_OWNER_ID
+    return d
 
 
 def _get_account_row(conn, account_id: str):
@@ -258,7 +265,7 @@ def resolve_default_owner_id(conn, owner_id: Optional[str]) -> Optional[str]:
 def list_accounts(include_children: bool = False, include_trashed: bool = False):
     with get_db() as conn:
         rows = _list_account_rows(conn, include_children=include_children, include_trashed=include_trashed)
-    return [dict(r) for r in rows]
+    return [_serialize_account(r) for r in rows]
 
 
 @router.get("/trash")
@@ -307,7 +314,7 @@ def create_account(body: AccountCreate):
             (account_id, name, name, account_type, owner_id),
         )
         row = _get_account_row(conn, account_id)
-    return dict(row)
+    return _serialize_account(row)
 
 
 @router.patch("/{account_id}")
@@ -338,8 +345,6 @@ def update_account(account_id: str, body: AccountUpdate):
             )
 
         if body.owner_id is not None:
-            if grouped:
-                raise HTTPException(status_code=400, detail="Ungroup this account before changing its owner")
             owner_val = _assert_owner_exists(conn, body.owner_id if body.owner_id != "" else None)
             conn.execute(
                 "UPDATE account SET owner_id = ? WHERE id = ?",
@@ -369,7 +374,16 @@ def attach_account(account_id: str, body: AccountAttachRequest):
             raise HTTPException(status_code=400, detail="Only top-level accounts can accept merged children")
         if _get_child_count(conn, account_id) > 0:
             raise HTTPException(status_code=400, detail="Ungroup this account's children before merging it")
-        if _normalize_match_value(account["owner_id"]) != _normalize_match_value(parent["owner_id"]):
+
+        # Owners are compatible if they match exactly, or if either account belongs to the shared owner.
+        source_owner = (account["owner_id"] or "").strip()
+        parent_owner = (parent["owner_id"] or "").strip()
+        owners_compatible = (
+            source_owner == parent_owner
+            or source_owner == SHARED_OWNER_ID
+            or parent_owner == SHARED_OWNER_ID
+        )
+        if not owners_compatible:
             raise HTTPException(status_code=400, detail="Only accounts with the same owner can be merged")
         if _normalize_match_value(account["type"]) != _normalize_match_value(parent["type"]):
             raise HTTPException(status_code=400, detail="Only accounts with the same type can be merged")

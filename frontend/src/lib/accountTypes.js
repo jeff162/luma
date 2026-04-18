@@ -9,11 +9,11 @@
 // - label: full descriptive label for contexts with space (accounts page type selector).
 // - shortLabel: compact label for narrow dropdowns (import mapping account rows).
 export const ACCOUNT_TYPES = [
-  { value: 'depository', label: 'Checking',    shortLabel: 'Checking'  },
-  { value: 'savings',    label: 'Savings',     shortLabel: 'Savings'   },
   { value: 'credit',     label: 'Credit card', shortLabel: 'Credit'    },
+  { value: 'depository', label: 'Checking',    shortLabel: 'Checking'  },
   { value: 'p2p',        label: 'P2P',         shortLabel: 'P2P'       },
   { value: 'investment', label: 'Investment',  shortLabel: 'Invest.'   },
+  { value: 'savings',    label: 'Savings',     shortLabel: 'Savings'   },
   { value: 'loan',       label: 'Loan',        shortLabel: 'Loan'      },
   { value: 'other',      label: 'Other',       shortLabel: 'Other'     },
 ]
