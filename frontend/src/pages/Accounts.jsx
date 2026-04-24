@@ -1568,82 +1568,82 @@ export default function Accounts() {
   }, [accounts])
 
   useEffect(() => {
-      const storageKey = getAccountsSectionsStorageKey(dbInstanceId, userId)
-      const prefValue = preferences?.[ACCOUNTS_SECTIONS_PREF_KEY]
-      const nextSectionState = isObjectLike(prefValue) ? prefValue : {}
+    const storageKey = getAccountsSectionsStorageKey(dbInstanceId, userId)
+    const prefValue = preferences?.[ACCOUNTS_SECTIONS_PREF_KEY]
+    const nextSectionState = isObjectLike(prefValue) ? prefValue : {}
 
-      if (!isObjectLike(prefValue) && storageKey) {
-        try {
-          const raw = window.localStorage.getItem(storageKey)
-          const parsed = raw ? JSON.parse(raw) : null
-          if (isObjectLike(parsed)) {
-            Object.assign(nextSectionState, parsed)
-          }
-        } catch {
-          // Ignore storage failures in restricted environments.
+    if (!isObjectLike(prefValue) && storageKey) {
+      try {
+        const raw = window.localStorage.getItem(storageKey)
+        const parsed = raw ? JSON.parse(raw) : null
+        if (isObjectLike(parsed)) {
+          Object.assign(nextSectionState, parsed)
         }
+      } catch {
+        // Ignore storage failures in restricted environments.
       }
+    }
 
-      if (nextSectionState.accountOwners === undefined) {
-        const legacyPrefValue = preferences?.[LEGACY_ACCOUNT_OWNERS_PREF_KEY]
-        if (typeof legacyPrefValue === 'boolean') {
-          nextSectionState.accountOwners = legacyPrefValue
-        } else {
-          const legacyStorageKey = getLegacyAccountOwnersStorageKey(dbInstanceId, userId)
-          if (legacyStorageKey) {
-            try {
-              const raw = window.localStorage.getItem(legacyStorageKey)
-              if (raw !== null) nextSectionState.accountOwners = raw === 'true'
-            } catch {
-              // Ignore storage failures in restricted environments.
-            }
-          }
-        }
-      }
-
-      setSectionExpandedState(nextSectionState)
-      setSectionStateLoaded(true)
-
-      // Load collapsed group state (which parent accounts have their children hidden).
-      const collapsedPrefValue = preferences?.[ACCOUNTS_COLLAPSED_PREF_KEY]
-      const collapsedStorageKey = getAccountsCollapsedStorageKey(dbInstanceId, userId)
-      let savedCollapsed = Array.isArray(collapsedPrefValue) ? collapsedPrefValue : null
-      if (!savedCollapsed && collapsedStorageKey) {
-        try {
-          const raw = window.localStorage.getItem(collapsedStorageKey)
-          const parsed = raw ? JSON.parse(raw) : null
-          if (Array.isArray(parsed)) savedCollapsed = parsed
-        } catch {
-          // Ignore storage failures in restricted environments.
-        }
-      }
-      setCollapsedGroups(new Set(savedCollapsed || []))
-      setCollapsedGroupsLoaded(true)
-
-      // Load sort preference — active key plus each column's last-used direction.
-      const sortPrefValue = preferences?.[ACCOUNTS_SORT_PREF_KEY]
-      const sortStorageKey = getAccountsSortStorageKey(dbInstanceId, userId)
-      let savedSort = isObjectLike(sortPrefValue) ? sortPrefValue : null
-      if (!savedSort && sortStorageKey) {
-        try {
-          const raw = window.localStorage.getItem(sortStorageKey)
-          const parsed = raw ? JSON.parse(raw) : null
-          if (isObjectLike(parsed)) savedSort = parsed
-        } catch {
-          // Ignore storage failures in restricted environments.
-        }
-      }
-      if (savedSort?.key) {
-        const nextSortKey = ACCOUNT_SORT_KEYS.includes(savedSort.key) ? savedSort.key : 'type'
-        const nextSortDirections = normalizeAccountSortDirections(savedSort.directions, savedSort.dir || 'asc')
-        setSortKey(nextSortKey)
-        setSortDir(nextSortDirections[nextSortKey] || 'asc')
-        setSortDirections(nextSortDirections)
+    if (nextSectionState.accountOwners === undefined) {
+      const legacyPrefValue = preferences?.[LEGACY_ACCOUNT_OWNERS_PREF_KEY]
+      if (typeof legacyPrefValue === 'boolean') {
+        nextSectionState.accountOwners = legacyPrefValue
       } else {
-        setSortDirections(DEFAULT_ACCOUNT_SORT_DIRECTIONS)
+        const legacyStorageKey = getLegacyAccountOwnersStorageKey(dbInstanceId, userId)
+        if (legacyStorageKey) {
+          try {
+            const raw = window.localStorage.getItem(legacyStorageKey)
+            if (raw !== null) nextSectionState.accountOwners = raw === 'true'
+          } catch {
+            // Ignore storage failures in restricted environments.
+          }
+        }
       }
-      setSortIndicatorActive(true)
-      setSortLoaded(true)
+    }
+
+    setSectionExpandedState(nextSectionState)
+    setSectionStateLoaded(true)
+
+    // Load collapsed group state (which parent accounts have their children hidden).
+    const collapsedPrefValue = preferences?.[ACCOUNTS_COLLAPSED_PREF_KEY]
+    const collapsedStorageKey = getAccountsCollapsedStorageKey(dbInstanceId, userId)
+    let savedCollapsed = Array.isArray(collapsedPrefValue) ? collapsedPrefValue : null
+    if (!savedCollapsed && collapsedStorageKey) {
+      try {
+        const raw = window.localStorage.getItem(collapsedStorageKey)
+        const parsed = raw ? JSON.parse(raw) : null
+        if (Array.isArray(parsed)) savedCollapsed = parsed
+      } catch {
+        // Ignore storage failures in restricted environments.
+      }
+    }
+    setCollapsedGroups(new Set(savedCollapsed || []))
+    setCollapsedGroupsLoaded(true)
+
+    // Load sort preference — active key plus each column's last-used direction.
+    const sortPrefValue = preferences?.[ACCOUNTS_SORT_PREF_KEY]
+    const sortStorageKey = getAccountsSortStorageKey(dbInstanceId, userId)
+    let savedSort = isObjectLike(sortPrefValue) ? sortPrefValue : null
+    if (!savedSort && sortStorageKey) {
+      try {
+        const raw = window.localStorage.getItem(sortStorageKey)
+        const parsed = raw ? JSON.parse(raw) : null
+        if (isObjectLike(parsed)) savedSort = parsed
+      } catch {
+        // Ignore storage failures in restricted environments.
+      }
+    }
+    if (savedSort?.key) {
+      const nextSortKey = ACCOUNT_SORT_KEYS.includes(savedSort.key) ? savedSort.key : 'type'
+      const nextSortDirections = normalizeAccountSortDirections(savedSort.directions, savedSort.dir || 'asc')
+      setSortKey(nextSortKey)
+      setSortDir(nextSortDirections[nextSortKey] || 'asc')
+      setSortDirections(nextSortDirections)
+    } else {
+      setSortDirections(DEFAULT_ACCOUNT_SORT_DIRECTIONS)
+    }
+    setSortIndicatorActive(true)
+    setSortLoaded(true)
   }, [dbInstanceId, preferences, userId])
 
   // Accounts-page section collapse state is profile-scoped UI state, so one person's workspace shape restores cleanly without affecting others.
@@ -2046,7 +2046,7 @@ export default function Accounts() {
       return
     }
 
-    // Cannot regroup — show tooltip after delay.
+    // Cannot merge accounts — show tooltip after delay.
     event.dataTransfer.dropEffect = 'none'
     setDropIntent(null)
     const sourceMissingType = !draggingAccount.type
@@ -2070,7 +2070,7 @@ export default function Accounts() {
       dragInvalidSinceRef.current = Date.now()
       clearTimeout(dragTooltipTimerRef.current)
       dragTooltipTimerRef.current = setTimeout(() => {
-        setDragTooltip({ x: event.clientX, y: event.clientY, message: `Can't regroup: ${reasons}` })
+        setDragTooltip({ x: event.clientX, y: event.clientY, message: `Can't merge with this account: ${reasons}` })
       }, 600)
     } else if (!reasons) {
       dragInvalidSinceRef.current = null
@@ -2080,7 +2080,7 @@ export default function Accounts() {
   }
 
   // Drop handler — child accounts may detach in the left gutter, otherwise drops
-  // either regroup into another top-level account or no-op within the same group.
+  // either merge into another top-level account or no-op within the same group.
   function handleListDrop(event) {
     if (!draggingAccount) return
     const listRect = listRef.current?.getBoundingClientRect()
@@ -2439,13 +2439,13 @@ export default function Accounts() {
                               setCollapsedGroups(new Set(orderedRootAccounts.filter(r => (childAccountsByParent.get(r.id) || []).length > 0).map(r => r.id)))
                               setListContextMenu(null)
                             }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
-                              Collapse all groups
+                              Collapse all
                             </button>
                             <button type="button" onClick={() => {
                               setCollapsedGroups(new Set())
                               setListContextMenu(null)
                             }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
-                              Expand all groups
+                              Expand all
                             </button>
                           </div>
                         )}

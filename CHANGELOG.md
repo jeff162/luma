@@ -11,6 +11,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+
 - Cross-platform launcher and setup helpers for Windows and Unix-like systems,
   including first-run environment bootstrap and a runtime repair screen for
   missing required settings.
@@ -24,6 +25,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   new category/account detail panels alongside the existing payee detail view.
 
 ### Changed
+
 - The setup flow is now organized around launcher scripts and a simpler `.env`
   story, with advanced overrides documented separately.
 - Accounts and Settings were reorganized so account editing lives on the
@@ -38,18 +40,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   placement between openings.
 - Backup restore is more resilient across exported instances, including restore
   handling for category/account relationship ordering.
-
-### Removed
-- Merchant Renames tab from the Rules page — functionality merged into rules.
-- Merchant rename API methods from `api.js` (`getMerchantRenames`,
-  `createMerchantRename`, `updateMerchantRename`, `deleteMerchantRename`,
-  `applyMerchantRenames`). The `merchants.py` router was already unregistered.
-
----
-
-## Pre-release baseline
-
-### Added
 - SQLite database with versioned migration system (v1–v13)
 - Plaid integration for live bank account sync
 - CSV import with column mapping, saved profiles, and duplicate detection
@@ -65,3 +55,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Auth system — optional multi-user mode with session-based login and 2FA
 - Docker support via `docker-compose.yml`
 - Nightly sync via `scripts/sync.sh` (cron-compatible)
+
+### Removed
+
+- Merchant Renames tab from the Rules page — functionality merged into rules.
+- Merchant rename API methods from `api.js` (`getMerchantRenames`,
+  `createMerchantRename`, `updateMerchantRename`, `deleteMerchantRename`,
+  `applyMerchantRenames`). The `merchants.py` router was already unregistered.

@@ -72,13 +72,13 @@ The frontend mixes page-specific screens with a small set of shared interaction�
 
 - **`components/TransientTextInput.jsx`:** shared single-field transient edit control used when Enter/blur should commit and Escape should cancel back to the pre-edit value
 
-There are shared primitives designed to create a uniform user experience. Unless a frontend interaction has special requirements, it should use the shared interaction primitives in `frontend/src/lib/uiInteractions.js` and `frontend/src/components/TransientTextInput.jsx` instead of page-local reimplementation. Search boxes, filters, and other intentionally custom controls sometimes contain page-specific logic.
+There are shared primitives designed to create a uniform user experience. Unless a frontend interaction has special requirements, it should use the shared interaction primitives in `frontend/src/lib/uiInteractions.js` and `frontend/src/components/TransientTextInput.jsx` instead of a page-local version. Search boxes, filters, and other intentionally custom controls sometimes contain page-specific logic.
 
 The concern behind this is interaction drift. Repeated popovers, inline editors, and dismissal rules are easy to make "almost the same" on each page, which creates both subtle bugs and a less coherent product feel over time.
 
 - **Local-mode onboarding:** when auth is off and no local preference profiles exist yet, `App.jsx` opens a first-run welcome flow that can seed multiple local profiles, optional account owners, default imported-category behavior, and an optional next route such as data-provider setup before the normal shell appears
 
-Keeping this in `App.jsx` makes it part of bootstrap rather than a normal revisitable workflow. The main need is to block the ordinary shell until there is enough local-profile state to scope preferences cleanly, not to create a long-lived page in the app information architecture.
+Keeping this in `App.jsx` makes it part of bootstrap rather than a repeatable workflow. The main need is to block the ordinary shell until there is enough local-profile state to scope preferences cleanly, not to create a long-lived page in the app’s information architecture.
 
 ## Data flow
 
@@ -129,7 +129,7 @@ This is a deliberate tradeoff toward local responsiveness. FinTrack is optimized
 
 - **Backend:** `backend/routers/import\_export.py`
 
-- **Handles:** CSV preview/import, saved import profiles, undoable import batches, CSV export, data backup/restore, and credentials backup/restore
+- **Handles:** CSV preview/import, saved import profiles, support undo import operations, CSV export, data backup/restore, and credentials backup/restore
 
 - **Effective-account behavior:** import review, saved-profile summaries, and CSV export resolve grouped child accounts through the parent's display name so historical account numbers still read as one physical account outside the Accounts page
 
@@ -155,7 +155,7 @@ That concentration is intentional. Import behavior is one of the places where ma
 
 - **Shared behavior:** draggable shell, monthly bar charts, month selection, lazy-loaded transaction lists, and page-driven default placement when multiple panels are open
 
-- **Reporting contract:** detail drawers and dashboard summaries should not drop rows just because a transaction's sign is unusual for an expense or income category; they include all matching rows for the selected slice and use the net amount for rollups
+- **Reporting contract:** Expense/Income are simply how the user thinks about their data. Expenses can include positive values for various reasons, an expense might get reimbursed, a purchase might be returned for a refund, etc. These monies received are not income, they offset an expenditure. To support this detail drawers and dashboard summaries should not drop rows just because a transaction's sign is unusual for an expense or income category; they include all matching rows for the selected slice and use the net amount.
 
 - **Shared implementation:** `frontend/src/components/detailShared.jsx`
 

@@ -128,7 +128,6 @@ Luma focuses on making common tasks easy and reducing the effort required to mai
 | Frontend | React 18 / Vite / Recharts |
 | Bank data | Plaid API (optional) |
 
-
 ## Platform support
 
 Luma is intended to run on:
@@ -167,7 +166,7 @@ Windows Task Scheduler or run inside a Linux environment.
 
 ### Quick start
 
-```
+```bash
 \`git clone https://github.com/your-username/luma.git\`  
   
 \`cd luma\`  
