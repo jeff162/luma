@@ -47,7 +47,7 @@ function normalizeCategoryImportValue(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
-function findNodeById(tree, nodeId) {
+export function findNodeById(tree, nodeId) {
   for (const sectionType of ['income', 'expense']) {
     for (const group of tree?.[sectionType] || []) {
       if (group.id === nodeId) return group

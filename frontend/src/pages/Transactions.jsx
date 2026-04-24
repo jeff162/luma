@@ -1,45 +1,52 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { refreshTaskBadge } from '../App.jsx'
 import { formatDate } from '../lib/utils.js'
-import AmountDisplay from '../components/AmountDisplay.jsx'
+import ImportBatchDetail from '../components/ImportBatchDetail.jsx'
+import PillGridTable from '../components/PillGridTable.jsx'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
 import { Card, PageHeader, Spinner, EmptyState, Input, OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from '../components/ui.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
-import { MerchantCell, CategoryCell, ContextMenu, useContextMenu, NotePopover, getTxnMerchantLabel } from '../components/TransactionRow.jsx'
+import { MerchantCell, CategoryCell, ContextMenu, useContextMenu, NotePopover, TransactionAmountCell, getTxnMerchantLabel, getTxnImportSourceLabel } from '../components/TransactionRow.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import RuleForm from '../components/RuleForm.jsx'
+import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
+import { useDismissibleLayer } from '../lib/uiInteractions.js'
+import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 
 const NEW_CATEGORY_SENTINEL = '__new__'
 
 const NEW_CAT_COLORS = [
-  '#6366f1','#ec4899','#f97316','#eab308','#22c55e',
-  '#14b8a6','#3b82f6','#a855f7','#ef4444','#64748b',
+  '#6366f1', '#ec4899', '#f97316', '#eab308', '#22c55e',
+  '#14b8a6', '#3b82f6', '#a855f7', '#ef4444', '#64748b',
 ]
 
 const COLUMN_DEFS = [
-  { key: 'date',     label: 'Date',     defaultWidth: 100, minWidth: 70  },
+  { key: 'date', label: 'Date', defaultWidth: 100, minWidth: 70 },
   { key: 'merchant', label: 'Merchant', defaultWidth: 220, minWidth: 120 },
   { key: 'category', label: 'Category', defaultWidth: 150, minWidth: 100 },
-  { key: 'account',  label: 'Account',  defaultWidth: 150, minWidth: 100 },
-  { key: 'amount',   label: 'Amount',   defaultWidth: 110, minWidth: 70  },
+  { key: 'account', label: 'Account', defaultWidth: 150, minWidth: 100 },
+  { key: 'amount', label: 'Amount', defaultWidth: 110, minWidth: 70 },
 ]
 
 const DEFAULT_ORDER = ['date', 'merchant', 'category', 'account', 'amount']
 const TXN_COLUMNS_STORAGE_KEY_PREFIX = 'fintrack:txn-columns'
 const TXN_COLUMNS_PREF_KEY = 'ui.transactions.columns'
+const TXN_SESSION_STATE_STORAGE_KEY = 'fintrack:txn-session-state'
+const DEFAULT_TRANSACTION_SORT = { key: 'date', dir: 'desc' }
 const TRANSACTIONS_BASE_PAGE_SIZE = 500
 const TRANSACTIONS_MAX_PAGE_SIZE = 1000
 const TRANSACTIONS_PAGE_GROWTH_STEP = 250
 const TRANSACTIONS_PAGE_GROWTH_INTERVAL = 1500
 const TRANSACTIONS_SCROLL_BUFFER_PX = 1600
+let transactionsSessionInitialized = false
 
 function getTransactionsPageSize(loadedCount = 0) {
   const growthSteps = Math.floor(Math.max(0, loadedCount) / TRANSACTIONS_PAGE_GROWTH_INTERVAL)
@@ -51,6 +58,53 @@ function getTransactionsPageSize(loadedCount = 0) {
 
 function getTxnColumnsStorageKey(instanceId, userId) {
   return instanceId && userId ? `${TXN_COLUMNS_STORAGE_KEY_PREFIX}:${instanceId}:${userId}` : null
+}
+
+function normalizeTransactionSortState(value) {
+  if (!value || typeof value !== 'object') return DEFAULT_TRANSACTION_SORT
+  const key = COLUMN_DEFS.some(column => column.key === value.key) ? value.key : DEFAULT_TRANSACTION_SORT.key
+  const dir = value.dir === 'asc' ? 'asc' : 'desc'
+  return { key, dir }
+}
+
+function getTransactionsNavigationType() {
+  if (typeof window === 'undefined' || !window.performance?.getEntriesByType) return ''
+  const navigationEntry = window.performance.getEntriesByType('navigation')[0]
+  return navigationEntry?.type || ''
+}
+
+function loadTransactionsSessionState() {
+  if (typeof window === 'undefined') return null
+  if (!transactionsSessionInitialized) {
+    transactionsSessionInitialized = true
+    if (getTransactionsNavigationType() === 'reload') {
+      try {
+        window.sessionStorage.removeItem(TXN_SESSION_STATE_STORAGE_KEY)
+      } catch { }
+      return null
+    }
+  }
+  try {
+    const raw = window.sessionStorage.getItem(TXN_SESSION_STATE_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return {
+      quickFilter: typeof parsed?.quickFilter === 'string' ? parsed.quickFilter : '',
+      sortState: normalizeTransactionSortState(parsed?.sortState),
+    }
+  } catch {
+    return null
+  }
+}
+
+function saveTransactionsSessionState({ quickFilter, sortState }) {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(TXN_SESSION_STATE_STORAGE_KEY, JSON.stringify({
+      quickFilter: quickFilter || '',
+      sortState: normalizeTransactionSortState(sortState),
+    }))
+  } catch { }
 }
 
 function defaultColumnConfig() {
@@ -92,21 +146,21 @@ function loadColumnConfig(instanceId, userId) {
 function saveColumnConfig(instanceId, userId, cfg) {
   const storageKey = getTxnColumnsStorageKey(instanceId, userId)
   if (!storageKey) return
-  try { localStorage.setItem(storageKey, JSON.stringify(cfg)) } catch {}
+  try { localStorage.setItem(storageKey, JSON.stringify(cfg)) } catch { }
 }
 
-function buildGridTemplate(cols) {
-  return cols.map(c => `${c.width}px`).join(' ')
+function getInitialSortDirection(columnKey) {
+  return columnKey === 'date' || columnKey === 'amount' ? 'desc' : 'asc'
 }
 
-function formatTransactionClipboardCell(key, txn) {
+function formatTransactionClipboardCell(key, txn, { showSourceInCategorySlot = false } = {}) {
   switch (key) {
     case 'date':
       return formatDate(txn.date)
     case 'merchant':
       return getTxnMerchantLabel(txn)
     case 'category':
-      return txn.category_name || 'Uncategorized'
+      return showSourceInCategorySlot ? getTxnImportSourceLabel(txn) : (txn.category_name || 'Uncategorized')
     case 'account':
       return `${txn.account_name || ''}${txn.account_mask ? ` ···${txn.account_mask}` : ''}`.trim()
     case 'amount':
@@ -161,7 +215,7 @@ function RuleActionModal({ state, onClose, onSaved }) {
     const { applyToExisting, ...ruleData } = data
     if (state.mode === 'edit') {
       await api.updateRule(state.ruleId, ruleData)
-      if (applyToExisting) await api.recategorize()
+      if (applyToExisting) await api.applyRule(state.ruleId)
       onSaved?.({ applyToExisting, mode: 'edit', ruleId: state.ruleId })
       onClose()
       return
@@ -177,19 +231,22 @@ function RuleActionModal({ state, onClose, onSaved }) {
 
   const initialValues = state.mode === 'edit'
     ? (rule ? {
-        keyword: rule.keyword,
-        amount_min: rule.amount_min ?? null,
-        amount_max: rule.amount_max ?? null,
-        owner_id: rule.owner_id || '',
-        account_id: rule.account_id || '',
-        catId: rule.category_id,
-        cleanName: rule.clean_name || '',
-      } : null)
+      keyword: rule.keyword,
+      amount_min: rule.amount_min ?? null,
+      amount_max: rule.amount_max ?? null,
+      debit_credit: rule.debit_credit || 'both',
+      owner_id: rule.owner_id || '',
+      account_id: rule.account_id || '',
+      catId: rule.category_id,
+      cleanName: rule.clean_name || '',
+      tagIds: rule.tag_ids || [],
+    } : null)
     : {
-        keyword: (state.keywordSource || '').toLowerCase().trim(),
-        cleanName: '',
-        catId: state.categoryId || '',
-      }
+      keyword: (state.keywordSource || '').toLowerCase().trim(),
+      cleanName: '',
+      catId: state.categoryId || '',
+      tagIds: [],
+    }
 
   return (
     <OverlayBackdrop zIndex={950} tint="rgba(10, 15, 26, 0.32)">
@@ -227,31 +284,41 @@ function RuleActionModal({ state, onClose, onSaved }) {
 }
 
 export default function Transactions() {
+  const initialSessionStateRef = useRef(loadTransactionsSessionState())
+  const { dbInstanceId, preferenceSubjectId: userId } = useAppSession()
+  const { preferences } = useUserPreferences()
   const { filters } = useFilters()
   const location = useLocation()
-  const [dbInstanceId, setDbInstanceId] = useState('')
-  const [userId, setUserId] = useState('')
   const [categories, setCategories] = useState([])
-  const [data, setData]             = useState({ transactions: [], total: 0, offset: 0, limit: TRANSACTIONS_BASE_PAGE_SIZE })
+  const [data, setData] = useState({ transactions: [], total: 0, offset: 0, limit: TRANSACTIONS_BASE_PAGE_SIZE })
   const [initialLoading, setInitialLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [detailPanels, setDetailPanels] = useState([])
-  const [editId, setEditId]         = useState(null)
+  const [batchDetailPanels, setBatchDetailPanels] = useState([])
+  const [editId, setEditId] = useState(null)
   const { menu, onContextMenu, close: closeMenu } = useContextMenu()
+  const [categoryHeaderMenu, setCategoryHeaderMenu] = useState(null)
   const [noteTarget, setNoteTarget] = useState(null)
   const [rulePrompt, setRulePrompt] = useState(null)
-  const [merchantSearch, setMerchantSearch] = useState('')
-  const [debouncedMerchantSearch, setDebouncedMerchantSearch] = useState('')
+  const [quickFilter, setQuickFilter] = useState(() => initialSessionStateRef.current?.quickFilter || '')
+  const [debouncedQuickFilter, setDebouncedQuickFilter] = useState(() => initialSessionStateRef.current?.quickFilter?.trim() || '')
   const [contextRuleMatch, setContextRuleMatch] = useState({ txnId: null, loading: false, ruleId: null })
   const [ruleModalState, setRuleModalState] = useState(null)
   const isFirstLoad = useRef(true)
   const listScrollRef = useRef(null)
+  const categoryHeaderMenuRef = useRef(null)
   const latestRequestKeyRef = useRef('')
-  const dragColKey = useRef(null)
-  const resizeState = useRef(null)
-
   const [cols, setCols] = useState(() => defaultColumnConfig())
-  const multiDetailMode = detailPanels.length > 1
+  const [sortState, setSortState] = useState(() => initialSessionStateRef.current?.sortState || DEFAULT_TRANSACTION_SORT)
+  const [showSourceInCategorySlot, setShowSourceInCategorySlot] = useState(false)
+  const totalDetailPanelCount = detailPanels.length + batchDetailPanels.length
+  const multiDetailMode = totalDetailPanelCount > 1
+
+  useDismissibleLayer({
+    open: !!categoryHeaderMenu,
+    onClose: () => setCategoryHeaderMenu(null),
+    refs: [categoryHeaderMenuRef],
+  })
 
   function openDetailPanel(type, item) {
     if (!item?.id) return
@@ -265,42 +332,40 @@ export default function Transactions() {
     setDetailPanels(prev => prev.filter(panel => !(panel.type === type && panel.item?.id === id)))
   }
 
+  function openBatchDetail(batch) {
+    if (!batch?.id) return
+    setBatchDetailPanels(prev => prev.some(panel => panel.id === batch.id) ? prev : [...prev, batch])
+  }
+
+  function closeBatchDetail(batchId) {
+    setBatchDetailPanels(prev => prev.filter(panel => panel.id !== batchId))
+  }
+
   function handleColUpdate(newCols) {
     setCols(newCols)
     saveColumnConfig(dbInstanceId, userId, newCols)
-    api.saveUserPreference(TXN_COLUMNS_PREF_KEY, newCols).catch(() => {})
+    api.saveUserPreference(TXN_COLUMNS_PREF_KEY, newCols).catch(() => { })
   }
-
-  const gridTemplate = buildGridTemplate(cols)
 
   const [uncategorizedOnly, setUncategorizedOnly] = useState(
     () => new URLSearchParams(location.search).get('uncategorized') === '1'
   )
 
   useEffect(() => {
-    Promise.all([
-      api.getAuthStatus().catch(() => null),
-      api.getUserPreferences().catch(() => ({ preferences: {} })),
-    ]).then(([status, prefResp]) => {
-      const nextDbInstanceId = status?.db_instance_id || ''
-      const nextUserId = status?.preference_profile?.id || status?.user?.id || ''
-      setDbInstanceId(nextDbInstanceId)
-      setUserId(nextUserId)
-      const saved = prefResp?.preferences?.[TXN_COLUMNS_PREF_KEY]
+      const saved = preferences?.[TXN_COLUMNS_PREF_KEY]
       const normalizedSaved = normalizeColumnConfig(saved)
       if (normalizedSaved) {
         setCols(normalizedSaved)
-        saveColumnConfig(nextDbInstanceId, nextUserId, normalizedSaved)
+        saveColumnConfig(dbInstanceId, userId, normalizedSaved)
         return
       }
-      const local = loadColumnConfig(nextDbInstanceId, nextUserId)
+      const local = loadColumnConfig(dbInstanceId, userId)
       if (local) {
         setCols(local)
         return
       }
       setCols(defaultColumnConfig())
-    })
-  }, [])
+  }, [dbInstanceId, preferences, userId])
 
   useEffect(() => {
     api.getCategories().then(setCategories)
@@ -318,29 +383,37 @@ export default function Transactions() {
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
-      setDebouncedMerchantSearch(merchantSearch.trim())
+      setDebouncedQuickFilter(quickFilter.trim())
     }, 180)
     return () => window.clearTimeout(timeoutId)
-  }, [merchantSearch])
+  }, [quickFilter])
+
+  useEffect(() => {
+    saveTransactionsSessionState({ quickFilter, sortState })
+  }, [quickFilter, sortState])
 
   const load = useCallback(async ({ append = false, offsetOverride = 0 } = {}) => {
-    const accountSel  = filters.selections.filter(s => s.type === 'account').map(s => s.id)
-    const groupSel    = filters.selections.filter(s => s.type === 'group').map(s => s.id)
+    const accountSel = filters.selections.filter(s => s.type === 'account').map(s => s.id)
+    const groupSel = filters.selections.filter(s => s.type === 'group').map(s => s.id)
     const categorySel = filters.selections.filter(s => s.type === 'category').map(s => s.id)
-    const payeeSel    = filters.selections.filter(s => s.type === 'payee').map(s => s.label)
-    const ownerSel    = filters.selections.filter(s => s.type === 'owner').map(s => s.id)
+    const tagSel = filters.selections.filter(s => s.type === 'tag').map(s => s.id)
+    const payeeSel = filters.selections.filter(s => s.type === 'payee').map(s => s.label)
+    const ownerSel = filters.selections.filter(s => s.type === 'owner').map(s => s.id)
     const offset = append ? offsetOverride : 0
     const pageSize = getTransactionsPageSize(offset)
     const requestKey = JSON.stringify({
       accountSel,
       groupSel,
       categorySel,
+      tagSel,
       payeeSel,
       ownerSel,
       uncategorizedOnly,
       dateStart: filters.date?.start || '',
       dateEnd: filters.date?.end || '',
-      merchantSearch: debouncedMerchantSearch,
+      quickFilter: debouncedQuickFilter,
+      sortBy: sortState.key,
+      sortDir: sortState.dir,
       offset,
       pageSize,
     })
@@ -352,16 +425,19 @@ export default function Transactions() {
     else if (isFirstLoad.current) setInitialLoading(true)
 
     const response = await api.getTransactions({
-      date_start:   filters.date?.start || undefined,
-      date_end:     filters.date?.end   || undefined,
-      account_ids:  accountSel.length   ? accountSel.join(',')   : undefined,
-      group_ids:    groupSel.length     ? groupSel.join(',')     : undefined,
-      category_id:  uncategorizedOnly   ? '__uncategorized__'    : undefined,
+      date_start: filters.date?.start || undefined,
+      date_end: filters.date?.end || undefined,
+      account_ids: accountSel.length ? accountSel.join(',') : undefined,
+      group_ids: groupSel.length ? groupSel.join(',') : undefined,
+      category_id: uncategorizedOnly ? '__uncategorized__' : undefined,
       category_ids: !uncategorizedOnly && categorySel.length ? categorySel.join(',') : undefined,
-      payees:       payeeSel.length     ? payeeSel.join('|')     : undefined,
-      owner_ids:    ownerSel.length     ? ownerSel.join(',')     : undefined,
-      search:       debouncedMerchantSearch || undefined,
-      limit:        pageSize,
+      tag_ids: tagSel.length ? tagSel.join(',') : undefined,
+      payees: payeeSel.length ? payeeSel.join('|') : undefined,
+      owner_ids: ownerSel.length ? ownerSel.join(',') : undefined,
+      quick_filter: debouncedQuickFilter || undefined,
+      sort_by: sortState.key,
+      sort_dir: sortState.dir,
+      limit: pageSize,
       offset,
     })
 
@@ -384,7 +460,7 @@ export default function Transactions() {
     setInitialLoading(false)
     setLoadingMore(false)
     isFirstLoad.current = false
-  }, [filters, uncategorizedOnly, debouncedMerchantSearch])
+  }, [filters, uncategorizedOnly, debouncedQuickFilter, sortState])
 
   useEffect(() => {
     isFirstLoad.current = true
@@ -449,9 +525,9 @@ export default function Transactions() {
         transactions: prev.transactions.map(t =>
           t.id === txnId ? {
             ...t,
-            category_id:         catId,
-            category_name:       cat?.name  ?? null,
-            category_color:      null,
+            category_id: catId,
+            category_name: cat?.name ?? null,
+            category_color: null,
             category_overridden: 1,
           } : t
         ),
@@ -470,55 +546,56 @@ export default function Transactions() {
     }))
   }
 
+  function updateTags(txnId, tags) {
+    setData(prev => ({
+      ...prev,
+      transactions: prev.transactions.map(t =>
+        t.id === txnId ? { ...t, tags } : t
+      ),
+    }))
+  }
+
   function addCategory(cat) {
     setCategories(prev => prev.find(c => c.id === cat.id) ? prev : [...prev, cat])
   }
 
-  useEffect(() => {
-    function onMove(e) {
-      if (!resizeState.current) return
-      const { key, startX, startWidth } = resizeState.current
-      const def = COLUMN_DEFS.find(col => col.key === key)
-      const nextWidth = Math.max(def?.minWidth ?? 60, Math.min(640, startWidth + (e.clientX - startX)))
-      handleColUpdate(cols.map(col => col.key === key ? { ...col, width: nextWidth } : col))
-    }
-    function onUp() {
-      resizeState.current = null
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-  }, [cols])
-
-  function handleHeaderDragStart(key) {
-    dragColKey.current = key
+  function toggleSort(columnKey) {
+    setSortState(current => (
+      current.key === columnKey
+        ? { key: columnKey, dir: current.dir === 'asc' ? 'desc' : 'asc' }
+        : { key: columnKey, dir: getInitialSortDirection(columnKey) }
+    ))
   }
 
-  function handleHeaderDrop(targetKey) {
-    const sourceKey = dragColKey.current
-    dragColKey.current = null
-    if (!sourceKey || sourceKey === targetKey) return
-    const next = [...cols]
-    const sourceIndex = next.findIndex(col => col.key === sourceKey)
-    const targetIndex = next.findIndex(col => col.key === targetKey)
-    if (sourceIndex === -1 || targetIndex === -1) return
-    const [moved] = next.splice(sourceIndex, 1)
-    next.splice(targetIndex, 0, moved)
-    handleColUpdate(next)
-  }
-
-  function startResize(e, col) {
-    e.preventDefault()
-    e.stopPropagation()
-    resizeState.current = {
-      key: col.key,
-      startX: e.clientX,
-      startWidth: col.width,
-    }
-  }
+  const tableColumns = useMemo(
+    () => cols.map(col => {
+      const def = COLUMN_DEFS.find(candidate => candidate.key === col.key)
+      const headerLabel = col.key === 'category' && showSourceInCategorySlot ? 'Source' : (def?.label ?? col.key)
+      const align = col.key === 'amount' ? 'end' : 'start'
+      return {
+        ...col,
+        label: headerLabel,
+        align,
+        minWidth: def?.minWidth ?? 60,
+        leadingInset: col.key === 'date' ? 4 : undefined,
+        trailingInset: col.key === 'amount' ? 4 : undefined,
+        title: col.key === 'category'
+          ? `${headerLabel} — right-click for options`
+          : `Click to sort. Drag middle to move ${headerLabel}`,
+        onContextMenu: col.key === 'category'
+          ? event => {
+            event.preventDefault()
+            event.stopPropagation()
+            setCategoryHeaderMenu({
+              x: event.clientX,
+              y: event.clientY,
+            })
+          }
+          : undefined,
+      }
+    }),
+    [cols, showSourceInCategorySlot],
+  )
 
   const handleTransactionCopy = useCallback((event) => {
     const root = listScrollRef.current
@@ -543,7 +620,7 @@ export default function Transactions() {
     const csvText = rowIds
       .map(id => txnById.get(id))
       .filter(Boolean)
-      .map(txn => cols.map(col => escapeCsvClipboardCell(formatTransactionClipboardCell(col.key, txn))).join(','))
+      .map(txn => cols.map(col => escapeCsvClipboardCell(formatTransactionClipboardCell(col.key, txn, { showSourceInCategorySlot }))).join(','))
       .join('\r\n')
 
     if (!csvText) return
@@ -551,7 +628,7 @@ export default function Transactions() {
     event.preventDefault()
     event.clipboardData.setData('text/plain', csvText)
     event.clipboardData.setData('text/csv', csvText)
-  }, [cols, data.transactions])
+  }, [cols, data.transactions, showSourceInCategorySlot])
 
   function renderCell(col, txn) {
     switch (col.key) {
@@ -574,6 +651,66 @@ export default function Transactions() {
           />
         )
       case 'category': {
+        if (showSourceInCategorySlot) {
+          const sourceLabel = getTxnImportSourceLabel(txn)
+          return (
+            <span
+              title={sourceLabel}
+              style={{
+                color: 'var(--muted)',
+                fontSize: 12,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                maxWidth: '100%',
+                minWidth: 0,
+                verticalAlign: 'top',
+              }}
+            >
+              <span style={{
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                display: 'inline-block',
+                minWidth: 0,
+                flex: '0 1 auto',
+              }}>
+                {sourceLabel}
+              </span>
+              {txn.import_batch_id ? (
+                <button
+                  type="button"
+                  onClick={event => {
+                    event.stopPropagation()
+                    openBatchDetail({
+                      id: txn.import_batch_id,
+                      filename: txn.import_batch_filename,
+                      imported_at: txn.import_batch_imported_at,
+                    })
+                  }}
+                  title="Open import file report"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--accent2)',
+                    cursor: 'pointer',
+                    fontSize: 11,
+                    padding: '3px 5px',
+                    opacity: 0.75,
+                    lineHeight: 1,
+                    flexShrink: 0,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: 6,
+                  }}
+                >
+                  ↗
+                </button>
+              ) : null}
+            </span>
+          )
+        }
         const accountLabel = txn.category_name
           ? `${txn.category_name} — click to view spending history`
           : 'Uncategorized'
@@ -585,8 +722,8 @@ export default function Transactions() {
             onAddCategory={addCategory}
             onRulePrompt={setRulePrompt}
             onOpenDetail={txn.category_id ? () => openDetailPanel('category', {
-              id:    txn.category_id,
-              name:  txn.category_name,
+              id: txn.category_id,
+              name: txn.category_name,
             }) : undefined}
           />
         )
@@ -623,7 +760,11 @@ export default function Transactions() {
       }
       case 'amount':
         return (
-          <AmountDisplay amount={txn.amount} isPending={!!txn.is_pending} style={{ display: 'flex' }} />
+          <TransactionAmountCell
+            txn={txn}
+            onUpdateNote={updateNote}
+            onUpdateTags={updateTags}
+          />
         )
       default:
         return null
@@ -653,29 +794,30 @@ export default function Transactions() {
 
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
+      <div style={{ padding: '24px 24px 0', flexShrink: 0 }}>
         <PageHeader title="Transactions" />
       </div>
 
-      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 32px 32px' }}>
-        <div style={{ padding: '0 0 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 24px 24px' }}>
+        <div style={{ padding: '0 0 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Input
-              value={merchantSearch}
-              onChange={setMerchantSearch}
-              placeholder="Filter merchants by name…"
-              style={{ width: 320 }}
+              value={quickFilter}
+              onChange={setQuickFilter}
+              placeholder="Quick filter…"
+              title="Quick filter can match date, merchant, category, account, or amount."
+              style={{ width: 180 }}
             />
-            {merchantSearch.trim() && (
+            {quickFilter.trim() && (
               <button
-                onClick={() => setMerchantSearch('')}
+                onClick={() => setQuickFilter('')}
                 style={{
                   background: 'none',
                   border: '1px solid var(--border)',
                   color: 'var(--muted)',
                   borderRadius: 8,
-                  padding: '6px 10px',
-                  fontSize: 13,
+                  padding: '5px 9px',
+                  fontSize: 12,
                   cursor: 'pointer',
                 }}
               >
@@ -683,11 +825,11 @@ export default function Transactions() {
               </button>
             )}
           </div>
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
             <button
               onClick={() => { setUncategorizedOnly(v => !v); isFirstLoad.current = true }}
               style={{
-                padding: '5px 12px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                padding: '4px 11px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
                 border: `1px solid ${uncategorizedOnly ? 'var(--accent)' : 'var(--border)'}`,
                 background: uncategorizedOnly
                   ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
@@ -698,118 +840,71 @@ export default function Transactions() {
             >
               {uncategorizedOnly ? '✕ Uncategorized only' : 'Uncategorized only'}
             </button>
-            <span style={{ fontSize: 13, color: 'var(--muted)' }}>
+            <span style={{ fontSize: 12, color: 'var(--muted)' }}>
               {data.total} transactions
             </span>
           </div>
         </div>
 
-        <Card style={{ padding: 0, overflow: 'hidden', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: gridTemplate,
-            padding: '10px 16px',
-            fontSize: 12, fontWeight: 600, color: 'var(--muted)',
-            borderBottom: '1px solid var(--border)',
-            textTransform: 'uppercase', letterSpacing: '0.05em',
-          }}>
-            {cols.map(col => {
-              const def = COLUMN_DEFS.find(d => d.key === col.key)
-              return (
-                <div
-                  key={col.key}
-                  draggable
-                  onDragStart={() => handleHeaderDragStart(col.key)}
-                  onDragOver={e => e.preventDefault()}
-                  onDrop={() => handleHeaderDrop(col.key)}
-                  style={{
-                    position: 'relative',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: col.key === 'amount' ? 'flex-end' : 'space-between',
-                    gap: 8,
-                    minWidth: 0,
-                    cursor: 'grab',
-                    ...(col.key === 'amount' ? { textAlign: 'right' } : {
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }),
-                  }}
-                >
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {def?.label ?? col.key}
-                  </span>
-                  <span style={{ fontSize: 10, opacity: 0.55, flexShrink: 0 }}>
-                    ↔
-                  </span>
-                  <button
-                    onMouseDown={e => startResize(e, col)}
-                    title={`Resize ${def?.label ?? col.key}`}
-                    style={{
-                      position: 'absolute',
-                      top: -10,
-                      right: -8,
-                      bottom: -10,
-                      width: 16,
-                      cursor: 'col-resize',
-                      border: 'none',
-                      background: 'transparent',
-                      padding: 0,
-                    }}
-                  />
-                </div>
-              )
-            })}
-          </div>
-
-          <div
-            ref={listScrollRef}
-            onScroll={maybeLoadMore}
-            onCopy={handleTransactionCopy}
-            style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
-          >
-            {initialLoading ? <Spinner /> : data.transactions.length === 0 ? (
-              <EmptyState message={merchantSearch.trim() ? 'No merchants match that filter' : 'No transactions found'} />
-            ) : (
-              data.transactions.map(txn => (
-                <div
-                  key={txn.id}
-                  data-txn-copy-row={txn.id}
-                  onContextMenu={e => onContextMenu(e, txn)}
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: gridTemplate,
-                    padding: '11px 16px', alignItems: 'center',
-                    borderBottom: '1px solid var(--border)',
-                    fontSize: 14,
-                    background: editId === txn.id ? 'var(--surface2)' : 'transparent',
-                    minWidth: 0,
-                  }}
-                >
-                  {cols.map(col => (
+        <Card style={{ padding: 0, overflowX: 'auto', overflowY: 'hidden', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <PillGridTable
+            columns={tableColumns}
+            onColumnsChange={handleColUpdate}
+            sortState={sortState}
+            onSort={toggleSort}
+            fillHeight
+            renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
+              <div
+                ref={listScrollRef}
+                onScroll={maybeLoadMore}
+                onCopy={handleTransactionCopy}
+                style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
+              >
+                {initialLoading ? <Spinner /> : data.transactions.length === 0 ? (
+                  <EmptyState message={quickFilter.trim() ? 'No matching transactions' : 'No transactions found'} />
+                ) : (
+                  data.transactions.map(txn => (
                     <div
-                      key={col.key}
+                      key={txn.id}
+                      data-txn-copy-row={txn.id}
+                      onContextMenu={e => onContextMenu(e, txn)}
                       style={{
-                        overflow: 'hidden',
+                        display: 'grid',
+                        gridTemplateColumns,
+                        padding: '9px 14px', alignItems: 'center',
+                        borderBottom: '1px solid var(--border)',
+                        fontSize: 13,
+                        background: editId === txn.id ? 'var(--surface2)' : 'transparent',
                         minWidth: 0,
-                        ...(col.key === 'amount' ? {} : { textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
                       }}
                     >
-                      {renderCell(col, txn)}
+                      {activeColumns.map(col => (
+                        <div
+                          key={col.key}
+                          style={{
+                            overflow: 'hidden',
+                            minWidth: 0,
+                            ...(col.key === 'amount' ? {} : { textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+                          }}
+                        >
+                          {renderCell(col, txn)}
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              ))
-            )}
-            {!initialLoading && data.transactions.length > 0 ? (
-              <div style={{ padding: '14px 16px', textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
-                {loadingMore
-                  ? 'Loading more transactions…'
-                  : data.transactions.length < data.total
-                    ? 'Scroll for older transactions'
-                    : 'All matching transactions loaded'}
+                  ))
+                )}
+                {!initialLoading && data.transactions.length > 0 ? (
+                  <div style={{ padding: '12px 14px', textAlign: 'center', color: 'var(--muted)', fontSize: 11 }}>
+                    {loadingMore
+                      ? 'Loading more transactions…'
+                      : data.transactions.length < data.total
+                        ? 'Scroll for older transactions'
+                        : 'All matching transactions loaded'}
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
+            )}
+          />
         </Card>
 
         {menu && (
@@ -827,6 +922,47 @@ export default function Transactions() {
                   : '⚙ Create rule'
             }
           />
+        )}
+
+        {categoryHeaderMenu && (
+          <div
+            ref={categoryHeaderMenuRef}
+            style={{
+              position: 'fixed',
+              zIndex: 620,
+              left: Math.min(categoryHeaderMenu.x, window.innerWidth - 220),
+              top: Math.min(categoryHeaderMenu.y, window.innerHeight - 120),
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 10,
+              boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+              padding: 4,
+              minWidth: 200,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setShowSourceInCategorySlot(value => !value)
+                setCategoryHeaderMenu(null)
+              }}
+              style={{
+                width: '100%',
+                textAlign: 'left',
+                padding: '8px 14px',
+                cursor: 'pointer',
+                fontSize: 13,
+                color: 'var(--text)',
+                borderRadius: 6,
+                border: 'none',
+                background: 'transparent',
+              }}
+              onMouseEnter={event => { event.currentTarget.style.background = 'var(--surface2)' }}
+              onMouseLeave={event => { event.currentTarget.style.background = 'transparent' }}
+            >
+              {showSourceInCategorySlot ? 'Switch to category' : 'Switch to source'}
+            </button>
+          </div>
         )}
 
         {noteTarget && (
@@ -858,7 +994,7 @@ export default function Transactions() {
                 categories={categories}
                 forceFloating={multiDetailMode}
                 stackIndex={index}
-                isTopmost={index === detailPanels.length - 1}
+                isTopmost={index === totalDetailPanelCount - 1}
                 onClose={() => closeDetailPanel('txn', panel.item.id)}
               />
             )
@@ -871,7 +1007,7 @@ export default function Transactions() {
                 categories={categories}
                 forceFloating={multiDetailMode}
                 stackIndex={index}
-                isTopmost={index === detailPanels.length - 1}
+                isTopmost={index === totalDetailPanelCount - 1}
                 onClose={() => closeDetailPanel('category', panel.item.id)}
               />
             )
@@ -884,13 +1020,26 @@ export default function Transactions() {
                 categories={categories}
                 forceFloating={multiDetailMode}
                 stackIndex={index}
-                isTopmost={index === detailPanels.length - 1}
+                isTopmost={index === totalDetailPanelCount - 1}
                 onClose={() => closeDetailPanel('account', panel.item.id)}
               />
             )
           }
           return null
         })}
+
+        {batchDetailPanels.map((batch, index) => (
+          <ImportBatchDetail
+            key={`batch:${batch.id}`}
+            batch={batch}
+            categories={categories}
+            onAddCategory={category => setCategories(prev => prev.some(existing => existing.id === category.id) ? prev : [...prev, category])}
+            onClose={() => closeBatchDetail(batch.id)}
+            forceFloating={multiDetailMode}
+            stackIndex={detailPanels.length + index}
+            isTopmost={detailPanels.length + index === totalDetailPanelCount - 1}
+          />
+        ))}
 
         {rulePrompt && (
           <RuleSuggestionToast

@@ -6,18 +6,13 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState } from '../components/ui.jsx'
 import RuleForm, { amountConditionSummary } from '../components/RuleForm.jsx'
+import { TagBadge } from '../components/TagUi.jsx'
 
 function describeRule(rule, owners, accounts) {
   const parts = []
 
-  if (rule.amount_min != null || rule.amount_max != null) {
-    const isEquals = rule.amount_min != null && rule.amount_max != null && rule.amount_min === rule.amount_max
-    if (isEquals) {
-      parts.push(`amount = $${rule.amount_min}`)
-    } else {
-      if (rule.amount_min != null) parts.push(`amount >= $${rule.amount_min}`)
-      if (rule.amount_max != null) parts.push(`amount <= $${rule.amount_max}`)
-    }
+  if (rule.amount_min != null || rule.amount_max != null || (rule.debit_credit && rule.debit_credit !== 'both')) {
+    parts.push(amountConditionSummary(rule.amount_min, '>=', rule.amount_max, '<=', rule.debit_credit || 'both'))
   }
 
   if (rule.owner_id) {
@@ -66,16 +61,21 @@ function RuleRow({ rule, owners, accounts, onSave, onDelete }) {
 
       <div style={{ fontSize: 13, lineHeight: 1.5, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' }}>
         <span style={{ color: 'var(--muted)', opacity: 0.4, margin: '0 2px' }}>→</span>
-        <Badge
-          label={rule.category_name}
-          toneKey={rule.category_id || rule.category_name}
-        />
+        {rule.category_name ? (
+          <Badge
+            label={rule.category_name}
+            toneKey={rule.category_id || rule.category_name}
+          />
+        ) : null}
 
         {rule.clean_name && (
           <span style={{ fontSize: 12, color: 'var(--muted)' }}>
             · rename to <span style={{ color: 'var(--text)', fontStyle: 'italic' }}>{rule.clean_name}</span>
           </span>
         )}
+        {Array.isArray(rule.tags) && rule.tags.map(tag => (
+          <TagBadge key={tag.id} tag={tag} />
+        ))}
       </div>
 
       <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
@@ -167,10 +167,12 @@ function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel 
               keyword: rule.keyword,
               amount_min: rule.amount_min ?? null,
               amount_max: rule.amount_max ?? null,
+              debit_credit: rule.debit_credit || 'both',
               owner_id: rule.owner_id || '',
               account_id: rule.account_id || '',
               catId: rule.category_id,
               cleanName: rule.clean_name || '',
+              tagIds: rule.tag_ids || [],
             }}
             categories={categories}
             owners={owners}
@@ -199,51 +201,84 @@ export default function Rules() {
   const [createInitialValues, setCreateInitialValues] = useState({})
   const [createTransactionData, setCreateTransactionData] = useState(null)
   const [recategorizeResult, setRecategorizeResult] = useState(null)
+  const [recategorizePendingCount, setRecategorizePendingCount] = useState(0)
 
   const loadRules = useCallback(() => {
     api.getRules(search || undefined).then(r => { setRules(r); setLoading(false) })
   }, [search])
   const loadCategories = useCallback(() => { api.getCategories().then(setCategories) }, [])
+  const loadRecategorizePreview = useCallback(() => {
+    api.getRecategorizePreview()
+      .then(result => setRecategorizePendingCount(Number(result?.pending || 0)))
+      .catch(() => setRecategorizePendingCount(0))
+  }, [])
 
   useEffect(() => { loadRules() },      [loadRules])
   useEffect(() => { loadCategories() }, [loadCategories])
+  useEffect(() => { loadRecategorizePreview() }, [loadRecategorizePreview])
   useEffect(() => { api.getOwners().then(setOwners) }, [])
   useEffect(() => { api.getAccounts().then(setAccounts) }, [])
 
   async function handleAdd(data) {
     const { applyToExisting, ...ruleData } = data
-    await api.createRule(ruleData)
-    if (applyToExisting) await api.recategorize()
+    const created = await api.createRule(ruleData)
+    if (applyToExisting) await api.applyRule(created.id)
     setShowAdd(false)
     setCreateInitialValues({})
     setCreateTransactionData(null)
     loadRules()
+    loadRecategorizePreview()
   }
 
   async function handleEditSave(data) {
     const { applyToExisting, ...ruleData } = data
     await api.updateRule(editingRuleId, ruleData)
-    if (applyToExisting) await api.recategorize()
+    if (applyToExisting) await api.applyRule(editingRuleId)
     setEditingRuleId(null)
     loadRules()
+    loadRecategorizePreview()
   }
 
   async function handleDelete(id) {
     await api.deleteRule(id)
     if (editingRuleId === id) setEditingRuleId(null)
     loadRules()
+    loadRecategorizePreview()
   }
 
   async function runRecategorize() {
     setRecategorizeResult(null)
     const result = await api.recategorize()
     setRecategorizeResult(result.updated)
+    setRecategorizePendingCount(0)
+    loadRecategorizePreview()
     setTimeout(() => setRecategorizeResult(null), 6000)
   }
 
   const editingRule = editingRuleId ? rules.find(rule => rule.id === editingRuleId) : null
   const showCreateForm = showAdd
   const showAnyEditor = showAdd || !!editingRule
+  const recategorizeHasPendingWork = recategorizePendingCount > 0
+  const recategorizeButtonStyle = recategorizeHasPendingWork
+    ? {
+        background: 'color-mix(in srgb, var(--surface2) 58%, var(--accent) 16%)',
+        border: '1px solid color-mix(in srgb, var(--accent) 36%, var(--border))',
+        boxShadow: '0 1px 0 rgba(255,255,255,0.03), 0 10px 22px rgba(0,0,0,0.12)',
+      }
+    : {
+        background: 'color-mix(in srgb, var(--surface2) 88%, transparent)',
+        border: '1px solid color-mix(in srgb, var(--border) 88%, transparent)',
+        boxShadow: 'none',
+        color: 'color-mix(in srgb, var(--muted) 88%, var(--text))',
+      }
+  const addRuleButtonStyle = {
+    background: showAnyEditor
+      ? 'color-mix(in srgb, var(--surface2) 82%, var(--accent) 6%)'
+      : 'color-mix(in srgb, var(--accent) 88%, black 8%)',
+    boxShadow: showAnyEditor
+      ? '0 8px 18px rgba(0,0,0,0.10)'
+      : '0 10px 22px rgba(0,0,0,0.12)',
+  }
 
   function openCreateForm() {
     setEditingRuleId(null)
@@ -293,8 +328,18 @@ export default function Rules() {
 
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
         <PageHeader title="Rules">
-          <Button variant="ghost" small onClick={runRecategorize}>↻ Re-run categorization</Button>
-          <Button small onClick={() => (showAnyEditor ? closeForm() : openCreateForm())}>
+          <Button
+            variant="ghost"
+            small
+            onClick={runRecategorize}
+            style={recategorizeButtonStyle}
+            title={recategorizeHasPendingWork
+              ? `${recategorizePendingCount} transaction${recategorizePendingCount === 1 ? '' : 's'} could be re-categorized`
+              : 'No transactions currently look eligible for re-categorization'}
+          >
+            ↻ Re-run categorization
+          </Button>
+          <Button small onClick={() => (showAnyEditor ? closeForm() : openCreateForm())} style={addRuleButtonStyle}>
             {showAnyEditor ? 'Cancel' : 'Add rule'}
           </Button>
         </PageHeader>

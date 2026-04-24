@@ -17,12 +17,16 @@ export function inferFilenamePattern(filename) {
   // Providers often append dates or export sequence suffixes to an otherwise
   // stable base filename. Strip those trailing patterns iteratively so saved
   // data sources can match "same source, newer export" without overfitting.
+  const separator = '[-_ ]'
+  const monthToken = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)'
   const trailingPatterns = [
-    /(?:[-_ ]+\d{4}(?:[-_]\d{2}){2}(?:T\d{2}(?:[-_:]?\d{2}){0,2})?)$/i,
-    /(?:[-_ ]+\d{4}(?:[-_]\d{2}){2}T)$/i,
-    /(?:[-_ ]+\d{4}(?:[-_]\d{2}){0,2})$/i,
-    /(?:[-_ ]+\d{8})$/i,
-    /(?:[-_ ]+\d{6,})$/i,
+    new RegExp(`(?:${separator}+\\d{4}${separator}${monthToken}${separator}\\d{1,2}(?:${separator}\\d{4}(?:${separator}${monthToken}${separator}\\d{1,2})?)?(?:${separator}[a-z]{2,6})?)$`, 'i'),
+    new RegExp(`(?:${separator}+${monthToken}${separator}\\d{1,2}${separator}\\d{4}(?:${separator}${monthToken}${separator}\\d{1,2}${separator}\\d{4})?(?:${separator}[a-z]{2,6})?)$`, 'i'),
+    new RegExp(`(?:${separator}+\\d{4}(?:${separator}\\d{2}){2}(?:T\\d{2}(?:[-_:]?\\d{2}){0,2})?)$`, 'i'),
+    new RegExp(`(?:${separator}+\\d{4}(?:${separator}\\d{2}){2}T)$`, 'i'),
+    new RegExp(`(?:${separator}+\\d{4}(?:${separator}\\d{2}){0,2})$`, 'i'),
+    new RegExp(`(?:${separator}+\\d{8})$`, 'i'),
+    new RegExp(`(?:${separator}+\\d{6,})$`, 'i'),
   ]
 
   let changed = true
@@ -170,6 +174,7 @@ function scoreHeaderName(header, type) {
     amount: ['amount', 'amt', 'value'],
     merchant: ['merchant', 'payee', 'description', 'desc'],
     category: ['category', 'cat', 'classification', 'type'],
+    notes: ['notes', 'note', 'memo', 'comment', 'comments'],
     account: ['account', 'acct'],
     debit: ['debit', 'withdrawal', 'outflow', 'payment', 'charge'],
     credit: ['credit', 'deposit', 'inflow', 'refund'],
@@ -203,6 +208,7 @@ export function analyzeImportColumns(preview, skipRows = 0) {
       amountCandidates: [],
       merchantCandidates: [],
       categoryCandidates: [],
+      notesCandidates: [],
       accountCandidates: [],
       debitCandidates: [],
       creditCandidates: [],
@@ -219,6 +225,7 @@ export function analyzeImportColumns(preview, skipRows = 0) {
     amountCandidates: [],
     merchantCandidates: [],
     categoryCandidates: [],
+    notesCandidates: [],
     accountCandidates: [],
     debitCandidates: [],
     creditCandidates: [],
@@ -259,6 +266,11 @@ export function analyzeImportColumns(preview, skipRows = 0) {
       analyses.categoryCandidates.push({ header, score: categoryBoost })
     }
 
+    const notesBoost = scoreHeaderName(header, 'notes')
+    if (notesBoost > 0) {
+      analyses.notesCandidates.push({ header, score: notesBoost })
+    }
+
     const accountBoost = scoreHeaderName(header, 'account')
     if (accountBoost > 0) {
       analyses.accountCandidates.push({ header, score: accountBoost })
@@ -292,7 +304,7 @@ export function analyzeImportColumns(preview, skipRows = 0) {
     }
   })
 
-  for (const key of ['dateCandidates', 'amountCandidates', 'merchantCandidates', 'categoryCandidates', 'accountCandidates', 'debitCandidates', 'creditCandidates', 'directionCandidates', 'pendingCandidates']) {
+  for (const key of ['dateCandidates', 'amountCandidates', 'merchantCandidates', 'categoryCandidates', 'notesCandidates', 'accountCandidates', 'debitCandidates', 'creditCandidates', 'directionCandidates', 'pendingCandidates']) {
     analyses[key].sort((a, b) => b.score - a.score || a.header.localeCompare(b.header))
     analyses[key] = analyses[key].map(entry => entry.header)
   }
@@ -428,7 +440,7 @@ export function inferUnambiguousImportMappingFromPreview(preview, skipRows = 0) 
       direction: amountConvention === 'single_unsigned' ? pickUnambiguousHeader(analysis.directionCandidates) : '',
       description: pickUnambiguousHeader(analysis.merchantCandidates),
       category: pickUnambiguousHeader(analysis.categoryCandidates),
-      notes: '',
+      notes: pickUnambiguousHeader(analysis.notesCandidates),
       pending: pickUnambiguousHeader(analysis.pendingCandidates),
       account: pickUnambiguousHeader(analysis.accountCandidates),
     },
@@ -464,7 +476,7 @@ export function inferImportMappingFromPreview(preview, skipRows = 0) {
       direction: amountConvention === 'single_unsigned' ? direction : '',
       description: analysis.merchantCandidates[0] || '',
       category: analysis.categoryCandidates[0] || '',
-      notes: '',
+      notes: analysis.notesCandidates[0] || '',
       pending: analysis.pendingCandidates[0] || '',
       account: analysis.accountCandidates[0] || '',
     },

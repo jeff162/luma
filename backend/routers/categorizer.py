@@ -96,9 +96,9 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
         cat_id     = result["category_id"] if isinstance(result, dict) else result
         clean_name = result.get("clean_name") if isinstance(result, dict) else None
         conn.execute(
-            """UPDATE txn SET category_id = ?
+            """UPDATE txn SET category_id = ?, category_source = ?
                WHERE id = ?""",
-            (cat_id, txn["id"]),
+            (cat_id, "rule" if cat_id else None, txn["id"]),
         )
         if clean_name and clean_name != txn["merchant_name"]:
             conn.execute(

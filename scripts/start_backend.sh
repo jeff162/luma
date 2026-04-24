@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+set -m
+trap 'kill -- -$$' EXIT INT TERM
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -173,4 +175,5 @@ cd "$ROOT_DIR"
 echo "Checking/installing backend dependencies. This can take a minute on first run..."
 "$VENV_PYTHON" -m pip install -r backend/requirements.txt
 echo "Starting backend on port $BACKEND_PORT"
-exec "$VENV_PYTHON" -m uvicorn backend.main:app --reload --reload-dir backend --reload-exclude "backend/db/test_fixtures" --host 0.0.0.0 --port "$BACKEND_PORT"
+#exec "$VENV_PYTHON" -m uvicorn backend.main:app --reload --reload-dir backend --reload-exclude "backend/db/test_fixtures" --host 0.0.0.0 --port "$BACKEND_PORT"
+"$VENV_PYTHON" -m uvicorn backend.main:app --reload --reload-dir backend --reload-exclude "backend/db/test_fixtures" --host 0.0.0.0 --port "$BACKEND_PORT"

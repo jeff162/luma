@@ -3,11 +3,15 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
+import { APP_NAME, APP_VERSION } from '../lib/appConfig.js'
+import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, AppConfirmDialog } from '../components/ui.jsx'
 import { PASSWORD_POLICIES, passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import { SECURITY_PROFILES, getSecurityProfile } from '../lib/securityProfiles.js'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
+import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
+import { TagGlyph, TAG_COLOR_PALETTE } from '../components/TagUi.jsx'
 
 const SETTINGS_SECTIONS_PREF_KEY = 'ui.settings.stickySections'
 const SETTINGS_SECTIONS_STORAGE_KEY_PREFIX = 'fintrack.settings.stickySections'
@@ -16,10 +20,10 @@ function clearBrowserStoredState() {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.clear()
-  } catch {}
+  } catch { }
   try {
     window.sessionStorage.clear()
-  } catch {}
+  } catch { }
 }
 
 function AuthModeSection({ authEnabled, onEnabled, embedded = false }) {
@@ -43,21 +47,21 @@ function AuthModeSection({ authEnabled, onEnabled, embedded = false }) {
   }
 
   return (
-      <Card style={{ padding: 20 }}>
-        <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-          Turning this on switches FinTrack into authenticated mode. You&apos;ll then create the first user account and use that account to manage any additional users.
+    <Card style={{ padding: 20 }}>
+      <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+        Turning this on enables authenticated mode. You&apos;ll then create the first user account and use that account to manage any additional users.
+      </div>
+      <div style={{ marginTop: 14 }}>
+        <Button small onClick={enableAuthMode} disabled={saving}>
+          {saving ? 'Enabling...' : 'Enable sign-in protection'}
+        </Button>
+      </div>
+      {error && (
+        <div style={{ marginTop: 12, color: '#ef4444', fontSize: 13 }}>
+          {error}
         </div>
-        <div style={{ marginTop: 14 }}>
-          <Button small onClick={enableAuthMode} disabled={saving}>
-            {saving ? 'Enabling...' : 'Enable sign-in protection'}
-          </Button>
-        </div>
-        {error && (
-          <div style={{ marginTop: 12, color: '#ef4444', fontSize: 13 }}>
-            {error}
-          </div>
-        )}
-      </Card>
+      )}
+    </Card>
   )
 }
 
@@ -83,7 +87,7 @@ function SecurityProfileSection({ authEnabled, securityProfile, passwordPolicy, 
     <Card style={{ padding: 20 }}>
       <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Security mode</div>
       <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, marginBottom: 14 }}>
-        Choose the deployment model this FinTrack instance is meant for. This does not force auth on or off by itself, but it sets expectations for password strength and sign-in protection.
+        Choose the target deployment model. This does not force auth on or off by itself, but it sets expectations for password strength and sign-in protection.
       </div>
       <div style={{ display: 'grid', gap: 8 }}>
         {SECURITY_PROFILES.map(option => (
@@ -288,11 +292,11 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
   }
 
   return (
-      <>
+    <>
       {pendingDeleteUser ? (
         <AppConfirmDialog
           title="Delete user?"
-          description={`Delete ${pendingDeleteUser.display_name || pendingDeleteUser.username}? This removes their sign-in account from this FinTrack instance.`}
+          description={`Delete ${pendingDeleteUser.display_name || pendingDeleteUser.username}? This removes their sign-in account.`}
           confirmLabel="Delete user"
           confirmVariant="danger"
           borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
@@ -305,7 +309,7 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
           <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
-            Use this area when more than one person needs their own sign-in for the same FinTrack installation, such as a shared household system or a password-protected home server.
+            Use this area when more than one person needs their own sign-in, such as a shared household system or a password-protected home server.
           </div>
         </div>
 
@@ -435,7 +439,7 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
           )
         ))}
       </Card>
-      </>
+    </>
   )
 }
 
@@ -460,7 +464,7 @@ function PasswordPolicyPanel({ passwordPolicy, onChange }) {
     <div style={{ display: 'grid', gap: 8, marginBottom: 18 }}>
       <div style={{ fontSize: 14, fontWeight: 600 }}>Password policy</div>
       <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-        Choose how strictly FinTrack should validate passwords for new sign-ins and user accounts.
+        Choose how strictly passwords are validated for new sign-ins and user accounts.
       </div>
       <div style={{ display: 'grid', gap: 6, paddingLeft: 14 }}>
         {PASSWORD_POLICIES.map(option => (
@@ -597,127 +601,127 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange, embedd
   }
 
   return (
-      <Card style={{ padding: 20 }}>
-        <PasswordPolicyPanel passwordPolicy={passwordPolicy} onChange={onPasswordPolicyChange} />
+    <Card style={{ padding: 20 }}>
+      <PasswordPolicyPanel passwordPolicy={passwordPolicy} onChange={onPasswordPolicyChange} />
 
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>Authenticator app</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
-              Status: {currentUser.two_factor_enabled ? 'Enabled' : 'Not enabled'}
-            </div>
-            {currentUser.two_factor_enabled && (
-              <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
-                Recovery codes remaining: {currentUser.recovery_code_count}
-              </div>
-            )}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Authenticator app</div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
+            Status: {currentUser.two_factor_enabled ? 'Enabled' : 'Not enabled'}
           </div>
-          {!currentUser.two_factor_enabled && !setup && (
-            <Button small onClick={beginSetup} disabled={saving}>Set up 2FA</Button>
+          {currentUser.two_factor_enabled && (
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
+              Recovery codes remaining: {currentUser.recovery_code_count}
+            </div>
           )}
         </div>
+        {!currentUser.two_factor_enabled && !setup && (
+          <Button small onClick={beginSetup} disabled={saving}>Set up 2FA</Button>
+        )}
+      </div>
 
-        {setup && !currentUser.two_factor_enabled && (
-          <InsetPanel as="form" onSubmit={confirmSetup} style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
-              Add this secret to your authenticator app, then enter the current 6-digit code to confirm.
+      {setup && !currentUser.two_factor_enabled && (
+        <InsetPanel as="form" onSubmit={confirmSetup} style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
+            Add this secret to your authenticator app, then enter the current 6-digit code to confirm.
+          </div>
+          <div>
+            <FormLabel style={{ marginBottom: 4 }}>Manual setup key</FormLabel>
+            <div style={{ fontFamily: 'monospace', fontSize: 14, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, wordBreak: 'break-all' }}>
+              {setup.secret}
             </div>
-            <div>
-              <FormLabel style={{ marginBottom: 4 }}>Manual setup key</FormLabel>
-              <div style={{ fontFamily: 'monospace', fontSize: 14, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, wordBreak: 'break-all' }}>
-                {setup.secret}
-              </div>
+          </div>
+          <div>
+            <FormLabel style={{ marginBottom: 4 }}>Provisioning URI</FormLabel>
+            <div style={{ fontFamily: 'monospace', fontSize: 11, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, wordBreak: 'break-all' }}>
+              {setup.otpauth_uri}
             </div>
-            <div>
-              <FormLabel style={{ marginBottom: 4 }}>Provisioning URI</FormLabel>
-              <div style={{ fontFamily: 'monospace', fontSize: 11, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, wordBreak: 'break-all' }}>
-                {setup.otpauth_uri}
-              </div>
+          </div>
+          <input
+            value={setupCode}
+            onChange={e => setSetupCode(e.target.value)}
+            placeholder="Enter 6-digit code"
+            inputMode="numeric"
+            style={inputStyle}
+          />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button small type="submit" disabled={saving || setupCode.trim().length < 6}>
+              {saving ? 'Enabling...' : 'Confirm setup'}
+            </Button>
+            <Button small variant="ghost" type="button" onClick={() => { setSetup(null); setSetupCode(''); setError('') }}>
+              Cancel
+            </Button>
+          </div>
+        </InsetPanel>
+      )}
+
+      {currentUser.two_factor_enabled && (
+        <div style={{ display: 'grid', gap: 12 }}>
+          <InsetPanel as="form" onSubmit={turnOff2fa}>
+            <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+              Enter a current authenticator code to disable 2FA for this account.
             </div>
             <input
-              value={setupCode}
-              onChange={e => setSetupCode(e.target.value)}
+              value={disableCode}
+              onChange={e => setDisableCode(e.target.value)}
               placeholder="Enter 6-digit code"
               inputMode="numeric"
               style={inputStyle}
             />
-            <div style={{ display: 'flex', gap: 8 }}>
-              <Button small type="submit" disabled={saving || setupCode.trim().length < 6}>
-                {saving ? 'Enabling...' : 'Confirm setup'}
-              </Button>
-              <Button small variant="ghost" type="button" onClick={() => { setSetup(null); setSetupCode(''); setError('') }}>
-                Cancel
+            <div>
+              <Button small type="submit" disabled={saving || disableCode.trim().length < 6}>
+                {saving ? 'Disabling...' : 'Disable 2FA'}
               </Button>
             </div>
           </InsetPanel>
-        )}
 
-        {currentUser.two_factor_enabled && (
-          <div style={{ display: 'grid', gap: 12 }}>
-            <InsetPanel as="form" onSubmit={turnOff2fa}>
-              <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-                Enter a current authenticator code to disable 2FA for this account.
-              </div>
-              <input
-                value={disableCode}
-                onChange={e => setDisableCode(e.target.value)}
-                placeholder="Enter 6-digit code"
-                inputMode="numeric"
-                style={inputStyle}
-              />
-              <div>
-                <Button small type="submit" disabled={saving || disableCode.trim().length < 6}>
-                  {saving ? 'Disabling...' : 'Disable 2FA'}
-                </Button>
-              </div>
-            </InsetPanel>
-
-            <InsetPanel as="form" onSubmit={regenerateCodes}>
-              <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-                Regenerate your recovery codes. This invalidates the current set immediately.
-              </div>
-              <input
-                value={regenCode}
-                onChange={e => setRegenCode(e.target.value)}
-                placeholder="Enter current 6-digit code"
-                inputMode="numeric"
-                style={inputStyle}
-              />
-              <div>
-                <Button small type="submit" disabled={saving || regenCode.trim().length < 6}>
-                  {saving ? 'Regenerating...' : 'Regenerate recovery codes'}
-                </Button>
-              </div>
-            </InsetPanel>
-          </div>
-        )}
-
-        {recoveryCodes.length > 0 && (
-          <div style={{ marginTop: 14, padding: 14, border: '1px solid #f59e0b', borderRadius: 10, background: 'color-mix(in srgb, #f59e0b 10%, var(--surface))' }}>
+          <InsetPanel as="form" onSubmit={regenerateCodes}>
             <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-              Save these recovery codes somewhere secure. They are shown only once and each code can be used one time.
+              Regenerate your recovery codes. This invalidates the current set immediately.
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, marginTop: 12 }}>
-              {recoveryCodes.map(code => (
-                <div key={code} style={{ fontFamily: 'monospace', fontSize: 13, padding: '8px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 }}>
-                  {code}
-                </div>
-              ))}
-            </div>
-            <div style={{ marginTop: 12 }}>
-              <Button small variant="ghost" type="button" onClick={() => setRecoveryCodes([])}>
-                Dismiss codes
+            <input
+              value={regenCode}
+              onChange={e => setRegenCode(e.target.value)}
+              placeholder="Enter current 6-digit code"
+              inputMode="numeric"
+              style={inputStyle}
+            />
+            <div>
+              <Button small type="submit" disabled={saving || regenCode.trim().length < 6}>
+                {saving ? 'Regenerating...' : 'Regenerate recovery codes'}
               </Button>
             </div>
-          </div>
-        )}
+          </InsetPanel>
+        </div>
+      )}
 
-        {error && (
-          <div style={{ marginTop: 14, color: '#ef4444', fontSize: 13 }}>
-            {error}
+      {recoveryCodes.length > 0 && (
+        <div style={{ marginTop: 14, padding: 14, border: '1px solid #f59e0b', borderRadius: 10, background: 'color-mix(in srgb, #f59e0b 10%, var(--surface))' }}>
+          <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+            Save these recovery codes somewhere secure. They are shown only once and each code can be used one time.
           </div>
-        )}
-      </Card>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, marginTop: 12 }}>
+            {recoveryCodes.map(code => (
+              <div key={code} style={{ fontFamily: 'monospace', fontSize: 13, padding: '8px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 }}>
+                {code}
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <Button small variant="ghost" type="button" onClick={() => setRecoveryCodes([])}>
+              Dismiss codes
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div style={{ marginTop: 14, color: '#ef4444', fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+    </Card>
   )
 }
 
@@ -759,36 +763,36 @@ function PlaidTokenProtectionSection({ embedded = false }) {
   if (!currentUser) return null
 
   return (
-      <Card style={{ padding: 20 }}>
-        <InsetPanel>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>Sensitive token protection</div>
-              <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
-                Optional protection for Plaid access tokens at rest. Local single-user installs usually do not need this if the machine is already encrypted.
-              </div>
-              <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 6 }}>
-                Status: {currentUser.privacy_mode === 'server_managed' ? 'Server-managed protection enabled' : 'Off'}
-              </div>
+    <Card style={{ padding: 20 }}>
+      <InsetPanel>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Sensitive token protection</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+              Optional protection for Plaid access tokens at rest. Local single-user installs usually do not need this if the machine is already encrypted.
             </div>
-            <Button
-              small
-              onClick={() => setPrivacyMode(currentUser.privacy_mode === 'server_managed' ? 'off' : 'server_managed')}
-              disabled={saving}
-            >
-              {currentUser.privacy_mode === 'server_managed' ? 'Turn off' : 'Enable'}
-            </Button>
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 6 }}>
+              Status: {currentUser.privacy_mode === 'server_managed' ? 'Server-managed protection enabled' : 'Off'}
+            </div>
           </div>
-          <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
-            This only protects Plaid tokens on disk. It does not change what FinTrack can display after you sign in.
-          </div>
-        </InsetPanel>
-        {error && (
-          <div style={{ marginTop: 14, color: '#ef4444', fontSize: 13 }}>
-            {error}
-          </div>
-        )}
-      </Card>
+          <Button
+            small
+            onClick={() => setPrivacyMode(currentUser.privacy_mode === 'server_managed' ? 'off' : 'server_managed')}
+            disabled={saving}
+          >
+            {currentUser.privacy_mode === 'server_managed' ? 'Turn off' : 'Enable'}
+          </Button>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+          This only protects Plaid tokens on disk. It does not change what can be displayed after you sign in.
+        </div>
+      </InsetPanel>
+      {error && (
+        <div style={{ marginTop: 14, color: '#ef4444', fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+    </Card>
   )
 }
 
@@ -1041,7 +1045,7 @@ function BackupRecipientsSection() {
   }
 
   return (
-      <>
+    <>
       {pendingDeleteRecipient ? (
         <AppConfirmDialog
           title="Delete backup recipient?"
@@ -1118,59 +1122,59 @@ function BackupRecipientsSection() {
             <Button small type="submit" disabled={creating || !form.label.trim() || !form.public_key.trim()}>
               {creating ? 'Saving...' : 'Add recipient'}
             </Button>
-        </div>
-      </form>
-
-      {error && <div style={{ padding: '10px 16px', color: '#ef4444', fontSize: 13, borderBottom: '1px solid var(--border)' }}>{error}</div>}
-      {loading ? <Spinner /> : recipients.length === 0 ? (
-        <div style={{ padding: '18px 16px', color: 'var(--muted)', fontSize: 13 }}>
-          Add an RSA public key here if you wish to generate encrypted backups.
-        </div>
-      ) : (
-        recipients.map(recipient => (
-          <div key={recipient.id} style={{ display: 'grid', gridTemplateColumns: '1fr 120px 90px', gap: 10, padding: '12px 16px', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
-              <EditableRecipientLabel
-                recipient={recipient}
-                onCommit={async next => {
-                  try {
-                    const updated = await api.updateBackupRecipient(recipient.id, { label: next })
-                    setRecipients(prev => prev.map(item => item.id === recipient.id ? updated : item))
-                  } catch (err) {
-                    setError(err.message || 'Failed to update recipient')
-                    throw err
-                  }
-                }}
-              />
-              <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'monospace', lineHeight: 1.2, wordBreak: 'break-all', minWidth: 0 }}>
-                {recipient.fingerprint}
-              </div>
-            </div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>
-              <input type="checkbox" checked={!!recipient.enabled} onChange={() => toggleRecipient(recipient)} />
-              Enabled
-            </label>
-            <button
-              type="button"
-              onClick={() => setPendingDeleteRecipient(recipient)}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--danger)',
-                cursor: 'pointer',
-                fontSize: 16,
-                lineHeight: 1,
-                width: 28,
-                height: 28,
-                borderRadius: 999,
-              }}
-            >
-              ×
-            </button>
           </div>
-        ))
-      )}
-    </Card>
+        </form>
+
+        {error && <div style={{ padding: '10px 16px', color: '#ef4444', fontSize: 13, borderBottom: '1px solid var(--border)' }}>{error}</div>}
+        {loading ? <Spinner /> : recipients.length === 0 ? (
+          <div style={{ padding: '18px 16px', color: 'var(--muted)', fontSize: 13 }}>
+            Add an RSA public key here if you wish to generate encrypted backups.
+          </div>
+        ) : (
+          recipients.map(recipient => (
+            <div key={recipient.id} style={{ display: 'grid', gridTemplateColumns: '1fr 120px 90px', gap: 10, padding: '12px 16px', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+                <EditableRecipientLabel
+                  recipient={recipient}
+                  onCommit={async next => {
+                    try {
+                      const updated = await api.updateBackupRecipient(recipient.id, { label: next })
+                      setRecipients(prev => prev.map(item => item.id === recipient.id ? updated : item))
+                    } catch (err) {
+                      setError(err.message || 'Failed to update recipient')
+                      throw err
+                    }
+                  }}
+                />
+                <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'monospace', lineHeight: 1.2, wordBreak: 'break-all', minWidth: 0 }}>
+                  {recipient.fingerprint}
+                </div>
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>
+                <input type="checkbox" checked={!!recipient.enabled} onChange={() => toggleRecipient(recipient)} />
+                Enabled
+              </label>
+              <button
+                type="button"
+                onClick={() => setPendingDeleteRecipient(recipient)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--danger)',
+                  cursor: 'pointer',
+                  fontSize: 16,
+                  lineHeight: 1,
+                  width: 28,
+                  height: 28,
+                  borderRadius: 999,
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))
+        )}
+      </Card>
     </>
   )
 }
@@ -1230,6 +1234,257 @@ function EditableRecipientLabel({ recipient, onCommit }) {
     >
       {recipient.label}
     </button>
+  )
+}
+
+function TagColorPalette({ value, onChange }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+      {TAG_COLOR_PALETTE.map(color => {
+        const selected = value === color
+        return (
+          <button
+            key={color}
+            type="button"
+            onClick={() => onChange(color)}
+            title={color}
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 999,
+              border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
+              background: selected
+                ? 'color-mix(in srgb, var(--accent) 10%, var(--surface2))'
+                : 'var(--surface2)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              padding: 0,
+            }}
+          >
+            <TagGlyph color={color} size={14} />
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function EditableTagName({ tag, onCommit }) {
+  const {
+    editing,
+    draft,
+    setDraft,
+    beginEdit,
+    cancelEdit,
+    commitEdit,
+  } = useTransientTextEdit(tag.name || '', { onCommit })
+
+  if (editing) {
+    return (
+      <TransientTextInput
+        value={draft}
+        onChange={setDraft}
+        onCommit={commitEdit}
+        onCancel={cancelEdit}
+        restoreOnEscape
+        style={{
+          background: 'var(--surface)',
+          color: 'var(--text)',
+          border: '1px solid var(--accent)',
+          borderRadius: 999,
+          padding: '4px 10px',
+          fontSize: 13,
+          fontWeight: 600,
+          lineHeight: 1.2,
+          minWidth: 120,
+          outline: 'none',
+        }}
+      />
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => beginEdit(tag.name || '')}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        background: 'var(--surface2)',
+        color: 'var(--text)',
+        border: '1px solid var(--border)',
+        borderRadius: 999,
+        padding: '4px 10px',
+        fontSize: 13,
+        fontWeight: 600,
+        lineHeight: 1.2,
+        cursor: 'text',
+      }}
+    >
+      <TagGlyph color={tag.color} size={13} />
+      <span>{tag.name}</span>
+    </button>
+  )
+}
+
+function TransactionTagsSection() {
+  const [tags, setTags] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [error, setError] = useState('')
+  const [pendingDeleteTag, setPendingDeleteTag] = useState(null)
+  const [form, setForm] = useState({
+    name: '',
+    color: TAG_COLOR_PALETTE[0],
+  })
+
+  async function load() {
+    setLoading(true)
+    try {
+      setTags(await api.getTags())
+      setError('')
+    } catch (err) {
+      setError(err.message || 'Failed to load tags')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  async function handleCreate(event) {
+    event.preventDefault()
+    setCreating(true)
+    setError('')
+    try {
+      const created = await api.createTag(form)
+      setTags(prev => [...prev, created].sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name)))
+      setForm({ name: '', color: form.color })
+    } catch (err) {
+      setError(err.message || 'Failed to create tag')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function handleUpdateTag(tagId, payload) {
+    try {
+      const updated = await api.updateTag(tagId, payload)
+      setTags(prev => prev.map(tag => tag.id === tagId ? updated : tag))
+      setError('')
+    } catch (err) {
+      setError(err.message || 'Failed to update tag')
+      throw err
+    }
+  }
+
+  async function handleDeleteTag(tag) {
+    setPendingDeleteTag(null)
+    try {
+      await api.deleteTag(tag.id)
+      setTags(prev => prev.filter(item => item.id !== tag.id))
+      setError('')
+    } catch (err) {
+      setError(err.message || 'Failed to delete tag')
+    }
+  }
+
+  return (
+    <>
+      {pendingDeleteTag ? (
+        <AppConfirmDialog
+          title="Delete tag?"
+          description={`Delete tag "${pendingDeleteTag.name}"? Existing transaction assignments will be removed too.`}
+          confirmLabel="Delete"
+          confirmVariant="danger"
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={() => handleDeleteTag(pendingDeleteTag)}
+          onCancel={() => setPendingDeleteTag(null)}
+          width="min(500px, 100%)"
+        />
+      ) : null}
+
+      <Card style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ padding: '14px 16px 0', color: 'var(--muted)', fontSize: 13, lineHeight: 1.5 }}>
+          Tags are lightweight labels you can add manually or through rules. They show up on transaction rows and can filter dashboard views and exports.
+        </div>
+        <form onSubmit={handleCreate} style={{ display: 'grid', gap: 12, padding: 16, borderBottom: '1px solid var(--border)' }}>
+          <input
+            value={form.name}
+            onChange={event => setForm(prev => ({ ...prev, name: event.target.value }))}
+            placeholder="Tag name"
+            style={{ ...getFormControlStyle({ size: 'md', surface: 'base' }), width: '100%' }}
+          />
+          <div style={{ display: 'grid', gap: 8 }}>
+            <FormLabel>Color</FormLabel>
+            <TagColorPalette
+              value={form.color}
+              onChange={color => setForm(prev => ({ ...prev, color }))}
+            />
+          </div>
+          <div>
+            <Button small type="submit" disabled={creating || !form.name.trim()}>
+              {creating ? 'Saving...' : 'Add tag'}
+            </Button>
+          </div>
+        </form>
+
+        {error ? (
+          <div style={{ padding: '10px 16px', color: '#ef4444', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
+            {error}
+          </div>
+        ) : null}
+
+        {loading ? <Spinner /> : tags.length === 0 ? (
+          <div style={{ padding: '18px 16px', color: 'var(--muted)', fontSize: 13 }}>
+            No tags created yet.
+          </div>
+        ) : (
+          tags.map(tag => (
+            <div
+              key={tag.id}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(0, 1fr) auto auto',
+                gap: 12,
+                alignItems: 'center',
+                padding: '12px 16px',
+                borderBottom: '1px solid var(--border)',
+              }}
+            >
+              <EditableTagName
+                tag={tag}
+                onCommit={name => handleUpdateTag(tag.id, { name })}
+              />
+              <TagColorPalette
+                value={tag.color}
+                onChange={color => handleUpdateTag(tag.id, { color })}
+              />
+              <button
+                type="button"
+                onClick={() => setPendingDeleteTag(tag)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--danger)',
+                  cursor: 'pointer',
+                  fontSize: 18,
+                  lineHeight: 1,
+                  width: 28,
+                  height: 28,
+                  borderRadius: 999,
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))
+        )}
+      </Card>
+    </>
   )
 }
 
@@ -1422,7 +1677,7 @@ function DeveloperOptionsSection({ authEnabled }) {
       },
       browser: {
         title: 'Clear browser-local state?',
-        description: 'Clear browser-local FinTrack state for this browser and reload?',
+        description: `Clear browser-local state and reload?`,
       },
       preferences: {
         title: 'Clear saved preferences?',
@@ -1564,7 +1819,7 @@ function DeveloperOptionsSection({ authEnabled }) {
           <div>
             <div style={{ fontSize: 14, fontWeight: 600 }}>Clear import memory</div>
             <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
-                  Clears saved CSV data sources and import snapshots stored in the backend, then reloads.
+              Clears saved CSV data sources and import snapshots stored in the backend, then reloads.
             </div>
           </div>
           <Button
@@ -1742,55 +1997,89 @@ function TrashSection() {
   )
 }
 
+function AboutRow({ label, value, help = '' }) {
+  return (
+    <div style={{ display: 'grid', gap: 4 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 600 }}>{value}</div>
+      {help ? (
+        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.55 }}>
+          {help}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function AboutSection({ dbInstanceId }) {
+  return (
+    <Card style={{ padding: 20 }}>
+      <div style={{ display: 'grid', gap: 18 }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700 }}>{APP_NAME}</div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.6 }}>
+            Self-hosted personal finance tracker.
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 18 }}>
+          <AboutRow
+            label="Version"
+            value={`v${APP_VERSION}`}
+            help="X"
+          />
+          <AboutRow
+            label="License"
+            value="GNU GPL v3.0 or later"
+            help="SPDX identifier: GPL-3.0-or-later."
+          />
+          <AboutRow
+            label="Instance ID"
+            value={dbInstanceId || 'Unavailable'}
+            help="Useful when you want to confirm which installation a screenshot or issue report came from."
+          />
+        </div>
+      </div>
+    </Card>
+  )
+}
+
 export default function Settings() {
-  const [authEnabled, setAuthEnabled] = useState(false)
-  const [currentUser, setCurrentUser] = useState(null)
-  const [passwordPolicy, setPasswordPolicy] = useState('min_8')
-  const [securityProfile, setSecurityProfile] = useState('local_private')
-  const [experimentalSecuritySettings, setExperimentalSecuritySettings] = useState(false)
-  const [developerOptionsEnabled, setDeveloperOptionsEnabled] = useState(false)
-  const [dbInstanceId, setDbInstanceId] = useState('')
-  const [userId, setUserId] = useState('')
+  const {
+    authEnabled,
+    currentUser,
+    passwordPolicy,
+    securityProfile,
+    experimentalSecuritySettings,
+    developerOptionsEnabled,
+    dbInstanceId,
+    preferenceSubjectId: userId,
+  } = useAppSession()
+  const { preferences } = useUserPreferences()
   const [sectionOpenState, setSectionOpenState] = useState({})
   const [sectionStateLoaded, setSectionStateLoaded] = useState(false)
   const settingsScrollRef = useRef(null)
 
   useEffect(() => {
-    Promise.all([
-      api.getAuthStatus(),
-      api.getUserPreferences().catch(() => ({ preferences: {} })),
-    ]).then(([status, prefResp]) => {
-      setAuthEnabled(!!status.auth_enabled)
-      setCurrentUser(status.user || null)
-      setPasswordPolicy(status.password_policy || 'min_8')
-      setSecurityProfile(status.security_profile || 'local_private')
-      setExperimentalSecuritySettings(!!status.experimental_security_settings)
-      setDeveloperOptionsEnabled(!!status.developer_options_enabled)
-      const nextDbInstanceId = status?.db_instance_id || ''
-      const nextUserId = status?.selected_local_profile_id || status?.user?.id || status?.user_id || ''
-      setDbInstanceId(nextDbInstanceId)
-      setUserId(nextUserId)
-
-      const prefValue = prefResp?.preferences?.[SETTINGS_SECTIONS_PREF_KEY]
-      if (prefValue && typeof prefValue === 'object') {
-        setSectionOpenState(prefValue)
-      } else {
-        const storageKey = nextDbInstanceId && nextUserId
-          ? `${SETTINGS_SECTIONS_STORAGE_KEY_PREFIX}.${nextDbInstanceId}.${nextUserId}`
-          : ''
-        if (storageKey) {
-          try {
-            const raw = window.localStorage.getItem(storageKey)
-            const parsed = raw ? JSON.parse(raw) : null
-            if (parsed && typeof parsed === 'object') setSectionOpenState(parsed)
-          } catch {
-            // Ignore storage failures in restricted environments.
-          }
+    const prefValue = preferences?.[SETTINGS_SECTIONS_PREF_KEY]
+    if (prefValue && typeof prefValue === 'object') {
+      setSectionOpenState(prefValue)
+    } else {
+      const storageKey = dbInstanceId && userId
+        ? `${SETTINGS_SECTIONS_STORAGE_KEY_PREFIX}.${dbInstanceId}.${userId}`
+        : ''
+      if (storageKey) {
+        try {
+          const raw = window.localStorage.getItem(storageKey)
+          const parsed = raw ? JSON.parse(raw) : null
+          if (parsed && typeof parsed === 'object') setSectionOpenState(parsed)
+        } catch {
+          // Ignore storage failures in restricted environments.
         }
       }
-      setSectionStateLoaded(true)
-    })
-  }, [])
+    }
+    setSectionStateLoaded(true)
+  }, [dbInstanceId, preferences, userId])
 
   useEffect(() => {
     if (!sectionStateLoaded) return
@@ -1804,7 +2093,7 @@ export default function Settings() {
         // Ignore storage failures in restricted environments.
       }
     }
-    api.saveUserPreference(SETTINGS_SECTIONS_PREF_KEY, sectionOpenState).catch(() => {})
+    api.saveUserPreference(SETTINGS_SECTIONS_PREF_KEY, sectionOpenState).catch(() => { })
   }, [dbInstanceId, userId, sectionOpenState, sectionStateLoaded])
 
   function bindSection(sectionKey, defaultCollapsed = true) {
@@ -1827,116 +2116,134 @@ export default function Settings() {
       </div>
 
       <div data-browser-context-passthrough="true" ref={settingsScrollRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 28px 24px' }}>
-      <div style={{ width: SETTINGS_CONTENT_WIDTH, margin: '0 auto' }}>
+        <div style={{ width: SETTINGS_CONTENT_WIDTH, margin: '0 auto' }}>
 
-      <StickySection
-        title="Backup recipients"
-        scrollContainerRef={settingsScrollRef}
-        {...bindSection('backupRecipients')}
-      >
-        <BackupRecipientsSection />
-      </StickySection>
+          <StickySection
+            title="Backup recipients"
+            scrollContainerRef={settingsScrollRef}
+            {...bindSection('backupRecipients')}
+          >
+            <BackupRecipientsSection />
+          </StickySection>
 
-      {canManageEnvironment && (
-        <StickySection
-          title="Environment variables (.env)"
-          scrollContainerRef={settingsScrollRef}
-          {...bindSection('environment')}
-        >
-          <EnvironmentSection authEnabled={authEnabled} currentUser={currentUser} />
-        </StickySection>
-      )}
+          {canManageEnvironment && (
+            <StickySection
+              title="Environment variables (.env)"
+              scrollContainerRef={settingsScrollRef}
+              {...bindSection('environment')}
+            >
+              <EnvironmentSection authEnabled={authEnabled} currentUser={currentUser} />
+            </StickySection>
+          )}
 
-      {showPreAuthSecuritySettings && (
-        <StickySection
-          title="Security model"
-          description="Match FinTrack's sign-in posture to how this instance is deployed and who can reach it."
-          scrollContainerRef={settingsScrollRef}
-          {...bindSection('securityModel')}
-        >
-          <SecurityProfileSection
-            authEnabled={authEnabled}
-            securityProfile={securityProfile}
-            passwordPolicy={passwordPolicy}
-            onChange={resp => {
-              setSecurityProfile(resp.security_profile || 'local_private')
-            }}
-          />
-        </StickySection>
-      )}
+          {showPreAuthSecuritySettings && (
+            <StickySection
+              title="Security model"
+              description={`Match ${APP_NAME}'s sign-in posture to how this instance is deployed and who can reach it.`}
+              scrollContainerRef={settingsScrollRef}
+              {...bindSection('securityModel')}
+            >
+              <SecurityProfileSection
+                authEnabled={authEnabled}
+                securityProfile={securityProfile}
+                passwordPolicy={passwordPolicy}
+                onChange={resp => {
+                  setSecurityProfile(resp.security_profile || 'local_private')
+                }}
+              />
+            </StickySection>
+          )}
 
-      {showPreAuthSecuritySettings && !authEnabled && (
-        <StickySection
-          title="Sign-in protection"
-          description="Enable login when you want passwords, 2FA, or multiple sign-in accounts for the same installation."
-          scrollContainerRef={settingsScrollRef}
-          {...bindSection('signInProtection')}
-        >
-          <AuthModeSection
-            authEnabled={authEnabled}
-            onEnabled={status => {
-              setAuthEnabled(!!status.auth_enabled)
-              setPasswordPolicy(status.password_policy || 'min_8')
-              setSecurityProfile(status.security_profile || 'local_private')
-            }}
-            embedded
-          />
-        </StickySection>
-      )}
+          {showPreAuthSecuritySettings && !authEnabled && (
+            <StickySection
+              title="Sign-in protection"
+              description="Enable login when you want passwords, 2FA, or multiple sign-in accounts for the same installation."
+              scrollContainerRef={settingsScrollRef}
+              {...bindSection('signInProtection')}
+            >
+              <AuthModeSection
+                authEnabled={authEnabled}
+                onEnabled={status => {
+                  setAuthEnabled(!!status.auth_enabled)
+                  setPasswordPolicy(status.password_policy || 'min_8')
+                  setSecurityProfile(status.security_profile || 'local_private')
+                }}
+                embedded
+              />
+            </StickySection>
+          )}
 
-      {authEnabled && (
-        <StickySection
-          title="Account security"
-          description="Manage password requirements and authenticator-based sign-in protection."
-          scrollContainerRef={settingsScrollRef}
-          {...bindSection('accountSecurity')}
-        >
-          <AccountSecuritySection passwordPolicy={passwordPolicy} onPasswordPolicyChange={setPasswordPolicy} embedded />
-        </StickySection>
-      )}
+          {authEnabled && (
+            <StickySection
+              title="Account security"
+              description="Manage password requirements and authenticator-based sign-in protection."
+              scrollContainerRef={settingsScrollRef}
+              {...bindSection('accountSecurity')}
+            >
+              <AccountSecuritySection passwordPolicy={passwordPolicy} onPasswordPolicyChange={setPasswordPolicy} embedded />
+            </StickySection>
+          )}
 
-      {authEnabled && (
-        <StickySection
-          title="Plaid token protection"
-          description="Control how Plaid access tokens are protected on disk for this account."
-          scrollContainerRef={settingsScrollRef}
-          {...bindSection('plaidTokenProtection')}
-        >
-          <PlaidTokenProtectionSection embedded />
-        </StickySection>
-      )}
+          {authEnabled && (
+            <StickySection
+              title="Plaid token protection"
+              description="Control how Plaid access tokens are protected on disk for this account."
+              scrollContainerRef={settingsScrollRef}
+              {...bindSection('plaidTokenProtection')}
+            >
+              <PlaidTokenProtectionSection embedded />
+            </StickySection>
+          )}
 
-      {authEnabled && (
-        <StickySection
-          title="User management"
-          description="Manage who can sign in to this shared FinTrack installation."
-          scrollContainerRef={settingsScrollRef}
-          {...bindSection('userManagement')}
-        >
-          <UserAdminSection passwordPolicy={passwordPolicy} embedded />
-        </StickySection>
-      )}
+          {authEnabled && (
+            <StickySection
+              title="User management"
+              description={`Manage who can sign in.`}
+              scrollContainerRef={settingsScrollRef}
+              {...bindSection('userManagement')}
+            >
+              <UserAdminSection passwordPolicy={passwordPolicy} embedded />
+            </StickySection>
+          )}
 
-      {developerOptionsEnabled && (
-        <StickySection
-          title="Developer options"
-          description="Useful tools for developers and testing workflows."
-          scrollContainerRef={settingsScrollRef}
-          {...bindSection('developerOptions')}
-        >
-          <DeveloperOptionsSection authEnabled={authEnabled} />
-        </StickySection>
-      )}
+          {developerOptionsEnabled && (
+            <StickySection
+              title="Developer options"
+              description="Useful tools for developers and testing workflows."
+              scrollContainerRef={settingsScrollRef}
+              {...bindSection('developerOptions')}
+            >
+              <DeveloperOptionsSection authEnabled={authEnabled} />
+            </StickySection>
+          )}
 
-      <StickySection
-        title="Trash"
-        description="Restore merged child accounts before you permanently remove them."
-        scrollContainerRef={settingsScrollRef}
-        {...bindSection('trash')}
-      >
-        <TrashSection />
-      </StickySection>
-      </div>
+          <StickySection
+            title="Transaction tags"
+            description="Create the lightweight labels that show on transaction rows and can be applied by rules."
+            scrollContainerRef={settingsScrollRef}
+            {...bindSection('transactionTags')}
+          >
+            <TransactionTagsSection />
+          </StickySection>
+
+          <StickySection
+            title="Trash"
+            description="Restore merged child accounts before you permanently remove them."
+            scrollContainerRef={settingsScrollRef}
+            {...bindSection('trash')}
+          >
+            <TrashSection />
+          </StickySection>
+
+          <StickySection
+            title="About"
+            description={`Version and installation details.`}
+            scrollContainerRef={settingsScrollRef}
+            {...bindSection('about')}
+          >
+            <AboutSection dbInstanceId={dbInstanceId} />
+          </StickySection>
+        </div>
       </div>
     </div>
   )

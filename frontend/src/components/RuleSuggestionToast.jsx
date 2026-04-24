@@ -54,7 +54,7 @@ function RuleModal({ prompt, onSave, onCancel }) {
     if (existingRule) {
       await api.updateRule(existingRule.id, ruleData)
       if (applyToExisting) {
-        await api.recategorize()
+        await api.applyRule(existingRule.id)
       }
       onSave({ applyToExisting, ruleData, ruleId: existingRule.id, updatedExisting: true })
       return
@@ -90,6 +90,7 @@ function RuleModal({ prompt, onSave, onCancel }) {
               account_id: existingRule?.account_id || '',
               cleanName: existingRule?.clean_name || '',
               catId: prompt.categoryId || existingRule?.category_id || '',
+              tagIds: existingRule?.tag_ids || [],
             }}
             categories={categories}
             owners={owners}

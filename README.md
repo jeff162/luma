@@ -202,6 +202,30 @@ The helper scripts:
 After startup, review `.env` as needed to customize ports, Plaid settings,  
 logging, or other advanced options.
 
+## Testing
+
+Luma currently has two lightweight test paths that are useful for catching regressions:
+
+- **Backend duplicate-detection tests:** fixture-driven import tests live in `backend/tests/test_import_duplicate_detection.py` with anonymized CSV fixtures under `backend/tests/fixtures/import_duplicates/`
+- **Frontend UI regression checks:** Playwright tests live in `frontend/tests/ui/` and cover a small set of import/export behaviors and smoke checks
+
+Backend duplicate-detection tests:
+
+```bash
+python3 -m unittest backend.tests.test_import_duplicate_detection
+```
+
+These tests run real CSV imports through the backend import logic and compare the resulting duplicate reasons and final imported ledger against expected snapshots. They require the backend Python dependencies from `backend/requirements.txt`, including `python-multipart`.
+
+Frontend Playwright checks:
+
+```bash
+cd frontend
+npm run ui:test
+```
+
+These UI tests are intentionally small and are mainly meant to catch regressions in shared behavior on important screens rather than provide exhaustive browser coverage.
+
 ## Contributing
 
 Luma is an early-stage project and evolving quickly. Feedback, bug reports, and contributions are welcome.
@@ -233,4 +257,3 @@ For implementation details, see inline comments in the codebase, which document 
 This project is licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later).
 
 See the [LICENSE](https://chatgpt.com/c/LICENSE) file for full details.
-

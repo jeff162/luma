@@ -4,6 +4,12 @@ This project uses a **system-level commenting style**. Comments should
 help a reader understand *why the code exists* and *how to think about
 it*, not restate what it does.
 
+The underlying concern is that low-value comments create noise without
+preserving the reasoning that actually prevents regressions. FinTrack
+changes fastest around workflows, invariants, and shared UI behavior, so
+comments need to capture the mental model behind those systems rather
+than narrate obvious code.
+
 ---
 
 ## Core Principles
@@ -44,6 +50,11 @@ Use these when a file contains a **non-obvious conceptual model**, such as:
 **Goal:**
 
 > A reader should understand the system without reverse-engineering multiple functions.
+
+This style favors system entry points because that is where a future
+maintainer decides whether a change is safe. If the reasoning is only
+implicit in several helper functions, the code is much easier to
+accidentally "simplify" into a regression.
 
 ---
 
@@ -100,7 +111,7 @@ Add a comment if:
 
 * multiple parts of the file work together to implement a behavior
 * there is an implicit model that is not immediately visible
-* a future reader would ask “why is this done this way?”
+* a future reader would ask "why is this done this way?"
 * changing the code without understanding context could introduce bugs
 
 ---
@@ -113,9 +124,9 @@ Do **not**:
 * comment obvious or self-explanatory logic
 * add structural comments like:
 
-  * “Render”
-  * “Header”
-  * “Row 1”
+  * "Render"
+  * "Header"
+  * "Row 1"
 * add comments to every function or block
 * use comments as filler
 

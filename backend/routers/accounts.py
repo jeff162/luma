@@ -18,8 +18,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.db.database import SHARED_OWNER_NAME, SHARED_OWNER_ID, get_db
+from backend.json_utils import safe_json_dict
 
 router = APIRouter()
+IMPORT_SUMMARY_KEY = "import_summary"
 
 
 class AccountCreate(BaseModel):
@@ -64,6 +66,11 @@ def _get_account_row(conn, account_id: str):
             a.parent_account_id,
             a.trashed_at,
             a.plaid_item_id,
+            (
+                SELECT COUNT(*)
+                FROM txn t
+                WHERE t.account_id = a.id
+            ) AS transaction_count,
             o.name AS owner_name,
             o.color AS owner_color
         FROM account a
@@ -96,6 +103,11 @@ def _list_account_rows(conn, *, include_children: bool, include_trashed: bool):
             a.parent_account_id,
             a.trashed_at,
             a.plaid_item_id,
+            (
+                SELECT COUNT(*)
+                FROM txn t
+                WHERE t.account_id = a.id
+            ) AS transaction_count,
             o.name AS owner_name,
             o.color AS owner_color
         FROM account a
@@ -137,6 +149,19 @@ def _set_root_display_name(conn, account_id: str, display_name: str):
         "UPDATE account SET display_name = ? WHERE parent_account_id = ?",
         (display_name, account_id),
     )
+
+
+def _list_group_member_ids(conn, account_id: str) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT id
+        FROM account
+        WHERE id = ? OR parent_account_id = ?
+        ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id
+        """,
+        (account_id, account_id, account_id),
+    ).fetchall()
+    return [row["id"] for row in rows]
 
 
 def _replace_account_reference_in_profile_column_maps(conn, source_account_id: str, target_account_id: str):
@@ -208,6 +233,72 @@ def _replace_account_reference_in_batch_snapshots(conn, source_account_id: str, 
             )
 
 
+def _refresh_import_batch_summaries(conn, batch_ids: set[str]):
+    for batch_id in sorted(batch_id for batch_id in batch_ids if batch_id):
+        batch = conn.execute(
+            "SELECT id, skipped_count, deduped_count, config_snapshot FROM import_batch WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            continue
+
+        imported_count = int(conn.execute(
+            "SELECT COUNT(*) FROM txn WHERE import_batch_id = ?",
+            (batch_id,),
+        ).fetchone()[0] or 0)
+        skipped_count = int(batch["skipped_count"] or 0)
+        deduped_count = int(batch["deduped_count"] or 0)
+        total_rows = imported_count + skipped_count + deduped_count
+
+        conn.execute(
+            "UPDATE import_batch SET row_count = ? WHERE id = ?",
+            (total_rows, batch_id),
+        )
+
+        snapshot = safe_json_dict(batch["config_snapshot"])
+        summary = snapshot.get(IMPORT_SUMMARY_KEY)
+        if isinstance(summary, dict):
+            summary["imported_count"] = imported_count
+            summary["total_rows"] = total_rows
+            snapshot[IMPORT_SUMMARY_KEY] = summary
+            conn.execute(
+                "UPDATE import_batch SET config_snapshot = ? WHERE id = ?",
+                (json.dumps(snapshot), batch_id),
+            )
+
+
+def _delete_account_and_import_history(conn, source_account_id: str):
+    affected_batch_ids = {
+        row["import_batch_id"]
+        for row in conn.execute(
+            """
+            SELECT DISTINCT import_batch_id
+            FROM txn
+            WHERE account_id = ?
+              AND import_batch_id IS NOT NULL
+            """,
+            (source_account_id,),
+        ).fetchall()
+        if row["import_batch_id"]
+    }
+
+    conn.execute("DELETE FROM txn WHERE account_id = ?", (source_account_id,))
+    conn.execute("DELETE FROM category_rule WHERE account_id = ?", (source_account_id,))
+    conn.execute("UPDATE csv_import_profile SET account_id = NULL WHERE account_id = ?", (source_account_id,))
+    conn.execute(
+        "DELETE FROM import_batch_account WHERE account_id = ? AND was_skipped = 0",
+        (source_account_id,),
+    )
+    conn.execute(
+        "UPDATE import_batch_account SET account_id = NULL WHERE account_id = ? AND was_skipped = 1",
+        (source_account_id,),
+    )
+    _replace_account_reference_in_profile_column_maps(conn, source_account_id, "")
+    _replace_account_reference_in_batch_snapshots(conn, source_account_id, "")
+    _refresh_import_batch_summaries(conn, affected_batch_ids)
+    conn.execute("DELETE FROM account WHERE id = ?", (source_account_id,))
+
+
 def _finalize_trashed_account(conn, account_row):
     source_account_id = account_row["id"]
     target_account_id = account_row["parent_account_id"]
@@ -230,15 +321,9 @@ def _finalize_trashed_account(conn, account_row):
         )
         _replace_account_reference_in_profile_column_maps(conn, source_account_id, target_account_id)
         _replace_account_reference_in_batch_snapshots(conn, source_account_id, target_account_id)
+        conn.execute("DELETE FROM account WHERE id = ?", (source_account_id,))
     else:
-        conn.execute("DELETE FROM txn WHERE account_id = ?", (source_account_id,))
-        conn.execute("DELETE FROM category_rule WHERE account_id = ?", (source_account_id,))
-        conn.execute("UPDATE csv_import_profile SET account_id = NULL WHERE account_id = ?", (source_account_id,))
-        conn.execute("UPDATE import_batch_account SET account_id = NULL WHERE account_id = ?", (source_account_id,))
-        _replace_account_reference_in_profile_column_maps(conn, source_account_id, "")
-        _replace_account_reference_in_batch_snapshots(conn, source_account_id, "")
-
-    conn.execute("DELETE FROM account WHERE id = ?", (source_account_id,))
+        _delete_account_and_import_history(conn, source_account_id)
 
 
 def resolve_default_owner_id(conn, owner_id: Optional[str]) -> Optional[str]:
@@ -372,8 +457,6 @@ def attach_account(account_id: str, body: AccountAttachRequest):
             raise HTTPException(status_code=400, detail="An account cannot be merged into itself")
         if parent["parent_account_id"]:
             raise HTTPException(status_code=400, detail="Only top-level accounts can accept merged children")
-        if _get_child_count(conn, account_id) > 0:
-            raise HTTPException(status_code=400, detail="Ungroup this account's children before merging it")
 
         # Owners are compatible if they match exactly, or if either account belongs to the shared owner.
         source_owner = (account["owner_id"] or "").strip()
@@ -388,9 +471,14 @@ def attach_account(account_id: str, body: AccountAttachRequest):
         if _normalize_match_value(account["type"]) != _normalize_match_value(parent["type"]):
             raise HTTPException(status_code=400, detail="Only accounts with the same type can be merged")
 
-        conn.execute(
-            "UPDATE account SET parent_account_id = ?, display_name = ?, trashed_at = NULL WHERE id = ?",
-            (parent["id"], parent["display_name"] or parent["name"], account["id"]),
+        group_member_ids = _list_group_member_ids(conn, account["id"])
+        if parent["id"] in group_member_ids:
+            raise HTTPException(status_code=400, detail="An account group cannot be merged into itself")
+
+        target_display_name = parent["display_name"] or parent["name"]
+        conn.executemany(
+            "UPDATE account SET parent_account_id = ?, display_name = ? WHERE id = ?",
+            [(parent["id"], target_display_name, member_id) for member_id in group_member_ids],
         )
     return {"ok": True}
 
@@ -474,6 +562,5 @@ def delete_account(account_id: str):
             raise HTTPException(status_code=404, detail="Account not found")
         if _get_child_count(conn, account_id) > 0:
             raise HTTPException(status_code=400, detail="Ungroup or trash child accounts before deleting this account")
-        conn.execute("DELETE FROM txn WHERE account_id = ?", (account_id,))
-        conn.execute("DELETE FROM account WHERE id = ?", (account_id,))
+        _delete_account_and_import_history(conn, account_id)
     return {"ok": True}

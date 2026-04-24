@@ -5,7 +5,7 @@
 
 """
 Run once after first launch to populate default categorization rules.
-Usage: DB_PATH=./data/fintrack.db python3 scripts/seed_rules.py
+Usage: DB_PATH=./data/fintrack-data.db python3 scripts/seed_rules.py
 """
 import os
 import sys

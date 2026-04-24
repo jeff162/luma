@@ -23,6 +23,8 @@ export const DETAIL_WINDOW_MONTHS = 18
 export const DETAIL_TOP_PADDING = '120px'
 export const DETAIL_MAX_VISIBLE_ROWS = 7
 export const DETAIL_STACK_OFFSET = 28
+export const DETAIL_FLOATING_TOP_GUTTER = 72
+export const DETAIL_FLOATING_EDGE_GUTTER = 24
 const DETAIL_SECTION_OVERHEAD = 108
 export function getDetailMonthSectionHeight(trend = []) {
   const maxCount = trend.reduce((max, row) => Math.max(max, Number(row?.count) || 0), 0)
@@ -37,18 +39,21 @@ export function getDetailMonthSectionHeight(trend = []) {
 
 function clampPanelPosition(pos, rect = null) {
   if (!pos) return null
-  const maxX = Math.max(0, window.innerWidth - (rect?.width || 200))
-  const maxY = Math.max(0, window.innerHeight - (rect?.height || 60))
+  const gutter = DETAIL_FLOATING_EDGE_GUTTER
+  const topGutter = DETAIL_FLOATING_TOP_GUTTER
+  const maxX = Math.max(gutter, window.innerWidth - (rect?.width || 200) - gutter)
+  const maxY = Math.max(topGutter, window.innerHeight - (rect?.height || 60) - gutter)
   return {
-    x: Math.max(0, Math.min(maxX, pos.x)),
-    y: Math.max(0, Math.min(maxY, pos.y)),
+    x: Math.max(gutter, Math.min(maxX, pos.x)),
+    y: Math.max(topGutter, Math.min(maxY, pos.y)),
   }
 }
 
 function getDefaultPanelPosition(rect, stackIndex = 0) {
-  const topPadding = parseInt(DETAIL_TOP_PADDING, 10) || 120
-  const centeredX = Math.max(16, Math.round((window.innerWidth - rect.width) / 2))
-  const centeredY = Math.max(topPadding, Math.round((window.innerHeight - rect.height) / 2))
+  const gutter = DETAIL_FLOATING_EDGE_GUTTER
+  const topGutter = DETAIL_FLOATING_TOP_GUTTER
+  const centeredX = Math.max(gutter, Math.round((window.innerWidth - rect.width) / 2))
+  const centeredY = Math.max(topGutter, Math.round((window.innerHeight - rect.height) / 2))
   return {
     x: centeredX + (stackIndex * DETAIL_STACK_OFFSET),
     y: centeredY + (stackIndex * DETAIL_STACK_OFFSET),
@@ -135,6 +140,18 @@ export function useDetailPanelChrome(onClose, options = {}) {
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
+
+  useEffect(() => {
+    if (typeof ResizeObserver !== 'function') return undefined
+    const element = panelRef.current
+    if (!element) return undefined
+
+    const observer = new ResizeObserver(() => {
+      setPos(prev => clampPanelPosition(prev, element.getBoundingClientRect()))
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [panelRef])
 
   return { pos, dragging, panelRef, onDragStart }
 }
@@ -472,7 +489,9 @@ export function DetailPanelShell({ pos, dragging, panelRef, onDragStart, onClose
           top: pos ? pos.y : undefined,
           width: DETAIL_PANEL_WIDTH,
           maxWidth: DETAIL_PANEL_WIDTH,
-          maxHeight: '85vh',
+          maxHeight: pos
+            ? `calc(100vh - ${DETAIL_FLOATING_TOP_GUTTER + DETAIL_FLOATING_EDGE_GUTTER}px)`
+            : '85vh',
           display: 'flex',
           flexDirection: 'column',
           pointerEvents: 'auto',

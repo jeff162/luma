@@ -65,6 +65,39 @@ is_truthy() {
   esac
 }
 
+cleanup_stray_processes() {
+  local root="$1"
+
+  #echo "Checking for stray processes..."
+
+  # Find processes whose command includes the project path
+  pids=$(ps -eo pid=,args= | awk -v root="$root" '
+    $0 ~ root && $0 !~ /awk/ && $0 !~ /start_fintrack.sh/ { print $1 }
+  ')
+
+  if [[ -z "$pids" ]]; then
+    #echo "No stray processes found."
+    return
+  fi
+
+  #echo "Found stray processes:"
+  #ps -fp $pids
+
+  echo "Killing stray processes..."
+  ps -fp $pids
+  kill -TERM $pids 2>/dev/null || true
+  sleep 1
+
+  # Force kill if still alive
+  still_alive=$(ps -o pid= -p $pids 2>/dev/null || true)
+  if [[ -n "$still_alive" ]]; then
+    echo "Force killing remaining processes..."
+    kill -KILL $still_alive 2>/dev/null || true
+  fi
+
+  #echo "Cleanup complete."
+}
+
 wait_backend_ready() {
   local url="$1"
   local attempts="${2:-60}"
@@ -108,8 +141,8 @@ open_in_terminal() {
   #  WSL detection
   if grep -qi microsoft /proc/version 2>/dev/null; then
     if command -v wt.exe >/dev/null 2>&1; then
-      wt.exe -w 0 new-tab --title "$title" wsl.exe bash -ic "\"$script_path\"" \
-        || wt.exe new-tab --title "$title" wsl.exe bash -ic "\"$script_path\""
+      wt.exe -w 0 new-tab --title "$title" wsl.exe bash -lc "\"$script_path\"" \
+        || wt.exe new-tab --title "$title" wsl.exe bash -lc "\"$script_path\""
     else
       cmd.exe /c start "" wt.exe new-tab --title "$title" wsl.exe bash -ic "\"$script_path\""
     fi
@@ -169,6 +202,10 @@ else
   BACKEND_TERMINAL_LOG=""
   FRONTEND_TERMINAL_LOG=""
 fi
+
+#wsl can leave an otherwise harmless stray process around from 
+#   the parent terminal. Clean them up so they don't build up
+cleanup_stray_processes "$ROOT_DIR"
 
 if open_in_terminal "$BACKEND_SCRIPT" "FinTrack Backend" "$BACKEND_TERMINAL_LOG"; then
   echo "Started backend in a new terminal window."

@@ -16,13 +16,13 @@ function getPreferenceValue(preferences, key, defaultValue) {
     : defaultValue
 }
 
-export function UserPreferencesProvider({ children }) {
+export function UserPreferencesProvider({ children, initialPreferences = null }) {
   /*
    * Preferences are loaded once here and then treated as optimistic local state so controls stay responsive
    * while this provider owns the save/rollback bookkeeping.
    */
-  const [preferences, setPreferences] = useState({})
-  const [preferencesReady, setPreferencesReady] = useState(false)
+  const [preferences, setPreferences] = useState(() => normalizePreferences(initialPreferences))
+  const [preferencesReady, setPreferencesReady] = useState(() => initialPreferences !== null)
   const mountedRef = useRef(true)
   const preferencesRef = useRef({})
 
@@ -38,6 +38,16 @@ export function UserPreferencesProvider({ children }) {
   }, [])
 
   useEffect(() => {
+    if (initialPreferences !== null) {
+      const normalized = normalizePreferences(initialPreferences)
+      preferencesRef.current = normalized
+      setPreferences(normalized)
+      setPreferencesReady(true)
+    }
+  }, [initialPreferences])
+
+  useEffect(() => {
+    if (initialPreferences !== null) return
     let cancelled = false
     setPreferencesReady(false)
 
@@ -58,7 +68,7 @@ export function UserPreferencesProvider({ children }) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [initialPreferences])
 
   const setPreference = useCallback((key, nextValueOrUpdater) => {
     const currentPreferences = preferencesRef.current

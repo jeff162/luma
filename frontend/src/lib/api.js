@@ -85,7 +85,7 @@ export const api = {
     const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))
     return request(`/transactions?${q}`)
   },
-  getGroupTotals: (month, account_id, date_start, date_end, owner_ids, category_owner_ids) => {
+  getGroupTotals: (month, account_id, date_start, date_end, owner_ids, category_owner_ids, tag_ids) => {
     const p = {
       ...(month               ? { month }               : {}),
       ...(date_start          ? { date_start }          : {}),
@@ -93,10 +93,11 @@ export const api = {
       ...(account_id          ? { account_id }          : {}),
       ...(owner_ids           ? { owner_ids }           : {}),
       ...(category_owner_ids  ? { category_owner_ids }  : {}),
+      ...(tag_ids             ? { tag_ids }             : {}),
     }
     return request(`/transactions/summary/by-group?${new URLSearchParams(p)}`)
   },
-  getCategoryTotalsInGroup: (month, group_id, account_id, date_start, date_end, owner_ids) => {
+  getCategoryTotalsInGroup: (month, group_id, account_id, date_start, date_end, owner_ids, tag_ids) => {
     const p = {
       group_id,
       ...(month      ? { month }      : {}),
@@ -104,32 +105,35 @@ export const api = {
       ...(date_end   ? { date_end }   : {}),
       ...(account_id ? { account_id } : {}),
       ...(owner_ids  ? { owner_ids }  : {}),
+      ...(tag_ids    ? { tag_ids }    : {}),
     }
     return request(`/transactions/summary/by-category-in-group?${new URLSearchParams(p)}`)
   },
-  getCategoryTotals: (month, account_id) => {
-    const q = new URLSearchParams({ month, ...(account_id ? { account_id } : {}) })
+  getCategoryTotals: (month, account_id, tag_ids) => {
+    const q = new URLSearchParams({ month, ...(account_id ? { account_id } : {}), ...(tag_ids ? { tag_ids } : {}) })
     return request(`/transactions/summary/by-category?${q}`)
   },
-  getMonthlyByGroup: (months = 24, account_id, group_id) => {
+  getMonthlyByGroup: (months = 24, account_id, group_id, tag_ids) => {
     const q = new URLSearchParams({
       months,
       ...(account_id ? { account_id } : {}),
       ...(group_id   ? { group_id }   : {}),
+      ...(tag_ids    ? { tag_ids }    : {}),
     })
     return request(`/transactions/summary/monthly-by-group?${q}`)
   },
-  getPayeeTrend: (payee, date_start, date_end) => {
-    const q = new URLSearchParams({ payee, ...(date_start ? { date_start } : {}), ...(date_end ? { date_end } : {}) })
+  getPayeeTrend: (payee, date_start, date_end, tag_ids) => {
+    const q = new URLSearchParams({ payee, ...(date_start ? { date_start } : {}), ...(date_end ? { date_end } : {}), ...(tag_ids ? { tag_ids } : {}) })
     return request(`/transactions/summary/monthly-trend?${q}`)
   },
-  getMonthlyTrend: (months = 6, category_id, account_id, date_start, date_end) => {
+  getMonthlyTrend: (months = 6, category_id, account_id, date_start, date_end, tag_ids) => {
     const q = new URLSearchParams({
       months,
       ...(category_id ? { category_id } : {}),
       ...(account_id ? { account_id } : {}),
       ...(date_start ? { date_start } : {}),
       ...(date_end ? { date_end } : {}),
+      ...(tag_ids ? { tag_ids } : {}),
     })
     return request(`/transactions/summary/monthly-trend?${q}`)
   },
@@ -174,6 +178,8 @@ export const api = {
 
   updateMerchant:      (id, name)   => request(`/transactions/${id}/merchant`, { method: 'PATCH', body: JSON.stringify({ merchant_name: name }) }),
   updateNotes:         (id, notes)  => request(`/transactions/${id}/notes`,    { method: 'PATCH', body: JSON.stringify({ notes }) }),
+  updateTransactionTag: (id, tag_id, present) =>
+    request(`/transactions/${id}/tags`, { method: 'PATCH', body: JSON.stringify({ tag_id, present }) }),
   clearOverride:       (id)         => request(`/transactions/${id}/uncategorize`, { method: 'PATCH' }),
 
   getRules: (search) => {
@@ -188,12 +194,17 @@ export const api = {
 
   runSync: (days = 30) => request(`/sync?days=${days}`, { method: 'POST' }),
   recategorize: () => request('/sync/recategorize', { method: 'POST' }),
+  getRecategorizePreview: () => request('/sync/recategorize-preview'),
 
   getTasks:    () => request('/tasks'),
   getOwners:   () => request('/owners'),
   createOwner: (data) => request('/owners', { method: 'POST', body: JSON.stringify(data) }),
   updateOwner: (id, data) => request(`/owners/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteOwner: (id) => request(`/owners/${id}`, { method: 'DELETE' }),
+  getTags:     () => request('/tags'),
+  createTag:   (data) => request('/tags', { method: 'POST', body: JSON.stringify(data) }),
+  updateTag:   (id, data) => request(`/tags/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteTag:   (id) => request(`/tags/${id}`, { method: 'DELETE' }),
   getOwnerSummary: (params = {}) => {
     const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))
     return request(`/owners/summary?${q}`)
@@ -238,6 +249,12 @@ export const api = {
     const suffix = q.toString() ? `?${q}` : ''
     return request(`/import-export/batches/${id}/rule-suggestions${suffix}`)
   },
+  getSystemRuleSuggestions: (ownerIds = []) => {
+    const q = new URLSearchParams()
+    if (ownerIds?.length) q.set('owner_ids', ownerIds.join(','))
+    const suffix = q.toString() ? `?${q}` : ''
+    return request(`/import-export/rule-suggestions${suffix}`)
+  },
   getProfileRuleSuggestions: (id, ownerIds = []) => {
     const q = new URLSearchParams()
     if (ownerIds?.length) q.set('owner_ids', ownerIds.join(','))
@@ -249,6 +266,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  getSystemRuleSuggestionMatches: (payload) =>
+    request('/import-export/rule-suggestions/matches', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   getProfileRuleSuggestionMatches: (id, payload) =>
     request(`/import-export/profiles/${id}/rule-suggestions/matches`, {
       method: 'POST',
@@ -256,6 +278,11 @@ export const api = {
     }),
   updateBatchRuleSuggestionReview: (id, payload) =>
     request(`/import-export/batches/${id}/rule-suggestions/review`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateSystemRuleSuggestionReview: (payload) =>
+    request('/import-export/rule-suggestions/review', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -272,6 +299,15 @@ export const api = {
     request(`/import-export/batches/${id}/category-workspace-draft`),
   setBatchProfile: (id, profileId) =>
     request(`/import-export/batches/${id}/profile`, { method: 'PATCH', body: JSON.stringify({ profile_id: profileId }) }),
+  updateBatchImportedCategoryUsage: (id, payload) =>
+    request(`/import-export/batches/${id}/imported-category-usage`, {
+      method: 'PATCH',
+      body: JSON.stringify(
+        typeof payload === 'boolean'
+          ? { use_imported_categories: payload }
+          : payload
+      ),
+    }),
   getCompatibleImportBatches: (profileId) =>
     request(`/import-export/profiles/${profileId}/compatible-batches`),
   importBatchDuplicates: (id, payload) =>

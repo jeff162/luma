@@ -41,6 +41,7 @@ function RuleEditorModal({
   categories,
   owners,
   accounts,
+  onCategoriesChanged,
   onAccept,
   onSaveAccepted,
   onCloseWithDraft,
@@ -211,6 +212,7 @@ function RuleEditorModal({
           showApplyToExisting={false}
           hideFooter
           onDraftChange={setDraftState}
+          onCategoriesChanged={onCategoriesChanged}
         />
 
         <div style={{
@@ -1094,6 +1096,7 @@ export default function ImportRuleSuggestionReview({
   categories,
   owners,
   accounts,
+  onCategoriesChanged,
 }) {
   const rootRef = useRef(null)
   const { getPreference, hasPreference, setPreference } = useUserPreferences()
@@ -1105,6 +1108,7 @@ export default function ImportRuleSuggestionReview({
   const [editingCategorySuggestionId, setEditingCategorySuggestionId] = useState(null)
   const [categoryPickerOpenToken, setCategoryPickerOpenToken] = useState(0)
   const categoryPickerHasOpenedRef = useRef(false)
+  const latestCategoriesRef = useRef(categories)
   const sortControlRef = useRef(null)
   const listTopRef = useRef(null)
   const [editingKeywordSuggestionId, setEditingKeywordSuggestionId] = useState(null)
@@ -1132,10 +1136,15 @@ export default function ImportRuleSuggestionReview({
     count: 0,
     rows: [],
   })
+
+  useEffect(() => {
+    latestCategoriesRef.current = categories
+  }, [categories])
   const merchantFilterSnapshotRef = useRef('')
   const merchantFilterInputRef = useRef(null)
   const merchantFilterButtonRef = useRef(null)
   const ownerFilterButtonRef = useRef(null)
+  const migratedSortPreferenceRef = useRef(false)
   // Migrate the pre-preferences sort choice forward once so existing users keep
   // their review ordering after the setting moved into user preferences.
   const legacySortOrderRef = useRef(
@@ -1152,8 +1161,10 @@ export default function ImportRuleSuggestionReview({
   const normalizedMerchantFilter = merchantFilterText.trim().toLowerCase()
 
   useEffect(() => {
+    if (migratedSortPreferenceRef.current) return
     const legacySortOrder = legacySortOrderRef.current
     if (hasPreference(IMPORT_RULE_SORT_PREF_KEY) || legacySortOrder === 'row_count') return
+    migratedSortPreferenceRef.current = true
     setPreference(IMPORT_RULE_SORT_PREF_KEY, legacySortOrder).catch(() => {})
   }, [hasPreference, setPreference])
   function matchesReviewFilter(suggestion, filterKey) {
@@ -1340,7 +1351,13 @@ export default function ImportRuleSuggestionReview({
 
   useEffect(() => {
     const visibleIds = new Set(visibleSuggestions.map(suggestion => getSuggestionKey(suggestion.id)))
-    setSelectedSuggestionIds(prev => prev.filter(id => visibleIds.has(id)))
+    setSelectedSuggestionIds(prev => {
+      const next = prev.filter(id => visibleIds.has(id))
+      if (next.length === prev.length && next.every((id, index) => id === prev[index])) {
+        return prev
+      }
+      return next
+    })
   }, [visibleSuggestions])
 
   useEffect(() => {
@@ -1417,7 +1434,7 @@ export default function ImportRuleSuggestionReview({
 
   useEffect(() => {
     if (selectedOwnerIds.length > 0) {
-      onOwnerFilterOpenChange(true)
+      onOwnerFilterOpenChange(current => (current ? current : true))
     }
   }, [selectedOwnerIds, onOwnerFilterOpenChange])
 
@@ -1692,7 +1709,7 @@ export default function ImportRuleSuggestionReview({
 
   function commitCategoryActionEdit(suggestion, categoryId) {
     const suggestionKey = getSuggestionKey(suggestion.id)
-    const nextCategory = categories.find(category => String(category.id) === String(categoryId))
+    const nextCategory = latestCategoriesRef.current.find(category => String(category.id) === String(categoryId))
     setSuggestionActionOverrides(prev => ({
       ...prev,
       [suggestionKey]: {
@@ -2589,6 +2606,12 @@ export default function ImportRuleSuggestionReview({
                       value={resolvedSuggestion.target_category_id}
                       categories={categories}
                       onChange={value => commitCategoryActionEdit(suggestion, value)}
+                      onCategoryCreated={async () => {
+                        const nextCategories = await onCategoriesChanged?.()
+                        if (Array.isArray(nextCategories)) {
+                          latestCategoriesRef.current = nextCategories
+                        }
+                      }}
                       compact
                       openToken={categoryPickerOpenToken}
                       onOpenChange={open => {
@@ -2836,10 +2859,11 @@ export default function ImportRuleSuggestionReview({
           categories={categories}
           owners={owners}
           accounts={accounts}
+          onCategoriesChanged={onCategoriesChanged}
           onAccept={async data => {
             persistSuggestionDraft(resolvedEditingSuggestion, data)
             const nextCategory = data.category_id
-              ? categories.find(category => String(category.id) === String(data.category_id))
+              ? latestCategoriesRef.current.find(category => String(category.id) === String(data.category_id))
               : null
             await onSaveSuggestion({
               ...resolvedEditingSuggestion,
@@ -2856,7 +2880,7 @@ export default function ImportRuleSuggestionReview({
           onSaveAccepted={async data => {
             persistSuggestionDraft(resolvedEditingSuggestion, data)
             const nextCategory = data.category_id
-              ? categories.find(category => String(category.id) === String(data.category_id))
+              ? latestCategoriesRef.current.find(category => String(category.id) === String(data.category_id))
               : null
             await onSaveAcceptedSuggestion({
               ...resolvedEditingSuggestion,

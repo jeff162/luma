@@ -247,6 +247,10 @@ function sanitizeSnapshot(snapshot, sourceValues) {
   return next
 }
 
+function snapshotsMatch(left, right) {
+  return JSON.stringify(left || null) === JSON.stringify(right || null)
+}
+
 function pillNoDragZone() {
   return (
     <span
@@ -609,7 +613,23 @@ function GroupCard({
   )
 }
 
-export default function CategoryImportWorkspace({ sourceValues, sourceMeta, existingCategories = [], initialDraftState, onDraftStateChange, onApply, onClose, onCategoriesChanged }) {
+export default function CategoryImportWorkspace({
+  sourceValues,
+  sourceMeta,
+  existingCategories = [],
+  initialDraftState,
+  onDraftStateChange,
+  onApply,
+  onClose,
+  onCategoriesChanged,
+  title = 'Import Categories From File',
+  description = 'Organize the categories from the imported data into groups.',
+  sourceHeading = 'File Categories',
+  applyLabel = 'Add imported categories',
+  applyPendingLabel = 'Adding…',
+  remainingItemLabelSingular = 'file category',
+  remainingItemLabelPlural = 'file categories',
+}) {
   /*
    * This workspace is a reversible staging area, not the live category tree. Every gesture mutates a sanitized
    * draft snapshot with undo/redo while the left column tracks raw import values that can be grouped, parked in
@@ -655,10 +675,14 @@ export default function CategoryImportWorkspace({ sourceValues, sourceMeta, exis
   const sourceMenuRef = useRef(null)
   const floatingGroupDraftRef = useRef(null)
   const [rightPanelHeight, setRightPanelHeight] = useState(720)
+  const sourceValuesKey = useMemo(() => JSON.stringify(sourceValues || []), [sourceValues])
 
   useEffect(() => {
-    setSnapshot(prev => sanitizeSnapshot(prev, sourceValues))
-  }, [sourceValues])
+    setSnapshot(prev => {
+      const next = sanitizeSnapshot(prev, sourceValues)
+      return snapshotsMatch(prev, next) ? prev : next
+    })
+  }, [sourceValuesKey])
 
   useDismissibleLayer({
     open: !!panelMenu,
@@ -1354,6 +1378,8 @@ export default function CategoryImportWorkspace({ sourceValues, sourceMeta, exis
   const groups = snapshot.tree[activeSection] || []
   const remainingCount = snapshot.sourceOrder.length
   const processedCount = Math.max(0, (sourceValues || []).filter(Boolean).length - remainingCount)
+  const remainingItemLabel = remainingCount === 1 ? remainingItemLabelSingular : remainingItemLabelPlural
+  const processedItemLabel = processedCount === 1 ? remainingItemLabelSingular : remainingItemLabelPlural
   const hasWorkToApply = useMemo(() => {
     // Applying should be a no-op if the draft only mirrors categories that already exist live.
     const liveGroupsByKey = new Map(
@@ -1437,12 +1463,12 @@ export default function CategoryImportWorkspace({ sourceValues, sourceMeta, exis
         <div style={{ padding: '18px 22px 14px', borderBottom: '1px solid var(--border)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 84%, var(--surface)), color-mix(in srgb, var(--surface2) 62%, var(--surface)))' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 18 }}>
             <div>
-              <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Import Categories From File</div>
+              <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>{title}</div>
               <div style={{ fontSize: 13, color: 'var(--muted)', maxWidth: 700, lineHeight: 1.55 }}>
-                Organize the categories from the imported data into groups.
+                {description}
               </div>
               <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
-                {remainingCount > 0 ? `${remainingCount} file categories still need a group.` : `${processedCount} file categories organized.`}
+                {remainingCount > 0 ? `${remainingCount} ${remainingItemLabel} still need a group.` : `${processedCount} ${processedItemLabel} organized.`}
               </div>
               {sourceMeta?.truncated ? (
                 <div style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 8, padding: '7px 10px', borderRadius: 12, border: '1px solid color-mix(in srgb, #f59e0b 34%, var(--border))', background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))', color: 'color-mix(in srgb, #f59e0b 72%, var(--text))', fontSize: 11, lineHeight: 1.4 }}>
@@ -1450,16 +1476,20 @@ export default function CategoryImportWorkspace({ sourceValues, sourceMeta, exis
                 </div>
               ) : null}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: 'color-mix(in srgb, var(--surface2) 60%, var(--surface))', border: '1px solid color-mix(in srgb, var(--border) 82%, transparent)' }}>
-                <Button variant="ghost" onClick={onClose}>Close</Button>
-                <Button variant={hasWorkToApply ? 'primary' : 'ghost'} onClick={async () => { setSaving(true); try { await onApply(buildDraftState()) } finally { setSaving(false) } }} disabled={saving}>
-                  {saving ? 'Adding…' : 'Add imported categories'}
-                </Button>
+            <div style={{ display: 'grid', gap: 8, minWidth: 'min(320px, 100%)', justifyItems: 'stretch', flex: '0 0 auto' }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: 'color-mix(in srgb, var(--surface2) 60%, var(--surface))', border: '1px solid color-mix(in srgb, var(--border) 82%, transparent)' }}>
+                  <Button variant={hasWorkToApply ? 'primary' : 'ghost'} onClick={async () => { setSaving(true); try { await onApply(buildDraftState()) } finally { setSaving(false) } }} disabled={saving}>
+                    {saving ? applyPendingLabel : applyLabel}
+                  </Button>
+                  <Button variant="ghost" onClick={onClose}>Close</Button>
+                </div>
               </div>
-              <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: 'color-mix(in srgb, var(--surface2) 60%, var(--surface))', border: '1px solid color-mix(in srgb, var(--border) 82%, transparent)' }}>
-                <Button variant="ghost" onClick={() => { if (!redoStack.length) return; const next = redoStack[redoStack.length - 1]; setUndoStack(prev => [...prev, cloneCategoryImportSnapshot(snapshot)]); setRedoStack(prev => prev.slice(0, -1)); setSnapshot(cloneCategoryImportSnapshot(next)) }} disabled={redoStack.length === 0}>Redo</Button>
-                <Button variant="ghost" onClick={() => { if (!undoStack.length) return; const next = undoStack[undoStack.length - 1]; setRedoStack(prev => [...prev, cloneCategoryImportSnapshot(snapshot)]); setUndoStack(prev => prev.slice(0, -1)); setSnapshot(cloneCategoryImportSnapshot(next)) }} disabled={undoStack.length === 0}>Undo</Button>
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: 'color-mix(in srgb, var(--surface2) 60%, var(--surface))', border: '1px solid color-mix(in srgb, var(--border) 82%, transparent)' }}>
+                  <Button variant="ghost" onClick={() => { if (!redoStack.length) return; const next = redoStack[redoStack.length - 1]; setUndoStack(prev => [...prev, cloneCategoryImportSnapshot(snapshot)]); setRedoStack(prev => prev.slice(0, -1)); setSnapshot(cloneCategoryImportSnapshot(next)) }} disabled={redoStack.length === 0}>Redo</Button>
+                  <Button variant="ghost" onClick={() => { if (!undoStack.length) return; const next = undoStack[undoStack.length - 1]; setRedoStack(prev => [...prev, cloneCategoryImportSnapshot(snapshot)]); setUndoStack(prev => prev.slice(0, -1)); setSnapshot(cloneCategoryImportSnapshot(next)) }} disabled={undoStack.length === 0}>Undo</Button>
+                </div>
               </div>
             </div>
           </div>
@@ -1469,7 +1499,7 @@ export default function CategoryImportWorkspace({ sourceValues, sourceMeta, exis
           <div style={{ minHeight: 0, display: 'flex', flexDirection: 'column', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 88%, black), color-mix(in srgb, var(--surface) 96%, black))' }}>
             <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid var(--border)' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 4 }}>
-                <div style={{ fontSize: 13, fontWeight: 700 }}>File Categories</div>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>{sourceHeading}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                   <button onClick={() => { if (!snapshot.selectedSourceIds.length) return; if (sourceSelectionInSetAside) restoreSelectedSources(); else moveSelectedSourcesToSetAside() }} disabled={snapshot.selectedSourceIds.length === 0} style={{ background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))', border: '1px solid var(--border)', borderRadius: 999, padding: '4px 10px', fontSize: 11, color: snapshot.selectedSourceIds.length === 0 ? 'color-mix(in srgb, var(--muted) 62%, transparent)' : 'var(--muted)', cursor: snapshot.selectedSourceIds.length === 0 ? 'default' : 'pointer', opacity: snapshot.selectedSourceIds.length === 0 ? 0.72 : 1 }}>{sourceSelectionInSetAside ? 'restore' : 'set aside'}</button>
                   <button onClick={() => { if (!snapshot.selectedSourceIds.length) return; setSnapshot(prev => ({ ...prev, selectedSourceIds: [] })); setSelectionAnchor(null) }} disabled={snapshot.selectedSourceIds.length === 0} style={{ background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))', border: '1px solid var(--border)', borderRadius: 999, padding: '4px 10px', fontSize: 11, color: snapshot.selectedSourceIds.length === 0 ? 'color-mix(in srgb, var(--muted) 62%, transparent)' : 'var(--muted)', cursor: snapshot.selectedSourceIds.length === 0 ? 'default' : 'pointer', opacity: snapshot.selectedSourceIds.length === 0 ? 0.72 : 1 }}>clear selection</button>

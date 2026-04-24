@@ -38,6 +38,7 @@ export default function ImportRuleSuggestions() {
   const { batchId, profileId } = useParams()
   const navigate = useNavigate()
   const isProfileContext = !!profileId
+  const isSystemContext = !batchId && !profileId
   const [owners, setOwners] = useState([])
   const [accounts, setAccounts] = useState([])
   const [categories, setCategories] = useState([])
@@ -78,17 +79,23 @@ export default function ImportRuleSuggestions() {
     [batches, profileId],
   )
   const loadSuggestionsForContext = (ownerIds = []) => (
-    isProfileContext
+    isSystemContext
+      ? api.getSystemRuleSuggestions(ownerIds)
+      : isProfileContext
       ? api.getProfileRuleSuggestions(profileId, ownerIds)
       : api.getBatchRuleSuggestions(batchId, ownerIds)
   )
   const updateSuggestionReviewForContext = payload => (
-    isProfileContext
+    isSystemContext
+      ? api.updateSystemRuleSuggestionReview(payload)
+      : isProfileContext
       ? api.updateProfileRuleSuggestionReview(profileId, payload)
       : api.updateBatchRuleSuggestionReview(batchId, payload)
   )
   const loadSuggestionMatchesForContext = payload => (
-    isProfileContext
+    isSystemContext
+      ? api.getSystemRuleSuggestionMatches(payload)
+      : isProfileContext
       ? api.getProfileRuleSuggestionMatches(profileId, payload)
       : api.getBatchRuleSuggestionMatches(batchId, payload)
   )
@@ -122,10 +129,14 @@ export default function ImportRuleSuggestions() {
     return () => { cancelled = true }
   }, [])
 
+  async function reloadCategories() {
+    const nextCategories = await api.getCategories()
+    setCategories(nextCategories)
+    return nextCategories
+  }
+
   useEffect(() => {
     let cancelled = false
-    if (!batchId && !profileId) return undefined
-
     async function loadRuleSuggestions() {
       setRuleSuggestionState(prev => ({ ...prev, loading: true, error: '' }))
       try {
@@ -158,7 +169,7 @@ export default function ImportRuleSuggestions() {
 
     loadRuleSuggestions()
     return () => { cancelled = true }
-  }, [batchId, profileId, selectedOwnerIds])
+  }, [batchId, profileId, selectedOwnerIds, isSystemContext])
 
   useEffect(() => {
     const availableOwnerIds = new Set(owners.map(owner => owner.id))
@@ -297,7 +308,7 @@ export default function ImportRuleSuggestions() {
       target_category_name: suggestion.target_category_name,
       keyword: suggestion.keyword,
     })
-    if (applyToExisting) await api.recategorize()
+    if (applyToExisting && createdRule?.id) await api.applyRule(createdRule.id)
     setEditingSuggestionId(null)
     applyLocalSuggestionUpdates({
       [suggestion.id]: {
@@ -415,18 +426,30 @@ export default function ImportRuleSuggestions() {
     }
   }
 
-  const contextMissing = isProfileContext ? !profile : !batch
-  const contextHasImportedCategories = isProfileContext
+  const systemCleanBatches = useMemo(
+    () => batches.filter(item => item.use_imported_categories),
+    [batches],
+  )
+  const contextMissing = isSystemContext ? false : (isProfileContext ? !profile : !batch)
+  const contextHasImportedCategories = isSystemContext
+    ? systemCleanBatches.some(item => item.has_imported_categories)
+    : isProfileContext
     ? profileBatches.some(item => item.has_imported_categories)
     : !!batch?.has_imported_categories
-  const contextTitle = isProfileContext
+  const contextTitle = isSystemContext
+    ? 'All categorized imports'
+    : isProfileContext
     ? (profile?.name || 'Data source')
     : (batch?.filename || 'Import')
-  const contextSummary = isProfileContext
+  const contextSummary = isSystemContext
+    ? `${systemCleanBatches.length} imported file${systemCleanBatches.length === 1 ? '' : 's'} using categories from the data`
+    : isProfileContext
     ? `${profileBatches.length} imported file${profileBatches.length === 1 ? '' : 's'}`
     : `Imported ${formatImportedAt(batch?.imported_at)}${formatImportSummary(batch) ? ` · ${formatImportSummary(batch)}` : ''}`
-  const emptyStateTitle = isProfileContext ? 'Data source not found' : 'Import not found'
-  const emptyStateDescription = isProfileContext
+  const emptyStateTitle = isSystemContext ? 'No categorized imports yet' : (isProfileContext ? 'Data source not found' : 'Import not found')
+  const emptyStateDescription = isSystemContext
+    ? 'Use the categories present in the data from Import / Export to include an imported file in rule suggestions.'
+    : isProfileContext
     ? 'This data source may have been deleted or no longer has imported files attached.'
     : 'This import may have been undone or is no longer available in Recent imports.'
 
@@ -466,11 +489,13 @@ export default function ImportRuleSuggestions() {
             </Card>
           ) : !contextHasImportedCategories ? (
             <Card>
-              <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No categorized rows were imported</div>
+              <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{isSystemContext ? 'No categorized imports available yet' : 'No categories from the data were used'}</div>
               <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-                {isProfileContext
-                  ? 'This data source does not have uncategorized imported rows that can be used to infer rules.'
-                  : 'This import does not contain uncategorized imported rows that can be used to infer rules.'}
+                {isSystemContext
+                  ? 'Only imported files that use categories present in the data contribute category and rule patterns to this system-wide review.'
+                  : isProfileContext
+                  ? 'This data source does not have imported transactions using categories from the data that can be used to infer rules.'
+                  : 'This import does not contain transactions using categories from the data that can be used to infer rules.'}
               </div>
             </Card>
           ) : (
@@ -490,9 +515,11 @@ export default function ImportRuleSuggestions() {
                   </div>
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-                  {isProfileContext
-                    ? 'Generate categorization rules from the uncategorized imported rows attached to this data source.'
-                    : 'Generate categorization rules from the uncategorized imported rows in this file.'}
+                  {isSystemContext
+                    ? 'Generate categorization rules from imported transactions that used categories present in the data across every imported file.'
+                    : isProfileContext
+                    ? 'Generate categorization rules from imported transactions attached to this data source that used categories present in the data.'
+                    : 'Generate categorization rules from imported transactions in this file that used categories present in the data.'}
                 </div>
               </Card>
 
@@ -519,6 +546,7 @@ export default function ImportRuleSuggestions() {
                 categories={categories}
                 owners={owners}
                 accounts={accounts}
+                onCategoriesChanged={reloadCategories}
               />
             </>
           )}

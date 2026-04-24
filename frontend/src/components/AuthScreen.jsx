@@ -3,6 +3,7 @@
 
 import { useState } from 'react'
 import { api } from '../lib/api.js'
+import { APP_NAME } from '../lib/appConfig.js'
 import { passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import { getSecurityProfile } from '../lib/securityProfiles.js'
 import TransientTextInput from './TransientTextInput.jsx'
@@ -108,13 +109,13 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
   return (
     <div style={s.page}>
       <form onSubmit={awaiting2fa ? handleTwoFactorSubmit : handleSubmit} style={s.card}>
-        <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 6 }}>FinTrack</div>
+        <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 6 }}>{APP_NAME}</div>
         <div style={{ fontSize: 14, color: 'var(--muted)', marginBottom: 20, lineHeight: 1.5 }}>
           {awaiting2fa
             ? `Enter the 6-digit code from your authenticator app to complete sign-in.${recoveryCodeCount ? ` You can also use one of your ${recoveryCodeCount} recovery codes.` : ''}`
             : needsBootstrap
-            ? `Create the first account for this FinTrack instance. That account becomes the initial tenant owner. Security mode: ${profile.label}.`
-            : `Sign in to load your FinTrack workspace. Security mode: ${profile.label}.`}
+              ? `Create the first account. That account becomes the initial tenant owner. Security mode: ${profile.label}.`
+              : `Sign in to load your workspace. Security mode: ${profile.label}.`}
         </div>
         {!awaiting2fa && (
           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16, lineHeight: 1.5 }}>

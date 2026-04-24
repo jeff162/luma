@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
+import { APP_NAME } from '../lib/appConfig.js'
 
 const WAITING_STORAGE_KEY = 'fintrack.runtimeConfigWaitingForRestart'
 const WAITING_STORAGE_TTL_MS = 5 * 60 * 1000
@@ -36,13 +37,13 @@ function readWaitingState() {
 function writeWaitingState() {
   try {
     window.sessionStorage.setItem(WAITING_STORAGE_KEY, String(Date.now()))
-  } catch {}
+  } catch { }
 }
 
 function clearWaitingState() {
   try {
     window.sessionStorage.removeItem(WAITING_STORAGE_KEY)
-  } catch {}
+  } catch { }
 }
 
 function detectPlatformCommand() {
@@ -218,7 +219,7 @@ export default function RuntimeConfigScreen({ runtimeConfig }) {
     <div style={s.page}>
       <form onSubmit={handleSubmit} style={s.card}>
         <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 6 }}>
-          {waitingMode ? 'Restart required' : 'FinTrack setup required'}
+          {waitingMode ? 'Restart required' : `${APP_NAME} setup required`}
         </div>
         {!waitingMode && (
           <div style={{ fontSize: 14, color: 'var(--muted)', marginBottom: 16, lineHeight: 1.6 }}>
@@ -235,47 +236,47 @@ export default function RuntimeConfigScreen({ runtimeConfig }) {
 
         {!waitingMode && (
           <div style={{ display: 'grid', gap: 12 }}>
-          <button
-            type="button"
-            onClick={handleUseDefaults}
-            disabled={loadingDefaults || submitting || saved}
-            style={{ ...s.button, background: 'transparent', color: 'var(--text)', border: '1px solid var(--border)' }}
-          >
-            {loadingDefaults ? 'Generating defaults...' : 'Use recommended values'}
-          </button>
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>SESSION_SECRET</div>
-            <input
-              value={sessionSecret}
-              onChange={e => setSessionSecret(e.target.value)}
-              placeholder="Leave blank to generate one automatically"
-              style={s.input}
-            />
-          </div>
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>SESSION_COOKIE_NAME</div>
-            <input
-              value={sessionCookieName}
-              onChange={e => setSessionCookieName(e.target.value)}
-              placeholder="Defaults to a name based on this install directory"
-              style={s.input}
-            />
-            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
-              Helps keep browser sessions separate when multiple FinTrack installs run on the same machine.
+            <button
+              type="button"
+              onClick={handleUseDefaults}
+              disabled={loadingDefaults || submitting || saved}
+              style={{ ...s.button, background: 'transparent', color: 'var(--text)', border: '1px solid var(--border)' }}
+            >
+              {loadingDefaults ? 'Generating defaults...' : 'Use recommended values'}
+            </button>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>SESSION_SECRET</div>
+              <input
+                value={sessionSecret}
+                onChange={e => setSessionSecret(e.target.value)}
+                placeholder="Leave blank to generate one automatically"
+                style={s.input}
+              />
             </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>APP_MASTER_KEY</div>
-            <input
-              value={appMasterKey}
-              onChange={e => setAppMasterKey(e.target.value)}
-              placeholder="Leave blank to generate a recommended value automatically"
-              style={s.input}
-            />
-            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
-              Recommended before linking bank accounts. FinTrack will generate a secure value if left blank.
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>SESSION_COOKIE_NAME</div>
+              <input
+                value={sessionCookieName}
+                onChange={e => setSessionCookieName(e.target.value)}
+                placeholder="Defaults to a name based on this install directory"
+                style={s.input}
+              />
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
+                Helps keep browser sessions separate when multiple installations are run on the same machine.
+              </div>
             </div>
-          </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>APP_MASTER_KEY</div>
+              <input
+                value={appMasterKey}
+                onChange={e => setAppMasterKey(e.target.value)}
+                placeholder="Leave blank to generate a recommended value automatically"
+                style={s.input}
+              />
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
+                Recommended before linking bank accounts. A secure value will be generated if left blank.
+              </div>
+            </div>
           </div>
         )}
 

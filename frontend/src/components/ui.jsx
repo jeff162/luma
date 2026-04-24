@@ -158,12 +158,12 @@ export function getFloatingPanelSurfaceStyle({ active = true, radius = 16 } = {}
       ? 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, white 2%), var(--surface))'
       : 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, black 3%), var(--surface))',
     border: active
-      ? '1px solid color-mix(in srgb, var(--accent) 24%, var(--border))'
-      : '1px solid color-mix(in srgb, var(--border) 84%, white 4%)',
+      ? '1px solid color-mix(in srgb, var(--accent) 30%, color-mix(in srgb, var(--border) 88%, white 10%))'
+      : '1px solid color-mix(in srgb, var(--border) 88%, white 8%)',
     borderRadius: radius,
     boxShadow: active
-      ? '0 26px 72px rgba(15, 23, 42, 0.34), 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent), inset 0 1px 0 rgba(255,255,255,0.05)'
-      : '0 16px 40px rgba(15, 23, 42, 0.22), inset 0 1px 0 rgba(255,255,255,0.03)',
+      ? '0 30px 80px rgba(15, 23, 42, 0.38), 0 0 0 1px color-mix(in srgb, var(--border) 32%, transparent), inset 0 1px 0 rgba(255,255,255,0.08)'
+      : '0 18px 44px rgba(15, 23, 42, 0.24), 0 0 0 1px color-mix(in srgb, var(--border) 18%, transparent), inset 0 1px 0 rgba(255,255,255,0.04)',
   }
 }
 

@@ -16,8 +16,10 @@ import json
 import uuid
 import zipfile
 import os
+import re
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import datetime, date
+from difflib import SequenceMatcher
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Request
@@ -27,12 +29,13 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from backend.db.database import get_db
+from backend.db.database import SHARED_OWNER_ID, get_db
 from backend.db.control_database import auth_required, get_local_preference_profile
 from backend.json_utils import safe_json_dict
 from backend.routers.accounts import resolve_default_owner_id
 from backend.services import crypto_service
 from backend.services.categorizer import categorize_transaction
+from backend.services.transaction_tags import VISIBLE_TXN_TAG_SQL, sync_rule_tags_for_transaction
 
 router = APIRouter()
 
@@ -41,6 +44,34 @@ RULE_SUGGESTION_REVIEW_KEY = "rule_suggestion_review"
 RULE_SUGGESTION_REVIEW_STATUSES = {"accepted", "skipped", "discarded"}
 IMPORT_SUMMARY_KEY = "import_summary"
 UNKNOWN_SOURCE_FALLBACK_KEY = "unknown_source_fallback"
+SYSTEM_RULE_SUGGESTION_REVIEW_STATE_KEY = "system_rule_suggestion_review"
+UNASSIGNED_CATEGORY_SYSTEM_KEY = "unassigned"
+IMPORTED_CATEGORY_SETTINGS_KEY = "imported_category_settings"
+IMPORTED_CATEGORY_SCOPE_ALL = "all"
+IMPORTED_CATEGORY_SCOPE_FILTERED = "filtered"
+FIXED_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX = "account:"
+NEW_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX = "new-account:"
+UNCATEGORIZED_IMPORT_CATEGORY_NAMES = {"uncategorized", "uncategorised", "unassigned"}
+MAX_IMPORT_EVIDENCE_TEXT_FIELDS = 3
+EXACT_DUPLICATE_STRATEGY_KEY = "exact_hash"
+COVERAGE_DUPLICATE_STRATEGY_KEY = "coverage_window"
+TEXT_DUPLICATE_STRATEGY_KEY = "cross_source_text"
+IMPORT_EVIDENCE_HEADER_KEYWORDS = (
+    "original statement",
+    "statement",
+    "memo",
+    "details",
+    "detail",
+    "reference",
+    "ref",
+    "payee",
+    "merchant",
+    "description",
+)
+GENERIC_DUPLICATE_TEXT_TOKENS = {
+    "ach", "atm", "card", "cash", "credit", "debit", "deposit", "money", "payment",
+    "purchase", "refcode", "send", "transfer", "transf", "tranno", "withdrawal",
+}
 
 
 def _developer_options_enabled() -> bool:
@@ -103,6 +134,10 @@ class ProfileCreate(BaseModel):
     amount_convention:    str = "single_signed"
     skip_rows:            int = 0
     apply_categorization: bool = True
+    use_imported_categories: bool = False
+    imported_category_scope_mode: str = IMPORTED_CATEGORY_SCOPE_ALL
+    imported_category_owner_ids: list[str] = []
+    imported_category_unassigned_account_tokens: list[str] = []
     notes:                Optional[str] = None
 
 class ProfileUpdate(BaseModel):
@@ -117,6 +152,10 @@ class ProfileUpdate(BaseModel):
     amount_convention:    Optional[str] = None
     skip_rows:            Optional[int] = None
     apply_categorization: Optional[bool] = None
+    use_imported_categories: Optional[bool] = None
+    imported_category_scope_mode: Optional[str] = None
+    imported_category_owner_ids: Optional[list[str]] = None
+    imported_category_unassigned_account_tokens: Optional[list[str]] = None
     notes:                Optional[str] = None
 
 
@@ -126,6 +165,98 @@ class BatchCategoryMappingApplyRequest(BaseModel):
 
 def _normalized_profile_name(value: Optional[str]) -> str:
     return str(value or "").strip()
+
+
+def _normalize_imported_category_scope_mode(value: Optional[str]) -> str:
+    return (
+        IMPORTED_CATEGORY_SCOPE_FILTERED
+        if str(value or "").strip().lower() == IMPORTED_CATEGORY_SCOPE_FILTERED
+        else IMPORTED_CATEGORY_SCOPE_ALL
+    )
+
+
+def _normalize_string_list(values) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        item = str(value or "").strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        normalized.append(item)
+    return normalized
+
+
+def _normalize_imported_category_settings(raw) -> dict:
+    payload = safe_json_dict(raw)
+    return {
+        "scope_mode": _normalize_imported_category_scope_mode(payload.get("scope_mode")),
+        "owner_ids": _normalize_string_list(payload.get("owner_ids")),
+        "unassigned_account_tokens": _normalize_string_list(payload.get("unassigned_account_tokens")),
+    }
+
+
+def _get_imported_category_settings(source: dict | None) -> dict:
+    source = source if isinstance(source, dict) else {}
+    if isinstance(source.get(IMPORTED_CATEGORY_SETTINGS_KEY), dict):
+        payload = source.get(IMPORTED_CATEGORY_SETTINGS_KEY)
+    elif isinstance(source.get("column_map"), dict) and isinstance(source["column_map"].get(IMPORTED_CATEGORY_SETTINGS_KEY), dict):
+        payload = source["column_map"].get(IMPORTED_CATEGORY_SETTINGS_KEY)
+    else:
+        payload = {
+            "scope_mode": source.get("imported_category_scope_mode"),
+            "owner_ids": source.get("imported_category_owner_ids"),
+            "unassigned_account_tokens": source.get("imported_category_unassigned_account_tokens"),
+        }
+    return _normalize_imported_category_settings(payload)
+
+
+def _store_imported_category_settings(container: dict | None, settings: dict) -> dict:
+    next_container = dict(container or {})
+    next_container[IMPORTED_CATEGORY_SETTINGS_KEY] = _normalize_imported_category_settings(settings)
+    return next_container
+
+
+def _annotate_imported_category_settings(target: dict | None, settings: dict) -> dict:
+    next_target = dict(target or {})
+    normalized = _normalize_imported_category_settings(settings)
+    next_target["imported_category_scope_mode"] = normalized["scope_mode"]
+    next_target["imported_category_owner_ids"] = normalized["owner_ids"]
+    next_target["imported_category_unassigned_account_tokens"] = normalized["unassigned_account_tokens"]
+    return next_target
+
+
+def _normalize_new_account_category_scope_token(name: Optional[str]) -> Optional[str]:
+    normalized = " ".join(str(name or "").strip().split()).casefold()
+    return f"{NEW_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX}{normalized}" if normalized else None
+
+
+def _category_scope_token_for_import_row(
+    csv_value: str,
+    account_id: Optional[str],
+    has_account_column: bool,
+    single_account_new: Optional[dict] = None,
+) -> Optional[str]:
+    if has_account_column:
+        token = str(csv_value or "").strip()
+        return token or None
+    named_token = _normalize_new_account_category_scope_token((single_account_new or {}).get("name"))
+    if named_token:
+        return named_token
+    token = str(account_id or "").strip()
+    return f"{FIXED_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX}{token}" if token else None
+
+
+def _row_uses_imported_categories(is_enabled: bool, settings: dict, owner_id: Optional[str], account_token: Optional[str]) -> bool:
+    if not is_enabled:
+        return False
+    if settings["scope_mode"] != IMPORTED_CATEGORY_SCOPE_FILTERED:
+        return True
+    if owner_id and owner_id in settings["owner_ids"]:
+        return True
+    if not owner_id and account_token and account_token in settings["unassigned_account_tokens"]:
+        return True
+    return False
 
 
 def _assert_profile_name_available(conn, name: Optional[str], exclude_profile_id: Optional[str] = None) -> str:
@@ -153,6 +284,13 @@ def _assert_profile_name_available(conn, name: Optional[str], exclude_profile_id
 
 class BatchCategoryWorkspaceDraftRequest(BaseModel):
     draft: Optional[dict] = None
+
+
+class BatchImportedCategoryUsageUpdateRequest(BaseModel):
+    use_imported_categories: bool
+    imported_category_scope_mode: Optional[str] = None
+    imported_category_owner_ids: Optional[list[str]] = None
+    imported_category_unassigned_account_tokens: Optional[list[str]] = None
 
 
 class BatchRuleSuggestionReviewUpdateRequest(BaseModel):
@@ -207,13 +345,328 @@ def _normalize_import_row_values(row: dict, headers: list[str]) -> dict:
     return normalized
 
 
+def _normalize_import_evidence_text(value: Optional[str]) -> str:
+    normalized = sanitize_rule_merchant_text(str(value or "")).lower()
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    return " ".join(normalized.split())
+
+
+def _normalize_duplicate_token(token: str) -> str:
+    compact = str(token or "").strip().lower()
+    if len(compact) > 5 and compact.endswith("s"):
+        compact = compact[:-1]
+    return compact
+
+
+def _duplicate_tokens_match(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
+    return len(shorter) >= 4 and longer.startswith(shorter)
+
+
+def _tokenize_duplicate_match_text(value: Optional[str], *, include_generic: bool = False) -> list[str]:
+    text = _normalize_import_evidence_text(value)
+    if not text:
+        return []
+    tokens: list[str] = []
+    for raw_token in text.split():
+        token = _normalize_duplicate_token(raw_token)
+        if len(token) < 3:
+            continue
+        if token.isdigit() and len(token) >= 4:
+            continue
+        if not include_generic and token in GENERIC_DUPLICATE_TEXT_TOKENS:
+            continue
+        if token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def _count_fuzzy_token_overlap(left_tokens: list[str], right_tokens: list[str]) -> int:
+    if not left_tokens or not right_tokens:
+        return 0
+    remaining = list(right_tokens)
+    matches = 0
+    for token in left_tokens:
+        match_index = next((index for index, candidate in enumerate(remaining) if _duplicate_tokens_match(token, candidate)), None)
+        if match_index is None:
+            continue
+        matches += 1
+        remaining.pop(match_index)
+    return matches
+
+
+def _header_matches_import_evidence_keyword(header: str) -> bool:
+    normalized = " ".join(re.sub(r"[^a-z0-9]+", " ", str(header or "").strip().lower()).split())
+    return any(keyword in normalized for keyword in IMPORT_EVIDENCE_HEADER_KEYWORDS)
+
+
+def _build_import_evidence(row: dict, headers: list[str], col: ColumnMap, csv_value: str, raw_desc: str) -> Optional[dict]:
+    evidence: dict[str, object] = {}
+    if col.account and csv_value:
+        evidence["account"] = {"header": col.account, "value": csv_value}
+    if col.description and raw_desc:
+        evidence["description"] = {"header": col.description, "value": raw_desc}
+
+    reserved_headers = {
+        str(header or "").strip()
+        for header in (
+            col.date,
+            col.amount,
+            col.debit,
+            col.credit,
+            col.direction,
+            col.pending,
+            col.description,
+            col.category,
+            col.notes,
+            col.account,
+        )
+        if str(header or "").strip()
+    }
+    seen_values = {raw_desc.casefold()} if raw_desc else set()
+    extra_text_fields: list[dict[str, str]] = []
+    for header in headers:
+        header_name = str(header or "").strip()
+        if not header_name or header_name in reserved_headers or not _header_matches_import_evidence_keyword(header_name):
+            continue
+        value = str(row.get(header_name, "") or "").strip()
+        if not value or value.casefold() in seen_values:
+            continue
+        extra_text_fields.append({"header": header_name, "value": value})
+        seen_values.add(value.casefold())
+        if len(extra_text_fields) >= MAX_IMPORT_EVIDENCE_TEXT_FIELDS:
+            break
+    if extra_text_fields:
+        evidence["extra_text_fields"] = extra_text_fields
+    return evidence or None
+
+
+def _parse_import_evidence(raw) -> Optional[dict]:
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _collect_duplicate_match_texts(*, merchant_name: Optional[str], display_name: Optional[str], raw_name: Optional[str], import_evidence: Optional[dict]) -> list[str]:
+    texts: list[str] = []
+
+    def add_text(value: Optional[str]):
+        text = str(value or "").strip()
+        normalized = _normalize_import_evidence_text(text)
+        if text and normalized and normalized not in {_normalize_import_evidence_text(existing) for existing in texts}:
+            texts.append(text)
+
+    add_text(display_name)
+    add_text(merchant_name)
+    add_text(raw_name)
+
+    if isinstance(import_evidence, dict):
+        description = import_evidence.get("description")
+        if isinstance(description, dict):
+            add_text(description.get("value"))
+        for field in import_evidence.get("extra_text_fields") or []:
+            if isinstance(field, dict):
+                add_text(field.get("value"))
+    return texts
+
+
+def _score_duplicate_text_match(left_text: str, right_text: str) -> tuple[float, dict]:
+    normalized_left = _normalize_import_evidence_text(left_text)
+    normalized_right = _normalize_import_evidence_text(right_text)
+    if not normalized_left or not normalized_right:
+        return 0.0, {}
+    if normalized_left == normalized_right:
+        return 1.0, {"mode": "exact_text"}
+
+    ratio = SequenceMatcher(None, normalized_left, normalized_right).ratio()
+    left_tokens = _tokenize_duplicate_match_text(normalized_left)
+    right_tokens = _tokenize_duplicate_match_text(normalized_right)
+    matched_tokens = _count_fuzzy_token_overlap(left_tokens, right_tokens)
+    overlap = (
+        matched_tokens / max(1, min(len(left_tokens), len(right_tokens)))
+        if left_tokens and right_tokens else 0.0
+    )
+    contains = (
+        min(len(normalized_left), len(normalized_right)) >= 8
+        and (normalized_left in normalized_right or normalized_right in normalized_left)
+    )
+
+    score = max(ratio, overlap)
+    if contains:
+        score = max(score, min(0.92, score + 0.08))
+    if matched_tokens >= 2 and overlap >= 0.67:
+        score = max(score, 0.82)
+    if matched_tokens >= 3 and overlap >= 0.8:
+        score = max(score, 0.9)
+
+    return score, {
+        "mode": "text_similarity",
+        "ratio": ratio,
+        "overlap": overlap,
+        "matched_tokens": matched_tokens,
+        "contains": contains,
+    }
+
+
+def _duplicate_amount_key(date_str: str, amount: float) -> str:
+    return f"{str(date_str or '').strip()}|{float(amount):.2f}"
+
+
+def _compute_import_coverage_window(date_values, terminal_date: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    unique_dates = sorted({str(value or "").strip() for value in (date_values or []) if str(value or "").strip()})
+    normalized_terminal_date = str(terminal_date or "").strip()
+    covered_dates = [date_value for date_value in unique_dates if not normalized_terminal_date or date_value < normalized_terminal_date]
+    if not covered_dates:
+        return None, None
+    return covered_dates[0], covered_dates[-1]
+
+
+def _date_in_import_coverage_window(date_str: str, start_date: Optional[str], end_date: Optional[str]) -> bool:
+    target = str(date_str or "").strip()
+    start = str(start_date or "").strip()
+    end = str(end_date or "").strip()
+    return bool(target and start and end and start <= target <= end)
+
+
+def _candidate_summary(candidate: Optional[dict]) -> Optional[dict]:
+    if not isinstance(candidate, dict):
+        return None
+    summary = dict(candidate)
+    for key in ("_consumed", "content_hash", "match_texts", "duplicate_scope", "csv_value", "scope_id"):
+        summary.pop(key, None)
+    return summary
+
+
+def _match_terminal_day_candidate(candidate_rows: list[dict], *, content_hash: str, amount: float) -> Optional[dict]:
+    active_rows = [candidate for candidate in candidate_rows if not candidate.get("_consumed")]
+    if not active_rows:
+        return None
+    exact_match = next((candidate for candidate in active_rows if candidate.get("content_hash") == content_hash), None)
+    if exact_match:
+        exact_match["_consumed"] = True
+        return exact_match
+    amount_match = next((candidate for candidate in active_rows if float(candidate.get("amount") or 0) == float(amount)), None)
+    if amount_match:
+        amount_match["_consumed"] = True
+        return amount_match
+    return None
+
+
+def _find_textual_duplicate_candidate(candidate_rows: list[dict], txn_payload: dict) -> Optional[dict]:
+    import_texts = _collect_duplicate_match_texts(
+        merchant_name=txn_payload.get("merchant_name"),
+        display_name=txn_payload.get("display_name"),
+        raw_name=txn_payload.get("raw_name"),
+        import_evidence=txn_payload.get("import_evidence"),
+    )
+    best_candidate = None
+    best_score = 0.0
+    for candidate in candidate_rows:
+        candidate_texts = candidate.get("match_texts") or []
+        if not import_texts or not candidate_texts:
+            continue
+        candidate_best_score = 0.0
+        for import_text in import_texts:
+            for candidate_text in candidate_texts:
+                score, _ = _score_duplicate_text_match(import_text, candidate_text)
+                if score > candidate_best_score:
+                    candidate_best_score = score
+        if candidate_best_score >= 0.78 and candidate_best_score > best_score:
+            best_candidate = candidate
+            best_score = candidate_best_score
+    if not best_candidate:
+        return None
+    matched = dict(best_candidate)
+    matched.pop("match_texts", None)
+    matched["duplicate_match_score"] = round(best_score, 3)
+    return matched
+
+
+def _normalize_account_type(value: Optional[str]) -> str:
+    return str(value or "").strip().lower()
+
+
+def _get_effective_account_row(conn, account_id: Optional[str]):
+    current_id = str(account_id or "").strip()
+    if not current_id:
+        return None
+    seen: set[str] = set()
+    while current_id and current_id not in seen:
+        seen.add(current_id)
+        row = conn.execute(
+            """
+            SELECT id, name, display_name, type, owner_id, parent_account_id
+            FROM account
+            WHERE id = ?
+            """,
+            (current_id,),
+        ).fetchone()
+        if not row:
+            return None
+        if not row["parent_account_id"]:
+            return row
+        current_id = row["parent_account_id"]
+    return None
+
+
+def _owners_are_group_compatible(source_owner_id: Optional[str], target_owner_id: Optional[str]) -> bool:
+    source_owner = str(source_owner_id or "").strip()
+    target_owner = str(target_owner_id or "").strip()
+    return (
+        source_owner == target_owner
+        or source_owner == SHARED_OWNER_ID
+        or target_owner == SHARED_OWNER_ID
+    )
+
+
+def _attach_import_created_account_to_group(conn, account_id: str, target_account_id: str) -> Optional[str]:
+    account = conn.execute(
+        """
+        SELECT id, type, owner_id
+        FROM account
+        WHERE id = ?
+        """,
+        (account_id,),
+    ).fetchone()
+    target = _get_effective_account_row(conn, target_account_id)
+    if not account:
+        raise HTTPException(status_code=400, detail="Account not found")
+    if not target:
+        raise HTTPException(status_code=400, detail="Group target account not found")
+    if _normalize_account_type(account["type"]) != _normalize_account_type(target["type"]):
+        raise HTTPException(status_code=400, detail="Only accounts with the same type can be grouped")
+    if account["owner_id"] and target["owner_id"] and not _owners_are_group_compatible(account["owner_id"], target["owner_id"]):
+        raise HTTPException(status_code=400, detail="Only accounts with the same owner can be grouped")
+    conn.execute(
+        """
+        UPDATE account
+        SET parent_account_id = ?,
+            display_name = ?,
+            owner_id = COALESCE(owner_id, ?)
+        WHERE id = ?
+        """,
+        (target["id"], target["display_name"] or target["name"], target["owner_id"], account_id),
+    )
+    return target["id"]
+
+
 def _insert_imported_transaction(conn, batch_id: str, payload: dict) -> str:
     txn_id = str(uuid.uuid4())
     conn.execute("""
         INSERT INTO txn
           (id, account_id, owner_id, category_id, amount, merchant_name,
-           display_name, raw_name, date, is_pending, content_hash, import_batch_id, imported_category, notes, category_overridden)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           display_name, raw_name, date, is_pending, content_hash, import_evidence_json, import_batch_id, imported_category, notes, category_overridden, category_source)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         txn_id,
         payload.get("account_id"),
@@ -226,10 +679,12 @@ def _insert_imported_transaction(conn, batch_id: str, payload: dict) -> str:
         payload.get("date"),
         int(payload.get("is_pending") or 0),
         payload.get("content_hash"),
+        json.dumps(payload.get("import_evidence")) if isinstance(payload.get("import_evidence"), dict) else None,
         batch_id,
         payload.get("imported_category"),
         payload.get("notes"),
         int(payload.get("category_overridden") or 0),
+        payload.get("category_source"),
     ))
     return txn_id
 
@@ -635,12 +1090,13 @@ def _get_profile_rule_suggestion_review_state(column_map: dict) -> dict:
     return get_rule_suggestion_review_state(column_map if isinstance(column_map, dict) else {})
 
 
-def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile_id: Optional[str] = None):
+def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile_id: Optional[str] = None, system_wide: bool = False):
     if batch_id:
         return conn.execute(
             """
             SELECT
                 t.id,
+                t.date,
                 COALESCE(a.parent_account_id, t.account_id) AS account_id,
                 t.owner_id,
                 t.amount,
@@ -650,6 +1106,7 @@ def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile
                 t.imported_category,
                 t.category_id,
                 t.category_overridden,
+                t.category_source,
                 t.import_batch_id,
                 COALESCE(a.display_name, a.name) AS account_name,
                 o.name AS owner_name
@@ -657,9 +1114,8 @@ def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile
             LEFT JOIN account a ON a.id = t.account_id
             LEFT JOIN owner o ON o.id = t.owner_id
             WHERE t.import_batch_id = ?
-              AND t.imported_category IS NOT NULL
-              AND TRIM(t.imported_category) <> ''
-              AND t.category_id IS NULL
+              AND t.category_source = 'import'
+              AND t.category_id IS NOT NULL
             """,
             (batch_id,),
         ).fetchall()
@@ -669,6 +1125,7 @@ def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile
             """
             SELECT
                 t.id,
+                t.date,
                 COALESCE(a.parent_account_id, t.account_id) AS account_id,
                 t.owner_id,
                 t.amount,
@@ -678,6 +1135,7 @@ def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile
                 t.imported_category,
                 t.category_id,
                 t.category_overridden,
+                t.category_source,
                 t.import_batch_id,
                 COALESCE(a.display_name, a.name) AS account_name,
                 o.name AS owner_name
@@ -687,19 +1145,123 @@ def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile
             LEFT JOIN owner o ON o.id = t.owner_id
             WHERE b.profile_id = ?
               AND b.status = 'completed'
-              AND t.imported_category IS NOT NULL
-              AND TRIM(t.imported_category) <> ''
-              AND t.category_id IS NULL
+              AND t.category_source = 'import'
+              AND t.category_id IS NOT NULL
             """,
             (profile_id,),
+        ).fetchall()
+
+    if system_wide:
+        return conn.execute(
+            """
+            SELECT
+                t.id,
+                t.date,
+                COALESCE(a.parent_account_id, t.account_id) AS account_id,
+                t.owner_id,
+                t.amount,
+                t.merchant_name,
+                t.display_name,
+                t.raw_name,
+                t.imported_category,
+                t.category_id,
+                t.category_overridden,
+                t.category_source,
+                t.import_batch_id,
+                COALESCE(a.display_name, a.name) AS account_name,
+                o.name AS owner_name
+            FROM txn t
+            JOIN import_batch b ON b.id = t.import_batch_id
+            LEFT JOIN account a ON a.id = t.account_id
+            LEFT JOIN owner o ON o.id = t.owner_id
+            WHERE b.status = 'completed'
+              AND b.use_imported_categories = 1
+              AND t.category_source = 'import'
+              AND t.category_id IS NOT NULL
+            """
         ).fetchall()
 
     return []
 
 
+def _calculate_rule_suggestion_threshold(rows) -> dict:
+    months = set()
+    total_rows = 0
+    for row in rows:
+        date_value = str(row.get("date") or "").strip()
+        if len(date_value) >= 7:
+            months.add(date_value[:7])
+        total_rows += 1
+
+    minimum_txn_count = 1
+    if len(months) >= 6 or total_rows >= 100:
+        minimum_txn_count = 2
+    if len(months) >= 12 or total_rows >= 250:
+        minimum_txn_count = 3
+    if len(months) >= 24 or total_rows >= 500:
+        minimum_txn_count = 4
+
+    return {
+        "distinct_month_count": len(months),
+        "candidate_transaction_count": total_rows,
+        "minimum_txn_count": minimum_txn_count,
+    }
+
+
+def _rule_suggestion_action_signature(suggestion: dict) -> tuple:
+    return (
+        suggestion.get("target_category_id"),
+        suggestion.get("owner_id"),
+        suggestion.get("account_id"),
+        suggestion.get("amount_min"),
+        suggestion.get("amount_max"),
+        suggestion.get("clean_name_suggestion"),
+    )
+
+
+def _suggestion_is_more_specific(left: dict, right: dict) -> bool:
+    left_keyword = str(left.get("keyword") or "")
+    right_keyword = str(right.get("keyword") or "")
+    return (
+        left_keyword != right_keyword
+        and right_keyword in left_keyword
+        and len(left_keyword) > len(right_keyword)
+    )
+
+
+def _prune_redundant_rule_suggestions(suggestions: list[dict]) -> list[dict]:
+    keep_flags = [True] * len(suggestions)
+
+    for index, suggestion in enumerate(suggestions):
+        if not keep_flags[index]:
+            continue
+
+        suggestion_row_ids = suggestion.get("_row_ids") or set()
+        if not suggestion_row_ids:
+            continue
+
+        for other_index, other in enumerate(suggestions):
+            if index == other_index or not keep_flags[other_index]:
+                continue
+            if _rule_suggestion_action_signature(suggestion) != _rule_suggestion_action_signature(other):
+                continue
+            if suggestion_row_ids != (other.get("_row_ids") or set()):
+                continue
+            if _suggestion_is_more_specific(other, suggestion):
+                keep_flags[index] = False
+                break
+
+    return [
+        suggestion
+        for index, suggestion in enumerate(suggestions)
+        if keep_flags[index]
+    ]
+
+
 def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_owner_ids: list[str]) -> dict:
     review_statuses = review_state.get("statuses") or {}
     candidate_rows = [dict(row) for row in rows if str(row["imported_category"] or "").strip()]
+    threshold_meta = _calculate_rule_suggestion_threshold(candidate_rows)
 
     if selected_owner_ids:
         unowned_accounts = sorted({
@@ -797,6 +1359,8 @@ def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_own
                         break
 
             for target_key, target_rows in by_target.items():
+                if len(target_rows) < threshold_meta["minimum_txn_count"]:
+                    continue
                 sample_row = target_rows[0]
                 merchant_label = sample_row["display_name"] or sample_row["merchant_name"] or sample_row["raw_name"] or keyword
                 clean_name_suggestion = suggest_rule_clean_name(merchant_label)
@@ -837,14 +1401,19 @@ def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_own
                     "imported_categories": sorted({row["imported_category"] for row in target_rows if row["imported_category"]}),
                     "needs_resolution": needs_resolution,
                     "resolution_reason": resolution_reason,
+                    "_row_ids": {str(row["id"]) for row in target_rows if row.get("id")},
                 }
                 suggestions.append(suggestion)
 
+    suggestions = _prune_redundant_rule_suggestions(suggestions)
     suggestions.sort(key=lambda item: (
         item["keyword"],
         item["owner_name"] or "",
         item["target_category_name"] or "",
     ))
+
+    for suggestion in suggestions:
+        suggestion.pop("_row_ids", None)
 
     for suggestion in suggestions:
         suggestion["review_status"] = (review_statuses.get(suggestion["id"]) or {}).get("status") or "pending"
@@ -864,6 +1433,8 @@ def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_own
         "suggestion_count": len(suggestions),
         "review_summary": review_summary,
         "generated_at": review_state.get("generated_at"),
+        "minimum_txn_count": threshold_meta["minimum_txn_count"],
+        "distinct_month_count": threshold_meta["distinct_month_count"],
         "should_persist": should_persist,
     }
 
@@ -873,6 +1444,75 @@ def save_batch_snapshot(conn, batch_id: str, snapshot: dict) -> None:
         "UPDATE import_batch SET config_snapshot = ? WHERE id = ?",
         (json.dumps(snapshot), batch_id),
     )
+
+
+def _reconcile_batch_history(conn, batch_ids: list[str]) -> None:
+    for batch_id in [str(value or "").strip() for value in (batch_ids or []) if str(value or "").strip()]:
+        deleted_active_account_rows = conn.execute(
+            """
+            DELETE FROM import_batch_account
+            WHERE batch_id = ?
+              AND was_skipped = 0
+              AND account_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM account a
+                  WHERE a.id = import_batch_account.account_id
+              )
+            """,
+            (batch_id,),
+        ).rowcount
+        cleared_skipped_account_rows = conn.execute(
+            """
+            UPDATE import_batch_account
+            SET account_id = NULL
+            WHERE batch_id = ?
+              AND was_skipped = 1
+              AND account_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM account a
+                  WHERE a.id = import_batch_account.account_id
+              )
+            """,
+            (batch_id,),
+        ).rowcount
+
+        batch = conn.execute(
+            "SELECT row_count, skipped_count, deduped_count, config_snapshot FROM import_batch WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            continue
+
+        imported_count = int(conn.execute(
+            "SELECT COUNT(*) FROM txn WHERE import_batch_id = ?",
+            (batch_id,),
+        ).fetchone()[0] or 0)
+        skipped_count = int(batch["skipped_count"] or 0)
+        deduped_count = int(batch["deduped_count"] or 0)
+        total_rows = imported_count + skipped_count + deduped_count
+
+        snapshot = safe_json_dict(batch["config_snapshot"])
+        summary = snapshot.get(IMPORT_SUMMARY_KEY)
+        summary_changed = False
+        if isinstance(summary, dict):
+            if int(summary.get("imported_count") or 0) != imported_count:
+                summary["imported_count"] = imported_count
+                summary_changed = True
+            if int(summary.get("total_rows") or 0) != total_rows:
+                summary["total_rows"] = total_rows
+                summary_changed = True
+
+        row_count_changed = int(batch["row_count"] or 0) != total_rows
+        if row_count_changed:
+            conn.execute(
+                "UPDATE import_batch SET row_count = ? WHERE id = ?",
+                (total_rows, batch_id),
+            )
+        if summary_changed:
+            snapshot[IMPORT_SUMMARY_KEY] = summary
+            save_batch_snapshot(conn, batch_id, snapshot)
 
 
 def parse_amount(row: dict, convention: str, col_map: ColumnMap) -> Optional[float]:
@@ -991,6 +1631,299 @@ def normalize_import_category(value: str) -> str:
     return " ".join((value or "").strip().lower().split())
 
 
+def normalize_effective_imported_category(value: str) -> str:
+    normalized = normalize_import_category(value)
+    if normalized in UNCATEGORIZED_IMPORT_CATEGORY_NAMES:
+        return ""
+    return " ".join((value or "").strip().split())
+
+
+def _get_import_workflow_state(conn, key: str) -> dict:
+    row = conn.execute(
+        "SELECT payload_json FROM import_workflow_state WHERE key = ?",
+        (key,),
+    ).fetchone()
+    return safe_json_dict(row["payload_json"]) if row else {}
+
+
+def _save_import_workflow_state(conn, key: str, payload: dict) -> None:
+    conn.execute(
+        """
+        INSERT INTO import_workflow_state (key, payload_json)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET payload_json = excluded.payload_json
+        """,
+        (key, json.dumps(payload or {})),
+    )
+
+
+def _get_system_rule_suggestion_review_state(conn) -> dict:
+    return get_rule_suggestion_review_state(
+        _get_import_workflow_state(conn, SYSTEM_RULE_SUGGESTION_REVIEW_STATE_KEY)
+    )
+
+
+def _save_system_rule_suggestion_review_state(conn, review_state: dict) -> None:
+    _save_import_workflow_state(
+        conn,
+        SYSTEM_RULE_SUGGESTION_REVIEW_STATE_KEY,
+        {RULE_SUGGESTION_REVIEW_KEY: review_state},
+    )
+
+
+def _get_unassigned_group(conn):
+    return conn.execute(
+        """
+        SELECT id, name, category_type, sort_order, system_key
+        FROM   category
+        WHERE  parent_id IS NULL
+          AND  system_key = ?
+        LIMIT  1
+        """,
+        (UNASSIGNED_CATEGORY_SYSTEM_KEY,),
+    ).fetchone()
+
+
+def _get_next_child_sort_order(conn, parent_id: str) -> int:
+    row = conn.execute(
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_sort FROM category WHERE parent_id = ?",
+        (parent_id,),
+    ).fetchone()
+    return int(row["next_sort"] or 0) if row else 0
+
+
+def _find_category_by_normalized_name(conn, normalized_name: str):
+    if not normalized_name:
+        return None
+    rows = conn.execute(
+        """
+        SELECT id, parent_id, name, category_type, sort_order, system_key, import_source_batch_id
+        FROM   category
+        ORDER  BY name
+        """
+    ).fetchall()
+    for row in rows:
+        if normalize_import_category(row["name"]) == normalized_name:
+            return row
+    return None
+
+
+def _ensure_imported_batch_category(conn, batch_id: str, raw_name: str):
+    unassigned_group = _get_unassigned_group(conn)
+    if not unassigned_group:
+        raise HTTPException(status_code=500, detail="The system Unassigned group is missing")
+    normalized_name = normalize_import_category(raw_name)
+    if not normalized_name:
+        return None
+    if normalized_name in UNCATEGORIZED_IMPORT_CATEGORY_NAMES:
+        return None
+    existing = _find_category_by_normalized_name(conn, normalized_name)
+    if existing:
+        if existing["import_source_batch_id"]:
+            conn.execute(
+                "UPDATE category SET import_source_batch_id = NULL WHERE id = ?",
+                (existing["id"],),
+            )
+        return existing
+
+    category_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO category (
+            id, parent_id, name, category_type, sort_order, exclude_from_totals,
+            owner_id, system_key, import_source_batch_id
+        )
+        VALUES (?, ?, ?, NULL, ?, 0, NULL, NULL, ?)
+        """,
+        (
+            category_id,
+            unassigned_group["id"],
+            raw_name,
+            _get_next_child_sort_order(conn, unassigned_group["id"]),
+            batch_id,
+        ),
+    )
+    return conn.execute(
+        """
+        SELECT id, parent_id, name, category_type, sort_order, system_key, import_source_batch_id
+        FROM   category
+        WHERE  id = ?
+        """,
+        (category_id,),
+    ).fetchone()
+
+
+def _apply_imported_batch_categories(conn, batch_id: str) -> None:
+    category_rows = conn.execute(
+        """
+        SELECT DISTINCT imported_category
+        FROM   txn
+        WHERE  import_batch_id = ?
+          AND  category_source = 'import'
+          AND  imported_category IS NOT NULL
+          AND  TRIM(imported_category) <> ''
+        ORDER  BY imported_category
+        """,
+        (batch_id,),
+    ).fetchall()
+
+    for row in category_rows:
+        _ensure_imported_batch_category(conn, batch_id, str(row["imported_category"] or "").strip())
+
+
+def _remove_imported_batch_categories(conn, batch_id: str) -> None:
+    rows = conn.execute(
+        """
+        SELECT c.id
+        FROM   category c
+        LEFT JOIN category p ON p.id = c.parent_id
+        WHERE  c.import_source_batch_id = ?
+          AND  c.parent_id IS NOT NULL
+          AND  p.system_key = ?
+        """,
+        (batch_id, UNASSIGNED_CATEGORY_SYSTEM_KEY),
+    ).fetchall()
+    if not rows:
+        return
+
+    category_ids = [row["id"] for row in rows]
+    placeholders = ",".join("?" for _ in category_ids)
+    usage_rows = conn.execute(
+        f"""
+        SELECT c.id
+        FROM   category c
+        WHERE  c.id IN ({placeholders})
+          AND (
+            EXISTS (SELECT 1 FROM txn t WHERE t.category_id = c.id)
+            OR EXISTS (SELECT 1 FROM category_rule r WHERE r.category_id = c.id)
+          )
+        """,
+        category_ids,
+    ).fetchall()
+    in_use_ids = {row["id"] for row in usage_rows}
+    removable_ids = [category_id for category_id in category_ids if category_id not in in_use_ids]
+    if removable_ids:
+        delete_placeholders = ",".join("?" for _ in removable_ids)
+        conn.execute(
+            f"DELETE FROM category WHERE id IN ({delete_placeholders})",
+            removable_ids,
+        )
+    if in_use_ids:
+        keep_placeholders = ",".join("?" for _ in in_use_ids)
+        conn.execute(
+            f"UPDATE category SET import_source_batch_id = NULL WHERE id IN ({keep_placeholders})",
+            list(in_use_ids),
+        )
+
+
+def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) -> None:
+    batch = conn.execute(
+        "SELECT config_snapshot FROM import_batch WHERE id = ?",
+        (batch_id,),
+    ).fetchone()
+    snapshot = safe_json_dict(batch["config_snapshot"]) if batch else {}
+    imported_category_settings = _get_imported_category_settings(snapshot)
+    batch_account_rows = conn.execute(
+        """
+        SELECT csv_value, account_id
+        FROM   import_batch_account
+        WHERE  batch_id = ?
+          AND  account_id IS NOT NULL
+        """,
+        (batch_id,),
+    ).fetchall()
+    batch_account_tokens_by_id: dict[str, list[str]] = {}
+    for account_row in batch_account_rows:
+        account_id = str(account_row["account_id"] or "").strip()
+        csv_value = str(account_row["csv_value"] or "").strip()
+        if not account_id or not csv_value:
+            continue
+        batch_account_tokens_by_id.setdefault(account_id, []).append(csv_value)
+    conn.execute(
+        "UPDATE import_batch SET use_imported_categories = ? WHERE id = ?",
+        (1 if is_enabled else 0, batch_id),
+    )
+    if is_enabled:
+        _apply_imported_batch_categories(conn, batch_id)
+        rows = conn.execute(
+            """
+            SELECT id, imported_category, owner_id, account_id, category_source
+            FROM   txn
+            WHERE  import_batch_id = ?
+              AND  imported_category IS NOT NULL
+              AND  TRIM(imported_category) <> ''
+            """,
+            (batch_id,),
+        ).fetchall()
+        for row in rows:
+            if row["category_source"] == "manual":
+                continue
+            scope_tokens = batch_account_tokens_by_id.get(row["account_id"]) or [
+                _category_scope_token_for_import_row("", row["account_id"], False, snapshot.get("single_account_new"))
+            ]
+            if not any(
+                _row_uses_imported_categories(True, imported_category_settings, row["owner_id"], token)
+                for token in scope_tokens
+                if token
+            ):
+                continue
+            category = _ensure_imported_batch_category(conn, batch_id, str(row["imported_category"] or "").strip())
+            if not category:
+                continue
+            conn.execute(
+                """
+                UPDATE txn
+                SET    category_id = ?,
+                       category_overridden = 1,
+                       category_source = 'import'
+                WHERE  id = ?
+                """,
+                (category["id"], row["id"]),
+            )
+    else:
+        conn.execute(
+            """
+            UPDATE txn
+            SET    category_id = NULL,
+                   category_overridden = 0,
+                   category_source = NULL
+            WHERE  import_batch_id = ?
+              AND  category_source = 'import'
+            """,
+            (batch_id,),
+        )
+        if snapshot.get("apply_categorization", True):
+            uncategorized_rows = conn.execute(
+                """
+                SELECT id, owner_id, account_id, amount, merchant_name, display_name, raw_name
+                FROM   txn
+                WHERE  import_batch_id = ?
+                  AND  category_id IS NULL
+                  AND  category_overridden = 0
+                """,
+                (batch_id,),
+            ).fetchall()
+            for row in uncategorized_rows:
+                result = categorize_transaction(
+                    row["merchant_name"] or row["raw_name"] or "",
+                    row["raw_name"] or row["merchant_name"] or "",
+                    row["display_name"] or row["merchant_name"] or row["raw_name"] or "",
+                    row["amount"],
+                    conn,
+                    owner_id=row["owner_id"],
+                    account_id=row["account_id"],
+                )
+                cat_id = result["category_id"] if isinstance(result, dict) else result
+                rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
+                source = "rule" if cat_id else None
+                conn.execute(
+                    "UPDATE txn SET category_id = ?, category_source = ? WHERE id = ?",
+                    (cat_id, source, row["id"]),
+                )
+                sync_rule_tags_for_transaction(conn, row["id"], rule_tag_ids)
+        _remove_imported_batch_categories(conn, batch_id)
+
+
 def sanitize_rule_merchant_text(value: str) -> str:
     normalized = " ".join((value or "").strip().split())
     if not normalized:
@@ -1042,17 +1975,16 @@ def _load_import_rule_target_maps(conn) -> tuple[dict[str, list[dict]], dict[str
 
 
 def _resolve_import_rule_target(row: dict, categories_by_name: dict[str, list[dict]], categories_by_id: dict[str, dict]) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    current_category_id = row.get("category_id")
+    if current_category_id and current_category_id in categories_by_id:
+        current = categories_by_id[current_category_id]
+        return current["id"], current["name"], current.get("group_name")
+
     imported_name = str(row.get("imported_category") or "").strip()
     normalized = normalize_import_category(imported_name)
     matches = categories_by_name.get(normalized, [])
     if len(matches) == 1:
         return matches[0]["id"], matches[0]["name"], matches[0].get("group_name")
-    # Imported category labels are not globally unique. If the user already overrode a
-    # row during review, prefer that concrete category over guessing by name alone.
-    current_category_id = row.get("category_id")
-    if row.get("category_overridden") and current_category_id and current_category_id in categories_by_id:
-        current = categories_by_id[current_category_id]
-        return current["id"], current["name"], current.get("group_name")
     return None, None, None
 
 
@@ -1308,6 +2240,7 @@ def list_profiles():
     for r in rows:
         d = dict(r)
         d["column_map"] = safe_json_dict(d["column_map"])
+        d = _annotate_imported_category_settings(d, _get_imported_category_settings(d))
         referenced_account_ids = set()
         if d.get("account_id"):
             referenced_account_ids.add(d["account_id"])
@@ -1325,18 +2258,28 @@ def create_profile(body: ProfileCreate):
     pid = str(uuid.uuid4())
     with get_db() as conn:
         normalized_name = _assert_profile_name_available(conn, body.name)
+        column_map = _store_imported_category_settings(
+            body.column_map,
+            {
+                "scope_mode": body.imported_category_scope_mode,
+                "owner_ids": body.imported_category_owner_ids,
+                "unassigned_account_tokens": body.imported_category_unassigned_account_tokens,
+            },
+        )
         conn.execute("""
             INSERT INTO csv_import_profile
               (id, name, filename_pattern, header_fingerprint, template_filename,
                template_file_hash, column_map,
                account_id, date_format, amount_convention, skip_rows,
-               apply_categorization, notes)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+               apply_categorization, use_imported_categories, notes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (pid, normalized_name, body.filename_pattern, body.header_fingerprint,
               body.template_filename, body.template_file_hash,
-              json.dumps(body.column_map), body.account_id, body.date_format,
+              json.dumps(column_map), body.account_id, body.date_format,
               body.amount_convention, body.skip_rows,
-              1 if body.apply_categorization else 0, body.notes))
+              1 if body.apply_categorization else 0,
+              1 if body.use_imported_categories else 0,
+              body.notes))
     return {"id": pid}
 
 
@@ -1344,7 +2287,7 @@ def create_profile(body: ProfileCreate):
 def update_profile(profile_id: str, body: ProfileUpdate):
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id FROM csv_import_profile WHERE id = ?", (profile_id,)
+            "SELECT id, column_map FROM csv_import_profile WHERE id = ?", (profile_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Profile not found")
@@ -1354,13 +2297,38 @@ def update_profile(profile_id: str, body: ProfileUpdate):
         if body.header_fingerprint   is not None: fields.append("header_fingerprint = ?");   params.append(body.header_fingerprint)
         if body.template_filename    is not None: fields.append("template_filename = ?");    params.append(body.template_filename)
         if body.template_file_hash   is not None: fields.append("template_file_hash = ?");   params.append(body.template_file_hash)
-        if body.column_map           is not None: fields.append("column_map = ?");           params.append(json.dumps(body.column_map))
         if body.account_id           is not None: fields.append("account_id = ?");           params.append(body.account_id)
         if body.date_format          is not None: fields.append("date_format = ?");          params.append(body.date_format)
         if body.amount_convention    is not None: fields.append("amount_convention = ?");    params.append(body.amount_convention)
         if body.skip_rows            is not None: fields.append("skip_rows = ?");            params.append(body.skip_rows)
         if body.apply_categorization is not None: fields.append("apply_categorization = ?"); params.append(1 if body.apply_categorization else 0)
+        if body.use_imported_categories is not None: fields.append("use_imported_categories = ?"); params.append(1 if body.use_imported_categories else 0)
         if body.notes                is not None: fields.append("notes = ?");                params.append(body.notes)
+        imported_category_fields_present = (
+            body.imported_category_scope_mode is not None or
+            body.imported_category_owner_ids is not None or
+            body.imported_category_unassigned_account_tokens is not None
+        )
+        if imported_category_fields_present:
+            current_column_map = safe_json_dict(row["column_map"])
+            current_settings = _get_imported_category_settings({"column_map": current_column_map})
+            next_settings = {
+                "scope_mode": body.imported_category_scope_mode if body.imported_category_scope_mode is not None else current_settings["scope_mode"],
+                "owner_ids": body.imported_category_owner_ids if body.imported_category_owner_ids is not None else current_settings["owner_ids"],
+                "unassigned_account_tokens": (
+                    body.imported_category_unassigned_account_tokens
+                    if body.imported_category_unassigned_account_tokens is not None
+                    else current_settings["unassigned_account_tokens"]
+                ),
+            }
+            if body.column_map is not None:
+                current_column_map = body.column_map
+            fields.append("column_map = ?")
+            params.append(json.dumps(_store_imported_category_settings(current_column_map, next_settings)))
+        elif body.column_map is not None:
+            settings = _get_imported_category_settings({"column_map": safe_json_dict(row["column_map"])})
+            fields.append("column_map = ?")
+            params.append(json.dumps(_store_imported_category_settings(body.column_map, settings)))
         if fields:
             params.append(profile_id)
             conn.execute(f"UPDATE csv_import_profile SET {', '.join(fields)} WHERE id = ?", params)
@@ -1389,6 +2357,7 @@ def clear_import_memory(request: Request):
     with get_db() as conn:
         conn.execute("DELETE FROM csv_import_profile")
         conn.execute("UPDATE import_batch SET config_snapshot = NULL")
+        conn.execute("DELETE FROM import_workflow_state")
     return {"ok": True}
 
 
@@ -1674,12 +2643,17 @@ async def run_import(
     date_format       = cfg.get("date_format", "%m/%d/%Y")
     amount_convention = cfg.get("amount_convention", "single_signed")
     apply_cat         = bool(cfg.get("apply_categorization", True))
+    use_imported_categories = bool(cfg.get("use_imported_categories", False))
+    imported_category_settings = _get_imported_category_settings(cfg)
     account_id        = cfg.get("account_id") or None
     single_account_new = cfg.get("single_account_new") or None
     category_assignments_cfg = cm_dict.get("category_assignments") or {}
     account_map_cfg   = cfg.get("account_map") or {}
     skip_accounts_cfg = cfg.get("skip_accounts") or []
     new_accounts_cfg  = cfg.get("new_accounts") or []
+    duplicate_strategies_cfg = safe_json_dict(cfg.get("duplicate_strategies"))
+    coverage_strategy_enabled = duplicate_strategies_cfg.get(COVERAGE_DUPLICATE_STRATEGY_KEY, True) is not False
+    text_strategy_enabled = duplicate_strategies_cfg.get(TEXT_DUPLICATE_STRATEGY_KEY, True) is not False
     profile_id        = cfg.get("profile_id") or None
     replace_batch_id  = cfg.get("replace_batch_id") or None
     filename          = file.filename or cfg.get("filename", "upload.csv")
@@ -1712,6 +2686,7 @@ async def run_import(
         }
 
         created_account_ids = {}
+        account_duplicate_compare_targets: dict[str, str] = {}
         if single_account_new:
             single_name = str(single_account_new.get("name", "")).strip()
             single_type = single_account_new.get("type", "depository")
@@ -1734,6 +2709,8 @@ async def run_import(
             csv_val  = na.get("csv_value", "")
             acc_name = na.get("name", csv_val).strip()
             acc_type = na.get("type", "depository")
+            requested_group_target_id = str(na.get("group_with_account_id") or "").strip()
+            requested_compare_target_id = str(na.get("duplicate_compare_account_id") or "").strip()
             if not acc_name:
                 continue
             # Check if an account with this name already exists — use it rather
@@ -1752,6 +2729,16 @@ async def run_import(
             """, (new_acc_id, f"csv_{new_acc_id}", acc_name, acc_name, acc_type, "checking",
                   default_owner_id))
             created_account_ids[csv_val] = new_acc_id
+            compare_target_id = ""
+            if requested_group_target_id:
+                compare_target_id = _attach_import_created_account_to_group(conn, new_acc_id, requested_group_target_id) or ""
+            if not compare_target_id and requested_compare_target_id:
+                effective_target = _get_effective_account_row(conn, requested_compare_target_id)
+                if not effective_target:
+                    raise HTTPException(status_code=400, detail="Duplicate comparison target account not found")
+                compare_target_id = str(effective_target["id"]) if effective_target else ""
+            if compare_target_id:
+                account_duplicate_compare_targets[csv_val] = compare_target_id
 
         created_account_owner_map = {}
         if created_account_ids:
@@ -1842,17 +2829,39 @@ async def run_import(
         # Pre-load pending rows so a posted transaction can replace the earlier
         # pending version instead of creating a second copy.
         relevant_account_ids = set()
+        relevant_effective_account_ids = set(account_duplicate_compare_targets.values())
         if account_id:
             relevant_account_ids.add(account_id)
         for aid in effective_map.values():
             if aid:
                 relevant_account_ids.add(aid)
+        effective_scope_cache: dict[str, Optional[str]] = {}
+
+        def get_current_duplicate_scope_id(resolved_account_id: Optional[str], csv_value: str) -> Optional[str]:
+            compare_target_id = account_duplicate_compare_targets.get(csv_value)
+            if compare_target_id:
+                return compare_target_id
+            normalized_account_id = str(resolved_account_id or "").strip()
+            if not normalized_account_id:
+                return None
+            if normalized_account_id not in effective_scope_cache:
+                effective_row = _get_effective_account_row(conn, normalized_account_id)
+                effective_scope_cache[normalized_account_id] = str(effective_row["id"]) if effective_row else normalized_account_id
+            return effective_scope_cache[normalized_account_id]
+
         existing_pending_rows: dict = {}
         existing_hashes_by_account: dict[str, dict[str, dict]] = {}
+        existing_hashes_by_effective_account: dict[str, dict[str, dict]] = {}
+        existing_rows_by_account_amount: dict[str, dict[str, list[dict]]] = {}
+        existing_rows_by_effective_account_amount: dict[str, dict[str, list[dict]]] = {}
+        import_coverage_by_csv_value: dict[str, list[dict]] = {}
+        import_coverage_by_scope_id: dict[str, list[dict]] = {}
+        terminal_day_candidates_by_csv_day: dict[tuple[str, str], list[dict]] = {}
+        terminal_day_candidates_by_scope_day: dict[tuple[str, str], list[dict]] = {}
         if relevant_account_ids:
             ph = ",".join("?" * len(relevant_account_ids))
             rows_db = conn.execute(
-                f"SELECT id, account_id, content_hash, date, raw_name, merchant_name, display_name, amount, is_pending FROM txn "
+                f"SELECT id, account_id, content_hash, date, raw_name, merchant_name, display_name, amount, is_pending, import_evidence_json FROM txn "
                 f"WHERE account_id IN ({ph}) AND content_hash IS NOT NULL",
                 list(relevant_account_ids)
             ).fetchall()
@@ -1871,6 +2880,162 @@ async def run_import(
                         "merchant_name": r["display_name"] or r["merchant_name"] or r["raw_name"],
                         "amount": r["amount"],
                     }
+                amount_key = _duplicate_amount_key(r["date"], r["amount"])
+                account_amount_rows = existing_rows_by_account_amount.setdefault(r["account_id"], {}).setdefault(amount_key, [])
+                account_amount_rows.append({
+                    "id": r["id"],
+                    "date": r["date"],
+                    "merchant_name": r["display_name"] or r["merchant_name"] or r["raw_name"],
+                    "amount": r["amount"],
+                    "duplicate_scope": "same_account",
+                    "match_texts": _collect_duplicate_match_texts(
+                        merchant_name=r["merchant_name"],
+                        display_name=r["display_name"],
+                        raw_name=r["raw_name"],
+                        import_evidence=_parse_import_evidence(r["import_evidence_json"]),
+                    ),
+                })
+        if relevant_effective_account_ids:
+            ph = ",".join("?" * len(relevant_effective_account_ids))
+            rows_db = conn.execute(
+                f"""
+                SELECT t.id, t.content_hash, t.date, t.raw_name, t.merchant_name, t.display_name, t.amount,
+                       t.import_evidence_json,
+                       COALESCE(a.parent_account_id, a.id) AS effective_account_id
+                FROM txn t
+                JOIN account a ON a.id = t.account_id
+                WHERE COALESCE(a.parent_account_id, a.id) IN ({ph})
+                  AND t.is_pending = 0
+                  AND t.content_hash IS NOT NULL
+                """,
+                list(relevant_effective_account_ids),
+            ).fetchall()
+            for r in rows_db:
+                scope_hashes = existing_hashes_by_effective_account.setdefault(r["effective_account_id"], {})
+                if r["content_hash"] not in scope_hashes:
+                    scope_hashes[r["content_hash"]] = {
+                        "id": r["id"],
+                        "date": r["date"],
+                        "merchant_name": r["display_name"] or r["merchant_name"] or r["raw_name"],
+                        "amount": r["amount"],
+                    }
+                amount_key = _duplicate_amount_key(r["date"], r["amount"])
+                scope_rows = existing_rows_by_effective_account_amount.setdefault(r["effective_account_id"], {}).setdefault(amount_key, [])
+                scope_rows.append({
+                    "id": r["id"],
+                    "date": r["date"],
+                    "merchant_name": r["display_name"] or r["merchant_name"] or r["raw_name"],
+                    "amount": r["amount"],
+                    "duplicate_scope": "linked_account_group",
+                    "match_texts": _collect_duplicate_match_texts(
+                        merchant_name=r["merchant_name"],
+                        display_name=r["display_name"],
+                        raw_name=r["raw_name"],
+                        import_evidence=_parse_import_evidence(r["import_evidence_json"]),
+                    ),
+                })
+
+        current_csv_values = (
+            {
+                str(row.get(col.account, "")).strip()
+                for row in data_rows
+                if str(row.get(col.account, "")).strip()
+            }
+            if col.account
+            else {""}
+        )
+        current_scope_ids = {
+            scope_id
+            for scope_id in (
+                get_current_duplicate_scope_id(effective_map.get(csv_value) or account_id or (fallback_acc["id"] if fallback_acc else None), csv_value)
+                for csv_value in current_csv_values
+            )
+            if scope_id
+        }
+
+        prior_coverage_query = """
+            SELECT iba.batch_id, iba.csv_value, iba.account_id, iba.coverage_start_date, iba.coverage_end_date, iba.terminal_date
+            FROM   import_batch_account iba
+            JOIN   import_batch b ON b.id = iba.batch_id
+            WHERE  b.status = 'completed'
+              AND  iba.was_skipped = 0
+        """
+        coverage_params: list[str] = []
+        if replace_batch_id:
+            prior_coverage_query += " AND b.id <> ?"
+            coverage_params.append(replace_batch_id)
+        prior_coverage_rows = conn.execute(prior_coverage_query, coverage_params).fetchall()
+        terminal_batch_lookup: dict[tuple[str, str, str], dict] = {}
+        terminal_batch_ids: set[str] = set()
+        terminal_dates: set[str] = set()
+        for row in prior_coverage_rows:
+            csv_value = str(row["csv_value"] or "").strip()
+            scope_id = get_current_duplicate_scope_id(row["account_id"], csv_value)
+            if csv_value not in current_csv_values and scope_id not in current_scope_ids:
+                continue
+            coverage_entry = {
+                "start_date": row["coverage_start_date"],
+                "end_date": row["coverage_end_date"],
+                "csv_value": csv_value,
+            }
+            if csv_value and coverage_entry.get("start_date") and coverage_entry.get("end_date"):
+                import_coverage_by_csv_value.setdefault(csv_value, []).append(coverage_entry)
+            if scope_id and coverage_entry.get("start_date") and coverage_entry.get("end_date"):
+                import_coverage_by_scope_id.setdefault(scope_id, []).append(coverage_entry)
+            terminal_date = str(row["terminal_date"] or "").strip()
+            if terminal_date:
+                terminal_key = (str(row["batch_id"] or "").strip(), csv_value, terminal_date)
+                terminal_batch_lookup[terminal_key] = {
+                    "batch_id": terminal_key[0],
+                    "csv_value": csv_value,
+                    "terminal_date": terminal_date,
+                    "scope_id": scope_id,
+                }
+                if terminal_key[0]:
+                    terminal_batch_ids.add(terminal_key[0])
+                    terminal_dates.add(terminal_date)
+
+        if terminal_batch_ids and terminal_dates:
+            batch_placeholders = ",".join("?" * len(terminal_batch_ids))
+            date_placeholders = ",".join("?" * len(terminal_dates))
+            terminal_rows = conn.execute(
+                f"""
+                SELECT id, import_batch_id, account_id, content_hash, date, raw_name, merchant_name, display_name, amount, import_evidence_json
+                FROM   txn
+                WHERE  import_batch_id IN ({batch_placeholders})
+                  AND  date IN ({date_placeholders})
+                  AND  is_pending = 0
+                """,
+                [*terminal_batch_ids, *terminal_dates],
+            ).fetchall()
+            for row in terminal_rows:
+                evidence = _parse_import_evidence(row["import_evidence_json"])
+                evidence_account = evidence.get("account") if isinstance(evidence, dict) else None
+                csv_value = str((evidence_account or {}).get("value") or "").strip() if isinstance(evidence_account, dict) else ""
+                terminal_key = (str(row["import_batch_id"] or "").strip(), csv_value, str(row["date"] or "").strip())
+                terminal_meta = terminal_batch_lookup.get(terminal_key)
+                if not terminal_meta:
+                    continue
+                candidate = {
+                    "id": row["id"],
+                    "date": row["date"],
+                    "merchant_name": row["display_name"] or row["merchant_name"] or row["raw_name"],
+                    "amount": row["amount"],
+                    "content_hash": row["content_hash"],
+                    "match_texts": _collect_duplicate_match_texts(
+                        merchant_name=row["merchant_name"],
+                        display_name=row["display_name"],
+                        raw_name=row["raw_name"],
+                        import_evidence=evidence,
+                    ),
+                    "csv_value": csv_value,
+                    "scope_id": terminal_meta.get("scope_id"),
+                    "_consumed": False,
+                }
+                terminal_day_candidates_by_csv_day.setdefault((csv_value, row["date"]), []).append(candidate)
+                scope_id = terminal_meta.get("scope_id")
+                if scope_id:
+                    terminal_day_candidates_by_scope_day.setdefault((scope_id, row["date"]), []).append(candidate)
 
         if replace_batch_id:
             conn.execute("DELETE FROM txn WHERE import_batch_id = ?", (replace_batch_id,))
@@ -1887,15 +3052,23 @@ async def run_import(
             "amount_convention":   amount_convention,
             "skip_rows":           skip_rows,
             "apply_categorization":apply_cat,
+            "use_imported_categories": use_imported_categories,
+            IMPORTED_CATEGORY_SETTINGS_KEY: imported_category_settings,
             "account_id":          account_id,
             "single_account_new":  single_account_new,
+            "duplicate_strategies": {
+                COVERAGE_DUPLICATE_STRATEGY_KEY: True,
+                TEXT_DUPLICATE_STRATEGY_KEY: True,
+            },
             UNKNOWN_SOURCE_FALLBACK_KEY: False,
         }
+        if account_duplicate_compare_targets:
+            config_snapshot["account_duplicate_compare"] = account_duplicate_compare_targets
         conn.execute("""
             INSERT INTO import_batch
-              (id, profile_id, filename, file_content_hash, row_count, skipped_count, deduped_count, config_snapshot)
-            VALUES (?, ?, ?, ?, 0, 0, 0, ?)
-        """, (batch_id, profile_id, filename, file_content_hash, json.dumps(config_snapshot)))
+              (id, profile_id, filename, file_content_hash, row_count, skipped_count, deduped_count, use_imported_categories, config_snapshot)
+            VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?)
+        """, (batch_id, profile_id, filename, file_content_hash, 1 if use_imported_categories else 0, json.dumps(config_snapshot)))
 
         if not profile_id:
             previous_profileless_batches = conn.execute(
@@ -1916,8 +3089,9 @@ async def run_import(
                 save_batch_snapshot(conn, prior_batch["id"], prior_snapshot)
 
         use_account_col = bool(col.account)
-        account_counts: dict = {}
+        batch_account_stats: dict[str, dict] = {}
         skip_counts:    dict = {}
+        batch_terminal_date = None
         consecutive_error_rows = 0
         footer_error_start_index = None
         footer_error_start_data_index = None
@@ -1953,17 +3127,13 @@ async def run_import(
 
         for i, row in enumerate(data_rows):
             row_num = header_row_index + skip_rows + i + 2
+            skip_account_row = False
 
             if use_account_col:
                 csv_val = str(row.get(col.account, "")).strip()
-                if csv_val in skip_set:
-                    skipped += 1
-                    skip_counts[csv_val] = skip_counts.get(csv_val, 0) + 1
-                    row_results.append({"row": row_num, "status": "skipped_account"})
-                    reset_footer_detection()
-                    continue
+                skip_account_row = csv_val in skip_set
                 row_account_id = effective_map.get(csv_val)
-                if not row_account_id:
+                if not skip_account_row and not row_account_id:
                     should_stop, remaining = record_footer_like_error(
                         row_num, f"No account mapped for '{csv_val}'", i
                     )
@@ -1971,7 +3141,7 @@ async def run_import(
                         skipped += remaining
                         break
                     continue
-                acc = get_account(row_account_id)
+                acc = get_account(row_account_id) if row_account_id else None
             elif fallback_acc:
                 csv_val = ""
                 acc     = dict(fallback_acc)
@@ -1982,7 +3152,7 @@ async def run_import(
                     break
                 continue
 
-            if not acc:
+            if not skip_account_row and not acc:
                 should_stop, remaining = record_footer_like_error(row_num, "Account not found", i)
                 if should_stop:
                     skipped += remaining
@@ -2018,12 +3188,28 @@ async def run_import(
                 row_results.append({"row": row_num, "status": "zero_amount"})
                 reset_footer_detection()
                 continue
+            if not batch_terminal_date or parsed_date > batch_terminal_date:
+                batch_terminal_date = parsed_date
+            if skip_account_row:
+                skipped += 1
+                skip_counts[csv_val] = skip_counts.get(csv_val, 0) + 1
+                row_results.append({"row": row_num, "status": "skipped_account"})
+                reset_footer_detection()
+                continue
 
             raw_desc     = str(row.get(col.description, "")).strip()
-            raw_imported_category = str(row.get(col.category, "")).strip() if col.category else ""
+            raw_imported_category = normalize_effective_imported_category(row.get(col.category, "")) if col.category else ""
             notes_val    = str(row.get(col.notes, "")).strip() if col.notes else None
             is_pending = parse_pending_flag(row, col)
             content_hash = make_hash(parsed_date, amount, raw_desc)
+            import_evidence = _build_import_evidence(row, headers, col, csv_val, raw_desc)
+            batch_account_stat = batch_account_stats.setdefault(
+                csv_val,
+                {"account_id": acc["id"], "count": 0, "coverage_dates": set()},
+            )
+            if not batch_account_stat.get("account_id"):
+                batch_account_stat["account_id"] = acc["id"]
+            batch_account_stat["coverage_dates"].add(parsed_date)
 
             pending_match_key = (acc["id"], parsed_date, raw_desc.lower())
             pending_match = existing_pending_rows.get(pending_match_key)
@@ -2035,17 +3221,39 @@ async def run_import(
                 imported_category_counts[raw_imported_category] = imported_category_counts.get(raw_imported_category, 0) + 1
 
             cat_id = None
-            category_from_import_mapping = False
+            category_source = None
+            category_overridden = 0
             if raw_imported_category:
-                cat_id = category_assignments_cfg.get(raw_imported_category)
-                category_from_import_mapping = bool(cat_id)
+                mapped_category_id = category_assignments_cfg.get(raw_imported_category)
+                if mapped_category_id:
+                    cat_id = mapped_category_id
+                    category_source = "manual"
+                    category_overridden = 1
+                else:
+                    category_scope_token = _category_scope_token_for_import_row(csv_val, acc["id"], use_account_col, single_account_new)
+                    if _row_uses_imported_categories(
+                        use_imported_categories,
+                        imported_category_settings,
+                        acc["owner_id"],
+                        category_scope_token,
+                    ):
+                        imported_category = _ensure_imported_batch_category(conn, batch_id, raw_imported_category)
+                        if imported_category:
+                            cat_id = imported_category["id"]
+                            category_source = "import"
+                            category_overridden = 1
             if apply_cat and not cat_id:
                 result = categorize_transaction(
-                    raw_desc, raw_desc, raw_desc, abs(amount), conn,
+                    raw_desc, raw_desc, raw_desc, amount, conn,
                     owner_id=acc["owner_id"],
                     account_id=acc["id"],
                 )
                 cat_id = result["category_id"] if isinstance(result, dict) else result
+                rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
+                if cat_id:
+                    category_source = "rule"
+            else:
+                rule_tag_ids = []
 
             txn_payload = {
                 "account_id": acc["id"],
@@ -2058,19 +3266,110 @@ async def run_import(
                 "date": parsed_date,
                 "is_pending": 1 if is_pending else 0,
                 "content_hash": content_hash,
+                "import_evidence": import_evidence,
                 "imported_category": raw_imported_category or None,
                 "notes": notes_val or None,
-                "category_overridden": 1 if category_from_import_mapping else 0,
+                "category_overridden": category_overridden,
+                "category_source": category_source,
                 "csv_value": csv_val,
             }
 
             duplicate_existing = existing_hashes_by_account.get(acc["id"], {}).get(content_hash)
+            duplicate_reason = "Matches an existing transaction"
+            if not duplicate_existing:
+                compare_target_id = account_duplicate_compare_targets.get(csv_val)
+                if compare_target_id:
+                    duplicate_existing = existing_hashes_by_effective_account.get(compare_target_id, {}).get(content_hash)
+                    if duplicate_existing:
+                        duplicate_reason = "Matches an existing transaction in the linked account group"
+            terminal_day_reconciled = False
+            if not duplicate_existing and coverage_strategy_enabled:
+                coverage_duplicate = next(
+                    (
+                        entry for entry in import_coverage_by_csv_value.get(csv_val, [])
+                        if _date_in_import_coverage_window(parsed_date, entry.get("start_date"), entry.get("end_date"))
+                    ),
+                    None,
+                )
+                if coverage_duplicate:
+                    duplicate_existing = {
+                        "date": f"{coverage_duplicate.get('start_date')}..{coverage_duplicate.get('end_date')}",
+                        "merchant_name": "Covered date range",
+                        "amount": amount,
+                    }
+                    duplicate_reason = "Falls within the fully covered date range from an earlier import for this source account"
+            if not duplicate_existing and coverage_strategy_enabled:
+                scope_id = get_current_duplicate_scope_id(acc["id"], csv_val)
+                coverage_duplicate = next(
+                    (
+                        entry for entry in import_coverage_by_scope_id.get(scope_id or "", [])
+                        if entry.get("csv_value") != csv_val
+                        and _date_in_import_coverage_window(parsed_date, entry.get("start_date"), entry.get("end_date"))
+                    ),
+                    None,
+                )
+                if coverage_duplicate:
+                    duplicate_existing = {
+                        "date": f"{coverage_duplicate.get('start_date')}..{coverage_duplicate.get('end_date')}",
+                        "merchant_name": "Covered date range",
+                        "amount": amount,
+                    }
+                    duplicate_reason = "Falls within the fully covered date range from an earlier import in this account scope"
+            if not duplicate_existing and coverage_strategy_enabled:
+                scope_id = get_current_duplicate_scope_id(acc["id"], csv_val)
+                same_source_terminal_candidates = terminal_day_candidates_by_csv_day.get((csv_val, parsed_date), [])
+                scope_terminal_candidates = terminal_day_candidates_by_scope_day.get((scope_id or "", parsed_date), [])
+                terminal_day_reconciled = bool(same_source_terminal_candidates) or any(
+                    candidate.get("csv_value") != csv_val
+                    for candidate in scope_terminal_candidates
+                )
+                if terminal_day_reconciled:
+                    matched_terminal_candidate = _match_terminal_day_candidate(
+                        same_source_terminal_candidates,
+                        content_hash=content_hash,
+                        amount=amount,
+                    )
+                    if not matched_terminal_candidate:
+                        matched_terminal_candidate = _match_terminal_day_candidate(
+                            [
+                                candidate for candidate in scope_terminal_candidates
+                                if candidate.get("csv_value") != csv_val
+                            ],
+                            content_hash=content_hash,
+                            amount=amount,
+                        )
+                    if matched_terminal_candidate:
+                        duplicate_existing = _candidate_summary(matched_terminal_candidate)
+                        duplicate_reason = (
+                            "Matches a remaining transaction from the terminal covered day in an earlier import"
+                            + (
+                                " for this source account"
+                                if matched_terminal_candidate.get("csv_value") == csv_val
+                                else " in this account scope"
+                            )
+                        )
+            if not duplicate_existing and text_strategy_enabled and not terminal_day_reconciled:
+                candidate_rows = list(existing_rows_by_account_amount.get(acc["id"], {}).get(_duplicate_amount_key(parsed_date, amount), []))
+                compare_target_id = account_duplicate_compare_targets.get(csv_val)
+                if compare_target_id:
+                    linked_candidates = existing_rows_by_effective_account_amount.get(compare_target_id, {}).get(_duplicate_amount_key(parsed_date, amount), [])
+                    seen_candidate_ids = {candidate["id"] for candidate in candidate_rows}
+                    candidate_rows.extend(candidate for candidate in linked_candidates if candidate["id"] not in seen_candidate_ids)
+                heuristic_duplicate = _find_textual_duplicate_candidate(candidate_rows, txn_payload)
+                if heuristic_duplicate:
+                    duplicate_existing = heuristic_duplicate
+                    heuristic_scope = heuristic_duplicate.get("duplicate_scope")
+                    duplicate_reason = (
+                        "Possible cross-source match by date, amount, and source text"
+                        + (" in the linked account group" if heuristic_scope == "linked_account_group" else " in this account")
+                        + " (medium confidence)"
+                    )
             if duplicate_existing:
                 deduped += 1
                 duplicate_rows.append({
                     "row": row_num,
                     "kind": "duplicate",
-                    "reason": "Matches an existing transaction",
+                    "reason": duplicate_reason,
                     "values": _normalize_import_row_values(row, headers),
                     "matched_transaction": duplicate_existing,
                     "txn_payload": txn_payload,
@@ -2081,16 +3380,14 @@ async def run_import(
                 continue
 
             txn_id = _insert_imported_transaction(conn, batch_id, txn_payload)
+            sync_rule_tags_for_transaction(conn, txn_id, rule_tag_ids)
             if is_pending:
                 existing_pending_rows[pending_match_key] = {"id": txn_id, "content_hash": content_hash}
             imported += 1
             row_results.append({"row": row_num, "status": "imported"})
             reset_footer_detection()
 
-            aid = acc["id"]
-            if aid not in account_counts:
-                account_counts[aid] = {"csv_value": csv_val, "count": 0}
-            account_counts[aid]["count"] += 1
+            batch_account_stats[csv_val]["count"] += 1
 
         trailing_non_transaction_suspected = footer_error_start_row is not None
 
@@ -2151,18 +3448,23 @@ async def run_import(
             _save_batch_duplicate_rows(conn, batch_id, duplicate_rows)
             config_snapshot[IMPORT_SUMMARY_KEY] = import_summary
             save_batch_snapshot(conn, batch_id, config_snapshot)
-            for aid, info in account_counts.items():
+            for csv_val, info in batch_account_stats.items():
+                coverage_start_date, coverage_end_date = _compute_import_coverage_window(
+                    info.get("coverage_dates"),
+                    batch_terminal_date,
+                )
+                terminal_date = batch_terminal_date
                 conn.execute("""
                     INSERT OR REPLACE INTO import_batch_account
-                      (batch_id, csv_value, account_id, row_count, was_skipped)
-                    VALUES (?, ?, ?, ?, 0)
-                """, (batch_id, info["csv_value"], aid, info["count"]))
+                      (batch_id, csv_value, account_id, row_count, was_skipped, coverage_start_date, coverage_end_date, terminal_date)
+                    VALUES (?, ?, ?, ?, 0, ?, ?, ?)
+                """, (batch_id, csv_val, info.get("account_id"), info.get("count", 0), coverage_start_date, coverage_end_date, terminal_date))
             for csv_val, row_ct in skip_counts.items():
                 mapped_id = effective_map.get(csv_val)
                 conn.execute("""
                     INSERT OR IGNORE INTO import_batch_account
-                      (batch_id, csv_value, account_id, row_count, was_skipped)
-                    VALUES (?, ?, ?, ?, 1)
+                      (batch_id, csv_value, account_id, row_count, was_skipped, coverage_start_date, coverage_end_date, terminal_date)
+                    VALUES (?, ?, ?, ?, 1, NULL, NULL, NULL)
                 """, (batch_id, csv_val, mapped_id or None, row_ct))
 
         account_skipped = sum(skip_counts.values())
@@ -2329,9 +3631,26 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
 @router.get("/batches")
 def list_batches():
     with get_db() as conn:
+        batch_rows = conn.execute("""
+            SELECT b.id, b.profile_id, b.filename, b.file_content_hash, b.imported_at, b.row_count, b.skipped_count,
+                   b.deduped_count, b.status, b.use_imported_categories, b.config_snapshot, p.name AS profile_name,
+                   EXISTS(
+                       SELECT 1
+                       FROM   txn t
+                       WHERE  t.import_batch_id = b.id
+                         AND  t.imported_category IS NOT NULL
+                         AND  TRIM(t.imported_category) <> ''
+                   ) AS has_imported_categories
+            FROM   import_batch b
+            LEFT JOIN csv_import_profile p ON p.id = b.profile_id
+            WHERE  b.status = 'completed'
+            ORDER  BY b.imported_at DESC
+            LIMIT  50
+        """).fetchall()
+        _reconcile_batch_history(conn, [row["id"] for row in batch_rows])
         batches = conn.execute("""
             SELECT b.id, b.profile_id, b.filename, b.file_content_hash, b.imported_at, b.row_count, b.skipped_count,
-                   b.deduped_count, b.status, b.config_snapshot, p.name AS profile_name,
+                   b.deduped_count, b.status, b.use_imported_categories, b.config_snapshot, p.name AS profile_name,
                    EXISTS(
                        SELECT 1
                        FROM   txn t
@@ -2357,6 +3676,8 @@ def list_batches():
                 summary = summarize_rule_suggestion_review(review_state)
 
             d["has_imported_categories"] = bool(d.get("has_imported_categories"))
+            d["use_imported_categories"] = bool(d.get("use_imported_categories"))
+            d = _annotate_imported_category_settings(d, _get_imported_category_settings(snapshot))
             d["rule_suggestion_review"] = {
                 "generated_at": review_state.get("generated_at"),
                 "last_generated_at": review_state.get("last_generated_at"),
@@ -2374,11 +3695,11 @@ def list_batches():
                     if key != "duplicate_rows"
                 }
             d["unknown_source_fallback"] = bool(snapshot.get(UNKNOWN_SOURCE_FALLBACK_KEY))
+            d["single_account_new"] = safe_json_dict(snapshot.get("single_account_new"))
 
-            # For profileless batches, the category workspace draft is stored
-            # directly in config_snapshot rather than in a profile. Surface a
-            # summary so the frontend can show the Import categories button on
-            # the individual batch row without fetching the full snapshot.
+            # Legacy category workspace drafts may still be present on some
+            # profileless batches. Surface a lightweight summary without
+            # fetching the full snapshot so older data remains inspectable.
             d["category_workspace_summary"] = (
                 summarize_category_workspace_draft(snapshot.get("category_workspace_draft"))
                 if not d.get("profile_id")
@@ -2570,7 +3891,7 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
         for raw_value, category_id in incoming_assignments.items():
             result = conn.execute("""
                 UPDATE txn
-                SET    category_id = ?, category_overridden = 1
+                SET    category_id = ?, category_overridden = 1, category_source = 'manual'
                 WHERE  import_batch_id = ?
                   AND  imported_category = ?
             """, (category_id, batch_id, raw_value))
@@ -2620,18 +3941,20 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
                     row["merchant_name"] or row["raw_name"] or "",
                     row["raw_name"] or row["merchant_name"] or "",
                     row["display_name"] or row["merchant_name"] or row["raw_name"] or "",
-                    abs(row["amount"]),
+                    row["amount"],
                     conn,
                     owner_id=row["owner_id"],
                     account_id=row["account_id"],
                 )
                 cat_id = result["category_id"] if isinstance(result, dict) else result
+                rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
                 if cat_id:
                     conn.execute(
-                        "UPDATE txn SET category_id = ? WHERE id = ?",
+                        "UPDATE txn SET category_id = ?, category_source = 'rule' WHERE id = ?",
                         (cat_id, row["id"]),
                     )
                     categorized_by_rules += 1
+                sync_rule_tags_for_transaction(conn, row["id"], rule_tag_ids)
 
     return {
         "ok": True,
@@ -2772,6 +4095,142 @@ def update_profile_rule_suggestion_review(profile_id: str, body: BatchRuleSugges
     }
 
 
+@router.get("/rule-suggestions")
+def get_system_rule_suggestions(owner_ids: Optional[str] = Query(None)):
+    with get_db() as conn:
+        review_state = _get_system_rule_suggestion_review_state(conn)
+        selected_owner_ids = [value.strip() for value in (owner_ids or "").split(",") if value.strip()]
+        rows = _query_rule_suggestion_rows(conn, system_wide=True)
+        result = _build_rule_suggestion_response(conn, rows, review_state, selected_owner_ids)
+        if result.pop("should_persist", False):
+            _save_system_rule_suggestion_review_state(conn, review_state)
+    return result
+
+
+@router.post("/rule-suggestions/review")
+def update_system_rule_suggestion_review(body: BatchRuleSuggestionReviewUpdateRequest):
+    status = (body.status or "").strip().lower()
+    if status not in ({"pending"} | RULE_SUGGESTION_REVIEW_STATUSES):
+        raise HTTPException(status_code=400, detail="Invalid review status")
+
+    with get_db() as conn:
+        review_state = _get_system_rule_suggestion_review_state(conn)
+        suggestion_entries = dict(review_state.get("suggestions") or {})
+        suggestion_entries.setdefault(body.suggestion_id, {})
+
+        if body.merchant_label:
+            suggestion_entries[body.suggestion_id]["merchant_label"] = body.merchant_label
+        if body.target_category_name:
+            suggestion_entries[body.suggestion_id]["target_category_name"] = body.target_category_name
+        if body.keyword:
+            suggestion_entries[body.suggestion_id]["keyword"] = body.keyword
+
+        statuses = dict(review_state.get("statuses") or {})
+        if status == "pending":
+            statuses.pop(body.suggestion_id, None)
+        else:
+            next_status = {
+                "status": status,
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+            if body.rule_id:
+                next_status["rule_id"] = body.rule_id
+            statuses[body.suggestion_id] = next_status
+
+        review_state["suggestions"] = suggestion_entries
+        review_state["statuses"] = statuses
+        review_summary = summarize_rule_suggestion_review(review_state)
+        _save_system_rule_suggestion_review_state(conn, review_state)
+
+    return {
+        "ok": True,
+        "review_summary": review_summary,
+        "generated_at": review_state.get("generated_at"),
+    }
+
+
+@router.post("/rule-suggestions/matches")
+def get_system_rule_suggestion_matches(body: BatchRuleSuggestionMatchRequest):
+    keyword = normalize_rule_keyword(body.keyword or "")
+    if not keyword:
+        raise HTTPException(status_code=400, detail="keyword required")
+
+    with get_db() as conn:
+        categories_by_name, categories_by_id = _load_import_rule_target_maps(conn)
+        rows = conn.execute(
+            """
+            SELECT
+                t.id,
+                t.date,
+                t.amount,
+                t.merchant_name,
+                t.display_name,
+                t.raw_name,
+                t.imported_category,
+                t.category_id,
+                t.category_overridden,
+                t.category_source,
+                COALESCE(a.parent_account_id, t.account_id) AS account_id,
+                t.owner_id,
+                COALESCE(a.display_name, a.name) AS account_name,
+                COALESCE(p.mask, a.mask) AS account_mask,
+                o.name AS owner_name
+            FROM txn t
+            JOIN import_batch b ON b.id = t.import_batch_id
+            LEFT JOIN account a ON a.id = t.account_id
+            LEFT JOIN account p ON p.id = a.parent_account_id
+            LEFT JOIN owner o ON o.id = t.owner_id
+            WHERE b.status = 'completed'
+              AND b.use_imported_categories = 1
+              AND t.category_source = 'import'
+              AND t.category_id IS NOT NULL
+            ORDER BY t.date DESC, t.id DESC
+            """
+        ).fetchall()
+
+    matching_rows = []
+    for base_row in rows:
+        row = dict(base_row)
+        row["display_amount"] = get_import_display_amount(row["amount"], "single_signed")
+        row_keyword = normalize_rule_keyword(
+            row["display_name"] or row["merchant_name"] or row["raw_name"] or ""
+        )
+        if not row_keyword or row_keyword != keyword:
+            continue
+        if body.owner_id and row["owner_id"] != body.owner_id:
+            continue
+        if body.account_id and row["account_id"] != body.account_id:
+            continue
+
+        abs_amount = abs(row["amount"])
+        if body.amount_min is not None and abs_amount < body.amount_min:
+            continue
+        if body.amount_max is not None and abs_amount > body.amount_max:
+            continue
+
+        target_category_id, target_category_name, target_category_group_name = _resolve_import_rule_target(
+            row,
+            categories_by_name,
+            categories_by_id,
+        )
+        row["target_category_id"] = target_category_id
+        row["target_category_name"] = target_category_name
+        row["target_category_group_name"] = target_category_group_name
+        row["conflicts_with_reference"] = bool(
+            body.reference_target_category_id
+            and target_category_id
+            and target_category_id != body.reference_target_category_id
+        )
+        matching_rows.append(row)
+
+    return {
+        "keyword": keyword,
+        "amount_convention": "single_signed",
+        "count": len(matching_rows),
+        "transactions": matching_rows,
+    }
+
+
 @router.post("/batches/{batch_id}/rule-suggestions/matches")
 def get_batch_rule_suggestion_matches(batch_id: str, body: BatchRuleSuggestionMatchRequest):
     keyword = normalize_rule_keyword(body.keyword or "")
@@ -2801,6 +4260,7 @@ def get_batch_rule_suggestion_matches(batch_id: str, body: BatchRuleSuggestionMa
                 t.imported_category,
                 t.category_id,
                 t.category_overridden,
+                t.category_source,
                 COALESCE(a.parent_account_id, t.account_id) AS account_id,
                 t.owner_id,
                 COALESCE(a.display_name, a.name) AS account_name,
@@ -2811,9 +4271,8 @@ def get_batch_rule_suggestion_matches(batch_id: str, body: BatchRuleSuggestionMa
             LEFT JOIN account p ON p.id = a.parent_account_id
             LEFT JOIN owner o ON o.id = t.owner_id
             WHERE t.import_batch_id = ?
-              AND t.imported_category IS NOT NULL
-              AND TRIM(t.imported_category) <> ''
-              AND t.category_id IS NULL
+              AND t.category_source = 'import'
+              AND t.category_id IS NOT NULL
             ORDER BY t.date DESC, t.id DESC
             """,
             (batch_id,),
@@ -2892,6 +4351,7 @@ def get_profile_rule_suggestion_matches(profile_id: str, body: BatchRuleSuggesti
                 t.imported_category,
                 t.category_id,
                 t.category_overridden,
+                t.category_source,
                 COALESCE(a.parent_account_id, t.account_id) AS account_id,
                 t.owner_id,
                 COALESCE(a.display_name, a.name) AS account_name,
@@ -2904,9 +4364,8 @@ def get_profile_rule_suggestion_matches(profile_id: str, body: BatchRuleSuggesti
             LEFT JOIN owner o ON o.id = t.owner_id
             WHERE b.profile_id = ?
               AND b.status = 'completed'
-              AND t.imported_category IS NOT NULL
-              AND TRIM(t.imported_category) <> ''
-              AND t.category_id IS NULL
+              AND t.category_source = 'import'
+              AND t.category_id IS NOT NULL
             ORDER BY t.date DESC, t.id DESC
             """,
             (profile_id,),
@@ -2995,6 +4454,40 @@ def set_batch_profile(batch_id: str, body: dict):
     return {"ok": True}
 
 
+@router.patch("/batches/{batch_id}/imported-category-usage")
+def update_batch_imported_category_usage(batch_id: str, body: BatchImportedCategoryUsageUpdateRequest):
+    with get_db() as conn:
+        batch = conn.execute(
+            "SELECT id, config_snapshot FROM import_batch WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+
+        snapshot = safe_json_dict(batch["config_snapshot"])
+        snapshot["use_imported_categories"] = bool(body.use_imported_categories)
+        current_settings = _get_imported_category_settings(snapshot)
+        next_settings = {
+            "scope_mode": body.imported_category_scope_mode if body.imported_category_scope_mode is not None else current_settings["scope_mode"],
+            "owner_ids": body.imported_category_owner_ids if body.imported_category_owner_ids is not None else current_settings["owner_ids"],
+            "unassigned_account_tokens": (
+                body.imported_category_unassigned_account_tokens
+                if body.imported_category_unassigned_account_tokens is not None
+                else current_settings["unassigned_account_tokens"]
+            ),
+        }
+        snapshot[IMPORTED_CATEGORY_SETTINGS_KEY] = _normalize_imported_category_settings(next_settings)
+        save_batch_snapshot(conn, batch_id, snapshot)
+        _set_batch_imported_category_usage(conn, batch_id, body.use_imported_categories)
+    return _annotate_imported_category_settings(
+        {
+            "ok": True,
+            "use_imported_categories": bool(body.use_imported_categories),
+        },
+        snapshot[IMPORTED_CATEGORY_SETTINGS_KEY],
+    )
+
+
 @router.get("/batches/{batch_id}/category-workspace-draft")
 def get_batch_category_workspace_draft(batch_id: str):
     with get_db() as conn:
@@ -3050,7 +4543,7 @@ def undo_batch(batch_id: str, force: bool = Query(False)):
     """
     with get_db() as conn:
         batch = conn.execute(
-            "SELECT id, status FROM import_batch WHERE id = ?", (batch_id,)
+            "SELECT id, status, use_imported_categories FROM import_batch WHERE id = ?", (batch_id,)
         ).fetchone()
         if not batch:
             raise HTTPException(status_code=404, detail="Batch not found")
@@ -3063,7 +4556,9 @@ def undo_batch(batch_id: str, force: bool = Query(False)):
                        c.name AS category_name
                 FROM   txn t
                 LEFT JOIN category c ON c.id = t.category_id
-                WHERE  t.import_batch_id = ? AND t.category_overridden = 1
+                WHERE  t.import_batch_id = ?
+                  AND  t.category_overridden = 1
+                  AND  COALESCE(t.category_source, 'manual') = 'manual'
             """, (batch_id,)).fetchall()
 
             if edited:
@@ -3076,6 +4571,8 @@ def undo_batch(batch_id: str, force: bool = Query(False)):
         conn.execute(
             "UPDATE import_batch SET status = 'undone' WHERE id = ?", (batch_id,)
         )
+        if batch["use_imported_categories"]:
+            _remove_imported_batch_categories(conn, batch_id)
 
     return {"ok": True}
 
@@ -3104,6 +4601,7 @@ def export_transactions_csv(
     owner_ids:    Optional[str] = Query(None),
     group_ids:    Optional[str] = Query(None),
     category_ids: Optional[str] = Query(None),
+    tag_ids:      Optional[str] = Query(None),
     search:       Optional[str] = Query(None),
 ):
     col_keys = [c.strip() for c in columns.split(",") if c.strip() in EXPORT_COLUMNS]
@@ -3136,6 +4634,20 @@ def export_transactions_csv(
     if category_ids:
         ids = [i.strip() for i in category_ids.split(",") if i.strip()]
         clauses.append(f"t.category_id IN ({','.join('?'*len(ids))})"); params.extend(ids)
+    if tag_ids:
+        ids = [i.strip() for i in tag_ids.split(",") if i.strip()]
+        clauses.append(
+            f"""
+            EXISTS (
+                SELECT 1
+                FROM txn_tag tt
+                WHERE tt.txn_id = t.id
+                  AND tt.tag_id IN ({','.join('?' * len(ids))})
+                  AND {VISIBLE_TXN_TAG_SQL}
+            )
+            """
+        )
+        params.extend(ids)
     if search:
         clauses.append("(t.display_name LIKE ? OR t.merchant_name LIKE ? OR t.raw_name LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
@@ -3178,7 +4690,7 @@ def export_backup(encrypted: bool = Query(False)):
             return [dict(r) for r in conn.execute(q).fetchall()]
 
         payload = {
-            "version":        4,
+            "version":        5,
             "exported_at":    datetime.utcnow().isoformat(),
             "owners":         dump("owner"),
             "accounts":       dump("account",
@@ -3191,10 +4703,12 @@ def export_backup(encrypted: bool = Query(False)):
             "import_batches": dump("import_batch"),
             "import_batch_accounts": dump("import_batch_account"),
             "import_batch_duplicates": dump("import_batch_duplicate"),
+            "import_workflow_states": dump("import_workflow_state"),
             "transactions":   dump("txn",
                                    "SELECT id, plaid_transaction_id, account_id, owner_id, "
                                    "category_id, amount, merchant_name, display_name, raw_name, date, "
-                                   "is_pending, category_overridden, imported_category, notes, content_hash, "
+                                   "is_pending, category_overridden, category_source, imported_category, notes, content_hash, "
+                                   "import_evidence_json, "
                                    "import_batch_id FROM txn ORDER BY date DESC"),
         }
         recipients = []
@@ -3284,7 +4798,7 @@ def restore_backup(body: RestoreRequest):
     Plaid items / access tokens are NOT touched.
     """
     d = body.data
-    if d.get("version") not in (1, 2, 3, 4):
+    if d.get("version") not in (1, 2, 3, 4, 5):
         raise HTTPException(status_code=400, detail="Unrecognised backup version")
 
     owners = [dict(row) for row in d.get("owners", [])]
@@ -3296,6 +4810,7 @@ def restore_backup(body: RestoreRequest):
     import_batches = [dict(row) for row in d.get("import_batches", [])]
     import_batch_accounts = [dict(row) for row in d.get("import_batch_accounts", [])]
     import_batch_duplicates = [dict(row) for row in d.get("import_batch_duplicates", [])]
+    import_workflow_states = [dict(row) for row in d.get("import_workflow_states", [])]
     transactions = [dict(row) for row in d.get("transactions", [])]
 
     owner_ids = {row.get("id") for row in owners if row.get("id")}
@@ -3361,6 +4876,7 @@ def restore_backup(body: RestoreRequest):
         conn.execute("DELETE FROM import_batch_duplicate")
         conn.execute("DELETE FROM import_batch_account")
         conn.execute("DELETE FROM import_batch")
+        conn.execute("DELETE FROM import_workflow_state")
         conn.execute("DELETE FROM category_rule")
         conn.execute("DELETE FROM merchant_rename")
         conn.execute("DELETE FROM csv_import_profile")
@@ -3390,6 +4906,7 @@ def restore_backup(body: RestoreRequest):
         insert_rows("import_batch", import_batches)
         insert_rows("import_batch_account", import_batch_accounts)
         insert_rows("import_batch_duplicate", import_batch_duplicates)
+        insert_rows("import_workflow_state", import_workflow_states)
         insert_rows("txn",          transactions)
 
     return {
@@ -3405,6 +4922,7 @@ def restore_backup(body: RestoreRequest):
             "import_batches": len(import_batches),
             "import_batch_accounts": len(import_batch_accounts),
             "import_batch_duplicates": len(import_batch_duplicates),
+            "import_workflow_states": len(import_workflow_states),
             "transactions": len(transactions),
         },
     }

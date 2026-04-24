@@ -52,7 +52,7 @@ function Test-ExcludedPath([string]$RelativePath) {
     return $true
   }
 
-  if ($filename -in @('fintrack.db', 'control.db', '.env', 'credentials.json', '.DS_Store', 'Thumbs.db', '.gitignore')) {
+  if ($filename -in @('fintrack.db', 'control.db', 'fintrack-data.db', 'fintrack-control.db', '.env', 'credentials.json', '.DS_Store', 'Thumbs.db', '.gitignore')) {
     return $true
   }
 

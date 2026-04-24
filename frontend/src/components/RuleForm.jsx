@@ -5,6 +5,7 @@ import { forwardRef, useState, useEffect, useImperativeHandle, useLayoutEffect, 
 import { api } from '../lib/api.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import { Button, DialogActions, SectionEyebrow, getFormControlStyle } from './ui.jsx'
+import { TagGlyph } from './TagUi.jsx'
 import {
   getSharedPillCornerRemoveButtonStyle,
   getSharedPillLabelStyle,
@@ -161,7 +162,7 @@ function AmountCondition({ low, lowOp, high, highOp, side, onChange }) {
       )}
 
       <div style={{ fontSize: 11, color: 'var(--muted)' }}>
-        All comparisons use absolute value — a debit of −$10 matches as $10
+        Amount ranges use absolute value, and the debit/credit toggle applies the sign separately.
       </div>
     </div>
   )
@@ -192,15 +193,22 @@ function ConditionChip({ label, summary, active, expanded = true, onActivate, on
       tabIndex={-1}
       style={{ border: '1px solid var(--accent)', borderRadius: 10, background: 'color-mix(in srgb, var(--accent) 5%, var(--surface))', overflow: 'hidden', outline: 'none' }}
     >
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         onClick={onActivate}
+        onKeyDown={event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            onActivate?.()
+          }
+        }}
         style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '6px 10px', border: 'none', borderBottom: expanded ? '1px solid var(--border)' : 'none', background: 'color-mix(in srgb, var(--accent) 8%, var(--surface2))', textAlign: 'left', cursor: 'pointer' }}
       >
         <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent2)', letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>{label}</span>
         {summary && <span style={{ fontSize: 12, color: 'var(--muted)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summary}</span>}
-        <button onClick={event => { event.stopPropagation(); onClear() }} title={`Remove ${label}`} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}>×</button>
-      </button>
+        <button type="button" onClick={event => { event.stopPropagation(); onClear() }} title={`Remove ${label}`} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}>×</button>
+      </div>
       {expanded ? <div style={{ padding: '10px 12px' }}>{children}</div> : null}
     </div>
   )
@@ -289,7 +297,7 @@ function SummaryPill({
   )
 }
 
-function MatchCountInline({ keyword, amtLow, amtHigh, ownerId, accountId, onCountChange }) {
+function MatchCountInline({ keyword, amtLow, amtHigh, amtSide, ownerId, accountId, onCountChange }) {
   const [count, setCount] = useState(null)
   const [loading, setLoading] = useState(false)
   const debounceRef = useRef(null)
@@ -316,6 +324,8 @@ function MatchCountInline({ keyword, amtLow, amtHigh, ownerId, accountId, onCoun
         })
         const matched = resp.transactions.filter(t => {
           const abs = Math.abs(t.amount)
+          if (amtSide === 'debit' && !(t.amount > 0)) return false
+          if (amtSide === 'credit' && !(t.amount < 0)) return false
           if (amtLow != null && abs < amtLow) return false
           if (amtHigh != null && abs > amtHigh) return false
           return true
@@ -331,7 +341,7 @@ function MatchCountInline({ keyword, amtLow, amtHigh, ownerId, accountId, onCoun
     }, 600)
     return () => clearTimeout(debounceRef.current)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keyword, amtLow, amtHigh, ownerId, accountId, canSearch])
+  }, [keyword, amtLow, amtHigh, amtSide, ownerId, accountId, canSearch])
 
   if (!canSearch) return null
   if (loading) return <span style={{ fontSize: 12, color: 'var(--muted)' }}>checking matches…</span>
@@ -360,6 +370,7 @@ const RuleForm = forwardRef(function RuleForm({
   showApplyToExisting = true,
   hideFooter = false,
   onDraftChange,
+  onCategoriesChanged,
 }, ref) {
   const getTransactionAmountState = () => {
     if (!transactionData || transactionData.amount == null) return null
@@ -369,7 +380,7 @@ const RuleForm = forwardRef(function RuleForm({
       amtLowOp: '>=',
       amtHigh: absAmount,
       amtHighOp: '<=',
-      amtSide: transactionData.amount < 0 ? 'debit' : 'credit',
+      amtSide: transactionData.amount > 0 ? 'debit' : 'credit',
     }
   }
 
@@ -407,7 +418,7 @@ const RuleForm = forwardRef(function RuleForm({
   const [accountId, setAccountId] = useState(initialValues.accountId ?? initialValues.account_id ?? '')
 
   const [kwOpen, setKwOpen] = useState(!!initialValues.keyword)
-  const [amtOpen, setAmtOpen] = useState(!!(initialAmount.amtLow != null || initialAmount.amtHigh != null))
+  const [amtOpen, setAmtOpen] = useState(!!(initialAmount.amtLow != null || initialAmount.amtHigh != null || initialAmount.amtSide !== 'both'))
   const [ownOpen, setOwnOpen] = useState(!!(initialValues.ownerId ?? initialValues.owner_id))
   const [accOpen, setAccOpen] = useState(!!(initialValues.accountId ?? initialValues.account_id))
 
@@ -415,6 +426,9 @@ const RuleForm = forwardRef(function RuleForm({
   const [cleanName, setCleanName] = useState(initialValues.cleanName ?? '')
   const [renameOpen, setRenameOpen] = useState(!!initialValues.cleanName)
   const [renameExpanded, setRenameExpanded] = useState(!!initialValues.cleanName)
+  const [tagIds, setTagIds] = useState(initialValues.tagIds ?? initialValues.tag_ids ?? [])
+  const [tagsOpen, setTagsOpen] = useState(!!((initialValues.tagIds ?? initialValues.tag_ids ?? []).length))
+  const [availableTags, setAvailableTags] = useState([])
 
   const [matchCount, setMatchCount] = useState(0)
   const [applyToExisting, setApplyToExisting] = useState(false)
@@ -458,7 +472,21 @@ const RuleForm = forwardRef(function RuleForm({
     }
   }, [amtOpen, transactionDefaultsApplied, transactionDefaults, amtLow, amtHigh])
 
-  const canSave = keyword.trim().length > 0 && catId
+  useEffect(() => {
+    let cancelled = false
+    api.getTags()
+      .then(tags => {
+        if (!cancelled) setAvailableTags(tags)
+      })
+      .catch(() => {
+        if (!cancelled) setAvailableTags([])
+      })
+    return () => { cancelled = true }
+  }, [])
+
+  const selectedTags = availableTags.filter(tag => tagIds.includes(tag.id))
+  const hasAction = Boolean(catId || cleanName.trim() || tagIds.length > 0)
+  const canSave = keyword.trim().length > 0 && hasAction
 
   function buildDraftPayload() {
     return {
@@ -466,9 +494,11 @@ const RuleForm = forwardRef(function RuleForm({
       category_id: catId || null,
       amount_min: amtLow,
       amount_max: amtHigh,
+      debit_credit: amtSide,
       clean_name: cleanName.trim() || null,
       owner_id: ownerId || null,
       account_id: accountId || null,
+      tag_ids: tagIds,
       clear_amount_min: amtLow === null,
       clear_amount_max: amtHigh === null,
       clear_clean_name: !cleanName.trim(),
@@ -490,11 +520,11 @@ const RuleForm = forwardRef(function RuleForm({
       data: buildDraftPayload(),
       canSave,
     })
-  }, [keyword, catId, amtLow, amtHigh, cleanName, ownerId, accountId, applyToExisting, canSave])
+  }, [keyword, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, tagIds, applyToExisting, canSave])
 
   useImperativeHandle(ref, () => ({
     getDraftState,
-  }), [keyword, catId, amtLow, amtHigh, cleanName, ownerId, accountId, applyToExisting, canSave])
+  }), [keyword, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, tagIds, applyToExisting, canSave])
 
   function handleAmtChange({ low, lowOp, high, highOp, side }) {
     setAmtLow(low); setAmtLowOp(lowOp ?? '>=')
@@ -621,6 +651,11 @@ const RuleForm = forwardRef(function RuleForm({
           },
         }
       : null,
+    ...selectedTags.map(tag => ({
+      key: `tag:${tag.id}`,
+      label: `tag: ${tag.name}`,
+      onClear: () => setTagIds(current => current.filter(id => id !== tag.id)),
+    })),
   ].filter(Boolean)
 
   return (
@@ -663,6 +698,7 @@ const RuleForm = forwardRef(function RuleForm({
               keyword={keyword}
               amtLow={amtLow}
               amtHigh={amtHigh}
+              amtSide={amtSide}
               ownerId={ownerId}
               accountId={accountId}
               onCountChange={n => { setMatchCount(n); if (n === 0) setApplyToExisting(false) }}
@@ -728,7 +764,7 @@ const RuleForm = forwardRef(function RuleForm({
             summary={amtOpen ? amtSummary : null}
             active={amtOpen}
             onActivate={() => setAmtOpen(true)}
-            onClear={() => { setAmtLow(null); setAmtHigh(null); setAmtOpen(false) }}
+            onClear={() => { setAmtLow(null); setAmtHigh(null); setAmtSide('both'); setAmtOpen(false) }}
           >
             <AmountCondition
               low={amtLow} lowOp={amtLowOp}
@@ -780,7 +816,12 @@ const RuleForm = forwardRef(function RuleForm({
               Assign Category
             </SectionEyebrow>
             <div style={{ display: 'flex' }}>
-              <CategoryPicker value={catId} categories={categories} onChange={setCatId} onCategoryCreated={() => api.getCategories()} />
+              <CategoryPicker
+                value={catId}
+                categories={categories}
+                onChange={setCatId}
+                onCategoryCreated={() => onCategoriesChanged?.()}
+              />
             </div>
           </div>
           <ConditionChip
@@ -815,6 +856,55 @@ const RuleForm = forwardRef(function RuleForm({
               style={{ width: '100%', boxSizing: 'border-box', ...getFormControlStyle({ size: 'md' }) }}
             />
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>Sets the display name when this rule fires on future transactions</div>
+          </ConditionChip>
+
+          <ConditionChip
+            label="Add Tags"
+            summary={tagIds.length ? selectedTags.map(tag => tag.name).join(', ') : null}
+            active={tagsOpen}
+            onActivate={() => setTagsOpen(true)}
+            onClear={() => { setTagIds([]); setTagsOpen(false) }}
+          >
+            {availableTags.length === 0 ? (
+              <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+                No tags yet. Create them in Settings first.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: 6 }}>
+                {availableTags.map(tag => {
+                  const checked = tagIds.includes(tag.id)
+                  return (
+                    <label
+                      key={tag.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        cursor: 'pointer',
+                        fontSize: 13,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => {
+                          setTagIds(current => (
+                            checked
+                              ? current.filter(id => id !== tag.id)
+                              : [...current, tag.id]
+                          ))
+                        }}
+                      />
+                      <TagGlyph color={tag.color} size={13} />
+                      <span>{tag.name}</span>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>
+              Matching transactions will gain these tags without replacing tags from other matching rules.
+            </div>
           </ConditionChip>
         </div>
       </div>

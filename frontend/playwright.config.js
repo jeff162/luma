@@ -2,6 +2,7 @@ import { defineConfig } from '@playwright/test'
 import { getPlaywrightBaseUrl } from './scripts/playwrightBaseUrl.js'
 
 const baseURL = getPlaywrightBaseUrl()
+const lightweightMode = process.env.PLAYWRIGHT_LIGHTWEIGHT === '1'
 
 export default defineConfig({
   testDir: './tests/ui',
@@ -18,8 +19,8 @@ export default defineConfig({
   use: {
     baseURL,
     headless: true,
-    trace: 'retain-on-failure',
+    trace: lightweightMode ? 'off' : 'retain-on-failure',
     screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
+    video: lightweightMode ? 'off' : 'retain-on-failure',
   },
 })

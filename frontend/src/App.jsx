@@ -1,26 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState, useEffect, useRef, Component } from 'react'
+import { useState, useEffect, useRef, Component, lazy, Suspense, useMemo } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
 import RuntimeConfigScreen from './components/RuntimeConfigScreen.jsx'
-import Dashboard from './pages/Dashboard.jsx'
-import Transactions from './pages/Transactions.jsx'
-import Categories from './pages/Categories.jsx'
-import Rules from './pages/Rules.jsx'
-import Accounts from './pages/Accounts.jsx'
-import Settings from './pages/Settings.jsx'
-import ImportExport from './pages/ImportExport.jsx'
-import ImportRuleSuggestions from './pages/ImportRuleSuggestions.jsx'
-import Tasks from './pages/Tasks.jsx'
 import { api, setLocalPreferenceProfileId } from './lib/api.js'
 import { UserPreferencesProvider } from './lib/UserPreferencesContext.jsx'
-import { useDismissibleLayer } from './lib/uiInteractions.js'
+import { AppSessionProvider } from './lib/AppSessionContext.jsx'
+import { useDismissibleLayer, useTransientTextEdit } from './lib/uiInteractions.js'
 import { AppConfirmDialog } from './components/ui.jsx'
 import TransientTextInput from './components/TransientTextInput.jsx'
+import {
+  APP_NAME,
+  APP_VERSION,
+  IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY,
+  IMPORT_CATEGORY_USAGE_MODE_ALL,
+  IMPORT_CATEGORY_USAGE_MODE_NONE,
+  SUPPORTED_DATA_PROVIDERS,
+  normalizeImportCategoryUsageMode,
+} from './lib/appConfig.js'
 
 class AppErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null } }
@@ -90,6 +91,36 @@ const NAV_LINKS = [
 
 const LOCAL_PROFILE_STORAGE_KEY_PREFIX = 'fintrack.localPreferenceProfile'
 const STARTUP_ROUTE_PREFERENCE_KEY = 'ui.startupRoute'
+const DATA_PROVIDER_STARTUP_ROUTE = '/accounts'
+const loadDashboardPage = () => import('./pages/Dashboard.jsx')
+const loadTransactionsPage = () => import('./pages/Transactions.jsx')
+const loadCategoriesPage = () => import('./pages/Categories.jsx')
+const loadRulesPage = () => import('./pages/Rules.jsx')
+const loadAccountsPage = () => import('./pages/Accounts.jsx')
+const loadSettingsPage = () => import('./pages/Settings.jsx')
+const loadImportExportPage = () => import('./pages/ImportExport.jsx')
+const loadImportRuleSuggestionsPage = () => import('./pages/ImportRuleSuggestions.jsx')
+const loadTasksPage = () => import('./pages/Tasks.jsx')
+const Dashboard = lazy(loadDashboardPage)
+const Transactions = lazy(loadTransactionsPage)
+const Categories = lazy(loadCategoriesPage)
+const Rules = lazy(loadRulesPage)
+const Accounts = lazy(loadAccountsPage)
+const Settings = lazy(loadSettingsPage)
+const ImportExport = lazy(loadImportExportPage)
+const ImportRuleSuggestions = lazy(loadImportRuleSuggestionsPage)
+const Tasks = lazy(loadTasksPage)
+const ROUTE_PREFETCHERS = [
+  loadDashboardPage,
+  loadTransactionsPage,
+  loadCategoriesPage,
+  loadRulesPage,
+  loadAccountsPage,
+  loadSettingsPage,
+  loadImportExportPage,
+  loadImportRuleSuggestionsPage,
+  loadTasksPage,
+]
 const GLOBAL_SCROLLBAR_STYLES = `
   * {
     scrollbar-width: thin;
@@ -125,6 +156,175 @@ function getLocalProfileStorageKey(dbInstanceId) {
   return dbInstanceId ? `${LOCAL_PROFILE_STORAGE_KEY_PREFIX}.${dbInstanceId}` : null
 }
 
+function DataProviderInfoButton({ label = 'data providers' }) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef(null)
+
+  useDismissibleLayer({
+    open,
+    onClose: () => setOpen(false),
+    refs: [containerRef],
+  })
+
+  return (
+    <span
+      ref={containerRef}
+      onMouseLeave={() => setOpen(false)}
+      style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}
+    >
+      <button
+        type="button"
+        onMouseEnter={() => setOpen(true)}
+        onFocus={() => setOpen(true)}
+        onClick={() => setOpen(current => !current)}
+        aria-expanded={open}
+        style={{
+          background: 'none',
+          border: 'none',
+          padding: 0,
+          margin: 0,
+          color: 'var(--accent2)',
+          textDecoration: 'underline',
+          textUnderlineOffset: '0.18em',
+          font: 'inherit',
+          cursor: 'pointer',
+        }}
+      >
+        {label}
+      </button>
+      {open ? (
+        <div
+          onMouseDown={event => event.stopPropagation()}
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 'calc(100% + 8px)',
+            zIndex: 20,
+            width: 220,
+            padding: '10px 12px',
+            borderRadius: 12,
+            border: '1px solid color-mix(in srgb, var(--accent) 24%, var(--border))',
+            background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, white 2%), var(--surface))',
+            boxShadow: '0 16px 40px rgba(15, 23, 42, 0.24)',
+            display: 'grid',
+            gap: 8,
+          }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>Currently supported</div>
+          <div style={{ display: 'grid', gap: 6 }}>
+            {SUPPORTED_DATA_PROVIDERS.map(provider => (
+              <div key={provider.id} style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
+                <span style={{ fontSize: 13, color: 'var(--text)' }}>{provider.name}</span>
+                <span style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }}>{provider.availability}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </span>
+  )
+}
+
+function RouteLoadingFallback() {
+  return (
+    <div style={{
+      minHeight: '100%',
+      display: 'grid',
+      placeItems: 'center',
+      padding: 24,
+    }}>
+      <div style={{ fontSize: 14, color: 'var(--muted)' }}>Loading page...</div>
+    </div>
+  )
+}
+
+function WelcomeNameChip({ value, onRename, onRemove }) {
+  const {
+    editing,
+    draft,
+    setDraft,
+    beginEdit,
+    cancelEdit,
+    commitEdit,
+  } = useTransientTextEdit(value, {
+    onCommit: onRename,
+  })
+
+  return (
+    <div
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        minWidth: 0,
+      }}
+    >
+      {editing ? (
+        <TransientTextInput
+          value={draft}
+          onChange={setDraft}
+          onCommit={commitEdit}
+          onCancel={cancelEdit}
+          restoreOnEscape
+          style={{
+            background: 'var(--surface)',
+            color: 'var(--text)',
+            border: '1px solid var(--accent)',
+            borderRadius: 999,
+            padding: '8px 30px 8px 12px',
+            fontSize: 13,
+            fontWeight: 600,
+            minWidth: 120,
+            outline: 'none',
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => beginEdit(value)}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '8px 12px',
+            borderRadius: 999,
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            color: 'var(--text)',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'text',
+          }}
+        >
+          <span>{value}</span>
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onRemove}
+        style={{
+          background: 'none',
+          border: 'none',
+          color: 'var(--muted)',
+          cursor: 'pointer',
+          padding: 0,
+          fontSize: 13,
+          lineHeight: 1,
+        }}
+        aria-label={`Remove ${value}`}
+      >
+        x
+      </button>
+    </div>
+  )
+}
+
+/*
+ * Local mode uses one surface for two related jobs:
+ * - first run expands into a welcome flow that seeds preference profiles, optional account owners,
+ *   imported-category defaults, and an optional next step
+ * - later visits collapse back to a lightweight profile chooser/switcher
+ */
 /*
  * In local-access mode these profiles are not auth identities; they are named preference buckets so multiple
  * people can share one install while keeping separate layout, filter, and startup-route state.
@@ -133,6 +333,7 @@ function LocalPreferenceProfileScreen({
   profiles,
   onSelect,
   onCreate,
+  onCompleteWelcome,
   onRename,
   onDelete,
   creating,
@@ -143,6 +344,13 @@ function LocalPreferenceProfileScreen({
   onCancel,
 }) {
   const [name, setName] = useState('')
+  const [welcomeProfileNames, setWelcomeProfileNames] = useState([])
+  const [ownerDraft, setOwnerDraft] = useState('')
+  const [welcomeOwnerNames, setWelcomeOwnerNames] = useState([])
+  const [welcomeCategoryUsageMode, setWelcomeCategoryUsageMode] = useState(IMPORT_CATEGORY_USAGE_MODE_NONE)
+  const [openDataProvidersNext, setOpenDataProvidersNext] = useState(false)
+  const [openWelcomeSection, setOpenWelcomeSection] = useState('users')
+  const [showWelcomeHelp, setShowWelcomeHelp] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [editingName, setEditingName] = useState('')
   const [menu, setMenu] = useState(null)
@@ -150,11 +358,123 @@ function LocalPreferenceProfileScreen({
 
   const hasProfiles = profiles.length > 0
 
+  function welcomeCategoryUsageModeLabel(mode) {
+    return mode === IMPORT_CATEGORY_USAGE_MODE_ALL
+      ? 'Use imported categories by default'
+      : 'Do not use imported categories by default'
+  }
+
+  function normalizeName(nextValue) {
+    return String(nextValue || '').trim()
+  }
+
+  function addUniqueName(list, nextValue, setItems) {
+    const normalized = normalizeName(nextValue)
+    if (!normalized) return false
+    if (list.some(item => item.toLowerCase() === normalized.toLowerCase())) return false
+    setItems([...list, normalized])
+    return true
+  }
+
+  function renameUniqueName(list, currentValue, nextValue, setItems) {
+    const normalized = String(nextValue || '').trim()
+    if (!normalized) return false
+    if (normalized.toLowerCase() !== String(currentValue || '').trim().toLowerCase()
+      && list.some(item => item.toLowerCase() === normalized.toLowerCase())) {
+      return false
+    }
+    setItems(list.map(item => (
+      item === currentValue ? normalized : item
+    )))
+    return true
+  }
+
   useDismissibleLayer({
     open: !!menu,
     onClose: () => setMenu(null),
     refs: [menuRef],
   })
+
+  function renderWelcomeSection({ key, title, summary, required = false, children }) {
+    const isOpen = openWelcomeSection === key
+    return (
+      <div
+        style={{
+          padding: 14,
+          background: isOpen
+            ? 'color-mix(in srgb, var(--surface2) 42%, transparent)'
+            : 'color-mix(in srgb, var(--surface2) 28%, transparent)',
+          border: `1px solid ${isOpen
+            ? 'color-mix(in srgb, var(--accent) 34%, var(--border))'
+            : 'color-mix(in srgb, var(--border) 88%, white 4%)'}`,
+          borderRadius: 16,
+          display: 'grid',
+          gap: isOpen ? 12 : 0,
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setOpenWelcomeSection(current => (current === key ? null : key))}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            width: '100%',
+            background: 'none',
+            border: 'none',
+            padding: 0,
+            color: 'inherit',
+            cursor: 'pointer',
+            textAlign: 'left',
+          }}
+        >
+          <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{title}</span>
+              {required ? (
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '2px 8px',
+                  borderRadius: 999,
+                  background: 'color-mix(in srgb, var(--accent) 12%, transparent)',
+                  color: 'var(--accent2)',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                }}>
+                  Required
+                </span>
+              ) : null}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.45 }}>
+              {summary}
+            </div>
+          </div>
+          <div
+            aria-hidden="true"
+            style={{
+              flex: '0 0 auto',
+              width: 28,
+              height: 28,
+              borderRadius: 999,
+              border: '1px solid color-mix(in srgb, var(--border) 88%, white 4%)',
+              display: 'grid',
+              placeItems: 'center',
+              color: 'var(--muted)',
+              fontSize: 14,
+              background: 'var(--surface)',
+            }}
+          >
+            {isOpen ? '−' : '+'}
+          </div>
+        </button>
+        {isOpen ? children : null}
+      </div>
+    )
+  }
 
   return (
     <div style={{
@@ -162,38 +482,42 @@ function LocalPreferenceProfileScreen({
       display: 'grid',
       placeItems: 'center',
       padding: 24,
-      background: 'radial-gradient(circle at top, color-mix(in srgb, var(--accent) 8%, transparent), transparent 36%), radial-gradient(circle at bottom right, color-mix(in srgb, var(--accent2) 6%, transparent), transparent 32%), linear-gradient(180deg, color-mix(in srgb, var(--surface2) 48%, var(--bg)) 0%, var(--bg) 100%)',
+      background: 'radial-gradient(circle at top, color-mix(in srgb, var(--accent) 16%, transparent), transparent 34%), radial-gradient(circle at bottom right, color-mix(in srgb, var(--accent2) 11%, transparent), transparent 30%), linear-gradient(180deg, color-mix(in srgb, var(--surface2) 62%, var(--bg)) 0%, var(--bg) 100%)',
     }}>
       <div style={{
         width: 'min(560px, 100%)',
-        background: 'var(--surface)',
-        border: '1px solid color-mix(in srgb, var(--border) 82%, white 5%)',
+        background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, white 3%), color-mix(in srgb, var(--surface) 98%, var(--surface2) 16%))',
+        border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
         borderRadius: 20,
         padding: 28,
-        boxShadow: '0 18px 48px rgba(0,0,0,0.14)',
+        boxShadow: '0 30px 82px rgba(15, 23, 42, 0.28), 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent), inset 0 1px 0 rgba(255,255,255,0.05)',
       }}>
         <div style={{ marginBottom: 18 }}>
           <div>
-        {showModePill ? (
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            padding: '5px 11px',
-            borderRadius: 999,
-            background: 'color-mix(in srgb, var(--accent) 12%, var(--surface2))',
-            color: 'var(--accent2)',
-            fontSize: 11,
-            fontWeight: 700,
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
-            marginBottom: 14,
-          }}>
-            Local access mode
-          </div>
-        ) : null}
-            <div style={{ fontSize: 22, fontWeight: 600, marginBottom: 6, letterSpacing: '-0.02em', lineHeight: 1.1 }}>User profiles</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.55, maxWidth: 410, paddingLeft: 10 }}>
-              Tracks layout and view preferences.
+            {showModePill ? (
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                padding: '5px 11px',
+                borderRadius: 999,
+                background: 'color-mix(in srgb, var(--accent) 12%, var(--surface2))',
+                color: 'var(--accent2)',
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                marginBottom: 14,
+              }}>
+                Local access mode
+              </div>
+            ) : null}
+            <div style={{ fontSize: 22, fontWeight: 600, marginBottom: 6, letterSpacing: '-0.02em', lineHeight: 1.1 }}>
+              {hasProfiles ? 'User profiles' : `Getting Started`}
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.55, maxWidth: 470, paddingLeft: 10 }}>
+              {hasProfiles
+                ? 'Tracks layout and view preferences.'
+                : `Create the first user and optionally provide some additional information up front which can be useful later.`}
             </div>
           </div>
         </div>
@@ -210,161 +534,473 @@ function LocalPreferenceProfileScreen({
               Current Users
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-            {profiles.map(profile => (
-              <div
-                key={profile.id}
-                style={{
-                  position: 'relative',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  minWidth: 0,
-                }}
-              >
-                {editingId === profile.id ? (
-                  <TransientTextInput
-                    value={editingName}
-                    onChange={setEditingName}
-                    restoreOnEscape
-                    onCommit={() => {
-                      const next = editingName.trim()
-                      setEditingId(null)
-                      if (next && next !== profile.name) onRename(profile.id, next)
-                    }}
-                    onCancel={() => {
-                      setEditingId(null)
-                      setEditingName(profile.name)
-                    }}
-                    style={{
-                      background: 'var(--surface)',
-                      color: 'var(--text)',
-                      border: '1px solid var(--accent)',
-                      borderRadius: 999,
-                      padding: '9px 30px 9px 15px',
-                      fontSize: 13,
-                      minWidth: 120,
-                      outline: 'none',
-                    }}
-                  />
-                ) : (
-                  <button
-                    onClick={() => onSelect(profile)}
-                    onContextMenu={e => {
-                      e.preventDefault()
-                      setMenu({
-                        profile,
-                        x: e.clientX,
-                        y: e.clientY,
-                      })
-                    }}
-                    style={{
-                      background: 'var(--surface)',
-                      color: 'var(--text)',
-                      border: '1px solid color-mix(in srgb, var(--border) 90%, white 4%)',
-                      borderRadius: 999,
-                      padding: '10px 16px',
-                      fontSize: 13,
-                      cursor: 'pointer',
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.04)',
-                      fontWeight: 600,
-                    }}
-                    title="Click to use"
-                  >
-                    {profile.name}
-                  </button>
-                )}
-              </div>
-            ))}
+              {profiles.map(profile => (
+                <div
+                  key={profile.id}
+                  style={{
+                    position: 'relative',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    minWidth: 0,
+                  }}
+                >
+                  {editingId === profile.id ? (
+                    <TransientTextInput
+                      value={editingName}
+                      onChange={setEditingName}
+                      restoreOnEscape
+                      onCommit={() => {
+                        const next = editingName.trim()
+                        setEditingId(null)
+                        if (next && next !== profile.name) onRename(profile.id, next)
+                      }}
+                      onCancel={() => {
+                        setEditingId(null)
+                        setEditingName(profile.name)
+                      }}
+                      style={{
+                        background: 'var(--surface)',
+                        color: 'var(--text)',
+                        border: '1px solid var(--accent)',
+                        borderRadius: 999,
+                        padding: '9px 30px 9px 15px',
+                        fontSize: 13,
+                        minWidth: 120,
+                        outline: 'none',
+                      }}
+                    />
+                  ) : (
+                    <button
+                      onClick={() => onSelect(profile)}
+                      onContextMenu={e => {
+                        e.preventDefault()
+                        setMenu({
+                          profile,
+                          x: e.clientX,
+                          y: e.clientY,
+                        })
+                      }}
+                      style={{
+                        background: 'var(--surface)',
+                        color: 'var(--text)',
+                        border: '1px solid color-mix(in srgb, var(--border) 90%, white 4%)',
+                        borderRadius: 999,
+                        padding: '10px 16px',
+                        fontSize: 13,
+                        cursor: 'pointer',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.04)',
+                        fontWeight: 600,
+                      }}
+                      title="Click to use"
+                    >
+                      {profile.name}
+                    </button>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
         ) : null}
 
-        <div style={{
-          padding: 17,
-          background: 'color-mix(in srgb, var(--surface2) 36%, transparent)',
-          border: '1px solid color-mix(in srgb, var(--border) 88%, white 4%)',
-          borderRadius: 16,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-        }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
-            {hasProfiles ? 'New profile' : 'Add the first user'}
-          </div>
-          <TransientTextInput
-            value={name}
-            onChange={value => {
-              setName(value)
-              if (error) onClearError?.()
-            }}
-            restoreOnEscape
-            onCommit={() => {
-              if (name.trim() && !creating) onCreate(name.trim(), () => setName(''))
-            }}
-            onCancel={() => {}}
-            onBlurCommit={false}
-            placeholder="user name"
-            style={{
-              background: 'var(--surface)',
-              color: 'var(--text)',
-              border: '1px solid var(--border)',
-              borderRadius: 12,
-              padding: '12px 14px',
-              fontSize: 13,
-              outline: 'none',
-            }}
-          />
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button
-              onClick={() => name.trim() && onCreate(name.trim(), () => setName(''))}
-              disabled={!name.trim() || creating}
-              style={{
-                background: !name.trim() || creating ? 'var(--surface)' : 'var(--accent)',
-                color: !name.trim() || creating ? 'var(--muted)' : '#fff',
-                border: !name.trim() || creating ? '1px solid var(--border)' : 'none',
-                borderRadius: 10,
-                padding: '9px 16px',
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: !name.trim() || creating ? 'not-allowed' : 'pointer',
+        {hasProfiles ? (
+          <div style={{
+            padding: 17,
+            background: 'color-mix(in srgb, var(--surface2) 36%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--border) 88%, white 4%)',
+            borderRadius: 16,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
+              New profile
+            </div>
+            <TransientTextInput
+              value={name}
+              onChange={value => {
+                setName(value)
+                if (error) onClearError?.()
               }}
-            >
-              {creating ? 'Creating…' : hasProfiles ? 'Create user' : 'Create and continue'}
-            </button>
-            {showCancel ? (
+              restoreOnEscape
+              onCommit={() => {
+                if (name.trim() && !creating) onCreate(name.trim(), () => setName(''))
+              }}
+              onCancel={() => { }}
+              onBlurCommit={false}
+              placeholder="user name"
+              style={{
+                background: 'var(--surface)',
+                color: 'var(--text)',
+                border: '1px solid var(--border)',
+                borderRadius: 12,
+                padding: '12px 14px',
+                fontSize: 13,
+                outline: 'none',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <button
-                onClick={onCancel}
+                onClick={() => name.trim() && onCreate(name.trim(), () => setName(''))}
+                disabled={!name.trim() || creating}
                 style={{
-                  marginLeft: 'auto',
-                  background: 'none',
-                  color: 'var(--muted)',
-                  border: '1px solid var(--border)',
+                  background: !name.trim() || creating ? 'var(--surface)' : 'var(--accent)',
+                  color: !name.trim() || creating ? 'var(--muted)' : '#fff',
+                  border: !name.trim() || creating ? '1px solid var(--border)' : 'none',
                   borderRadius: 10,
-                  padding: '9px 14px',
+                  padding: '9px 16px',
                   fontSize: 13,
+                  fontWeight: 600,
+                  cursor: !name.trim() || creating ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {creating ? 'Creating…' : 'Create user'}
+              </button>
+              {showCancel ? (
+                <button
+                  onClick={onCancel}
+                  style={{
+                    marginLeft: 'auto',
+                    background: 'none',
+                    color: 'var(--muted)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 10,
+                    padding: '9px 14px',
+                    fontSize: 13,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+              ) : null}
+            </div>
+            {error ? (
+              <div
+                style={{
+                  marginTop: 2,
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  border: '1px solid color-mix(in srgb, var(--danger) 34%, var(--border))',
+                  background: 'color-mix(in srgb, var(--danger) 8%, var(--surface))',
+                  color: 'var(--text)',
+                  fontSize: 12,
+                  lineHeight: 1.45,
+                }}
+              >
+                {error}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 14 }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
+              flexWrap: 'wrap',
+            }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}></div>
+              <button
+                type="button"
+                onClick={() => setShowWelcomeHelp(current => !current)}
+                style={{
+                  background: showWelcomeHelp
+                    ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
+                    : 'var(--surface)',
+                  color: showWelcomeHelp ? 'var(--accent2)' : 'var(--text)',
+                  border: `1px solid ${showWelcomeHelp ? 'color-mix(in srgb, var(--accent) 34%, var(--border))' : 'var(--border)'}`,
+                  borderRadius: 999,
+                  padding: '8px 12px',
+                  fontSize: 12,
+                  fontWeight: 600,
                   cursor: 'pointer',
                 }}
               >
-                Cancel
+                {showWelcomeHelp ? 'Back to setup' : 'More information'}
               </button>
+            </div>
+
+            {showWelcomeHelp ? (
+              <div style={{
+                padding: 18,
+                background: 'color-mix(in srgb, var(--surface2) 36%, transparent)',
+                border: '1px solid color-mix(in srgb, var(--border) 88%, white 4%)',
+                borderRadius: 16,
+                display: 'grid',
+                gap: 14,
+              }}>
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>Getting Started</div>
+                  <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+                    You only need one user name to begin, everything else can be skipped and added later.
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gap: 10 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>If you are starting from scratch</div>
+                  <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+                    Keep it simple: add your user name, skip the optional sections for now, and proceed to the import page to load your first set of transactions or to the accounts page to link accounts through{' '}
+                    <DataProviderInfoButton />.
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gap: 10 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>If you are already tracking finances elsewhere</div>
+                  <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+                    Add the names of the various account owners and indicate that the transactions you are importing have already been categorized so the system should both preserve the existing categories when importing the transactions and propose rules based on the mappings. You may have multiple data sources, if some have been curated and some have not, you can make this distinction later at the data source level. This is simply the default.
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
+                  Other than user name the fields on the welcome page are there as they can be a useful place to get started but it is perfectly fine to ignore them and their meaning will become clear as you start to work with your data.
+                </div>
+              </div>
+            ) : (
+              <>
+                {renderWelcomeSection({
+                  key: 'users',
+                  title: 'Users',
+                  summary: welcomeProfileNames.length > 0
+                    ? `${welcomeProfileNames.length} added`
+                    : `Tracks page layout and preferences.`,
+                  required: true,
+                  children: (
+                    <>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <TransientTextInput
+                          value={name}
+                          onChange={value => {
+                            setName(value)
+                            if (error) onClearError?.()
+                          }}
+                          restoreOnEscape
+                          onCommit={() => {
+                            if (addUniqueName(welcomeProfileNames, name, setWelcomeProfileNames)) setName('')
+                          }}
+                          onCancel={() => { }}
+                          onBlurCommit={false}
+                          placeholder="Add a user name"
+                          style={{
+                            flex: 1,
+                            background: 'var(--surface)',
+                            color: 'var(--text)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 12,
+                            padding: '12px 14px',
+                            fontSize: 13,
+                            outline: 'none',
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (addUniqueName(welcomeProfileNames, name, setWelcomeProfileNames)) setName('')
+                          }}
+                          disabled={!name.trim()}
+                          style={{
+                            background: !name.trim() ? 'var(--surface)' : 'var(--accent)',
+                            color: !name.trim() ? 'var(--muted)' : '#fff',
+                            border: !name.trim() ? '1px solid var(--border)' : 'none',
+                            borderRadius: 10,
+                            padding: '10px 14px',
+                            fontSize: 13,
+                            fontWeight: 600,
+                            cursor: !name.trim() ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          Add
+                        </button>
+                      </div>
+                      {welcomeProfileNames.length > 0 ? (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                          {welcomeProfileNames.map(profileName => (
+                            <WelcomeNameChip
+                              key={profileName}
+                              value={profileName}
+                              onRename={nextValue => {
+                                renameUniqueName(welcomeProfileNames, profileName, nextValue, setWelcomeProfileNames)
+                              }}
+                              onRemove={() => setWelcomeProfileNames(prev => prev.filter(item => item !== profileName))}
+                            />
+                          ))}
+                        </div>
+                      ) : null}
+                    </>
+                  ),
+                })}
+
+                {renderWelcomeSection({
+                  key: 'owners',
+                  title: 'Account owners',
+                  summary: welcomeOwnerNames.length > 0
+                    ? `${welcomeOwnerNames.length} added`
+                    : 'of accounts in the transaction data. Managed on the accounts page.',
+                  children: (
+                    <>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <TransientTextInput
+                          value={ownerDraft}
+                          onChange={value => {
+                            setOwnerDraft(value)
+                            if (error) onClearError?.()
+                          }}
+                          restoreOnEscape
+                          onCommit={() => {
+                            if (addUniqueName(welcomeOwnerNames, ownerDraft, setWelcomeOwnerNames)) setOwnerDraft('')
+                          }}
+                          onCancel={() => { }}
+                          onBlurCommit={false}
+                          placeholder="Add an account owner"
+                          style={{
+                            flex: 1,
+                            background: 'var(--surface)',
+                            color: 'var(--text)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 12,
+                            padding: '12px 14px',
+                            fontSize: 13,
+                            outline: 'none',
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (addUniqueName(welcomeOwnerNames, ownerDraft, setWelcomeOwnerNames)) setOwnerDraft('')
+                          }}
+                          disabled={!ownerDraft.trim()}
+                          style={{
+                            background: !ownerDraft.trim() ? 'var(--surface)' : 'var(--accent)',
+                            color: !ownerDraft.trim() ? 'var(--muted)' : '#fff',
+                            border: !ownerDraft.trim() ? '1px solid var(--border)' : 'none',
+                            borderRadius: 10,
+                            padding: '10px 14px',
+                            fontSize: 13,
+                            fontWeight: 600,
+                            cursor: !ownerDraft.trim() ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          Add
+                        </button>
+                      </div>
+                      {welcomeOwnerNames.length > 0 ? (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                          {welcomeOwnerNames.map(ownerName => (
+                            <WelcomeNameChip
+                              key={ownerName}
+                              value={ownerName}
+                              onRename={nextValue => {
+                                renameUniqueName(welcomeOwnerNames, ownerName, nextValue, setWelcomeOwnerNames)
+                              }}
+                              onRemove={() => setWelcomeOwnerNames(prev => prev.filter(item => item !== ownerName))}
+                            />
+                          ))}
+                        </div>
+                      ) : null}
+                    </>
+                  ),
+                })}
+
+                {renderWelcomeSection({
+                  key: 'trust',
+                  title: 'Learn from the imported transactions',
+                  summary: 'Useful if the transactions have already been categorized',
+                  children: (
+                    <>
+                      <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+                        Set the default for whether categories already present in imported data should be used. Each imported data set can still be adjusted later.
+                      </div>
+                      <label style={{
+                        display: 'grid',
+                        gap: 4,
+                        padding: '11px 12px',
+                        borderRadius: 12,
+                        border: `1px solid ${welcomeCategoryUsageMode === IMPORT_CATEGORY_USAGE_MODE_ALL ? 'var(--accent)' : 'var(--border)'}`,
+                        background: welcomeCategoryUsageMode === IMPORT_CATEGORY_USAGE_MODE_ALL
+                          ? 'color-mix(in srgb, var(--accent) 7%, var(--surface2))'
+                          : 'var(--surface)',
+                        cursor: 'pointer',
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <input
+                            type="checkbox"
+                            checked={welcomeCategoryUsageMode === IMPORT_CATEGORY_USAGE_MODE_ALL}
+                            onChange={event => setWelcomeCategoryUsageMode(event.target.checked ? IMPORT_CATEGORY_USAGE_MODE_ALL : IMPORT_CATEGORY_USAGE_MODE_NONE)}
+                          />
+                          <span style={{ fontSize: 13, fontWeight: 600 }}>Imported transactions have already been categorized</span>
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, paddingLeft: 24 }}>
+                          Use the categories present in the data to categorize imported transactions and generate potential categorization rules. Leave this off when imported categories are inconsistent or should only be used selectively.
+                        </div>
+                      </label>
+                    </>
+                  ),
+                })}
+
+                {renderWelcomeSection({
+                  key: 'providers',
+                  title: 'Data providers',
+                  summary: openDataProvidersNext
+                    ? 'Open Data Providers after setup'
+                    : 'Link accounts for direct import.',
+                  children: (
+                    <>
+                      <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+                        Connections with <DataProviderInfoButton /> are managed on the accounts page.
+                      </div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={openDataProvidersNext}
+                          onChange={event => setOpenDataProvidersNext(event.target.checked)}
+                        />
+                        Open Data Providers after setup
+                      </label>
+                    </>
+                  ),
+                })}
+              </>
+            )}
+
+            {!showWelcomeHelp ? (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button
+                  type="button"
+                  onClick={() => onCompleteWelcome?.({
+                    profileNames: welcomeProfileNames,
+                    ownerNames: welcomeOwnerNames,
+                    categoryUsageMode: welcomeCategoryUsageMode,
+                    openDataProvidersNext,
+                  })}
+                  disabled={welcomeProfileNames.length === 0 || creating}
+                  style={{
+                    background: welcomeProfileNames.length === 0 || creating ? 'var(--surface)' : 'var(--accent)',
+                    color: welcomeProfileNames.length === 0 || creating ? 'var(--muted)' : '#fff',
+                    border: welcomeProfileNames.length === 0 || creating ? '1px solid var(--border)' : 'none',
+                    borderRadius: 10,
+                    padding: '10px 18px',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: welcomeProfileNames.length === 0 || creating ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {creating ? 'Setting up…' : 'Continue'}
+                </button>
+              </div>
+            ) : null}
+            {error ? (
+              <div
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  border: '1px solid color-mix(in srgb, var(--danger) 34%, var(--border))',
+                  background: 'color-mix(in srgb, var(--danger) 8%, var(--surface))',
+                  color: 'var(--text)',
+                  fontSize: 12,
+                  lineHeight: 1.45,
+                }}
+              >
+                {error}
+              </div>
             ) : null}
           </div>
-          {error ? (
-            <div
-              style={{
-                marginTop: 2,
-                padding: '10px 12px',
-                borderRadius: 10,
-                border: '1px solid color-mix(in srgb, var(--danger) 34%, var(--border))',
-                background: 'color-mix(in srgb, var(--danger) 8%, var(--surface))',
-                color: 'var(--text)',
-                fontSize: 12,
-                lineHeight: 1.45,
-              }}
-            >
-              {error}
-            </div>
-          ) : null}
-        </div>
+        )}
       </div>
       {menu ? (
         <div
@@ -452,6 +1088,7 @@ export default function App() {
   const [passwordPolicy, setPasswordPolicy] = useState('min_8')
   const [securityProfile, setSecurityProfile] = useState('local_private')
   const [experimentalSecuritySettings, setExperimentalSecuritySettings] = useState(false)
+  const [developerOptionsEnabled, setDeveloperOptionsEnabled] = useState(false)
   const [dbInstanceId, setDbInstanceId] = useState('')
   const [localProfiles, setLocalProfiles] = useState([])
   const [activeLocalProfile, setActiveLocalProfile] = useState(null)
@@ -464,17 +1101,50 @@ export default function App() {
   const [navProfileEditing, setNavProfileEditing] = useState(false)
   const [navProfileDraft, setNavProfileDraft] = useState('')
   const [startupRouteApplied, setStartupRouteApplied] = useState(false)
+  const [bootPreferences, setBootPreferences] = useState(null)
+  const [bootPreferenceSubjectId, setBootPreferenceSubjectId] = useState('')
   const navProfileMenuRef = useRef(null)
+  const savedStartupRouteRef = useRef('')
+  const savedStartupRouteSubjectRef = useRef('')
+  const preferenceSubjectId = authEnabled
+    ? (currentUser?.id || currentUser?.user_id || '')
+    : (activeLocalProfile?.id || '')
+  const appSessionValue = useMemo(() => ({
+    authEnabled,
+    currentUser,
+    passwordPolicy,
+    securityProfile,
+    experimentalSecuritySettings,
+    developerOptionsEnabled,
+    dbInstanceId,
+    activeLocalProfile,
+    preferenceSubjectId,
+  }), [
+    authEnabled,
+    currentUser,
+    passwordPolicy,
+    securityProfile,
+    experimentalSecuritySettings,
+    developerOptionsEnabled,
+    dbInstanceId,
+    activeLocalProfile,
+    preferenceSubjectId,
+  ])
 
   async function hydrateStartupRoute(profileId = '', options = {}) {
-    const { forceFromRoot = false } = options
+    const { forceFromRoot = false, preferenceSubjectIdOverride = '' } = options
     try {
       if (profileId) setLocalPreferenceProfileId(profileId)
       // The startup route is stored per active preference identity, so hydrate it before we start saving the
       // current location; otherwise first load would immediately overwrite the remembered landing page with "/".
       const prefResp = await api.getUserPreferences().catch(() => ({ preferences: {} }))
+      const nextPreferenceSubjectId = preferenceSubjectIdOverride || profileId || ''
+      setBootPreferenceSubjectId(nextPreferenceSubjectId)
+      setBootPreferences(prefResp?.preferences || {})
       const startupRoute = String(prefResp?.preferences?.[STARTUP_ROUTE_PREFERENCE_KEY] || '').trim()
       const validStartupRoute = startupRoute && startupRoute.startsWith('/') ? startupRoute : ''
+      savedStartupRouteRef.current = validStartupRoute
+      savedStartupRouteSubjectRef.current = nextPreferenceSubjectId
       if (forceFromRoot) {
         navigate(validStartupRoute || '/', { replace: true })
       } else if (location.pathname === '/' && validStartupRoute && validStartupRoute !== location.pathname) {
@@ -504,7 +1174,10 @@ export default function App() {
         setPasswordPolicy(status.password_policy || 'min_8')
         setSecurityProfile(status.security_profile || 'local_private')
         setExperimentalSecuritySettings(!!status.experimental_security_settings)
+        setDeveloperOptionsEnabled(!!status.developer_options_enabled)
         setDbInstanceId(status.db_instance_id || '')
+        setBootPreferences(null)
+        setBootPreferenceSubjectId('')
 
         if (!status.auth_enabled) {
           const profilesResp = await api.getLocalPreferenceProfiles().catch(() => ({ profiles: [] }))
@@ -522,9 +1195,9 @@ export default function App() {
             setLocalPreferenceProfileId(autoSelected.id)
             setActiveLocalProfile(autoSelected)
             if (storageKey) {
-              try { window.localStorage.setItem(storageKey, autoSelected.id) } catch {}
+              try { window.localStorage.setItem(storageKey, autoSelected.id) } catch { }
             }
-            await hydrateStartupRoute(autoSelected.id)
+            await hydrateStartupRoute(autoSelected.id, { preferenceSubjectIdOverride: autoSelected.id })
           } else {
             setLocalPreferenceProfileId('')
             setActiveLocalProfile(null)
@@ -543,7 +1216,7 @@ export default function App() {
         }
 
         setCurrentUser(status.user || null)
-        await hydrateStartupRoute('')
+        await hydrateStartupRoute('', { preferenceSubjectIdOverride: status?.user?.id || status?.user_id || '' })
         setAuthChecked(true)
       } catch (err) {
         if (cancelled) return
@@ -567,12 +1240,22 @@ export default function App() {
     // Do not persist the current route until the initial startup-route hydration finished; that would turn the
     // bootstrap/login/profile-entry route into the new default landing page.
     const route = `${location.pathname}${location.search || ''}`
-    api.saveUserPreference(STARTUP_ROUTE_PREFERENCE_KEY, route).catch(() => {})
+    if (savedStartupRouteSubjectRef.current === preferenceSubjectId) {
+      if (savedStartupRouteRef.current === route) return
+      if (!savedStartupRouteRef.current && route === '/') return
+    }
+    api.saveUserPreference(STARTUP_ROUTE_PREFERENCE_KEY, route)
+      .then(() => {
+        savedStartupRouteRef.current = route
+        savedStartupRouteSubjectRef.current = preferenceSubjectId
+      })
+      .catch(() => { })
   }, [
     startupRouteApplied,
     authEnabled,
     currentUser,
     activeLocalProfile,
+    preferenceSubjectId,
     location.pathname,
     location.search,
   ])
@@ -580,17 +1263,49 @@ export default function App() {
   useEffect(() => {
     if (runtimeConfig && runtimeConfig.ok === false) return
     if (authEnabled && !currentUser) return
+    if (!authEnabled && !activeLocalProfile) return
 
     function fetchTasks() {
       api.getTasks()
         .then(r => setTaskCount(r?.open_items || 0))
-        .catch(() => {})
+        .catch(() => { })
     }
 
     fetchTasks()
     window.addEventListener('fintrack:refresh-tasks', fetchTasks)
     return () => window.removeEventListener('fintrack:refresh-tasks', fetchTasks)
   }, [authEnabled, currentUser, runtimeConfig])
+
+  useEffect(() => {
+    if (!startupRouteApplied) return
+    if (authEnabled && !currentUser) return
+    if (!authEnabled && !activeLocalProfile) return
+
+    let cancelled = false
+    let timeoutId = null
+    let idleId = null
+
+    const preloadRoutes = () => {
+      if (cancelled) return
+      ROUTE_PREFETCHERS.forEach(loadPage => {
+        loadPage().catch(() => { })
+      })
+    }
+
+    if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+      idleId = window.requestIdleCallback(preloadRoutes, { timeout: 2000 })
+    } else {
+      timeoutId = window.setTimeout(preloadRoutes, 1200)
+    }
+
+    return () => {
+      cancelled = true
+      if (timeoutId !== null) window.clearTimeout(timeoutId)
+      if (idleId !== null && typeof window !== 'undefined' && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(idleId)
+      }
+    }
+  }, [startupRouteApplied, authEnabled, currentUser, activeLocalProfile])
 
   useEffect(() => {
     function isEditableTarget(target) {
@@ -624,7 +1339,7 @@ export default function App() {
   }, [])
 
   async function handleLogout() {
-    await api.logout().catch(() => {})
+    await api.logout().catch(() => { })
     setCurrentUser(null)
     setTaskCount(0)
   }
@@ -646,13 +1361,18 @@ export default function App() {
     setNavProfileEditing(false)
     setNavProfileMenu(null)
     setLocalPreferenceProfileId(profile?.id || '')
+    setBootPreferences(null)
+    setBootPreferenceSubjectId('')
     const storageKey = getLocalProfileStorageKey(dbInstanceId)
     if (storageKey) {
       try {
         if (profile?.id) window.localStorage.setItem(storageKey, profile.id)
-      } catch {}
+      } catch { }
     }
-    hydrateStartupRoute(profile?.id || '', { forceFromRoot: forceStartupRoute }).catch(() => setStartupRouteApplied(true))
+    hydrateStartupRoute(profile?.id || '', {
+      forceFromRoot: forceStartupRoute,
+      preferenceSubjectIdOverride: profile?.id || '',
+    }).catch(() => setStartupRouteApplied(true))
   }
 
   async function handleCreateLocalProfile(name, clearForm) {
@@ -671,8 +1391,72 @@ export default function App() {
     } catch (err) {
       setLocalProfileError(
         err?.message === 'Failed to fetch'
-          ? 'Server unreachable. Start or restart FinTrack and try again.'
+          ? `Server unreachable. Start or restart ${APP_NAME} and try again.`
           : (err?.message || 'Could not create the user profile.')
+      )
+    } finally {
+      setCreatingLocalProfile(false)
+    }
+  }
+
+  async function handleCompleteWelcomeSetup(setup) {
+    const profileNames = Array.isArray(setup?.profileNames) ? setup.profileNames.map(value => String(value || '').trim()).filter(Boolean) : []
+    const ownerNames = Array.isArray(setup?.ownerNames) ? setup.ownerNames.map(value => String(value || '').trim()).filter(Boolean) : []
+    const categoryUsageMode = normalizeImportCategoryUsageMode(setup?.categoryUsageMode)
+    const openDataProvidersNext = !!setup?.openDataProvidersNext
+    if (profileNames.length === 0) {
+      setLocalProfileError('Add at least one user name to continue.')
+      return
+    }
+
+    setLocalProfileError('')
+    setCreatingLocalProfile(true)
+    const originalProfileId = activeLocalProfile?.id || ''
+
+    try {
+      const existingOwners = await api.getOwners().catch(() => [])
+      const existingOwnerNames = new Set((existingOwners || []).map(owner => String(owner?.name || '').trim().toLowerCase()).filter(Boolean))
+      const reservedOwnerNames = new Set(['shared', ...existingOwnerNames])
+      const conflictingOwner = ownerNames.find(ownerName => reservedOwnerNames.has(ownerName.toLowerCase()))
+      if (conflictingOwner) {
+        throw new Error(`An account owner named "${conflictingOwner}" already exists.`)
+      }
+
+      const createdProfiles = []
+      for (const profileName of profileNames) {
+        const resp = await api.createLocalPreferenceProfile(profileName)
+        if (resp?.profile) createdProfiles.push(resp.profile)
+      }
+      if (createdProfiles.length === 0) {
+        throw new Error('Could not create the first user profile.')
+      }
+
+      for (const ownerName of ownerNames) {
+        await api.createOwner({ name: ownerName })
+      }
+
+      const startupRoute = openDataProvidersNext ? DATA_PROVIDER_STARTUP_ROUTE : '/'
+      for (const profile of createdProfiles) {
+        setLocalPreferenceProfileId(profile.id)
+        await api.saveUserPreference(IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY, categoryUsageMode)
+        await api.saveUserPreference(STARTUP_ROUTE_PREFERENCE_KEY, startupRoute)
+      }
+      setLocalPreferenceProfileId(originalProfileId)
+
+      setLocalProfiles(prev => {
+        const next = [...prev]
+        for (const profile of createdProfiles) {
+          if (!next.some(item => item.id === profile.id)) next.push(profile)
+        }
+        return next.sort((a, b) => a.name.localeCompare(b.name))
+      })
+      activateLocalProfile(createdProfiles[0], { forceStartupRoute: true })
+    } catch (err) {
+      setLocalPreferenceProfileId(originalProfileId)
+      setLocalProfileError(
+        err?.message === 'Failed to fetch'
+          ? `Server unreachable. Start or restart ${APP_NAME} and try again.`
+          : (err?.message || 'Could not finish the welcome setup.')
       )
     } finally {
       setCreatingLocalProfile(false)
@@ -706,7 +1490,7 @@ export default function App() {
     if (deletedCurrentProfile) {
       const storageKey = getLocalProfileStorageKey(dbInstanceId)
       if (storageKey) {
-        try { window.localStorage.removeItem(storageKey) } catch {}
+        try { window.localStorage.removeItem(storageKey) } catch { }
       }
       setLocalPreferenceProfileId('')
       setActiveLocalProfile(null)
@@ -737,7 +1521,7 @@ export default function App() {
   if (!authChecked) {
     return (
       <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
-        <div style={{ fontSize: 14, color: 'var(--muted)' }}>Loading FinTrack...</div>
+        <div style={{ fontSize: 14, color: 'var(--muted)' }}>Loading {APP_NAME}...</div>
       </div>
     )
   }
@@ -762,7 +1546,12 @@ export default function App() {
             setCurrentUser(user)
             setAuthEnabled(true)
             setNeedsBootstrap(false)
-            hydrateStartupRoute('', { forceFromRoot: true }).catch(() => setStartupRouteApplied(true))
+            setBootPreferences(null)
+            setBootPreferenceSubjectId('')
+            hydrateStartupRoute('', {
+              forceFromRoot: true,
+              preferenceSubjectIdOverride: user?.id || user?.user_id || '',
+            }).catch(() => setStartupRouteApplied(true))
           }}
         />
       </AppErrorBoundary>
@@ -779,6 +1568,7 @@ export default function App() {
           onClearError={() => setLocalProfileError('')}
           onSelect={profile => activateLocalProfile(profile, { forceStartupRoute: !localProfilePickerDismissible })}
           onCreate={handleCreateLocalProfile}
+          onCompleteWelcome={handleCompleteWelcomeSetup}
           onRename={handleRenameLocalProfile}
           onDelete={handleDeleteLocalProfile}
           showModePill={experimentalSecuritySettings}
@@ -792,187 +1582,210 @@ export default function App() {
   return (
     <AppErrorBoundary>
       {/* Key the provider by the active preference identity so switching user/profile drops cached preference state instead of leaking it across sessions. */}
-      <UserPreferencesProvider key={authEnabled ? `user:${currentUser?.id || currentUser?.username || ''}` : `local:${activeLocalProfile?.id || ''}`}>
-        <FilterProvider>
-        <style>{GLOBAL_SCROLLBAR_STYLES}</style>
-        {pendingLocalProfileDelete ? (
-          <AppConfirmDialog
-            title="Delete user profile?"
-            description={`Delete user profile "${pendingLocalProfileDelete.name}"?`}
-            confirmLabel="Delete"
-            confirmVariant="danger"
-            borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
-            onConfirm={confirmDeleteLocalProfile}
-            onCancel={() => setPendingLocalProfileDelete(null)}
-            width="min(480px, 100%)"
-          />
-        ) : null}
-        <div style={s.shell}>
-          <nav style={s.nav}>
-            <div style={s.logo}>FinTrack</div>
-            {NAV_LINKS.map(([to, label]) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={to === '/'}
-                style={({ isActive }) => (isActive ? activeStyle : s.link)}
-              >
-                <span>{label}</span>
-                {to === '/tasks' && taskCount > 0 && (
-                  <span style={{
-                    background: '#f59e0b', color: '#fff',
-                    fontSize: 11, fontWeight: 700,
-                    padding: '1px 7px', borderRadius: 99,
-                    lineHeight: '18px', minWidth: 20, textAlign: 'center',
+      <AppSessionProvider value={appSessionValue}>
+        <UserPreferencesProvider
+          key={authEnabled ? `user:${currentUser?.id || currentUser?.username || ''}` : `local:${activeLocalProfile?.id || ''}`}
+          initialPreferences={bootPreferenceSubjectId && bootPreferenceSubjectId === preferenceSubjectId ? bootPreferences : null}
+        >
+          <FilterProvider>
+          <style>{GLOBAL_SCROLLBAR_STYLES}</style>
+          {pendingLocalProfileDelete ? (
+            <AppConfirmDialog
+              title="Delete user profile?"
+              description={`Delete user profile "${pendingLocalProfileDelete.name}"?`}
+              confirmLabel="Delete"
+              confirmVariant="danger"
+              borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+              onConfirm={confirmDeleteLocalProfile}
+              onCancel={() => setPendingLocalProfileDelete(null)}
+              width="min(480px, 100%)"
+            />
+          ) : null}
+          <div style={s.shell}>
+            <nav style={s.nav}>
+              <div style={s.logo}>
+                <div>{APP_NAME}</div>
+                {developerOptionsEnabled ? (
+                  <div style={{
+                    marginTop: 3,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: 'var(--muted)',
+                    letterSpacing: '0.04em',
                   }}>
-                    {taskCount}
-                  </span>
-                )}
-              </NavLink>
-            ))}
-            <div style={s.navFooter}>
-              <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-                {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
-                {authEnabled ? (
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>
-                    {currentUser?.display_name || currentUser?.username}
-                  </span>
-                ) : (
-                  navProfileEditing && activeLocalProfile ? (
-                    <TransientTextInput
-                      value={navProfileDraft}
-                      onChange={setNavProfileDraft}
-                      onCommit={commitNavProfileRename}
-                      onCancel={() => {
-                        setNavProfileEditing(false)
-                        setNavProfileDraft(activeLocalProfile.name)
-                      }}
-                      restoreOnEscape
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        background: 'var(--surface2)',
-                        color: 'var(--text)',
-                        border: '1px solid var(--accent)',
-                        borderRadius: 999,
-                        padding: '4px 10px',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        verticalAlign: 'middle',
-                        minWidth: 110,
-                        outline: 'none',
-                      }}
-                    />
+                    v{APP_VERSION}
+                  </div>
+                ) : null}
+              </div>
+              {NAV_LINKS.map(([to, label]) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={to === '/'}
+                  style={({ isActive }) => (isActive ? activeStyle : s.link)}
+                >
+                  <span>{label}</span>
+                  {to === '/tasks' && taskCount > 0 && (
+                    <span style={{
+                      background: '#f59e0b', color: '#fff',
+                      fontSize: 11, fontWeight: 700,
+                      padding: '1px 7px', borderRadius: 99,
+                      lineHeight: '18px', minWidth: 20, textAlign: 'center',
+                    }}>
+                      {taskCount}
+                    </span>
+                  )}
+                </NavLink>
+              ))}
+              <div style={s.navFooter}>
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+                  {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
+                  {authEnabled ? (
+                    <span style={{ fontWeight: 600, color: 'var(--text)' }}>
+                      {currentUser?.display_name || currentUser?.username}
+                    </span>
                   ) : (
-                    <button
-                      onClick={handleSwitchLocalProfile}
-                      onContextMenu={e => {
-                        e.preventDefault()
-                        if (!activeLocalProfile) return
-                        setNavProfileMenu({
-                          x: e.clientX,
-                          y: e.clientY,
-                        })
-                      }}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        background: 'var(--surface2)',
-                        color: 'var(--text)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 999,
-                        padding: '4px 10px',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        verticalAlign: 'middle',
-                      }}
-                      title="Switch user profile"
-                    >
-                      {activeLocalProfile?.name || 'Choose profile'}
-                    </button>
-                  )
+                    navProfileEditing && activeLocalProfile ? (
+                      <TransientTextInput
+                        value={navProfileDraft}
+                        onChange={setNavProfileDraft}
+                        onCommit={commitNavProfileRename}
+                        onCancel={() => {
+                          setNavProfileEditing(false)
+                          setNavProfileDraft(activeLocalProfile.name)
+                        }}
+                        restoreOnEscape
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          background: 'var(--surface2)',
+                          color: 'var(--text)',
+                          border: '1px solid var(--accent)',
+                          borderRadius: 999,
+                          padding: '4px 10px',
+                          fontSize: 12,
+                          fontWeight: 600,
+                          verticalAlign: 'middle',
+                          minWidth: 110,
+                          outline: 'none',
+                        }}
+                      />
+                    ) : (
+                      <button
+                        onClick={handleSwitchLocalProfile}
+                        onContextMenu={e => {
+                          e.preventDefault()
+                          if (!activeLocalProfile) return
+                          setNavProfileMenu({
+                            x: e.clientX,
+                            y: e.clientY,
+                          })
+                        }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          background: 'var(--surface2)',
+                          color: 'var(--text)',
+                          border: '1px solid var(--border)',
+                          borderRadius: 999,
+                          padding: '4px 10px',
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          verticalAlign: 'middle',
+                        }}
+                        title="Switch user profile"
+                      >
+                        {activeLocalProfile?.name || 'Choose profile'}
+                      </button>
+                    )
+                  )}
+                </div>
+                {authEnabled && (
+                  <button
+                    onClick={handleLogout}
+                    style={{
+                      width: '100%',
+                      background: 'none',
+                      border: '1px solid var(--border)',
+                      color: 'var(--text)',
+                      borderRadius: 8,
+                      padding: '8px 10px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Sign out
+                  </button>
                 )}
               </div>
-              {authEnabled && (
+            </nav>
+            <div style={s.main}>
+              <FilterBar />
+              <div style={s.content}>
+                {/* Route-level lazy loading keeps the shell responsive and avoids forcing every large screen into
+                    the initial bundle before the user ever visits it. */}
+                <Suspense fallback={<RouteLoadingFallback />}>
+                  <Routes>
+                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/transactions" element={<Transactions />} />
+                    <Route path="/categories" element={<Categories />} />
+                    <Route path="/rules" element={<Rules />} />
+                    <Route path="/accounts" element={<Accounts />} />
+                    <Route path="/import-export/rule-suggestions" element={<ImportRuleSuggestions />} />
+                    <Route path="/import-export/batches/:batchId/rule-suggestions" element={<ImportRuleSuggestions />} />
+                    <Route path="/import-export/profiles/:profileId/rule-suggestions" element={<ImportRuleSuggestions />} />
+                    <Route path="/import-export" element={<ImportExport />} />
+                    <Route path="/tasks" element={<Tasks />} />
+                    <Route path="/settings" element={<Settings />} />
+                  </Routes>
+                </Suspense>
+              </div>
+            </div>
+          </div>
+            {navProfileMenu && activeLocalProfile && (
+              <div
+                ref={navProfileMenuRef}
+                onMouseDown={e => e.stopPropagation()}
+                style={{
+                  position: 'fixed',
+                  left: Math.min(navProfileMenu.x, window.innerWidth - 160),
+                  top: Math.min(navProfileMenu.y, window.innerHeight - 100),
+                  zIndex: 30,
+                  background: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 10,
+                  boxShadow: '0 14px 36px rgba(0,0,0,0.18)',
+                  padding: 4,
+                  minWidth: 150,
+                }}
+              >
                 <button
-                  onClick={handleLogout}
+                  onClick={() => {
+                    setNavProfileMenu(null)
+                    setNavProfileDraft(activeLocalProfile.name)
+                    setNavProfileEditing(true)
+                  }}
                   style={{
+                    display: 'block',
                     width: '100%',
+                    textAlign: 'left',
                     background: 'none',
-                    border: '1px solid var(--border)',
-                    color: 'var(--text)',
+                    border: 'none',
                     borderRadius: 8,
                     padding: '8px 10px',
+                    fontSize: 13,
                     cursor: 'pointer',
+                    color: 'var(--text)',
                   }}
                 >
-                  Sign out
+                  Rename
                 </button>
-              )}
-            </div>
-          </nav>
-          <div style={s.main}>
-            <FilterBar />
-            <div style={s.content}>
-              <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/transactions" element={<Transactions />} />
-                <Route path="/categories" element={<Categories />} />
-                <Route path="/rules" element={<Rules />} />
-                <Route path="/accounts" element={<Accounts />} />
-                <Route path="/import-export/batches/:batchId/rule-suggestions" element={<ImportRuleSuggestions />} />
-                <Route path="/import-export/profiles/:profileId/rule-suggestions" element={<ImportRuleSuggestions />} />
-                <Route path="/import-export" element={<ImportExport />} />
-                <Route path="/tasks" element={<Tasks />} />
-                <Route path="/settings" element={<Settings />} />
-              </Routes>
-            </div>
-          </div>
-        </div>
-        {navProfileMenu && activeLocalProfile && (
-          <div
-            ref={navProfileMenuRef}
-            onMouseDown={e => e.stopPropagation()}
-            style={{
-              position: 'fixed',
-              left: Math.min(navProfileMenu.x, window.innerWidth - 160),
-              top: Math.min(navProfileMenu.y, window.innerHeight - 100),
-              zIndex: 30,
-              background: 'var(--surface)',
-              border: '1px solid var(--border)',
-              borderRadius: 10,
-              boxShadow: '0 14px 36px rgba(0,0,0,0.18)',
-              padding: 4,
-              minWidth: 150,
-            }}
-          >
-            <button
-              onClick={() => {
-                setNavProfileMenu(null)
-                setNavProfileDraft(activeLocalProfile.name)
-                setNavProfileEditing(true)
-              }}
-              style={{
-                display: 'block',
-                width: '100%',
-                textAlign: 'left',
-                background: 'none',
-                border: 'none',
-                borderRadius: 8,
-                padding: '8px 10px',
-                fontSize: 13,
-                cursor: 'pointer',
-                color: 'var(--text)',
-              }}
-            >
-              Rename
-            </button>
-          </div>
-        )}
-        </FilterProvider>
-      </UserPreferencesProvider>
+              </div>
+            )}
+          </FilterProvider>
+        </UserPreferencesProvider>
+      </AppSessionProvider>
     </AppErrorBoundary>
   )
 }

@@ -14,6 +14,7 @@ import { api } from '../lib/api.js'
 import { getTxnMerchantLabel } from './TransactionRow.jsx'
 import { CategoryMarker } from './ui.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
+import { TagGlyph } from './TagUi.jsx'
 
 const fmt   = d => format(d, 'yyyy-MM-dd')
 const today = new Date()
@@ -125,6 +126,7 @@ const FILTER_TABS = [
   { id: 'accounts',   label: 'Accounts'   },
   { id: 'groups',     label: 'Groups'     },
   { id: 'categories', label: 'Categories' },
+  { id: 'tags',       label: 'Tags'       },
   { id: 'owners',     label: 'Owners'     },
   { id: 'payee',      label: 'Payee'      },
 ]
@@ -135,6 +137,7 @@ function FilterPopover({ onClose }) {
   const [categories, setCategories]         = useState([])
   const [accounts, setAccounts]             = useState([])
   const [owners, setOwners]                 = useState([])
+  const [tags, setTags]                     = useState([])
   const [payeeSearch, setPayeeSearch]       = useState('')
   const [payeeSuggestions, setPayeeSuggestions] = useState([])
 
@@ -142,6 +145,7 @@ function FilterPopover({ onClose }) {
     api.getCategories().then(setCategories)
     api.getAccounts().then(setAccounts)
     api.getOwners().then(setOwners)
+    api.getTags().then(setTags)
   }, [])
 
   useEffect(() => {
@@ -273,6 +277,29 @@ function FilterPopover({ onClose }) {
           })
         )}
 
+        {tab === 'tags' && (
+          tags.length === 0 ? (
+            <div style={{ padding: '12px 16px', fontSize: 13, color: 'var(--muted)' }}>
+              No tags yet — create them in Settings.
+            </div>
+          ) : tags.map(tag => {
+            const sel = { type: 'tag', id: tag.id, label: tag.name, color: tag.color }
+            return (
+              <div key={tag.id} onClick={() => toggle(sel)} style={{
+                ...rowStyle,
+                background: isSelected(tag.id) ? 'var(--surface2)' : 'transparent',
+                justifyContent: 'space-between',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <TagGlyph color={tag.color} size={13} />
+                  <span style={{ fontSize: 13 }}>{tag.name}</span>
+                </div>
+                {isSelected(tag.id) && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
+              </div>
+            )
+          })
+        )}
+
         {tab === 'payee' && (
           <div style={{ padding: '8px 12px' }}>
             <input
@@ -320,6 +347,7 @@ function FilterChip({ sel, onRemove }) {
       border: '1px solid var(--accent)', color: 'var(--accent2)',
       whiteSpace: 'nowrap',
     }}>
+      {sel.type === 'tag' ? <TagGlyph color={sel.color} size={12} /> : null}
       {sel.label}
       <button onClick={() => onRemove(sel.id)} style={{
         background: 'none', border: 'none', color: 'var(--accent2)',

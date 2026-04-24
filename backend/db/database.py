@@ -10,6 +10,7 @@ advance through ordered migrations, and core invariants like leaf-only transacti
 categories and the built-in shared owner are re-established on startup.
 """
 
+import json
 import os
 import sqlite3
 import uuid
@@ -19,7 +20,7 @@ from pathlib import Path
 
 from backend.app_logging import log_info
 
-DB_PATH = os.getenv("DB_PATH", "fintrack.db")
+DB_PATH = os.getenv("DB_PATH", "fintrack-data.db")
 _current_db_path: ContextVar[str | None] = ContextVar("fintrack_current_db_path", default=None)
 SHARED_OWNER_ID = "shared-owner"
 SHARED_OWNER_NAME = "shared"
@@ -91,7 +92,7 @@ def get_db(db_path: str | None = None):
 # Migrations are additive startup upgrades for existing databases only; fresh installs
 # are created directly at `CURRENT_VERSION` and should not replay the migration chain.
 
-CURRENT_VERSION = 5
+CURRENT_VERSION = 16
 
 MIGRATIONS = {}
 
@@ -157,6 +158,116 @@ def run_migrations(conn):
     log_info(f"[db] database is now at version {CURRENT_VERSION}")
 
 
+def _normalize_category_name(value: str | None) -> str:
+    return " ".join(str(value or "").strip().split()).casefold()
+
+
+def _is_uncategorized_import_placeholder(value: str | None) -> bool:
+    return _normalize_category_name(value) in {"uncategorized", "uncategorised", "unassigned"}
+
+
+def _claim_unique_category_name(base_name: str, used_names: set[str]) -> str:
+    candidate = " ".join(str(base_name or "").strip().split())
+    suffix = 2
+    while _normalize_category_name(candidate) in used_names:
+        candidate = f"{base_name} {suffix}"
+        suffix += 1
+    used_names.add(_normalize_category_name(candidate))
+    return candidate
+
+
+def _load_json_object(raw):
+    if isinstance(raw, dict):
+        return dict(raw)
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _rename_imported_category_metadata(payload):
+    next_payload = dict(payload or {})
+
+    if "categorization_is_clean" in next_payload and "use_imported_categories" not in next_payload:
+        next_payload["use_imported_categories"] = bool(next_payload.pop("categorization_is_clean"))
+    if "trust_scope_mode" in next_payload and "imported_category_scope_mode" not in next_payload:
+        next_payload["imported_category_scope_mode"] = next_payload.pop("trust_scope_mode")
+    if "trusted_owner_ids" in next_payload and "imported_category_owner_ids" not in next_payload:
+        next_payload["imported_category_owner_ids"] = next_payload.pop("trusted_owner_ids")
+    if "trusted_unassigned_account_tokens" in next_payload and "imported_category_unassigned_account_tokens" not in next_payload:
+        next_payload["imported_category_unassigned_account_tokens"] = next_payload.pop("trusted_unassigned_account_tokens")
+
+    if isinstance(next_payload.get("column_map"), dict):
+        column_map = dict(next_payload["column_map"])
+        if "trusted_categorization" in column_map and "imported_category_settings" not in column_map:
+            column_map["imported_category_settings"] = column_map.pop("trusted_categorization")
+        next_payload["column_map"] = column_map
+
+    if "trusted_categorization" in next_payload and "imported_category_settings" not in next_payload:
+        next_payload["imported_category_settings"] = next_payload.pop("trusted_categorization")
+
+    return next_payload
+
+
+def _dedupe_category_names(conn: sqlite3.Connection):
+    rows = conn.execute(
+        """
+        SELECT
+            c.id,
+            c.parent_id,
+            c.name,
+            COALESCE(c.category_type, CASE WHEN c.parent_id IS NULL THEN 'expense' END) AS category_type,
+            p.name AS parent_name
+        FROM category c
+        LEFT JOIN category p ON p.id = c.parent_id
+        ORDER BY
+            CASE WHEN c.parent_id IS NULL THEN 0 ELSE 1 END,
+            c.sort_order,
+            LOWER(c.name),
+            c.name,
+            c.id
+        """
+    ).fetchall()
+
+    used_names: set[str] = set()
+    for row in rows:
+        normalized_name = _normalize_category_name(row["name"])
+        if normalized_name and normalized_name not in used_names:
+            used_names.add(normalized_name)
+            continue
+
+        original_name = " ".join(str(row["name"] or "").strip().split())
+        parent_name = " ".join(str(row["parent_name"] or "").strip().split())
+        candidate_bases: list[str] = []
+        if row["parent_id"]:
+            if _normalize_category_name(parent_name) and _normalize_category_name(parent_name) != normalized_name:
+                candidate_bases.append(f"{original_name} ({parent_name})")
+            else:
+                candidate_bases.append(f"Other {original_name}")
+                candidate_bases.append(f"{original_name} (subcategory)")
+        else:
+            type_label = "income" if row["category_type"] == "income" else "expense"
+            candidate_bases.append(f"{original_name} ({type_label})")
+            candidate_bases.append(f"{original_name} (group)")
+
+        renamed = None
+        for base_name in candidate_bases:
+            if not _normalize_category_name(base_name):
+                continue
+            renamed = _claim_unique_category_name(base_name, used_names)
+            break
+        if renamed is None:
+            renamed = _claim_unique_category_name(original_name, used_names)
+
+        conn.execute(
+            "UPDATE category SET name = ? WHERE id = ?",
+            (renamed, row["id"]),
+        )
+
+
 @migration(1)
 def m1_baseline(conn):
     pass
@@ -217,6 +328,332 @@ def m5_account_display_name_and_trash(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_account_trashed ON account(trashed_at)")
 
 
+@migration(6)
+def m6_import_learning_state_and_unassigned_group(conn):
+    category_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(category)").fetchall()
+    }
+    if "system_key" not in category_columns:
+        conn.execute("ALTER TABLE category ADD COLUMN system_key TEXT")
+    if "import_source_batch_id" not in category_columns:
+        conn.execute("ALTER TABLE category ADD COLUMN import_source_batch_id TEXT REFERENCES import_batch(id) ON DELETE SET NULL")
+
+    profile_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(csv_import_profile)").fetchall()
+    }
+    if "categorization_is_clean" not in profile_columns:
+        conn.execute("ALTER TABLE csv_import_profile ADD COLUMN categorization_is_clean INTEGER NOT NULL DEFAULT 0")
+
+    batch_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(import_batch)").fetchall()
+    }
+    if "categorization_is_clean" not in batch_columns:
+        conn.execute("ALTER TABLE import_batch ADD COLUMN categorization_is_clean INTEGER NOT NULL DEFAULT 0")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS import_workflow_state (
+            key          TEXT PRIMARY KEY,
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_category_system_key ON category(system_key)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_category_import_source_batch ON category(import_source_batch_id)")
+
+
+def _alphabetize_top_level_category_groups(conn: sqlite3.Connection):
+    for category_type in ("income", "expense"):
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM category
+            WHERE parent_id IS NULL
+              AND COALESCE(category_type, 'expense') = ?
+            ORDER BY LOWER(name), name, id
+            """,
+            (category_type,),
+        ).fetchall()
+        for index, row in enumerate(rows):
+            conn.execute(
+                "UPDATE category SET sort_order = ? WHERE id = ?",
+                (index, row["id"]),
+            )
+
+
+@migration(7)
+def m7_alphabetize_top_level_category_groups(conn):
+    # The persisted tree order is shared across category pickers and the editor, so
+    # older databases need a one-time normalization to stop picker-created groups from
+    # sitting permanently after the seeded defaults.
+    _alphabetize_top_level_category_groups(conn)
+
+
+@migration(8)
+def m8_dedupe_category_names(conn):
+    # Category and group names now have to be globally unique so pickers, import review,
+    # and rule suggestions can resolve a label to exactly one branch.
+    _dedupe_category_names(conn)
+
+
+@migration(9)
+def m9_transaction_category_source(conn):
+    txn_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(txn)").fetchall()
+    }
+    if "category_source" not in txn_columns:
+        conn.execute("ALTER TABLE txn ADD COLUMN category_source TEXT")
+
+    # Older databases did not distinguish imported, manual, and rule-owned categories.
+    # Backfill enough source context for rerun protection and batch undo to behave
+    # sensibly, then let newer writes keep the field precise.
+    conn.execute(
+        """
+        UPDATE txn
+        SET    category_source = 'manual'
+        WHERE  category_source IS NULL
+          AND  category_overridden = 1
+        """
+    )
+    conn.execute(
+        """
+        UPDATE txn
+        SET    category_source = 'rule'
+        WHERE  category_source IS NULL
+          AND  category_overridden = 0
+          AND  category_id IS NOT NULL
+        """
+    )
+
+
+@migration(10)
+def m10_imported_category_terminology(conn):
+    profile_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(csv_import_profile)").fetchall()
+    }
+    if "categorization_is_clean" in profile_columns and "use_imported_categories" not in profile_columns:
+        conn.execute(
+            "ALTER TABLE csv_import_profile RENAME COLUMN categorization_is_clean TO use_imported_categories"
+        )
+
+    batch_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(import_batch)").fetchall()
+    }
+    if "categorization_is_clean" in batch_columns and "use_imported_categories" not in batch_columns:
+        conn.execute(
+            "ALTER TABLE import_batch RENAME COLUMN categorization_is_clean TO use_imported_categories"
+        )
+
+    profile_rows = conn.execute(
+        "SELECT id, column_map FROM csv_import_profile"
+    ).fetchall()
+    for row in profile_rows:
+        column_map = _rename_imported_category_metadata(_load_json_object(row["column_map"]))
+        conn.execute(
+            "UPDATE csv_import_profile SET column_map = ? WHERE id = ?",
+            (json.dumps(column_map), row["id"]),
+        )
+
+    batch_rows = conn.execute(
+        "SELECT id, config_snapshot FROM import_batch"
+    ).fetchall()
+    for row in batch_rows:
+        snapshot = _rename_imported_category_metadata(_load_json_object(row["config_snapshot"]))
+        conn.execute(
+            "UPDATE import_batch SET config_snapshot = ? WHERE id = ?",
+            (json.dumps(snapshot), row["id"]),
+        )
+
+
+@migration(11)
+def m11_transaction_import_evidence(conn):
+    txn_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(txn)").fetchall()
+    }
+    if "import_evidence_json" not in txn_columns:
+        conn.execute("ALTER TABLE txn ADD COLUMN import_evidence_json TEXT")
+
+
+@migration(12)
+def m12_import_batch_account_coverage(conn):
+    batch_account_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(import_batch_account)").fetchall()
+    }
+    if "coverage_start_date" not in batch_account_columns:
+        conn.execute("ALTER TABLE import_batch_account ADD COLUMN coverage_start_date TEXT")
+    if "coverage_end_date" not in batch_account_columns:
+        conn.execute("ALTER TABLE import_batch_account ADD COLUMN coverage_end_date TEXT")
+    if "terminal_date" not in batch_account_columns:
+        conn.execute("ALTER TABLE import_batch_account ADD COLUMN terminal_date TEXT")
+
+
+@migration(13)
+def m13_import_batch_account_terminal_date(conn):
+    batch_account_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(import_batch_account)").fetchall()
+    }
+    if "terminal_date" not in batch_account_columns:
+        conn.execute("ALTER TABLE import_batch_account ADD COLUMN terminal_date TEXT")
+
+
+@migration(14)
+def m14_uncategorized_import_placeholders(conn):
+    placeholder_category_ids = [
+        row["id"]
+        for row in conn.execute(
+            """
+            SELECT c.id, c.name
+            FROM   category c
+            JOIN   category p ON p.id = c.parent_id
+            WHERE  p.system_key = ?
+            """,
+            ("unassigned",),
+        ).fetchall()
+        if _is_uncategorized_import_placeholder(row["name"])
+    ]
+
+    if placeholder_category_ids:
+        placeholders = ",".join("?" for _ in placeholder_category_ids)
+        conn.execute(
+            f"""
+            UPDATE txn
+            SET    category_id = NULL,
+                   category_overridden = 0,
+                   category_source = NULL
+            WHERE  category_id IN ({placeholders})
+            """,
+            placeholder_category_ids,
+        )
+        conn.execute(
+            f"DELETE FROM category WHERE id IN ({placeholders})",
+            placeholder_category_ids,
+        )
+
+    placeholder_txn_ids = [
+        row["id"]
+        for row in conn.execute(
+            "SELECT id, imported_category FROM txn WHERE imported_category IS NOT NULL"
+        ).fetchall()
+        if _is_uncategorized_import_placeholder(row["imported_category"])
+    ]
+    if placeholder_txn_ids:
+        placeholders = ",".join("?" for _ in placeholder_txn_ids)
+        conn.execute(
+            f"UPDATE txn SET imported_category = NULL WHERE id IN ({placeholders})",
+            placeholder_txn_ids,
+        )
+
+
+@migration(15)
+def m15_rule_debit_credit_scope(conn):
+    rule_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(category_rule)").fetchall()
+    }
+    if "debit_credit" not in rule_columns:
+        conn.execute("ALTER TABLE category_rule ADD COLUMN debit_credit TEXT NOT NULL DEFAULT 'both'")
+    conn.execute(
+        """
+        UPDATE category_rule
+        SET debit_credit = 'both'
+        WHERE debit_credit IS NULL
+           OR TRIM(debit_credit) = ''
+        """
+    )
+
+
+@migration(16)
+def m16_transaction_tags(conn):
+    rule_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(category_rule)").fetchall()
+    }
+    category_id_info = next(
+        (row for row in conn.execute("PRAGMA table_info(category_rule)").fetchall() if row["name"] == "category_id"),
+        None,
+    )
+    category_id_is_not_null = bool(category_id_info and category_id_info["notnull"])
+
+    if "category_id" in rule_columns and category_id_is_not_null:
+        # Tags can be rule actions on their own, so older databases need the
+        # rules table rebuilt with a nullable category_id before tag-only rules can be saved.
+        conn.executescript(
+            """
+            ALTER TABLE category_rule RENAME TO category_rule_legacy_tags;
+
+            CREATE TABLE category_rule (
+                id           TEXT PRIMARY KEY,
+                category_id  TEXT REFERENCES category(id) ON DELETE CASCADE,
+                keyword      TEXT NOT NULL,
+                priority     INTEGER NOT NULL DEFAULT 5,
+                amount_min   REAL,
+                amount_max   REAL,
+                debit_credit TEXT NOT NULL DEFAULT 'both',
+                clean_name   TEXT,
+                owner_id     TEXT REFERENCES owner(id) ON DELETE SET NULL,
+                account_id   TEXT REFERENCES account(id) ON DELETE SET NULL
+            );
+
+            INSERT INTO category_rule
+              (id, category_id, keyword, priority, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id)
+            SELECT
+              id, category_id, keyword, priority, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id
+            FROM category_rule_legacy_tags;
+
+            DROP TABLE category_rule_legacy_tags;
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_category   ON category_rule(category_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_keyword    ON category_rule(keyword)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_account    ON category_rule(account_id)")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tag (
+            id         TEXT PRIMARY KEY,
+            name       TEXT NOT NULL,
+            color      TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_name_unique
+        ON tag(LOWER(TRIM(name)))
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rule_tag (
+            rule_id TEXT NOT NULL REFERENCES category_rule(id) ON DELETE CASCADE,
+            tag_id  TEXT NOT NULL REFERENCES tag(id) ON DELETE CASCADE,
+            PRIMARY KEY (rule_id, tag_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS txn_tag (
+            txn_id        TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+            tag_id        TEXT NOT NULL REFERENCES tag(id) ON DELETE CASCADE,
+            rule_present  INTEGER NOT NULL DEFAULT 0,
+            manual_state  INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (txn_id, tag_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_tag_tag ON rule_tag(tag_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_tag_tag ON txn_tag(tag_id)")
+
+
 def init_db(db_path: str | None = None):
     resolved_path = _normalize_db_path(db_path)
     with get_db(resolved_path) as conn:
@@ -249,7 +686,9 @@ def init_db(db_path: str | None = None):
                 category_type       TEXT,
                 sort_order          INTEGER NOT NULL DEFAULT 0,
                 exclude_from_totals INTEGER NOT NULL DEFAULT 0,
-                owner_id            TEXT REFERENCES owner(id) ON DELETE SET NULL
+                owner_id            TEXT REFERENCES owner(id) ON DELETE SET NULL,
+                system_key          TEXT,
+                import_source_batch_id TEXT REFERENCES import_batch(id) ON DELETE SET NULL
             );
 
             -- keyword is matched as a case-insensitive substring of merchant_name or raw_name.
@@ -257,15 +696,16 @@ def init_db(db_path: str | None = None):
             -- amount_min/amount_max allow the same payee to map to different categories
             -- depending on transaction size (e.g. small Costco = groceries, large = shopping).
             CREATE TABLE IF NOT EXISTS category_rule (
-                id          TEXT PRIMARY KEY,
-                category_id TEXT NOT NULL REFERENCES category(id) ON DELETE CASCADE,
-                keyword     TEXT NOT NULL,
-                priority    INTEGER NOT NULL DEFAULT 5,
-                amount_min  REAL,
-                amount_max  REAL,
-                clean_name  TEXT,
-                owner_id    TEXT REFERENCES owner(id) ON DELETE SET NULL,
-                account_id  TEXT REFERENCES account(id) ON DELETE SET NULL
+                id           TEXT PRIMARY KEY,
+                category_id  TEXT REFERENCES category(id) ON DELETE CASCADE,
+                keyword      TEXT NOT NULL,
+                priority     INTEGER NOT NULL DEFAULT 5,
+                amount_min   REAL,
+                amount_max   REAL,
+                debit_credit TEXT NOT NULL DEFAULT 'both',
+                clean_name   TEXT,
+                owner_id     TEXT REFERENCES owner(id) ON DELETE SET NULL,
+                account_id   TEXT REFERENCES account(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS owner (
@@ -293,7 +733,9 @@ def init_db(db_path: str | None = None):
             -- merchant_name is the preserved canonical/original merchant value.
             -- display_name is the user-facing label (may be updated by rules or user edits).
             -- raw_name is the original string from Plaid, never modified.
-            -- category_overridden=1 means user manually set category; auto-categorizer skips these.
+            -- category_overridden=1 means recategorize should leave this row alone.
+            -- category_source records whether the current category came from a rule,
+            -- imported categories already present in the data, or explicit user action.
             CREATE TABLE IF NOT EXISTS txn (
                 id                   TEXT PRIMARY KEY,
                 plaid_transaction_id TEXT UNIQUE,
@@ -306,11 +748,34 @@ def init_db(db_path: str | None = None):
                 date                 TEXT NOT NULL,
                 is_pending           INTEGER NOT NULL DEFAULT 0,
                 category_overridden  INTEGER NOT NULL DEFAULT 0,
+                category_source      TEXT,
                 imported_category    TEXT,
                 notes                TEXT,
                 owner_id             TEXT REFERENCES owner(id) ON DELETE SET NULL,
                 content_hash         TEXT,
+                import_evidence_json TEXT,
                 import_batch_id      TEXT REFERENCES import_batch(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS tag (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                color      TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS rule_tag (
+                rule_id TEXT NOT NULL REFERENCES category_rule(id) ON DELETE CASCADE,
+                tag_id  TEXT NOT NULL REFERENCES tag(id) ON DELETE CASCADE,
+                PRIMARY KEY (rule_id, tag_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS txn_tag (
+                txn_id       TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+                tag_id       TEXT NOT NULL REFERENCES tag(id) ON DELETE CASCADE,
+                rule_present INTEGER NOT NULL DEFAULT 0,
+                manual_state INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (txn_id, tag_id)
             );
 
             CREATE INDEX IF NOT EXISTS idx_txn_date        ON txn(date);
@@ -319,10 +784,14 @@ def init_db(db_path: str | None = None):
             CREATE INDEX IF NOT EXISTS idx_txn_owner       ON txn(owner_id);
             CREATE INDEX IF NOT EXISTS idx_txn_batch       ON txn(import_batch_id);
             CREATE INDEX IF NOT EXISTS idx_txn_hash        ON txn(content_hash);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_name_unique ON tag(LOWER(TRIM(name)));
+            CREATE INDEX IF NOT EXISTS idx_tag_sort_order  ON tag(sort_order);
             CREATE INDEX IF NOT EXISTS idx_rule_category   ON category_rule(category_id);
             CREATE INDEX IF NOT EXISTS idx_rule_keyword    ON category_rule(keyword);
             CREATE INDEX IF NOT EXISTS idx_rule_account    ON category_rule(account_id);
+            CREATE INDEX IF NOT EXISTS idx_rule_tag_tag    ON rule_tag(tag_id);
             CREATE INDEX IF NOT EXISTS idx_account_owner   ON account(owner_id);
+            CREATE INDEX IF NOT EXISTS idx_txn_tag_tag     ON txn_tag(tag_id);
 
             CREATE TABLE IF NOT EXISTS csv_import_profile (
                 id                   TEXT PRIMARY KEY,
@@ -337,6 +806,7 @@ def init_db(db_path: str | None = None):
                 amount_convention    TEXT NOT NULL DEFAULT 'single_signed',
                 skip_rows            INTEGER NOT NULL DEFAULT 0,
                 apply_categorization INTEGER NOT NULL DEFAULT 1,
+                use_imported_categories INTEGER NOT NULL DEFAULT 0,
                 notes                TEXT,
                 created_at           TEXT NOT NULL DEFAULT (datetime('now'))
             );
@@ -351,6 +821,7 @@ def init_db(db_path: str | None = None):
                 skipped_count    INTEGER NOT NULL DEFAULT 0,
                 deduped_count    INTEGER NOT NULL DEFAULT 0,
                 status           TEXT NOT NULL DEFAULT 'completed',
+                use_imported_categories INTEGER NOT NULL DEFAULT 0,
                 config_snapshot  TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_import_batch_file_hash ON import_batch(file_content_hash);
@@ -361,6 +832,9 @@ def init_db(db_path: str | None = None):
                 account_id  TEXT REFERENCES account(id) ON DELETE SET NULL,
                 row_count   INTEGER NOT NULL DEFAULT 0,
                 was_skipped INTEGER NOT NULL DEFAULT 0,
+                coverage_start_date TEXT,
+                coverage_end_date   TEXT,
+                terminal_date       TEXT,
                 PRIMARY KEY (batch_id, csv_value)
             );
             CREATE INDEX IF NOT EXISTS idx_iba_account ON import_batch_account(account_id);
@@ -386,12 +860,18 @@ def init_db(db_path: str | None = None):
                 enabled     INTEGER NOT NULL DEFAULT 1,
                 created_at  TEXT NOT NULL DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS import_workflow_state (
+                key          TEXT PRIMARY KEY,
+                payload_json TEXT NOT NULL DEFAULT '{}'
+            );
         """)
         init_merchant_renames(conn)
 
         _seed_default_categories(conn)
 
         if is_fresh_db:
+            _alphabetize_top_level_category_groups(conn)
             # Fresh databases are stamped current immediately; the migration pipeline exists
             # to upgrade historical files, not to bootstrap brand-new ones step by step.
             set_db_version(conn, CURRENT_VERSION)
@@ -408,40 +888,81 @@ def init_db(db_path: str | None = None):
 
 def _seed_default_categories(conn: sqlite3.Connection):
     import uuid
+    category_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(category)").fetchall()
+    }
+    has_system_key = "system_key" in category_columns
 
-    def upsert_cat(name, parent_id=None, category_type=None, exclude_from_totals=0):
+    def upsert_cat(name, parent_id=None, category_type=None, exclude_from_totals=0, system_key=None):
         if parent_id is None:
-            row = conn.execute(
-                "SELECT id FROM category WHERE name = ? AND parent_id IS NULL",
-                (name,),
-            ).fetchone()
+            if has_system_key:
+                row = conn.execute(
+                    """
+                    SELECT id
+                    FROM category
+                    WHERE (
+                        (? IS NOT NULL AND system_key = ?)
+                        OR (? IS NULL AND name = ? AND parent_id IS NULL)
+                    )
+                    LIMIT 1
+                    """,
+                    (system_key, system_key, system_key, name),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT id FROM category WHERE name = ? AND parent_id IS NULL",
+                    (name,),
+                ).fetchone()
         else:
             row = conn.execute(
                 "SELECT id FROM category WHERE name = ? AND parent_id = ?",
                 (name, parent_id),
             ).fetchone()
         if row:
-            conn.execute(
-                """
-                UPDATE category
-                SET category_type = COALESCE(?, category_type),
-                    exclude_from_totals = COALESCE(?, exclude_from_totals)
-                WHERE id = ?
-                """,
-                (category_type, exclude_from_totals, row["id"]),
-            )
+            if has_system_key:
+                conn.execute(
+                    """
+                    UPDATE category
+                    SET category_type = COALESCE(?, category_type),
+                        exclude_from_totals = COALESCE(?, exclude_from_totals),
+                        system_key = COALESCE(?, system_key)
+                    WHERE id = ?
+                    """,
+                    (category_type, exclude_from_totals, system_key, row["id"]),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE category
+                    SET category_type = COALESCE(?, category_type),
+                        exclude_from_totals = COALESCE(?, exclude_from_totals)
+                    WHERE id = ?
+                    """,
+                    (category_type, exclude_from_totals, row["id"]),
+                )
             return row["id"]
         new_id = str(uuid.uuid4())
-        conn.execute(
-            """
-            INSERT INTO category (id, parent_id, name, category_type, exclude_from_totals)
-            VALUES (?,?,?,?,?)
-            """,
-            (new_id, parent_id, name, category_type, exclude_from_totals),
-        )
+        if has_system_key:
+            conn.execute(
+                """
+                INSERT INTO category (id, parent_id, name, category_type, exclude_from_totals, system_key)
+                VALUES (?,?,?,?,?,?)
+                """,
+                (new_id, parent_id, name, category_type, exclude_from_totals, system_key),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO category (id, parent_id, name, category_type, exclude_from_totals)
+                VALUES (?,?,?,?,?)
+                """,
+                (new_id, parent_id, name, category_type, exclude_from_totals),
+            )
         return new_id
 
     income_group  = upsert_cat("Income", category_type="income")
+    upsert_cat("Unassigned", category_type=None, system_key="unassigned")
     finance       = upsert_cat("Finance", category_type="expense")
     food          = upsert_cat("Food & Drink", category_type="expense")
     gifts         = upsert_cat("Gifts & Donations", category_type="expense")
@@ -451,10 +972,44 @@ def _seed_default_categories(conn: sqlite3.Connection):
     other         = upsert_cat("Miscellaneous", category_type="expense")
     shopping      = upsert_cat("Shopping", category_type="expense")
     entertainment = upsert_cat("Entertainment", category_type="expense")
-    transport     = upsert_cat("Transportation", category_type="expense")
+    transport     = upsert_cat("Auto & Transportation", category_type="expense")
     travel        = upsert_cat("Vacation & Travel", category_type="expense")
     utilities     = upsert_cat("Utilities", category_type="expense")
     transfers     = upsert_cat("Transfers", category_type="expense", exclude_from_totals=1)
+
+    # Older defaults reused a few top-level names inside the same tree, which makes
+    # rule suggestions and category pickers ambiguous. Seed upgrades those legacy rows
+    # in place before the rest of the defaults are reconciled.
+    conn.execute(
+        """
+        UPDATE category
+        SET name = 'Medical Services'
+        WHERE name = 'Medical'
+          AND parent_id = ?
+          AND NOT EXISTS (
+              SELECT 1
+              FROM category
+              WHERE parent_id = ?
+                AND name = 'Medical Services'
+          )
+        """,
+        (medical, medical),
+    )
+    conn.execute(
+        """
+        UPDATE category
+        SET name = 'Natural Gas'
+        WHERE name = 'Gas'
+          AND parent_id = ?
+          AND NOT EXISTS (
+              SELECT 1
+              FROM category
+              WHERE parent_id = ?
+                AND name = 'Natural Gas'
+          )
+        """,
+        (utilities, utilities),
+    )
 
     upsert_cat("Fitness Classes", health)
     upsert_cat("Gym Membership", health)
@@ -469,15 +1024,18 @@ def _seed_default_categories(conn: sqlite3.Connection):
     upsert_cat("Coffee & Drinks", food)
     upsert_cat("Dining Out", food)
     upsert_cat("Groceries", food)
+    upsert_cat("Take-out", food)
+
 
     upsert_cat("Home Improvement", household)
     upsert_cat("Home Insurance", household)
     upsert_cat("Home Repairs", household)
     upsert_cat("Property Tax", household)
     upsert_cat("Rent & Mortgage", household)
+    upsert_cat("Household Supplies", household)
 
     upsert_cat("Electricity", utilities)
-    upsert_cat("Gas", utilities)
+    upsert_cat("Natural Gas", utilities)
     upsert_cat("Internet", utilities)
     upsert_cat("Phone", utilities)
     upsert_cat("Water", utilities)
@@ -492,6 +1050,7 @@ def _seed_default_categories(conn: sqlite3.Connection):
     upsert_cat("Air Travel", travel)
     upsert_cat("Rental Car", travel)
     upsert_cat("Vacation Food", travel)
+    upsert_cat("Vacation Transportation", travel)
 
     upsert_cat("Clothing", shopping)
     upsert_cat("Electronics", shopping)
@@ -499,22 +1058,30 @@ def _seed_default_categories(conn: sqlite3.Connection):
 
     upsert_cat("Hobbies", entertainment)
     upsert_cat("Movies & Events", entertainment)
-    upsert_cat("Subscriptions", entertainment)
+    upsert_cat("Streaming Services", entertainment)
 
     upsert_cat("Fees & Charges", finance)
-    upsert_cat("Savings", finance)
+    upsert_cat("ATM Fees", finance)
+
     upsert_cat("Credit Card Payment", transfers)
     upsert_cat("Bank Transfer", transfers)
 
     upsert_cat("Charity", gifts)
-    upsert_cat("Charity (not deductible)", gifts)
-    upsert_cat("Gifts", gifts)
+    upsert_cat("Charity (non-deductible)", gifts)
+    upsert_cat("Gifts Given", gifts)
+
+    upsert_cat("Other", other)
 
     upsert_cat("Salary", income_group)
     upsert_cat("Freelance", income_group)
+    upsert_cat("Gifts Received", income_group)
     upsert_cat("Investment", income_group)
     upsert_cat("Refund", income_group)
+    upsert_cat("Interest Income", income_group)
     upsert_cat("Other Income", income_group)
+
+
+
 
 
 def init_merchant_renames(conn: sqlite3.Connection):

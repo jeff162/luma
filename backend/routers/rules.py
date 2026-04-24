@@ -10,11 +10,40 @@ order needs to stay in lockstep with the categorizer used during sync/import.
 import uuid
 from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Literal, Optional
 from backend.db.database import get_db
-from backend.services.categorizer import _amount_matches
+from backend.services.categorizer import _amount_rule_matches
+from backend.services.transaction_tags import sync_rule_tags_for_transaction, would_sync_rule_tags_change
 
 router = APIRouter()
+
+
+def _load_rule_tag_map(conn, rule_ids: list[str]) -> dict[str, list[dict]]:
+    if not rule_ids:
+        return {}
+    placeholders = ",".join("?" for _ in rule_ids)
+    rows = conn.execute(
+        f"""
+        SELECT
+            rt.rule_id,
+            g.id,
+            g.name,
+            g.color
+        FROM rule_tag rt
+        JOIN tag g ON g.id = rt.tag_id
+        WHERE rt.rule_id IN ({placeholders})
+        ORDER BY g.sort_order, LOWER(g.name), g.name, g.id
+        """,
+        rule_ids,
+    ).fetchall()
+    tag_map: dict[str, list[dict]] = {rule_id: [] for rule_id in rule_ids}
+    for row in rows:
+        tag_map.setdefault(row["rule_id"], []).append({
+            "id": row["id"],
+            "name": row["name"],
+            "color": row["color"],
+        })
+    return tag_map
 
 
 def _find_matching_rule(conn, txn):
@@ -38,16 +67,17 @@ def _find_matching_rule(conn, txn):
             LENGTH(keyword) DESC,
             (CASE WHEN amount_min IS NOT NULL THEN 1 ELSE 0 END +
              CASE WHEN amount_max IS NOT NULL THEN 1 ELSE 0 END +
+             CASE WHEN COALESCE(debit_credit, 'both') <> 'both' THEN 1 ELSE 0 END +
              CASE WHEN owner_id   IS NOT NULL THEN 1 ELSE 0 END +
              CASE WHEN account_id IS NOT NULL THEN 1 ELSE 0 END) DESC
         """
     ).fetchall()
 
-    abs_amount = abs(txn["amount"])
+    fallback_rule_id = None
     for rule in rules:
         full_rule = conn.execute(
             """
-            SELECT id, keyword, amount_min, amount_max, owner_id, account_id
+            SELECT id, keyword, amount_min, amount_max, debit_credit, owner_id, account_id, category_id, clean_name
             FROM category_rule
             WHERE id = ?
             """,
@@ -55,20 +85,23 @@ def _find_matching_rule(conn, txn):
         ).fetchone()
         if full_rule["owner_id"] is not None and full_rule["owner_id"] != txn["owner_id"]:
             continue
-        if full_rule["account_id"] is not None and full_rule["account_id"] != txn["account_id"]:
+        if full_rule["account_id"] is not None and full_rule["account_id"] != txn["effective_account_id"]:
             continue
         if full_rule["keyword"].lower() not in text:
             continue
-        if not _amount_matches(abs_amount, full_rule["amount_min"], full_rule["amount_max"]):
+        if not _amount_rule_matches(txn["amount"], full_rule["amount_min"], full_rule["amount_max"], full_rule["debit_credit"]):
+            continue
+        if full_rule["category_id"] is None and not full_rule["clean_name"]:
+            fallback_rule_id = full_rule["id"]
             continue
         return full_rule["id"]
-    return None
+    return fallback_rule_id
 
 
 def _rule_matches_txn(rule, txn) -> bool:
     if rule["owner_id"] is not None and rule["owner_id"] != txn["owner_id"]:
         return False
-    if rule["account_id"] is not None and rule["account_id"] != txn["account_id"]:
+    if rule["account_id"] is not None and rule["account_id"] != txn["effective_account_id"]:
         return False
     text = " ".join(filter(None, [
         txn["display_name"],
@@ -77,12 +110,12 @@ def _rule_matches_txn(rule, txn) -> bool:
     ])).lower()
     if not text or rule["keyword"].lower() not in text:
         return False
-    return _amount_matches(abs(txn["amount"]), rule["amount_min"], rule["amount_max"])
+    return _amount_rule_matches(txn["amount"], rule["amount_min"], rule["amount_max"], rule["debit_credit"])
 
 
 def _apply_rule_to_existing(conn, rule_id: str) -> int:
     rule = conn.execute(
-        """SELECT id, keyword, category_id, amount_min, amount_max, clean_name, owner_id, account_id
+        """SELECT id, keyword, category_id, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id
            FROM category_rule
            WHERE id = ?""",
         (rule_id,),
@@ -91,40 +124,77 @@ def _apply_rule_to_existing(conn, rule_id: str) -> int:
         raise HTTPException(status_code=404, detail="Rule not found")
 
     txns = conn.execute(
-        """SELECT id, merchant_name, display_name, raw_name, amount, owner_id, account_id
-           FROM txn"""
+        """SELECT
+               t.id,
+               t.merchant_name,
+               t.display_name,
+               t.raw_name,
+               t.amount,
+               t.owner_id,
+               t.account_id,
+               COALESCE(a.parent_account_id, t.account_id) AS effective_account_id
+           FROM txn t
+           JOIN account a ON a.id = t.account_id"""
     ).fetchall()
+
+    rule_tag_ids = [
+        row["tag_id"]
+        for row in conn.execute(
+            "SELECT tag_id FROM rule_tag WHERE rule_id = ?",
+            (rule_id,),
+        ).fetchall()
+    ]
 
     updated = 0
     for txn in txns:
         if not _rule_matches_txn(rule, txn):
             continue
-        params = [rule["category_id"]]
-        # An explicit apply is the user asking the rule to own these matches, so any
-        # prior auto state is replaced with the rule's category/clean name output.
-        set_parts = ["category_id = ?", "category_overridden = 0"]
-        if rule["clean_name"]:
-            set_parts.append("display_name = ?")
-            params.append(rule["clean_name"])
-        params.append(txn["id"])
-        conn.execute(
-            f"UPDATE txn SET {', '.join(set_parts)} WHERE id = ?",
-            params,
-        )
-        updated += 1
+        row_changed = False
+        if rule["category_id"] is not None or rule["clean_name"]:
+            params = []
+            set_parts = []
+            if rule["category_id"] is not None:
+                # An explicit apply is the user asking the rule to own these matches, so any
+                # prior auto state is replaced with the rule's category output when provided.
+                set_parts.extend(["category_id = ?", "category_overridden = 0", "category_source = 'rule'"])
+                params.append(rule["category_id"])
+            if rule["clean_name"]:
+                set_parts.append("display_name = ?")
+                params.append(rule["clean_name"])
+            params.append(txn["id"])
+            conn.execute(
+                f"UPDATE txn SET {', '.join(set_parts)} WHERE id = ?",
+                params,
+            )
+            row_changed = True
+        current_rule_tag_ids = {
+            row["tag_id"]
+            for row in conn.execute(
+                "SELECT tag_id FROM txn_tag WHERE txn_id = ? AND rule_present = 1",
+                (txn["id"],),
+            ).fetchall()
+        }
+        merged_rule_tag_ids = current_rule_tag_ids | set(rule_tag_ids)
+        if would_sync_rule_tags_change(conn, txn["id"], merged_rule_tag_ids, clear_manual_blocks=True):
+            sync_rule_tags_for_transaction(conn, txn["id"], merged_rule_tag_ids, clear_manual_blocks=True)
+            row_changed = True
+        if row_changed:
+            updated += 1
 
     return updated
 
 
 class RuleCreate(BaseModel):
     keyword:     str
-    category_id: str
+    category_id: Optional[str] = None
     priority:    int   = 5
     amount_min:  Optional[float] = None
     amount_max:  Optional[float] = None
+    debit_credit: Literal["both", "debit", "credit"] = "both"
     clean_name:  Optional[str]   = None
     owner_id:    Optional[str]   = None
     account_id:  Optional[str]   = None
+    tag_ids:     list[str]       = []
 
 
 class RuleUpdate(BaseModel):
@@ -133,9 +203,11 @@ class RuleUpdate(BaseModel):
     priority:    Optional[int]   = None
     amount_min:  Optional[float] = None
     amount_max:  Optional[float] = None
+    debit_credit: Optional[Literal["both", "debit", "credit"]] = None
     clean_name:  Optional[str]   = None
     owner_id:    Optional[str]   = None
     account_id:  Optional[str]   = None
+    tag_ids:     Optional[list[str]] = None
     clear_amount_min: bool = False
     clear_amount_max: bool = False
     clear_clean_name: bool = False
@@ -152,7 +224,7 @@ def list_rules(search: Optional[str] = Query(None)):
             f"""
             SELECT
                 cr.id, cr.keyword, cr.priority,
-                cr.amount_min, cr.amount_max, cr.clean_name,
+                cr.amount_min, cr.amount_max, cr.debit_credit, cr.clean_name,
                 cr.category_id,
                 cr.owner_id,
                 cr.account_id,
@@ -164,7 +236,7 @@ def list_rules(search: Optional[str] = Query(None)):
                 COALESCE(a.display_name, a.name) AS account_name,
                 COALESCE(ap.mask, a.mask)        AS account_mask
             FROM   category_rule cr
-            JOIN   category c  ON c.id  = cr.category_id
+            LEFT JOIN category c  ON c.id  = cr.category_id
             LEFT JOIN category p ON p.id = c.parent_id
             LEFT JOIN owner    o ON o.id = cr.owner_id
             LEFT JOIN account  a ON a.id = cr.account_id
@@ -178,12 +250,18 @@ def list_rules(search: Optional[str] = Query(None)):
                 LENGTH(cr.keyword) ASC,
                 (CASE WHEN cr.amount_min IS NOT NULL THEN 1 ELSE 0 END +
                  CASE WHEN cr.amount_max IS NOT NULL THEN 1 ELSE 0 END +
+                 CASE WHEN COALESCE(cr.debit_credit, 'both') <> 'both' THEN 1 ELSE 0 END +
                  CASE WHEN cr.owner_id   IS NOT NULL THEN 1 ELSE 0 END +
                  CASE WHEN cr.account_id IS NOT NULL THEN 1 ELSE 0 END) ASC
             """,
             params,
         ).fetchall()
-    return [dict(r) for r in rows]
+        rules = [dict(r) for r in rows]
+        tag_map = _load_rule_tag_map(conn, [rule["id"] for rule in rules])
+        for rule in rules:
+            rule["tags"] = tag_map.get(rule["id"], [])
+            rule["tag_ids"] = [tag["id"] for tag in rule["tags"]]
+    return rules
 
 
 @router.get("/match/transaction/{txn_id}")
@@ -191,9 +269,18 @@ def match_rule_for_transaction(txn_id: str):
     with get_db() as conn:
         txn = conn.execute(
             """
-            SELECT id, merchant_name, display_name, raw_name, amount, owner_id, account_id
-            FROM txn
-            WHERE id = ?
+            SELECT
+                t.id,
+                t.merchant_name,
+                t.display_name,
+                t.raw_name,
+                t.amount,
+                t.owner_id,
+                t.account_id,
+                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id
+            FROM txn t
+            JOIN account a ON a.id = t.account_id
+            WHERE t.id = ?
             """,
             (txn_id,),
         ).fetchone()
@@ -205,15 +292,22 @@ def match_rule_for_transaction(txn_id: str):
 
 @router.post("")
 def create_rule(body: RuleCreate):
+    if not body.category_id and not (body.clean_name or "").strip() and not body.tag_ids:
+        raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, or tag")
     rid = str(uuid.uuid4())
     with get_db() as conn:
         conn.execute(
             """INSERT INTO category_rule
-               (id, category_id, keyword, priority, amount_min, amount_max, clean_name, owner_id, account_id)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+               (id, category_id, keyword, priority, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (rid, body.category_id, body.keyword.lower().strip(),
-             body.priority, body.amount_min, body.amount_max, body.clean_name, body.owner_id, body.account_id),
+             body.priority, body.amount_min, body.amount_max, body.debit_credit, body.clean_name, body.owner_id, body.account_id),
         )
+        for tag_id in body.tag_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)",
+                (rid, tag_id),
+            )
     return {"id": rid, **body.model_dump()}
 
 
@@ -226,6 +320,7 @@ def update_rule(rule_id: str, body: RuleUpdate):
         if body.priority    is not None: fields.append("priority = ?");    params.append(body.priority)
         if body.amount_min  is not None: fields.append("amount_min = ?");  params.append(body.amount_min)
         if body.amount_max  is not None: fields.append("amount_max = ?");  params.append(body.amount_max)
+        if body.debit_credit is not None: fields.append("debit_credit = ?"); params.append(body.debit_credit)
         if body.owner_id    is not None: fields.append("owner_id = ?");    params.append(body.owner_id)
         if body.account_id  is not None: fields.append("account_id = ?");  params.append(body.account_id)
         if body.clear_amount_min:        fields.append("amount_min = NULL")
@@ -238,6 +333,23 @@ def update_rule(rule_id: str, body: RuleUpdate):
         if fields:
             params.append(rule_id)
             conn.execute(f"UPDATE category_rule SET {', '.join(fields)} WHERE id = ?", params)
+        if body.tag_ids is not None:
+            conn.execute("DELETE FROM rule_tag WHERE rule_id = ?", (rule_id,))
+            for tag_id in body.tag_ids:
+                conn.execute(
+                    "INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)",
+                    (rule_id, tag_id),
+                )
+        current = conn.execute(
+            "SELECT category_id, clean_name FROM category_rule WHERE id = ?",
+            (rule_id,),
+        ).fetchone()
+        current_tag_ids = [
+            row["tag_id"]
+            for row in conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (rule_id,)).fetchall()
+        ]
+        if current and current["category_id"] is None and not (current["clean_name"] or "").strip() and not current_tag_ids:
+            raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, or tag")
     return {"ok": True}
 
 

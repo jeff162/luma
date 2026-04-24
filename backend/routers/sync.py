@@ -16,7 +16,8 @@ from fastapi import APIRouter, Request
 from backend.app_logging import log_warning
 from backend.db.database import get_db
 from backend.services import crypto_service, plaid_service
-from backend.services.categorizer import categorize_transaction, recategorize_all
+from backend.services.categorizer import categorize_transaction, preview_recategorize_count, recategorize_all
+from backend.services.transaction_tags import sync_rule_tags_for_transaction
 
 router = APIRouter()
 
@@ -85,9 +86,11 @@ def run_sync(days: int = 30, request: Request = None):
                     account_id=acc["id"],
                 )
                 cat_id       = result["category_id"] if isinstance(result, dict) else result
+                rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
                 display_name = (
                     result.get("clean_name") if isinstance(result, dict) else None
                 ) or t["merchant_name"] or t["raw_name"]
+                txn_id = str(uuid.uuid4())
 
                 conn.execute(
                     """
@@ -97,7 +100,7 @@ def run_sync(days: int = 30, request: Request = None):
                     VALUES (?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
-                        str(uuid.uuid4()),
+                        txn_id,
                         t["plaid_transaction_id"],
                         acc["id"],
                         acc["owner_id"],
@@ -110,6 +113,7 @@ def run_sync(days: int = 30, request: Request = None):
                         1 if t["is_pending"] else 0,
                     ),
                 )
+                sync_rule_tags_for_transaction(conn, txn_id, rule_tag_ids)
                 added += 1
 
     return {"added": added, "updated": updated, "skipped": skipped}
@@ -120,3 +124,10 @@ def recategorize():
     with get_db() as conn:
         n = recategorize_all(conn)
     return {"updated": n}
+
+
+@router.get("/recategorize-preview")
+def recategorize_preview():
+    with get_db() as conn:
+        pending = preview_recategorize_count(conn)
+    return {"pending": pending}

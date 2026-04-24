@@ -82,6 +82,8 @@ EXCLUDE=(
   "*/data/*"
   "*/fintrack.db"
   "*/control.db"
+  "*/fintrack-data.db"
+  "*/fintrack-control.db"
   "*/.env"
   "*/.env.*"
   "*/*.log"

@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button } from '../components/ui.jsx'
+import CategoryDetail from '../components/CategoryDetail.jsx'
 import CategoryPicker from '../components/CategoryPicker.jsx'
 import {
   BulkMoveToast,
@@ -13,10 +14,12 @@ import {
   SectionEndDropZone,
   normalizeCategoryType,
 } from '../components/CategoryTreePrimitives.jsx'
+import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import { usePagedTransactions } from '../components/detailShared.jsx'
 import { ESCAPE_BEHAVIOR, useDismissibleLayer, useEscapeAction } from '../lib/uiInteractions.js'
+import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 
 const SECTION_META = {
   income: { label: 'Income' },
@@ -25,11 +28,53 @@ const SECTION_META = {
 
 const SECTION_STORAGE_KEY_PREFIX = 'fintrack.categories.collapsedSections'
 const GROUP_STORAGE_KEY_PREFIX = 'fintrack.categories.collapsedGroups'
+const MATCHING_TXN_COLUMNS_STORAGE_KEY_PREFIX = 'fintrack.categories.matching-txn-columns'
 const SECTION_PREF_KEY = 'ui.categories.collapsedSections'
 const GROUP_PREF_KEY = 'ui.categories.collapsedGroups'
+const MATCHING_TXN_COLUMNS_PREF_KEY = 'ui.categories.matchingTransactions.columns'
+const UNASSIGNED_CATEGORY_SYSTEM_KEY = 'unassigned'
+const SYNTHETIC_UNCATEGORIZED_EXPENSE_CATEGORY_ID = '__uncategorized_expense__'
+const SYNTHETIC_UNCATEGORIZED_EXPENSE_CATEGORY_NAME = 'Uncategorized'
+const SYNTHETIC_UNCATEGORIZED_INCOME_GROUP_ID = '__uncategorized_income_group__'
+const SYNTHETIC_UNCATEGORIZED_INCOME_CATEGORY_ID = '__uncategorized_income__'
+const SYNTHETIC_UNCATEGORIZED_INCOME_CATEGORY_NAME = 'Other Income'
+const CATEGORY_SECTION_TYPES = ['income', 'expense']
+const EMPTY_USAGE_SUMMARY = {
+  txn_count: 0,
+  rule_count: 0,
+  profile_mapping_count: 0,
+  batch_mapping_count: 0,
+  is_in_use: false,
+}
+const MATCHING_TXN_COLUMN_DEFAULTS = [
+  { key: 'date', width: 96 },
+  { key: 'merchant', width: 260 },
+  { key: 'category', width: 150 },
+  { key: 'account', width: 140 },
+  { key: 'amount', width: 108 },
+]
 
 function getSectionStorageKey(instanceId, userId) {
   return instanceId && userId ? `${SECTION_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
+}
+
+function getMatchingTxnColumnsStorageKey(instanceId, userId) {
+  return instanceId && userId ? `${MATCHING_TXN_COLUMNS_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
+}
+
+function defaultMatchingTxnColumnConfig() {
+  return MATCHING_TXN_COLUMN_DEFAULTS.map(column => ({ ...column }))
+}
+
+function normalizeMatchingTxnColumnConfig(value) {
+  if (!Array.isArray(value)) return null
+  const byKey = new Map(value.map(column => [column?.key, column]))
+  const hasAllColumns = MATCHING_TXN_COLUMN_DEFAULTS.every(column => byKey.has(column.key))
+  if (!hasAllColumns || byKey.size !== MATCHING_TXN_COLUMN_DEFAULTS.length) return null
+  return MATCHING_TXN_COLUMN_DEFAULTS.map(column => ({
+    key: column.key,
+    width: Number(byKey.get(column.key)?.width) || column.width,
+  }))
 }
 
 /*
@@ -68,6 +113,59 @@ function getEffectiveCategoryOwnerId(category, flatCats, owners) {
 function getFullCategoryRecord(cat, flatCats) {
   if (!cat) return null
   return flatCats.find(item => item.id === cat.id) || cat
+}
+
+function isProtectedSystemCategory(cat) {
+  return cat?.system_key === UNASSIGNED_CATEGORY_SYSTEM_KEY
+}
+
+function isSyntheticUncategorizedCategory(cat) {
+  return cat?.synthetic_kind === 'uncategorized'
+}
+
+function isSyntheticUncategorizedIncomeGroup(cat) {
+  return cat?.synthetic_kind === 'uncategorized_income_group'
+}
+
+function isSystemCategory(cat) {
+  return isProtectedSystemCategory(cat) || isSyntheticUncategorizedCategory(cat) || isSyntheticUncategorizedIncomeGroup(cat)
+}
+
+function buildSyntheticUncategorizedCategory(group, txnCount, options = {}) {
+  if (!group || !txnCount) return null
+  return {
+    id: options.id || SYNTHETIC_UNCATEGORIZED_EXPENSE_CATEGORY_ID,
+    parent_id: group.id,
+    parent_name: group.name,
+    name: options.name || SYNTHETIC_UNCATEGORIZED_EXPENSE_CATEGORY_NAME,
+    category_type: options.category_type || group.category_type,
+    synthetic_kind: 'uncategorized',
+    txn_count: Number(txnCount || 0),
+  }
+}
+
+function buildSyntheticUncategorizedIncomeGroup(txnCount) {
+  if (!txnCount) return null
+  const syntheticGroup = {
+    id: SYNTHETIC_UNCATEGORIZED_INCOME_GROUP_ID,
+    parent_id: null,
+    name: 'Unassigned',
+    category_type: 'income',
+    system_key: UNASSIGNED_CATEGORY_SYSTEM_KEY,
+    synthetic_kind: 'uncategorized_income_group',
+    children: [],
+  }
+  const syntheticChild = buildSyntheticUncategorizedCategory(syntheticGroup, txnCount, {
+    id: SYNTHETIC_UNCATEGORIZED_INCOME_CATEGORY_ID,
+    name: SYNTHETIC_UNCATEGORIZED_INCOME_CATEGORY_NAME,
+    category_type: 'income',
+  })
+  syntheticGroup.children = syntheticChild ? [syntheticChild] : []
+  return syntheticGroup
+}
+
+function getDirectTxnCount(cat, categoryUsage) {
+  return Number(categoryUsage?.[cat?.id]?.txn_count || 0)
 }
 
 function getGroupStorageKey(instanceId, userId) {
@@ -554,23 +652,28 @@ function ScrollFade({ top, bottom }) {
  */
 export default function Categories() {
   const navigate = useNavigate()
+  const { dbInstanceId, preferenceSubjectId: userId } = useAppSession()
+  const { preferences } = useUserPreferences()
   const { filters } = useFilters()
-  const [dbInstanceId, setDbInstanceId] = useState('')
-  const [userId, setUserId] = useState('')
   const [tree, setTree] = useState([])
   const [flatCats, setFlatCats] = useState([])
   const [owners, setOwners] = useState([])
   const [categoryUsage, setCategoryUsage] = useState({})
+  const [uncategorizedExpenseTxnCount, setUncategorizedExpenseTxnCount] = useState(0)
+  const [uncategorizedIncomeTxnCount, setUncategorizedIncomeTxnCount] = useState(0)
   const [matchingTxnsTotal, setMatchingTxnsTotal] = useState(0)
   const [selected, setSelected] = useState(null)
   const [selectedCategoryIds, setSelectedCategoryIds] = useState([])
+  const [detailPanels, setDetailPanels] = useState([])
   const [loading, setLoading] = useState(true)
   const [newName, setNewName] = useState('')
   const [contextMenu, setContextMenu] = useState(null)
   const [inlineForm, setInlineForm] = useState(null)
   const [collapsedSections, setCollapsedSections] = useState({})
   const [collapsedGroups, setCollapsedGroups] = useState({})
+  const [matchingTxnColumns, setMatchingTxnColumns] = useState(defaultMatchingTxnColumnConfig)
   const [collapseStateLoaded, setCollapseStateLoaded] = useState(false)
+  const [matchingTxnColumnsLoaded, setMatchingTxnColumnsLoaded] = useState(false)
   const [listScrollState, setListScrollState] = useState({ top: false, bottom: false })
   const [deleteDialog, setDeleteDialog] = useState(null)
   const [deleteMode, setDeleteMode] = useState('replace')
@@ -583,6 +686,9 @@ export default function Categories() {
   const dragScrollRef = useRef(null)
   const selectedRef = useRef(null)
 
+  const sectionStateReady = CATEGORY_SECTION_TYPES.every(sectionType => Object.prototype.hasOwnProperty.call(collapsedSections, sectionType))
+  const groupStateReady = tree.length > 0 && tree.every(group => Object.prototype.hasOwnProperty.call(collapsedGroups, group.id))
+
   useEffect(() => {
     selectedRef.current = selected
   }, [selected])
@@ -590,22 +696,15 @@ export default function Categories() {
 
   // Tree-collapse state is scoped per db/profile so one user's workspace shape does not leak into another's, with localStorage as fallback only.
   useEffect(() => {
-    let cancelled = false
-    Promise.all([
-      api.getAuthStatus().catch(() => null),
-      api.getUserPreferences().catch(() => ({ preferences: {} })),
-    ]).then(([status, prefResp]) => {
-      if (cancelled) return
-      const nextDbInstanceId = status?.db_instance_id || ''
-      const nextUserId = status?.preference_profile?.id || status?.user?.id || ''
-      setDbInstanceId(nextDbInstanceId)
-      setUserId(nextUserId)
-      const sectionPrefs = prefResp?.preferences?.[SECTION_PREF_KEY]
-      const groupPrefs = prefResp?.preferences?.[GROUP_PREF_KEY]
+      const sectionPrefs = preferences?.[SECTION_PREF_KEY]
+      const groupPrefs = preferences?.[GROUP_PREF_KEY]
+      const matchingTxnColumnPrefs = normalizeMatchingTxnColumnConfig(preferences?.[MATCHING_TXN_COLUMNS_PREF_KEY])
       if (sectionPrefs && typeof sectionPrefs === 'object') setCollapsedSections(sectionPrefs)
       if (groupPrefs && typeof groupPrefs === 'object') setCollapsedGroups(groupPrefs)
-      const sectionStorageKey = getSectionStorageKey(nextDbInstanceId, nextUserId)
-      const groupStorageKey = getGroupStorageKey(nextDbInstanceId, nextUserId)
+      if (matchingTxnColumnPrefs) setMatchingTxnColumns(matchingTxnColumnPrefs)
+      const sectionStorageKey = getSectionStorageKey(dbInstanceId, userId)
+      const groupStorageKey = getGroupStorageKey(dbInstanceId, userId)
+      const matchingTxnColumnsStorageKey = getMatchingTxnColumnsStorageKey(dbInstanceId, userId)
       if (!sectionPrefs && sectionStorageKey) {
         const savedSections = JSON.parse(window.localStorage.getItem(sectionStorageKey) || 'null')
         if (savedSections && typeof savedSections === 'object') setCollapsedSections(savedSections)
@@ -614,28 +713,51 @@ export default function Categories() {
         const savedGroups = JSON.parse(window.localStorage.getItem(groupStorageKey) || 'null')
         if (savedGroups && typeof savedGroups === 'object') setCollapsedGroups(savedGroups)
       }
+      if (!matchingTxnColumnPrefs && matchingTxnColumnsStorageKey) {
+        const savedColumns = normalizeMatchingTxnColumnConfig(
+          JSON.parse(window.localStorage.getItem(matchingTxnColumnsStorageKey) || 'null')
+        )
+        if (savedColumns) setMatchingTxnColumns(savedColumns)
+      }
       setCollapseStateLoaded(true)
-    })
-    .catch(() => {
-      if (cancelled) return
-      setDbInstanceId('')
-      setUserId('')
-      setCollapseStateLoaded(true)
-    })
-    return () => { cancelled = true }
-  }, [])
+      setMatchingTxnColumnsLoaded(true)
+  }, [dbInstanceId, preferences, userId])
 
   const loadCategories = useCallback(async (selectedId = selectedRef.current?.id) => {
-    const [nextTree, nextFlat, nextUsage] = await Promise.all([
+    const [nextTree, nextFlat, nextUsage, uncategorizedExpenseResult, uncategorizedIncomeResult] = await Promise.all([
       api.getCategoryTree(),
       api.getCategories(),
       api.getCategoryUsageSummary(),
+      api.getTransactions({
+        category_id: SYNTHETIC_UNCATEGORIZED_EXPENSE_CATEGORY_ID,
+        limit: 1,
+        offset: 0,
+      }),
+      api.getTransactions({
+        category_id: SYNTHETIC_UNCATEGORIZED_INCOME_CATEGORY_ID,
+        limit: 1,
+        offset: 0,
+      }),
     ])
+    const nextUncategorizedExpenseTxnCount = Number(uncategorizedExpenseResult?.total || 0)
+    const nextUncategorizedIncomeTxnCount = Number(uncategorizedIncomeResult?.total || 0)
     setTree(nextTree)
     setFlatCats(nextFlat)
     setCategoryUsage(nextUsage || {})
+    setUncategorizedExpenseTxnCount(nextUncategorizedExpenseTxnCount)
+    setUncategorizedIncomeTxnCount(nextUncategorizedIncomeTxnCount)
     setLoading(false)
-    if (selectedId) setSelected(nextFlat.find(cat => cat.id === selectedId) || null)
+    if (selectedId === SYNTHETIC_UNCATEGORIZED_EXPENSE_CATEGORY_ID) {
+      const unassignedGroup = nextTree.find(group => isProtectedSystemCategory(group))
+      setSelected(buildSyntheticUncategorizedCategory(unassignedGroup, nextUncategorizedExpenseTxnCount))
+    } else if (selectedId === SYNTHETIC_UNCATEGORIZED_INCOME_CATEGORY_ID) {
+      const syntheticIncomeGroup = buildSyntheticUncategorizedIncomeGroup(nextUncategorizedIncomeTxnCount)
+      setSelected(syntheticIncomeGroup?.children?.[0] || null)
+    } else if (selectedId === SYNTHETIC_UNCATEGORIZED_INCOME_GROUP_ID) {
+      setSelected(buildSyntheticUncategorizedIncomeGroup(nextUncategorizedIncomeTxnCount))
+    } else if (selectedId) {
+      setSelected(nextFlat.find(cat => cat.id === selectedId) || null)
+    }
     setSelectedCategoryIds(prev => prev.filter(id => nextFlat.some(cat => cat.id === id && cat.parent_id)))
   }, [])
 
@@ -678,6 +800,7 @@ export default function Categories() {
   })
   useEffect(() => {
     if (!collapseStateLoaded) return
+    if (!tree.length || !sectionStateReady) return
     const storageKey = getSectionStorageKey(dbInstanceId, userId)
     if (!storageKey) return
     try {
@@ -686,9 +809,10 @@ export default function Categories() {
       // Ignore storage failures in environments that block localStorage.
     }
     api.saveUserPreference(SECTION_PREF_KEY, collapsedSections).catch(() => {})
-  }, [dbInstanceId, userId, collapsedSections, collapseStateLoaded])
+  }, [dbInstanceId, userId, collapsedSections, collapseStateLoaded, tree.length, sectionStateReady])
   useEffect(() => {
     if (!collapseStateLoaded) return
+    if (!groupStateReady) return
     const storageKey = getGroupStorageKey(dbInstanceId, userId)
     if (!storageKey) return
     try {
@@ -697,18 +821,95 @@ export default function Categories() {
       // Ignore storage failures in environments that block localStorage.
     }
     api.saveUserPreference(GROUP_PREF_KEY, collapsedGroups).catch(() => {})
-  }, [dbInstanceId, userId, collapsedGroups, collapseStateLoaded])
+  }, [dbInstanceId, userId, collapsedGroups, collapseStateLoaded, groupStateReady])
+  useEffect(() => {
+    if (!matchingTxnColumnsLoaded) return
+    const storageKey = getMatchingTxnColumnsStorageKey(dbInstanceId, userId)
+    if (!storageKey) return
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(matchingTxnColumns))
+    } catch {
+      // Ignore storage failures in environments that block localStorage.
+    }
+    api.saveUserPreference(MATCHING_TXN_COLUMNS_PREF_KEY, matchingTxnColumns).catch(() => {})
+  }, [dbInstanceId, userId, matchingTxnColumns, matchingTxnColumnsLoaded])
+
+  function getSyntheticUncategorizedChild(group) {
+    if (!isProtectedSystemCategory(group)) return null
+    return buildSyntheticUncategorizedCategory(group, uncategorizedExpenseTxnCount)
+  }
+
+  function getSyntheticIncomeGroup() {
+    return buildSyntheticUncategorizedIncomeGroup(uncategorizedIncomeTxnCount)
+  }
+
+  function getVisibleChildrenForGroup(group) {
+    if (!group) return []
+    if (isSyntheticUncategorizedIncomeGroup(group)) return group.children || []
+    if (!isProtectedSystemCategory(group)) return group.children || []
+    const visibleChildren = (group.children || []).filter(child => getDirectTxnCount(child, categoryUsage) > 0)
+    const syntheticChild = getSyntheticUncategorizedChild(group)
+    return syntheticChild ? [syntheticChild, ...visibleChildren] : visibleChildren
+  }
+
+  function getBulkMovableChildrenForGroup(group) {
+    return getVisibleChildrenForGroup(group).filter(child => !isSyntheticUncategorizedCategory(child))
+  }
+
+  function shouldShowGroup(group) {
+    if (!group) return false
+    if (isSyntheticUncategorizedIncomeGroup(group)) return getVisibleChildrenForGroup(group).length > 0
+    if (!isProtectedSystemCategory(group)) return true
+    return getVisibleChildrenForGroup(group).length > 0
+  }
+
+  function getVisibleSubcategoryCount(group) {
+    return getVisibleChildrenForGroup(group).length
+  }
+
+  function getSectionGroups(sectionType) {
+    const sectionGroups = tree.filter(group => (
+      normalizeCategoryType(group.category_type) === sectionType &&
+      shouldShowGroup(group)
+    ))
+    const regularGroups = sectionGroups.filter(group => !isProtectedSystemCategory(group))
+    const protectedGroups = sectionGroups.filter(isProtectedSystemCategory)
+    const groups = [...regularGroups, ...protectedGroups]
+    if (sectionType === 'income') {
+      const syntheticIncomeGroup = getSyntheticIncomeGroup()
+      if (syntheticIncomeGroup) groups.push(syntheticIncomeGroup)
+    }
+    return groups
+  }
 
   const groupsBySection = {
-    income: tree.filter(group => normalizeCategoryType(group.category_type) === 'income'),
-    expense: tree.filter(group => normalizeCategoryType(group.category_type) === 'expense'),
+    income: getSectionGroups('income'),
+    expense: getSectionGroups('expense'),
   }
 
   function getUsageSummaryForNode(cat) {
     if (!cat) {
-      return { txn_count: 0, rule_count: 0, profile_mapping_count: 0, batch_mapping_count: 0, is_in_use: false }
+      return EMPTY_USAGE_SUMMARY
     }
-    const direct = categoryUsage?.[cat.id] || { txn_count: 0, rule_count: 0, profile_mapping_count: 0, batch_mapping_count: 0, is_in_use: false }
+    if (isSyntheticUncategorizedCategory(cat)) {
+      return {
+        ...EMPTY_USAGE_SUMMARY,
+        txn_count: cat.id === SYNTHETIC_UNCATEGORIZED_INCOME_CATEGORY_ID
+          ? uncategorizedIncomeTxnCount
+          : uncategorizedExpenseTxnCount,
+        is_in_use: cat.id === SYNTHETIC_UNCATEGORIZED_INCOME_CATEGORY_ID
+          ? uncategorizedIncomeTxnCount > 0
+          : uncategorizedExpenseTxnCount > 0,
+      }
+    }
+    if (isSyntheticUncategorizedIncomeGroup(cat)) {
+      return {
+        ...EMPTY_USAGE_SUMMARY,
+        txn_count: uncategorizedIncomeTxnCount,
+        is_in_use: uncategorizedIncomeTxnCount > 0,
+      }
+    }
+    const direct = categoryUsage?.[cat.id] || EMPTY_USAGE_SUMMARY
     if (cat.parent_id) return direct
     const aggregate = {
       txn_count: direct.txn_count || 0,
@@ -724,6 +925,9 @@ export default function Categories() {
       aggregate.profile_mapping_count += childUsage.profile_mapping_count || 0
       aggregate.batch_mapping_count += childUsage.batch_mapping_count || 0
     }
+    if (isProtectedSystemCategory(cat)) {
+      aggregate.txn_count += uncategorizedExpenseTxnCount
+    }
     aggregate.is_in_use = !!(
       aggregate.txn_count ||
       aggregate.rule_count ||
@@ -736,25 +940,41 @@ export default function Categories() {
   const visibleChildIds = ['income', 'expense'].flatMap(sectionType => {
     if (collapsedSections[sectionType]) return []
     return groupsBySection[sectionType].flatMap(group => (
-      collapsedGroups[group.id] ? [] : (group.children || []).map(child => child.id)
+      collapsedGroups[group.id] ? [] : getBulkMovableChildrenForGroup(group).map(child => child.id)
     ))
   })
 
   useEffect(() => {
     if (!tree.length || !collapseStateLoaded) return
-    const sectionStorageKey = getSectionStorageKey(dbInstanceId, userId)
-    const groupStorageKey = getGroupStorageKey(dbInstanceId, userId)
     setCollapsedSections(prev => {
-      if (sectionStorageKey && window.localStorage.getItem(sectionStorageKey) !== null) return prev
-      return { income: true, expense: true }
-    })
-    setCollapsedGroups(prev => {
-      if (groupStorageKey && window.localStorage.getItem(groupStorageKey) !== null) return prev
       const next = {}
-      tree.forEach(group => { next[group.id] = true })
+      let changed = false
+      CATEGORY_SECTION_TYPES.forEach(sectionType => {
+        if (Object.prototype.hasOwnProperty.call(prev, sectionType)) {
+          next[sectionType] = !!prev[sectionType]
+        } else {
+          next[sectionType] = false
+          changed = true
+        }
+      })
+      if (!changed && CATEGORY_SECTION_TYPES.every(sectionType => prev[sectionType] === next[sectionType])) return prev
       return next
     })
-  }, [dbInstanceId, userId, tree, collapseStateLoaded])
+    setCollapsedGroups(prev => {
+      const next = {}
+      let changed = false
+      tree.forEach(group => {
+        if (Object.prototype.hasOwnProperty.call(prev, group.id)) {
+          next[group.id] = !!prev[group.id]
+        } else {
+          next[group.id] = true
+          changed = true
+        }
+      })
+      if (!changed && tree.length === Object.keys(prev).length && tree.every(group => prev[group.id] === next[group.id])) return prev
+      return next
+    })
+  }, [tree, collapseStateLoaded])
   useEffect(() => {
     updateScrollState(listRef, setListScrollState)
   }, [tree, selected, loading, inlineForm, collapsedSections, collapsedGroups])
@@ -1032,11 +1252,17 @@ export default function Categories() {
       return
     }
 
+    if (isSyntheticUncategorizedCategory(fullCat)) {
+      setSelectedCategoryIds([])
+      return
+    }
+
     setSelectedCategoryIds([fullCat.id])
   }
 
   function getDragPayload(cat) {
     if (bulkMoveMode) return null
+    if (isSystemCategory(cat)) return null
     if (!cat.parent_id) {
       return {
         id: cat.id,
@@ -1207,7 +1433,7 @@ export default function Categories() {
     const usageSummary = fullCat ? getUsageSummaryForNode(fullCat) : null
     if (fullCat) {
       setSelected(fullCat)
-      setSelectedCategoryIds(fullCat.parent_id ? [fullCat.id] : [])
+      setSelectedCategoryIds(fullCat.parent_id && !isSyntheticUncategorizedCategory(fullCat) ? [fullCat.id] : [])
     }
     setContextMenu({
       x: e.clientX,
@@ -1215,9 +1441,9 @@ export default function Categories() {
       sectionType,
       groupId: group?.id || null,
       groupName: group?.name || '',
-      categoryId: fullCat?.parent_id ? fullCat.id : null,
-      categoryName: fullCat?.parent_id ? fullCat.name : '',
-      removableId: fullCat?.id || null,
+      categoryId: fullCat?.parent_id && !isSyntheticUncategorizedCategory(fullCat) ? fullCat.id : null,
+      categoryName: fullCat?.parent_id && !isSyntheticUncategorizedCategory(fullCat) ? fullCat.name : '',
+      removableId: fullCat && !isSystemCategory(fullCat) ? fullCat.id : null,
       removeInUse: !!usageSummary?.is_in_use,
       scope: group?.id ? 'group' : 'section',
       insertPosition,
@@ -1256,6 +1482,11 @@ export default function Categories() {
 
   function toggleBulkChecked(cat) {
     if (!bulkMoveMode) return
+    if (isSyntheticUncategorizedCategory(cat)) {
+      setSelected(cat)
+      setSelectedCategoryIds([])
+      return
+    }
     if (cat.parent_id) {
       setSelected(cat)
       setSelectedCategoryIds(prev => (
@@ -1266,7 +1497,7 @@ export default function Categories() {
       return
     }
 
-    const childIds = (cat.children || []).map(child => child.id)
+    const childIds = getBulkMovableChildrenForGroup(cat).map(child => child.id)
     const allChecked = childIds.length > 0 && childIds.every(id => selectedCategoryIds.includes(id))
     setSelected(cat)
     setSelectedCategoryIds(prev => {
@@ -1285,7 +1516,13 @@ export default function Categories() {
     await moveChildrenBatch(selectedCategoryIds, targetParentId)
   }
 
-  const parentCategory = selected?.parent_id ? flatCats.find(cat => cat.id === selected.parent_id) : null
+  const parentCategory = selected?.parent_id
+    ? (
+      flatCats.find(cat => cat.id === selected.parent_id) ||
+      (selected.parent_id === SYNTHETIC_UNCATEGORIZED_INCOME_GROUP_ID ? getSyntheticIncomeGroup() : null)
+    )
+    : null
+  const selectedIsSystemCategory = isSystemCategory(selected)
   const personalOwners = getPersonalOwners(owners)
   const sharedOwner = getSharedOwner(owners)
   const effectiveSelectedOwnerId = getEffectiveCategoryOwnerId(selected, flatCats, owners)
@@ -1308,7 +1545,13 @@ export default function Categories() {
   const selectedCategoryFilter = isMultiCategorySelection
     ? null
     : selected
-      ? (selected.parent_id ? selected.id : `__group__${selected.id}`)
+      ? (
+        isSyntheticUncategorizedIncomeGroup(selected)
+          ? SYNTHETIC_UNCATEGORIZED_INCOME_CATEGORY_ID
+          : isSyntheticUncategorizedCategory(selected)
+            ? selected.id
+            : (selected.parent_id ? selected.id : `__group__${selected.id}`)
+      )
       : null
   const selectedCategoryIdsFilter = isMultiCategorySelection
     ? selectedCategories.map(cat => cat.id).join(',')
@@ -1357,6 +1600,23 @@ export default function Categories() {
         category_overridden: 1,
       } : txn
     ))
+  }
+
+  function handleMatchingTxnColumnUpdate(nextColumns) {
+    const normalized = normalizeMatchingTxnColumnConfig(nextColumns)
+    if (normalized) setMatchingTxnColumns(normalized)
+  }
+
+  function openDetailPanel(type, item) {
+    if (!item?.id) return
+    setDetailPanels(prev => [
+      ...prev.filter(panel => !(panel.type === type && panel.item?.id === item.id)),
+      { type, item },
+    ])
+  }
+
+  function closeDetailPanel(type, id) {
+    setDetailPanels(prev => prev.filter(panel => !(panel.type === type && panel.item?.id === id)))
   }
 
   useEffect(() => {
@@ -1506,6 +1766,8 @@ export default function Categories() {
 
                   {!sectionCollapsed ? sectionGroups.map(group => {
                     const groupCollapsed = !!collapsedGroups[group.id]
+                    const visibleChildren = getVisibleChildrenForGroup(group)
+                    const selectableChildren = getBulkMovableChildrenForGroup(group)
                     const showGroupFormBefore =
                       inlineForm?.mode === 'group' &&
                       inlineForm.sectionType === sectionType &&
@@ -1532,10 +1794,16 @@ export default function Categories() {
                         cat={group}
                         isChild={false}
                         isSelected={selected?.id === group.id}
+                        draggable={!isSystemCategory(group)}
+                        renameDisabled={isSystemCategory(group)}
+                        allowSelectionWhenRenameDisabled={isSystemCategory(group)}
+                        showDelete={!isSystemCategory(group)}
+                        acceptDrop={!isSystemCategory(group)}
+                        nameStyle={isSystemCategory(group) ? { fontStyle: 'italic' } : null}
                         bulkMoveMode={bulkMoveMode}
-                        bulkChecked={(group.children || []).length > 0 && (group.children || []).every(child => selectedCategoryIdSet.has(child.id))}
+                        bulkChecked={selectableChildren.length > 0 && selectableChildren.every(child => selectedCategoryIdSet.has(child.id))}
                         isCollapsed={groupCollapsed}
-                        canCollapse={(group.children || []).length > 0}
+                        canCollapse={visibleChildren.length > 0}
                         onToggleCollapse={toggleGroup}
                         onSelect={selectCategory}
                         onRename={handleRename}
@@ -1545,20 +1813,27 @@ export default function Categories() {
                         onOpenContextMenu={openContextMenu}
                         onDragStartRow={getDragPayload}
                       />
-                      {!groupCollapsed ? (group.children || []).map(child => (
+                      {!groupCollapsed ? visibleChildren.map(child => (
                         <CategoryTreeRow
                           key={child.id}
                           cat={child}
                           isChild={true}
-                          isSelected={selectedCategoryIds.includes(child.id)}
+                          isSelected={selected?.id === child.id || selectedCategoryIds.includes(child.id)}
+                          draggable={!isSystemCategory(child)}
+                          renameDisabled={isSystemCategory(child)}
+                          allowSelectionWhenRenameDisabled={isSystemCategory(child)}
+                          showDelete={!isSystemCategory(child)}
+                          acceptDrop={!isSystemCategory(child)}
+                          nameStyle={isSystemCategory(child) ? { fontStyle: 'italic' } : null}
                           bulkMoveMode={bulkMoveMode}
                           bulkChecked={selectedCategoryIdSet.has(child.id)}
+                          bulkSelectable={!isSystemCategory(child)}
                           onSelect={selectCategory}
                           onRename={handleRename}
                           onDelete={handleDelete}
                           onToggleBulkChecked={toggleBulkChecked}
                           onDropRow={handleDropRow}
-                          onOpenContextMenu={openContextMenu}
+                          onOpenContextMenu={isSyntheticUncategorizedCategory(child) ? undefined : openContextMenu}
                           onDragStartRow={getDragPayload}
                         />
                       )) : null}
@@ -1664,23 +1939,23 @@ export default function Categories() {
                 <>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
                     <CategoryMarker kind={selected.parent_id ? 'category' : 'group'} size={selected.parent_id ? 8 : 10} />
-                    <h2 style={{ fontSize: 16, fontWeight: 600 }}>{selected.name}</h2>
+                    <h2 style={{ fontSize: 16, fontWeight: 600, fontStyle: selectedIsSystemCategory ? 'italic' : 'normal' }}>{selected.name}</h2>
                   </div>
 
-                  {selected.parent_id ? (
+                      {selected.parent_id ? (
                     <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
                       Subcategory of {parentCategory?.name || '-'}
                       {parentCategory?.exclude_from_totals ? ' (excluded from totals)' : ''}
                     </div>
                   ) : (
                     <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
-                      {SECTION_META[selectedGroupType].label} group - {(tree.find(group => group.id === selected.id)?.children || []).length} subcategories
+                      {SECTION_META[selectedGroupType].label} group - {getVisibleSubcategoryCount(selected)} subcategories
                     </div>
                   )}
                 </>
               )}
 
-              {!isMultiCategorySelection && (
+              {!isMultiCategorySelection && !selectedIsSystemCategory && (
               <>
               <div
                 style={{
@@ -1826,10 +2101,14 @@ export default function Categories() {
                     rows={pagedMatchingTxns}
                     categories={flatCats}
                     onCategorySave={saveMatchingTxnCategory}
+                    onCategoryOpenDetail={category => openDetailPanel('category', category)}
                     onAddCategory={addMatchingCategory}
                     onRowsChange={setPagedMatchingTxns}
                     scrollRef={matchingTxnsListRef}
                     fillHeight={true}
+                    usePillTable={true}
+                    columnConfig={matchingTxnColumns}
+                    onColumnConfigChange={handleMatchingTxnColumnUpdate}
                   />
                 )}
                 {matchingTxnsLoadingMore ? (
@@ -1843,6 +2122,23 @@ export default function Categories() {
           </div>
         </div>
       </div>
+
+      {detailPanels.map((panel, index) => {
+        if (panel.type === 'category') {
+          return (
+            <CategoryDetail
+              key={`category:${panel.item.id}`}
+              category={panel.item}
+              categories={flatCats}
+              forceFloating={true}
+              stackIndex={index}
+              isTopmost={index === detailPanels.length - 1}
+              onClose={() => closeDetailPanel('category', panel.item.id)}
+            />
+          )
+        }
+        return null
+      })}
 
       {contextMenu ? (
         <ContextMenu

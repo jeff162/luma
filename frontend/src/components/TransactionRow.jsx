@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import { api } from '../lib/api.js'
 import { Button, CategoryMarker, SectionEyebrow, getFormControlStyle } from './ui.jsx'
 import CategoryDisplay from './CategoryDisplay.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from './TransientTextInput.jsx'
+import AmountDisplay from './AmountDisplay.jsx'
+import { TagGlyph } from './TagUi.jsx'
 
 /*
  * These cells centralize transaction editing semantics across every table in the app. Parents keep the row data;
@@ -42,6 +44,14 @@ export function buildGroups(flatCats) {
 
 export function getTxnMerchantLabel(txn) {
   return txn.display_name || txn.merchant_name || txn.raw_name || '—'
+}
+
+function getTxnImportedMerchantLabel(txn) {
+  return txn.merchant_name || txn.raw_name || txn.display_name || '—'
+}
+
+export function getTxnImportSourceLabel(txn) {
+  return txn.import_batch_filename || 'Not imported from file'
 }
 
 export function NotePopover({ txn, onSave, onClose }) {
@@ -224,7 +234,7 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onOpenRul
         padding: '4px', minWidth: 160,
       }}
     >
-      {item('↗ Open detail', () => onOpenDetail(menu.txn))}
+      {item('✎ Edit transaction…', () => onOpenDetail(menu.txn))}
       {item(ruleActionLabel, () => onOpenRule(menu.txn))}
       <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
       {item(
@@ -238,8 +248,13 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onOpenRul
 
 export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
   const [name, setName]         = useState(getTxnMerchantLabel(txn))
-  const [showNote, setShowNote] = useState(false)
-  const [localNotes, setLocalNotes] = useState(txn.notes || null)
+  const labelRef = useRef(null)
+  const [nameTruncated, setNameTruncated] = useState(false)
+  const importedName = getTxnImportedMerchantLabel(txn)
+  const renamed = Boolean(txn.display_name && txn.display_name !== importedName)
+  const merchantTitle = nameTruncated
+    ? (renamed ? `${name}\nOriginally: ${importedName}` : name)
+    : (renamed ? `Originally: ${importedName}` : '')
 
   const {
     editing,
@@ -260,15 +275,29 @@ export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
     if (!editing) setName(getTxnMerchantLabel(txn))
   }, [txn.display_name, txn.merchant_name, txn.raw_name, editing])
 
-  useEffect(() => {
-    setLocalNotes(txn.notes || null)
-  }, [txn.notes])
+  useLayoutEffect(() => {
+    if (editing) {
+      setNameTruncated(false)
+      return undefined
+    }
+    const element = labelRef.current
+    if (!element) return undefined
 
-  async function handleNoteSave(val) {
-    await api.updateNotes(txn.id, val)
-    setLocalNotes(val)
-    onUpdateNote?.(txn.id, val)
-  }
+    function updateTruncation() {
+      setNameTruncated(element.scrollWidth > element.clientWidth + 1)
+    }
+
+    updateTruncation()
+
+    if (typeof ResizeObserver === 'function') {
+      const observer = new ResizeObserver(() => updateTruncation())
+      observer.observe(element)
+      return () => observer.disconnect()
+    }
+
+    window.addEventListener('resize', updateTruncation)
+    return () => window.removeEventListener('resize', updateTruncation)
+  }, [editing, name, onOpenDetail, renamed])
 
   if (editing) {
     return (
@@ -279,6 +308,7 @@ export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
           onCommit={commitEdit}
           onCancel={cancelEdit}
           restoreOnEscape
+          blurOnEscape={false}
           onKeyDown={e => e.stopPropagation()}
           onClick={e => e.stopPropagation()}
           style={{
@@ -295,6 +325,7 @@ export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0, maxWidth: '100%' }}>
       <span
+        ref={labelRef}
         onClick={e => {
           e.stopPropagation()
           beginEdit(name)
@@ -310,33 +341,216 @@ export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
           display: 'inline-block',
           maxWidth: '100%',
         }}
-        title={name}
+        title={merchantTitle || undefined}
       >
         {name}
       </span>
       {onOpenDetail && (
         <button
           onClick={e => { e.stopPropagation(); onOpenDetail(txn) }}
-          title="View spending history"
+          title="Open merchant spending report"
           style={{ ...detailButtonStyle, flexShrink: 0 }}
         >↗</button>
       )}
-      {localNotes && (
-        <div style={{ position: 'relative', display: 'inline-flex' }}>
-          <span
-            title={localNotes}
-            onClick={e => { e.stopPropagation(); setShowNote(v => !v) }}
-            style={{ fontSize: 12, cursor: 'pointer', opacity: 0.7, lineHeight: 1 }}
-          >📝</span>
-          {showNote && (
-            <NotePopover
-              txn={{ ...txn, notes: localNotes }}
-              onSave={handleNoteSave}
-              onClose={() => setShowNote(false)}
-            />
-          )}
+    </div>
+  )
+}
+
+function NoteGlyph({ size = 13, color = 'currentColor' }) {
+  return (
+    <svg viewBox="0 0 16 16" width={size} height={size} fill="none" aria-hidden="true">
+      <path
+        d="M4 2.5h8a1 1 0 0 1 1 1v9L10.2 10H4a1 1 0 0 1-1-1v-5.5"
+        stroke={color}
+        strokeWidth="1.25"
+        strokeLinejoin="round"
+      />
+      <path d="M5 6h6M5 8.75h4" stroke={color} strokeWidth="1.15" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function MarkerButton({ title, onClick, children, active = false }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={event => {
+        event.stopPropagation()
+        onClick?.(event)
+      }}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 18,
+        height: 18,
+        borderRadius: 6,
+        border: 'none',
+        background: active ? 'var(--surface2)' : 'transparent',
+        color: active ? 'var(--accent2)' : 'var(--muted)',
+        cursor: 'pointer',
+        padding: 0,
+        flexShrink: 0,
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
+function TagPickerPopover({ allTags, visibleTagIds, onToggleTag, onClose, loading = false }) {
+  const ref = useRef(null)
+
+  useDismissibleLayer({
+    open: true,
+    onClose,
+    refs: [ref],
+  })
+
+  return (
+    <div
+      ref={ref}
+      style={{
+        position: 'absolute',
+        zIndex: 520,
+        top: '100%',
+        right: 0,
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 10,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+        padding: 10,
+        minWidth: 220,
+        marginTop: 4,
+      }}
+      onClick={event => event.stopPropagation()}
+    >
+      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 8 }}>
+        Transaction tags
+      </div>
+      {loading ? (
+        <div style={{ fontSize: 12, color: 'var(--muted)' }}>Loading tags…</div>
+      ) : allTags.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+          No tags yet. Create them in Settings.
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: 4 }}>
+          {allTags.map(tag => {
+            const checked = visibleTagIds.has(tag.id)
+            return (
+              <label
+                key={tag.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  cursor: 'pointer',
+                  padding: '6px 2px',
+                  fontSize: 13,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => onToggleTag(tag, !checked)}
+                />
+                <TagGlyph color={tag.color} size={13} />
+                <span>{tag.name}</span>
+              </label>
+            )
+          })}
         </div>
       )}
+    </div>
+  )
+}
+
+export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags }) {
+  const [showNote, setShowNote] = useState(false)
+  const [showTags, setShowTags] = useState(false)
+  const [availableTags, setAvailableTags] = useState([])
+  const [loadingTags, setLoadingTags] = useState(false)
+
+  const visibleTags = Array.isArray(txn.tags) ? txn.tags : []
+  const visibleTagIds = new Set(visibleTags.map(tag => tag.id))
+
+  useEffect(() => {
+    if (!showTags || availableTags.length > 0 || loadingTags) return
+    let cancelled = false
+    setLoadingTags(true)
+    api.getTags()
+      .then(tags => {
+        if (!cancelled) setAvailableTags(tags)
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingTags(false)
+      })
+    return () => { cancelled = true }
+  }, [availableTags.length, loadingTags, showTags])
+
+  async function handleNoteSave(val) {
+    await api.updateNotes(txn.id, val)
+    onUpdateNote?.(txn.id, val)
+  }
+
+  async function handleToggleTag(tag, present) {
+    const result = await api.updateTransactionTag(txn.id, tag.id, present)
+    onUpdateTags?.(txn.id, result.tags || [])
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, width: '100%', minWidth: 0 }}>
+      <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+        <MarkerButton
+          title={txn.notes ? 'Edit note' : 'Add note'}
+          onClick={() => setShowNote(value => !value)}
+          active={!!txn.notes}
+        >
+          <NoteGlyph size={13} />
+        </MarkerButton>
+        {visibleTags.map(tag => (
+          <MarkerButton
+            key={tag.id}
+            title={tag.name}
+            onClick={() => setShowTags(true)}
+          >
+            <TagGlyph color={tag.color} size={13} />
+          </MarkerButton>
+        ))}
+        <MarkerButton
+          title={visibleTags.length ? 'Edit tags' : 'Add tag'}
+          onClick={() => setShowTags(value => !value)}
+        >
+          <TagGlyph
+            color={visibleTags.length ? 'var(--muted)' : 'var(--accent2)'}
+            size={13}
+            outline={visibleTags.length > 0}
+          />
+        </MarkerButton>
+        {showNote ? (
+          <NotePopover
+            txn={txn}
+            onSave={handleNoteSave}
+            onClose={() => setShowNote(false)}
+          />
+        ) : null}
+        {showTags ? (
+          <TagPickerPopover
+            allTags={availableTags}
+            visibleTagIds={visibleTagIds}
+            loading={loadingTags}
+            onToggleTag={handleToggleTag}
+            onClose={() => setShowTags(false)}
+          />
+        ) : null}
+      </div>
+      <AmountDisplay
+        amount={txn.amount}
+        isPending={!!txn.is_pending}
+        style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}
+      />
     </div>
   )
 }
@@ -353,6 +567,7 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
   const [newParent, setNewParent]     = useState('')
   const [creatingGroup, setCreatingGroup] = useState(false)
   const [newGroupName, setNewGroupName]   = useState('')
+  const [createError, setCreateError] = useState('')
   const inputRef  = useRef(null)
   const listRef   = useRef(null)
   const wrapRef   = useRef(null)
@@ -394,7 +609,12 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
   function pick(cat) { onSave(cat.id) }
 
   function handleKey(e) {
-    if (e.key === 'Escape') { onClose(); return }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      onClose()
+      return
+    }
     if (e.key === 'ArrowDown') { e.preventDefault(); setCursor(c => Math.min(c + 1, total - 1)); return }
     if (e.key === 'ArrowUp')   { e.preventDefault(); setCursor(c => Math.max(c - 1, 0)); return }
     if ((e.key === 'Enter' || e.key === 'Tab') && total > 0) { e.preventDefault(); pick(options[cursor]); return }
@@ -408,10 +628,15 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
 
   async function handleNewSave() {
     if (!newName.trim()) return
-    const cat = await api.createCategory({ name: newName.trim(), parent_id: newParent || null })
-    onAddCategory?.(cat)
-    onSaveNew?.(cat)
-    onClose?.()
+    setCreateError('')
+    try {
+      const cat = await api.createCategory({ name: newName.trim(), parent_id: newParent || null })
+      onAddCategory?.(cat)
+      onSaveNew?.(cat)
+      onClose?.()
+    } catch (error) {
+      setCreateError(error?.message || 'Could not create that category')
+    }
   }
 
   function handleParentChange(val) {
@@ -425,11 +650,16 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
 
   async function handleNewGroupSave() {
     if (!newGroupName.trim()) return
-    const grp = await api.createCategory({ name: newGroupName.trim(), parent_id: null })
-    onAddCategory?.(grp)
-    setNewParent(grp.id)
-    setCreatingGroup(false)
-    setNewGroupName('')
+    setCreateError('')
+    try {
+      const grp = await api.createCategory({ name: newGroupName.trim(), parent_id: null })
+      onAddCategory?.(grp)
+      setNewParent(grp.id)
+      setCreatingGroup(false)
+      setNewGroupName('')
+    } catch (error) {
+      setCreateError(error?.message || 'Could not create that group')
+    }
   }
 
   const parentName = cat => categories.find(c => c.id === cat.parent_id)?.name
@@ -473,7 +703,7 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
           {showNew ? (
             <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>New category</div>
-              <TransientTextInput value={newName} onChange={setNewName}
+              <TransientTextInput value={newName} onChange={value => { if (createError) setCreateError(''); setNewName(value) }}
                 onCommit={handleNewSave}
                 onCancel={() => { setShowNew(false); setNewName('') }}
                 restoreOnEscape
@@ -485,7 +715,7 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <TransientTextInput
                     value={newGroupName}
-                    onChange={setNewGroupName}
+                    onChange={value => { if (createError) setCreateError(''); setNewGroupName(value) }}
                     placeholder="New group name"
                     onCommit={handleNewGroupSave}
                     onCancel={() => { setCreatingGroup(false); setNewParent(''); setNewGroupName('') }}
@@ -508,6 +738,11 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
                   <option value="__new_group__">＋ New group…</option>
                 </select>
               )}
+              {createError ? (
+                <div style={{ fontSize: 12, color: 'var(--danger)', lineHeight: 1.3 }}>
+                  {createError}
+                </div>
+              ) : null}
               <div style={{ display: 'flex', gap: 6 }}>
                 <Button small onMouseDown={e => { e.preventDefault(); handleNewSave() }} disabled={!newName.trim()} style={{ flex: 1, justifyContent: 'center' }}>
                   Add & assign

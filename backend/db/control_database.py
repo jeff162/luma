@@ -25,7 +25,7 @@ from pathlib import Path
 from backend.db.database import DB_PATH, init_db
 
 
-CONTROL_DB_PATH = str(Path(os.getenv("CONTROL_DB_PATH", "control.db")))
+CONTROL_DB_PATH = str(Path(os.getenv("CONTROL_DB_PATH", "fintrack-control.db")))
 TENANT_DATA_ROOT = Path(os.getenv("TENANT_DATA_ROOT", "data"))
 PASSWORD_ITERATIONS = 600_000
 TOTP_PERIOD = 30
@@ -569,6 +569,10 @@ def _legacy_db_path() -> str:
     return str(Path(DB_PATH))
 
 
+def _tenant_db_filename() -> str:
+    return Path(DB_PATH).name or "fintrack-data.db"
+
+
 def _default_tenant_db_path(tenant_id: str) -> str:
     legacy_path = Path(_legacy_db_path())
     if legacy_path.exists():
@@ -577,7 +581,7 @@ def _default_tenant_db_path(tenant_id: str) -> str:
         return str(legacy_path)
     tenant_root = TENANT_DATA_ROOT / tenant_id
     tenant_root.mkdir(parents=True, exist_ok=True)
-    return str(tenant_root / "fintrack.db")
+    return str(tenant_root / _tenant_db_filename())
 
 
 def _create_user_with_tenant(
@@ -620,7 +624,7 @@ def _create_user_with_tenant(
             resolved_tenant_id = str(uuid.uuid4())
             tenant_name = user_display_name
             base_slug = _tenant_slug(clean_username)
-            db_path = _default_tenant_db_path(resolved_tenant_id) if use_legacy_db_if_present else str((TENANT_DATA_ROOT / resolved_tenant_id / "fintrack.db"))
+            db_path = _default_tenant_db_path(resolved_tenant_id) if use_legacy_db_if_present else str(TENANT_DATA_ROOT / resolved_tenant_id / _tenant_db_filename())
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
             init_db(db_path)
             slug = _unique_tenant_slug(conn, base_slug)

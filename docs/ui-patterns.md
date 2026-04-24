@@ -70,11 +70,17 @@ Shared controls should be treated as finished product surfaces, not reused snip
 
 - Treat repeated UI elements as shared product language. Trees, pills, menus, inline editors, overlays, tables, selectors, and other controls that appear on more than one page should keep the same look, spacing, and behavior unless there is a very strong reason to diverge.
 
+- Treat recurring domain objects as shared product language too. When a user, account owner, category, account, or similar named thing appears on multiple screens, its basic add/edit/remove behavior should feel the same unless the workflow is genuinely different.
+
+- The reason for this consistency is not only aesthetics. Reusing the same interaction language lowers relearning cost, makes the product feel more trustworthy, and avoids the impression that one screen is a lesser or temporary version of another.
+
 - Shared form controls and dialog footers should come from shared primitives where possible so cancel/save rows and everyday input chrome do not drift across pages.
 
 - When a UI behavior is meant to be shared, implement the shared behavior first. Do not land a one-sided or page-specific version and plan to “sync it up” later unless the narrower scope is intentional and explicitly documented.
 
 - Before changing a UI interaction, decide whether it is page-specific behavior or shared product language. Shared product language should be implemented and reviewed with parity across all affected surfaces from the start.
+
+- When a screen has a dedicated close action in its header or panel chrome, prefer placing that close control at the upper right unless that surface already follows a stronger established pattern.
 
 - Keep advanced and less-common settings below everyday workflows.
 
@@ -87,6 +93,18 @@ Shared controls should be treated as finished product surfaces, not reused snip
 - Remember a user's working UI state across pages when it materially helps them resume work. Things like panel open/closed state, table layout, and similar view preferences should use the shared per-user/profile preference model with local cache plus best-effort backend sync, rather than one-off page-specific persistence.
 
 - Prefer user control over hidden inference when the choice affects meaning. For example, ownership, mapping, and destructive actions should be explicit when there is more than one reasonable interpretation.
+
+- Long transaction ledgers should let the user change sort directly from the column headers. When the list is paged or incrementally loaded, the sort should be applied by the backend so the whole filtered result stays in one consistent order.
+
+- If a table header supports more than one interaction, the affordances should still read as one clean surface. Pill-style headers are a good fit when the label handles sort and move while the resize target remains visually tied to the column it changes. In scrollable tables, dragging a resize control should normally change that column's width directly instead of silently reallocating space into its neighbor.
+
+- Pill-style multi-interaction headers should come from a shared header component rather than page-local copies. Sortability, drag-to-reorder, resize, and uncommon per-column actions such as a context menu should all be individually optional so quieter tables can reuse the same visual language without inheriting every behavior.
+
+- When a screen needs the full pill-header table pattern, prefer a shared table shell that owns the header, column resize/reorder wiring, and shared grid template. Individual pages should still own row rendering, selection, sorting semantics, and data loading unless those behaviors become meaningfully shared too.
+
+- When column order or widths materially affect how a user works, that table geometry should persist through the shared per-user preference model instead of resetting every time the page or dialog opens.
+
+- Transaction troubleshooting can temporarily repurpose a less-critical column, such as Category, for debug context like the import-file source, but it should not displace the primary merchant label. Prefer a tucked-away header action such as a context menu over a persistent page-level button for these uncommon views, and reuse the same file-detail drill-in wherever an import file source is shown.
 
 ## Page structure
 
@@ -115,6 +133,11 @@ Tree views should use the same visual grammar wherever they appear.
 - Expand/collapse controls should stay close to the label they affect.
 
 - On the Accounts page, merged child accounts should read as a lightweight second level under the parent account rather than as a second flat table with repeated owner/type columns.
+
+- Protected system groups, such as `Unassigned` on the Categories page, should behave like filtered fallback buckets rather than normal editable groups. They should stay at the bottom of their section and only surface children that currently have assigned transactions.
+
+- Protected system rows should read differently from ordinary editable taxonomy rows. Use italic labels for immutable system buckets such as `Unassigned` and the synthetic `Uncategorized` child it can surface when uncategorized transactions exist.
+- When uncategorized transactions need different debit/credit presentation, keep that split synthetic. Expense-side uncategorized rows may stay under `Unassigned`, while uncategorized credits may surface as a separate income-side system bucket such as `Other Income` without creating a real stored category.
 
 ## Section toggles
 
@@ -148,9 +171,25 @@ For account rows, owner rows, and similar editable lists:
 
 - Account merge behavior should stay in-place on the Accounts page: drag handles start the regrouping gesture, eligible drop targets stay visually clear, and child rows hide owner/type fields instead of duplicating parent metadata.
 
+- Dragging a grouped parent onto another top-level account or account group should flatten the dragged group's visible members under the new parent instead of preserving a nested merge tree.
+
+- Child accounts should remain detachable from a merged group through the same in-place drag model. Pulling a child into a visible top-level gutter is preferable to forcing a separate unmerge action elsewhere.
+
 - Sending a merged child account away should use the app trash flow rather than immediate hard deletion, with recovery managed from Settings.
 
 Inline row creation should usually happen inside the existing list, not in a detached panel above it.
+
+## Transaction rows
+
+Transaction tables should share the same row-level metadata treatment.
+
+- Notes and transaction tags belong in a shared marker strip near the amount column rather than being rendered differently on each page.
+
+- Tags should use one fixed shared glyph, with user-selected color carrying the visual identity.
+
+- Hovering a tag marker should reveal its label, and clicking row markers should use the shared inline popover patterns instead of page-local dialogs.
+
+If a list introduces the same kind of object the user already manages elsewhere, start from the existing row/chip behavior first. A lighter presentation is fine, but it should still preserve the same core expectations for clicking, editing, Enter/Escape, and removal.
 
 ## Pills and expanding selectors
 
@@ -167,6 +206,10 @@ Use compact pill-style controls for values like owner, account type, and other 
 - Opening a selector should not change row height or shift surrounding rows.
 
 For category assignment, prefer the shared category picker so transaction pages, import mapping, and any future category assignment flows behave the same way.
+
+- Category pickers and the Categories page should reflect the same persisted group order so users do not learn one structure in the editor and see another while categorizing transactions.
+
+- Top-level category groups should default into alphabetical order within their income or expense section until the user explicitly drags that section into a custom order.
 
 ## Empty states
 
@@ -206,21 +249,43 @@ Do not rely on browser `confirm()`, `alert()`, or `prompt()` dialogs when the re
 
 - Success dialogs should usually have one clear next step.
 
+## First-run onboarding
+
+First-run setup should feel like a guided welcome, not a blank admin prompt.
+
+- If the app is waiting on the first user decision, the screen should explain what each choice means instead of only presenting raw fields.
+
+- It is acceptable to use the application name on this screen and related auth/setup entry points, but it should come from the shared build-time app-name setting rather than hardcoded copy.
+
+- When local mode is active and no user profiles exist yet, setup may collect several related defaults at once if they help the user get started: who uses the app, optional account owners, default imported-category behavior, and what setup screen to open next.
+
+- First-run setup should not feel like a wall of options. Prefer compact collapsed decision blocks for secondary choices, with the minimum required action remaining clear.
+
+- Deeper onboarding guidance should be available from the same screen, but tucked behind a deliberate `More information` or similar affordance so users who only want to get started are not forced to read it first.
+
 ## Import-specific patterns
 
 CSV import has a few special rules:
 
-- If header rows start after line 1, show the raw file and make the skipped-row value match what the importer detected.
+- If header rows start after line 1, surface the detected skipped-row value immediately and offer the raw file as an explicit review step rather than forcing it open by default.
 
 - If the file tail looks like footer or non-transaction data, force the user to review it before continuing.
 
 - True validation errors should open the raw viewer as well; do not bury them only in summary counts.
 
-- Use post-import mapping flows for imported category text instead of forcing everything into the initial import form.
+- If a file already carries meaningful categories, the import mapping screen should let the user use the categories present in the data so imported transactions can keep those categories, missing categories can be added under `Unassigned`, and the file can contribute to system-wide rule suggestions.
+
+- Controls for using categories present in the data should support partial filtering by owner and by unassigned-account bucket without changing which rows are imported. The scope changes only how imported categorization is applied and learned from.
+
+- Organizing imported categories out of `Unassigned` should use the dedicated left-column/right-column workspace from Import / Export so users can sort categories into groups in bulk without working through the general category editor.
+
+- The Import-page actions for organizing imported categories and generating rules should show the remaining actionable count. Categories moved to `Set Aside` in the imported-category workspace should stop counting as still waiting in `Unassigned`.
 
 - Mapping screens should allow partial completion when that is a valid workflow.
 
 - The column-mapping field section should be shared between the import preview and saved data source editing so suggestion pills, required states, and account mapping behavior stay aligned.
+
+- Recent-import file cards may use the same small `↗` detail affordance used elsewhere in the app to open a file-scoped ledger view of the transactions imported from that file.
 
 ### Import mapping persistence
 

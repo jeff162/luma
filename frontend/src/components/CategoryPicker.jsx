@@ -64,6 +64,7 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
   const [newGroupName, setNewGroupName] = useState('')
   const [categoryType, setCategoryType] = useState('expense')
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
   const inputRef = useRef(null)
   const groupNameInputRef = useRef(null)
   const creatingNewGroup = mode === 'leaf' && groupId === '__new_group__'
@@ -85,40 +86,48 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
     )
   }, [creatingNewGroup])
 
+  useEffect(() => {
+    setError('')
+  }, [creatingNewGroup, categoryType, groupId, mode])
+
   async function handleSave() {
     if (mode === 'leaf' && !groupId) return
     if (creatingNewGroup && !newGroupName.trim()) return
     if (!creatingNewGroup && !name.trim()) return
     setSaving(true)
-    if (mode === 'group') {
-      const created = await api.createCategory({ name: name.trim(), parent_id: null, category_type: categoryType })
-      await onSave(created)
-      setSaving(false)
-      return
-    }
-
-    if (creatingNewGroup) {
-      const createdGroup = await api.createCategory({
-        name: newGroupName.trim(),
-        parent_id: null,
-        category_type: categoryType,
-      })
-      if (name.trim()) {
-        const createdCategory = await api.createCategory({
-          name: name.trim(),
-          parent_id: createdGroup.id,
-        })
-        await onSave(createdCategory, createdGroup)
-      } else {
-        await onCreateGroup?.(createdGroup)
+    setError('')
+    try {
+      if (mode === 'group') {
+        const created = await api.createCategory({ name: name.trim(), parent_id: null, category_type: categoryType })
+        await onSave(created)
+        return
       }
-      setSaving(false)
-      return
-    }
 
-    const created = await api.createCategory({ name: name.trim(), parent_id: groupId })
-    await onSave(created)
-    setSaving(false)
+      if (creatingNewGroup) {
+        const createdGroup = await api.createCategory({
+          name: newGroupName.trim(),
+          parent_id: null,
+          category_type: categoryType,
+        })
+        if (name.trim()) {
+          const createdCategory = await api.createCategory({
+            name: name.trim(),
+            parent_id: createdGroup.id,
+          })
+          await onSave(createdCategory, createdGroup)
+        } else {
+          await onCreateGroup?.(createdGroup)
+        }
+        return
+      }
+
+      const created = await api.createCategory({ name: name.trim(), parent_id: groupId })
+      await onSave(created)
+    } catch (err) {
+      setError(err?.message || 'Could not create that category')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -130,7 +139,10 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
               <TransientTextInput
                 ref={groupNameInputRef}
                 value={newGroupName}
-                onChange={setNewGroupName}
+                onChange={nextValue => {
+                  if (error) setError('')
+                  setNewGroupName(nextValue)
+                }}
                 onCommit={handleSave}
                 onCancel={onCancel}
                 restoreOnEscape
@@ -194,7 +206,10 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
         <TransientTextInput
           ref={inputRef}
           value={name}
-          onChange={setName}
+          onChange={nextValue => {
+            if (error) setError('')
+            setName(nextValue)
+          }}
           onCommit={handleSave}
           onCancel={onCancel}
           restoreOnEscape
@@ -202,6 +217,11 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
           placeholder={mode === 'group' ? 'Group name…' : 'Category name…'}
           style={{ ...getFormControlStyle({ size: 'md' }) }}
         />
+      ) : null}
+      {error ? (
+        <div style={{ fontSize: 12, color: 'var(--danger)', lineHeight: 1.3 }}>
+          {error}
+        </div>
       ) : null}
       <div style={{ display: 'flex', gap: 6 }}>
         <Button

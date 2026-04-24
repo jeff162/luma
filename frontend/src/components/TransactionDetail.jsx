@@ -3,15 +3,17 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
-import { formatCurrency, formatDate, monthLabel } from '../lib/utils.js'
+import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { Spinner, Badge } from './ui.jsx'
-import { MerchantCell, CategoryCell, getTxnMerchantLabel } from './TransactionRow.jsx'
-import AmountDisplay from './AmountDisplay.jsx'
+import { getTxnMerchantLabel } from './TransactionRow.jsx'
 import CategoryDisplay from './CategoryDisplay.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
+import TransactionListTable from './TransactionListTable.jsx'
+import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
+import { TagBadge, TagGlyph } from './TagUi.jsx'
 import {
   DETAIL_LIST_MAX_HEIGHT,
   getDetailMonthSectionHeight,
@@ -26,6 +28,8 @@ const inputStyle = {
   border: '1px solid var(--border)', borderRadius: 6,
   padding: '5px 8px', fontSize: 13, outline: 'none',
 }
+const TRANSACTION_DETAIL_TABLE_STORAGE_KEY_PREFIX = 'fintrack.transaction-detail.transactions.columns'
+const TRANSACTION_DETAIL_TABLE_PREF_KEY = 'ui.transactionDetail.transactions.columns'
 
 /*
  * This drawer treats one transaction as the entry point into a payee's history. It keeps the visible month
@@ -43,16 +47,28 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
   const [trendLoading, setTrendLoading] = useState(true)
   const [rulePrompt, setRulePrompt]     = useState(null)
   const [detailCategories, setDetailCategories] = useState(categories)
+  const [detailTxn, setDetailTxn] = useState(txn)
+  const [availableTags, setAvailableTags] = useState([])
+  const [tagsLoading, setTagsLoading] = useState(true)
+  const [notesDraft, setNotesDraft] = useState(txn.notes || '')
+  const [notesSaving, setNotesSaving] = useState(false)
+  const [columnConfig, setColumnConfig] = useTransactionTableLayout({
+    storageKeyPrefix: TRANSACTION_DETAIL_TABLE_STORAGE_KEY_PREFIX,
+    preferenceKey: TRANSACTION_DETAIL_TABLE_PREF_KEY,
+  })
 
-  const payee    = getTxnMerchantLabel(txn)
+  const payee    = getTxnMerchantLabel(detailTxn)
   useEffect(() => {
     setDetailCategories(categories)
   }, [categories])
+  useEffect(() => {
+    setDetailTxn(txn)
+    setNotesDraft(txn.notes || '')
+  }, [txn])
   const loadMonthPage = useCallback((month, offset, limit) => (
     api.getTransactions({
       month,
       payees: payee,
-      direction: 'debit',
       limit,
       offset,
     })
@@ -64,6 +80,22 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
     loadingMore: txnLoadingMore,
     listRef,
   } = usePagedMonthTransactions({ selectedMonth, loadPage: loadMonthPage })
+
+  useEffect(() => {
+    let cancelled = false
+    setTagsLoading(true)
+    api.getTags()
+      .then(rows => {
+        if (!cancelled) setAvailableTags(rows)
+      })
+      .catch(() => {
+        if (!cancelled) setAvailableTags([])
+      })
+      .finally(() => {
+        if (!cancelled) setTagsLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     setTrendLoading(true)
@@ -78,6 +110,15 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
 
   // Keep the visible month in sync with the just-saved override so the drawer reflects the manual fix immediately.
   function handleCatSaved(txnId, cat) {
+    if (txnId === detailTxn.id) {
+      setDetailTxn(prev => ({
+        ...prev,
+        category_id: cat?.id ?? null,
+        category_name: cat?.name ?? null,
+        category_color: null,
+        category_overridden: 1,
+      }))
+    }
     setMonthTxns(prev => prev.map(t =>
       t.id !== txnId ? t : {
         ...t,
@@ -87,6 +128,13 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
         category_overridden: 1,
       }
     ))
+  }
+
+  function patchDetailTxn(patch) {
+    setDetailTxn(prev => ({ ...prev, ...patch }))
+    setMonthTxns(prev => prev.map(row => (
+      row.id === detailTxn.id ? { ...row, ...patch } : row
+    )))
   }
 
   function handleAddCategory(cat) {
@@ -108,18 +156,38 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
     commitEdit: commitEditingName,
   } = useTransientTextEdit(displayName, {
     onCommit: async nextName => {
-      await api.updateMerchant(txn.id, nextName)
+      await api.updateMerchant(detailTxn.id, nextName)
       setDisplayName(nextName)
-      setMonthTxns(prev => prev.map(row => row.id === txn.id ? { ...row, display_name: nextName } : row))
+      patchDetailTxn({ display_name: nextName })
     },
   })
 
   useEffect(() => {
-    if (!editingName) setDisplayName(getTxnMerchantLabel(txn))
-  }, [txn.display_name, txn.merchant_name, txn.raw_name, editingName])
+    if (!editingName) setDisplayName(getTxnMerchantLabel(detailTxn))
+  }, [detailTxn.display_name, detailTxn.merchant_name, detailTxn.raw_name, editingName])
+
+  async function handleSaveNotes() {
+    setNotesSaving(true)
+    const nextNotes = notesDraft.trim() || null
+    try {
+      await api.updateNotes(detailTxn.id, nextNotes)
+      patchDetailTxn({ notes: nextNotes })
+      setNotesDraft(nextNotes || '')
+    } finally {
+      setNotesSaving(false)
+    }
+  }
+
+  async function handleToggleTag(tag, present) {
+    const result = await api.updateTransactionTag(detailTxn.id, tag.id, present)
+    patchDetailTxn({ tags: result.tags || [] })
+  }
 
   const selectedMonthRow = trend.find(r => r.month === selectedMonth)
   const monthSectionHeight = getDetailMonthSectionHeight(trend)
+  const visibleTags = Array.isArray(detailTxn.tags) ? detailTxn.tags : []
+  const visibleTagIds = new Set(visibleTags.map(tag => tag.id))
+  const renamed = Boolean(detailTxn.display_name && detailTxn.display_name !== (detailTxn.merchant_name || detailTxn.raw_name || detailTxn.display_name))
   const header = (
     <>
       {editingName ? (
@@ -162,7 +230,7 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
         </div>
       )}
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
-        Spending history{dateStart || dateEnd
+        Activity history{dateStart || dateEnd
           ? ` · ${dateStart ? dateStart.slice(0, 7) : ''}${dateStart && dateEnd ? ' – ' : ''}${dateEnd ? dateEnd.slice(0, 7) : ''}`
           : ' · all time'}
       </div>
@@ -180,8 +248,167 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
         header={header}
         isTopmost={isTopmost}
       >
+          <div style={{
+            display: 'grid',
+            gap: 16,
+            padding: 14,
+            border: '1px solid var(--border)',
+            borderRadius: 12,
+            background: 'var(--surface2)',
+            marginBottom: 18,
+          }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
+                  Transaction
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>{formatCurrency(detailTxn.amount)}</div>
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{detailTxn.date}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
+                  Category
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  {detailTxn.category_id ? (
+                    <CategoryDisplay id={detailTxn.category_id} name={detailTxn.category_name} />
+                  ) : (
+                    <Badge label="Uncategorized" toneKey="uncategorized" />
+                  )}
+                  {detailTxn.category_overridden ? (
+                    <span style={{ fontSize: 11, color: 'var(--muted)' }}>manual</span>
+                  ) : null}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
+                  Account
+                </div>
+                <div style={{ fontSize: 13 }}>
+                  {detailTxn.account_name}{detailTxn.account_mask ? ` ···${detailTxn.account_mask}` : ''}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
+                  Source
+                </div>
+                <div style={{ fontSize: 13, color: detailTxn.import_batch_filename ? 'var(--text)' : 'var(--muted)' }}>
+                  {detailTxn.import_batch_filename || 'Not imported from file'}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gap: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Tags
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {visibleTags.length > 0 ? visibleTags.map(tag => (
+                  <TagBadge key={tag.id} tag={tag} />
+                )) : (
+                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>No tags on this transaction.</span>
+                )}
+              </div>
+              {tagsLoading ? (
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>Loading tags…</div>
+              ) : availableTags.length > 0 ? (
+                <div style={{ display: 'grid', gap: 6 }}>
+                  {availableTags.map(tag => {
+                    const checked = visibleTagIds.has(tag.id)
+                    return (
+                      <label
+                        key={tag.id}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => handleToggleTag(tag, !checked)}
+                        />
+                        <TagGlyph color={tag.color} size={13} />
+                        <span>{tag.name}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>No tags defined yet. Create them in Settings.</div>
+              )}
+            </div>
+
+            <div style={{ display: 'grid', gap: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Notes
+              </div>
+              <textarea
+                value={notesDraft}
+                onChange={event => setNotesDraft(event.target.value)}
+                rows={3}
+                placeholder="Add notes about this transaction…"
+                style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  resize: 'vertical',
+                  background: 'var(--surface)',
+                  color: 'var(--text)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 10,
+                  padding: '8px 10px',
+                  fontSize: 13,
+                  outline: 'none',
+                }}
+              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={handleSaveNotes}
+                  disabled={notesSaving}
+                  style={{
+                    background: 'var(--accent)',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 8,
+                    padding: '6px 12px',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {notesSaving ? 'Saving…' : 'Save note'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNotesDraft(detailTxn.notes || '')}
+                  style={{
+                    background: 'var(--surface)',
+                    color: 'var(--muted)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    padding: '6px 10px',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gap: 6 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Source fields
+              </div>
+              <div style={{ display: 'grid', gap: 6, fontSize: 12 }}>
+                <div><span style={{ color: 'var(--muted)' }}>Visible merchant:</span> {getTxnMerchantLabel(detailTxn)}</div>
+                {renamed ? (
+                  <div><span style={{ color: 'var(--muted)' }}>Imported merchant:</span> {detailTxn.merchant_name || '—'}</div>
+                ) : null}
+                <div><span style={{ color: 'var(--muted)' }}>Raw source text:</span> {detailTxn.raw_name || '—'}</div>
+              </div>
+            </div>
+          </div>
+
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
-            Spending at {payee}{dateStart || dateEnd ? '' : ' — all time'}
+            Activity at {payee}{dateStart || dateEnd ? '' : ' — all time'}
           </div>
 
           {trendLoading ? <Spinner /> : trend.length === 0 ? (
@@ -201,61 +428,37 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
               {txnLoading && monthTxns.length === 0 ? <Spinner /> : monthTxns.length === 0 ? (
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
-                <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-                  <div style={{
-                    display: 'grid', gridTemplateColumns: '110px 1fr 140px 160px 110px',
-                    padding: '7px 14px', fontSize: 11, fontWeight: 600,
-                    color: 'var(--muted)', textTransform: 'uppercase',
-                    letterSpacing: '0.05em', background: 'var(--surface2)',
-                    borderBottom: '1px solid var(--border)',
-                  }}>
-                    <span>Date</span>
-                    <span>Description</span>
-                    <span>Account</span>
-                    <span>Category</span>
-                    <span style={{ textAlign: 'right' }}>Amount</span>
-                  </div>
-
-                  <div ref={listRef} style={{ maxHeight: DETAIL_LIST_MAX_HEIGHT, overflowY: 'auto' }}>
-                    {monthTxns.map(t => (
-                      <div key={t.id} style={{
-                        display: 'grid', gridTemplateColumns: '110px 1fr 140px 160px 110px',
-                        padding: '9px 14px', alignItems: 'center', fontSize: 13,
-                        borderBottom: '1px solid var(--border)',
-                        background: t.id === txn.id
-                          ? 'color-mix(in srgb, var(--accent) 8%, transparent)'
-                          : 'transparent',
-                      }}>
-                        <span style={{ color: 'var(--muted)', fontSize: 12 }}>{formatDate(t.date)}</span>
-                        <MerchantCell
-                          txn={t}
-                          onRename={(id, name) => setMonthTxns(prev =>
-                            prev.map(x => x.id === id ? { ...x, display_name: name } : x)
-                          )}
-                        />
-                        <span style={{ color: 'var(--muted)', fontSize: 12,
-                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {t.account_name}{t.account_mask ? ` ···${t.account_mask}` : ''}
-                        </span>
-                        <CategoryCell
-                          txn={t}
-                          categories={detailCategories}
-                          onSave={handleOverrideCategory}
-                          onAddCategory={handleAddCategory}
-                          onRulePrompt={p => {
-                            setRulePrompt(p)
-                            externalRulePrompt?.(p)
-                          }}
-                        />
-                        <AmountDisplay amount={t.amount} isPending={!!t.is_pending} />
-                      </div>
-                    ))}
-                  </div>
-
+                <div>
+                  <TransactionListTable
+                    rows={monthTxns}
+                    categories={detailCategories}
+                    onCategorySave={handleOverrideCategory}
+                    onAddCategory={handleAddCategory}
+                    onRulePrompt={p => {
+                      setRulePrompt(p)
+                      externalRulePrompt?.(p)
+                    }}
+                    onRowsChange={setMonthTxns}
+                    usePillTable={true}
+                    columnConfig={columnConfig}
+                    onColumnConfigChange={setColumnConfig}
+                    maxHeight={DETAIL_LIST_MAX_HEIGHT}
+                    scrollRef={listRef}
+                    getRowStyle={row => (
+                      row.id === txn.id
+                        ? { background: 'color-mix(in srgb, var(--accent) 8%, transparent)' }
+                        : undefined
+                    )}
+                  />
                   <div style={{
                     padding: '8px 14px', fontSize: 13, fontWeight: 600,
                     textAlign: 'right', borderTop: '1px solid var(--border)',
                     background: 'var(--surface2)',
+                    borderLeft: '1px solid var(--border)',
+                    borderRight: '1px solid var(--border)',
+                    borderBottom: '1px solid var(--border)',
+                    borderBottomLeftRadius: 8,
+                    borderBottomRightRadius: 8,
                   }}>
                     {selectedMonthRow?.count ? `${selectedMonthRow.count} matching · ` : ''}
                     Total: {formatCurrency(selectedMonthRow?.total ?? monthTxns.reduce((s, t) => s + t.amount, 0))}
@@ -274,7 +477,6 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
               api.getTransactions({
                 month: selectedMonth,
                 payees: payee,
-                direction: 'debit',
                 limit: monthTxns.length || 100,
                 offset: 0,
               }).then(d => setMonthTxns(d.transactions))

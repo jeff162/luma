@@ -35,6 +35,10 @@ function parseSimpleEnvFile(content) {
 
 export default defineConfig(({ mode }) => {
   const projectRoot = path.resolve(process.cwd(), '..')
+  const packageJsonPath = path.join(process.cwd(), 'package.json')
+  const packageJson = fs.existsSync(packageJsonPath)
+    ? JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
+    : {}
   const frontendEnv = loadEnv(mode, process.cwd(), '')
   const rootEnvPath = path.join(projectRoot, '.env')
   const rootEnv = fs.existsSync(rootEnvPath)
@@ -46,6 +50,9 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    define: {
+      __APP_VERSION__: JSON.stringify(env.VITE_APP_VERSION || packageJson.version || '0.2.0'),
+    },
     server: {
       host: '0.0.0.0',
       port: frontendPort,

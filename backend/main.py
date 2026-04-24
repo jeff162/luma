@@ -28,7 +28,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from backend.db.control_database import auth_required, get_local_mode_user, get_user_by_id, init_control_db
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
-from backend.routers import accounts, auth, categories, import_export, owners, plaid, rules, sync, tasks, transactions
+from backend.routers import accounts, auth, categories, import_export, owners, plaid, rules, sync, tags, tasks, transactions
 from backend.runtime_config import runtime_config_status
 
 
@@ -117,7 +117,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="FinTrack", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="FinTrack", version="0.2.0", lifespan=lifespan)
 app.add_middleware(TenantSessionMiddleware)
 app.add_middleware(
     SessionMiddleware,
@@ -141,6 +141,7 @@ app.include_router(plaid.router,        prefix="/api/plaid",         tags=["plai
 app.include_router(sync.router,         prefix="/api/sync",          tags=["sync"])
 app.include_router(rules.router,        prefix="/api/rules",         tags=["rules"])
 app.include_router(owners.router,       prefix="/api/owners",        tags=["owners"])
+app.include_router(tags.router,         prefix="/api/tags",          tags=["tags"])
 app.include_router(import_export.router, prefix="/api/import-export", tags=["import-export"])
 app.include_router(tasks.router,         prefix="/api/tasks",         tags=["tasks"])
 

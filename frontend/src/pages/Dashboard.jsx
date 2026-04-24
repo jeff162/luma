@@ -7,8 +7,6 @@ import {
   BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Legend, ReferenceLine,
 } from 'recharts'
 import { api } from '../lib/api.js'
-import { MerchantCell, CategoryCell } from '../components/TransactionRow.jsx'
-import AmountDisplay from '../components/AmountDisplay.jsx'
 import { Link } from 'react-router-dom'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
@@ -16,6 +14,13 @@ import { useFilters, resolveDateMonths } from '../lib/FilterContext.jsx'
 import { currentMonth, formatCurrency, formatDate, monthLabel, lastNMonths } from '../lib/utils.js'
 import { Card, PageHeader, Select, Spinner, EmptyState, CategoryMarker } from '../components/ui.jsx'
 import { format, subMonths, subYears, startOfYear, endOfYear, startOfMonth, endOfMonth } from 'date-fns'
+import TransactionListTable from '../components/TransactionListTable.jsx'
+import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
+
+const DASHBOARD_CATEGORY_TXN_TABLE_STORAGE_KEY_PREFIX = 'fintrack.dashboard.category-transactions.columns'
+const DASHBOARD_CATEGORY_TXN_TABLE_PREF_KEY = 'ui.dashboard.categoryTransactions.columns'
+const DASHBOARD_GROUP_TXN_TABLE_STORAGE_KEY_PREFIX = 'fintrack.dashboard.group-transactions.columns'
+const DASHBOARD_GROUP_TXN_TABLE_PREF_KEY = 'ui.dashboard.groupTransactions.columns'
 
 function monthsInRange(startYM, endYM) {
   const months = []
@@ -66,10 +71,10 @@ function presetToPeriod(preset) {
 
 const RECENT_MONTHS = lastNMonths(24).map(m => ({ value: m, label: monthLabel(m) }))
 
-async function fetchPeriodGroupTotals(period, accountId) {
+async function fetchPeriodGroupTotals(period, accountId, tagIds) {
   const months = periodMonths(period)
   const results = await Promise.all(
-    months.map(m => api.getGroupTotals(m, accountId || undefined))
+    months.map(m => api.getGroupTotals(m, accountId || undefined, undefined, undefined, undefined, undefined, tagIds))
   )
   const merged = {}
   for (const monthRows of results) {
@@ -86,10 +91,10 @@ async function fetchPeriodGroupTotals(period, accountId) {
     .sort((a, b) => b.total - a.total)
 }
 
-async function fetchPeriodCatTotals(period, groupId, accountId) {
+async function fetchPeriodCatTotals(period, groupId, accountId, tagIds) {
   const months = periodMonths(period)
   const results = await Promise.all(
-    months.map(m => api.getCategoryTotalsInGroup(m, groupId, accountId || undefined))
+    months.map(m => api.getCategoryTotalsInGroup(m, groupId, accountId || undefined, undefined, undefined, undefined, tagIds))
   )
   const merged = {}
   for (const monthRows of results) {
@@ -649,6 +654,15 @@ export default function Dashboard() {
   const [loading,      setLoading]      = useState(true)
   const [drillLoading, setDrillLoading] = useState(false)
   const multiDetailMode = detailTxns.length > 1
+  const [categoryTxnColumns, setCategoryTxnColumns] = useTransactionTableLayout({
+    storageKeyPrefix: DASHBOARD_CATEGORY_TXN_TABLE_STORAGE_KEY_PREFIX,
+    preferenceKey: DASHBOARD_CATEGORY_TXN_TABLE_PREF_KEY,
+    showCategory: false,
+  })
+  const [groupTxnColumns, setGroupTxnColumns] = useTransactionTableLayout({
+    storageKeyPrefix: DASHBOARD_GROUP_TXN_TABLE_STORAGE_KEY_PREFIX,
+    preferenceKey: DASHBOARD_GROUP_TXN_TABLE_PREF_KEY,
+  })
 
   function openTransactionDetail(txn) {
     if (!txn?.id) return
@@ -666,6 +680,8 @@ export default function Dashboard() {
   const dateEnd   = filters.date?.end   || null
   const accountSelections = filters.selections.filter(s => s.type === 'account')
   const accountId = accountSelections.length === 1 ? accountSelections[0].id : undefined
+  const tagSelections = filters.selections.filter(s => s.type === 'tag')
+  const tagIds = tagSelections.length > 0 ? tagSelections.map(s => s.id).join(',') : undefined
 
   // On the Dashboard this filters by CATEGORY owner (whose budget domain),
   // not transaction owner (who spent it). Shared/null-owner groups always show.
@@ -677,25 +693,29 @@ export default function Dashboard() {
     setLoading(true)
     setLevel('groups'); setSelectedGroup(null); setSelectedCat(null)
     Promise.all([
-      api.getGroupTotals(null, accountId || undefined, dateStart, dateEnd, undefined, categoryOwnerIds),
-      api.getMonthlyTrend(12),
+      api.getGroupTotals(null, accountId || undefined, dateStart, dateEnd, undefined, categoryOwnerIds, tagIds),
+      api.getMonthlyTrend(12, undefined, accountId || undefined, dateStart, dateEnd, tagIds),
     ]).then(([g, tr]) => {
       setGroupRows(g.filter(r => r.category_type !== 'income'))
       setIncomeRows(g.filter(r => r.category_type === 'income'))
       setTrend(tr)
       setLoading(false)
     })
-  }, [accountId, categoryOwnerIds, mode, filters, dateStart, dateEnd])
+  }, [accountId, categoryOwnerIds, mode, filters, dateStart, dateEnd, tagIds])
 
   useEffect(() => {
     api.getOwners().then(setOwners)
+  }, [])
+
+  useEffect(() => {
+    api.getCategories().then(setCategories)
   }, [])
 
   // Fetches all groups once (no owner filter), then the frontend splits them
   // by group_owner_id. Explicit Shared groups appear in every personal-owner column.
   useEffect(() => {
     if (mode !== 'single' || !splitByOwner || personalOwners.length === 0) return
-    api.getGroupTotals(null, accountId || undefined, dateStart, dateEnd)
+    api.getGroupTotals(null, accountId || undefined, dateStart, dateEnd, undefined, undefined, tagIds)
       .then(allRows => {
         const filtered = allRows.filter(r => r.category_type !== 'income')
         const byOwner = {}
@@ -707,38 +727,38 @@ export default function Dashboard() {
         }
         setOwnerSplitData(byOwner)
       })
-  }, [mode, splitByOwner, personalOwners, sharedOwnerId, accountId, dateStart, dateEnd, filters])
+  }, [mode, splitByOwner, personalOwners, sharedOwnerId, accountId, dateStart, dateEnd, filters, tagIds])
 
   useEffect(() => {
     if (mode !== 'compare' || !periodA || !periodB) return
     setLoading(true)
     setCmpLevel('groups'); setCmpGroup(null)
     Promise.all([
-      fetchPeriodGroupTotals(periodA, accountId),
-      fetchPeriodGroupTotals(periodB, accountId),
+      fetchPeriodGroupTotals(periodA, accountId, tagIds),
+      fetchPeriodGroupTotals(periodB, accountId, tagIds),
     ]).then(([a, b]) => {
       setCmpGroupsA(a)
       setCmpGroupsB(b)
       setLoading(false)
     })
-  }, [periodA, periodB, accountId, mode])
+  }, [periodA, periodB, accountId, mode, tagIds])
 
   useEffect(() => {
     if (mode !== 'trends') return
     setTrendLoading(true)
-    api.getMonthlyByGroup(60, accountId || undefined, trendGroup?.series_id || undefined)
+    api.getMonthlyByGroup(60, accountId || undefined, trendGroup?.series_id || undefined, tagIds)
       .then(rows => {
         setTrendRows(rows)
         setTrendLoading(false)
       })
-  }, [mode, accountId, trendGroup])
+  }, [mode, accountId, trendGroup, tagIds])
 
   useEffect(() => {
     if (mode !== 'trends') return
-    api.getGroupTotals(thisM, accountId || undefined).then(g => {
+    api.getGroupTotals(thisM, accountId || undefined, undefined, undefined, undefined, undefined, tagIds).then(g => {
       setTrendGroups(g.filter(r => r.category_type !== 'income'))
     })
-  }, [mode, accountId])
+  }, [mode, accountId, tagIds])
 
   async function drillToCategories(group) {
     const groupId  = group.group_id ?? group.payload?.group_id
@@ -746,12 +766,13 @@ export default function Dashboard() {
     setDrillLoading(true)
     setSelectedGroup(groupRow)
     const [rows, txnResp] = await Promise.all([
-      api.getCategoryTotalsInGroup(null, groupId, accountId || undefined, dateStart, dateEnd),
+      api.getCategoryTotalsInGroup(null, groupId, accountId || undefined, dateStart, dateEnd, undefined, tagIds),
       api.getTransactions({
         date_start:  filters.date?.start || undefined,
         date_end:    filters.date?.end   || undefined,
         group_ids:   groupId,
         account_id:  accountId || undefined,
+        tag_ids:     tagIds,
         limit: 500,
       }),
     ])
@@ -769,10 +790,11 @@ export default function Dashboard() {
     const data = await api.getTransactions({
       date_start:  filters.date?.start || undefined,
       date_end:    filters.date?.end   || undefined,
-      // The transactions endpoint uses an explicit uncategorized sentinel, so the
-      // dashboard drill path has to translate the chart row back into that API value.
-      category_id: categoryId === 'uncategorized' ? '__uncategorized__' : categoryId,
+      // Summary rows can surface synthetic uncategorized buckets, so the drill path
+      // forwards the returned id directly instead of trying to collapse them back to one label.
+      category_id: categoryId,
       account_id:  accountId || undefined,
+      tag_ids:     tagIds,
       limit: 200,
     })
     setTxnData(data.transactions)
@@ -792,8 +814,8 @@ export default function Dashboard() {
     setDrillLoading(true)
     setCmpGroup(groupRow)
     const [a, b] = await Promise.all([
-      fetchPeriodCatTotals(periodA, groupId, accountId),
-      fetchPeriodCatTotals(periodB, groupId, accountId),
+      fetchPeriodCatTotals(periodA, groupId, accountId, tagIds),
+      fetchPeriodCatTotals(periodB, groupId, accountId, tagIds),
     ])
     setCmpCatsA(a)
     setCmpCatsB(b)
@@ -1028,48 +1050,30 @@ export default function Dashboard() {
                   {level === 'transactions' && selectedCat && (
                     <div style={{ gridColumn: '1 / -1' }}>
                       <Card style={{ padding: 0, overflow: 'hidden' }}>
-                        <div style={{
-                          display: 'grid', gridTemplateColumns: '100px 1fr 160px 120px',
-                          padding: '10px 16px', fontSize: 11, fontWeight: 600,
-                          color: 'var(--muted)', textTransform: 'uppercase',
-                          letterSpacing: '0.05em', borderBottom: '1px solid var(--border)',
-                        }}>
-                          <span>Date</span><span>Merchant</span><span>Account</span>
-                          <span style={{ textAlign: 'right' }}>Amount</span>
-                        </div>
-                        {txnData.length === 0 ? <EmptyState message="No transactions" /> : txnData.map(txn => (
-                          <div key={txn.id} style={{
-                            display: 'grid', gridTemplateColumns: '100px 1fr 160px 160px 120px',
-                            padding: '10px 16px', alignItems: 'center',
-                            borderBottom: '1px solid var(--border)', fontSize: 14,
-                          }}>
-                            <span style={{ color: 'var(--muted)', fontSize: 13 }}>{formatDate(txn.date)}</span>
-                            <MerchantCell
-                              txn={txn}
-                              onOpenDetail={openTransactionDetail}
-                              onRename={(id, name) => setTxnData(prev =>
-                                prev.map(x => x.id === id ? { ...x, display_name: name } : x)
-                              )}
-                            />
-                            <span style={{ color: 'var(--muted)', fontSize: 13 }}>{txn.account_name}{txn.account_mask ? ` ···${txn.account_mask}` : ''}</span>
-                            <CategoryCell
-                              txn={txn}
-                              categories={categories}
-                              onSave={(txnId, catId, catObj) => {
-                                const cat = catObj || categories.find(c => c.id === catId)
-                                setTxnData(prev => prev.map(x => x.id === txnId ? {
-                                  ...x, category_id: catId,
-                                  category_name: cat?.name ?? null,
-                                  category_color: null,
-                                  category_overridden: 1,
-                                } : x))
-                                api.overrideCategory(txnId, catId)
-                              }}
-                              onRulePrompt={setRulePrompt}
-                            />
-                            <AmountDisplay amount={txn.amount} isPending={!!txn.is_pending} />
-                          </div>
-                        ))}
+                        {txnData.length === 0 ? <EmptyState message="No transactions" /> : (
+                          <TransactionListTable
+                            rows={txnData}
+                            categories={categories}
+                            onCategorySave={(txnId, catId, catObj) => {
+                              const cat = catObj || categories.find(c => c.id === catId)
+                              setTxnData(prev => prev.map(x => x.id === txnId ? {
+                                ...x,
+                                category_id: catId,
+                                category_name: cat?.name ?? null,
+                                category_color: null,
+                                category_overridden: 1,
+                              } : x))
+                              api.overrideCategory(txnId, catId)
+                            }}
+                            onRulePrompt={setRulePrompt}
+                            onRowsChange={setTxnData}
+                            onTransactionOpenDetail={openTransactionDetail}
+                            showCategory={false}
+                            usePillTable={true}
+                            columnConfig={categoryTxnColumns}
+                            onColumnConfigChange={setCategoryTxnColumns}
+                          />
+                        )}
                       </Card>
                     </div>
                   )}
@@ -1104,53 +1108,28 @@ export default function Dashboard() {
                       Click a category above to filter
                     </span>
                   </div>
-                  <div style={{
-                    display: 'grid', gridTemplateColumns: '100px 1fr 140px 150px 110px',
-                    padding: '8px 16px', fontSize: 11, fontWeight: 600,
-                    color: 'var(--muted)', textTransform: 'uppercase',
-                    letterSpacing: '0.05em', borderBottom: '1px solid var(--border)',
-                  }}>
-                    <span>Date</span><span>Merchant</span><span>Account</span>
-                    <span>Category</span><span style={{ textAlign: 'right' }}>Amount</span>
-                  </div>
-                  <div style={{ maxHeight: 320, overflowY: 'auto' }}>
-                    {groupTxnData.map(t => (
-                      <div key={t.id} style={{
-                        display: 'grid', gridTemplateColumns: '100px 1fr 140px 160px 110px',
-                        padding: '9px 16px', alignItems: 'center', fontSize: 13,
-                        borderBottom: '1px solid var(--border)',
-                      }}>
-                        <span style={{ color: 'var(--muted)', fontSize: 12 }}>{formatDate(t.date)}</span>
-                        <MerchantCell
-                          txn={t}
-                          onOpenDetail={openTransactionDetail}
-                          onRename={(id, name) => setGroupTxnData(prev =>
-                            prev.map(x => x.id === id ? { ...x, display_name: name } : x)
-                          )}
-                        />
-                        <span style={{ color: 'var(--muted)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {t.account_name}{t.account_mask ? ` ···${t.account_mask}` : ''}
-                        </span>
-                        <CategoryCell
-                          txn={t}
-                          categories={categories}
-                          onSave={(txnId, catId, catObj) => {
-                            const cat = catObj || categories.find(c => c.id === catId)
-                            setGroupTxnData(prev => prev.map(x => x.id === txnId ? {
-                              ...x,
-                              category_id: catId,
-                              category_name: cat?.name ?? null,
-                              category_color: null,
-                              category_overridden: 1,
-                            } : x))
-                            api.overrideCategory(txnId, catId)
-                          }}
-                          onRulePrompt={setRulePrompt}
-                        />
-                        <AmountDisplay amount={t.amount} isPending={!!t.is_pending} />
-                      </div>
-                    ))}
-                  </div>
+                  <TransactionListTable
+                    rows={groupTxnData}
+                    categories={categories}
+                    onCategorySave={(txnId, catId, catObj) => {
+                      const cat = catObj || categories.find(c => c.id === catId)
+                      setGroupTxnData(prev => prev.map(x => x.id === txnId ? {
+                        ...x,
+                        category_id: catId,
+                        category_name: cat?.name ?? null,
+                        category_color: null,
+                        category_overridden: 1,
+                      } : x))
+                      api.overrideCategory(txnId, catId)
+                    }}
+                    onRulePrompt={setRulePrompt}
+                    onRowsChange={setGroupTxnData}
+                    onTransactionOpenDetail={openTransactionDetail}
+                    usePillTable={true}
+                    columnConfig={groupTxnColumns}
+                    onColumnConfigChange={setGroupTxnColumns}
+                    maxHeight={320}
+                  />
                 </Card>
               )}
             </>

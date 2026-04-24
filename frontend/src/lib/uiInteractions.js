@@ -225,6 +225,7 @@ export function useDismissibleLayer({
 
 export function useTransientTextEdit(value, {
   onCommit,
+  onCommitError,
   normalize = next => next.trim(),
   allowEmpty = false,
 } = {}) {
@@ -246,13 +247,20 @@ export function useTransientTextEdit(value, {
     setEditing(false)
   }
 
-  function commitEdit() {
+  async function commitEdit() {
     const normalized = normalize ? normalize(draft) : draft
-    setEditing(false)
-    setDraft(value ?? '')
     if ((!normalized && !allowEmpty) || normalized === value) return false
-    onCommit?.(normalized)
-    return true
+    setEditing(false)
+    try {
+      await onCommit?.(normalized)
+      setDraft(value ?? '')
+      return true
+    } catch (error) {
+      setDraft(normalized)
+      setEditing(true)
+      onCommitError?.(error, normalized)
+      return false
+    }
   }
 
   return {

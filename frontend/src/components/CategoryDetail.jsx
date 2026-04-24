@@ -7,6 +7,7 @@ import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { Spinner, Badge, CategoryMarker } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
+import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import {
   DETAIL_LIST_MAX_HEIGHT,
   getDetailMonthSectionHeight,
@@ -15,6 +16,9 @@ import {
   useDetailPanelChrome,
   usePagedMonthTransactions,
 } from './detailShared.jsx'
+
+const CATEGORY_DETAIL_TABLE_STORAGE_KEY_PREFIX = 'fintrack.category-detail.transactions.columns'
+const CATEGORY_DETAIL_TABLE_PREF_KEY = 'ui.categoryDetail.transactions.columns'
 
 export default function CategoryDetail({ category, categories = [], onClose, forceFloating = false, stackIndex = 0, isTopmost = true }) {
   /*
@@ -29,11 +33,14 @@ export default function CategoryDetail({ category, categories = [], onClose, for
   const [trend, setTrend]           = useState([])
   const [selectedMonth, setSelectedMonth] = useState(null)
   const [trendLoading, setTrendLoading] = useState(true)
+  const [columnConfig, setColumnConfig] = useTransactionTableLayout({
+    storageKeyPrefix: CATEGORY_DETAIL_TABLE_STORAGE_KEY_PREFIX,
+    preferenceKey: CATEGORY_DETAIL_TABLE_PREF_KEY,
+  })
   const loadMonthPage = useCallback((month, offset, limit) => (
     api.getTransactions({
       month,
       category_ids: String(category.id),
-      direction: 'debit',
       limit,
       offset,
     })
@@ -86,7 +93,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
         <Badge label={category.name} toneKey={category.id || category.name} />
       </div>
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
-        Spending history
+        Activity history
         {dateStart || dateEnd
           ? ` · ${dateStart ? dateStart.slice(0, 7) : ''}${dateStart && dateEnd ? ' – ' : ''}${dateEnd ? dateEnd.slice(0, 7) : ''}`
           : ' · all time'}
@@ -105,7 +112,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
       isTopmost={isTopmost}
     >
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
-            Monthly spending — {category.name}
+            Monthly activity — {category.name}
           </div>
 
           {trendLoading ? <Spinner /> : trend.length === 0 ? (
@@ -126,15 +133,17 @@ export default function CategoryDetail({ category, categories = [], onClose, for
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <div ref={listRef}>
-                    <TransactionListTable
-                      rows={localMonthTxns}
-                      categories={categories}
-                      onCategorySave={saveCategory}
-                      onRowsChange={setLocalMonthTxns}
-                      maxHeight={DETAIL_LIST_MAX_HEIGHT}
-                    />
-                  </div>
+                  <TransactionListTable
+                    rows={localMonthTxns}
+                    categories={categories}
+                    onCategorySave={saveCategory}
+                    onRowsChange={setLocalMonthTxns}
+                    usePillTable={true}
+                    columnConfig={columnConfig}
+                    onColumnConfigChange={setColumnConfig}
+                    maxHeight={DETAIL_LIST_MAX_HEIGHT}
+                    scrollRef={listRef}
+                  />
                   <div style={{
                     padding: '8px 14px', fontSize: 13, fontWeight: 600,
                     textAlign: 'right', borderTop: '1px solid var(--border)',

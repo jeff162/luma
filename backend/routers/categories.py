@@ -17,6 +17,95 @@ from backend.db.database import get_db
 from backend.json_utils import safe_json_dict
 
 router = APIRouter()
+UNASSIGNED_CATEGORY_SYSTEM_KEY = "unassigned"
+
+
+def _group_name_sort_key(name: str | None) -> tuple[str, str]:
+    label = str(name or "").strip()
+    return (label.casefold(), label)
+
+
+def _normalize_category_name(value: str | None) -> str:
+    return " ".join(str(value or "").strip().split()).casefold()
+
+
+def _clean_category_name(value: str | None) -> str:
+    return " ".join(str(value or "").strip().split())
+
+
+def _find_category_name_conflict(conn, name: str | None, exclude_id: str | None = None):
+    normalized_name = _normalize_category_name(name)
+    if not normalized_name:
+        raise HTTPException(status_code=400, detail="Category names cannot be empty")
+
+    rows = conn.execute(
+        """
+        SELECT c.id, c.name, c.parent_id, p.name AS parent_name
+        FROM category c
+        LEFT JOIN category p ON p.id = c.parent_id
+        WHERE (? IS NULL OR c.id <> ?)
+        ORDER BY c.parent_id IS NOT NULL, c.sort_order, c.name, c.id
+        """,
+        (exclude_id, exclude_id),
+    ).fetchall()
+    for row in rows:
+        if _normalize_category_name(row["name"]) != normalized_name:
+            continue
+        return row
+    return None
+
+
+def _ensure_category_name_is_unique(conn, name: str | None, exclude_id: str | None = None) -> str:
+    cleaned_name = _clean_category_name(name)
+    conflict = _find_category_name_conflict(conn, cleaned_name, exclude_id=exclude_id)
+    if not conflict:
+        return cleaned_name
+
+    parent_name = str(conflict["parent_name"] or "").strip()
+    if parent_name:
+        location = f' under "{parent_name}"'
+    else:
+        location = ""
+    raise HTTPException(
+        status_code=400,
+        detail=f'A category or group named "{conflict["name"]}" already exists{location}.',
+    )
+
+
+def _load_top_level_group_rows(conn, category_type: str):
+    return conn.execute(
+        """
+        SELECT id, name
+        FROM category
+        WHERE parent_id IS NULL
+          AND COALESCE(category_type, 'expense') = ?
+        ORDER BY sort_order, LOWER(name), id
+        """,
+        (category_type,),
+    ).fetchall()
+
+
+def _top_level_groups_are_name_sorted(rows) -> bool:
+    expected_ids = [
+        row["id"]
+        for row in sorted(
+            rows,
+            key=lambda row: (
+                *_group_name_sort_key(row["name"]),
+                row["id"],
+            ),
+        )
+    ]
+    current_ids = [row["id"] for row in rows]
+    return current_ids == expected_ids
+
+
+def _find_top_level_group_insert_index(rows, name: str) -> int:
+    new_key = _group_name_sort_key(name)
+    for index, row in enumerate(rows):
+        if new_key < _group_name_sort_key(row["name"]):
+            return index
+    return len(rows)
 
 
 def _get_affected_category_ids(conn, category_id: str) -> list[str]:
@@ -146,6 +235,7 @@ def list_categories():
                 id,
                 parent_id,
                 name,
+                system_key,
                 COALESCE(category_type, CASE WHEN parent_id IS NULL THEN 'expense' END) AS category_type,
                 sort_order,
                 exclude_from_totals
@@ -187,6 +277,7 @@ def list_categories_flat():
                 parent_id,
                 name,
                 owner_id,
+                system_key,
                 COALESCE(category_type, CASE WHEN parent_id IS NULL THEN 'expense' END) AS category_type,
                 sort_order,
                 exclude_from_totals
@@ -261,7 +352,9 @@ def get_category_usage_summary():
 def create_category(body: CategoryCreate):
     cid = str(uuid.uuid4())
     with get_db() as conn:
+        cleaned_name = _ensure_category_name_is_unique(conn, body.name)
         category_type = body.category_type
+        reordered_top_level_ids = None
         if body.parent_id:
             # Child categories inherit the parent's type so a group cannot silently mix
             # income and expense semantics inside one reporting branch.
@@ -291,18 +384,35 @@ def create_category(body: CategoryCreate):
                     """,
                     (category_type,),
                 ).fetchone()
-            sort_order = row["next_sort"] if row else 0
+                sort_order = row["next_sort"] if row else 0
+                sibling_rows = _load_top_level_group_rows(conn, category_type)
+                # Top-level group order is shared across the editor and pickers. When the
+                # current section is still in its default alphabetical order, unnamed insert
+                # requests should stay alphabetized instead of silently appending to the end.
+                if _top_level_groups_are_name_sorted(sibling_rows):
+                    sort_order = _find_top_level_group_insert_index(sibling_rows, cleaned_name)
+                    reordered_top_level_ids = [row["id"] for row in sibling_rows]
+                    reordered_top_level_ids.insert(sort_order, cid)
+            if sort_order is None:
+                sort_order = row["next_sort"] if row else 0
 
         conn.execute(
             """
             INSERT INTO category (id, parent_id, name, category_type, sort_order)
             VALUES (?,?,?,?,?)
             """,
-            (cid, body.parent_id, body.name, category_type, sort_order),
+            (cid, body.parent_id, cleaned_name, category_type, sort_order),
         )
+        if reordered_top_level_ids is not None:
+            for index, category_id in enumerate(reordered_top_level_ids):
+                conn.execute(
+                    "UPDATE category SET sort_order = ? WHERE id = ?",
+                    (index, category_id),
+                )
     return {
         "id": cid,
         **body.model_dump(),
+        "name": cleaned_name,
         "category_type": category_type,
         "sort_order": sort_order,
     }
@@ -312,10 +422,12 @@ def create_category(body: CategoryCreate):
 def delete_category_preview(category_id: str):
     with get_db() as conn:
         cat = conn.execute(
-            "SELECT id, name FROM category WHERE id = ?", (category_id,)
+            "SELECT id, name, system_key FROM category WHERE id = ?", (category_id,)
         ).fetchone()
         if not cat:
             raise HTTPException(status_code=404, detail="Not found")
+        if cat["system_key"] == UNASSIGNED_CATEGORY_SYSTEM_KEY:
+            raise HTTPException(status_code=400, detail="The Unassigned group cannot be deleted")
         affected_ids = _get_affected_category_ids(conn, category_id)
         impact = _collect_delete_impact(conn, affected_ids)
     return {
@@ -330,10 +442,12 @@ def delete_category_preview(category_id: str):
 def delete_category(category_id: str, body: CategoryDelete | None = None):
     with get_db() as conn:
         cat = conn.execute(
-            "SELECT id, parent_id FROM category WHERE id = ?", (category_id,)
+            "SELECT id, parent_id, system_key FROM category WHERE id = ?", (category_id,)
         ).fetchone()
         if not cat:
             raise HTTPException(status_code=404, detail="Not found")
+        if cat["system_key"] == UNASSIGNED_CATEGORY_SYSTEM_KEY:
+            raise HTTPException(status_code=400, detail="The Unassigned group cannot be deleted")
         affected_ids = _get_affected_category_ids(conn, category_id)
         placeholders = ",".join("?" for _ in affected_ids)
         replacement_category_id = body.replacement_category_id if body else None
@@ -352,7 +466,8 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
                 f"""
                 UPDATE txn
                 SET category_id = ?,
-                    category_overridden = 0
+                    category_overridden = 0,
+                    category_source = 'rule'
                 WHERE category_id IN ({placeholders})
                 """,
                 [replacement_category_id, *affected_ids],
@@ -364,7 +479,8 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
                 f"""
                 UPDATE txn
                 SET category_id = NULL,
-                    category_overridden = 0
+                    category_overridden = 0,
+                    category_source = NULL
                 WHERE category_id IN ({placeholders})
                 """,
                 affected_ids,
@@ -431,12 +547,17 @@ class CategoryUpdate(BaseModel):
 def update_category(category_id: str, body: CategoryUpdate):
     with get_db() as conn:
         cat = conn.execute(
-            "SELECT id FROM category WHERE id = ?", (category_id,)
+            "SELECT id, system_key FROM category WHERE id = ?", (category_id,)
         ).fetchone()
         if not cat:
             raise HTTPException(status_code=404, detail="Not found")
+        if cat["system_key"] == UNASSIGNED_CATEGORY_SYSTEM_KEY:
+            if body.name is not None:
+                raise HTTPException(status_code=400, detail="The Unassigned group cannot be renamed")
+            if body.parent_id is not None:
+                raise HTTPException(status_code=400, detail="The Unassigned group cannot be moved")
         fields, params = [], []
-        if body.name                is not None: fields.append("name = ?");                 params.append(body.name)
+        if body.name                is not None: fields.append("name = ?");                 params.append(_ensure_category_name_is_unique(conn, body.name, exclude_id=category_id))
         if body.parent_id           is not None: fields.append("parent_id = ?");            params.append(body.parent_id)
         if body.owner_id            is not None: fields.append("owner_id = ?");             params.append(body.owner_id)
         if body.category_type       is not None: fields.append("category_type = ?");        params.append(body.category_type)

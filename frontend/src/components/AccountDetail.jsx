@@ -3,11 +3,11 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
-import { formatCurrency, formatDate, monthLabel } from '../lib/utils.js'
+import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { Spinner } from './ui.jsx'
-import { CategoryCell, MerchantCell } from './TransactionRow.jsx'
-import AmountDisplay from './AmountDisplay.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
+import TransactionListTable from './TransactionListTable.jsx'
+import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import {
   DETAIL_LIST_MAX_HEIGHT,
   getDetailMonthSectionHeight,
@@ -16,6 +16,9 @@ import {
   useDetailPanelChrome,
   usePagedMonthTransactions,
 } from './detailShared.jsx'
+
+const ACCOUNT_DETAIL_TABLE_STORAGE_KEY_PREFIX = 'fintrack.account-detail.transactions.columns'
+const ACCOUNT_DETAIL_TABLE_PREF_KEY = 'ui.accountDetail.transactions.columns'
 
 export default function AccountDetail({ account, categories = [], onClose, forceFloating = false, stackIndex = 0, initialPosition = null, isTopmost = true }) {
   /*
@@ -34,7 +37,6 @@ export default function AccountDetail({ account, categories = [], onClose, force
     api.getTransactions({
       account_ids: String(account.id),
       month,
-      direction: 'debit',
       limit,
       offset,
     })
@@ -45,6 +47,11 @@ export default function AccountDetail({ account, categories = [], onClose, force
     listRef,
   } = usePagedMonthTransactions({ selectedMonth, loadPage: loadMonthPage })
   const [localMonthTxns, setLocalMonthTxns] = useState([])
+  const [columnConfig, setColumnConfig] = useTransactionTableLayout({
+    storageKeyPrefix: ACCOUNT_DETAIL_TABLE_STORAGE_KEY_PREFIX,
+    preferenceKey: ACCOUNT_DETAIL_TABLE_PREF_KEY,
+    showAccount: false,
+  })
   const displayName = `${account.name}${account.mask ? ` ···${account.mask}` : ''}`
 
   useEffect(() => {
@@ -80,7 +87,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
     <>
       <div style={{ fontSize: 17, fontWeight: 600 }}>{displayName}</div>
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
-        Account spending history
+        Account activity history
         {dateStart || dateEnd
           ? ` · ${dateStart ? dateStart.slice(0, 7) : ''}${dateStart && dateEnd ? ' – ' : ''}${dateEnd ? dateEnd.slice(0, 7) : ''}`
           : ' · all time'}
@@ -99,7 +106,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
       isTopmost={isTopmost}
     >
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
-            Monthly spending — {displayName}
+            Monthly activity — {displayName}
           </div>
 
           {trendLoading ? <Spinner /> : trend.length === 0 ? (
@@ -119,43 +126,28 @@ export default function AccountDetail({ account, categories = [], onClose, force
               {txnLoading && monthTxns.length === 0 ? <Spinner /> : monthTxns.length === 0 ? (
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
-                <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-                  <div style={{
-                    display: 'grid', gridTemplateColumns: '110px 1fr 160px 110px',
-                    padding: '7px 14px', fontSize: 11, fontWeight: 600,
-                    color: 'var(--muted)', textTransform: 'uppercase',
-                    letterSpacing: '0.05em', background: 'var(--surface2)',
-                    borderBottom: '1px solid var(--border)',
-                  }}>
-                    <span>Date</span>
-                    <span>Merchant</span>
-                    <span>Category</span>
-                    <span style={{ textAlign: 'right' }}>Amount</span>
-                  </div>
-
-                  <div ref={listRef} style={{ maxHeight: DETAIL_LIST_MAX_HEIGHT, overflowY: 'auto' }}>
-                    {localMonthTxns.map(t => (
-                      <div key={t.id} style={{
-                        display: 'grid', gridTemplateColumns: '110px 1fr 160px 110px',
-                        padding: '9px 14px', alignItems: 'center', fontSize: 13,
-                        borderBottom: '1px solid var(--border)',
-                      }}>
-                        <span style={{ color: 'var(--muted)', fontSize: 12 }}>{formatDate(t.date)}</span>
-                        <MerchantCell txn={t} onRename={() => {}} />
-                        <CategoryCell
-                          txn={t}
-                          categories={categories}
-                          onSave={saveCategory}
-                        />
-                        <AmountDisplay amount={t.amount} isPending={!!t.is_pending} />
-                      </div>
-                    ))}
-                  </div>
-
+                <div>
+                  <TransactionListTable
+                    rows={localMonthTxns}
+                    categories={categories}
+                    onCategorySave={saveCategory}
+                    onRowsChange={setLocalMonthTxns}
+                    showAccount={false}
+                    usePillTable={true}
+                    columnConfig={columnConfig}
+                    onColumnConfigChange={setColumnConfig}
+                    maxHeight={DETAIL_LIST_MAX_HEIGHT}
+                    scrollRef={listRef}
+                  />
                   <div style={{
                     padding: '8px 14px', fontSize: 13, fontWeight: 600,
                     textAlign: 'right', borderTop: '1px solid var(--border)',
                     background: 'var(--surface2)',
+                    borderLeft: '1px solid var(--border)',
+                    borderRight: '1px solid var(--border)',
+                    borderBottom: '1px solid var(--border)',
+                    borderBottomLeftRadius: 8,
+                    borderBottomRightRadius: 8,
                   }}>
                     {selectedMonthRow?.count ? `${selectedMonthRow.count} matching · ` : ''}
                     Total: {formatCurrency(selectedMonthRow?.total ?? localMonthTxns.reduce((s, t) => s + t.amount, 0))}

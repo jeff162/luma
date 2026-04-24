@@ -10,6 +10,13 @@ import {
   inferImportFileCharacteristicsFromPreview,
   inferUnambiguousImportMappingFromPreview,
 } from '../lib/importColumnInference.js'
+import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import {
+  IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY,
+  IMPORT_CATEGORY_USAGE_MODE_ALL,
+  IMPORT_CATEGORY_USAGE_MODE_PER_SOURCE,
+  normalizeImportCategoryUsageMode,
+} from '../lib/appConfig.js'
 import { Card, Button, Spinner, getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground, OverlayBackdrop, FloatingPanel, AppNoticeDialog } from './ui.jsx'
 import ImportColumnMappingSection from './ImportColumnMappingSection.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
@@ -86,6 +93,7 @@ function ProfileForm({
   // both cases we preserve exact known mappings, but any newly inferred single
   // match stays as an explicit suggestion until the user accepts it.
   const isNew = !profile?.id
+  const [defaultImportCategoryUsageMode] = useUserPreference(IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY, IMPORT_CATEGORY_USAGE_MODE_PER_SOURCE)
   const floatingPanelStyle = getFloatingPanelSurfaceStyle({ active: true, radius: 18 })
   const sampleFileInputRef = useRef(null)
   const [name, setName] = useState(profile?.name || '')
@@ -98,6 +106,11 @@ function ProfileForm({
   const [amtConv, setAmtConv] = useState(profile?.amount_convention || 'single_signed')
   const [skipRows, setSkipRows] = useState(profile?.skip_rows ?? 0)
   const [applyCat, setApplyCat] = useState(profile?.apply_categorization !== false)
+  const [useImportedCategories, setUseImportedCategories] = useState(
+    profile?.use_imported_categories != null
+      ? !!profile.use_imported_categories
+      : normalizeImportCategoryUsageMode(defaultImportCategoryUsageMode) === IMPORT_CATEGORY_USAGE_MODE_ALL
+  )
   const [notes, setNotes] = useState(profile?.notes || '')
   const [samplePreview, setSamplePreview] = useState(null)
   const [sampleFileName, setSampleFileName] = useState('')
@@ -114,6 +127,7 @@ function ProfileForm({
   const [colPending, setColPending] = useState(cm.pending || '')
   const [colAccount, setColAccount] = useState(cm.account || '')
   const [mappingSuggestions, setMappingSuggestions] = useState(getBlankSuggestedColumns())
+  const [sampleFile, setSampleFile] = useState(null)
 
   const inputStyle = {
     background: 'var(--surface)', color: 'var(--text)',
@@ -206,6 +220,7 @@ function ProfileForm({
       const nextHeaders = result.headers || []
       const nextAmountConvention = inferredCharacteristics.amountConvention || 'single_signed'
       setSamplePreview(result)
+      setSampleFile(file)
       setSampleFileName(result.filename || file.name || '')
       setTemplateFileName(result.filename || file.name || '')
       setTemplateFileHash(result.file_content_hash || '')
@@ -227,6 +242,7 @@ function ProfileForm({
 
   function handleSave() {
     if (!canSave) return
+    const existingImportedCategorySettings = profile?.column_map?.imported_category_settings
     const column_map = {
       date: colDate,
       description: colDesc,
@@ -238,19 +254,27 @@ function ProfileForm({
       ...(colCategory ? { category: colCategory } : {}),
       ...(colNotes ? { notes: colNotes } : {}),
       ...(colAccount ? { account: colAccount } : {}),
+      ...(existingImportedCategorySettings ? { imported_category_settings: existingImportedCategorySettings } : {}),
     }
-    onSave({
-      name: name.trim(),
-      filename_pattern: filePattern.trim() || null,
-      header_fingerprint: headerFp.trim() || null,
-      template_filename: templateFileName.trim() || null,
-      template_file_hash: templateFileHash.trim() || null,
-      column_map, account_id: accountId || null,
-      date_format: dateFormat, amount_convention: amtConv,
-      skip_rows: parseInt(skipRows) || 0,
-      apply_categorization: applyCat,
-      notes: notes.trim() || null,
-    })
+    onSave(
+      {
+        name: name.trim(),
+        filename_pattern: filePattern.trim() || null,
+        header_fingerprint: headerFp.trim() || null,
+        template_filename: templateFileName.trim() || null,
+        template_file_hash: templateFileHash.trim() || null,
+        column_map, account_id: accountId || null,
+        date_format: dateFormat, amount_convention: amtConv,
+        skip_rows: parseInt(skipRows) || 0,
+        apply_categorization: applyCat,
+        use_imported_categories: useImportedCategories,
+        notes: notes.trim() || null,
+      },
+      {
+        sampleFile,
+        samplePreview,
+      },
+    )
   }
 
   return (
@@ -616,6 +640,10 @@ function ProfileForm({
           <input type="checkbox" checked={applyCat} onChange={e => setApplyCat(e.target.checked)} />
           Apply categorization rules by default
         </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+          <input type="checkbox" checked={useImportedCategories} onChange={e => setUseImportedCategories(e.target.checked)} />
+          Trusted imports from this data source can apply their existing categories, add missing categories under Unassigned, and suggest rules
+        </label>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           <Button small onClick={handleSave} disabled={!canSave}>
             {isNew ? 'Create data source' : 'Save changes'}
@@ -627,7 +655,13 @@ function ProfileForm({
   )
 }
 
-export default function ImportProfilesManager({ embedded = false, onEditingChange, onDataChange } = {}) {
+export default function ImportProfilesManager({
+  embedded = false,
+  onEditingChange,
+  onDataChange,
+  initialMode = 'list',
+  onProfileCreated,
+} = {}) {
   // This manager keeps saved data-source administration inside Import / Export:
   // the list stays embedded in the page, while add/edit happens in a floating
   // form so users can manage recurring CSV sources without leaving the workflow.
@@ -686,6 +720,13 @@ export default function ImportProfilesManager({ embedded = false, onEditingChang
   }, [editId, onEditingChange, showAdd])
 
   useEffect(() => {
+    if (initialMode === 'add') {
+      setShowAdd(true)
+      setEditId(null)
+    }
+  }, [initialMode])
+
+  useEffect(() => {
     if (!activeFormKey) {
       setFormPanelPos(null)
       return
@@ -742,14 +783,20 @@ export default function ImportProfilesManager({ embedded = false, onEditingChang
     event.preventDefault()
   }
 
-  async function handleSave(data) {
+  async function handleSave(data, meta = {}) {
     try {
       if (editId) {
         await api.updateImportProfile(editId, data)
         setEditId(null)
       } else {
-        await api.createImportProfile(data)
+        const created = await api.createImportProfile(data)
         setShowAdd(false)
+        onProfileCreated?.({
+          profileId: created?.id || '',
+          sampleFile: meta?.sampleFile || null,
+          samplePreview: meta?.samplePreview || null,
+          body: data,
+        })
       }
       await refreshManagerData()
     } catch (error) {

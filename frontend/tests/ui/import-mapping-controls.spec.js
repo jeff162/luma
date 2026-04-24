@@ -10,6 +10,11 @@ const MISMATCHED_CSV = `Date,Description,Amount (in $),Account Name,Category
 2026-02-04,Paycheck,1200.00,Checking,Income
 `
 
+const NEW_ACCOUNT_CSV = `Date,Description,Amount,Account,Notes
+2026-03-03,Coffee Shop,-4.75,Alias Wallet (...7777),Morning run
+2026-03-04,Paycheck,1200.00,Alias Wallet (...7777),Payroll
+`
+
 function sampleCsvFile() {
   return {
     name: 'sample-transactions.csv',
@@ -23,6 +28,14 @@ function mismatchedCsvFile() {
     name: 'mismatched-transactions.csv',
     mimeType: 'text/csv',
     buffer: Buffer.from(MISMATCHED_CSV, 'utf8'),
+  }
+}
+
+function newAccountCsvFile() {
+  return {
+    name: 'new-account-transactions.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from(NEW_ACCOUNT_CSV, 'utf8'),
   }
 }
 
@@ -194,4 +207,29 @@ test('deleting a data source from the manager updates the import page list immed
   } finally {
     await deleteImportProfile(request, profileId)
   }
+})
+
+test('creating a new mapped account keeps import disabled until the user chooses a type', async ({ page }) => {
+  await page.goto('/import-export')
+
+  await page.getByRole('button', { name: 'Skip' }).click()
+  await page.locator('#csv-file-input').setInputFiles(newAccountCsvFile())
+
+  for (const suggestion of ['Accept Date', 'Accept Description', 'Accept Amount', 'Accept Account']) {
+    await page.getByText(suggestion).click()
+  }
+
+  await page.getByRole('button', { name: '+New' }).click()
+
+  const importButton = page.getByRole('button', { name: /Import \d+ rows/ })
+  const typeSelect = page.locator('select').filter({
+    has: page.locator('option').filter({ hasText: 'Checking' }),
+  }).last()
+
+  await expect(importButton).toBeDisabled()
+  await expect(typeSelect).toHaveValue('')
+  await expect(page.getByText('Choose an account type for "Alias Wallet (...7777)".')).toBeVisible()
+
+  await typeSelect.selectOption('depository')
+  await expect(importButton).toBeEnabled()
 })
