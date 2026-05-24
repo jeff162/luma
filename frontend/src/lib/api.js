@@ -109,9 +109,19 @@ export const api = {
     }
     return request(`/transactions/summary/by-category-in-group?${new URLSearchParams(p)}`)
   },
-  getCategoryTotals: (month, account_id, tag_ids) => {
-    const q = new URLSearchParams({ month, ...(account_id ? { account_id } : {}), ...(tag_ids ? { tag_ids } : {}) })
-    return request(`/transactions/summary/by-category?${q}`)
+  getCategoryTotals: (month, account_id, date_start, date_end, owner_ids, category_owner_ids, tag_ids, exclude_income, exclude_expense) => {
+    const p = {
+      ...(month        ? { month }        : {}),
+      ...(date_start   ? { date_start }   : {}),
+      ...(date_end     ? { date_end }     : {}),
+      ...(account_id   ? { account_id }   : {}),
+      ...(owner_ids    ? { owner_ids }    : {}),
+      ...(category_owner_ids ? { category_owner_ids } : {}),
+      ...(tag_ids      ? { tag_ids }      : {}),
+      ...(exclude_income ? { exclude_income: 'true' } : {}),
+      ...(exclude_expense ? { exclude_expense: 'true' } : {}),
+    }
+    return request(`/transactions/summary/by-category?${new URLSearchParams(p)}`)
   },
   getMonthlyByGroup: (months = 24, account_id, group_id, tag_ids) => {
     const q = new URLSearchParams({
@@ -126,7 +136,7 @@ export const api = {
     const q = new URLSearchParams({ payee, ...(date_start ? { date_start } : {}), ...(date_end ? { date_end } : {}), ...(tag_ids ? { tag_ids } : {}) })
     return request(`/transactions/summary/monthly-trend?${q}`)
   },
-  getMonthlyTrend: (months = 6, category_id, account_id, date_start, date_end, tag_ids) => {
+  getMonthlyTrend: (months = 6, category_id, account_id, date_start, date_end, tag_ids, view) => {
     const q = new URLSearchParams({
       months,
       ...(category_id ? { category_id } : {}),
@@ -134,6 +144,7 @@ export const api = {
       ...(date_start ? { date_start } : {}),
       ...(date_end ? { date_end } : {}),
       ...(tag_ids ? { tag_ids } : {}),
+      ...(view ? { view } : {}),
     })
     return request(`/transactions/summary/monthly-trend?${q}`)
   },
@@ -166,6 +177,9 @@ export const api = {
   deleteCategory: (id, data = {}) => request(`/categories/${id}`, { method: 'DELETE', body: JSON.stringify(data) }),
   updateCategory: (id, data) =>
     request(`/categories/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  getCategoryTags: (id) => request(`/categories/${id}/tags`),
+  setCategoryTags: (id, tag_ids) =>
+    request(`/categories/${id}/tags`, { method: 'PUT', body: JSON.stringify({ tag_ids }) }),
 
   deleteRule: (ruleId) => request(`/categories/rules/${ruleId}`, { method: 'DELETE' }),
 
@@ -181,12 +195,19 @@ export const api = {
   updateTransactionTag: (id, tag_id, present) =>
     request(`/transactions/${id}/tags`, { method: 'PATCH', body: JSON.stringify({ tag_id, present }) }),
   clearOverride:       (id)         => request(`/transactions/${id}/uncategorize`, { method: 'PATCH' }),
+  // Trash (soft-delete) for transactions. Mirrors the account trash flow: trashed rows are
+  // filtered out of every read until they're explicitly restored or the trash is emptied.
+  trashTransaction:    (id)         => request(`/transactions/${id}`,           { method: 'DELETE' }),
+  restoreTransaction:  (id)         => request(`/transactions/${id}/restore`,   { method: 'POST'   }),
+  getTrashedTransactions: ()        => request('/transactions/trash'),
+  emptyTransactionTrash: ()         => request('/transactions/trash/empty',     { method: 'POST'   }),
 
   getRules: (search) => {
     const q = search ? '?' + new URLSearchParams({ search }) : ''
     return request(`/rules${q}`)
   },
   getMatchingRuleForTransaction: (txnId) => request(`/rules/match/transaction/${txnId}`),
+  previewRule: (data) => request('/rules/preview', { method: 'POST', body: JSON.stringify(data) }),
   createRule: (data) => request('/rules', { method: 'POST', body: JSON.stringify(data) }),
   updateRule: (id, data) => request(`/rules/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   applyRule: (id) => request(`/rules/${id}/apply`, { method: 'POST' }),

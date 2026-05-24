@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from typing import Literal, Optional
 from backend.db.database import get_db
 from backend.services.categorizer import _amount_rule_matches
-from backend.services.transaction_tags import sync_rule_tags_for_transaction, would_sync_rule_tags_change
+from backend.services.transaction_tags import sync_rule_tags_for_transaction, would_sync_rule_tags_change, get_visible_transaction_tag_map
 
 router = APIRouter()
 
@@ -182,6 +182,95 @@ def _apply_rule_to_existing(conn, rule_id: str) -> int:
             updated += 1
 
     return updated
+
+
+class RulePreview(BaseModel):
+    keyword:      str
+    category_id:  Optional[str] = None
+    amount_min:   Optional[float] = None
+    amount_max:   Optional[float] = None
+    debit_credit: Literal["both", "debit", "credit"] = "both"
+    clean_name:   Optional[str] = None
+    owner_id:     Optional[str] = None
+    account_id:   Optional[str] = None
+    tag_ids:      list[str] = []
+
+
+@router.post("/preview")
+def preview_rule(body: RulePreview):
+    """Return transactions that would actually change if this rule were applied."""
+    rule = {
+        "keyword":     (body.keyword or "").lower().strip(),
+        "category_id": body.category_id,
+        "amount_min":  body.amount_min,
+        "amount_max":  body.amount_max,
+        "debit_credit": body.debit_credit,
+        "clean_name":  body.clean_name,
+        "owner_id":    body.owner_id,
+        "account_id":  body.account_id,
+    }
+    rule_tag_ids = set(body.tag_ids)
+
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
+                t.is_pending, t.category_overridden, t.notes,
+                COALESCE(a.parent_account_id, a.id) AS account_id,
+                t.owner_id,
+                COALESCE(a.display_name, a.name) AS account_name,
+                COALESCE(p.mask, a.mask)         AS account_mask,
+                t.import_batch_id,
+                t.category_id,
+                c.name        AS category_name,
+                NULL          AS category_color,
+                b.filename    AS import_batch_filename,
+                b.imported_at AS import_batch_imported_at,
+                o.name        AS owner_name,
+                o.color       AS owner_color,
+                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id
+            FROM txn t
+            JOIN account a ON a.id = t.account_id
+            LEFT JOIN account p ON p.id = a.parent_account_id
+            LEFT JOIN category c ON c.id = t.category_id
+            LEFT JOIN import_batch b ON b.id = t.import_batch_id
+            LEFT JOIN owner o ON o.id = t.owner_id
+            ORDER BY t.date DESC
+            """
+        ).fetchall()
+
+        affected = []
+        for row in rows:
+            txn = dict(row)
+            if not _rule_matches_txn(rule, txn):
+                continue
+            txn.pop("effective_account_id", None)
+
+            would_change = False
+            if rule["category_id"] is not None and txn["category_id"] != rule["category_id"]:
+                would_change = True
+            if not would_change and rule["clean_name"] and txn["display_name"] != rule["clean_name"]:
+                would_change = True
+            if not would_change and rule_tag_ids:
+                current_rule_tag_ids = {
+                    r["tag_id"]
+                    for r in conn.execute(
+                        "SELECT tag_id FROM txn_tag WHERE txn_id = ? AND rule_present = 1",
+                        (txn["id"],),
+                    ).fetchall()
+                }
+                if would_sync_rule_tags_change(conn, txn["id"], current_rule_tag_ids | rule_tag_ids, clear_manual_blocks=True):
+                    would_change = True
+
+            if would_change:
+                affected.append(txn)
+
+        tag_map = get_visible_transaction_tag_map(conn, [t["id"] for t in affected]) if affected else {}
+        for txn in affected:
+            txn["tags"] = tag_map.get(txn["id"], [])
+
+    return {"count": len(affected), "transactions": affected}
 
 
 class RuleCreate(BaseModel):

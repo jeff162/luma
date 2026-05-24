@@ -29,7 +29,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
   const { filters } = useFilters()
   const dateStart = filters.date?.start || null
   const dateEnd   = filters.date?.end   || null
-  const { pos, dragging, panelRef, onDragStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
+  const { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
   const [trend, setTrend]           = useState([])
   const [selectedMonth, setSelectedMonth] = useState(null)
   const [trendLoading, setTrendLoading] = useState(true)
@@ -104,9 +104,12 @@ export default function CategoryDetail({ category, categories = [], onClose, for
   return (
     <DetailPanelShell
       pos={pos}
+      size={size}
       dragging={dragging}
+      resizing={resizing}
       panelRef={panelRef}
       onDragStart={onDragStart}
+      onResizeStart={onResizeStart}
       onClose={onClose}
       header={header}
       isTopmost={isTopmost}

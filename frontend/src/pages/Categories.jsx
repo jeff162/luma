@@ -18,6 +18,9 @@ import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import { usePagedTransactions } from '../components/detailShared.jsx'
+import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
+import { TagGlyph } from '../components/TagUi.jsx'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { ESCAPE_BEHAVIOR, useDismissibleLayer, useEscapeAction } from '../lib/uiInteractions.js'
 import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 
@@ -77,38 +80,6 @@ function normalizeMatchingTxnColumnConfig(value) {
   }))
 }
 
-/*
- * Ownership is intentionally tri-state: groups can resolve from "no explicit owner" to shared or sole-owner,
- * while child categories only inherit when owner_id is null. Explicit child ownership must survive later group-owner changes.
- */
-function isSharedOwner(owner) {
-  return !!owner?.is_shared || (owner?.name || '').trim().toLowerCase() === 'shared'
-}
-
-function getPersonalOwners(owners) {
-  return owners.filter(owner => !isSharedOwner(owner))
-}
-
-function getSharedOwner(owners) {
-  return owners.find(isSharedOwner) || null
-}
-
-function getEffectiveGroupOwnerId(group, owners) {
-  if (!group) return ''
-  if (group.owner_id) return group.owner_id
-  const personalOwners = getPersonalOwners(owners)
-  if (personalOwners.length === 1) return personalOwners[0].id
-  if (personalOwners.length > 1) return getSharedOwner(owners)?.id || ''
-  return ''
-}
-
-function getEffectiveCategoryOwnerId(category, flatCats, owners) {
-  if (!category) return ''
-  if (!category.parent_id) return getEffectiveGroupOwnerId(category, owners)
-  if (category.owner_id) return category.owner_id
-  const parentGroup = flatCats.find(cat => cat.id === category.parent_id)
-  return getEffectiveGroupOwnerId(parentGroup, owners)
-}
 
 function getFullCategoryRecord(cat, flatCats) {
   if (!cat) return null
@@ -657,7 +628,8 @@ export default function Categories() {
   const { filters } = useFilters()
   const [tree, setTree] = useState([])
   const [flatCats, setFlatCats] = useState([])
-  const [owners, setOwners] = useState([])
+  const [availableTags, setAvailableTags] = useState([])
+  const [tagPickerOpenForId, setTagPickerOpenForId] = useState(null)
   const [categoryUsage, setCategoryUsage] = useState({})
   const [uncategorizedExpenseTxnCount, setUncategorizedExpenseTxnCount] = useState(0)
   const [uncategorizedIncomeTxnCount, setUncategorizedIncomeTxnCount] = useState(0)
@@ -762,7 +734,9 @@ export default function Categories() {
   }, [])
 
   useEffect(() => { loadCategories() }, [loadCategories])
-  useEffect(() => { api.getOwners().then(setOwners) }, [])
+  useEffect(() => {
+    api.getTags().then(rows => setAvailableTags(Array.isArray(rows) ? rows : [])).catch(() => setAvailableTags([]))
+  }, [])
   useEscapeAction(event => {
      // Escape unwinds the most specific transient UI first so keyboard users can
      // back out one layer at a time instead of losing the whole tree context at once.
@@ -1170,31 +1144,34 @@ export default function Categories() {
     await loadCategories(id)
   }
 
-  async function handleOwnerChange(categoryId, ownerId) {
-    const target = flatCats.find(cat => cat.id === categoryId)
-    if (!target) return
-    const effectiveGroupOwnerId = target.parent_id
-      ? getEffectiveGroupOwnerId(flatCats.find(cat => cat.id === target.parent_id), owners)
-      : getEffectiveGroupOwnerId(target, owners)
-
-    let patch
-    if (target.parent_id) {
-      patch = ownerId === '__inherit__' || !ownerId
-        ? { clear_owner: true }
-        : { owner_id: ownerId }
-    } else {
-      patch = !ownerId || ownerId === effectiveGroupOwnerId
-        ? { clear_owner: true }
-        : { owner_id: ownerId }
-    }
-
-    await api.updateCategory(categoryId, patch)
-    await loadCategories(categoryId)
-  }
-
   async function handleExcludeChange(groupId, exclude) {
     await api.updateCategory(groupId, { exclude_from_totals: exclude ? 1 : 0 })
     await loadCategories(groupId)
+  }
+
+  async function handleToggleCategoryTag(categoryId, tag, present) {
+    const target = flatCats.find(cat => cat.id === categoryId)
+    if (!target) return
+    const current = new Set(Array.isArray(target.tag_ids) ? target.tag_ids : [])
+    if (present) current.add(tag.id)
+    else current.delete(tag.id)
+    const next = Array.from(current)
+    // Optimistic local update so the panel reflects the change immediately while the
+    // PUT lands; loadCategories then reconciles against authoritative server state.
+    setFlatCats(prev => prev.map(c => c.id === categoryId ? { ...c, tag_ids: next } : c))
+    setSelected(prev => prev?.id === categoryId ? { ...prev, tag_ids: next } : prev)
+    try {
+      await api.setCategoryTags(categoryId, next)
+    } finally {
+      await loadCategories(categoryId)
+    }
+  }
+
+  function handleCategoryTagCreated(tag) {
+    setAvailableTags(prev => {
+      if (prev.some(existing => existing.id === tag.id)) return prev
+      return [...prev, tag]
+    })
   }
 
   async function handleDelete(id) {
@@ -1523,12 +1500,6 @@ export default function Categories() {
     )
     : null
   const selectedIsSystemCategory = isSystemCategory(selected)
-  const personalOwners = getPersonalOwners(owners)
-  const sharedOwner = getSharedOwner(owners)
-  const effectiveSelectedOwnerId = getEffectiveCategoryOwnerId(selected, flatCats, owners)
-  const inheritedOwnerLabel = parentCategory
-    ? (owners.find(owner => owner.id === getEffectiveGroupOwnerId(parentCategory, owners))?.name || 'group owner')
-    : ''
   const selectedGroupType = normalizeCategoryType(selected?.category_type)
   const selectedCategories = selectedCategoryIds
     .map(id => flatCats.find(cat => cat.id === id))
@@ -1970,83 +1941,100 @@ export default function Categories() {
                   border: '1px solid var(--border)',
                 }}
               >
-                {personalOwners.length > 1 ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '1 1 160px' }}>
-                    <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Owner</span>
-                    <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
-                      <select
-                        value={selected.parent_id ? (selected.owner_id || '__inherit__') : effectiveSelectedOwnerId}
-                        onChange={e => handleOwnerChange(selected.id, e.target.value)}
-                        style={{
-                          width: '100%',
-                          background: 'var(--surface)',
-                          color: 'var(--text)',
-                          border: '1px solid var(--border)',
-                          borderRadius: 6,
-                          padding: '4px 28px 4px 8px',
-                          fontSize: 12,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {selected.parent_id ? (
-                          <option value="__inherit__">{inheritedOwnerLabel}</option>
-                        ) : sharedOwner ? (
-                          <option value={sharedOwner.id}>{sharedOwner.name}</option>
-                        ) : null}
-                        {personalOwners.map(owner => (
-                          <option key={owner.id} value={owner.id}>{owner.name}</option>
-                        ))}
-                      </select>
-                      {selected.parent_id && !selected.owner_id ? (
+                {(() => {
+                  // Tag attachment for the selected category. Direct tags get the
+                  // standard pill with an x-to-remove; inherited tags from the parent
+                  // group render in muted italic without an x (the user must remove
+                  // them at the group level for that change to propagate everywhere).
+                  const tagsById = new Map(availableTags.map(t => [t.id, t]))
+                  const directTagIds = Array.isArray(selected.tag_ids) ? selected.tag_ids : []
+                  const parentCat = selected.parent_id ? flatCats.find(c => c.id === selected.parent_id) : null
+                  const inheritedTagIds = parentCat && Array.isArray(parentCat.tag_ids)
+                    ? parentCat.tag_ids.filter(id => !directTagIds.includes(id))
+                    : []
+                  const directTags = directTagIds.map(id => tagsById.get(id)).filter(Boolean)
+                  const inheritedTags = inheritedTagIds.map(id => tagsById.get(id)).filter(Boolean)
+                  const isPickerOpen = tagPickerOpenForId === selected.id
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flex: '1 1 240px', position: 'relative' }}>
+                      <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        Tags
+                        <FeatureExplainer topic="categories-tags" placement="bottom-left" />
+                      </span>
+                      {directTags.map(tag => (
                         <span
+                          key={tag.id}
                           style={{
-                            position: 'absolute',
-                            left: 8,
-                            top: '50%',
-                            transform: 'translateY(-50%)',
-                            right: 28,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            minWidth: 0,
-                            paddingRight: 4,
-                            background: 'var(--surface)',
-                            pointerEvents: 'none',
+                            display: 'inline-flex', alignItems: 'center', gap: 6,
+                            padding: '3px 6px 3px 8px',
+                            borderRadius: 999,
+                            border: `1px solid color-mix(in srgb, ${tag.color} 32%, var(--border))`,
+                            background: `color-mix(in srgb, ${tag.color} 12%, var(--surface))`,
+                            color: 'var(--text)',
+                            fontSize: 12,
+                            lineHeight: 1.2,
                           }}
                         >
-                          <span
+                          <TagGlyph color={tag.color} size={12} />
+                          <span>{tag.name}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleCategoryTag(selected.id, tag, false)}
+                            title={`Remove ${tag.name}`}
                             style={{
-                              minWidth: 0,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              color: 'var(--text)',
-                              fontSize: 12,
+                              background: 'none', border: 'none', cursor: 'pointer',
+                              color: 'var(--muted)', fontSize: 14, lineHeight: 1, padding: '0 2px',
                             }}
-                          >
-                            {inheritedOwnerLabel}
-                          </span>
-                          <span
-                            style={{
-                              fontSize: 9.5,
-                              color: 'color-mix(in srgb, var(--text) 66%, var(--muted))',
-                              padding: '1px 6px',
-                              borderRadius: 999,
-                              border: '1px solid color-mix(in srgb, var(--border) 92%, transparent)',
-                              background: 'color-mix(in srgb, var(--surface2) 92%, var(--surface))',
-                              whiteSpace: 'nowrap',
-                              fontStyle: 'italic',
-                              lineHeight: 1.15,
-                              flexShrink: 0,
-                            }}
-                          >
-                            inherited
-                          </span>
+                          >×</button>
                         </span>
-                      ) : null}
+                      ))}
+                      {inheritedTags.map(tag => (
+                        <span
+                          key={`inh-${tag.id}`}
+                          title={`Inherited from group — remove at group level`}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: 6,
+                            padding: '3px 8px',
+                            borderRadius: 999,
+                            border: '1px dashed color-mix(in srgb, var(--border) 92%, transparent)',
+                            background: 'color-mix(in srgb, var(--surface2) 92%, var(--surface))',
+                            color: 'var(--muted)',
+                            fontSize: 12, fontStyle: 'italic', lineHeight: 1.2,
+                          }}
+                        >
+                          <TagGlyph color={tag.color} size={12} />
+                          <span>{tag.name}</span>
+                        </span>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setTagPickerOpenForId(isPickerOpen ? null : selected.id)}
+                        style={{
+                          background: 'none',
+                          border: '1px dashed var(--border)',
+                          color: 'var(--accent2)',
+                          borderRadius: 999,
+                          padding: '3px 10px',
+                          fontSize: 12,
+                          cursor: 'pointer',
+                          lineHeight: 1.2,
+                        }}
+                      >
+                        + Tag
+                      </button>
+                      {isPickerOpen && (
+                        <TagPickerWithCreate
+                          allTags={availableTags}
+                          selectedTagIds={new Set(directTagIds)}
+                          onToggleTag={(tag, present) => handleToggleCategoryTag(selected.id, tag, present)}
+                          onTagCreated={handleCategoryTagCreated}
+                          onClose={() => setTagPickerOpenForId(null)}
+                          align="left"
+                        />
+                      )}
                     </div>
-                  </div>
-                ) : null}
+                  )
+                })()}
 
                 {!selected.parent_id ? (
                   <label

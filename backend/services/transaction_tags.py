@@ -20,6 +20,12 @@ from typing import Iterable
 
 VISIBLE_TXN_TAG_SQL = "(tt.manual_state = 1 OR (tt.manual_state = 0 AND tt.rule_present = 1))"
 
+# Source precedence when a tag reaches a transaction through more than one path.
+# Direct (rule + manual) beats category-level which beats group-level — so a tag
+# the user explicitly attached to a transaction is reported as 'direct' even if
+# it would also be inherited from the category or its parent group.
+_SOURCE_PRIORITY = {"group": 1, "category": 2, "direct": 3}
+
 
 def get_visible_transaction_tag_map(
     conn: sqlite3.Connection,
@@ -29,28 +35,82 @@ def get_visible_transaction_tag_map(
     if not txn_ids:
         return {}
     placeholders = ",".join("?" for _ in txn_ids)
-    rows = conn.execute(
+
+    direct_rows = conn.execute(
         f"""
         SELECT
             tt.txn_id,
             g.id,
             g.name,
-            g.color
+            g.color,
+            g.sort_order
         FROM txn_tag tt
         JOIN tag g ON g.id = tt.tag_id
         WHERE tt.txn_id IN ({placeholders})
           AND {VISIBLE_TXN_TAG_SQL}
-        ORDER BY tt.txn_id, g.sort_order, LOWER(g.name), g.name, g.id
         """,
         txn_ids,
     ).fetchall()
-    tag_map: dict[str, list[dict]] = {txn_id: [] for txn_id in txn_ids}
-    for row in rows:
-        tag_map.setdefault(row["txn_id"], []).append({
+
+    # Inherited tags: pulled additively from the transaction's leaf category and its
+    # parent group. The CASE on category_id picks the most specific source so we can
+    # mark each tag with where it came from for downstream UI affordances.
+    inherited_rows = conn.execute(
+        f"""
+        SELECT
+            t.id  AS txn_id,
+            g.id  AS id,
+            g.name,
+            g.color,
+            g.sort_order,
+            CASE
+                WHEN ct.category_id = t.category_id THEN 'category'
+                ELSE 'group'
+            END AS source
+        FROM txn t
+        JOIN category c ON c.id = t.category_id
+        JOIN category_tag ct
+          ON ct.category_id = t.category_id
+          OR ct.category_id = c.parent_id
+        JOIN tag g ON g.id = ct.tag_id
+        WHERE t.id IN ({placeholders})
+        """,
+        txn_ids,
+    ).fetchall()
+
+    # Merge per transaction, keyed by tag id so a tag contributed via more than one
+    # path collapses into one entry tagged with the highest-priority source.
+    merged: dict[str, dict[str, dict]] = {txn_id: {} for txn_id in txn_ids}
+    for row in inherited_rows:
+        bucket = merged[row["txn_id"]]
+        existing = bucket.get(row["id"])
+        if existing is None or _SOURCE_PRIORITY[row["source"]] > _SOURCE_PRIORITY[existing["source"]]:
+            bucket[row["id"]] = {
+                "id": row["id"],
+                "name": row["name"],
+                "color": row["color"],
+                "source": row["source"],
+                "_sort": row["sort_order"] or 0,
+            }
+    for row in direct_rows:
+        merged[row["txn_id"]][row["id"]] = {
             "id": row["id"],
             "name": row["name"],
             "color": row["color"],
-        })
+            "source": "direct",
+            "_sort": row["sort_order"] or 0,
+        }
+
+    tag_map: dict[str, list[dict]] = {}
+    for txn_id, bucket in merged.items():
+        sorted_tags = sorted(
+            bucket.values(),
+            key=lambda t: (t["_sort"], (t["name"] or "").lower(), t["name"] or "", t["id"]),
+        )
+        tag_map[txn_id] = [
+            {"id": t["id"], "name": t["name"], "color": t["color"], "source": t["source"]}
+            for t in sorted_tags
+        ]
     return tag_map
 
 

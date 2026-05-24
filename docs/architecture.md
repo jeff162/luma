@@ -119,11 +119,13 @@ This is a deliberate tradeoff toward local responsiveness. FinTrack is optimized
 
 ### Transaction tags
 
-- **Storage:** `tag`, `rule_tag`, `txn_tag`
+- **Storage:** `tag`, `rule_tag`, `txn_tag`, `category_tag`
 
-- **Runtime:** shared transaction-tag service plus the shared transaction row UI
+- **Runtime:** shared transaction-tag service plus shared row UI; the picker (`components/TagPickerWithCreate.jsx`) is the one surface for browsing and creating tags, used from transaction rows and from the Categories right panel
 
-- **Behavior:** tags are lightweight labels separate from categories; rules contribute a union of tag assignments across all matching rules, and transactions keep a per-tag manual override state so the user can add or remove a tag on one row without rewriting the underlying rules
+- **Behavior:** tags are lightweight labels separate from categories. A transaction's effective tags are the additive union of direct tags (rule + manual via `txn_tag`), tags on its leaf category, and tags on the leaf category's parent group (both via `category_tag`). Rules contribute a union of tag assignments across all matching rules, and transactions keep a per-tag manual override state for the *direct* layer; inherited (category- and group-level) tags are not overridable per-transaction at present. Tag filtering and aggregation match against effective tags, so reporting picks up tags applied at the most natural level
+
+- **Reporting:** the dashboard's "Spending by …" picker offers built-in `group` / `category` partitions plus user-saved tag reports built on the multi-tag breakdown; combination wedges represent transactions matching multiple selected tags, and an `Other / Untagged` wedge holds the remainder
 
 ### Import / export
 

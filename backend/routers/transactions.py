@@ -17,7 +17,7 @@ from typing import Optional
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import re
-from backend.db.database import get_db, get_shared_owner_id
+from backend.db.database import get_db
 from backend.services.transaction_tags import (
     VISIBLE_TXN_TAG_SQL,
     get_visible_transaction_tag_map,
@@ -37,6 +37,7 @@ TRIM(
 )
 """
 QUICK_FILTER_ACCOUNT_EXCLUDED_TERMS = {"check", "checking", "saving", "savings", "credit", "debit"}
+QUICK_FILTER_FIELD_PREFIXES = {"merchant", "category", "account", "date", "amount"}
 TRANSACTION_SORT_SQL = {
     "date": "t.date",
     "merchant": "LOWER(COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), ''))",
@@ -76,6 +77,37 @@ def _append_uncategorized_filter(clauses, params, *, category_id: Optional[str])
         clauses.append("t.amount < 0")
         return True
     return False
+
+
+# Sign convention for monthly-trend and related reports:
+# the chart's positive y-axis should always represent the natural direction for
+# the queried scope. The DB stores expense amounts as positive and income
+# amounts as negative, so income-type scopes get a -1 multiplier to make
+# received income read as a positive bar, while reverses (refunds in expense
+# categories, returns in income categories) appear as negative bars and the
+# chart's y-axis spans both sides naturally.
+def _resolve_category_is_income(conn, category_id: str) -> bool:
+    if category_id == UNCATEGORIZED_INCOME_CATEGORY_ID:
+        return True
+    if category_id in (UNCATEGORIZED_EXPENSE_CATEGORY_ID, UNCATEGORIZED_CATEGORY_ID):
+        return False
+    if category_id.startswith("__group__"):
+        gid = category_id[len("__group__"):]
+        row = conn.execute(
+            "SELECT category_type FROM category WHERE id = ?",
+            [gid],
+        ).fetchone()
+        return bool(row and row[0] == "income")
+    row = conn.execute(
+        """
+        SELECT COALESCE(c.category_type, p.category_type)
+        FROM   category c
+        LEFT JOIN category p ON p.id = c.parent_id
+        WHERE  c.id = ?
+        """,
+        [category_id],
+    ).fetchone()
+    return bool(row and row[0] == "income")
 
 
 def _build_uncategorized_multi_filter(column_sql: str, raw_ids: list[str]):
@@ -165,17 +197,31 @@ def _append_tag_filter(clauses, params, *, tag_ids: Optional[str]):
     if not ids:
         return
     placeholders = ",".join("?" * len(ids))
+    # A transaction "has" a tag through any of three paths: direct (txn_tag with
+    # rule/manual visibility), inherited from its leaf category, or inherited from
+    # the leaf category's parent group. The filter accepts a match through any
+    # path so tag-based reporting picks up tags applied at the most natural level.
     clauses.append(
         f"""
-        EXISTS (
-            SELECT 1
-            FROM txn_tag tt
-            WHERE tt.txn_id = t.id
-              AND tt.tag_id IN ({placeholders})
-              AND {VISIBLE_TXN_TAG_SQL}
+        (
+            EXISTS (
+                SELECT 1
+                FROM txn_tag tt
+                WHERE tt.txn_id = t.id
+                  AND tt.tag_id IN ({placeholders})
+                  AND {VISIBLE_TXN_TAG_SQL}
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM category_tag ct
+                JOIN category cc ON cc.id = t.category_id
+                WHERE ct.tag_id IN ({placeholders})
+                  AND (ct.category_id = cc.id OR ct.category_id = cc.parent_id)
+            )
         )
         """
     )
+    params.extend(ids)
     params.extend(ids)
 
 
@@ -184,49 +230,86 @@ def _append_tag_filter(clauses, params, *, tag_ids: Optional[str]):
 # - account labels match normalized whole words/phrases so generic fragments like `check` do not expand to every
 #   `Checking` account and drown out rows whose merchant is actually `CHECK`
 # - date and amount parsing add more precise matches when the input looks like those domains
+# - a `<field>:<value>` prefix (merchant/category/account/date/amount) restricts the search to that one field;
+#   when the prefix is explicit we also drop the account-term exclusion list because the user has asked specifically
 # - the result stays additive with the normal ledger filters instead of replacing them
+def _split_quick_filter_field(value: str):
+    match = re.match(r"^([A-Za-z]+)\s*:\s*(.*)$", value)
+    if not match:
+        return None, value
+    field = match.group(1).lower()
+    if field not in QUICK_FILTER_FIELD_PREFIXES:
+        return None, value
+    return field, match.group(2).strip()
+
+
 def _build_quick_filter_clause(value: str):
     text = (value or "").strip()
     if not text:
         return None
 
-    lowered = text.lower()
-    normalized_account_text = _normalize_quick_filter_text(text)
-    or_clauses = [
-        "LOWER(COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), '')) LIKE ?",
-        "LOWER(COALESCE(c.name, '')) LIKE ?",
-    ]
-    params = [f"%{lowered}%"] * 2
+    field, remainder = _split_quick_filter_field(text)
+    if field is not None:
+        if not remainder:
+            return None
+        search_text = remainder
+    else:
+        search_text = text
 
-    if normalized_account_text and normalized_account_text not in QUICK_FILTER_ACCOUNT_EXCLUDED_TERMS:
-        if " " in normalized_account_text:
-            or_clauses.append(f"{QUICK_FILTER_ACCOUNT_LABEL_SQL} LIKE ?")
-            params.append(f"%{normalized_account_text}%")
-        else:
-            or_clauses.append(f"(' ' || {QUICK_FILTER_ACCOUNT_LABEL_SQL} || ' ') LIKE ?")
-            params.append(f"% {normalized_account_text} %")
+    lowered = search_text.lower()
+    normalized_account_text = _normalize_quick_filter_text(search_text)
+    or_clauses = []
+    params = []
 
-    if lowered in {"uncategorized", "uncategorised"}:
-        or_clauses.append("t.category_id IS NULL")
+    def want(name: str) -> bool:
+        return field is None or field == name
 
-    iso_date = _parse_quick_filter_date(text)
-    if iso_date:
-        or_clauses.append("t.date = ?")
-        params.append(iso_date)
+    if want("merchant"):
+        or_clauses.append(
+            "LOWER(COALESCE(NULLIF(t.display_name, ''), NULLIF(t.merchant_name, ''), NULLIF(t.raw_name, ''), '')) LIKE ?"
+        )
+        params.append(f"%{lowered}%")
 
-    year_month = _parse_quick_filter_year_month(text)
-    if year_month:
-        or_clauses.append("t.date LIKE ?")
-        params.append(f"{year_month}%")
+    if want("category"):
+        or_clauses.append("LOWER(COALESCE(c.name, '')) LIKE ?")
+        params.append(f"%{lowered}%")
+        if lowered in {"uncategorized", "uncategorised"}:
+            or_clauses.append("t.category_id IS NULL")
 
-    amount_value = _parse_quick_filter_amount(text)
-    if amount_value is not None:
-        if amount_value < 0:
-            or_clauses.append("ROUND(t.amount, 2) = ?")
-            params.append(float(amount_value))
-        else:
-            or_clauses.append("ROUND(ABS(t.amount), 2) = ?")
-            params.append(float(amount_value))
+    if want("account") and normalized_account_text:
+        if field is not None or normalized_account_text not in QUICK_FILTER_ACCOUNT_EXCLUDED_TERMS:
+            if " " in normalized_account_text:
+                or_clauses.append(f"{QUICK_FILTER_ACCOUNT_LABEL_SQL} LIKE ?")
+                params.append(f"%{normalized_account_text}%")
+            else:
+                or_clauses.append(f"(' ' || {QUICK_FILTER_ACCOUNT_LABEL_SQL} || ' ') LIKE ?")
+                params.append(f"% {normalized_account_text} %")
+
+    if want("date"):
+        iso_date = _parse_quick_filter_date(search_text)
+        if iso_date:
+            or_clauses.append("t.date = ?")
+            params.append(iso_date)
+        year_month = _parse_quick_filter_year_month(search_text)
+        if year_month:
+            or_clauses.append("t.date LIKE ?")
+            params.append(f"{year_month}%")
+
+    if want("amount"):
+        amount_value = _parse_quick_filter_amount(search_text)
+        if amount_value is not None:
+            if amount_value < 0:
+                or_clauses.append("ROUND(t.amount, 2) = ?")
+                params.append(float(amount_value))
+            else:
+                or_clauses.append("ROUND(ABS(t.amount), 2) = ?")
+                params.append(float(amount_value))
+
+    if not or_clauses:
+        # The user explicitly asked for `field:value` but the value did not produce any constraint
+        # (e.g. `date:not-a-date`). Match nothing so the empty result reflects the typed intent rather
+        # than silently falling back to a broad OR search.
+        return "(1 = 0)", []
 
     return f"({' OR '.join(or_clauses)})", params
 
@@ -302,8 +385,10 @@ def list_transactions(
     owner_ids:    Optional[str] = Query(None, description="comma-separated owner IDs"),
     payees:       Optional[str] = Query(None, description="pipe-separated payee names"),
     direction:    Optional[str] = Query(None, description="debit | credit"),
+    view:         Optional[str] = Query(None, description="spending | income — mirrors monthly-trend's category-type scope filter"),
     search:       Optional[str] = Query(None),
     quick_filter: Optional[str] = Query(None),
+    include_trashed: bool       = Query(False, description="Include rows in the trash. Off by default — the trash view sets this explicitly."),
     limit:        int           = Query(200, le=1000),
     offset:       int           = Query(0),
 ):
@@ -311,6 +396,8 @@ def list_transactions(
     # reporting rules used by summaries such as excluding pending transactions or normalizing amount direction.
     clauses = []
     params  = []
+    if not include_trashed:
+        clauses.append("t.trashed_at IS NULL")
     sort_key = sort_by if sort_by in TRANSACTION_SORT_SQL else "date"
     sort_direction = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
 
@@ -421,6 +508,23 @@ def list_transactions(
         clauses.append("t.amount > 0")
     elif direction == "credit":
         clauses.append("t.amount < 0")
+    if view == "spending":
+        clauses.append(
+            "(COALESCE(c.category_type, pc.category_type) = 'expense' "
+            "OR (t.category_id IS NULL AND t.amount > 0))"
+        )
+    elif view == "income":
+        clauses.append(
+            "(COALESCE(c.category_type, pc.category_type) = 'income' "
+            "OR (t.category_id IS NULL AND t.amount < 0))"
+        )
+    if view in ("spending", "income"):
+        # Cross-cutting dashboard scopes (spending/income) skip categories marked
+        # exclude_from_totals so transfers and other bookkeeping moves don't pollute
+        # the listing of transactions backing a Dashboard total bar.
+        clauses.append(
+            "COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) = 0"
+        )
     if search:
         clauses.append("(t.display_name LIKE ? OR t.merchant_name LIKE ? OR t.raw_name LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
@@ -451,6 +555,7 @@ def list_transactions(
             JOIN account a ON a.id = t.account_id
             LEFT JOIN account p ON p.id = a.parent_account_id
             LEFT JOIN category c ON c.id = t.category_id
+            LEFT JOIN category pc ON pc.id = c.parent_id
             {where}
             """,
             params
@@ -477,6 +582,7 @@ def list_transactions(
             JOIN   account  a ON a.id = t.account_id
             LEFT JOIN account  p ON p.id = a.parent_account_id
             LEFT JOIN category c ON c.id = t.category_id
+            LEFT JOIN category pc ON pc.id = c.parent_id
             LEFT JOIN import_batch b ON b.id = t.import_batch_id
             LEFT JOIN owner    o ON o.id = t.owner_id
             {where}
@@ -566,32 +672,136 @@ def clear_override(txn_id: str):
     return {"ok": True}
 
 
+# Soft-delete (trash) mirrors the account-trash pattern in routers/accounts.py: stamp `trashed_at`
+# so every read filters the row out, but the underlying record is preserved until the user empties
+# the trash from Settings. Restoration just clears the timestamp.
+@router.delete("/{txn_id}")
+def trash_transaction(txn_id: str):
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM txn WHERE id = ?", (txn_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        conn.execute(
+            "UPDATE txn SET trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+            (txn_id,),
+        )
+    return {"ok": True}
+
+
+@router.post("/{txn_id}/restore")
+def restore_transaction(txn_id: str):
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM txn WHERE id = ?", (txn_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        conn.execute("UPDATE txn SET trashed_at = NULL WHERE id = ?", (txn_id,))
+    return {"ok": True}
+
+
+@router.get("/trash")
+def list_trashed_transactions(limit: int = Query(200, le=1000)):
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
+                   t.account_id, t.category_id, t.trashed_at, t.notes,
+                   a.name AS account_name, a.display_name AS account_display_name, a.mask AS account_mask,
+                   c.name AS category_name,
+                   p.name AS group_name, p.id AS group_id
+            FROM   txn t
+            LEFT JOIN account  a ON a.id = t.account_id
+            LEFT JOIN category c ON c.id = t.category_id
+            LEFT JOIN category p ON p.id = c.parent_id
+            WHERE  t.trashed_at IS NOT NULL
+            ORDER  BY t.trashed_at DESC, t.date DESC
+            LIMIT  ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@router.post("/trash/empty")
+def empty_transaction_trash():
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM txn WHERE trashed_at IS NOT NULL")
+        removed = cursor.rowcount or 0
+    return {"removed": removed}
+
+
+# Filter surface is kept symmetric with /summary/by-group (date range, owner filters, exclude_from_totals)
+# so dashboard views that toggle between group and category aggregation see the same slice of data.
+# Unlike by-group, this endpoint has no natural category_type column to filter on post-grouping, so
+# income exclusion is a query-time flag rather than a frontend filter on the result list.
 @router.get("/summary/by-category")
 def spending_by_category(
-    month: str = Query(..., description="YYYY-MM"),
-    account_id:  Optional[str] = Query(None),
-    account_ids: Optional[str] = Query(None),
-    tag_ids:     Optional[str] = Query(None),
+    month:              Optional[str] = Query(None, description="YYYY-MM"),
+    date_start:         Optional[str] = Query(None),
+    date_end:           Optional[str] = Query(None),
+    account_id:         Optional[str] = Query(None),
+    account_ids:        Optional[str] = Query(None),
+    tag_ids:            Optional[str] = Query(None),
+    owner_ids:          Optional[str] = Query(None, description="filter by transaction owner (comma-separated)"),
+    exclude_income:     bool          = Query(False, description="omit income categories from results"),
+    exclude_expense:    bool          = Query(False, description="omit expense categories from results"),
 ):
-    clauses = ["t.date LIKE ?", "t.is_pending = 0"]
-    params  = [f"{month}%"]
+    clauses = ["t.is_pending = 0", "t.trashed_at IS NULL",
+               "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0"]
+    params  = []
+    if date_start and date_end:
+        clauses.append("t.date BETWEEN ? AND ?"); params.extend([date_start, date_end])
+    elif date_start:
+        clauses.append("t.date >= ?"); params.append(date_start)
+    elif date_end:
+        clauses.append("t.date <= ?"); params.append(date_end)
+    elif month:
+        clauses.append("t.date LIKE ?"); params.append(f"{month}%")
 
     _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
     _append_tag_filter(clauses, params, tag_ids=tag_ids)
 
-    where = "WHERE " + " AND ".join(clauses)
+    if owner_ids:
+        ids = [i.strip() for i in owner_ids.split(',') if i.strip()]
+        if 'unassigned' in ids:
+            other_ids = [i for i in ids if i != 'unassigned']
+            if other_ids:
+                placeholders = ','.join('?' * len(other_ids))
+                clauses.append(f"(t.owner_id IS NULL OR t.owner_id IN ({placeholders}))")
+                params.extend(other_ids)
+            else:
+                clauses.append("t.owner_id IS NULL")
+        else:
+            placeholders = ','.join('?' * len(ids))
+            clauses.append(f"t.owner_id IN ({placeholders})")
+            params.extend(ids)
+
+    if exclude_income:
+        clauses.append(
+            "((t.category_id IS NULL AND t.amount > 0) OR "
+            "COALESCE(c.category_type, p.category_type) != 'income')"
+        )
+    if exclude_expense:
+        clauses.append(
+            "((t.category_id IS NULL AND t.amount < 0) OR "
+            "COALESCE(c.category_type, p.category_type) != 'expense')"
+        )
 
     with get_db() as conn:
+        where = "WHERE " + " AND ".join(clauses)
         rows = conn.execute(
             f"""
             SELECT
                 {_summary_uncategorized_id_sql('category')}   AS category_id,
                 {_summary_uncategorized_name_sql('category')} AS category_name,
-                NULL                                AS category_color,
-                ABS(SUM(t.amount))                  AS total,
-                COUNT(*)                            AS count
+                NULL                                          AS category_color,
+                COALESCE(p.id, c.id)                          AS group_id,
+                COALESCE(p.name, c.name)                      AS group_name,
+                {_summary_uncategorized_type_sql('category')} AS category_type,
+                ABS(SUM(t.amount))                            AS total,
+                COUNT(*)                                      AS count
             FROM   txn t
             LEFT JOIN category c ON c.id = t.category_id
+            LEFT JOIN category p ON p.id = c.parent_id
             {where}
             GROUP BY category_id
             ORDER BY total DESC
@@ -612,9 +822,9 @@ def spending_by_group(
     account_ids:        Optional[str] = Query(None),
     tag_ids:            Optional[str] = Query(None),
     owner_ids:          Optional[str] = Query(None, description="filter by transaction owner (comma-separated)"),
-    category_owner_ids: Optional[str] = Query(None, description="filter by category group owner (comma-separated)"),
+    category_owner_ids: Optional[str] = Query(None, description="reserved for summary filter parity"),
 ):
-    clauses = ["t.is_pending = 0",
+    clauses = ["t.is_pending = 0", "t.trashed_at IS NULL",
                "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0"]
     params  = []
     if date_start and date_end:
@@ -644,21 +854,6 @@ def spending_by_group(
             params.extend(ids)
 
     with get_db() as conn:
-        if category_owner_ids:
-            ids = [i.strip() for i in category_owner_ids.split(',') if i.strip()]
-            shared_owner_id = get_shared_owner_id(conn)
-            filter_ids = list(ids)
-            if shared_owner_id and shared_owner_id not in filter_ids:
-                filter_ids.append(shared_owner_id)
-            placeholders = ','.join('?' * len(filter_ids))
-            # Ownership inherits downward only for unowned child categories. Once a leaf has its own owner, group
-            # ownership stops applying so summaries and drill-downs stay aligned with what the category editor shows.
-            clauses.append(
-                f"(COALESCE(p.id, c.id) IS NULL OR "
-                f"COALESCE(c.owner_id, p.owner_id) IN ({placeholders}))"
-            )
-            params.extend(filter_ids)
-
         where = "WHERE " + " AND ".join(clauses)
         rows = conn.execute(
             f"""
@@ -666,7 +861,6 @@ def spending_by_group(
                 {_summary_uncategorized_id_sql('group')}      AS group_id,
                 {_summary_uncategorized_name_sql('group')}    AS group_name,
                 NULL                                                        AS group_color,
-                COALESCE(c.owner_id,        p.owner_id)                          AS group_owner_id,
                 {_summary_uncategorized_type_sql('group')}                       AS category_type,
                 ABS(SUM(t.amount))                                               AS total,
                 COUNT(*)                                                         AS count
@@ -694,7 +888,7 @@ def spending_by_category_in_group(
     tag_ids:     Optional[str] = Query(None),
     owner_ids:   Optional[str] = Query(None, description="comma-separated owner IDs"),
 ):
-    clauses = ["t.is_pending = 0"]
+    clauses = ["t.is_pending = 0", "t.trashed_at IS NULL"]
     params  = []
     if date_start and date_end:
         clauses.append("t.date BETWEEN ? AND ?"); params.extend([date_start, date_end])
@@ -759,6 +953,17 @@ def spending_by_category_in_group(
 
     return [dict(r) for r in rows]
 
+# Returns signed monthly totals (no ABS), so reverses against the natural
+# direction of the queried scope appear as negative bars instead of being
+# folded into a magnitude. Sign and transaction-filter selection:
+#   - category_id given: ignore `view`; sign follows category type so
+#     income-type scopes flip to positive-on-receipt; the existing
+#     category-membership filter limits which transactions count.
+#   - payee given: ignore `view`; signed SUM, positive = paid them.
+#   - neither: `view` selects the cross-cutting frame the caller wants:
+#       * spending  -> filter to expense-side transactions, SUM
+#       * income    -> filter to income-side transactions, -SUM
+#       * cash_flow -> all transactions, -SUM (positive = net inflow)
 @router.get("/summary/monthly-trend")
 def monthly_trend(
     category_id: Optional[str] = Query(None),
@@ -769,15 +974,16 @@ def monthly_trend(
     months:      int            = Query(18, le=120),
     date_start:  Optional[str] = Query(None),
     date_end:    Optional[str] = Query(None),
+    view:        str            = Query("cash_flow", description="spending | income | cash_flow (used only when no category/payee scope)"),
 ):
     if payee:
         # Payee detail drawers want the merchant's full visible history by default, so the rolling month window is
         # suppressed unless the caller supplied an explicit date filter.
-        clauses = ["t.is_pending = 0",
+        clauses = ["t.is_pending = 0", "t.trashed_at IS NULL",
                    "(t.display_name = ? OR t.merchant_name = ? OR t.raw_name = ?)"]
         params  = [payee, payee, payee]
     else:
-        clauses = ["t.is_pending = 0"]
+        clauses = ["t.is_pending = 0", "t.trashed_at IS NULL"]
         params  = []
         if _append_uncategorized_filter(clauses, params, category_id=category_id):
             pass
@@ -804,6 +1010,27 @@ def monthly_trend(
         elif category_id:
             clauses.append("t.category_id = ?")
             params.append(category_id)
+        elif view == "spending":
+            clauses.append(
+                "(COALESCE(c.category_type, p.category_type) = 'expense' "
+                "OR (t.category_id IS NULL AND t.amount > 0))"
+            )
+        elif view == "income":
+            clauses.append(
+                "(COALESCE(c.category_type, p.category_type) = 'income' "
+                "OR (t.category_id IS NULL AND t.amount < 0))"
+            )
+        # cash_flow: no category-type filter
+
+        if not category_id:
+            # In cross-cutting dashboard frames the bars represent total
+            # spending/income/cash flow, so categories marked exclude_from_totals
+            # (transfers etc.) are removed. Detail-panel scopes (category_id) keep
+            # showing their own activity unfiltered so the user can still see what
+            # is in an excluded category when they ask for it explicitly.
+            clauses.append(
+                "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0"
+            )
 
     _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
     _append_tag_filter(clauses, params, tag_ids=tag_ids)
@@ -821,16 +1048,33 @@ def monthly_trend(
         clauses.append("t.date >= date('now', ? || ' months')")
         params.append(f"-{months}")
 
+    needs_category_join = bool(category_id) or (not payee)
+    join_sql = (
+        "LEFT JOIN category c ON c.id = t.category_id "
+        "LEFT JOIN category p ON p.id = c.parent_id"
+        if needs_category_join else ""
+    )
+
     where = "WHERE " + " AND ".join(clauses)
 
     with get_db() as conn:
+        if category_id:
+            sign_factor = -1 if _resolve_category_is_income(conn, category_id) else 1
+        elif payee:
+            sign_factor = 1
+        elif view == "income" or view == "cash_flow":
+            sign_factor = -1
+        else:
+            sign_factor = 1
+
         rows = conn.execute(
             f"""
             SELECT
                 strftime('%Y-%m', t.date) AS month,
-                ABS(SUM(t.amount))        AS total,
+                ({sign_factor} * SUM(t.amount)) AS total,
                 COUNT(*)                  AS count
             FROM   txn t
+            {join_sql}
             {where}
             GROUP BY month
             ORDER BY month
@@ -851,6 +1095,7 @@ def monthly_by_group(
 ):
     clauses = [
         "t.is_pending = 0",
+        "t.trashed_at IS NULL",
         "t.date >= date('now', ? || ' months')",
         "strftime('%Y-%m', t.date) IS NOT NULL",
         "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0",

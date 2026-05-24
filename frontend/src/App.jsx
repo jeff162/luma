@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef, Component, lazy, Suspense, useMemo } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { FilterProvider } from './lib/FilterContext.jsx'
+import { FilterProvider, pastTwelveMonthsRange } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
 import RuntimeConfigScreen from './components/RuntimeConfigScreen.jsx'
@@ -58,8 +58,9 @@ class AppErrorBoundary extends Component {
 const s = {
   shell: { display: 'flex', height: '100vh', overflow: 'hidden' },
   nav: {
-    width: 220, background: 'var(--surface)', borderRight: '1px solid var(--border)',
+    background: 'var(--surface)', borderRight: '1px solid var(--border)',
     display: 'flex', flexDirection: 'column', padding: '24px 0', flexShrink: 0,
+    position: 'relative',
   },
   logo: {
     fontSize: 20, fontWeight: 700, color: 'var(--accent2)',
@@ -87,6 +88,7 @@ const NAV_LINKS = [
   ['/import-export', 'Import / Export'],
   ['/tasks', 'Tasks'],
   ['/settings', 'Settings'],
+  ['/help', 'Help'],
 ]
 
 const LOCAL_PROFILE_STORAGE_KEY_PREFIX = 'fintrack.localPreferenceProfile'
@@ -101,6 +103,7 @@ const loadSettingsPage = () => import('./pages/Settings.jsx')
 const loadImportExportPage = () => import('./pages/ImportExport.jsx')
 const loadImportRuleSuggestionsPage = () => import('./pages/ImportRuleSuggestions.jsx')
 const loadTasksPage = () => import('./pages/Tasks.jsx')
+const loadHelpPage = () => import('./pages/Help.jsx')
 const Dashboard = lazy(loadDashboardPage)
 const Transactions = lazy(loadTransactionsPage)
 const Categories = lazy(loadCategoriesPage)
@@ -110,6 +113,7 @@ const Settings = lazy(loadSettingsPage)
 const ImportExport = lazy(loadImportExportPage)
 const ImportRuleSuggestions = lazy(loadImportRuleSuggestionsPage)
 const Tasks = lazy(loadTasksPage)
+const Help = lazy(loadHelpPage)
 const ROUTE_PREFETCHERS = [
   loadDashboardPage,
   loadTransactionsPage,
@@ -120,6 +124,7 @@ const ROUTE_PREFETCHERS = [
   loadImportExportPage,
   loadImportRuleSuggestionsPage,
   loadTasksPage,
+  loadHelpPage,
 ]
 const GLOBAL_SCROLLBAR_STYLES = `
   * {
@@ -150,10 +155,69 @@ const GLOBAL_SCROLLBAR_STYLES = `
   *::-webkit-scrollbar-corner {
     background: transparent;
   }
+
+  .nav-resize-handle {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    bottom: 0;
+    width: 6px;
+    cursor: col-resize;
+    z-index: 2;
+    background: transparent;
+  }
+  .nav-resize-handle::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 2px;
+    transform: translateX(-50%);
+    background: var(--accent);
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+  .nav-resize-handle:hover::after,
+  .nav-resize-handle.is-resizing::after {
+    opacity: 0.55;
+  }
 `
+
+const NAV_PANE_WIDTH_STORAGE_KEY = 'fintrack.ui.navPaneWidth'
+const NAV_PANE_DEFAULT_WIDTH = 220
+const NAV_PANE_MIN_WIDTH = 140
+const NAV_PANE_MAX_WIDTH = NAV_PANE_DEFAULT_WIDTH
+
+function clampNavPaneWidth(value) {
+  if (!Number.isFinite(value)) return NAV_PANE_DEFAULT_WIDTH
+  return Math.min(NAV_PANE_MAX_WIDTH, Math.max(NAV_PANE_MIN_WIDTH, Math.round(value)))
+}
+
+function readStoredNavPaneWidth() {
+  try {
+    const raw = window.localStorage.getItem(NAV_PANE_WIDTH_STORAGE_KEY)
+    if (!raw) return NAV_PANE_DEFAULT_WIDTH
+    return clampNavPaneWidth(Number(raw))
+  } catch {
+    return NAV_PANE_DEFAULT_WIDTH
+  }
+}
 
 function getLocalProfileStorageKey(dbInstanceId) {
   return dbInstanceId ? `${LOCAL_PROFILE_STORAGE_KEY_PREFIX}.${dbInstanceId}` : null
+}
+
+// FilterBar is rendered above the active route; date and saved-filter chips only make sense on pages
+// whose content respects them — Dashboard reports and the Transactions ledger. Other pages (Categories,
+// Rules, Accounts, Settings, Tasks, Help) operate on their own scope and would otherwise show a bar
+// that does nothing. The Import/Export page deliberately uses its own local filter panel so the
+// shared chip can stay scoped to the user's "what am I looking at" view without dragging the export
+// scope along with it.
+function shouldShowFilterBar(pathname) {
+  if (pathname === '/') return true
+  if (pathname === '/transactions') return true
+  return false
 }
 
 function DataProviderInfoButton({ label = 'data providers' }) {
@@ -1079,6 +1143,8 @@ export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
   const [taskCount, setTaskCount] = useState(0)
+  const [navPaneWidth, setNavPaneWidth] = useState(readStoredNavPaneWidth)
+  const [navResizing, setNavResizing] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
   const [authEnabled, setAuthEnabled] = useState(false)
   const [needsBootstrap, setNeedsBootstrap] = useState(false)
@@ -1338,6 +1404,41 @@ export default function App() {
     return () => document.removeEventListener('contextmenu', handleContextMenu, true)
   }, [])
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(NAV_PANE_WIDTH_STORAGE_KEY, String(navPaneWidth))
+    } catch { }
+  }, [navPaneWidth])
+
+  function startNavPaneResize(event) {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = navPaneWidth
+
+    function handleMove(moveEvent) {
+      const next = clampNavPaneWidth(startWidth + (moveEvent.clientX - startX))
+      setNavPaneWidth(next)
+    }
+
+    function stop() {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', stop)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      setNavResizing(false)
+    }
+
+    setNavResizing(true)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', stop)
+  }
+
+  function resetNavPaneWidth() {
+    setNavPaneWidth(NAV_PANE_DEFAULT_WIDTH)
+  }
+
   async function handleLogout() {
     await api.logout().catch(() => { })
     setCurrentUser(null)
@@ -1587,7 +1688,7 @@ export default function App() {
           key={authEnabled ? `user:${currentUser?.id || currentUser?.username || ''}` : `local:${activeLocalProfile?.id || ''}`}
           initialPreferences={bootPreferenceSubjectId && bootPreferenceSubjectId === preferenceSubjectId ? bootPreferences : null}
         >
-          <FilterProvider>
+          <FilterProvider initialDate={pastTwelveMonthsRange()}>
           <style>{GLOBAL_SCROLLBAR_STYLES}</style>
           {pendingLocalProfileDelete ? (
             <AppConfirmDialog
@@ -1602,7 +1703,7 @@ export default function App() {
             />
           ) : null}
           <div style={s.shell}>
-            <nav style={s.nav}>
+            <nav style={{ ...s.nav, width: navPaneWidth }}>
               <div style={s.logo}>
                 <div>{APP_NAME}</div>
                 {developerOptionsEnabled ? (
@@ -1719,9 +1820,18 @@ export default function App() {
                   </button>
                 )}
               </div>
+              <div
+                className={`nav-resize-handle${navResizing ? ' is-resizing' : ''}`}
+                onMouseDown={startNavPaneResize}
+                onDoubleClick={resetNavPaneWidth}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize navigation pane"
+                title="Drag to resize · double-click to reset"
+              />
             </nav>
             <div style={s.main}>
-              <FilterBar />
+              {shouldShowFilterBar(location.pathname) ? <FilterBar /> : null}
               <div style={s.content}>
                 {/* Route-level lazy loading keeps the shell responsive and avoids forcing every large screen into
                     the initial bundle before the user ever visits it. */}
@@ -1738,6 +1848,8 @@ export default function App() {
                     <Route path="/import-export" element={<ImportExport />} />
                     <Route path="/tasks" element={<Tasks />} />
                     <Route path="/settings" element={<Settings />} />
+                    <Route path="/help" element={<Help />} />
+                    <Route path="/help/:topic" element={<Help />} />
                   </Routes>
                 </Suspense>
               </div>

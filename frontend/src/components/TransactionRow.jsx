@@ -8,7 +8,7 @@ import CategoryDisplay from './CategoryDisplay.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from './TransientTextInput.jsx'
 import AmountDisplay from './AmountDisplay.jsx'
-import { TagGlyph } from './TagUi.jsx'
+import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 
 /*
  * These cells centralize transaction editing semantics across every table in the app. Parents keep the row data;
@@ -54,7 +54,7 @@ export function getTxnImportSourceLabel(txn) {
   return txn.import_batch_filename || 'Not imported from file'
 }
 
-export function NotePopover({ txn, onSave, onClose }) {
+export function NotePopover({ txn, onSave, onClose, positioning = 'absolute' }) {
   const [draft, setDraft] = useState(txn.notes || '')
   const ref       = useRef(null)
   const textareaRef = useRef(null)
@@ -76,14 +76,18 @@ export function NotePopover({ txn, onSave, onClose }) {
     onClose()
   }
 
+  const positionStyle = positioning === 'absolute'
+    ? { position: 'absolute', zIndex: 500, top: '100%', left: 0, marginTop: 4 }
+    : { position: 'relative' }
+
   return (
     <div
       ref={ref}
       style={{
-        position: 'absolute', zIndex: 500, top: '100%', left: 0,
+        ...positionStyle,
         background: 'var(--surface)', border: '1px solid var(--border)',
         borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
-        padding: 12, minWidth: 260, marginTop: 4,
+        padding: 12, minWidth: 260,
       }}
       onClick={e => e.stopPropagation()}
     >
@@ -198,7 +202,7 @@ export function useContextMenu() {
   return { menu, onContextMenu, close }
 }
 
-export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onOpenRule, ruleActionLabel = 'Rule…' }) {
+export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTags, onOpenRule, onTrash, ruleActionLabel = 'Rule…' }) {
   const ref = useRef(null)
   useDismissibleLayer({
     open: !!menu,
@@ -207,7 +211,7 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onOpenRul
   })
 
   const x = Math.min(menu.x, window.innerWidth  - 180)
-  const y = Math.min(menu.y, window.innerHeight - 140)
+  const y = Math.min(menu.y, window.innerHeight - 240)
 
   const item = (label, onClick, danger) => (
     <div
@@ -242,6 +246,13 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onOpenRul
         () => onEditNote(menu.txn)
       )}
       {menu.txn.notes && item('Remove note', () => onEditNote(menu.txn, true), true)}
+      {onEditTags ? item('🏷 Tags…', () => onEditTags(menu.txn)) : null}
+      {onTrash ? (
+        <>
+          <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+          {item('🗑 Send to trash…', () => onTrash(menu.txn), true)}
+        </>
+      ) : null}
     </div>
   )
 }
@@ -370,125 +381,233 @@ function NoteGlyph({ size = 13, color = 'currentColor' }) {
   )
 }
 
-function MarkerButton({ title, onClick, children, active = false }) {
+function PencilGlyph({ size = 13, color = 'currentColor' }) {
   return (
-    <button
-      type="button"
-      title={title}
-      onClick={event => {
-        event.stopPropagation()
-        onClick?.(event)
-      }}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 18,
-        height: 18,
-        borderRadius: 6,
-        border: 'none',
-        background: active ? 'var(--surface2)' : 'transparent',
-        color: active ? 'var(--accent2)' : 'var(--muted)',
-        cursor: 'pointer',
-        padding: 0,
-        flexShrink: 0,
-      }}
+    <svg viewBox="0 0 16 16" width={size} height={size} fill="none" aria-hidden="true">
+      <path
+        d="M2.5 13.5l.9-2.8L10 4.1l1.9 1.9-6.6 6.6-2.8.9z"
+        stroke={color}
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path d="M9 5l2 2" stroke={color} strokeWidth="1.2" strokeLinecap="round" />
+      <path
+        d="M10 4.1l1.4-1.4a1 1 0 0 1 1.4 0l.5.5a1 1 0 0 1 0 1.4L11.9 6"
+        stroke={color}
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+const TAG_INLINE_LIMIT = 3
+const MAX_TAG_TOOLTIP_WIDTH = 260
+const MAX_NOTE_TOOLTIP_WIDTH = 320
+
+const iconButtonStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 18,
+  height: 18,
+  borderRadius: 6,
+  border: 'none',
+  background: 'transparent',
+  color: 'var(--muted)',
+  cursor: 'pointer',
+  padding: 0,
+  flexShrink: 0,
+}
+
+function HoverTooltip({ children, content, maxWidth = 280, align = 'left' }) {
+  // Hover-only popover. The wrapping span is the hover hit target; pointer events on the floating
+  // panel are disabled so it can't itself trigger a hover loop on the parent.
+  const [open, setOpen] = useState(false)
+  if (!content) return children
+  return (
+    <span
+      style={{ position: 'relative', display: 'inline-flex' }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
     >
       {children}
-    </button>
+      {open ? (
+        <div
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: align === 'left' ? 0 : 'auto',
+            right: align === 'right' ? 0 : 'auto',
+            marginTop: 6,
+            zIndex: 200,
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            padding: '6px 10px',
+            fontSize: 12,
+            color: 'var(--text)',
+            // width: max-content keeps the tooltip from inheriting the 16px chip width
+            // as its shrink-to-fit available-width budget, which was wrapping every char.
+            width: 'max-content',
+            maxWidth,
+            whiteSpace: 'normal',
+            wordBreak: 'break-word',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+            pointerEvents: 'none',
+            textAlign: 'left',
+          }}
+        >
+          {content}
+        </div>
+      ) : null}
+    </span>
   )
 }
 
-function TagPickerPopover({ allTags, visibleTagIds, onToggleTag, onClose, loading = false }) {
-  const ref = useRef(null)
+function getTagLetter(tag) {
+  const trimmed = (tag?.name || '').trim()
+  return (trimmed.charAt(0) || '?').toUpperCase()
+}
 
-  useDismissibleLayer({
-    open: true,
-    onClose,
-    refs: [ref],
-  })
-
+function TagLetterChip({ tag, inherited, onClick }) {
+  const tooltip = inherited
+    ? `${tag.name} (inherited from ${tag.source})`
+    : tag.name
   return (
-    <div
-      ref={ref}
-      style={{
-        position: 'absolute',
-        zIndex: 520,
-        top: '100%',
-        right: 0,
-        background: 'var(--surface)',
-        border: '1px solid var(--border)',
-        borderRadius: 10,
-        boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
-        padding: 10,
-        minWidth: 220,
-        marginTop: 4,
-      }}
-      onClick={event => event.stopPropagation()}
-    >
-      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 8 }}>
-        Transaction tags
-      </div>
-      {loading ? (
-        <div style={{ fontSize: 12, color: 'var(--muted)' }}>Loading tags…</div>
-      ) : allTags.length === 0 ? (
-        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
-          No tags yet. Create them in Settings.
-        </div>
-      ) : (
-        <div style={{ display: 'grid', gap: 4 }}>
-          {allTags.map(tag => {
-            const checked = visibleTagIds.has(tag.id)
-            return (
-              <label
-                key={tag.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  cursor: 'pointer',
-                  padding: '6px 2px',
-                  fontSize: 13,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => onToggleTag(tag, !checked)}
-                />
-                <TagGlyph color={tag.color} size={13} />
-                <span>{tag.name}</span>
-              </label>
-            )
-          })}
-        </div>
-      )}
+    <HoverTooltip content={tooltip} maxWidth={MAX_TAG_TOOLTIP_WIDTH}>
+      <button
+        type="button"
+        onClick={event => {
+          event.stopPropagation()
+          onClick?.(event)
+        }}
+        aria-label={tooltip}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 16,
+          height: 16,
+          borderRadius: '50%',
+          background: tag.color || 'var(--muted)',
+          color: '#fff',
+          fontSize: 9,
+          fontWeight: 700,
+          lineHeight: 1,
+          border: inherited
+            ? '1.5px solid color-mix(in srgb, #0f172a 32%, transparent)'
+            : 'none',
+          cursor: 'pointer',
+          padding: 0,
+          flexShrink: 0,
+          textShadow: '0 0 1px rgba(0,0,0,0.25)',
+        }}
+      >
+        {getTagLetter(tag)}
+      </button>
+    </HoverTooltip>
+  )
+}
+
+function TagStackChip({ tags, onClick }) {
+  const preview = tags.slice(0, 3)
+  const tooltip = (
+    <div style={{ display: 'grid', gap: 4 }}>
+      {tags.map(tag => {
+        const inherited = tag.source && tag.source !== 'direct'
+        return (
+          <div key={tag.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                background: tag.color || 'var(--muted)',
+                flexShrink: 0,
+              }}
+            />
+            <span>{tag.name}{inherited ? <span style={{ color: 'var(--muted)' }}> (from {tag.source})</span> : null}</span>
+          </div>
+        )
+      })}
     </div>
   )
+  return (
+    <HoverTooltip content={tooltip} maxWidth={MAX_TAG_TOOLTIP_WIDTH}>
+      <button
+        type="button"
+        onClick={event => {
+          event.stopPropagation()
+          onClick?.(event)
+        }}
+        aria-label={`${tags.length} tags`}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          height: 16,
+          padding: '0 3px 0 0',
+          border: 'none',
+          background: 'transparent',
+          cursor: 'pointer',
+          flexShrink: 0,
+        }}
+      >
+        {preview.map((tag, idx) => (
+          <span
+            key={tag.id}
+            style={{
+              width: 12,
+              height: 12,
+              borderRadius: '50%',
+              background: tag.color || 'var(--muted)',
+              border: '1.5px solid var(--surface)',
+              marginLeft: idx === 0 ? 0 : -5,
+              boxShadow: '0 0 0 0.5px color-mix(in srgb, #0f172a 18%, transparent)',
+            }}
+          />
+        ))}
+        <span
+          style={{
+            marginLeft: 4,
+            fontSize: 10,
+            fontWeight: 600,
+            color: 'var(--muted)',
+            lineHeight: 1,
+          }}
+        >
+          {tags.length}
+        </span>
+      </button>
+    </HoverTooltip>
+  )
 }
 
-export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags }) {
+export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenDetail }) {
   const [showNote, setShowNote] = useState(false)
   const [showTags, setShowTags] = useState(false)
-  const [availableTags, setAvailableTags] = useState([])
-  const [loadingTags, setLoadingTags] = useState(false)
+  // null sentinel = not fetched yet; an array (possibly empty) = fetched.
+  // Tracking via state alone (no separate loading flag) avoids a cancel-loop where
+  // the effect re-runs on every loading-state flip and aborts its own in-flight fetch.
+  const [availableTags, setAvailableTags] = useState(null)
 
   const visibleTags = Array.isArray(txn.tags) ? txn.tags : []
   const visibleTagIds = new Set(visibleTags.map(tag => tag.id))
+  // Tags inherited from the transaction's category or group cannot be removed at the
+  // transaction level — they live on the category itself. The picker shows them as
+  // checked but disabled so the user understands why they cannot be unticked here.
+  const inheritedTagIds = new Set(
+    visibleTags.filter(tag => tag.source && tag.source !== 'direct').map(tag => tag.id),
+  )
 
   useEffect(() => {
-    if (!showTags || availableTags.length > 0 || loadingTags) return
+    if (!showTags || availableTags !== null) return
     let cancelled = false
-    setLoadingTags(true)
     api.getTags()
-      .then(tags => {
-        if (!cancelled) setAvailableTags(tags)
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingTags(false)
-      })
+      .then(tags => { if (!cancelled) setAvailableTags(Array.isArray(tags) ? tags : []) })
+      .catch(() => { if (!cancelled) setAvailableTags([]) })
     return () => { cancelled = true }
-  }, [availableTags.length, loadingTags, showTags])
+  }, [showTags, availableTags])
 
   async function handleNoteSave(val) {
     await api.updateNotes(txn.id, val)
@@ -500,35 +619,42 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags }) {
     onUpdateTags?.(txn.id, result.tags || [])
   }
 
+  const useStack = visibleTags.length > TAG_INLINE_LIMIT
+  const hasNote = !!txn.notes
+
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, width: '100%', minWidth: 0 }}>
-      <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
-        <MarkerButton
-          title={txn.notes ? 'Edit note' : 'Add note'}
-          onClick={() => setShowNote(value => !value)}
-          active={!!txn.notes}
-        >
-          <NoteGlyph size={13} />
-        </MarkerButton>
-        {visibleTags.map(tag => (
-          <MarkerButton
-            key={tag.id}
-            title={tag.name}
-            onClick={() => setShowTags(true)}
+      <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+        {hasNote ? (
+          <HoverTooltip
+            content={<span style={{ whiteSpace: 'pre-wrap' }}>{txn.notes}</span>}
+            maxWidth={MAX_NOTE_TOOLTIP_WIDTH}
           >
-            <TagGlyph color={tag.color} size={13} />
-          </MarkerButton>
-        ))}
-        <MarkerButton
-          title={visibleTags.length ? 'Edit tags' : 'Add tag'}
-          onClick={() => setShowTags(value => !value)}
-        >
-          <TagGlyph
-            color={visibleTags.length ? 'var(--muted)' : 'var(--accent2)'}
-            size={13}
-            outline={visibleTags.length > 0}
-          />
-        </MarkerButton>
+            <button
+              type="button"
+              onClick={event => {
+                event.stopPropagation()
+                setShowNote(value => !value)
+              }}
+              aria-label="Edit note"
+              style={{ ...iconButtonStyle, color: 'var(--accent2)' }}
+            >
+              <NoteGlyph size={13} />
+            </button>
+          </HoverTooltip>
+        ) : null}
+        {useStack ? (
+          <TagStackChip tags={visibleTags} onClick={() => setShowTags(true)} />
+        ) : (
+          visibleTags.map(tag => (
+            <TagLetterChip
+              key={tag.id}
+              tag={tag}
+              inherited={tag.source && tag.source !== 'direct'}
+              onClick={() => setShowTags(true)}
+            />
+          ))
+        )}
         {showNote ? (
           <NotePopover
             txn={txn}
@@ -537,11 +663,13 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags }) {
           />
         ) : null}
         {showTags ? (
-          <TagPickerPopover
-            allTags={availableTags}
-            visibleTagIds={visibleTagIds}
-            loading={loadingTags}
+          <TagPickerWithCreate
+            allTags={availableTags || []}
+            selectedTagIds={visibleTagIds}
+            inheritedTagIds={inheritedTagIds}
+            loading={availableTags === null}
             onToggleTag={handleToggleTag}
+            onTagCreated={tag => setAvailableTags(prev => (prev || []).some(t => t.id === tag.id) ? prev : [...(prev || []), tag])}
             onClose={() => setShowTags(false)}
           />
         ) : null}
@@ -549,8 +677,22 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags }) {
       <AmountDisplay
         amount={txn.amount}
         isPending={!!txn.is_pending}
-        style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}
+        style={{ display: 'flex', justifyContent: 'flex-end' }}
       />
+      {onOpenDetail ? (
+        <button
+          type="button"
+          onClick={event => {
+            event.stopPropagation()
+            onOpenDetail(txn)
+          }}
+          title="Edit transaction…"
+          aria-label="Edit transaction"
+          style={{ ...iconButtonStyle, color: 'var(--muted)', marginLeft: 2 }}
+        >
+          <PencilGlyph size={13} />
+        </button>
+      ) : null}
     </div>
   )
 }

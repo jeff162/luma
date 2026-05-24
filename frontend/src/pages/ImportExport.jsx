@@ -5,7 +5,8 @@ import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'rea
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { refreshTaskBadge } from '../App.jsx'
-import { useFilters } from '../lib/FilterContext.jsx'
+import { FilterProvider, useFilters } from '../lib/FilterContext.jsx'
+import FilterBar from '../components/FilterBar.jsx'
 import {
   Card,
   DialogActions,
@@ -6664,11 +6665,21 @@ function ImportTab() {
                                 {(b.accounts?.length > 0 || summary.rejectedCount > 0 || summary.dedupedCount > 0) && (
                                   <div style={{ padding: '4px 16px 10px 58px', borderBottom: '1px solid color-mix(in srgb, var(--border) 80%, transparent)', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                                     {b.accounts.map((a, i) => {
-                                      const label = a.was_skipped ? a.csv_value : a.account_name
                                       const count = Number(a.row_count || 0)
-                                      const truncated = label?.length > 22 ? label.slice(0, 20) + '…' : label
+                                      const csvLabel = a.csv_value || a.account_name || ''
+                                      const mappedLabel = a.account_name || ''
+                                      // If the CSV's original account label differs from the account it currently
+                                      // resolves to, the user mapped it after the import completed. Surface both
+                                      // so the file card matches what the user saw at import time, with the mapped
+                                      // destination as a faded suffix.
+                                      const showMapping = !a.was_skipped && mappedLabel && csvLabel && mappedLabel !== csvLabel
+                                      const truncate = s => (s && s.length > 22 ? s.slice(0, 20) + '…' : s)
+                                      const primary = a.was_skipped ? csvLabel : csvLabel
+                                      const tooltip = showMapping
+                                        ? `${csvLabel} → ${mappedLabel}`
+                                        : (a.was_skipped ? csvLabel : (mappedLabel || csvLabel))
                                       return (
-                                        <span key={i} title={label} style={{
+                                        <span key={i} title={tooltip} style={{
                                           display: 'inline-flex', alignItems: 'center', gap: 4,
                                           fontSize: 11, padding: '2px 7px', borderRadius: 99,
                                           background: a.was_skipped
@@ -6680,7 +6691,13 @@ function ImportTab() {
                                           <span style={{ color: a.was_skipped ? 'var(--muted)' : 'var(--success)', fontWeight: 600 }}>
                                             {a.was_skipped ? '✕' : '✓'}
                                           </span>
-                                          {truncated}
+                                          {truncate(primary)}
+                                          {showMapping ? (
+                                            <>
+                                              <span style={{ color: 'var(--muted)', opacity: 0.7 }}>→</span>
+                                              <span style={{ color: 'var(--muted)' }}>{truncate(mappedLabel)}</span>
+                                            </>
+                                          ) : null}
                                           {count > 0 && <span style={{ color: 'var(--muted)' }}>{count}</span>}
                                         </span>
                                       )
@@ -6946,6 +6963,18 @@ function ImportTab() {
 }
 
 function ExportTab() {
+  // Export uses a filter scope independent of the app-wide FilterContext: the dashboard/transactions
+  // view is "what am I looking at now," while an export is "what slice of history do I want a copy of."
+  // A nested FilterProvider with no initial filters keeps the export defaulted to everything and lets
+  // the user adjust it without disturbing the chip the rest of the app reads.
+  return (
+    <FilterProvider>
+      <ExportTabContent />
+    </FilterProvider>
+  )
+}
+
+function ExportTabContent() {
   const { filters } = useFilters()
   const [selectedCols, setSelectedCols] = useState(new Set(DEFAULT_EXPORT_COLS))
 
@@ -6973,6 +7002,9 @@ function ExportTab() {
   return (
     <div>
       <SectionTitle>Export transactions to a .csv file</SectionTitle>
+      <Card style={{ marginBottom: 12, padding: 0 }}>
+        <FilterBar />
+      </Card>
       <Card>
         <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14 }}>Select columns to include:</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 16 }}>
@@ -6984,11 +7016,11 @@ function ExportTab() {
         </div>
         <div style={{ display: 'grid', gap: 8, justifyItems: 'start' }}>
           <Button onClick={downloadCsv} disabled={selectedCols.size === 0}>Generate File</Button>
-          {filters.date || filters.selections.length > 0 ? (
-            <div style={{ fontSize: 12, color: 'var(--accent2)' }}>
-              Only transactions matching the current filter will be exported.
-            </div>
-          ) : null}
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+            {filters.date || filters.selections.length > 0
+              ? 'Only transactions matching the filter above will be exported.'
+              : 'No filter set — all transactions will be exported.'}
+          </div>
         </div>
       </Card>
     </div>

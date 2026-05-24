@@ -485,13 +485,13 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
             "use_imported_categories": False,
         }
         result_grouped = await self._run_import_fixture("duplicate_grouped_compare.csv", grouped_config)
-        self.assertEqual(result_grouped["imported"], 1)
-        self.assertEqual(result_grouped["deduped"], 3)
+        self.assertEqual(result_grouped["imported"], 2)
+        self.assertEqual(result_grouped["deduped"], 2)
 
         duplicates = self._get_duplicates(result_grouped["batch_id"])
         reasons = [row["reason"] for row in duplicates["rows"]]
         self.assertEqual(sum(reason == "Matches an existing transaction in the linked account group" for reason in reasons), 2)
-        self.assertEqual(sum("Falls within the fully covered date range from an earlier import in this account scope" in reason for reason in reasons), 1)
+        self.assertEqual(sum("Falls within the fully covered date range from an earlier import in this account scope" in reason for reason in reasons), 0)
         self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_grouped_compare_ledger.csv"))
 
     async def test_terminal_day_reconciliation_consumes_only_prior_same_amount_rows(self):

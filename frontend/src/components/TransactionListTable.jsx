@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { useMemo, useState } from 'react'
 import { formatDate } from '../lib/utils.js'
-import { CategoryCell, MerchantCell, TransactionAmountCell } from './TransactionRow.jsx'
+import { CategoryCell, MerchantCell, TransactionAmountCell, getTxnMerchantLabel } from './TransactionRow.jsx'
 import PillGridTable from './PillGridTable.jsx'
 
 const COLUMN_DEFS = {
@@ -21,6 +22,24 @@ function getAvailableColumns({ showCategory, showAccount }) {
     ...(showAccount ? [COLUMN_DEFS.account] : []),
     COLUMN_DEFS.amount,
   ]
+}
+
+// Column-header click sorting is handled entirely by the table when no external sort props
+// are supplied — the surfaces that just render this table (MonthDetail, the dashboard
+// drill-down tables, AccountDetail, TagDetail) all get sort for free without each having to
+// reimplement the comparator. Numeric/date columns default to "biggest first"; text columns
+// to ascending, matching the pattern the Transactions page already uses.
+function compareRows(a, b, key, sign) {
+  if (key === 'date') return sign * String(a.date || '').localeCompare(String(b.date || ''))
+  if (key === 'merchant') return sign * String(getTxnMerchantLabel(a) || '').localeCompare(String(getTxnMerchantLabel(b) || ''))
+  if (key === 'category') return sign * String(a.category_name || '').localeCompare(String(b.category_name || ''))
+  if (key === 'account') return sign * String(a.account_name || '').localeCompare(String(b.account_name || ''))
+  if (key === 'amount') return sign * ((Number(a.amount) || 0) - (Number(b.amount) || 0))
+  return 0
+}
+
+function getInitialSortDirection(key) {
+  return key === 'date' || key === 'amount' ? 'desc' : 'asc'
 }
 
 function normalizeInteractiveColumns(columnConfig, availableColumns) {
@@ -75,7 +94,31 @@ export default function TransactionListTable({
   usePillTable = false,
   columnConfig = null,
   onColumnConfigChange = null,
+  // Callers that own row fetching (and thus do sort server-side) can pass a controlled pair;
+  // when omitted the table manages its own client-side sort.
+  sortState: externalSortState = null,
+  onSort: externalOnSort = null,
 }) {
+  const externallyControlled = typeof externalOnSort === 'function'
+  const [internalSortState, setInternalSortState] = useState(null)
+  const sortState = externallyControlled ? externalSortState : internalSortState
+  function handleInternalSort(key) {
+    setInternalSortState(prev => {
+      if (prev && prev.key === key) {
+        return { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+      }
+      return { key, dir: getInitialSortDirection(key) }
+    })
+  }
+  const onSort = externallyControlled ? externalOnSort : handleInternalSort
+
+  // External sort means the parent has already ordered `rows`; only sort here when we own state.
+  const visibleRows = useMemo(() => {
+    if (externallyControlled || !sortState) return rows
+    const sign = sortState.dir === 'asc' ? 1 : -1
+    return [...rows].sort((a, b) => compareRows(a, b, sortState.key, sign))
+  }, [rows, externallyControlled, sortState])
+
   const availableColumns = getAvailableColumns({ showCategory, showAccount })
   const simpleColumns = [
     { key: 'date', label: 'Date', width: '96px' },
@@ -142,6 +185,7 @@ export default function TransactionListTable({
             txn={txn}
             onUpdateNote={(id, notes) => patchRows(id, { notes })}
             onUpdateTags={(id, tags) => patchRows(id, { tags })}
+            onOpenDetail={onTransactionOpenDetail}
           />
         )
       default:
@@ -150,7 +194,7 @@ export default function TransactionListTable({
   }
 
   function renderRows(columns, gridTemplateColumns) {
-    return rows.map(txn => (
+    return visibleRows.map(txn => (
       <div
         key={txn.id}
         style={{
@@ -215,6 +259,8 @@ export default function TransactionListTable({
           <PillGridTable
             columns={pillColumns}
             onColumnsChange={onColumnConfigChange}
+            sortState={sortState}
+            onSort={onSort}
             fillHeight={fillHeight}
             renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
               <div

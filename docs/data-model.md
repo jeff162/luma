@@ -153,6 +153,8 @@ Groups also carry important reporting behavior:
 
 This is used for things like transfers and credit-card-payment categories.
 
+Categories and groups themselves do **not** have an `owner_id`. The dimensions a user wants to report by — personal/shared, essential/discretionary, business/personal, and similar — are expressed through tags, attached at whichever level matches the user's intent (group, leaf category, or individual transaction). Tag attachment for categories is stored in `category_tag(category_id, tag_id)`.
+
 Reporting should not assume every transaction inside an expense or income branch shares the same sign.
 
 - expense categories may still contain credits such as reimbursements or returns
@@ -195,15 +197,21 @@ Important behavior:
 
 The goal is to make rule behavior explainable without requiring users to hand-maintain a priority table. Specificity and owner scope stand in for manual ordering because they usually match what a user means when two rules overlap.
 
-Rules can also add transaction tags:
+Tags are separate from the category tree and are meant for cross-cutting labels such as `Essential Expenses`, `Alice`, `Reimbursable`, etc. A transaction's **effective tags** are the additive union of four sources, listed by precedence when reporting the source for a tag the transaction picked up through more than one path:
 
-- tags are separate from the category tree and are meant for cross-cutting labels such as `Essential Expenses`
+- **direct (txn_tag):** added on a transaction by a matching rule (`rule_present`) and/or a manual edit (`manual_state = 1`); manual `manual_state = -1` blocks a rule-applied direct tag for that one transaction without changing the rule
+
+- **category-level (category_tag):** any tag attached to the transaction's leaf category propagates to every transaction in that category
+
+- **group-level (category_tag):** any tag attached to the leaf category's parent group propagates to every transaction in any leaf under it
+
+Inherited tags (category- or group-level) are not currently overridable on a single transaction; if a transaction needs to opt out, retag at the level the inheritance comes from. A future block-inherited mechanism (parallel to the existing `manual_state` for direct tags) can be added when an actual case calls for it.
+
+Tag-aware filtering and aggregation matches a transaction if its effective tags include the requested tag, regardless of which source contributed it. Rules can still add tags directly:
 
 - a rule may assign a category, rename the merchant, add tags, or do any combination of those actions
 
-- category/rename still come from the first matching rule that provides that action, while tags are the union of all matching rules
-
-- manual tag edits on one transaction override the rule-derived tag presence for that one row without changing the rule itself
+- category/rename still come from the first matching rule that provides that action, while direct tags are the union of all matching rules
 
 ## Import batches and profiles
 

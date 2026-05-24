@@ -9,11 +9,12 @@ import { formatDate } from '../lib/utils.js'
 import ImportBatchDetail from '../components/ImportBatchDetail.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
-import { Card, PageHeader, Spinner, EmptyState, Input, OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from '../components/ui.jsx'
+import { AppConfirmDialog, Card, PageHeader, Spinner, EmptyState, Input, OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from '../components/ui.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import { MerchantCell, CategoryCell, ContextMenu, useContextMenu, NotePopover, TransactionAmountCell, getTxnMerchantLabel, getTxnImportSourceLabel } from '../components/TransactionRow.jsx'
+import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import RuleForm from '../components/RuleForm.jsx'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
@@ -299,6 +300,11 @@ export default function Transactions() {
   const { menu, onContextMenu, close: closeMenu } = useContextMenu()
   const [categoryHeaderMenu, setCategoryHeaderMenu] = useState(null)
   const [noteTarget, setNoteTarget] = useState(null)
+  const [tagTarget, setTagTarget] = useState(null)
+  const [pendingTrash, setPendingTrash] = useState(null)
+  // null sentinel = not fetched yet, mirroring TransactionAmountCell. Cached at the
+  // page level so reopening the modal for a different row doesn't refetch.
+  const [tagModalAllTags, setTagModalAllTags] = useState(null)
   const [rulePrompt, setRulePrompt] = useState(null)
   const [quickFilter, setQuickFilter] = useState(() => initialSessionStateRef.current?.quickFilter || '')
   const [debouncedQuickFilter, setDebouncedQuickFilter] = useState(() => initialSessionStateRef.current?.quickFilter?.trim() || '')
@@ -546,6 +552,25 @@ export default function Transactions() {
     }))
   }
 
+  async function confirmTrashTransaction() {
+    if (!pendingTrash) return
+    const target = pendingTrash
+    setPendingTrash(null)
+    try {
+      await api.trashTransaction(target.id)
+      // Drop the row from local state so the list updates without a full refetch. The total count
+      // is decremented to keep the "N transactions" label honest.
+      setData(prev => ({
+        ...prev,
+        transactions: prev.transactions.filter(t => t.id !== target.id),
+        total: Math.max(0, (prev.total || 0) - 1),
+      }))
+      setDetailPanels(prev => prev.filter(panel => !(panel.type === 'txn' && panel.item?.id === target.id)))
+    } catch (err) {
+      console.error('Failed to send transaction to trash', err)
+    }
+  }
+
   function updateTags(txnId, tags) {
     setData(prev => ({
       ...prev,
@@ -553,6 +578,22 @@ export default function Transactions() {
         t.id === txnId ? { ...t, tags } : t
       ),
     }))
+    setTagTarget(prev => (prev && prev.id === txnId ? { ...prev, tags } : prev))
+  }
+
+  useEffect(() => {
+    if (!tagTarget || tagModalAllTags !== null) return
+    let cancelled = false
+    api.getTags()
+      .then(tags => { if (!cancelled) setTagModalAllTags(Array.isArray(tags) ? tags : []) })
+      .catch(() => { if (!cancelled) setTagModalAllTags([]) })
+    return () => { cancelled = true }
+  }, [tagTarget, tagModalAllTags])
+
+  async function toggleTagFromModal(tag, present) {
+    if (!tagTarget) return
+    const result = await api.updateTransactionTag(tagTarget.id, tag.id, present)
+    updateTags(tagTarget.id, result.tags || [])
   }
 
   function addCategory(cat) {
@@ -764,6 +805,7 @@ export default function Transactions() {
             txn={txn}
             onUpdateNote={updateNote}
             onUpdateTags={updateTags}
+            onOpenDetail={detailTxn => openDetailPanel('txn', detailTxn)}
           />
         )
       default:
@@ -805,7 +847,7 @@ export default function Transactions() {
               value={quickFilter}
               onChange={setQuickFilter}
               placeholder="Quick filter…"
-              title="Quick filter can match date, merchant, category, account, or amount."
+              title="Quick filter matches date, merchant, category, account, or amount. Prefix with a field name to restrict the match, e.g. merchant:transfer."
               style={{ width: 180 }}
             />
             {quickFilter.trim() && (
@@ -882,9 +924,10 @@ export default function Transactions() {
                         <div
                           key={col.key}
                           style={{
-                            overflow: 'hidden',
                             minWidth: 0,
-                            ...(col.key === 'amount' ? {} : { textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+                            ...(col.key === 'amount'
+                              ? {}
+                              : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
                           }}
                         >
                           {renderCell(col, txn)}
@@ -913,6 +956,8 @@ export default function Transactions() {
             onClose={closeMenu}
             onOpenDetail={txn => { openDetailPanel('txn', txn); closeMenu() }}
             onEditNote={txn => { setNoteTarget(txn); closeMenu() }}
+            onEditTags={txn => { setTagTarget(txn); closeMenu() }}
+            onTrash={txn => { setPendingTrash(txn); closeMenu() }}
             onOpenRule={openRuleFromTransaction}
             ruleActionLabel={
               contextRuleMatch.loading
@@ -974,12 +1019,51 @@ export default function Transactions() {
             <div onClick={e => e.stopPropagation()}>
               <NotePopover
                 txn={noteTarget}
+                positioning="relative"
                 onSave={async val => {
                   await api.updateNotes(noteTarget.id, val)
                   updateNote(noteTarget.id, val)
                   setNoteTarget(null)
                 }}
                 onClose={() => setNoteTarget(null)}
+              />
+            </div>
+          </div>
+        )}
+
+        {pendingTrash && (
+          <AppConfirmDialog
+            title="Send transaction to trash?"
+            description={`Send "${getTxnMerchantLabel(pendingTrash)}" (${pendingTrash.date}) to the trash? You can restore it later from Settings → Trash.`}
+            confirmLabel="Send to trash"
+            confirmVariant="danger"
+            borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+            onConfirm={confirmTrashTransaction}
+            onCancel={() => setPendingTrash(null)}
+            width="min(520px, 100%)"
+          />
+        )}
+
+        {tagTarget && (
+          <div style={{
+            position: 'fixed', inset: 0, zIndex: 400,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(0,0,0,0.3)',
+          }} onClick={() => setTagTarget(null)}>
+            <div onClick={e => e.stopPropagation()}>
+              <TagPickerWithCreate
+                allTags={tagModalAllTags || []}
+                selectedTagIds={new Set((tagTarget.tags || []).map(t => t.id))}
+                inheritedTagIds={new Set(
+                  (tagTarget.tags || [])
+                    .filter(t => t.source && t.source !== 'direct')
+                    .map(t => t.id),
+                )}
+                loading={tagModalAllTags === null}
+                positioning="relative"
+                onToggleTag={toggleTagFromModal}
+                onTagCreated={tag => setTagModalAllTags(prev => (prev || []).some(t => t.id === tag.id) ? prev : [...(prev || []), tag])}
+                onClose={() => setTagTarget(null)}
               />
             </div>
           </div>
@@ -996,6 +1080,11 @@ export default function Transactions() {
                 stackIndex={index}
                 isTopmost={index === totalDetailPanelCount - 1}
                 onClose={() => closeDetailPanel('txn', panel.item.id)}
+                onTrashed={txnId => setData(prev => ({
+                  ...prev,
+                  transactions: prev.transactions.filter(t => t.id !== txnId),
+                  total: Math.max(0, (prev.total || 0) - 1),
+                }))}
               />
             )
           }

@@ -28,7 +28,7 @@ This document defines UI behavior and interaction patterns. For underlying data 
 
 - [Import-specific patterns](#import-specific-patterns)
 
-- [Ownership rules](#ownership-rules)
+- [Ownership and tag-driven reporting](#ownership-and-tag-driven-reporting)
 
 - [When to document a new pattern](#when-to-document-a-new-pattern)
 
@@ -101,6 +101,8 @@ Shared controls should be treated as finished product surfaces, not reused snip
 - Pill-style multi-interaction headers should come from a shared header component rather than page-local copies. Sortability, drag-to-reorder, resize, and uncommon per-column actions such as a context menu should all be individually optional so quieter tables can reuse the same visual language without inheriting every behavior.
 
 - When a screen needs the full pill-header table pattern, prefer a shared table shell that owns the header, column resize/reorder wiring, and shared grid template. Individual pages should still own row rendering, selection, sorting semantics, and data loading unless those behaviors become meaningfully shared too.
+
+- When a pill-header table is hosted inside a modal or dialog, the dialog should own both axes of scrolling through a single outer scroll container (for example `flex: 1, min-height: 0, overflow: auto`) with the pill header pinned via `position: sticky`. A nested vertical scroll inside the table body will consume width from the grid's last column when the scrollbar appears and clip the rightmost cell. The duplicate-rows dialog on the Import / Export page is the reference implementation.
 
 - When column order or widths materially affect how a user works, that table geometry should persist through the shared per-user preference model instead of resetting every time the page or dialog opens.
 
@@ -309,25 +311,27 @@ When a profile matches, it should carry reusable import workspace state, includ
 
 The local draft must not override a matched profile. It exists only so a manual/no-profile import session can resume later if the next file is still compatible.
 
-## Ownership rules
+## Ownership and tag-driven reporting
 
-Ownership should be managed where it is most relevant:
+Ownership applies only to **accounts**. Categories and groups do not have owners; the dimensions a user wants to report by — personal/shared, essential/discretionary, business/personal, and similar — are expressed through **tags**, applied at whichever level fits:
 
-- **Accounts page:** create, assign, rename, and delete account owners
+- a tag on a **transaction** marks just that row (manually or via a rule)
 
-- **Categories page:** manage category and group ownership
+- a tag on a **leaf category** marks every transaction in that category
 
-- **General rule:** avoid duplicate ownership editors in multiple places
+- a tag on a **group** marks every transaction in any of the group's leaves
 
-Category ownership semantics differ from account ownership and should remain explicit:
+Tag attachment is additive: a transaction's effective tags are the union of its direct tags, its category's tags, and its category's parent group's tags. The dashboard "tag report" picker breaks the period down by user-selected tags, with combination wedges for transactions that match more than one selected tag and a synthetic "Other / Untagged" wedge for the rest.
 
-- **Accounts:** explicit ownership only
+Ownership-related rules:
 
-- **Category groups:** can resolve to shared ownership when more than one personal owner exists
+- **Accounts:** explicit owner per account, managed on the Accounts page.
 
-- **Child categories:** `owner\_id = NULL` means inheritance from the group
+- **Categories / groups:** no owner field. The Categories page right-hand panel surfaces a tags row for the selected category or group, with the shared inline `+ New tag` affordance for both creating and attaching tags.
 
-- **Explicit child ownership:** must not be rewritten when the group owner changes
+- **Inherited tag display:** tags inherited from a parent group render in italic without a remove `×` on the leaf's panel, since removing them at the leaf would not propagate; the user must edit the group's tags instead. On transaction rows, inherited tags use the outline tag glyph and a tooltip that names the source.
+
+- **No transaction-level override of inherited tags yet:** if a transaction needs to opt out of an inherited tag, retag at the level the inheritance comes from. A future "block inherited" mechanism (parallel to the existing `manual_state` for direct tags) can be added when an actual case calls for it.
 
 ## When to document a new pattern
 

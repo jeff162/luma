@@ -6,6 +6,7 @@ import { api } from '../lib/api.js'
 import { APP_NAME, APP_VERSION } from '../lib/appConfig.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, AppConfirmDialog } from '../components/ui.jsx'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { PASSWORD_POLICIES, passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import { SECURITY_PROFILES, getSecurityProfile } from '../lib/securityProfiles.js'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
@@ -909,7 +910,7 @@ function StickySection({ title, description, actions, children, defaultCollapsed
               {description ? <span style={{ fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.45 }}>{description}</span> : null}
             </span>
           </button>
-          {open && actions ? <div style={{ flexShrink: 0 }}>{actions}</div> : null}
+          {actions ? <div style={{ flexShrink: 0 }}>{actions}</div> : null}
         </div>
       </div>
       {open ? (
@@ -1997,6 +1998,141 @@ function TrashSection() {
   )
 }
 
+function TransactionsTrashSection() {
+  // Soft-deleted transactions follow the same pattern as trashed accounts: restoration just
+  // clears the `trashed_at` flag, emptying the trash drops the records permanently.
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [workingId, setWorkingId] = useState('')
+  const [emptying, setEmptying] = useState(false)
+  const [error, setError] = useState('')
+  const [confirmEmpty, setConfirmEmpty] = useState(false)
+
+  async function load() {
+    setLoading(true)
+    try {
+      const rows = await api.getTrashedTransactions()
+      setItems(Array.isArray(rows) ? rows : [])
+      setError('')
+    } catch (err) {
+      setError(err.message || 'Failed to load trashed transactions')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  async function restoreItem(txnId) {
+    setWorkingId(txnId)
+    setError('')
+    try {
+      await api.restoreTransaction(txnId)
+      await load()
+    } catch (err) {
+      setError(err.message || 'Failed to restore transaction')
+    } finally {
+      setWorkingId('')
+    }
+  }
+
+  async function emptyTrash() {
+    setConfirmEmpty(false)
+    setEmptying(true)
+    setError('')
+    try {
+      await api.emptyTransactionTrash()
+      await load()
+    } catch (err) {
+      setError(err.message || 'Failed to empty trash')
+    } finally {
+      setEmptying(false)
+    }
+  }
+
+  return (
+    <>
+      {confirmEmpty ? (
+        <AppConfirmDialog
+          title="Empty transaction trash?"
+          description="This permanently removes every trashed transaction. Restored history will not be recoverable afterward."
+          confirmLabel="Empty trash"
+          confirmVariant="danger"
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={emptyTrash}
+          onCancel={() => setConfirmEmpty(false)}
+          width="min(620px, 100%)"
+        />
+      ) : null}
+
+      <Card style={{ display: 'grid', gap: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, maxWidth: 620 }}>
+            Transactions you've sent to the trash live here until you restore them or empty the trash.
+          </div>
+          <Button
+            small
+            variant="ghost"
+            onClick={() => setConfirmEmpty(true)}
+            disabled={emptying || loading || items.length === 0}
+          >
+            {emptying ? 'Emptying…' : 'Empty trash'}
+          </Button>
+        </div>
+
+        {loading ? <Spinner /> : items.length === 0 ? (
+          <EmptyState message="No transactions in trash." />
+        ) : (
+          <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+            {items.map((item, index) => {
+              const merchant = item.display_name || item.merchant_name || item.raw_name || '—'
+              const account = item.account_display_name || item.account_name || '—'
+              const amount = Number(item.amount) || 0
+              return (
+                <div
+                  key={item.id}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1fr) auto auto',
+                    gap: 16,
+                    alignItems: 'center',
+                    padding: '10px 14px',
+                    borderTop: index === 0 ? 'none' : '1px solid var(--border)',
+                    background: 'var(--surface2)',
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {merchant}
+                    </div>
+                    <div style={{ marginTop: 2, fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+                      {item.date} · {account}{item.category_name ? ` · ${item.category_name}` : ''} · Trashed {item.trashed_at || 'recently'}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: amount < 0 ? 'var(--success)' : 'var(--text)', whiteSpace: 'nowrap' }}>
+                    {amount < 0 ? '+' : ''}{amount.toFixed(2)}
+                  </div>
+                  <Button
+                    small
+                    onClick={() => restoreItem(item.id)}
+                    disabled={workingId === item.id || emptying}
+                  >
+                    {workingId === item.id ? 'Restoring…' : 'Restore'}
+                  </Button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {error ? (
+          <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div>
+        ) : null}
+      </Card>
+    </>
+  )
+}
+
 function AboutRow({ label, value, help = '' }) {
   return (
     <div style={{ display: 'grid', gap: 4 }}>
@@ -2220,6 +2356,7 @@ export default function Settings() {
           <StickySection
             title="Transaction tags"
             description="Create the lightweight labels that show on transaction rows and can be applied by rules."
+            actions={<FeatureExplainer topic="tags" placement="bottom-left" />}
             scrollContainerRef={settingsScrollRef}
             {...bindSection('transactionTags')}
           >
@@ -2228,11 +2365,24 @@ export default function Settings() {
 
           <StickySection
             title="Trash"
-            description="Restore merged child accounts before you permanently remove them."
+            description="Restore merged child accounts or trashed transactions before you permanently remove them."
             scrollContainerRef={settingsScrollRef}
             {...bindSection('trash')}
           >
-            <TrashSection />
+            <div style={{ display: 'grid', gap: 18 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
+                  Accounts
+                </div>
+                <TrashSection />
+              </div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
+                  Transactions
+                </div>
+                <TransactionsTrashSection />
+              </div>
+            </div>
           </StickySection>
 
           <StickySection

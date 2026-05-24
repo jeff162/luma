@@ -458,19 +458,22 @@ export function DialogActions({ children, align = 'end', style, background = 'va
   )
 }
 
-export function PageHeader({ title, children }) {
+export function PageHeader({ title, children, leftAdornment }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       marginBottom: 24,
     }}>
-      <h1 style={{ fontSize: 22, fontWeight: 600 }}>{title}</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 600 }}>{title}</h1>
+        {leftAdornment}
+      </div>
       <div style={{ display: 'flex', gap: 8 }}>{children}</div>
     </div>
   )
 }
 
-export function Button({ children, onClick, variant = 'primary', small, disabled, style, title }) {
+export function Button({ children, onClick, onMouseDown, variant = 'primary', small, disabled, style, title }) {
   const base = {
     padding: small ? '6px 12px' : '9px 16px',
     borderRadius: 8, border: 'none', cursor: disabled ? 'not-allowed' : 'pointer',
@@ -490,6 +493,7 @@ export function Button({ children, onClick, variant = 'primary', small, disabled
   return (
     <button
       onClick={disabled ? undefined : onClick}
+      onMouseDown={disabled ? undefined : onMouseDown}
       style={{ ...base, ...variants[variant] }}
       title={title}
     >

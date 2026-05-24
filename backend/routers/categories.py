@@ -253,8 +253,13 @@ def list_categories():
                 name
             """
         ).fetchall()
+        tag_rows = conn.execute("SELECT category_id, tag_id FROM category_tag").fetchall()
 
-    cats = [dict(r) for r in rows]
+    tag_map: dict[str, list[str]] = {}
+    for row in tag_rows:
+        tag_map.setdefault(row["category_id"], []).append(row["tag_id"])
+
+    cats = [{**dict(r), "tag_ids": tag_map.get(r["id"], [])} for r in rows]
     by_id = {c["id"]: {**c, "children": []} for c in cats}
 
     roots = []
@@ -276,7 +281,6 @@ def list_categories_flat():
                 id,
                 parent_id,
                 name,
-                owner_id,
                 system_key,
                 COALESCE(category_type, CASE WHEN parent_id IS NULL THEN 'expense' END) AS category_type,
                 sort_order,
@@ -292,7 +296,11 @@ def list_categories_flat():
                 name
             """
         ).fetchall()
-    return [dict(r) for r in rows]
+        tag_rows = conn.execute("SELECT category_id, tag_id FROM category_tag").fetchall()
+    tag_map: dict[str, list[str]] = {}
+    for row in tag_rows:
+        tag_map.setdefault(row["category_id"], []).append(row["tag_id"])
+    return [{**dict(r), "tag_ids": tag_map.get(r["id"], [])} for r in rows]
 
 
 @router.get("/usage-summary")
@@ -536,10 +544,8 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
 class CategoryUpdate(BaseModel):
     name:                 Optional[str] = None
     parent_id:            Optional[str] = None
-    owner_id:             Optional[str] = None
     category_type:        Optional[str] = None
     sort_order:           Optional[int] = None
-    clear_owner:          bool = False
     exclude_from_totals:  Optional[int] = None
 
 
@@ -559,11 +565,9 @@ def update_category(category_id: str, body: CategoryUpdate):
         fields, params = [], []
         if body.name                is not None: fields.append("name = ?");                 params.append(_ensure_category_name_is_unique(conn, body.name, exclude_id=category_id))
         if body.parent_id           is not None: fields.append("parent_id = ?");            params.append(body.parent_id)
-        if body.owner_id            is not None: fields.append("owner_id = ?");             params.append(body.owner_id)
         if body.category_type       is not None: fields.append("category_type = ?");        params.append(body.category_type)
         if body.sort_order          is not None: fields.append("sort_order = ?");           params.append(body.sort_order)
         if body.exclude_from_totals is not None: fields.append("exclude_from_totals = ?");  params.append(body.exclude_from_totals)
-        if body.clear_owner:                     fields.append("owner_id = NULL")
         if fields:
             params.append(category_id)
             conn.execute(f"UPDATE category SET {', '.join(fields)} WHERE id = ?", params)
@@ -576,4 +580,56 @@ def ungroup_category(category_id: str):
         conn.execute(
             "UPDATE category SET parent_id = NULL WHERE id = ?", (category_id,)
         )
+    return {"ok": True}
+
+
+# Category tag attachments. Tags applied to a category propagate additively to
+# every transaction in that category, and (if applied to a group) to every
+# transaction in any of the group's leaf categories. The list returned mirrors
+# the tag shape used by transactions so the same tag pill UI can render it.
+class CategoryTagsUpdate(BaseModel):
+    tag_ids: list[str]
+
+
+@router.get("/{category_id}/tags")
+def list_category_tags(category_id: str):
+    with get_db() as conn:
+        cat = conn.execute("SELECT id FROM category WHERE id = ?", (category_id,)).fetchone()
+        if not cat:
+            raise HTTPException(status_code=404, detail="Not found")
+        rows = conn.execute(
+            """
+            SELECT g.id, g.name, g.color
+            FROM category_tag ct
+            JOIN tag g ON g.id = ct.tag_id
+            WHERE ct.category_id = ?
+            ORDER BY g.sort_order, LOWER(g.name), g.name, g.id
+            """,
+            (category_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@router.put("/{category_id}/tags")
+def set_category_tags(category_id: str, body: CategoryTagsUpdate):
+    cleaned = [str(tag_id).strip() for tag_id in body.tag_ids if tag_id and str(tag_id).strip()]
+    with get_db() as conn:
+        cat = conn.execute("SELECT id FROM category WHERE id = ?", (category_id,)).fetchone()
+        if not cat:
+            raise HTTPException(status_code=404, detail="Not found")
+        if cleaned:
+            placeholders = ",".join("?" * len(cleaned))
+            valid_rows = conn.execute(
+                f"SELECT id FROM tag WHERE id IN ({placeholders})",
+                cleaned,
+            ).fetchall()
+            valid_ids = {row["id"] for row in valid_rows}
+        else:
+            valid_ids = set()
+        conn.execute("DELETE FROM category_tag WHERE category_id = ?", (category_id,))
+        for tag_id in valid_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO category_tag (category_id, tag_id) VALUES (?, ?)",
+                (category_id, tag_id),
+            )
     return {"ok": True}

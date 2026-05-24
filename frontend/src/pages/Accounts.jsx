@@ -204,6 +204,34 @@ function reconcileAccountOrder(previousRows, nextRows) {
   return orderedRows
 }
 
+function OwnerFilterPill({ label, count, active, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '6px 12px',
+        borderRadius: 999,
+        border: `1px solid ${active ? 'color-mix(in srgb, var(--accent) 60%, var(--border))' : 'var(--border)'}`,
+        background: active
+          ? 'color-mix(in srgb, var(--accent) 14%, var(--surface2))'
+          : 'var(--surface2)',
+        color: active ? 'var(--accent2)' : 'var(--muted)',
+        fontSize: 12,
+        fontWeight: 600,
+        cursor: 'pointer',
+        boxShadow: active ? '0 6px 14px rgba(15, 23, 42, 0.10)' : 'none',
+      }}
+    >
+      <span>{count}</span>
+      <span style={{ fontWeight: 500 }}>{label}</span>
+    </button>
+  )
+}
+
 function SectionCard({ title, summary = '', headerCenter = null, expanded, onExpandedChange, disabled = false, width, children, style }) {
   return (
     <Card style={{
@@ -1506,6 +1534,8 @@ export default function Accounts() {
   const [movingAccountId, setMovingAccountId] = useState(null)
   const [collapsedGroups, setCollapsedGroups] = useState(new Set()) // Set of parent account IDs
   const [collapsedGroupsLoaded, setCollapsedGroupsLoaded] = useState(false)
+  // null = no owner filter (show all); empty string = unassigned-only; otherwise the selected owner_id.
+  const [ownerFilter, setOwnerFilter] = useState(null)
   const dragTooltipTimerRef = useRef(null)
   const listRef = useRef(null)
   const accountsPanelRef = useRef(null)
@@ -2124,6 +2154,29 @@ export default function Accounts() {
     map.set(account.parent_account_id, list)
     return map
   }, new Map())
+
+  const accountCountsByOwnerId = rootAccounts.reduce((counts, account) => {
+    const id = account.owner_id || ''
+    counts.set(id, (counts.get(id) || 0) + 1)
+    return counts
+  }, new Map())
+  const ownerFilterPills = [
+    ...owners
+      .filter(owner => accountCountsByOwnerId.has(owner.id))
+      .map(owner => ({
+        id: owner.id,
+        name: owner.name || (isSharedOwner(owner) ? 'Shared' : 'Owner'),
+        count: accountCountsByOwnerId.get(owner.id),
+      })),
+    ...(accountCountsByOwnerId.has('')
+      ? [{ id: '', name: 'Unassigned', count: accountCountsByOwnerId.get('') }]
+      : []),
+  ]
+  // Only worth offering pills once there's more than one bucket to choose between.
+  const showOwnerFilterRow = ownerFilterPills.length > 1
+  const displayRootAccounts = ownerFilter !== null
+    ? orderedRootAccounts.filter(account => (account.owner_id || '') === ownerFilter)
+    : orderedRootAccounts
   const draggingAccount = draggingAccountId ? activeAccounts.find(account => account.id === draggingAccountId) : null
   const detachDropActive = dropIntent?.kind === 'detach' && !!draggingAccount?.parent_account_id
 
@@ -2241,12 +2294,34 @@ export default function Accounts() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            marginBottom: 18,
+            marginBottom: showOwnerFilterRow ? 12 : 18,
             width: 'fit-content',
             maxWidth: '100%',
           }}>
             <h1 style={{ fontSize: 22, fontWeight: 600 }}>Accounts</h1>
           </div>
+          {showOwnerFilterRow ? (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+              marginBottom: 18,
+            }}>
+              <OwnerFilterPill
+                label="All"
+                count={rootAccounts.length}
+                active={ownerFilter === null}
+                onClick={() => setOwnerFilter(null)}
+              />
+              {ownerFilterPills.map(pill => (
+                <OwnerFilterPill
+                  key={pill.id || '__unassigned__'}
+                  label={pill.name}
+                  count={pill.count}
+                  active={ownerFilter === pill.id}
+                  onClick={() => setOwnerFilter(prev => prev === pill.id ? null : pill.id)}
+                />
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
@@ -2318,6 +2393,10 @@ export default function Accounts() {
                   {rootAccounts.length === 0 && !showCreateAccount ? (
                     <div style={{ padding: '12px 16px 14px', fontSize: 14, color: 'var(--muted)', lineHeight: 1.4 }}>
                       No accounts yet.
+                    </div>
+                  ) : displayRootAccounts.length === 0 && !showCreateAccount ? (
+                    <div style={{ padding: '12px 16px 14px', fontSize: 14, color: 'var(--muted)', lineHeight: 1.4 }}>
+                      No accounts match this owner filter.
                     </div>
                   ) : (
                     <>
@@ -2449,7 +2528,7 @@ export default function Accounts() {
                             </button>
                           </div>
                         )}
-                        {orderedRootAccounts.map(root => {
+                        {displayRootAccounts.map(root => {
                           const children = childAccountsByParent.get(root.id) || []
                           const isCollapsed = collapsedGroups.has(root.id)
                           const rootDragDisabled = !!movingAccountId

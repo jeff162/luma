@@ -188,8 +188,8 @@ class ImportUncategorizedPlaceholderTests(unittest.IsolatedAsyncioTestCase):
                 txn_id = str(uuid.uuid4())
                 conn.execute(
                     """
-                    INSERT INTO category (id, parent_id, name, category_type, sort_order, exclude_from_totals, owner_id, system_key, import_source_batch_id)
-                    VALUES (?, ?, ?, NULL, 0, 0, NULL, NULL, NULL)
+                    INSERT INTO category (id, parent_id, name, category_type, sort_order, exclude_from_totals, system_key, import_source_batch_id)
+                    VALUES (?, ?, ?, NULL, 0, 0, NULL, NULL)
                     """,
                     (category_id, unassigned_group["id"], "Uncategorized"),
                 )

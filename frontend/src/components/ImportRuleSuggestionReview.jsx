@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { api } from '../lib/api.js'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { formatTransactionAmount, getTransactionAmountColor } from '../lib/moneyDisplay.js'
 import { Button, Spinner } from './ui.jsx'
@@ -391,7 +392,7 @@ function ConflictSetModal({ sections, onClose, renderSuggestionCard }) {
   )
 }
 
-function MatchingTransactionsModal({ state, categories, onClose }) {
+function MatchingTransactionsModal({ state, categories, onClose, onKeepCategory }) {
   if (!state?.open) return null
 
   const summaryParts = []
@@ -620,6 +621,23 @@ function MatchingTransactionsModal({ state, categories, onClose }) {
                           emptyLabel="Unresolved"
                           emptyFontSize={12}
                         />
+                        {row.category_source === 'manual' ? (
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            padding: '2px 7px',
+                            borderRadius: 999,
+                            fontSize: 10.5,
+                            fontWeight: 600,
+                            color: 'color-mix(in srgb, var(--accent2) 70%, var(--text))',
+                            background: 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
+                            border: '1px solid color-mix(in srgb, var(--accent2) 24%, var(--border))',
+                            whiteSpace: 'nowrap',
+                          }}>
+                            manual override
+                          </span>
+                        ) : null}
                         {row.conflicts_with_reference ? (
                           <span style={{
                             display: 'inline-flex',
@@ -636,6 +654,30 @@ function MatchingTransactionsModal({ state, categories, onClose }) {
                           }}>
                             conflicting rule
                           </span>
+                        ) : null}
+                        {row.target_category_id && row.category_source !== 'manual' && row.conflicts_with_reference ? (
+                          <button
+                            type="button"
+                            onClick={() => onKeepCategory?.(row)}
+                            disabled={row.keeping}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              fontSize: 10.5,
+                              fontWeight: 600,
+                              color: 'var(--text)',
+                              background: 'color-mix(in srgb, var(--surface2) 82%, white 4%)',
+                              border: '1px solid color-mix(in srgb, var(--border) 84%, white 8%)',
+                              cursor: row.keeping ? 'wait' : 'pointer',
+                              opacity: row.keeping ? 0.7 : 1,
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {row.keeping ? 'Keeping…' : 'Preserve This Categorization'}
+                          </button>
                         ) : null}
                       </div>
                       <div style={{ textAlign: 'right' }}>
@@ -1097,6 +1139,7 @@ export default function ImportRuleSuggestionReview({
   owners,
   accounts,
   onCategoriesChanged,
+  onReloadSuggestions,
 }) {
   const rootRef = useRef(null)
   const { getPreference, hasPreference, setPreference } = useUserPreferences()
@@ -1129,7 +1172,10 @@ export default function ImportRuleSuggestionReview({
     error: '',
     merchantLabel: '',
     keyword: '',
+    referenceTargetCategoryId: null,
+    ownerId: null,
     ownerName: '',
+    accountId: null,
     accountName: '',
     amountMin: null,
     amountMax: null,
@@ -1583,9 +1629,19 @@ export default function ImportRuleSuggestionReview({
     setSuggestionMenu(null)
     setBulkMenu(null)
     setBulkMode(true)
-    setSelectedSuggestionIds(
-      initialSuggestion ? [getSuggestionKey(initialSuggestion.id)] : [],
-    )
+    if (!initialSuggestion) {
+      setSelectedSuggestionIds([])
+      return
+    }
+    const suggestionKey = getSuggestionKey(initialSuggestion.id)
+    const conflictGroupIds = initialSuggestion.conflict_group_id
+      ? (visibleConflictGroupMembers.get(initialSuggestion.conflict_group_id) || []).map(getSuggestionKey)
+      : []
+    if (conflictGroupIds.length > 1 && conflictGroupIds[0] === suggestionKey) {
+      setSelectedSuggestionIds(conflictGroupIds)
+      return
+    }
+    setSelectedSuggestionIds([suggestionKey])
   }
 
   function getResolvedSuggestion(suggestion) {
@@ -1617,16 +1673,41 @@ export default function ImportRuleSuggestionReview({
     }
   }
 
+  function getConflictReferenceSuggestion(suggestion) {
+    if (!suggestion?.conflict_group_id) return getResolvedSuggestion(suggestion)
+    const siblings = suggestions
+      .filter(candidate => candidate.conflict_group_id === suggestion.conflict_group_id)
+      .map(getResolvedSuggestion)
+    if (!siblings.length) return getResolvedSuggestion(suggestion)
+
+    const ranked = [...siblings].sort((left, right) => {
+      if ((right.txn_count || 0) !== (left.txn_count || 0)) {
+        return (right.txn_count || 0) - (left.txn_count || 0)
+      }
+      const leftFilterCount = Number(Boolean(left.owner_id)) + Number(Boolean(left.account_id)) + Number(left.amount_min != null || left.amount_max != null)
+      const rightFilterCount = Number(Boolean(right.owner_id)) + Number(Boolean(right.account_id)) + Number(right.amount_min != null || right.amount_max != null)
+      if (leftFilterCount !== rightFilterCount) {
+        return leftFilterCount - rightFilterCount
+      }
+      return String(left.target_category_name || '').localeCompare(String(right.target_category_name || ''), undefined, { sensitivity: 'base' })
+    })
+    return ranked[0]
+  }
+
   async function openMatchingTransactionsViewer(suggestion) {
     if (!onLoadSuggestionMatches) return
     const resolvedSuggestion = getResolvedSuggestion(suggestion)
+    const referenceSuggestion = getConflictReferenceSuggestion(suggestion)
     setMatchViewerState({
       open: true,
       loading: true,
       error: '',
       merchantLabel: resolvedSuggestion.merchant_label,
       keyword: resolvedSuggestion.keyword,
+      referenceTargetCategoryId: referenceSuggestion.target_category_id || null,
+      ownerId: resolvedSuggestion.owner_id || null,
       ownerName: resolvedSuggestion.owner_name || '',
+      accountId: resolvedSuggestion.account_id || null,
       accountName: resolvedSuggestion.account_name || '',
       amountMin: resolvedSuggestion.amount_min,
       amountMax: resolvedSuggestion.amount_max,
@@ -1636,7 +1717,7 @@ export default function ImportRuleSuggestionReview({
     try {
       const result = await onLoadSuggestionMatches({
         keyword: resolvedSuggestion.keyword,
-        reference_target_category_id: resolvedSuggestion.target_category_id || null,
+        reference_target_category_id: referenceSuggestion.target_category_id || null,
         owner_id: resolvedSuggestion.owner_id || null,
         account_id: resolvedSuggestion.account_id || null,
         amount_min: resolvedSuggestion.amount_min,
@@ -1653,6 +1734,43 @@ export default function ImportRuleSuggestionReview({
         ...prev,
         loading: false,
         error: err.message || 'Unable to load matching imported rows.',
+      }))
+    }
+  }
+
+  async function keepMatchingTransactionCategory(row) {
+    if (!row?.id || !row?.target_category_id) return
+    setMatchViewerState(prev => ({
+      ...prev,
+      rows: prev.rows.map(current => (
+        current.id === row.id ? { ...current, keeping: true } : current
+      )),
+    }))
+    try {
+      await api.overrideCategory(row.id, row.target_category_id)
+      await onReloadSuggestions?.()
+      const result = await onLoadSuggestionMatches?.({
+        keyword: matchViewerState.keyword,
+        reference_target_category_id: matchViewerState.referenceTargetCategoryId,
+        owner_id: matchViewerState.ownerId,
+        account_id: matchViewerState.accountId,
+        amount_min: matchViewerState.amountMin,
+        amount_max: matchViewerState.amountMax,
+      })
+      setMatchViewerState(prev => ({
+        ...prev,
+        loading: false,
+        error: '',
+        count: result?.count || 0,
+        rows: result?.transactions || [],
+      }))
+    } catch (err) {
+      setMatchViewerState(prev => ({
+        ...prev,
+        error: err.message || 'Unable to keep this category.',
+        rows: prev.rows.map(current => (
+          current.id === row.id ? { ...current, keeping: false } : current
+        )),
       }))
     }
   }
@@ -2850,6 +2968,7 @@ export default function ImportRuleSuggestionReview({
       <MatchingTransactionsModal
         state={matchViewerState}
         categories={categories}
+        onKeepCategory={keepMatchingTransactionCategory}
         onClose={() => setMatchViewerState(prev => ({ ...prev, open: false }))}
       />
 

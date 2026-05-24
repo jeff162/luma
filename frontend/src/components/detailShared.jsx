@@ -13,10 +13,16 @@ import {
   ResponsiveContainer, Cell, LabelList,
 } from 'recharts'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
+import { formatSignedAxisTick, formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground } from './ui.jsx'
 
 export const DETAIL_PAGE_SIZE = 100
-export const DETAIL_PANEL_WIDTH = 'min(820px, calc(100vw - 32px))'
+// Default panel width fits the full transaction-table column set (date, merchant,
+// category, account, amount) plus chrome and a vertical scrollbar gutter without
+// clipping the rightmost column on a typical desktop window.
+export const DETAIL_PANEL_WIDTH = 'min(960px, calc(100vw - 32px))'
+export const DETAIL_PANEL_MIN_WIDTH = 480
+export const DETAIL_PANEL_MIN_HEIGHT = 320
 export const DETAIL_LIST_MAX_HEIGHT = 312
 export const DETAIL_MONTH_SECTION_MIN_HEIGHT = 420
 export const DETAIL_WINDOW_MONTHS = 18
@@ -75,10 +81,23 @@ export function useDetailPanelChrome(onClose, options = {}) {
     initialPosition = null,
   } = options
   const [pos, setPos] = useState(null)
+  const [size, setSize] = useState(null)
   const [dragging, setDragging] = useState(false)
+  const [resizing, setResizing] = useState(false)
   const panelRef = useRef(null)
   const dragOffset = useRef({ x: 0, y: 0 })
+  const resizeStart = useRef({ x: 0, y: 0, width: 0, height: 0 })
   const hasDragged = useRef(false)
+
+  function clampSize(next) {
+    if (!next) return null
+    const maxWidth = Math.max(DETAIL_PANEL_MIN_WIDTH, window.innerWidth - DETAIL_FLOATING_EDGE_GUTTER * 2)
+    const maxHeight = Math.max(DETAIL_PANEL_MIN_HEIGHT, window.innerHeight - DETAIL_FLOATING_TOP_GUTTER - DETAIL_FLOATING_EDGE_GUTTER)
+    return {
+      width: Math.max(DETAIL_PANEL_MIN_WIDTH, Math.min(maxWidth, next.width)),
+      height: Math.max(DETAIL_PANEL_MIN_HEIGHT, Math.min(maxHeight, next.height)),
+    }
+  }
 
   function onDragStart(e) {
     if (!panelRef.current) return
@@ -90,6 +109,20 @@ export function useDetailPanelChrome(onClose, options = {}) {
     hasDragged.current = false
     setDragging(true)
     e.preventDefault()
+  }
+
+  // Resize converts the panel into floating mode (matching drag) so size and
+  // position stay coherent: once the user has explicitly sized a panel, it
+  // should stick at that geometry regardless of where it was originally docked.
+  function onResizeStart(e) {
+    if (!panelRef.current) return
+    const rect = panelRef.current.getBoundingClientRect()
+    resizeStart.current = { x: e.clientX, y: e.clientY, width: rect.width, height: rect.height }
+    if (!size) setSize({ width: rect.width, height: rect.height })
+    if (!pos) setPos({ x: rect.left, y: rect.top })
+    setResizing(true)
+    e.preventDefault()
+    e.stopPropagation()
   }
 
   useEffect(() => {
@@ -134,8 +167,28 @@ export function useDetailPanelChrome(onClose, options = {}) {
   }, [dragging, pos])
 
   useEffect(() => {
+    if (!resizing) return
+    function onMove(e) {
+      const { x, y, width, height } = resizeStart.current
+      const next = clampSize({
+        width: width + (e.clientX - x),
+        height: height + (e.clientY - y),
+      })
+      setSize(next)
+    }
+    function onUp() { setResizing(false) }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [resizing])
+
+  useEffect(() => {
     function handleResize() {
       setPos(prev => clampPanelPosition(prev, panelRef.current?.getBoundingClientRect()))
+      setSize(prev => clampSize(prev))
     }
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
@@ -153,7 +206,7 @@ export function useDetailPanelChrome(onClose, options = {}) {
     return () => observer.disconnect()
   }, [panelRef])
 
-  return { pos, dragging, panelRef, onDragStart }
+  return { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart }
 }
 
 export function usePagedMonthTransactions({ selectedMonth, loadPage }) {
@@ -305,7 +358,7 @@ function CustomTooltip({ active, payload, label }) {
       borderRadius: 8, padding: '8px 12px', fontSize: 13,
     }}>
       <div style={{ color: 'var(--muted)', marginBottom: 2 }}>{monthLabel(label)}</div>
-      <div style={{ fontWeight: 600 }}>{formatCurrency(payload[0].value)}</div>
+      <div style={{ fontWeight: 600 }}>{formatSignedMoneyAmount(payload[0].value)}</div>
       <div style={{ fontSize: 11, color: 'var(--muted)' }}>{payload[0].payload.count} txns</div>
     </div>
   )
@@ -389,7 +442,7 @@ export function DetailTrendChart({ trend, selectedMonth, onSelectMonth }) {
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
             <XAxis dataKey="month" tick={<YearTick data={visible} />} tickLine={false} axisLine={false} height={30} interval={0} minTickGap={0} />
             <YAxis
-              tickFormatter={v => `$${v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v}`}
+              tickFormatter={formatSignedAxisTick}
               tick={{ fill: 'var(--muted)', fontSize: 10 }}
               axisLine={false}
               tickLine={false}
@@ -466,11 +519,24 @@ export function DetailTrendChart({ trend, selectedMonth, onSelectMonth }) {
   )
 }
 
-export function DetailPanelShell({ pos, dragging, panelRef, onDragStart, onClose, header, children, isTopmost = true }) {
+export function DetailPanelShell({
+  pos,
+  size,
+  dragging,
+  resizing = false,
+  panelRef,
+  onDragStart,
+  onResizeStart,
+  onClose,
+  header,
+  children,
+  isTopmost = true,
+}) {
   const panelSurfaceStyle = getFloatingPanelSurfaceStyle({
     active: !pos || isTopmost,
     radius: 12,
   })
+  const explicitSized = Boolean(size)
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 400,
@@ -487,15 +553,18 @@ export function DetailPanelShell({ pos, dragging, panelRef, onDragStart, onClose
           position: pos ? 'fixed' : 'relative',
           left: pos ? pos.x : undefined,
           top: pos ? pos.y : undefined,
-          width: DETAIL_PANEL_WIDTH,
-          maxWidth: DETAIL_PANEL_WIDTH,
-          maxHeight: pos
-            ? `calc(100vh - ${DETAIL_FLOATING_TOP_GUTTER + DETAIL_FLOATING_EDGE_GUTTER}px)`
-            : '85vh',
+          width: explicitSized ? size.width : DETAIL_PANEL_WIDTH,
+          maxWidth: explicitSized ? undefined : DETAIL_PANEL_WIDTH,
+          height: explicitSized ? size.height : undefined,
+          maxHeight: explicitSized
+            ? undefined
+            : (pos
+              ? `calc(100vh - ${DETAIL_FLOATING_TOP_GUTTER + DETAIL_FLOATING_EDGE_GUTTER}px)`
+              : '85vh'),
           display: 'flex',
           flexDirection: 'column',
           pointerEvents: 'auto',
-          userSelect: dragging ? 'none' : 'auto',
+          userSelect: dragging || resizing ? 'none' : 'auto',
           zIndex: 401,
           ...panelSurfaceStyle,
         }}
@@ -522,6 +591,28 @@ export function DetailPanelShell({ pos, dragging, panelRef, onDragStart, onClose
         <div style={{ flex: 1, overflow: 'hidden', padding: '20px 24px', display: 'flex', flexDirection: 'column' }}>
           {children}
         </div>
+        {onResizeStart && (
+          <div
+            onMouseDown={onResizeStart}
+            title="Drag to resize"
+            style={{
+              position: 'absolute',
+              right: 0, bottom: 0,
+              width: 18, height: 18,
+              cursor: 'nwse-resize',
+              touchAction: 'none',
+            }}
+          >
+            <div style={{
+              position: 'absolute',
+              right: 4, bottom: 4,
+              width: 9, height: 9,
+              borderRight: '2px solid var(--muted)',
+              borderBottom: '2px solid var(--muted)',
+              opacity: 0.55,
+            }} />
+          </div>
+        )}
       </div>
     </div>
   )

@@ -29,7 +29,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
   const { filters } = useFilters()
   const dateStart = filters.date?.start || null
   const dateEnd   = filters.date?.end   || null
-  const { pos, dragging, panelRef, onDragStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex, initialPosition })
+  const { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex, initialPosition })
   const [trend, setTrend]           = useState([])
   const [selectedMonth, setSelectedMonth] = useState(null)
   const [trendLoading, setTrendLoading] = useState(true)
@@ -74,7 +74,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
 
   useEffect(() => {
     setTrendLoading(true)
-    api.getMonthlyTrend(60, undefined, String(account.id), dateStart, dateEnd).then(rows => {
+    api.getMonthlyTrend(60, undefined, String(account.id), dateStart, dateEnd, undefined, 'spending').then(rows => {
       setTrend(rows)
       setTrendLoading(false)
       if (rows.length > 0) setSelectedMonth(rows[rows.length - 1].month)
@@ -98,9 +98,12 @@ export default function AccountDetail({ account, categories = [], onClose, force
   return (
     <DetailPanelShell
       pos={pos}
+      size={size}
       dragging={dragging}
+      resizing={resizing}
       panelRef={panelRef}
       onDragStart={onDragStart}
+      onResizeStart={onResizeStart}
       onClose={onClose}
       header={header}
       isTopmost={isTopmost}

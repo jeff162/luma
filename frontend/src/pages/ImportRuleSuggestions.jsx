@@ -34,11 +34,38 @@ function buildReviewSummary(suggestions) {
   }
 }
 
+function normalizeRuleKeyword(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
+  if (!normalized) return ''
+  const tokens = normalized.split(' ')
+  while (tokens.length > 1) {
+    const compact = tokens[tokens.length - 1].replace(/[^a-z0-9]/g, '')
+    if (/^\d{4,}$/.test(compact)) {
+      tokens.pop()
+      continue
+    }
+    break
+  }
+  const sanitized = tokens.join(' ').trim()
+  return /^\d+$/.test(sanitized.replace(/[^a-z0-9]/g, '')) ? '' : sanitized
+}
+
+function ruleSuggestionRangeCovers(coveringMin, coveringMax, coveredMin, coveredMax) {
+  if (coveringMin != null && (coveredMin == null || coveringMin > coveredMin)) return false
+  if (coveringMax != null && (coveredMax == null || coveringMax < coveredMax)) return false
+  return true
+}
+
 export default function ImportRuleSuggestions() {
   const { batchId, profileId } = useParams()
   const navigate = useNavigate()
   const isProfileContext = !!profileId
   const isSystemContext = !batchId && !profileId
+  const contextKey = isSystemContext
+    ? 'system'
+    : isProfileContext
+    ? `profile:${profileId}`
+    : `batch:${batchId}`
   const [owners, setOwners] = useState([])
   const [accounts, setAccounts] = useState([])
   const [categories, setCategories] = useState([])
@@ -46,6 +73,7 @@ export default function ImportRuleSuggestions() {
   const [profiles, setProfiles] = useState([])
   const [loadingBatchContext, setLoadingBatchContext] = useState(true)
   const [batchContextError, setBatchContextError] = useState('')
+  const [initialSuggestionLoadComplete, setInitialSuggestionLoadComplete] = useState(false)
   const [ruleSuggestionState, setRuleSuggestionState] = useState({
     loading: false,
     error: '',
@@ -136,6 +164,10 @@ export default function ImportRuleSuggestions() {
   }
 
   useEffect(() => {
+    setInitialSuggestionLoadComplete(false)
+  }, [contextKey])
+
+  useEffect(() => {
     let cancelled = false
     async function loadRuleSuggestions() {
       setRuleSuggestionState(prev => ({ ...prev, loading: true, error: '' }))
@@ -152,6 +184,7 @@ export default function ImportRuleSuggestions() {
           review_summary: result.review_summary || null,
           generated_at: result.generated_at || null,
         })
+        setInitialSuggestionLoadComplete(true)
       } catch (err) {
         if (cancelled) return
         setRuleSuggestionState({
@@ -164,6 +197,7 @@ export default function ImportRuleSuggestions() {
           review_summary: null,
           generated_at: null,
         })
+        setInitialSuggestionLoadComplete(true)
       }
     }
 
@@ -247,6 +281,47 @@ export default function ImportRuleSuggestions() {
     return categories.find(category => String(category.id) === String(categoryId))?.name || null
   }
 
+  function getCoveredSuggestionIds(sourceSuggestion, data) {
+    const coveringKeyword = normalizeRuleKeyword(data.keyword)
+    if (!coveringKeyword) return []
+
+    const coveringCategoryId = String(data.category_id || '').trim()
+    const coveringCategoryName = String(getCategoryName(data.category_id) || sourceSuggestion.target_category_name || '').trim().toLowerCase()
+    const coveringOwnerId = String(data.owner_id || '').trim()
+    const coveringAccountId = String(data.account_id || '').trim()
+
+    return ruleSuggestionState.suggestions
+      .filter(otherSuggestion => {
+        if (otherSuggestion.id === sourceSuggestion.id) return false
+        if (otherSuggestion.review_status === 'accepted' || otherSuggestion.review_status === 'discarded') return false
+
+        const otherKeyword = normalizeRuleKeyword(otherSuggestion.keyword)
+        if (!otherKeyword || otherKeyword === coveringKeyword || !otherKeyword.includes(coveringKeyword)) return false
+
+        const otherCategoryId = String(otherSuggestion.target_category_id || '').trim()
+        const otherCategoryName = String(otherSuggestion.target_category_name || '').trim().toLowerCase()
+        if (coveringCategoryId && otherCategoryId) {
+          if (coveringCategoryId !== otherCategoryId) return false
+        } else if (coveringCategoryName !== otherCategoryName) {
+          return false
+        }
+
+        const otherOwnerId = String(otherSuggestion.owner_id || '').trim()
+        if (coveringOwnerId && coveringOwnerId !== otherOwnerId) return false
+
+        const otherAccountId = String(otherSuggestion.account_id || '').trim()
+        if (coveringAccountId && coveringAccountId !== otherAccountId) return false
+
+        return ruleSuggestionRangeCovers(
+          data.amount_min,
+          data.amount_max,
+          otherSuggestion.amount_min,
+          otherSuggestion.amount_max,
+        )
+      })
+      .map(suggestion => suggestion.id)
+  }
+
   async function setSuggestionStatus(suggestion, status) {
     setEditingSuggestionId(null)
     pushUndo([suggestion.id])
@@ -298,41 +373,33 @@ export default function ImportRuleSuggestions() {
 
   async function saveSuggestion(suggestion, data) {
     const { applyToExisting, ...ruleData } = data
-    pushUndo([suggestion.id])
+    const coveredSuggestionIds = getCoveredSuggestionIds(suggestion, data)
+    pushUndo([suggestion.id, ...coveredSuggestionIds])
     const createdRule = await api.createRule(ruleData)
-    const result = await updateSuggestionReviewForContext({
+    await updateSuggestionReviewForContext({
       suggestion_id: suggestion.id,
       status: 'accepted',
       rule_id: createdRule?.id || null,
       merchant_label: suggestion.merchant_label,
-      target_category_name: suggestion.target_category_name,
-      keyword: suggestion.keyword,
+      target_category_name: data.category_id ? getCategoryName(data.category_id) : suggestion.target_category_name,
+      target_category_id: data.category_id || null,
+      keyword: data.keyword,
+      owner_id: data.owner_id || null,
+      account_id: data.account_id || null,
+      amount_min: data.amount_min,
+      amount_max: data.amount_max,
+      clean_name_suggestion: data.clean_name || null,
     })
     if (applyToExisting && createdRule?.id) await api.applyRule(createdRule.id)
     setEditingSuggestionId(null)
-    applyLocalSuggestionUpdates({
-      [suggestion.id]: {
-        review_status: 'accepted',
-        rule_id: createdRule?.id || null,
-        keyword: data.keyword,
-        target_category_id: data.category_id || null,
-        target_category_name: data.category_id ? getCategoryName(data.category_id) : null,
-        amount_min: data.amount_min,
-        amount_max: data.amount_max,
-        clean_name_suggestion: data.clean_name || null,
-        owner_id: data.owner_id || null,
-        account_id: data.account_id || null,
-      },
-    }, {
-      review_summary: result.review_summary || undefined,
-      generated_at: result.generated_at || undefined,
-    })
+    await reloadSuggestions()
   }
 
   async function saveAcceptedSuggestion(suggestion, data) {
     const { applyToExisting, ...ruleData } = data
     let ruleId = suggestion.rule_id || null
-    pushUndo([suggestion.id])
+    const coveredSuggestionIds = getCoveredSuggestionIds(suggestion, data)
+    pushUndo([suggestion.id, ...coveredSuggestionIds])
 
     if (ruleId) {
       await api.updateRule(ruleId, ruleData)
@@ -341,33 +408,23 @@ export default function ImportRuleSuggestions() {
       ruleId = createdRule?.id || null
     }
 
-    const result = await updateSuggestionReviewForContext({
+    await updateSuggestionReviewForContext({
       suggestion_id: suggestion.id,
       status: 'accepted',
       rule_id: ruleId,
       merchant_label: suggestion.merchant_label,
       target_category_name: data.category_id ? getCategoryName(data.category_id) : null,
+      target_category_id: data.category_id || null,
       keyword: data.keyword,
+      owner_id: data.owner_id || null,
+      account_id: data.account_id || null,
+      amount_min: data.amount_min,
+      amount_max: data.amount_max,
+      clean_name_suggestion: data.clean_name || null,
     })
 
-    applyLocalSuggestionUpdates({
-      [suggestion.id]: {
-        review_status: 'accepted',
-        rule_id: ruleId,
-        keyword: data.keyword,
-        target_category_id: data.category_id || null,
-        target_category_name: data.category_id ? getCategoryName(data.category_id) : null,
-        amount_min: data.amount_min,
-        amount_max: data.amount_max,
-        clean_name_suggestion: data.clean_name || null,
-        owner_id: data.owner_id || null,
-        account_id: data.account_id || null,
-      },
-    }, {
-      review_summary: result.review_summary || undefined,
-      generated_at: result.generated_at || undefined,
-    })
     setEditingSuggestionId(null)
+    await reloadSuggestions()
   }
 
   async function saveSuggestionAsIs(suggestion) {
@@ -452,106 +509,114 @@ export default function ImportRuleSuggestions() {
     : isProfileContext
     ? 'This data source may have been deleted or no longer has imported files attached.'
     : 'This import may have been undone or is no longer available in Recent imports.'
+  const showBlockingLoading = loadingBatchContext || (!batchContextError && !initialSuggestionLoadComplete)
 
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div style={{ padding: '20px 32px 0', flexShrink: 0 }}>
-        <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Link to="/import-export" style={{ fontSize: 13, color: 'var(--accent2)', textDecoration: 'none' }}>
-            ← Back to Import / Export
-          </Link>
-          {undoStack.length > 0 && (
-            <Button variant="ghost" small onClick={performUndo}>
-              ↩ Undo ({undoStack.length})
-            </Button>
-          )}
+      {showBlockingLoading ? (
+        <div data-browser-context-passthrough="true" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32 }}>
+          <Spinner />
         </div>
-        <PageHeader title="Imported Rule Suggestions" />
-      </div>
+      ) : (
+        <>
+          <div style={{ padding: '20px 32px 0', flexShrink: 0 }}>
+            <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Link to="/import-export" style={{ fontSize: 13, color: 'var(--accent2)', textDecoration: 'none' }}>
+                ← Back to Import / Export
+              </Link>
+              {undoStack.length > 0 && (
+                <Button variant="ghost" small onClick={performUndo}>
+                  ↩ Undo ({undoStack.length})
+                </Button>
+              )}
+            </div>
+            <PageHeader title="Imported Rule Suggestions" />
+          </div>
 
-      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 32px 32px' }}>
-        <div style={{ width: '100%', maxWidth: 1120, display: 'grid', gap: 18 }}>
-          {loadingBatchContext ? (
-            <Spinner />
-          ) : batchContextError ? (
-            <Card>
-              <div style={{ fontSize: 14, color: 'var(--danger)' }}>{batchContextError}</div>
-            </Card>
-          ) : contextMissing ? (
-            <Card>
-              <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{emptyStateTitle}</div>
-              <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14 }}>
-                {emptyStateDescription}
-              </div>
-              <Button onClick={() => navigate('/import-export')}>
-                Return to Import / Export
-              </Button>
-            </Card>
-          ) : !contextHasImportedCategories ? (
-            <Card>
-              <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{isSystemContext ? 'No categorized imports available yet' : 'No categories from the data were used'}</div>
-              <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-                {isSystemContext
-                  ? 'Only imported files that use categories present in the data contribute category and rule patterns to this system-wide review.'
-                  : isProfileContext
-                  ? 'This data source does not have imported transactions using categories from the data that can be used to infer rules.'
-                  : 'This import does not contain transactions using categories from the data that can be used to infer rules.'}
-              </div>
-            </Card>
-          ) : (
-            <>
-              <Card style={{ display: 'grid', gap: 10 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                  <div>
-                    <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>{contextTitle}</div>
-                    <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-                      {contextSummary}
+          <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 32px 32px' }}>
+            <div style={{ width: '100%', maxWidth: 1120, display: 'grid', gap: 18 }}>
+              {batchContextError ? (
+                <Card>
+                  <div style={{ fontSize: 14, color: 'var(--danger)' }}>{batchContextError}</div>
+                </Card>
+              ) : contextMissing ? (
+                <Card>
+                  <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{emptyStateTitle}</div>
+                  <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14 }}>
+                    {emptyStateDescription}
+                  </div>
+                  <Button onClick={() => navigate('/import-export')}>
+                    Return to Import / Export
+                  </Button>
+                </Card>
+              ) : !contextHasImportedCategories ? (
+                <Card>
+                  <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{isSystemContext ? 'No categorized imports available yet' : 'No categories from the data were used'}</div>
+                  <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+                    {isSystemContext
+                      ? 'Only imported files that use categories present in the data contribute category and rule patterns to this system-wide review.'
+                      : isProfileContext
+                      ? 'This data source does not have imported transactions using categories from the data that can be used to infer rules.'
+                      : 'This import does not contain transactions using categories from the data that can be used to infer rules.'}
+                  </div>
+                </Card>
+              ) : (
+                <>
+                  <Card style={{ display: 'grid', gap: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                      <div>
+                        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>{contextTitle}</div>
+                        <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+                          {contextSummary}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                        {ruleSuggestionState.generated_at
+                          ? `Generated ${ruleSuggestionState.generated_at.slice(0, 16).replace('T', ' ')}`
+                          : 'Suggestions will be generated from this imported data.'}
+                      </div>
                     </div>
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    {ruleSuggestionState.generated_at
-                      ? `Generated ${ruleSuggestionState.generated_at.slice(0, 16).replace('T', ' ')}`
-                      : 'Suggestions will be generated from this imported data.'}
-                  </div>
-                </div>
-                <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-                  {isSystemContext
-                    ? 'Generate categorization rules from imported transactions that used categories present in the data across every imported file.'
-                    : isProfileContext
-                    ? 'Generate categorization rules from imported transactions attached to this data source that used categories present in the data.'
-                    : 'Generate categorization rules from imported transactions in this file that used categories present in the data.'}
-                </div>
-              </Card>
+                    <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+                      {isSystemContext
+                        ? 'Generate categorization rules from imported transactions that used categories present in the data across every imported file.'
+                        : isProfileContext
+                        ? 'Generate categorization rules from imported transactions attached to this data source that used categories present in the data.'
+                        : 'Generate categorization rules from imported transactions in this file that used categories present in the data.'}
+                    </div>
+                  </Card>
 
-              <ImportRuleSuggestionReview
-                onLoadSuggestionMatches={loadSuggestionMatchesForContext}
-                ruleSuggestionState={ruleSuggestionState}
-                selectedOwnerIds={selectedOwnerIds}
-                reviewFilter={reviewFilter}
-                onChangeReviewFilter={setReviewFilter}
-                onToggleOwner={toggleOwner}
-                merchantFilterOpen={merchantFilterOpen}
-                onMerchantFilterOpenChange={setMerchantFilterOpen}
-                ownerFilterOpen={ownerFilterOpen}
-                onOwnerFilterOpenChange={setOwnerFilterOpen}
-                onEditSuggestion={setEditingSuggestionId}
-                onCancelEdit={() => setEditingSuggestionId(null)}
-                onSaveSuggestion={saveSuggestion}
-                onSaveAcceptedSuggestion={saveAcceptedSuggestion}
-                onSaveSuggestionAsIs={saveSuggestionAsIs}
-                onSetSuggestionStatusBulk={setSuggestionStatusBulk}
-                onSaveSuggestionsAsIsBulk={saveSuggestionsAsIsBulk}
-                onSetSuggestionStatus={setSuggestionStatus}
-                editingSuggestionId={editingSuggestionId}
-                categories={categories}
-                owners={owners}
-                accounts={accounts}
-                onCategoriesChanged={reloadCategories}
-              />
-            </>
-          )}
-        </div>
-      </div>
+                  <ImportRuleSuggestionReview
+                    onLoadSuggestionMatches={loadSuggestionMatchesForContext}
+                    onReloadSuggestions={reloadSuggestions}
+                    ruleSuggestionState={ruleSuggestionState}
+                    selectedOwnerIds={selectedOwnerIds}
+                    reviewFilter={reviewFilter}
+                    onChangeReviewFilter={setReviewFilter}
+                    onToggleOwner={toggleOwner}
+                    merchantFilterOpen={merchantFilterOpen}
+                    onMerchantFilterOpenChange={setMerchantFilterOpen}
+                    ownerFilterOpen={ownerFilterOpen}
+                    onOwnerFilterOpenChange={setOwnerFilterOpen}
+                    onEditSuggestion={setEditingSuggestionId}
+                    onCancelEdit={() => setEditingSuggestionId(null)}
+                    onSaveSuggestion={saveSuggestion}
+                    onSaveAcceptedSuggestion={saveAcceptedSuggestion}
+                    onSaveSuggestionAsIs={saveSuggestionAsIs}
+                    onSetSuggestionStatusBulk={setSuggestionStatusBulk}
+                    onSaveSuggestionsAsIsBulk={saveSuggestionsAsIsBulk}
+                    onSetSuggestionStatus={setSuggestionStatus}
+                    editingSuggestionId={editingSuggestionId}
+                    categories={categories}
+                    owners={owners}
+                    accounts={accounts}
+                    onCategoriesChanged={reloadCategories}
+                  />
+                </>
+              )}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }

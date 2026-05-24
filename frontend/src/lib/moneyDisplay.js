@@ -21,6 +21,46 @@ export function formatMoneyMagnitude(amount, { currencySymbol = MONEY_DISPLAY_CO
   return `${currencySymbol}${DECIMAL_FORMATTER.format(Math.abs(Number(amount) || 0))}`
 }
 
+// Shared Recharts tooltip styling. Recharts colors each item's text using the
+// data series color by default, which is unreadable on dark surfaces when the
+// series happens to be a dark accent. Charts should spread these onto the
+// `<Tooltip>` props (contentStyle / labelStyle / itemStyle) so the chrome
+// stays themed and the value text always uses the page's text color.
+export const CHART_TOOLTIP_CONTENT_STYLE = {
+  background: 'var(--surface2)',
+  border: '1px solid var(--border)',
+  borderRadius: 8,
+  color: 'var(--text)',
+}
+
+export const CHART_TOOLTIP_LABEL_STYLE = {
+  color: 'var(--text)',
+}
+
+export const CHART_TOOLTIP_ITEM_STYLE = {
+  color: 'var(--text)',
+}
+
+// Compact signed axis label for charts whose y-axis can span both sides of zero
+// (e.g. monthly-trend with refunds netting expense bars below zero). Renders as
+// `-$1.5k` rather than the raw `$-1500` Recharts would otherwise emit.
+export function formatSignedAxisTick(
+  value,
+  {
+    currencySymbol = MONEY_DISPLAY_CONFIG.currencySymbol,
+    decimals = 1,
+    threshold = 1000,
+  } = {},
+) {
+  const num = Number(value) || 0
+  const sign = num < 0 ? '-' : ''
+  const abs = Math.abs(num)
+  if (abs >= threshold) {
+    return `${sign}${currencySymbol}${(abs / 1000).toFixed(decimals)}k`
+  }
+  return `${sign}${currencySymbol}${Math.round(abs)}`
+}
+
 export function formatSignedMoneyAmount(
   amount,
   {

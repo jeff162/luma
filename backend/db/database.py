@@ -92,7 +92,7 @@ def get_db(db_path: str | None = None):
 # Migrations are additive startup upgrades for existing databases only; fresh installs
 # are created directly at `CURRENT_VERSION` and should not replay the migration chain.
 
-CURRENT_VERSION = 16
+CURRENT_VERSION = 19
 
 MIGRATIONS = {}
 
@@ -654,6 +654,69 @@ def m16_transaction_tags(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_tag_tag ON txn_tag(tag_id)")
 
 
+@migration(19)
+def m19_drop_category_owner_id(conn):
+    # Category ownership has been replaced by category-level tags (see m18). Drop the
+    # now-unused owner_id column so the schema cannot drift back to a dual-ownership
+    # model. SQLite 3.35+ supports DROP COLUMN directly.
+    cols = conn.execute("PRAGMA table_info(category)").fetchall()
+    if any(col["name"] == "owner_id" for col in cols):
+        conn.execute("ALTER TABLE category DROP COLUMN owner_id")
+
+
+@migration(18)
+def m18_category_tags(conn):
+    # Tags can now be attached to categories (leaves or groups) so transactions
+    # inherit additive tags from their leaf category and its parent group. The
+    # owner_id column on category stays in place for now; a later migration
+    # drops it once the frontend stops referencing it.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS category_tag (
+            category_id TEXT NOT NULL REFERENCES category(id) ON DELETE CASCADE,
+            tag_id      TEXT NOT NULL REFERENCES tag(id) ON DELETE CASCADE,
+            PRIMARY KEY (category_id, tag_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_category_tag_tag ON category_tag(tag_id)")
+
+
+@migration(20)
+def m20_txn_trash(conn):
+    """Soft-delete column for transactions. Mirrors the existing account-trash pattern so the
+    UI can let users send a row to the trash and recover it later, with periodic cleanup
+    handled the same way (manual "empty trash" action from Settings)."""
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(txn)").fetchall()
+    }
+    if "trashed_at" not in columns:
+        conn.execute("ALTER TABLE txn ADD COLUMN trashed_at TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_trashed ON txn(trashed_at)")
+
+
+@migration(17)
+def m17_fix_rule_tag_fk(conn):
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='rule_tag'"
+    ).fetchone()
+    if row and "category_rule_legacy_tags" in (row["sql"] or ""):
+        conn.executescript(
+            """
+            ALTER TABLE rule_tag RENAME TO rule_tag_legacy_fk;
+            CREATE TABLE rule_tag (
+                rule_id TEXT NOT NULL REFERENCES category_rule(id) ON DELETE CASCADE,
+                tag_id  TEXT NOT NULL REFERENCES tag(id) ON DELETE CASCADE,
+                PRIMARY KEY (rule_id, tag_id)
+            );
+            INSERT INTO rule_tag SELECT * FROM rule_tag_legacy_fk;
+            DROP TABLE rule_tag_legacy_fk;
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_tag_tag ON rule_tag(tag_id)")
+
+
 def init_db(db_path: str | None = None):
     resolved_path = _normalize_db_path(db_path)
     with get_db(resolved_path) as conn:
@@ -686,7 +749,6 @@ def init_db(db_path: str | None = None):
                 category_type       TEXT,
                 sort_order          INTEGER NOT NULL DEFAULT 0,
                 exclude_from_totals INTEGER NOT NULL DEFAULT 0,
-                owner_id            TEXT REFERENCES owner(id) ON DELETE SET NULL,
                 system_key          TEXT,
                 import_source_batch_id TEXT REFERENCES import_batch(id) ON DELETE SET NULL
             );
@@ -754,7 +816,8 @@ def init_db(db_path: str | None = None):
                 owner_id             TEXT REFERENCES owner(id) ON DELETE SET NULL,
                 content_hash         TEXT,
                 import_evidence_json TEXT,
-                import_batch_id      TEXT REFERENCES import_batch(id) ON DELETE SET NULL
+                import_batch_id      TEXT REFERENCES import_batch(id) ON DELETE SET NULL,
+                trashed_at           TEXT
             );
 
             CREATE TABLE IF NOT EXISTS tag (
@@ -778,6 +841,16 @@ def init_db(db_path: str | None = None):
                 PRIMARY KEY (txn_id, tag_id)
             );
 
+            -- Category-level tag attachments. A category can be a leaf or a group
+            -- (parent_id NULL); transactions inherit additively from their leaf
+            -- category and that category's parent group, so a tag on a group
+            -- propagates to every leaf under it without per-leaf duplication.
+            CREATE TABLE IF NOT EXISTS category_tag (
+                category_id TEXT NOT NULL REFERENCES category(id) ON DELETE CASCADE,
+                tag_id      TEXT NOT NULL REFERENCES tag(id) ON DELETE CASCADE,
+                PRIMARY KEY (category_id, tag_id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_txn_date        ON txn(date);
             CREATE INDEX IF NOT EXISTS idx_txn_account     ON txn(account_id);
             CREATE INDEX IF NOT EXISTS idx_txn_category    ON txn(category_id);
@@ -792,6 +865,7 @@ def init_db(db_path: str | None = None):
             CREATE INDEX IF NOT EXISTS idx_rule_tag_tag    ON rule_tag(tag_id);
             CREATE INDEX IF NOT EXISTS idx_account_owner   ON account(owner_id);
             CREATE INDEX IF NOT EXISTS idx_txn_tag_tag     ON txn_tag(tag_id);
+            CREATE INDEX IF NOT EXISTS idx_category_tag_tag ON category_tag(tag_id);
 
             CREATE TABLE IF NOT EXISTS csv_import_profile (
                 id                   TEXT PRIMARY KEY,

@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
-import { Spinner, Badge } from './ui.jsx'
+import { AppConfirmDialog, Spinner, Badge } from './ui.jsx'
 import { getTxnMerchantLabel } from './TransactionRow.jsx'
 import CategoryDisplay from './CategoryDisplay.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
@@ -36,11 +36,11 @@ const TRANSACTION_DETAIL_TABLE_PREF_KEY = 'ui.transactionDetail.transactions.col
  * locally editable, but it can also branch straight into rule creation when a manual recategorization looks
  * like the start of a repeatable pattern.
  */
-export default function TransactionDetail({ txn, categories, onClose, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true }) {
+export default function TransactionDetail({ txn, categories, onClose, onTrashed, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true }) {
   const { filters } = useFilters()
   const dateStart = filters.date?.start || null
   const dateEnd   = filters.date?.end   || null
-  const { pos, dragging, panelRef, onDragStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
+  const { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
   const [trend, setTrend]               = useState([])
   const [displayName, setDisplayName]   = useState(getTxnMerchantLabel(txn))
   const [selectedMonth, setSelectedMonth] = useState(null)
@@ -52,6 +52,18 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
   const [tagsLoading, setTagsLoading] = useState(true)
   const [notesDraft, setNotesDraft] = useState(txn.notes || '')
   const [notesSaving, setNotesSaving] = useState(false)
+  const [trashConfirmOpen, setTrashConfirmOpen] = useState(false)
+
+  async function confirmTrash() {
+    setTrashConfirmOpen(false)
+    try {
+      await api.trashTransaction(txn.id)
+      onTrashed?.(txn.id)
+      onClose?.()
+    } catch (err) {
+      console.error('Failed to send transaction to trash', err)
+    }
+  }
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
     storageKeyPrefix: TRANSACTION_DETAIL_TABLE_STORAGE_KEY_PREFIX,
     preferenceKey: TRANSACTION_DETAIL_TABLE_PREF_KEY,
@@ -227,6 +239,14 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
               cursor: 'pointer', fontSize: 13, padding: '2px 4px',
             }}
           >✎</button>
+          <button
+            onClick={() => setTrashConfirmOpen(true)}
+            title="Send transaction to trash"
+            style={{
+              background: 'none', border: 'none', color: 'var(--muted)',
+              cursor: 'pointer', fontSize: 13, padding: '2px 4px', marginLeft: 'auto',
+            }}
+          >🗑</button>
         </div>
       )}
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
@@ -241,9 +261,12 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
     <>
       <DetailPanelShell
         pos={pos}
+        size={size}
         dragging={dragging}
+        resizing={resizing}
         panelRef={panelRef}
         onDragStart={onDragStart}
+        onResizeStart={onResizeStart}
         onClose={onClose}
         header={header}
         isTopmost={isTopmost}
@@ -468,6 +491,18 @@ export default function TransactionDetail({ txn, categories, onClose, onRuleProm
             </div>
           )}
       </DetailPanelShell>
+      {trashConfirmOpen && (
+        <AppConfirmDialog
+          title="Send transaction to trash?"
+          description={`Send "${displayName}" (${detailTxn.date}) to the trash? You can restore it later from Settings → Trash.`}
+          confirmLabel="Send to trash"
+          confirmVariant="danger"
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={confirmTrash}
+          onCancel={() => setTrashConfirmOpen(false)}
+          width="min(520px, 100%)"
+        />
+      )}
       {rulePrompt && (
         <RuleSuggestionToast
           prompt={rulePrompt}
