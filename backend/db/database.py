@@ -840,14 +840,10 @@ def init_db(db_path: str | None = None):
                 content_hash         TEXT,
                 import_evidence_json TEXT,
                 import_batch_id      TEXT REFERENCES import_batch(id) ON DELETE SET NULL,
-<<<<<<< HEAD
-                trashed_at           TEXT
-=======
                 trashed_at           TEXT,
-                suspect_duplicate_of      TEXT,
-                suspect_duplicate_reason  TEXT,
-                suspect_resolved_at       TEXT
->>>>>>> eda125e (Enhanced duplicate detection, deleted transactions go to trash, help pages)
+                suspect_duplicate_of     TEXT,
+                suspect_duplicate_reason TEXT,
+                suspect_resolved_at      TEXT
             );
 
             CREATE TABLE IF NOT EXISTS tag (
