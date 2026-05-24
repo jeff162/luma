@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useState, useRef, useEffect, useLayoutEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { Button, CategoryMarker, SectionEyebrow, getFormControlStyle } from './ui.jsx'
 import CategoryDisplay from './CategoryDisplay.jsx'
@@ -35,8 +36,8 @@ const detailButtonStyle = {
 export function buildGroups(flatCats) {
   const groups = flatCats.filter(c => !c.parent_id)
   return groups.map(g => ({
-    value:   g.id,
-    label:   g.name,
+    value: g.id,
+    label: g.name,
     options: flatCats.filter(c => c.parent_id === g.id)
       .map(c => ({ value: c.id, label: c.name })),
   })).filter(g => g.options.length > 0)
@@ -56,7 +57,7 @@ export function getTxnImportSourceLabel(txn) {
 
 export function NotePopover({ txn, onSave, onClose, positioning = 'absolute' }) {
   const [draft, setDraft] = useState(txn.notes || '')
-  const ref       = useRef(null)
+  const ref = useRef(null)
   const textareaRef = useRef(null)
 
   useEffect(() => {
@@ -210,7 +211,7 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTag
     refs: [ref],
   })
 
-  const x = Math.min(menu.x, window.innerWidth  - 180)
+  const x = Math.min(menu.x, window.innerWidth - 180)
   const y = Math.min(menu.y, window.innerHeight - 240)
 
   const item = (label, onClick, danger) => (
@@ -258,7 +259,7 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTag
 }
 
 export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
-  const [name, setName]         = useState(getTxnMerchantLabel(txn))
+  const [name, setName] = useState(getTxnMerchantLabel(txn))
   const labelRef = useRef(null)
   const [nameTruncated, setNameTruncated] = useState(false)
   const importedName = getTxnImportedMerchantLabel(txn)
@@ -584,6 +585,7 @@ function TagStackChip({ tags, onClick }) {
 }
 
 export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenDetail }) {
+  const navigate = useNavigate()
   const [showNote, setShowNote] = useState(false)
   const [showTags, setShowTags] = useState(false)
   // null sentinel = not fetched yet; an array (possibly empty) = fetched.
@@ -595,7 +597,7 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
   const visibleTagIds = new Set(visibleTags.map(tag => tag.id))
   // Tags inherited from the transaction's category or group cannot be removed at the
   // transaction level — they live on the category itself. The picker shows them as
-  // checked but disabled so the user understands why they cannot be unticked here.
+  // checked but disabled so the user understands why they cannot be un-ticked here.
   const inheritedTagIds = new Set(
     visibleTags.filter(tag => tag.source && tag.source !== 'direct').map(tag => tag.id),
   )
@@ -625,6 +627,29 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, width: '100%', minWidth: 0 }}>
       <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+        {txn.suspect_duplicate_of ? (
+          <HoverTooltip
+            content={<span>Possible duplicate of another transaction. Click to review.</span>}
+            maxWidth={MAX_TAG_TOOLTIP_WIDTH}
+          >
+            <button
+              type="button"
+              onClick={event => {
+                event.stopPropagation()
+                navigate('/suspect-duplicates')
+              }}
+              aria-label="Possible duplicate — review"
+              style={{
+                ...iconButtonStyle,
+                color: '#f59e0b',
+                fontSize: 13,
+                fontWeight: 700,
+              }}
+            >
+              ⚠
+            </button>
+          </HoverTooltip>
+        ) : null}
         {hasNote ? (
           <HoverTooltip
             content={<span style={{ whiteSpace: 'pre-wrap' }}>{txn.notes}</span>}
@@ -699,20 +724,20 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
 
 export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAddCategory, onClose, initialQuery = '' }) {
   const currentCat = categories.find(c => c.id === txn.category_id)
-  const [query, setQuery]             = useState(initialQuery || '')
-  const [cursor, setCursor]           = useState(0)
-  const [showAll, setShowAll]         = useState(false)
-  const [openUp, setOpenUp]           = useState(false)
+  const [query, setQuery] = useState(initialQuery || '')
+  const [cursor, setCursor] = useState(0)
+  const [showAll, setShowAll] = useState(false)
+  const [openUp, setOpenUp] = useState(false)
   const [dropVisible, setDropVisible] = useState(false)
-  const [showNew, setShowNew]         = useState(false)
-  const [newName, setNewName]         = useState('')
-  const [newParent, setNewParent]     = useState('')
+  const [showNew, setShowNew] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newParent, setNewParent] = useState('')
   const [creatingGroup, setCreatingGroup] = useState(false)
-  const [newGroupName, setNewGroupName]   = useState('')
+  const [newGroupName, setNewGroupName] = useState('')
   const [createError, setCreateError] = useState('')
-  const inputRef  = useRef(null)
-  const listRef   = useRef(null)
-  const wrapRef   = useRef(null)
+  const inputRef = useRef(null)
+  const listRef = useRef(null)
+  const wrapRef = useRef(null)
 
   useEffect(() => {
     setQuery(initialQuery || '')
@@ -736,12 +761,12 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
     }
   }, [showAll, query, showNew])
 
-  const leaves   = categories.filter(c => !categories.some(x => x.parent_id === c.id))
-  const groups   = buildGroups(categories)
-  const topGrps  = categories.filter(c => !c.parent_id)
+  const leaves = categories.filter(c => !categories.some(x => x.parent_id === c.id))
+  const groups = buildGroups(categories)
+  const topGrps = categories.filter(c => !c.parent_id)
   const filtered = query.trim() ? leaves.filter(c => c.name.toLowerCase().includes(query.toLowerCase())) : []
-  const options  = query.trim() ? filtered : (showAll ? leaves : [])
-  const total    = options.length
+  const options = query.trim() ? filtered : (showAll ? leaves : [])
+  const total = options.length
 
   useEffect(() => { setCursor(0) }, [query])
   useEffect(() => {
@@ -758,7 +783,7 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
       return
     }
     if (e.key === 'ArrowDown') { e.preventDefault(); setCursor(c => Math.min(c + 1, total - 1)); return }
-    if (e.key === 'ArrowUp')   { e.preventDefault(); setCursor(c => Math.max(c - 1, 0)); return }
+    if (e.key === 'ArrowUp') { e.preventDefault(); setCursor(c => Math.max(c - 1, 0)); return }
     if ((e.key === 'Enter' || e.key === 'Tab') && total > 0) { e.preventDefault(); pick(options[cursor]); return }
     if ((e.key === 'Enter' || e.key === 'Tab') && !query.trim()) { onClose(); return }
   }
@@ -812,9 +837,9 @@ export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAdd
     borderRadius: 8, minWidth: 240, maxHeight: 280,
     overflowY: 'auto', boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
     visibility: dropVisible ? 'visible' : 'hidden',
-    top:    openUp ? 'auto' : (wrapRef.current?.getBoundingClientRect().bottom + 4) || 0,
+    top: openUp ? 'auto' : (wrapRef.current?.getBoundingClientRect().bottom + 4) || 0,
     bottom: openUp ? (window.innerHeight - (wrapRef.current?.getBoundingClientRect().top - 4)) || 0 : 'auto',
-    left:   wrapRef.current?.getBoundingClientRect().left || 0,
+    left: wrapRef.current?.getBoundingClientRect().left || 0,
   }
 
   return (
@@ -958,9 +983,9 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
     onRulePrompt({
       merchantName,
       keywordSource,
-      transactionId:  txn.id,
-      categoryId:    cat.id,
-      categoryName:  cat.name,
+      transactionId: txn.id,
+      categoryId: cat.id,
+      categoryName: cat.name,
       categoryColor: null,
       transactionData: {
         amount: txn.amount,

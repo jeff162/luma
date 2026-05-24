@@ -201,6 +201,15 @@ export const api = {
   restoreTransaction:  (id)         => request(`/transactions/${id}/restore`,   { method: 'POST'   }),
   getTrashedTransactions: ()        => request('/transactions/trash'),
   emptyTransactionTrash: ()         => request('/transactions/trash/empty',     { method: 'POST'   }),
+  // Suspect-duplicate review. The backend flags rows during import (new account, soft match)
+  // and account merge; this surface lets the user keep or trash each flagged row.
+  getSuspectDuplicates: ({ batchId } = {}) => {
+    const q = batchId ? `?${new URLSearchParams({ batch_id: batchId })}` : ''
+    return request(`/transactions/suspect-duplicates${q}`)
+  },
+  getSuspectDuplicateCount: () => request('/transactions/suspect-duplicates/count'),
+  resolveSuspectDuplicate: (id, action) =>
+    request(`/transactions/${id}/resolve-suspect`, { method: 'POST', body: JSON.stringify({ action }) }),
 
   getRules: (search) => {
     const q = search ? '?' + new URLSearchParams({ search }) : ''

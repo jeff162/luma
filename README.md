@@ -203,10 +203,18 @@ logging, or other advanced options.
 
 ## Testing
 
-Luma currently has two lightweight test paths that are useful for catching regressions:
+Luma currently has a small set of test paths that are useful for catching regressions:
 
 - **Backend duplicate-detection tests:** fixture-driven import tests live in `backend/tests/test_import_duplicate_detection.py` with anonymized CSV fixtures under `backend/tests/fixtures/import_duplicates/`
+- **Backend suspect-duplicate detection tests:** unit-style coverage of the soft-match flow (new-account guard, payee normalization, account-merge sweep, keep/trash resolution) in `backend/tests/test_suspect_duplicates.py`
+- **Backend trash filter tests:** confirm trashed transactions disappear from `list_transactions`, `monthly_trend`, and `spending_by_group`, and that `/transactions/trash` reveals them, in `backend/tests/test_transaction_trash_filter.py`
 - **Frontend UI regression checks:** Playwright tests live in `frontend/tests/ui/` and cover a small set of import/export behaviors and smoke checks
+
+Backend tests (all):
+
+```bash
+python3 -m unittest discover -s backend/tests
+```
 
 Backend duplicate-detection tests:
 

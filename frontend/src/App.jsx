@@ -103,6 +103,7 @@ const loadSettingsPage = () => import('./pages/Settings.jsx')
 const loadImportExportPage = () => import('./pages/ImportExport.jsx')
 const loadImportRuleSuggestionsPage = () => import('./pages/ImportRuleSuggestions.jsx')
 const loadTasksPage = () => import('./pages/Tasks.jsx')
+const loadSuspectDuplicatesPage = () => import('./pages/SuspectDuplicates.jsx')
 const loadHelpPage = () => import('./pages/Help.jsx')
 const Dashboard = lazy(loadDashboardPage)
 const Transactions = lazy(loadTransactionsPage)
@@ -113,6 +114,7 @@ const Settings = lazy(loadSettingsPage)
 const ImportExport = lazy(loadImportExportPage)
 const ImportRuleSuggestions = lazy(loadImportRuleSuggestionsPage)
 const Tasks = lazy(loadTasksPage)
+const SuspectDuplicates = lazy(loadSuspectDuplicatesPage)
 const Help = lazy(loadHelpPage)
 const ROUTE_PREFETCHERS = [
   loadDashboardPage,
@@ -124,6 +126,7 @@ const ROUTE_PREFETCHERS = [
   loadImportExportPage,
   loadImportRuleSuggestionsPage,
   loadTasksPage,
+  loadSuspectDuplicatesPage,
   loadHelpPage,
 ]
 const GLOBAL_SCROLLBAR_STYLES = `
@@ -1689,172 +1692,173 @@ export default function App() {
           initialPreferences={bootPreferenceSubjectId && bootPreferenceSubjectId === preferenceSubjectId ? bootPreferences : null}
         >
           <FilterProvider initialDate={pastTwelveMonthsRange()}>
-          <style>{GLOBAL_SCROLLBAR_STYLES}</style>
-          {pendingLocalProfileDelete ? (
-            <AppConfirmDialog
-              title="Delete user profile?"
-              description={`Delete user profile "${pendingLocalProfileDelete.name}"?`}
-              confirmLabel="Delete"
-              confirmVariant="danger"
-              borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
-              onConfirm={confirmDeleteLocalProfile}
-              onCancel={() => setPendingLocalProfileDelete(null)}
-              width="min(480px, 100%)"
-            />
-          ) : null}
-          <div style={s.shell}>
-            <nav style={{ ...s.nav, width: navPaneWidth }}>
-              <div style={s.logo}>
-                <div>{APP_NAME}</div>
-                {developerOptionsEnabled ? (
-                  <div style={{
-                    marginTop: 3,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: 'var(--muted)',
-                    letterSpacing: '0.04em',
-                  }}>
-                    v{APP_VERSION}
-                  </div>
-                ) : null}
-              </div>
-              {NAV_LINKS.map(([to, label]) => (
-                <NavLink
-                  key={to}
-                  to={to}
-                  end={to === '/'}
-                  style={({ isActive }) => (isActive ? activeStyle : s.link)}
-                >
-                  <span>{label}</span>
-                  {to === '/tasks' && taskCount > 0 && (
-                    <span style={{
-                      background: '#f59e0b', color: '#fff',
-                      fontSize: 11, fontWeight: 700,
-                      padding: '1px 7px', borderRadius: 99,
-                      lineHeight: '18px', minWidth: 20, textAlign: 'center',
+            <style>{GLOBAL_SCROLLBAR_STYLES}</style>
+            {pendingLocalProfileDelete ? (
+              <AppConfirmDialog
+                title="Delete user profile?"
+                description={`Delete user profile "${pendingLocalProfileDelete.name}"?`}
+                confirmLabel="Delete"
+                confirmVariant="danger"
+                borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+                onConfirm={confirmDeleteLocalProfile}
+                onCancel={() => setPendingLocalProfileDelete(null)}
+                width="min(480px, 100%)"
+              />
+            ) : null}
+            <div style={s.shell}>
+              <nav style={{ ...s.nav, width: navPaneWidth }}>
+                <div style={s.logo}>
+                  <div>{APP_NAME}</div>
+                  {developerOptionsEnabled ? (
+                    <div style={{
+                      marginTop: 3,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: 'var(--muted)',
+                      letterSpacing: '0.04em',
                     }}>
-                      {taskCount}
-                    </span>
-                  )}
-                </NavLink>
-              ))}
-              <div style={s.navFooter}>
-                <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-                  {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
-                  {authEnabled ? (
-                    <span style={{ fontWeight: 600, color: 'var(--text)' }}>
-                      {currentUser?.display_name || currentUser?.username}
-                    </span>
-                  ) : (
-                    navProfileEditing && activeLocalProfile ? (
-                      <TransientTextInput
-                        value={navProfileDraft}
-                        onChange={setNavProfileDraft}
-                        onCommit={commitNavProfileRename}
-                        onCancel={() => {
-                          setNavProfileEditing(false)
-                          setNavProfileDraft(activeLocalProfile.name)
-                        }}
-                        restoreOnEscape
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          background: 'var(--surface2)',
-                          color: 'var(--text)',
-                          border: '1px solid var(--accent)',
-                          borderRadius: 999,
-                          padding: '4px 10px',
-                          fontSize: 12,
-                          fontWeight: 600,
-                          verticalAlign: 'middle',
-                          minWidth: 110,
-                          outline: 'none',
-                        }}
-                      />
+                      v{APP_VERSION}
+                    </div>
+                  ) : null}
+                </div>
+                {NAV_LINKS.map(([to, label]) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={to === '/'}
+                    style={({ isActive }) => (isActive ? activeStyle : s.link)}
+                  >
+                    <span>{label}</span>
+                    {to === '/tasks' && taskCount > 0 && (
+                      <span style={{
+                        background: '#f59e0b', color: '#fff',
+                        fontSize: 11, fontWeight: 700,
+                        padding: '1px 7px', borderRadius: 99,
+                        lineHeight: '18px', minWidth: 20, textAlign: 'center',
+                      }}>
+                        {taskCount}
+                      </span>
+                    )}
+                  </NavLink>
+                ))}
+                <div style={s.navFooter}>
+                  <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+                    {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
+                    {authEnabled ? (
+                      <span style={{ fontWeight: 600, color: 'var(--text)' }}>
+                        {currentUser?.display_name || currentUser?.username}
+                      </span>
                     ) : (
-                      <button
-                        onClick={handleSwitchLocalProfile}
-                        onContextMenu={e => {
-                          e.preventDefault()
-                          if (!activeLocalProfile) return
-                          setNavProfileMenu({
-                            x: e.clientX,
-                            y: e.clientY,
-                          })
-                        }}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          background: 'var(--surface2)',
-                          color: 'var(--text)',
-                          border: '1px solid var(--border)',
-                          borderRadius: 999,
-                          padding: '4px 10px',
-                          fontSize: 12,
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          verticalAlign: 'middle',
-                        }}
-                        title="Switch user profile"
-                      >
-                        {activeLocalProfile?.name || 'Choose profile'}
-                      </button>
-                    )
+                      navProfileEditing && activeLocalProfile ? (
+                        <TransientTextInput
+                          value={navProfileDraft}
+                          onChange={setNavProfileDraft}
+                          onCommit={commitNavProfileRename}
+                          onCancel={() => {
+                            setNavProfileEditing(false)
+                            setNavProfileDraft(activeLocalProfile.name)
+                          }}
+                          restoreOnEscape
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            background: 'var(--surface2)',
+                            color: 'var(--text)',
+                            border: '1px solid var(--accent)',
+                            borderRadius: 999,
+                            padding: '4px 10px',
+                            fontSize: 12,
+                            fontWeight: 600,
+                            verticalAlign: 'middle',
+                            minWidth: 110,
+                            outline: 'none',
+                          }}
+                        />
+                      ) : (
+                        <button
+                          onClick={handleSwitchLocalProfile}
+                          onContextMenu={e => {
+                            e.preventDefault()
+                            if (!activeLocalProfile) return
+                            setNavProfileMenu({
+                              x: e.clientX,
+                              y: e.clientY,
+                            })
+                          }}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            background: 'var(--surface2)',
+                            color: 'var(--text)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 999,
+                            padding: '4px 10px',
+                            fontSize: 12,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            verticalAlign: 'middle',
+                          }}
+                          title="Switch user profile"
+                        >
+                          {activeLocalProfile?.name || 'Choose profile'}
+                        </button>
+                      )
+                    )}
+                  </div>
+                  {authEnabled && (
+                    <button
+                      onClick={handleLogout}
+                      style={{
+                        width: '100%',
+                        background: 'none',
+                        border: '1px solid var(--border)',
+                        color: 'var(--text)',
+                        borderRadius: 8,
+                        padding: '8px 10px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Sign out
+                    </button>
                   )}
                 </div>
-                {authEnabled && (
-                  <button
-                    onClick={handleLogout}
-                    style={{
-                      width: '100%',
-                      background: 'none',
-                      border: '1px solid var(--border)',
-                      color: 'var(--text)',
-                      borderRadius: 8,
-                      padding: '8px 10px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Sign out
-                  </button>
-                )}
-              </div>
-              <div
-                className={`nav-resize-handle${navResizing ? ' is-resizing' : ''}`}
-                onMouseDown={startNavPaneResize}
-                onDoubleClick={resetNavPaneWidth}
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize navigation pane"
-                title="Drag to resize · double-click to reset"
-              />
-            </nav>
-            <div style={s.main}>
-              {shouldShowFilterBar(location.pathname) ? <FilterBar /> : null}
-              <div style={s.content}>
-                {/* Route-level lazy loading keeps the shell responsive and avoids forcing every large screen into
+                <div
+                  className={`nav-resize-handle${navResizing ? ' is-resizing' : ''}`}
+                  onMouseDown={startNavPaneResize}
+                  onDoubleClick={resetNavPaneWidth}
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Resize navigation pane"
+                  title="Drag to resize · double-click to reset"
+                />
+              </nav>
+              <div style={s.main}>
+                {shouldShowFilterBar(location.pathname) ? <FilterBar /> : null}
+                <div style={s.content}>
+                  {/* Route-level lazy loading keeps the shell responsive and avoids forcing every large screen into
                     the initial bundle before the user ever visits it. */}
-                <Suspense fallback={<RouteLoadingFallback />}>
-                  <Routes>
-                    <Route path="/" element={<Dashboard />} />
-                    <Route path="/transactions" element={<Transactions />} />
-                    <Route path="/categories" element={<Categories />} />
-                    <Route path="/rules" element={<Rules />} />
-                    <Route path="/accounts" element={<Accounts />} />
-                    <Route path="/import-export/rule-suggestions" element={<ImportRuleSuggestions />} />
-                    <Route path="/import-export/batches/:batchId/rule-suggestions" element={<ImportRuleSuggestions />} />
-                    <Route path="/import-export/profiles/:profileId/rule-suggestions" element={<ImportRuleSuggestions />} />
-                    <Route path="/import-export" element={<ImportExport />} />
-                    <Route path="/tasks" element={<Tasks />} />
-                    <Route path="/settings" element={<Settings />} />
-                    <Route path="/help" element={<Help />} />
-                    <Route path="/help/:topic" element={<Help />} />
-                  </Routes>
-                </Suspense>
+                  <Suspense fallback={<RouteLoadingFallback />}>
+                    <Routes>
+                      <Route path="/" element={<Dashboard />} />
+                      <Route path="/transactions" element={<Transactions />} />
+                      <Route path="/categories" element={<Categories />} />
+                      <Route path="/rules" element={<Rules />} />
+                      <Route path="/accounts" element={<Accounts />} />
+                      <Route path="/import-export/rule-suggestions" element={<ImportRuleSuggestions />} />
+                      <Route path="/import-export/batches/:batchId/rule-suggestions" element={<ImportRuleSuggestions />} />
+                      <Route path="/import-export/profiles/:profileId/rule-suggestions" element={<ImportRuleSuggestions />} />
+                      <Route path="/import-export" element={<ImportExport />} />
+                      <Route path="/tasks" element={<Tasks />} />
+                      <Route path="/suspect-duplicates" element={<SuspectDuplicates />} />
+                      <Route path="/settings" element={<Settings />} />
+                      <Route path="/help" element={<Help />} />
+                      <Route path="/help/:topic" element={<Help />} />
+                    </Routes>
+                  </Suspense>
+                </div>
               </div>
             </div>
-          </div>
             {navProfileMenu && activeLocalProfile && (
               <div
                 ref={navProfileMenuRef}

@@ -92,7 +92,7 @@ def get_db(db_path: str | None = None):
 # Migrations are additive startup upgrades for existing databases only; fresh installs
 # are created directly at `CURRENT_VERSION` and should not replay the migration chain.
 
-CURRENT_VERSION = 19
+CURRENT_VERSION = 21
 
 MIGRATIONS = {}
 
@@ -682,6 +682,29 @@ def m18_category_tags(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_category_tag_tag ON category_tag(tag_id)")
 
 
+@migration(21)
+def m21_suspect_duplicates(conn):
+    """Suspect-duplicate bookkeeping. A transaction can be flagged as a possible duplicate of
+    another (across accounts) at two trigger points:
+      - import time, when the receiving account is brand new to the database — same date/amount/
+        payee on a different account is likely the same event entered through two CSVs;
+      - account merge, when two accounts get rolled together and overlapping rows surface.
+    The columns sit on `txn` rather than a side table so the existence of a suspect can be
+    detected with a single index lookup at row-render time."""
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(txn)").fetchall()
+    }
+    if "suspect_duplicate_of" not in columns:
+        conn.execute("ALTER TABLE txn ADD COLUMN suspect_duplicate_of TEXT")
+    if "suspect_duplicate_reason" not in columns:
+        conn.execute("ALTER TABLE txn ADD COLUMN suspect_duplicate_reason TEXT")
+    if "suspect_resolved_at" not in columns:
+        conn.execute("ALTER TABLE txn ADD COLUMN suspect_resolved_at TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_suspect ON txn(suspect_duplicate_of) WHERE suspect_duplicate_of IS NOT NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_date_amount ON txn(date, amount)")
+
+
 @migration(20)
 def m20_txn_trash(conn):
     """Soft-delete column for transactions. Mirrors the existing account-trash pattern so the
@@ -817,7 +840,14 @@ def init_db(db_path: str | None = None):
                 content_hash         TEXT,
                 import_evidence_json TEXT,
                 import_batch_id      TEXT REFERENCES import_batch(id) ON DELETE SET NULL,
+<<<<<<< HEAD
                 trashed_at           TEXT
+=======
+                trashed_at           TEXT,
+                suspect_duplicate_of      TEXT,
+                suspect_duplicate_reason  TEXT,
+                suspect_resolved_at       TEXT
+>>>>>>> eda125e (Enhanced duplicate detection, deleted transactions go to trash, help pages)
             );
 
             CREATE TABLE IF NOT EXISTS tag (

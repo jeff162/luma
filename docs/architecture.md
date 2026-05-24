@@ -139,6 +139,8 @@ This is a deliberate tradeoff toward local responsiveness. FinTrack is optimized
 
 - **Duplicate matching contract:** import dedupe always keeps the exact content-hash path as the high-confidence rule, while lower-confidence cross-source matches rely on stored import evidence and stay visible in duplicate review with an explicit reason instead of being silently treated like exact duplicates
 
+- **Soft-duplicate contract:** the same exact-match dedup that blocks imports cannot catch identical activity entered through two CSVs into separately-named accounts. After each batch finalizes, transactions on accounts that are brand new to the database also run a soft check against the rest of the ledger (date + amount + normalized payee); matches are flagged via `suspect_duplicate_of` rather than blocked, and surface in the duplicate-review report. The same routine runs after an account merge so previously-distinct rows across the now-grouped accounts can be reconciled. Lives in `backend/services/suspect_duplicates.py` to keep the SQL together with both trigger points.
+
 - **Saved-data-source behavior:** saved data sources remember whether imported files from that source should use categories present in the data by default, while each completed import batch keeps the actual per-file decision and scope used for that file
 
 - **Imported-category behavior:** imports that use categories present in the data can apply those file categories directly to imported transactions, add missing imported categories as real leaf categories under the protected system `Unassigned` group, and feed those categorized transactions into the shared rule-suggestion workflow; placeholder labels that only mean "not categorized yet" are normalized back to `NULL` instead of creating a real category
@@ -216,6 +218,8 @@ FinTrack uses several distinct storage layers for working state.
 - **Contains:** transactions, categories, rules, accounts, owners, saved import profiles, import batches, snapshots, and other import/export data
 
 - **Account lifecycle note:** account rows can participate in a parent/child merge model for reissued account numbers, and child accounts can move through a recoverable trash state before permanent cleanup folds their references into the parent
+
+- **Transaction lifecycle note:** transactions also support a recoverable soft-delete via `txn.trashed_at` — every user-facing read filters trashed rows out, but they stay in the table until the user empties the transaction trash from Settings. Neither trash is auto-emptied; both require a manual action.
 
 - **Account regrouping note:** dragging one merged parent onto another top-level account flattens the dragged group's visible members under the new parent instead of preserving a nested account tree
 

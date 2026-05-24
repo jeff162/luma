@@ -35,6 +35,7 @@ from backend.json_utils import safe_json_dict
 from backend.routers.accounts import resolve_default_owner_id
 from backend.services import crypto_service
 from backend.services.categorizer import categorize_transaction
+from backend.services.suspect_duplicates import mark_import_suspects
 from backend.services.transaction_tags import VISIBLE_TXN_TAG_SQL, sync_rule_tags_for_transaction
 
 router = APIRouter()
@@ -3703,6 +3704,12 @@ async def run_import(
                     VALUES (?, ?, ?, ?, 1, NULL, NULL, NULL)
                 """, (batch_id, csv_val, mapped_id or None, row_ct))
 
+            # Soft-duplicate sweep. Catches the case where two CSVs from different sources are
+            # imported into accounts that didn't yet exist, so the exact-match dedup couldn't see
+            # them as the same event. Only runs against transactions whose receiving account is
+            # brand new in the database; existing accounts already get caught by the exact match.
+            mark_import_suspects(conn, batch_id)
+
         account_skipped = sum(skip_counts.values())
 
     trailing_non_transaction_message = None
@@ -3857,6 +3864,10 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
             (len(remaining_rows), batch_id),
         )
 
+        # Same soft-duplicate sweep as the main import path, so user-driven "force import these
+        # duplicates" rows also get cross-checked against unrelated accounts.
+        mark_import_suspects(conn, batch_id)
+
     return {
         "batch_id": batch_id,
         "imported_count": imported_now,
@@ -3951,6 +3962,14 @@ def list_batches():
                 ORDER BY iba.was_skipped, iba.csv_value
             """, (b["id"],)).fetchall()
             d["accounts"] = [dict(a) for a in accs]
+            d["suspect_duplicate_count"] = int(conn.execute("""
+                SELECT COUNT(*) AS n
+                FROM   txn
+                WHERE  import_batch_id = ?
+                  AND  suspect_duplicate_of IS NOT NULL
+                  AND  suspect_resolved_at  IS NULL
+                  AND  trashed_at           IS NULL
+            """, (b["id"],)).fetchone()["n"] or 0)
             result.append(d)
         return result
 

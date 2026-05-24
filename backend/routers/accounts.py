@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from backend.db.database import SHARED_OWNER_NAME, SHARED_OWNER_ID, get_db
 from backend.json_utils import safe_json_dict
+from backend.services.suspect_duplicates import mark_merge_suspects
 
 router = APIRouter()
 IMPORT_SUMMARY_KEY = "import_summary"
@@ -480,6 +481,10 @@ def attach_account(account_id: str, body: AccountAttachRequest):
             "UPDATE account SET parent_account_id = ?, display_name = ? WHERE id = ?",
             [(parent["id"], target_display_name, member_id) for member_id in group_member_ids],
         )
+        # Two accounts that previously looked distinct are now one group; re-check transactions
+        # in the newly-attached members for matches anywhere else in the ledger by
+        # (date, amount, payee). Flagged pairs surface in the duplicate-review report.
+        mark_merge_suspects(conn, group_member_ids + [parent["id"]])
     return {"ok": True}
 
 

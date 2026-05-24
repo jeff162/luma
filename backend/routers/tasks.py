@@ -63,6 +63,28 @@ def get_tasks():
                 "severity":    SEVERITY_INFO,
             })
 
+        # Soft-detected duplicates flagged at import time (new account on either side) or after
+        # an account merge. They never auto-trash, so they linger here until the user reviews.
+        suspect_dupes = conn.execute("""
+            SELECT COUNT(*) AS n
+            FROM   txn
+            WHERE  suspect_duplicate_of IS NOT NULL
+              AND  suspect_resolved_at  IS NULL
+              AND  trashed_at           IS NULL
+        """).fetchone()["n"]
+
+        if suspect_dupes:
+            tasks.append({
+                "id":          "suspect_duplicates",
+                "title":       "Possible duplicate transactions",
+                "description": f"{suspect_dupes} transaction{'s match' if suspect_dupes != 1 else ' matches'} "
+                               "an existing row on a different account. Review them and either keep or trash each.",
+                "count":       suspect_dupes,
+                "link":        "/suspect-duplicates",
+                "link_label":  "Review duplicates",
+                "severity":    SEVERITY_WARNING,
+            })
+
     return {
         "tasks":       tasks,
         "total_count": sum(t["count"] for t in tasks),

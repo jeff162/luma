@@ -577,7 +577,9 @@ def list_transactions(
                 b.filename    AS import_batch_filename,
                 b.imported_at AS import_batch_imported_at,
                 o.name        AS owner_name,
-                o.color       AS owner_color
+                o.color       AS owner_color,
+                t.suspect_duplicate_of,
+                t.suspect_duplicate_reason
             FROM   txn t
             JOIN   account  a ON a.id = t.account_id
             LEFT JOIN account  p ON p.id = a.parent_account_id
@@ -727,6 +729,46 @@ def empty_transaction_trash():
         cursor = conn.execute("DELETE FROM txn WHERE trashed_at IS NOT NULL")
         removed = cursor.rowcount or 0
     return {"removed": removed}
+
+
+# Suspect-duplicate review. The flag itself is set by services/suspect_duplicates.py during the
+# import and account-merge flows; these endpoints just expose listing and per-row resolution.
+@router.get("/suspect-duplicates")
+def list_suspect_duplicates(
+    batch_id: Optional[str] = Query(None, description="Filter to a specific import batch."),
+    limit:    int           = Query(500, le=2000),
+):
+    from backend.services.suspect_duplicates import list_suspects
+    with get_db() as conn:
+        return {"pairs": list_suspects(conn, batch_id=batch_id, limit=limit)}
+
+
+@router.get("/suspect-duplicates/count")
+def count_suspect_duplicates():
+    from backend.services.suspect_duplicates import count_active_suspects
+    with get_db() as conn:
+        return {"count": count_active_suspects(conn)}
+
+
+class SuspectResolveBody(BaseModel):
+    action: str  # 'keep' | 'trash'
+
+
+@router.post("/{txn_id}/resolve-suspect")
+def resolve_suspect_duplicate(txn_id: str, body: SuspectResolveBody):
+    from backend.services.suspect_duplicates import resolve_suspect
+    with get_db() as conn:
+        result = resolve_suspect(conn, txn_id, action=body.action)
+    if not result.get("resolved"):
+        reason = result.get("reason")
+        if reason == "not_found":
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        if reason == "not_suspect":
+            raise HTTPException(status_code=400, detail="Transaction is not flagged as a suspect duplicate")
+        if reason == "invalid_action":
+            raise HTTPException(status_code=400, detail="action must be 'keep' or 'trash'")
+        raise HTTPException(status_code=400, detail="Unable to resolve suspect")
+    return result
 
 
 # Filter surface is kept symmetric with /summary/by-group (date range, owner filters, exclude_from_totals)

@@ -104,6 +104,10 @@ Important conventions:
 
 - pending transactions are visible in lists but usually excluded from summary totals
 
+- `trashed_at != NULL` means the row is soft-deleted; every read path (the raw list, the summary endpoints, the dashboard, the import-card counts) filters it out, but the record stays in `txn` until the user empties the transaction trash from Settings, mirroring the account-trash pattern
+
+- `suspect_duplicate_of`, `suspect_duplicate_reason`, and `suspect_resolved_at` together carry the soft-duplicate flag set by the import flow (when the receiving account is brand new to the database) or by the account-merge sweep (when overlapping rows surface across two accounts that just got grouped together); flagged rows show a badge in lists and surface in a review report under Tasks until the user resolves each with Keep or Trash
+
 These conventions are meant to preserve user intent and keep reporting stable.
 `category_overridden` and `category_source` exist so automated categorization can stay helpful without silently undoing deliberate user choices or imported categories the user chose to keep.
 
@@ -228,6 +232,8 @@ Important import-batch behavior:
 - duplicate detection only blocks rows that match transactions already in FinTrack before the import starts
 
 - exact duplicate protection remains the highest-confidence rule; heuristic matching only considers existing transactions in the same effective account scope with the same date and signed amount, then compares stored import evidence/source text to decide whether the row should be reviewed as a possible duplicate
+
+- a separate **soft-duplicate** check runs after a batch finalizes: when the receiving account is brand new to the database, any imported row that matches an existing row on another account by (date, amount, normalized payee) is flagged (not blocked) via the `suspect_duplicate_of` columns and surfaces in the duplicate-review report; account merges run the same check across the now-grouped accounts so previously-distinct rows can be reconciled after the fact
 
 - duplicate rows within the same CSV are allowed
 
