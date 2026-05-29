@@ -10,6 +10,12 @@ import RuntimeConfigScreen from './components/RuntimeConfigScreen.jsx'
 import { api, setLocalPreferenceProfileId } from './lib/api.js'
 import { UserPreferencesProvider } from './lib/UserPreferencesContext.jsx'
 import { AppSessionProvider } from './lib/AppSessionContext.jsx'
+import {
+  UnifiedDuplicatesViewerProvider,
+  UnifiedDuplicatesViewerRenderer,
+  MinimizedDuplicatesNavItem,
+} from './contexts/UnifiedDuplicatesViewerContext.jsx'
+import { PanelStackProvider } from './contexts/PanelStackContext.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from './lib/uiInteractions.js'
 import { AppConfirmDialog } from './components/ui.jsx'
 import TransientTextInput from './components/TransientTextInput.jsx'
@@ -1137,6 +1143,14 @@ export function refreshTaskBadge() {
   window.dispatchEvent(new CustomEvent('fintrack:refresh-tasks'))
 }
 
+// Notify listeners that account mappings have changed (merge/detach/rename/delete/owner-change/
+// forget-distinct-pair). Currently consumed by the unified duplicate-detection report so it
+// auto-refreshes its entries when the user edits accounts based on what the report shows.
+// Other surfaces can listen for the same event if they need to react to account mutations.
+export function notifyAccountsChanged() {
+  window.dispatchEvent(new CustomEvent('fintrack:accounts-changed'))
+}
+
 export default function App() {
   /*
    * App boots through one of three gates before the main shell exists: runtime-config recovery, authenticated
@@ -1683,6 +1697,27 @@ export default function App() {
     )
   }
 
+  /*
+   * Provider tree composition. Order matters — each layer assumes its enclosing layers are
+   * already mounted, so additions need to slot in at the right level.
+   *
+   *   AppErrorBoundary           — last-resort UI for render-time crashes anywhere below
+   *     AppSessionProvider       — current user/profile identity for the rest of the tree
+   *       UserPreferencesProvider — keyed by identity; resets cached prefs on switch
+   *         FilterProvider       — shared date/account/owner filter state across pages
+   *           PanelStackProvider — click-to-focus z-index registry for floating panels
+   *             UnifiedDuplicatesViewerProvider — App-level duplicate-detection dialog state
+   *               UnifiedDuplicatesViewerRenderer — renders the floating dialog above all
+   *                 routes when there's an active viewer; sits BEFORE <Routes> so any
+   *                 route-mounted floating panel (batch/account/month/tag detail) opened
+   *                 later appears in DOM order after it and naturally stacks on top
+   *               shell (nav + main + <Routes>)
+   *
+   * The bottom two contexts (PanelStack, UnifiedDuplicatesViewer) are the foundation for
+   * floating UI that needs to survive route navigation. Anything new in that category should
+   * sit at this level — render its UI above <Routes> for stacking, and expose hooks
+   * consumers can call from inside routes.
+   */
   return (
     <AppErrorBoundary>
       {/* Key the provider by the active preference identity so switching user/profile drops cached preference state instead of leaking it across sessions. */}
@@ -1692,6 +1727,9 @@ export default function App() {
           initialPreferences={bootPreferenceSubjectId && bootPreferenceSubjectId === preferenceSubjectId ? bootPreferences : null}
         >
           <FilterProvider initialDate={pastTwelveMonthsRange()}>
+            <PanelStackProvider>
+            <UnifiedDuplicatesViewerProvider>
+            <UnifiedDuplicatesViewerRenderer />
             <style>{GLOBAL_SCROLLBAR_STYLES}</style>
             {pendingLocalProfileDelete ? (
               <AppConfirmDialog
@@ -1741,6 +1779,7 @@ export default function App() {
                     )}
                   </NavLink>
                 ))}
+                <MinimizedDuplicatesNavItem />
                 <div style={s.navFooter}>
                   <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
                     {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
@@ -1899,6 +1938,8 @@ export default function App() {
                 </button>
               </div>
             )}
+            </UnifiedDuplicatesViewerProvider>
+            </PanelStackProvider>
           </FilterProvider>
         </UserPreferencesProvider>
       </AppSessionProvider>

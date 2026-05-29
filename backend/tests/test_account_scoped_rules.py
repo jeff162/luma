@@ -110,8 +110,8 @@ class AccountScopedRulesTests(unittest.TestCase):
         return txn_id
 
     def test_parent_account_rule_matches_grouped_child_transaction_for_preview_and_recategorize(self):
-        parent_account_id = self._insert_account("Northgate Checking")
-        child_account_id = self._insert_account("Northgate Checking Old", parent_account_id=parent_account_id)
+        parent_account_id = self._insert_account("Personal Checking")
+        child_account_id = self._insert_account("Personal Checking Old", parent_account_id=parent_account_id)
         category_id = self._insert_income_leaf("Retirement Income")
         self._insert_rule(category_id=category_id, account_id=parent_account_id, keyword="transfer")
         txn_id = self._insert_transaction(account_id=child_account_id, merchant_name="TRANSFER FROM BROKERAGE")
@@ -129,8 +129,8 @@ class AccountScopedRulesTests(unittest.TestCase):
         self.assertEqual(txn["category_source"], "rule")
 
     def test_explicit_apply_uses_effective_parent_account_scope(self):
-        parent_account_id = self._insert_account("Northgate Checking")
-        child_account_id = self._insert_account("Northgate Checking Old", parent_account_id=parent_account_id)
+        parent_account_id = self._insert_account("Personal Checking")
+        child_account_id = self._insert_account("Personal Checking Old", parent_account_id=parent_account_id)
         category_id = self._insert_income_leaf("Retirement Income")
         rule_id = self._insert_rule(category_id=category_id, account_id=parent_account_id, keyword="transfer")
         txn_id = self._insert_transaction(account_id=child_account_id, merchant_name="TRANSFER TO SAVINGS")

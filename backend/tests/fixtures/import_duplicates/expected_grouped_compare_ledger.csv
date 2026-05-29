@@ -1,9 +1,10 @@
 date,merchant,amount,account
-2025-10-10,Payroll Deposit,1200.00,Merged Checking
-2025-10-11,Corner Market,-28.40,Merged Checking
-2025-10-11,Corner Market East,-28.40,Merged Checking
-2025-10-12,Neighborhood Cafe,-12.50,Merged Checking
-2025-10-13,Utility Transfer,300.00,Merged Checking
-2025-10-15,Bookshop,-18.00,Merged Checking
-2025-10-16,Venmo Rent,-650.00,Merged Checking
-2025-10-20,PAYPAL INST XFER CLEANING CREW,-125.00,Merged Checking
+2025-10-10,Payroll Deposit,-1200.00,Merged Checking
+2025-10-11,Corner Market,28.40,Merged Checking
+2025-10-11,Corner Market East,28.40,Merged Checking
+2025-10-12,Neighborhood Cafe,12.50,Merged Checking
+2025-10-13,Utility Transfer,-300.00,Merged Checking
+2025-10-14,PAYPAL INST XFER CLEANING CREW,125.00,Merged Checking
+2025-10-15,Bookshop,18.00,Merged Checking
+2025-10-16,Venmo Rent,650.00,Merged Checking
+2025-10-20,PAYPAL INST XFER CLEANING CREW,125.00,Merged Checking

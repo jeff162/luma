@@ -565,12 +565,15 @@ def list_transactions(
             f"""
             SELECT
                 t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
-                t.is_pending, t.category_overridden, t.notes,
+                t.is_pending, t.category_overridden, t.category_source, t.notes,
                 COALESCE(a.parent_account_id, a.id) AS account_id,
+                t.account_id  AS source_account_id,
                 t.owner_id,
                 COALESCE(a.display_name, a.name) AS account_name,
                 COALESCE(p.mask, a.mask)         AS account_mask,
+                a.name                            AS source_account_raw_name,
                 t.import_batch_id,
+                t.import_evidence_json,
                 t.category_id,
                 c.name        AS category_name,
                 NULL          AS category_color,
@@ -731,21 +734,21 @@ def empty_transaction_trash():
     return {"removed": removed}
 
 
-# Suspect-duplicate review. The flag itself is set by services/suspect_duplicates.py during the
+# Suspect-duplicate review. The flag itself is set by services/duplicate_detection.py during the
 # import and account-merge flows; these endpoints just expose listing and per-row resolution.
 @router.get("/suspect-duplicates")
 def list_suspect_duplicates(
     batch_id: Optional[str] = Query(None, description="Filter to a specific import batch."),
     limit:    int           = Query(500, le=2000),
 ):
-    from backend.services.suspect_duplicates import list_suspects
+    from backend.services.duplicate_detection import list_suspects
     with get_db() as conn:
         return {"pairs": list_suspects(conn, batch_id=batch_id, limit=limit)}
 
 
 @router.get("/suspect-duplicates/count")
 def count_suspect_duplicates():
-    from backend.services.suspect_duplicates import count_active_suspects
+    from backend.services.duplicate_detection import count_active_suspects
     with get_db() as conn:
         return {"count": count_active_suspects(conn)}
 
@@ -754,9 +757,27 @@ class SuspectResolveBody(BaseModel):
     action: str  # 'keep' | 'trash'
 
 
+@router.post("/{txn_id}/restore-rejected")
+def restore_rejected_duplicate_endpoint(txn_id: str):
+    """Reverse a confirmed-duplicate rejection. The transaction returns to the active ledger
+    with the rejection flag cleared. Used from the unified duplicate-detection report when the
+    user undoes a previous 'reject' decision on a soft-flag suspect."""
+    from backend.services.duplicate_detection import restore_rejected_duplicate
+    with get_db() as conn:
+        result = restore_rejected_duplicate(conn, txn_id)
+    if not result.get("restored"):
+        reason = result.get("reason")
+        if reason == "not_found":
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        if reason == "not_rejected":
+            raise HTTPException(status_code=400, detail="Transaction is not a confirmed-duplicate rejection")
+        raise HTTPException(status_code=400, detail="Unable to restore transaction")
+    return result
+
+
 @router.post("/{txn_id}/resolve-suspect")
 def resolve_suspect_duplicate(txn_id: str, body: SuspectResolveBody):
-    from backend.services.suspect_duplicates import resolve_suspect
+    from backend.services.duplicate_detection import resolve_suspect
     with get_db() as conn:
         result = resolve_suspect(conn, txn_id, action=body.action)
     if not result.get("resolved"):

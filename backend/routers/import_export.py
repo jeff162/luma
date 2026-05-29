@@ -35,7 +35,12 @@ from backend.json_utils import safe_json_dict
 from backend.routers.accounts import resolve_default_owner_id
 from backend.services import crypto_service
 from backend.services.categorizer import categorize_transaction
-from backend.services.suspect_duplicates import mark_import_suspects
+from backend.services.duplicate_detection import (
+    DedupeContext,
+    evaluate_duplicate,
+    list_unified_batch_duplicates,
+    mark_import_suspects,
+)
 from backend.services.transaction_tags import VISIBLE_TXN_TAG_SQL, sync_rule_tags_for_transaction
 
 router = APIRouter()
@@ -2924,6 +2929,13 @@ async def run_import(
 
         created_account_ids = {}
         account_duplicate_compare_targets: dict[str, str] = {}
+        # csv_values whose new account was explicitly declared an alias of an existing account via
+        # `duplicate_compare_account_id`. Distinguished from group-attached new accounts: an alias
+        # is asserting "this is the same physical account in a different system" (so cross-account
+        # dedupe rules should fire against the target), whereas a group attachment just means
+        # "this new sibling lives in the same group" (different physical account; medium-confidence
+        # dedupe across siblings would over-collapse).
+        explicit_alias_csv_values: set[str] = set()
         if single_account_new:
             single_name = str(single_account_new.get("name", "")).strip()
             single_type = single_account_new.get("type", "depository")
@@ -2974,6 +2986,8 @@ async def run_import(
                 if not effective_target:
                     raise HTTPException(status_code=400, detail="Duplicate comparison target account not found")
                 compare_target_id = str(effective_target["id"]) if effective_target else ""
+                if compare_target_id:
+                    explicit_alias_csv_values.add(csv_val)
             if compare_target_id:
                 account_duplicate_compare_targets[csv_val] = compare_target_id
 
@@ -3098,7 +3112,7 @@ async def run_import(
         if relevant_account_ids:
             ph = ",".join("?" * len(relevant_account_ids))
             rows_db = conn.execute(
-                f"SELECT id, account_id, content_hash, date, raw_name, merchant_name, display_name, amount, is_pending, import_evidence_json FROM txn "
+                f"SELECT id, account_id, content_hash, date, raw_name, merchant_name, display_name, amount, is_pending, import_evidence_json, import_batch_id FROM txn "
                 f"WHERE account_id IN ({ph}) AND content_hash IS NOT NULL",
                 list(relevant_account_ids)
             ).fetchall()
@@ -3116,6 +3130,8 @@ async def run_import(
                         "date": r["date"],
                         "merchant_name": r["display_name"] or r["merchant_name"] or r["raw_name"],
                         "amount": r["amount"],
+                        "account_id": r["account_id"],
+                        "import_batch_id": r["import_batch_id"],
                     }
                 amount_key = _duplicate_amount_key(r["date"], r["amount"])
                 account_amount_rows = existing_rows_by_account_amount.setdefault(r["account_id"], {}).setdefault(amount_key, [])
@@ -3124,6 +3140,8 @@ async def run_import(
                     "date": r["date"],
                     "merchant_name": r["display_name"] or r["merchant_name"] or r["raw_name"],
                     "amount": r["amount"],
+                    "account_id": r["account_id"],
+                    "import_batch_id": r["import_batch_id"],
                     "duplicate_scope": "same_account",
                     "match_texts": _collect_duplicate_match_texts(
                         merchant_name=r["merchant_name"],
@@ -3132,12 +3150,30 @@ async def run_import(
                         import_evidence=_parse_import_evidence(r["import_evidence_json"]),
                     ),
                 })
+
+        # Accounts with any prior row in the ledger. Used as a precondition on the medium-confidence
+        # cross-account dedupe rules (in-scope coverage, terminal-day reconciliation, text-strategy)
+        # so a brand-new sibling account in a linked group doesn't inherit hard-dedupe behavior from
+        # its siblings. Brand-new accounts let those rows through to the post-insert suspect-flag
+        # sweep in services/duplicate_detection.py, where the user can review them. The hash-exact
+        # cross-account check stays unconditional — same date+amount+payee is high-confidence enough
+        # to drop regardless of the receiving account's history.
+        accounts_with_prior_history: set[str] = set()
+        if relevant_account_ids:
+            ph_all = ",".join("?" * len(relevant_account_ids))
+            for r in conn.execute(
+                f"SELECT DISTINCT account_id FROM txn WHERE account_id IN ({ph_all})",
+                list(relevant_account_ids),
+            ).fetchall():
+                if r["account_id"]:
+                    accounts_with_prior_history.add(str(r["account_id"]))
+
         if relevant_effective_account_ids:
             ph = ",".join("?" * len(relevant_effective_account_ids))
             rows_db = conn.execute(
                 f"""
-                SELECT t.id, t.content_hash, t.date, t.raw_name, t.merchant_name, t.display_name, t.amount,
-                       t.import_evidence_json,
+                SELECT t.id, t.account_id, t.content_hash, t.date, t.raw_name, t.merchant_name, t.display_name, t.amount,
+                       t.import_evidence_json, t.import_batch_id,
                        COALESCE(a.parent_account_id, a.id) AS effective_account_id
                 FROM txn t
                 JOIN account a ON a.id = t.account_id
@@ -3155,6 +3191,8 @@ async def run_import(
                         "date": r["date"],
                         "merchant_name": r["display_name"] or r["merchant_name"] or r["raw_name"],
                         "amount": r["amount"],
+                        "account_id": r["account_id"],
+                        "import_batch_id": r["import_batch_id"],
                     }
                 amount_key = _duplicate_amount_key(r["date"], r["amount"])
                 scope_rows = existing_rows_by_effective_account_amount.setdefault(r["effective_account_id"], {}).setdefault(amount_key, [])
@@ -3163,6 +3201,8 @@ async def run_import(
                     "date": r["date"],
                     "merchant_name": r["display_name"] or r["merchant_name"] or r["raw_name"],
                     "amount": r["amount"],
+                    "account_id": r["account_id"],
+                    "import_batch_id": r["import_batch_id"],
                     "duplicate_scope": "linked_account_group",
                     "match_texts": _collect_duplicate_match_texts(
                         merchant_name=r["merchant_name"],
@@ -3214,6 +3254,8 @@ async def run_import(
                 "start_date": row["coverage_start_date"],
                 "end_date": row["coverage_end_date"],
                 "csv_value": csv_value,
+                "account_id": str(row["account_id"] or "").strip() or None,
+                "batch_id": str(row["batch_id"] or "").strip() or None,
             }
             if csv_value and coverage_entry.get("start_date") and coverage_entry.get("end_date"):
                 import_coverage_by_csv_value.setdefault(csv_value, []).append(coverage_entry)
@@ -3333,6 +3375,32 @@ async def run_import(
         footer_error_start_index = None
         footer_error_start_data_index = None
         footer_error_start_row = None
+
+        # Bundle the precomputed dedupe lookups + the small helper functions into one context that
+        # `evaluate_duplicate` can use. The helpers live in this module today; a planned follow-up
+        # cleanup will move them into the dedupe service so this dict goes away.
+        dedupe_context = DedupeContext(
+            existing_hashes_by_account=existing_hashes_by_account,
+            existing_hashes_by_effective_account=existing_hashes_by_effective_account,
+            existing_rows_by_account_amount=existing_rows_by_account_amount,
+            existing_rows_by_effective_account_amount=existing_rows_by_effective_account_amount,
+            import_coverage_by_csv_value=import_coverage_by_csv_value,
+            import_coverage_by_scope_id=import_coverage_by_scope_id,
+            terminal_day_candidates_by_csv_day=terminal_day_candidates_by_csv_day,
+            terminal_day_candidates_by_scope_day=terminal_day_candidates_by_scope_day,
+            accounts_with_prior_history=accounts_with_prior_history,
+            explicit_alias_csv_values=explicit_alias_csv_values,
+            account_duplicate_compare_targets=account_duplicate_compare_targets,
+            coverage_strategy_enabled=coverage_strategy_enabled,
+            text_strategy_enabled=text_strategy_enabled,
+            helpers={
+                "date_in_window": _date_in_import_coverage_window,
+                "candidate_summary": _candidate_summary,
+                "match_terminal": _match_terminal_day_candidate,
+                "duplicate_amount_key": _duplicate_amount_key,
+                "find_textual": _find_textual_duplicate_candidate,
+            },
+        )
 
         def reset_footer_detection():
             nonlocal consecutive_error_rows, footer_error_start_index, footer_error_start_data_index, footer_error_start_row
@@ -3511,96 +3579,24 @@ async def run_import(
                 "csv_value": csv_val,
             }
 
-            duplicate_existing = existing_hashes_by_account.get(acc["id"], {}).get(content_hash)
-            duplicate_reason = "Matches an existing transaction"
-            if not duplicate_existing:
-                compare_target_id = account_duplicate_compare_targets.get(csv_val)
-                if compare_target_id:
-                    duplicate_existing = existing_hashes_by_effective_account.get(compare_target_id, {}).get(content_hash)
-                    if duplicate_existing:
-                        duplicate_reason = "Matches an existing transaction in the linked account group"
-            terminal_day_reconciled = False
-            if not duplicate_existing and coverage_strategy_enabled:
-                coverage_duplicate = next(
-                    (
-                        entry for entry in import_coverage_by_csv_value.get(csv_val, [])
-                        if _date_in_import_coverage_window(parsed_date, entry.get("start_date"), entry.get("end_date"))
-                    ),
-                    None,
-                )
-                if coverage_duplicate:
-                    duplicate_existing = {
-                        "date": f"{coverage_duplicate.get('start_date')}..{coverage_duplicate.get('end_date')}",
-                        "merchant_name": "Covered date range",
-                        "amount": amount,
-                    }
-                    duplicate_reason = "Falls within the fully covered date range from an earlier import for this source account"
-            if not duplicate_existing and coverage_strategy_enabled:
-                scope_id = get_current_duplicate_scope_id(acc["id"], csv_val)
-                coverage_duplicate = next(
-                    (
-                        entry for entry in import_coverage_by_scope_id.get(scope_id or "", [])
-                        if entry.get("csv_value") != csv_val
-                        and _date_in_import_coverage_window(parsed_date, entry.get("start_date"), entry.get("end_date"))
-                    ),
-                    None,
-                )
-                if coverage_duplicate:
-                    duplicate_existing = {
-                        "date": f"{coverage_duplicate.get('start_date')}..{coverage_duplicate.get('end_date')}",
-                        "merchant_name": "Covered date range",
-                        "amount": amount,
-                    }
-                    duplicate_reason = "Falls within the fully covered date range from an earlier import in this account scope"
-            if not duplicate_existing and coverage_strategy_enabled:
-                scope_id = get_current_duplicate_scope_id(acc["id"], csv_val)
-                same_source_terminal_candidates = terminal_day_candidates_by_csv_day.get((csv_val, parsed_date), [])
-                scope_terminal_candidates = terminal_day_candidates_by_scope_day.get((scope_id or "", parsed_date), [])
-                terminal_day_reconciled = bool(same_source_terminal_candidates) or any(
-                    candidate.get("csv_value") != csv_val
-                    for candidate in scope_terminal_candidates
-                )
-                if terminal_day_reconciled:
-                    matched_terminal_candidate = _match_terminal_day_candidate(
-                        same_source_terminal_candidates,
-                        content_hash=content_hash,
-                        amount=amount,
-                    )
-                    if not matched_terminal_candidate:
-                        matched_terminal_candidate = _match_terminal_day_candidate(
-                            [
-                                candidate for candidate in scope_terminal_candidates
-                                if candidate.get("csv_value") != csv_val
-                            ],
-                            content_hash=content_hash,
-                            amount=amount,
-                        )
-                    if matched_terminal_candidate:
-                        duplicate_existing = _candidate_summary(matched_terminal_candidate)
-                        duplicate_reason = (
-                            "Matches a remaining transaction from the terminal covered day in an earlier import"
-                            + (
-                                " for this source account"
-                                if matched_terminal_candidate.get("csv_value") == csv_val
-                                else " in this account scope"
-                            )
-                        )
-            if not duplicate_existing and text_strategy_enabled and not terminal_day_reconciled:
-                candidate_rows = list(existing_rows_by_account_amount.get(acc["id"], {}).get(_duplicate_amount_key(parsed_date, amount), []))
-                compare_target_id = account_duplicate_compare_targets.get(csv_val)
-                if compare_target_id:
-                    linked_candidates = existing_rows_by_effective_account_amount.get(compare_target_id, {}).get(_duplicate_amount_key(parsed_date, amount), [])
-                    seen_candidate_ids = {candidate["id"] for candidate in candidate_rows}
-                    candidate_rows.extend(candidate for candidate in linked_candidates if candidate["id"] not in seen_candidate_ids)
-                heuristic_duplicate = _find_textual_duplicate_candidate(candidate_rows, txn_payload)
-                if heuristic_duplicate:
-                    duplicate_existing = heuristic_duplicate
-                    heuristic_scope = heuristic_duplicate.get("duplicate_scope")
-                    duplicate_reason = (
-                        "Possible cross-source match by date, amount, and source text"
-                        + (" in the linked account group" if heuristic_scope == "linked_account_group" else " in this account")
-                        + " (medium confidence)"
-                    )
+            # Run the consolidated dedupe rule chain. The verdict carries either a hard-reject
+            # decision (with matched row + reason text) or a passthrough decision. The rule chain
+            # itself lives in `backend/services/duplicate_detection.py` — see that module's
+            # docstring for the confidence ladder and the precondition for the medium-confidence
+            # rules.
+            verdict = evaluate_duplicate(
+                context=dedupe_context,
+                receiving_account_id=acc["id"],
+                csv_value=csv_val,
+                content_hash=content_hash,
+                parsed_date=parsed_date,
+                amount=amount,
+                scope_id=get_current_duplicate_scope_id(acc["id"], csv_val),
+                txn_payload=txn_payload,
+            )
+            duplicate_existing = verdict.matched if verdict.hard_reject else None
+            duplicate_reason = verdict.reason if verdict.hard_reject else ""
+            terminal_day_reconciled = verdict.terminal_day_reconciled
             if duplicate_existing:
                 deduped += 1
                 duplicate_rows.append({
@@ -3704,10 +3700,10 @@ async def run_import(
                     VALUES (?, ?, ?, ?, 1, NULL, NULL, NULL)
                 """, (batch_id, csv_val, mapped_id or None, row_ct))
 
-            # Soft-duplicate sweep. Catches the case where two CSVs from different sources are
-            # imported into accounts that didn't yet exist, so the exact-match dedup couldn't see
-            # them as the same event. Only runs against transactions whose receiving account is
-            # brand new in the database; existing accounts already get caught by the exact match.
+            # Cross-account soft-flag sweep. Catches matches between this batch's rows and
+            # existing rows on different accounts that the exact-content-hash dedup didn't see.
+            # Filtered by `account_pair_distinct` so pairs the user has already declared distinct
+            # don't re-surface — see `mark_import_suspects` in duplicate_detection.py.
             mark_import_suspects(conn, batch_id)
 
         account_skipped = sum(skip_counts.values())
@@ -3768,6 +3764,52 @@ def get_batch_duplicates(batch_id: str):
             "headers": headers,
             "rows": duplicate_rows,
             "count": len(duplicate_rows),
+        }
+
+
+# Combined view of duplicate decisions made for this batch — both the hard-rejects that never
+# entered the ledger (from `import_batch_duplicate`) and the soft-flagged rows that landed in the
+# ledger with `suspect_duplicate_of` set. The shape is uniform across the two pools so the file
+# card can render a single unified report. See `backend/services/duplicate_detection.py` for the
+# rule/confidence classification.
+@router.get("/batches/{batch_id}/duplicates-unified")
+def get_batch_duplicates_unified(batch_id: str):
+    with get_db() as conn:
+        batch = conn.execute(
+            "SELECT id, filename FROM import_batch WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+
+        entries = list_unified_batch_duplicates(conn, batch_id)
+        hard = sum(1 for e in entries if e["kind"] == "hard_reject")
+        soft = sum(1 for e in entries if e["kind"] == "soft_flag")
+        # Per-rule rollup so the UI can show a clickable breakdown of which rules contributed
+        # how many entries. Each item carries the rule_key, the human label, the confidence
+        # band, and the count. Order is by descending count so the dominant rules surface first.
+        rule_counts: dict[str, dict] = {}
+        for e in entries:
+            key = e.get("rule_key") or "other_hard"
+            if key not in rule_counts:
+                rule_counts[key] = {
+                    "rule_key": key,
+                    "rule_label": e.get("rule_label") or key,
+                    "rule_description": e.get("rule_description") or "",
+                    "confidence": e.get("confidence") or "medium",
+                    "kind": e.get("kind"),
+                    "count": 0,
+                }
+            rule_counts[key]["count"] += 1
+        rule_breakdown = sorted(rule_counts.values(), key=lambda r: (-r["count"], r["rule_key"]))
+        return {
+            "batch_id": batch_id,
+            "filename": batch["filename"],
+            "entries": entries,
+            "hard_reject_count": hard,
+            "soft_flag_count": soft,
+            "total_count": len(entries),
+            "rule_breakdown": rule_breakdown,
         }
 
 
@@ -4958,6 +5000,31 @@ def undo_batch(batch_id: str, force: bool = Query(False)):
                 })
 
         conn.execute("DELETE FROM txn WHERE import_batch_id = ?", (batch_id,))
+
+        # Clean up dedupe state the batch left behind. Three concerns:
+        #   1. The batch's own hard-reject records (import_batch_duplicate) describe a decision
+        #      about an import that no longer exists. Keeping them around would surface stale
+        #      entries in the unified duplicate report.
+        #   2. The batch's coverage records (import_batch_account) tell future imports "this
+        #      date range was already covered." Once the batch is undone that premise is gone;
+        #      leaving the records in place would cause future imports to spuriously hard-reject
+        #      rows on those dates.
+        #   3. Soft-flags on OTHER batches may point at txns that just got deleted (their
+        #      suspect_duplicate_of references rows from this batch). Clear those dangling
+        #      pointers so the unified report doesn't carry orphaned entries.
+        conn.execute("DELETE FROM import_batch_duplicate WHERE batch_id = ?", (batch_id,))
+        conn.execute("DELETE FROM import_batch_account WHERE batch_id = ?", (batch_id,))
+        conn.execute(
+            """
+            UPDATE txn
+            SET    suspect_duplicate_of = NULL,
+                   suspect_duplicate_reason = NULL,
+                   suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE  suspect_duplicate_of IS NOT NULL
+              AND  suspect_duplicate_of NOT IN (SELECT id FROM txn)
+            """
+        )
+
         conn.execute(
             "UPDATE import_batch SET status = 'undone' WHERE id = ?", (batch_id,)
         )

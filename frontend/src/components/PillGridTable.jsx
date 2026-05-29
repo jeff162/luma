@@ -1,6 +1,19 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+/*
+ * Header-only table: owns the sortable/draggable/resizable column row, but the body is
+ * consumer-provided via `renderBody({ columns, gridTemplateColumns })`. This split lets
+ * consumers attach their own scroll ref + `overflow-y: auto` to the body container so the
+ * pill header stays put while just the rows scroll, and lets each cell render arbitrarily
+ * complex content (editors, action buttons, multi-line). See `TransactionListTable.jsx` for
+ * the canonical consumer and its scroll-container contract.
+ *
+ * Auto-scroll-during-column-drag: holding a header pill near the left/right edge of the
+ * nearest horizontally-scrollable ancestor scrolls that ancestor via requestAnimationFrame,
+ * so a column can be dragged past the viewport edge when the table is wider than its container.
+ */
+
 import { useEffect, useMemo, useRef } from 'react'
 import PillTableHeader from './PillTableHeader.jsx'
 

@@ -1,6 +1,6 @@
 Date,Merchant,Category,Account,Original Statement,Notes,Amount,Tags,Owner
 2025-11-26,Amazon,Shopping,CREDIT CARD (...1234),AMAZON MKTPLACE,,-19.99,,Alex
-2025-11-27,Harbor Fuel East,Gas,CREDIT CARD (...1234),HARBOR FUEL #331,,-38.41,,Alex
+2025-11-27,City Gas East,Gas,CREDIT CARD (...1234),CITY GAS #331,,-38.41,,Alex
 2025-11-28,Netflix Stream,Streaming,CREDIT CARD (...1234),NETFLIX.COM,,-7.99,Subscription,Alex
 2025-11-28,Westside Bakehouse,Dining,CREDIT CARD (...1234),WESTSIDE BAKERY,,-12.45,,Alex
 2025-11-28,Apple,Software,CREDIT CARD (...1234),APPLE.COM/BILL,,-1.99,,Alex

@@ -2,9 +2,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 /*
- * Account, category, and transaction detail drawers all share the same interaction model here:
- * open docked, optionally become a remembered floating panel, show a windowed month chart, and lazy-load
- * the selected month's transactions. The leaf components only swap in their own header and query logic.
+ * Shared chrome for every floating detail panel (AccountDetail, CategoryDetail, MonthDetail,
+ * TagDetail, TransactionDetail, ImportBatchDetail, the duplicate-detection dialog). Three
+ * non-obvious design points:
+ *
+ *   - `useDetailPanelChrome` does drag via direct-DOM writes (requestAnimationFrame-batched)
+ *     and only commits the final position to React state on mouseup. This skips React
+ *     reconciliation per mousemove — crucial for dialogs hosting large tables. Trade-off
+ *     documented at the drag effect itself.
+ *
+ *   - `DetailPanelShell` claims a slot in `PanelStackContext` so z-index ordering and click-
+ *     to-focus work across panels rendered in different parts of the tree (e.g., the App-
+ *     level duplicate dialog and route-mounted batch/account panels coordinate via one stack).
+ *
+ *   - `usePagedTransactions` backs lists that infinite-scroll as the user nears the bottom.
+ *     `activeKey` resets pagination — consumers include filters (date range, search) in the
+ *     key so changing a filter starts over at page 1.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -15,6 +28,7 @@ import {
 import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { formatSignedAxisTick, formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground } from './ui.jsx'
+import { usePanelStackSlot } from '../contexts/PanelStackContext.jsx'
 
 export const DETAIL_PAGE_SIZE = 100
 // Default panel width fits the full transaction-table column set (date, merchant,
@@ -79,9 +93,25 @@ export function useDetailPanelChrome(onClose, options = {}) {
     forceFloating = false,
     stackIndex = 0,
     initialPosition = null,
+    initialSize = null,
   } = options
-  const [pos, setPos] = useState(null)
-  const [size, setSize] = useState(null)
+  // When the caller passes a saved position (e.g., restoring a minimized dialog), seed `pos`
+  // synchronously so the first paint is already at the correct location. Otherwise the panel
+  // would render once at the docked/centered fallback (with backdrop) and then snap to the
+  // saved position on the next frame — visible as a flash. We clamp against initialSize (the
+  // caller's declared panel size) so a saved position that's now off-screen — because the
+  // window was resized smaller — still lands within the viewport. The post-mount window-resize
+  // effect / ResizeObserver will re-clamp using the real measured rect; the initial clamp here
+  // is the safety net that guarantees enough of the panel is on-screen to grab.
+  const [pos, setPos] = useState(() => (
+    forceFloating && initialPosition
+      ? clampPanelPosition(applyPanelStackOffset(initialPosition, stackIndex), initialSize)
+      : null
+  ))
+  // initialSize lets a caller open the panel at a constrained explicit size so the user has
+  // room to drag it around. Without this the panel falls back to a max-height that nearly fills
+  // the viewport, which leaves zero vertical drag range (clampPanelPosition locks Y to topGutter).
+  const [size, setSize] = useState(initialSize)
   const [dragging, setDragging] = useState(false)
   const [resizing, setResizing] = useState(false)
   const panelRef = useRef(null)
@@ -138,6 +168,30 @@ export function useDetailPanelChrome(onClose, options = {}) {
 
   useEffect(() => {
     if (!dragging) return
+    // Direct-DOM drag: writing `left`/`top` via panelRef on each mousemove (batched through
+    // requestAnimationFrame) skips React reconciliation entirely while the user is dragging.
+    // For dialogs with large bodies (the duplicate-detection report renders hundreds of table
+    // rows), per-mousemove `setState`-driven re-renders were noticeably sluggish — every frame
+    // walked the whole subtree even though the only thing changing was the panel position.
+    // We commit the final position to React state on mouseup so subsequent renders read the
+    // up-to-date pos. Trade-off: an outside re-render in mid-drag would briefly snap the panel
+    // back to the last committed pos until the next mousemove. No call site currently triggers
+    // such renders during drag, and the next mousemove corrects the position immediately.
+    let pendingFrame = null
+    let lastEvent = null
+    let lastWritten = null
+    function applyFrame() {
+      pendingFrame = null
+      if (!lastEvent || !panelRef.current) return
+      const rect = panelRef.current.getBoundingClientRect()
+      const next = clampPanelPosition({
+        x: lastEvent.clientX - dragOffset.current.x,
+        y: lastEvent.clientY - dragOffset.current.y,
+      }, rect)
+      panelRef.current.style.left = `${next.x}px`
+      panelRef.current.style.top  = `${next.y}px`
+      lastWritten = next
+    }
     function onMove(e) {
       if (!hasDragged.current) {
         if (!pos && panelRef.current) {
@@ -150,17 +204,22 @@ export function useDetailPanelChrome(onClose, options = {}) {
         }
         hasDragged.current = true
       }
-      const rect = panelRef.current?.getBoundingClientRect()
-      const next = clampPanelPosition({
-        x: e.clientX - dragOffset.current.x,
-        y: e.clientY - dragOffset.current.y,
-      }, rect)
-      setPos(prev => (prev ? next : prev))
+      lastEvent = { clientX: e.clientX, clientY: e.clientY }
+      if (!pendingFrame) pendingFrame = requestAnimationFrame(applyFrame)
     }
-    function onUp() { setDragging(false) }
+    function onUp() {
+      if (pendingFrame) {
+        cancelAnimationFrame(pendingFrame)
+        pendingFrame = null
+        applyFrame()
+      }
+      if (lastWritten) setPos(lastWritten)
+      setDragging(false)
+    }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
     return () => {
+      if (pendingFrame) cancelAnimationFrame(pendingFrame)
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
@@ -532,14 +591,21 @@ export function DetailPanelShell({
   children,
   isTopmost = true,
 }) {
+  const stack = usePanelStackSlot()
+  const effectiveIsTopmost = stack.isTopmost && isTopmost
   const panelSurfaceStyle = getFloatingPanelSurfaceStyle({
-    active: !pos || isTopmost,
+    active: !pos || effectiveIsTopmost,
     radius: 12,
   })
   const explicitSized = Boolean(size)
+  // mousedown anywhere on the panel (header, body, buttons) is the click-to-focus trigger.
+  // Using mousedown rather than click means the panel rises immediately, before any nested
+  // event listener runs — so the focused panel is on top while the user's actual gesture
+  // (button press, drag-to-select) executes against it.
+  const onPanelMouseDown = stack.bringToFront
   return (
     <div style={{
-      position: 'fixed', inset: 0, zIndex: 400,
+      position: 'fixed', inset: 0, zIndex: stack.zIndex - 1,
       background: pos ? 'transparent' : 'rgba(0,0,0,0.5)',
       display: pos ? 'block' : 'flex',
       alignItems: 'flex-start', justifyContent: 'center',
@@ -549,6 +615,7 @@ export function DetailPanelShell({
     }}>
       <div
         ref={panelRef}
+        onMouseDownCapture={onPanelMouseDown}
         style={{
           position: pos ? 'fixed' : 'relative',
           left: pos ? pos.x : undefined,
@@ -565,7 +632,7 @@ export function DetailPanelShell({
           flexDirection: 'column',
           pointerEvents: 'auto',
           userSelect: dragging || resizing ? 'none' : 'auto',
-          zIndex: 401,
+          zIndex: stack.zIndex,
           ...panelSurfaceStyle,
         }}
       >
@@ -574,7 +641,7 @@ export function DetailPanelShell({
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             padding: '16px 24px', borderBottom: '1px solid var(--border)', flexShrink: 0,
-            background: getFloatingPanelHeaderBackground(isTopmost),
+            background: getFloatingPanelHeaderBackground(effectiveIsTopmost),
             cursor: dragging ? 'grabbing' : 'grab',
           }}
         >

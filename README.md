@@ -206,25 +206,27 @@ logging, or other advanced options.
 Luma currently has a small set of test paths that are useful for catching regressions:
 
 - **Backend duplicate-detection tests:** fixture-driven import tests live in `backend/tests/test_import_duplicate_detection.py` with anonymized CSV fixtures under `backend/tests/fixtures/import_duplicates/`
-- **Backend suspect-duplicate detection tests:** unit-style coverage of the soft-match flow (new-account guard, payee normalization, account-merge sweep, keep/trash resolution) in `backend/tests/test_suspect_duplicates.py`
+- **Backend suspect-duplicate detection tests:** unit-style coverage of the soft-match flow (cross-account import-time flagging, payee normalization, per-pair-distinct filter via `account_pair_distinct`, broad-Keep cascade, keep/reject resolution with the `dedupe_resolved_by` provenance marker, promote-on-merge with same-batch transitivity clear, auto-restore-on-detach for auto_merge rows, user-Reject preservation across detach, conservation invariants for credit-card-reissue and N-way-merge scenarios) in `backend/tests/test_suspect_duplicates.py`
+- **Backend dedupe rule evaluator tests:** isolated tests for the per-row `evaluate_duplicate` rule chain in `backend/tests/test_evaluate_duplicate.py` — drives each rule with a programmatic `DedupeContext` so individual rule preconditions and verdict shapes can be pinned without standing up a full import
 - **Backend trash filter tests:** confirm trashed transactions disappear from `list_transactions`, `monthly_trend`, and `spending_by_group`, and that `/transactions/trash` reveals them, in `backend/tests/test_transaction_trash_filter.py`
 - **Frontend UI regression checks:** Playwright tests live in `frontend/tests/ui/` and cover a small set of import/export behaviors and smoke checks
 
-Backend tests (all):
+### Running the backend tests
+
+A helper script under `scripts/` wraps `python -m unittest` using the backend venv, so the same command works whether you've installed the backend deps system-wide or only inside `backend/venv/`. Tests use isolated SQLite files in `tempfile.TemporaryDirectory()`s — they do not touch the live `fintrack-data.db`, so they're safe to run with the backend still up.
 
 ```bash
-python3 -m unittest discover -s backend/tests
+scripts/run_tests.sh                                              # everything
+scripts/run_tests.sh backend.tests.test_suspect_duplicates        # one module
+scripts/run_tests.sh backend.tests.test_evaluate_duplicate.EvaluateDuplicateRuleTests.test_exact_hash_same_account_dominates_other_rules
+scripts/run_tests.sh -v                                           # verbose listing
 ```
 
-Backend duplicate-detection tests:
+The script requires `backend/venv/` to exist — `scripts/start_backend.sh` creates the venv on its first run and installs `backend/requirements.txt`. If a new dependency lands, re-run `start_backend.sh` once to refresh the venv before running tests again.
 
-```bash
-python3 -m unittest backend.tests.test_import_duplicate_detection
-```
+The fixture-driven import tests run real CSV imports through the backend import logic and compare the resulting duplicate reasons and final imported ledger against expected snapshots under `backend/tests/fixtures/import_duplicates/`.
 
-These tests run real CSV imports through the backend import logic and compare the resulting duplicate reasons and final imported ledger against expected snapshots. They require the backend Python dependencies from `backend/requirements.txt`, including `python-multipart`.
-
-Frontend Playwright checks:
+### Frontend Playwright checks
 
 ```bash
 cd frontend

@@ -2,11 +2,21 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Account records now serve two related account-lifecycle models.
+Account records serve two related lifecycle models.
 
 - Active root accounts are the selectable/reportable physical accounts the rest of the app works with.
 - Child accounts keep historical account numbers visible on the Accounts page while sharing a parent display name elsewhere.
 - Trashed child accounts stay recoverable until the trash is emptied, at which point their references are folded into the parent.
+
+Attach / detach also coordinates with dedupe state — see
+`backend/services/duplicate_detection.py`:
+- attach declares two accounts as the same physical account, so it drops any prior
+  "these accounts are distinct" assertion (`clear_account_pair_distinct_for_merge`) and
+  promotes pre-existing cross-account soft-flags between the merged accounts to confirmed
+  duplicates (`promote_in_group_suspects_to_confirmed`, tagged `dedupe_resolved_by='auto_merge'`).
+- detach reverses the merge promotion: rows on the detaching account that were tagged
+  `'auto_merge'` and point into the remaining group are restored to active-suspect state
+  (`restore_auto_merged_after_detach`). User-Reject decisions (`'user'`) are preserved.
 """
 
 import json
@@ -19,7 +29,13 @@ from pydantic import BaseModel
 
 from backend.db.database import SHARED_OWNER_NAME, SHARED_OWNER_ID, get_db
 from backend.json_utils import safe_json_dict
-from backend.services.suspect_duplicates import mark_merge_suspects
+from backend.services.duplicate_detection import (
+    clear_account_pair_distinct_for_merge,
+    forget_account_pair_distinct,
+    list_distinct_account_pairs,
+    promote_in_group_suspects_to_confirmed,
+    restore_auto_merged_after_detach,
+)
 
 router = APIRouter()
 IMPORT_SUMMARY_KEY = "import_summary"
@@ -445,6 +461,26 @@ def update_account(account_id: str, body: AccountUpdate):
     return {"ok": True}
 
 
+# Distinct-account-pair assertions: the user's explicit "these two accounts are different
+# physical accounts" decisions, recorded via Keep on a cross-account soft-flag suspect. The
+# `account_pair_distinct` table is read here for the management UI and written by the dedupe
+# service when the user clicks Keep. See `backend/services/duplicate_detection.py` for the
+# detection-side logic and the design rationale.
+@router.get("/distinct-pairs")
+def list_distinct_account_pairs_endpoint():
+    with get_db() as conn:
+        return {"pairs": list_distinct_account_pairs(conn)}
+
+
+@router.delete("/distinct-pairs/{account_id_a}/{account_id_b}")
+def forget_distinct_account_pair(account_id_a: str, account_id_b: str):
+    """Forget a recorded distinct-account assertion. Future imports touching both accounts will
+    re-evaluate cross-account matches between them as normal; any matches that previously got
+    suppressed by this assertion will resurface as soft-flag suspects again."""
+    with get_db() as conn:
+        return forget_account_pair_distinct(conn, account_id_a, account_id_b)
+
+
 @router.post("/{account_id}/attach")
 def attach_account(account_id: str, body: AccountAttachRequest):
     with get_db() as conn:
@@ -481,24 +517,59 @@ def attach_account(account_id: str, body: AccountAttachRequest):
             "UPDATE account SET parent_account_id = ?, display_name = ? WHERE id = ?",
             [(parent["id"], target_display_name, member_id) for member_id in group_member_ids],
         )
-        # Two accounts that previously looked distinct are now one group; re-check transactions
-        # in the newly-attached members for matches anywhere else in the ledger by
-        # (date, amount, payee). Flagged pairs surface in the duplicate-review report.
-        mark_merge_suspects(conn, group_member_ids + [parent["id"]])
+        # In the new per-pair-distinct dedupe model, detection happens at import time only.
+        # On merge we have two responsibilities:
+        #   1. Promote any PRE-EXISTING soft-flags whose two sides are now in this linked
+        #      group to confirmed duplicates. The merge is the user's assertion that the two
+        #      accounts are the same physical account; a same (date, amount, payee) match
+        #      across them is the same case that exact_hash_linked_group would have hard-
+        #      rejected at import time.
+        #   2. Delete any `account_pair_distinct` rows between the merging accounts. The user
+        #      may have previously asserted these accounts were distinct; the merge contradicts
+        #      that, so the new declaration wins.
+        affected_ids = group_member_ids + [parent["id"]]
+        promote_in_group_suspects_to_confirmed(conn, affected_ids)
+        clear_account_pair_distinct_for_merge(conn, affected_ids)
     return {"ok": True}
 
 
 @router.post("/{account_id}/detach")
 def detach_account(account_id: str):
+    """Detach an account from its parent group. Two things happen:
+
+    1. The account itself: parent_account_id cleared, display_name reset to its own name,
+       trashed_at cleared (a previously soft-deleted child can come back live on detach).
+    2. Dedupe state: any confirmed_duplicate rows on the detaching account that were
+       auto-promoted by the original merge (dedupe_resolved_by='auto_merge') and that point at
+       canonical rows on accounts still in the now-shrunk group are restored to active-suspect
+       state. Rows the user explicitly Rejected (dedupe_resolved_by='user') are left alone —
+       the user's deliberate decision survives the un-merge.
+
+    Cross-account soft-flags (not auto-promoted, still active suspects) are untouched by detach
+    — they reflect import-time facts, not group membership.
+    """
     with get_db() as conn:
         account = _get_account_row(conn, account_id)
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
+        # Capture the remaining-group accounts BEFORE clearing parent_account_id, so we know
+        # which canonicals the auto-promoted rows on the detaching account were promoted
+        # against. Group = parent + all of parent's children except the one being detached.
+        remaining_group_ids: list[str] = []
+        parent_id = account["parent_account_id"]
+        if parent_id:
+            remaining_group_ids.append(parent_id)
+            sibling_rows = conn.execute(
+                "SELECT id FROM account WHERE parent_account_id = ? AND id != ?",
+                (parent_id, account_id),
+            ).fetchall()
+            remaining_group_ids.extend(str(row["id"]) for row in sibling_rows)
         conn.execute(
             "UPDATE account SET parent_account_id = NULL, display_name = name, trashed_at = NULL WHERE id = ?",
             (account_id,),
         )
-    return {"ok": True}
+        restored = restore_auto_merged_after_detach(conn, account_id, remaining_group_ids)
+    return {"ok": True, "restored_count": restored}
 
 
 @router.post("/{account_id}/trash")

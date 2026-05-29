@@ -1,6 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""
+Surfaces the nag list shown on the Tasks page and as a badge count on the nav. Each task is
+a small "you have things to look at" item — unowned accounts when the user is tracking owners,
+unresolved duplicate suspects, uncategorized transactions, etc.
+
+The conditions here are intentionally curated and behavior-sensitive (e.g., owner-related
+tasks stay hidden until the household actually uses owner tracking) so a fresh install doesn't
+greet the user with a wall of warnings about features they haven't opted into yet.
+"""
+
 from fastapi import APIRouter
 from backend.db.database import get_db
 

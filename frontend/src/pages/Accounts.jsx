@@ -3,7 +3,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
-import { refreshTaskBadge } from '../App.jsx'
+import { refreshTaskBadge, notifyAccountsChanged } from '../App.jsx'
 import { Card, Button, Spinner, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog } from '../components/ui.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import PillTableHeader from '../components/PillTableHeader.jsx'
@@ -1850,6 +1850,7 @@ export default function Accounts() {
       setSortIndicatorActive(false)
     }
     refreshTaskBadge()
+    notifyAccountsChanged()
   }
 
   function requestDelete(accountId) {
@@ -1866,6 +1867,7 @@ export default function Accounts() {
     await api.deleteAccount(accountId)
     reloadAccounts().catch(() => { })
     refreshTaskBadge()
+    notifyAccountsChanged()
   }
 
   async function saveOwner(ownerId, data) {
@@ -1904,6 +1906,7 @@ export default function Accounts() {
     )))
     setSortIndicatorActive(false)
     refreshTaskBadge()
+    notifyAccountsChanged()
   }
 
   function clearDragState() {
@@ -1939,6 +1942,7 @@ export default function Accounts() {
       await api.attachAccount(source.id, target.id)
       await reloadAccounts()
       refreshTaskBadge()
+      notifyAccountsChanged()
     } catch (error) {
       setNoticeDialog({
         title: 'Could not regroup accounts',
@@ -1957,6 +1961,7 @@ export default function Accounts() {
       await api.detachAccount(account.id)
       await reloadAccounts()
       refreshTaskBadge()
+      notifyAccountsChanged()
     } catch (error) {
       setNoticeDialog({
         title: 'Could not ungroup account',
@@ -1977,6 +1982,7 @@ export default function Accounts() {
       await api.trashAccount(account.id)
       await reloadAccounts()
       refreshTaskBadge()
+      notifyAccountsChanged()
     } catch (error) {
       setNoticeDialog({
         title: 'Could not send account to trash',

@@ -30,6 +30,10 @@ This document defines UI behavior and interaction patterns. For underlying data 
 
 - [Ownership and tag-driven reporting](#ownership-and-tag-driven-reporting)
 
+- [Floating detail panels](#floating-detail-panels)
+
+- [Charts and overlays](#charts-and-overlays)
+
 - [When to document a new pattern](#when-to-document-a-new-pattern)
 
 ## Product intent
@@ -332,6 +336,58 @@ Ownership-related rules:
 - **Inherited tag display:** tags inherited from a parent group render in italic without a remove `×` on the leaf's panel, since removing them at the leaf would not propagate; the user must edit the group's tags instead. On transaction rows, inherited tags use the outline tag glyph and a tooltip that names the source.
 
 - **No transaction-level override of inherited tags yet:** if a transaction needs to opt out of an inherited tag, retag at the level the inheritance comes from. A future "block inherited" mechanism (parallel to the existing `manual_state` for direct tags) can be added when an actual case calls for it.
+
+## Floating detail panels
+
+Account, category, payee, single-month-transactions, and tag-signature detail drawers all share one shell (`DetailPanelShell` plus `useDetailPanelChrome` in `frontend/src/components/detailShared.jsx`). Anything new in the detail-panel family should plug into the same shell so the chrome and behavior stay consistent.
+
+- **Open behavior.** Panels open docked at a sensible spot. The first drag converts them to floating, with a small stacking offset when more than one is open at once.
+
+- **Resize.** A `nwse-resize` handle in the bottom-right corner lets the user resize any panel. The first resize gesture also promotes the panel to floating geometry so size and position stay coherent. Min/max are clamped to keep the panel inside the viewport; size is session-only (not persisted).
+
+- **Stacking and click-to-focus.** Z-index is managed by a single app-level registry in `frontend/src/contexts/PanelStackContext.jsx`. Every `DetailPanelShell` claims a slot via `usePanelStackSlot` on mount; the slot returns its current `zIndex`, an `isTopmost` flag for header styling, and a stable `bringToFront` callback. Clicking anywhere on a panel surface (`onMouseDownCapture` in the shell) lifts that panel to the front of the stack — works across panels rendered in different parts of the tree (e.g., the App-level duplicate-detection dialog and route-mounted batch/account/month panels coordinate through the same stack). Re-opening the same target focuses the existing panel rather than spawning a duplicate; if the target's payload differs from the existing panel's payload (e.g., the duplicate-report drill-through opens the same batch with vs. without a date filter), the existing panel's payload is replaced rather than ignored, so the second click reflects the new parameters.
+
+- **Dismissal.** Panels require an explicit close (`×` in the header, Escape with focus inside the panel). Backdrop-click dismissal is intentionally avoided so a half-finished edit is not lost to a stray click.
+
+- **Minimize-to-nav-bar.** Long-lived dialogs that the user wants to keep open while working elsewhere can offer a Minimize affordance instead of forcing a close. The pattern (see `MinimizedDuplicatesNavItem` in `UnifiedDuplicatesViewerContext.jsx`) is: a `minimized: true` flag on the dialog's state hides the floating panel without dropping any loaded data; a small pill appears in the nav bar showing the dialog's title plus a count of items needing attention; clicking the pill flips `minimized` back to false and the panel reappears at its prior position/size with its prior sort/selection preserved. State must be lifted out of the route tree (typically to an App-level context) so the dialog survives route navigation while minimized.
+
+- **Persisted geometry.** Dialogs that the user routinely re-opens should remember their last-dragged position and size via `useUserPreference`. The persisted snapshot should include the viewport size at save time (`{pos, size, viewport: {width, height}}`); on restore, scale both position and size proportionally against the current viewport so a dialog saved bottom-right on a 1920×1080 monitor lands bottom-right on a 1280×720 laptop. The chrome's existing `clampPanelPosition` guarantees enough of the panel stays on-screen to grab even if a saved geometry would otherwise place it past the new viewport edge.
+
+- **Auto-refresh on cross-page mutations.** Dialogs that show data that other pages can mutate (the duplicate-detection report's entries are affected by merges/renames on the Accounts page, etc.) should subscribe to a window-level event dispatched by the mutation site (`notifyAccountsChanged` in `App.jsx` is the pattern). Listeners debounce briefly and only refresh when the dialog is open *and* not currently loading. The `minimized` flag must survive these refreshes — minimize keeps the dialog stashed; an out-of-band refresh should never pop it back into view.
+
+- **Default panel width** is sized to fit the standard transaction table without clipping the Amount column. New detail panels that host a transaction table should not override that down to a narrower value.
+
+- **Scroll-container contract.** The actual scroll viewport for paginated transaction lists inside detail panels is the `renderBody` div in `TransactionListTable` (under `usePillTable + fillHeight`). All ancestors between the panel shell and that div must propagate height via a flex column chain — every wrapper needs either `flex: 1, minHeight: 0` or an explicit `height` that resolves against a flex parent. A plain block wrapper anywhere in the chain silently breaks percentage-height resolution for its descendants, the scroll viewport ends up sized to its content (no overflow), and wheel events bubble out through the floating-panel backdrop (`pointer-events: none`) into the page behind. If you add a new wrapper around `TransactionListTable`, give it `display: flex, flexDirection: column, flex: 1, minHeight: 0` and verify scroll still works in the BatchDetail panel against a large file.
+
+## Charts and overlays
+
+Recharts is the visualization library. A few conventions keep charts consistent across the dashboard and detail panels.
+
+- **Themed tooltips.** Use the shared `CHART_TOOLTIP_CONTENT_STYLE`, `CHART_TOOLTIP_LABEL_STYLE`, and `CHART_TOOLTIP_ITEM_STYLE` constants from `frontend/src/lib/moneyDisplay.js` on every `<Tooltip>`. Recharts colors each item's value text using the data series color by default, which is invisible against the dark surface for darkly-themed accents; the shared `itemStyle` forces value text back to `var(--text)`.
+
+- **Signed axis labels.** Use `formatSignedAxisTick` from `moneyDisplay.js` for any y-axis whose data can span both sides of zero (monthly trends, account balances, refund-heavy months in an expense category). It renders `-$1.5k` instead of the raw `$-1500` Recharts would otherwise emit, and pairs with `formatSignedMoneyAmount` for the tooltip body.
+
+- **Average reference line.** When a chart shows a meaningful per-period average, render it as a `<ReferenceLine>` using the shared `AvgReferenceLabel` component (in `frontend/src/pages/Dashboard.jsx`). The label is split: a small "Avg" pill anchored inside the chart at the line's height, plus the formatted value rendered in the y-axis tick column (accent color, slightly bolder than regular ticks). The pill is `pointer-events: none` so it does not interfere with the chart's own hover tooltip.
+
+- **Click-on-chart-element to drill.** Bars on the dashboard's monthly-trend chart click through to a `MonthDetail` for that month; pie wedges on the Spending-by group/category/tag-report panels click through to either the next drill level (group → categories) or the appropriate transaction detail. Use the `cursor: 'pointer'` style on the clickable element so the drill affordance is discoverable; pair the chart click handler with the same handler the row legend uses so list and chart behave identically.
+
+- **Tooltip offset on dense charts.** Stacked area charts can have many elements clustered near the cursor; bump the `<Tooltip offset>` past the default 10 (the dashboard's "Monthly spending by group" uses 20) so the tooltip card does not obscure the column the user is reading.
+
+### Pie partition with Other-drill
+
+Long-tail categorical pies (the dashboard's Spending-by-group/category and tag-report wedges) use an adaptive slicing algorithm in `frontend/src/pages/Dashboard.jsx` so the chart stays clickable even when the underlying data has many small items.
+
+- **Minimum named wedges** (`MIN_NAMED_SLICES`, currently 10). At least this many real items are shown before the long tail is collapsed.
+
+- **Smallest-wedge threshold** (`SMALLEST_NAMED_SLICE_MIN_SHARE`, currently 3%). Beyond the minimum, items keep getting peeled out as long as the next one would still be at least this big a share of the current page's pool. Once the next item would drop below the threshold, the rest are collapsed into a synthetic `Other (N)` wedge.
+
+- **No upper cap.** If a dataset has many items above the threshold, all of them render directly. The threshold (not an arbitrary cap) controls the cutoff.
+
+- **Singleton absorption.** If peeling would leave exactly one item in Other, that item is added to the named wedges instead so we never show a one-item Other.
+
+- **Other-drill.** Clicking Other re-renders the pie against just the remaining tail with the same algorithm. The threshold is recomputed against the smaller pool so deeper levels do not strand the user. A breadcrumb above the pie tracks the Other depth and clicking any crumb pops back to that level.
+
+- **Peeled-Other vs. natural-Other.** In tag-report mode, transactions matching none of the selected report tags form a *natural* Other / Untagged signature. That is distinct from the synthetic peeled-Other wedge added at any given depth. Wedges added by the slicing algorithm carry a `_peeledOther` flag so the click handler can dispatch correctly: peeled-Other pages deeper; natural-Other opens the detail panel for that signature.
 
 ## When to document a new pattern
 

@@ -1,0 +1,1111 @@
+# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""
+Duplicate detection for transactions — hard-reject (blocked at import) and soft-flag
+(imported with a suspect pointer for user review).
+
+The rule chain is a confidence ladder:
+
+  * High confidence — exact content-hash match (same account or same linked group) → hard-
+    reject. The incoming row never enters the ledger; the rejection is recorded in
+    `import_batch_duplicate` so it can resurface if the rejecting batch is later undone.
+  * Medium confidence — coverage-window or terminal-day rules, plus a fuzzy-text fallback.
+    Fires only when the receiving account already had prior history in the matching scope
+    (or the import explicitly declared it an alias). A brand-new sibling that only inherits
+    its linked-group's coverage doesn't satisfy the precondition and falls through.
+  * Lower confidence — cross-account match by (date, amount, normalized payee). Always
+    soft-flag, never hard-reject; surfaces in the unified duplicate report so the user can
+    Keep (assert the two accounts are distinct) or Reject (confirm a duplicate).
+
+Triggers:
+  * Import-time per row (`evaluate_duplicate` via `DedupeContext`) — assigns hard-reject /
+    soft-flag / passthrough verdicts as each row is inserted.
+  * Post-batch sweep (`mark_import_suspects`) — runs against the just-inserted batch for the
+    cross-account soft-flag case. Skips pairs the user has previously declared distinct via
+    `account_pair_distinct`; that table is what keeps the report non-noisy after the user has
+    reviewed each pair once.
+  * Account merge (`promote_in_group_suspects_to_confirmed`) — when two accounts merge into
+    one linked group, any pre-existing cross-account soft-flag between them gets promoted to
+    `rejection_reason='duplicate_confirmed'` (tagged `dedupe_resolved_by='auto_merge'`). Also
+    performs a same-batch transitivity clear: a sibling row in the same CSV as a promoted row
+    whose own suspect points into the same merged group has its suspect flag cleared, because
+    same-CSV-different-account asserts distinct, and the merge identifies one of them with the
+    canonical.
+  * Account detach (`restore_auto_merged_after_detach`) — reverses auto_merge promotions for
+    rows on the detaching account that pointed into the remaining group. Rows the user
+    explicitly Rejected (dedupe_resolved_by='user') are left alone.
+
+The cross-account soft-flag SQL joins on `(date, ROUND(amount, 2), normalized payee)`, indexed
+via `idx_txn_date_amount`, so cost stays proportional to candidate pairs rather than N*N.
+
+The user-asserted "these two accounts are distinct" model (see `account_pair_distinct` table
+and `resolve_suspect(action='keep')`) replaced an older proxy that fired only when the
+receiving account was brand new to the database. The new model keeps detection running for
+every cross-batch pair forever, with the per-pair table acting as the user's accumulated
+filter of "I've already decided these are different accounts."
+"""
+
+import sqlite3
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Optional
+
+
+# The same normalized-payee expression is used on both sides of the join. The COALESCE chain
+# matches the convention used elsewhere in the app for "what label do we show for this txn."
+NORMALIZED_PAYEE_SQL = (
+    "LOWER(TRIM(COALESCE(NULLIF({alias}.display_name, ''), "
+    "NULLIF({alias}.merchant_name, ''), NULLIF({alias}.raw_name, ''), '')))"
+)
+
+
+def _placeholders(values) -> str:
+    return ",".join("?" * len(values))
+
+
+# ---------------------------------------------------------------------------
+# Import-time per-row evaluator
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class DedupeContext:
+    """Precomputed lookups for a single import pass. Built once via `build_dedupe_context` so
+    the per-row evaluator is just dict lookups."""
+
+    existing_hashes_by_account: dict = field(default_factory=dict)
+    existing_hashes_by_effective_account: dict = field(default_factory=dict)
+    existing_rows_by_account_amount: dict = field(default_factory=dict)
+    existing_rows_by_effective_account_amount: dict = field(default_factory=dict)
+    import_coverage_by_csv_value: dict = field(default_factory=dict)
+    import_coverage_by_scope_id: dict = field(default_factory=dict)
+    terminal_day_candidates_by_csv_day: dict = field(default_factory=dict)
+    terminal_day_candidates_by_scope_day: dict = field(default_factory=dict)
+    accounts_with_prior_history: set = field(default_factory=set)
+    explicit_alias_csv_values: set = field(default_factory=set)
+    account_duplicate_compare_targets: dict = field(default_factory=dict)
+    coverage_strategy_enabled: bool = True
+    text_strategy_enabled: bool = True
+    # Helpers live in the import-flow module today; importing them here would create a circular
+    # dependency, so the caller passes them in. Moving the helpers into this module is a planned
+    # follow-up cleanup; once that lands these fields drop out of the context.
+    helpers: dict = field(default_factory=dict)
+
+
+@dataclass
+class DedupeVerdict:
+    """Result of evaluating a single row. Exactly one of `hard_reject` / `soft_flag` / `passthrough`
+    is true. When `hard_reject`, `matched` and `reason` describe why; the caller writes the row to
+    `import_batch_duplicate` and skips insert. When `soft_flag`, `suspect_of` carries the existing
+    row id and `reason_key` carries a stable code (e.g. `'import_new_account'`); the caller inserts
+    the row with `suspect_duplicate_of` set. When `passthrough`, the row is inserted normally.
+
+    `terminal_day_reconciled` is exposed separately because the text-strategy rule needs to know
+    whether the terminal-day branch already considered the row, even when no terminal-day match
+    was produced — preserves the existing precedence semantics.
+    """
+
+    hard_reject: bool = False
+    soft_flag: bool = False
+    passthrough: bool = True
+    matched: Optional[dict] = None
+    reason: str = ""
+    suspect_of: Optional[str] = None
+    reason_key: str = ""
+    terminal_day_reconciled: bool = False
+
+
+def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_account_id: str,
+                                          parsed_date: str, amount: float,
+                                          duplicate_amount_key, include_scope: bool) -> list[dict]:
+    """For a coverage-window hit, look up actual same-account candidate rows by (date, amount).
+    Returns a list of compact dicts the unified report renders directly. Empty list means
+    'covered date but no specific match' — the report flags those for manual review.
+
+    The lookup re-uses the per-account amount index that text-strategy already populates, so the
+    cost is dict lookups, not extra queries. For in-scope coverage we also fold in candidates from
+    sibling accounts in the linked group, since the rule's premise is that the prior import covered
+    the whole effective-account scope.
+    """
+    key = duplicate_amount_key(parsed_date, amount)
+    seen_ids: set[str] = set()
+    out: list[dict] = []
+    for candidate in context.existing_rows_by_account_amount.get(receiving_account_id, {}).get(key, []):
+        cid = candidate.get("id")
+        if cid and cid not in seen_ids:
+            seen_ids.add(cid)
+            out.append({
+                "id":            cid,
+                "date":          candidate.get("date"),
+                "merchant_name": candidate.get("merchant_name"),
+                "amount":        candidate.get("amount"),
+                "account_id":    candidate.get("account_id"),
+                "import_batch_id": candidate.get("import_batch_id"),
+            })
+    if include_scope:
+        # Try the linked-group rows too. We don't have compare_target_id at this point in the
+        # signature, so we iterate the whole effective-account map looking up by amount-key —
+        # cheap because the second-level dict is keyed by amount-key.
+        for scope_map in context.existing_rows_by_effective_account_amount.values():
+            for candidate in scope_map.get(key, []):
+                cid = candidate.get("id")
+                if cid and cid not in seen_ids:
+                    seen_ids.add(cid)
+                    out.append({
+                        "id":            cid,
+                        "date":          candidate.get("date"),
+                        "merchant_name": candidate.get("merchant_name"),
+                        "amount":        candidate.get("amount"),
+                        "account_id":    candidate.get("account_id"),
+                        "import_batch_id": candidate.get("import_batch_id"),
+                    })
+    return out
+
+
+def _coverage_matched(cov: dict, candidates: list[dict]) -> dict:
+    """Build the verdict's `matched` dict for a coverage-window hit. We deliberately do NOT echo
+    the incoming amount as a synthetic 'matched amount' (it implies a specific match we didn't
+    make). Instead we describe the coverage and attach any actual candidates the lookup found.
+
+    Shape:
+      - covered: { start_date, end_date, source_batch_id }   (always present)
+      - candidates: list of compact candidate dicts          (may be empty → no specific match)
+      - candidate_count: len(candidates)                     (UI shortcut)
+    """
+    return {
+        "covered": {
+            "start_date": cov.get("start_date"),
+            "end_date":   cov.get("end_date"),
+            "source_batch_id": cov.get("batch_id"),
+            "source_csv_value": cov.get("csv_value"),
+        },
+        "candidates":      candidates,
+        "candidate_count": len(candidates),
+    }
+
+
+def evaluate_duplicate(
+    *,
+    context: DedupeContext,
+    receiving_account_id: str,
+    csv_value: str,
+    content_hash: str,
+    parsed_date: str,
+    amount: float,
+    scope_id: Optional[str],
+    txn_payload: dict,
+) -> DedupeVerdict:
+    """Run the dedupe rule chain for a single incoming row. See module docstring for the rule
+    ladder. The caller builds `context` once per import via `build_dedupe_context` (or constructs
+    one directly for tests). `scope_id` is the receiving account's effective-account/linked-group
+    scope id, used by the in-scope rules.
+    """
+    h = context.helpers
+    date_in_window = h["date_in_window"]
+    candidate_summary = h["candidate_summary"]
+    match_terminal = h["match_terminal"]
+    duplicate_amount_key = h["duplicate_amount_key"]
+    find_textual = h["find_textual"]
+
+    # Rule 1: exact content-hash match within the receiving account.
+    matched = context.existing_hashes_by_account.get(receiving_account_id, {}).get(content_hash)
+    if matched:
+        return DedupeVerdict(hard_reject=True, passthrough=False, matched=matched,
+                             reason="Matches an existing transaction")
+
+    # Rule 2: exact content-hash match across the linked-group scope (cross-account).
+    compare_target_id = context.account_duplicate_compare_targets.get(csv_value)
+    if compare_target_id:
+        matched = context.existing_hashes_by_effective_account.get(compare_target_id, {}).get(content_hash)
+        if matched:
+            return DedupeVerdict(hard_reject=True, passthrough=False, matched=matched,
+                                 reason="Matches an existing transaction in the linked account group")
+
+    # Rule 3: coverage window from a prior import of the same source (csv_value). When the rule
+    # fires we ALSO look for actual candidate rows by (receiving_account, date, amount) so the
+    # report can show what we think the row matched (or flag "no specific match" if nothing
+    # plausible exists). The lookup is free — we already index existing rows by amount-key.
+    if context.coverage_strategy_enabled:
+        cov = next(
+            (entry for entry in context.import_coverage_by_csv_value.get(csv_value, [])
+             if date_in_window(parsed_date, entry.get("start_date"), entry.get("end_date"))),
+            None,
+        )
+        if cov:
+            candidates = _candidate_summary_rows_for_coverage(
+                context, receiving_account_id, parsed_date, amount, duplicate_amount_key, include_scope=False,
+            )
+            return DedupeVerdict(
+                hard_reject=True, passthrough=False,
+                matched=_coverage_matched(cov, candidates),
+                reason="Falls within the fully covered date range from an earlier import for this source account",
+            )
+
+    # Rule 4: in-scope coverage window — same linked group, different csv_value. Precondition: the
+    # entry must be for the receiving account itself (or for an account the user explicitly
+    # aliased this csv to). A brand-new sibling inheriting only its group's coverage does NOT
+    # satisfy the precondition; the row falls through to the soft-flag sweep instead.
+    if context.coverage_strategy_enabled:
+        eligible_account_ids = {receiving_account_id}
+        if csv_value in context.explicit_alias_csv_values:
+            alias_target = context.account_duplicate_compare_targets.get(csv_value)
+            if alias_target:
+                eligible_account_ids.add(alias_target)
+        cov = next(
+            (entry for entry in context.import_coverage_by_scope_id.get(scope_id or "", [])
+             if entry.get("csv_value") != csv_value
+             and entry.get("account_id") in eligible_account_ids
+             and date_in_window(parsed_date, entry.get("start_date"), entry.get("end_date"))),
+            None,
+        )
+        if cov:
+            candidates = _candidate_summary_rows_for_coverage(
+                context, receiving_account_id, parsed_date, amount, duplicate_amount_key, include_scope=True,
+            )
+            return DedupeVerdict(
+                hard_reject=True, passthrough=False,
+                matched=_coverage_matched(cov, candidates),
+                reason="Falls within the fully covered date range from an earlier import in this account scope",
+            )
+
+    # Rule 5: terminal-day reconciliation. Same-source candidates are always eligible; cross-account
+    # candidates only when the receiving account has prior history or is an explicit alias (same
+    # precondition as Rule 4 — see module docstring).
+    terminal_day_reconciled = False
+    if context.coverage_strategy_enabled:
+        same_source = context.terminal_day_candidates_by_csv_day.get((csv_value, parsed_date), [])
+        receiving_account_is_known = (
+            receiving_account_id in context.accounts_with_prior_history
+            or csv_value in context.explicit_alias_csv_values
+        )
+        scope_terminal = (
+            context.terminal_day_candidates_by_scope_day.get((scope_id or "", parsed_date), [])
+            if receiving_account_is_known else []
+        )
+        terminal_day_reconciled = bool(same_source) or any(
+            c.get("csv_value") != csv_value for c in scope_terminal
+        )
+        if terminal_day_reconciled:
+            matched_term = match_terminal(same_source, content_hash=content_hash, amount=amount)
+            if not matched_term:
+                matched_term = match_terminal(
+                    [c for c in scope_terminal if c.get("csv_value") != csv_value],
+                    content_hash=content_hash, amount=amount,
+                )
+            if matched_term:
+                return DedupeVerdict(
+                    hard_reject=True, passthrough=False,
+                    matched=candidate_summary(matched_term),
+                    reason=(
+                        "Matches a remaining transaction from the terminal covered day in an earlier import"
+                        + (" for this source account" if matched_term.get("csv_value") == csv_value
+                           else " in this account scope")
+                    ),
+                    terminal_day_reconciled=True,
+                )
+
+    # Rule 6: fuzzy text match on candidates with the same date+amount. Same precondition as Rule 4
+    # for cross-account expansion; same-account candidates are always considered.
+    if context.text_strategy_enabled and not terminal_day_reconciled:
+        candidate_rows = list(
+            context.existing_rows_by_account_amount.get(receiving_account_id, {})
+            .get(duplicate_amount_key(parsed_date, amount), [])
+        )
+        receiving_account_is_known = (
+            receiving_account_id in context.accounts_with_prior_history
+            or csv_value in context.explicit_alias_csv_values
+        )
+        if compare_target_id and receiving_account_is_known:
+            linked = context.existing_rows_by_effective_account_amount.get(compare_target_id, {}).get(
+                duplicate_amount_key(parsed_date, amount), []
+            )
+            seen_ids = {c["id"] for c in candidate_rows}
+            candidate_rows.extend(c for c in linked if c["id"] not in seen_ids)
+        heuristic = find_textual(candidate_rows, txn_payload)
+        if heuristic:
+            return DedupeVerdict(
+                hard_reject=True, passthrough=False, matched=heuristic,
+                reason=(
+                    "Possible cross-source match by date, amount, and source text"
+                    + (" in the linked account group"
+                       if heuristic.get("duplicate_scope") == "linked_account_group" else " in this account")
+                    + " (medium confidence)"
+                ),
+                terminal_day_reconciled=terminal_day_reconciled,
+            )
+
+    return DedupeVerdict(passthrough=True, terminal_day_reconciled=terminal_day_reconciled)
+
+
+def _sorted_pair(a: str, b: str) -> tuple[str, str]:
+    """Return (a, b) sorted so the lower id comes first. Used everywhere account_pair_distinct
+    is read or written — the table stores pairs canonically (account_id_low < account_id_high)
+    so each pair has exactly one row regardless of which direction surfaced first."""
+    a = str(a); b = str(b)
+    return (a, b) if a < b else (b, a)
+
+
+def list_distinct_account_pairs(conn: sqlite3.Connection) -> list[dict]:
+    """Return every recorded distinct-account assertion the user has made via Keep, joined to
+    the account display names so the management UI can render them without a follow-up fetch."""
+    rows = conn.execute(
+        """
+        SELECT
+            p.account_id_low, p.account_id_high, p.asserted_at,
+            a_low.name           AS account_low_name,
+            a_low.display_name   AS account_low_display_name,
+            a_low.mask           AS account_low_mask,
+            a_high.name          AS account_high_name,
+            a_high.display_name  AS account_high_display_name,
+            a_high.mask          AS account_high_mask
+        FROM   account_pair_distinct p
+        JOIN   account a_low  ON a_low.id  = p.account_id_low
+        JOIN   account a_high ON a_high.id = p.account_id_high
+        ORDER  BY p.asserted_at DESC
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def forget_account_pair_distinct(conn: sqlite3.Connection,
+                                  account_id_a: str, account_id_b: str) -> dict:
+    """Remove a recorded distinct-account assertion. The next import touching both accounts
+    will re-evaluate matches between them and may surface fresh suspects. The user's prior
+    transaction-level resolutions (Keep/Reject) on specific rows are not touched."""
+    low, high = _sorted_pair(account_id_a, account_id_b)
+    cursor = conn.execute(
+        "DELETE FROM account_pair_distinct WHERE account_id_low = ? AND account_id_high = ?",
+        (low, high),
+    )
+    return {"deleted": cursor.rowcount or 0}
+
+
+def clear_account_pair_distinct_for_merge(conn: sqlite3.Connection,
+                                           account_ids: Iterable[str]) -> int:
+    """When two accounts are merged, the user is asserting they're the same physical account.
+    That contradicts any prior 'distinct accounts' assertion between them — delete any such
+    row so the new declaration is the truth of record."""
+    account_id_list = [aid for aid in (account_ids or []) if aid]
+    if len(account_id_list) < 2:
+        return 0
+    placeholders = _placeholders(account_id_list)
+    cursor = conn.execute(
+        f"""
+        DELETE FROM account_pair_distinct
+        WHERE  account_id_low  IN ({placeholders})
+          AND  account_id_high IN ({placeholders})
+        """,
+        [*account_id_list, *account_id_list],
+    )
+    return cursor.rowcount or 0
+
+
+def restore_auto_merged_after_detach(conn: sqlite3.Connection,
+                                      detached_account_id: str,
+                                      remaining_group_account_ids: Iterable[str]) -> int:
+    """When an account is detached from its merged group, reverse the auto-promotion that
+    `promote_in_group_suspects_to_confirmed` did during the original merge — but ONLY for rows
+    the marker tags as automatic ('auto_merge'). User-explicit Reject decisions
+    (dedupe_resolved_by='user') are left alone; the user's deliberate "yes, this is a duplicate"
+    stays in effect even after the accounts are taken apart.
+
+    A restored row goes back to its prior state: trashed_at/rejection_reason/suspect_resolved_at
+    cleared, suspect_duplicate_of preserved as the audit pointer. It re-appears as an active
+    suspect in the duplicate-detection dialog so the user can Keep, Reject, or leave alone.
+
+    `remaining_group_account_ids` is the set of accounts still in the (formerly merged) group
+    after the detach — only rows pointing into that set get restored. Restoring rows pointing
+    to accounts outside the remaining group would be wrong because those weren't part of the
+    merge that promoted them in the first place.
+
+    Returns the count of rows restored.
+    """
+    remaining_ids = [aid for aid in (remaining_group_account_ids or []) if aid]
+    if not detached_account_id or not remaining_ids:
+        return 0
+    placeholders = _placeholders(remaining_ids)
+    cursor = conn.execute(
+        f"""
+        UPDATE txn
+        SET    trashed_at = NULL,
+               rejection_reason = NULL,
+               suspect_resolved_at = NULL,
+               dedupe_resolved_by = NULL
+        WHERE  account_id = ?
+          AND  dedupe_resolved_by = 'auto_merge'
+          AND  rejection_reason = 'duplicate_confirmed'
+          AND  suspect_duplicate_of IN (
+                 SELECT id FROM txn WHERE account_id IN ({placeholders})
+               )
+        """,
+        [detached_account_id, *remaining_ids],
+    )
+    return cursor.rowcount or 0
+
+
+def mark_import_suspects(conn: sqlite3.Connection, batch_id: str) -> int:
+    """After a batch's transactions have been inserted, flag every cross-batch cross-account
+    same-(date, amount, normalized payee) match as a soft-flag suspect — unless the pair of
+    accounts is already in `account_pair_distinct` (the user has previously declared them
+    distinct). Returns the number of rows flagged.
+
+    The check runs for ALL rows in the batch; there is no "brand-new account" gate. The
+    `account_pair_distinct` filter is what keeps the output non-noisy after the user has
+    reviewed each pair once. The reason value is always `'cross_account'`.
+
+    Within-batch (same-batch) pairs are skipped: the source asserts via the CSV that two rows
+    on different accounts in the same file are distinct transactions, even if they share
+    date/amount/payee. Cross-batch pairs are candidates.
+    """
+    matches = conn.execute(
+        f"""
+        SELECT t1.id AS new_id, MIN(t2.id) AS existing_id
+        FROM   txn t1
+        JOIN   txn t2
+          ON   t2.id != t1.id
+          AND  t2.account_id != t1.account_id
+          AND  t2.date = t1.date
+          AND  ROUND(t2.amount, 2) = ROUND(t1.amount, 2)
+          AND  {NORMALIZED_PAYEE_SQL.format(alias='t2')} = {NORMALIZED_PAYEE_SQL.format(alias='t1')}
+          AND  {NORMALIZED_PAYEE_SQL.format(alias='t1')} != ''
+          AND  t2.trashed_at IS NULL
+          AND  (t2.import_batch_id IS NULL OR t2.import_batch_id != t1.import_batch_id)
+          AND  NOT EXISTS (
+                SELECT 1
+                FROM   account_pair_distinct p
+                WHERE  p.account_id_low  = MIN(t1.account_id, t2.account_id)
+                  AND  p.account_id_high = MAX(t1.account_id, t2.account_id)
+          )
+        WHERE  t1.import_batch_id = ?
+          AND  t1.trashed_at IS NULL
+          AND  t1.suspect_duplicate_of IS NULL
+        GROUP  BY t1.id
+        """,
+        (batch_id,),
+    ).fetchall()
+    if not matches:
+        return 0
+    conn.executemany(
+        """
+        UPDATE txn
+        SET    suspect_duplicate_of = ?,
+               suspect_duplicate_reason = 'cross_account',
+               suspect_resolved_at = NULL
+        WHERE  id = ?
+        """,
+        [(row["existing_id"], row["new_id"]) for row in matches],
+    )
+    return len(matches)
+
+
+def list_suspects(conn: sqlite3.Connection, *, batch_id: str | None = None, limit: int = 500) -> list[dict]:
+    """Return active suspect pairs (flagged, not yet resolved). Each row carries enough context
+    for the review UI to render both sides without a follow-up fetch."""
+    params: list = []
+    clauses = [
+        "t1.suspect_duplicate_of IS NOT NULL",
+        "t1.suspect_resolved_at IS NULL",
+        "t1.trashed_at IS NULL",
+    ]
+    if batch_id:
+        clauses.append("t1.import_batch_id = ?")
+        params.append(batch_id)
+    where = " AND ".join(clauses)
+    params.append(limit)
+    rows = conn.execute(
+        f"""
+        SELECT
+            t1.id                          AS new_id,
+            t1.date                        AS new_date,
+            t1.amount                      AS new_amount,
+            COALESCE(NULLIF(t1.display_name, ''), NULLIF(t1.merchant_name, ''), NULLIF(t1.raw_name, ''))
+                                           AS new_payee,
+            a1.display_name                AS new_account_display_name,
+            a1.name                        AS new_account_name,
+            c1.name                        AS new_category_name,
+            t1.import_batch_id             AS new_batch_id,
+            t1.suspect_duplicate_reason    AS reason,
+            t2.id                          AS existing_id,
+            t2.date                        AS existing_date,
+            t2.amount                      AS existing_amount,
+            COALESCE(NULLIF(t2.display_name, ''), NULLIF(t2.merchant_name, ''), NULLIF(t2.raw_name, ''))
+                                           AS existing_payee,
+            a2.display_name                AS existing_account_display_name,
+            a2.name                        AS existing_account_name,
+            c2.name                        AS existing_category_name,
+            t2.import_batch_id             AS existing_batch_id
+        FROM   txn t1
+        JOIN   txn t2                ON t2.id = t1.suspect_duplicate_of
+        LEFT JOIN account  a1        ON a1.id = t1.account_id
+        LEFT JOIN account  a2        ON a2.id = t2.account_id
+        LEFT JOIN category c1        ON c1.id = t1.category_id
+        LEFT JOIN category c2        ON c2.id = t2.category_id
+        WHERE  {where}
+        ORDER  BY t1.date DESC, t1.id
+        LIMIT  ?
+        """,
+        params,
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def count_active_suspects(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS n
+        FROM   txn
+        WHERE  suspect_duplicate_of IS NOT NULL
+          AND  suspect_resolved_at IS NULL
+          AND  trashed_at IS NULL
+        """,
+    ).fetchone()
+    return int(row["n"] if row else 0)
+
+
+# ---------------------------------------------------------------------------
+# Unified per-batch report
+# ---------------------------------------------------------------------------
+# Hard rejects (from `import_batch_duplicate`) and soft flags (from `txn.suspect_duplicate_of`)
+# share a uniform response shape so the import-file card can render them in one place; the
+# `kind` field plus a few optional fields in `incoming` distinguish the two cases.
+
+
+# Maps a free-text reason produced by the import-time rule chain to a stable rule_key + confidence
+# tag the UI can group/style on. New reason strings get a fallback of ('other_hard', 'medium')
+# until the table is extended; this prevents silent grouping under "unknown" if a rule reason text
+# is tweaked without updating the map.
+_RULE_REASON_CLASSIFIERS = (
+    ("Matches an existing transaction in the linked account group",
+     "exact_hash_linked_group", "high"),
+    ("Matches an existing transaction",
+     "exact_hash_same_account", "high"),
+    ("Falls within the fully covered date range from an earlier import for this source account",
+     "coverage_same_source", "medium"),
+    ("Falls within the fully covered date range from an earlier import in this account scope",
+     "coverage_in_scope", "medium"),
+    ("Matches a remaining transaction from the terminal covered day in an earlier import for this source account",
+     "terminal_day_same_source", "medium"),
+    ("Matches a remaining transaction from the terminal covered day in an earlier import in this account scope",
+     "terminal_day_in_scope", "medium"),
+    ("Possible cross-source match by date, amount, and source text in the linked account group",
+     "text_strategy_linked_group", "medium"),
+    ("Possible cross-source match by date, amount, and source text in this account",
+     "text_strategy_same_account", "medium"),
+)
+
+_SOFT_FLAG_CLASSIFIERS = {
+    # New unified reason in the per-pair-distinct model.
+    "cross_account":      ("cross_account",      "low"),
+    # Legacy reasons kept in the map for forward-compatibility while old data is being
+    # migrated; both map to the same rule_key for UI purposes since they represent the
+    # same logical case (cross-account same-(date, amount, payee) match).
+    "import_new_account": ("cross_account",      "low"),
+    "account_merge":      ("cross_account",      "low"),
+}
+
+# User-facing labels keyed by rule_key. Short label is what shows up in the badge; long label is
+# the tooltip. These are intentionally not derived from the reason text so labels can be tuned
+# independently of the rule chain's own wording. Keep keys here in sync with the classifiers
+# above and with the `_confirmed` suffix used for graduated soft-flags.
+_RULE_LABELS = {
+    "exact_hash_same_account":         ("Exact match (same account)",
+                                        "Identical date, amount, and payee already exist on the receiving account."),
+    "exact_hash_linked_group":         ("Exact match (linked group)",
+                                        "Identical date, amount, and payee already exist on a sibling account in the same linked group."),
+    "coverage_same_source":            ("Date covered (same source)",
+                                        "This date falls inside a date range already fully imported from this same source."),
+    "coverage_in_scope":               ("Date covered (account)",
+                                        "This date falls inside a date range already fully imported for this account from a different source."),
+    "terminal_day_same_source":        ("Boundary day (same source)",
+                                        "Matches a reserved slot on the boundary day of a prior import from this same source."),
+    "terminal_day_in_scope":           ("Boundary day (account)",
+                                        "Matches a reserved slot on the boundary day of a prior import for this account."),
+    "text_strategy_same_account":      ("Likely match by text (same account)",
+                                        "Same date and amount, with similar source text, on the receiving account."),
+    "text_strategy_linked_group":      ("Likely match by text (linked group)",
+                                        "Same date and amount, with similar source text, on a sibling account in the same linked group."),
+    "cross_account":                   ("Cross-account match",
+                                        "Same date, amount, and payee as a transaction on a different account. Surfaced for review so you can decide whether the two accounts are actually distinct."),
+    "cross_account_confirmed":         ("Cross-account match (confirmed)",
+                                        "You confirmed this is the same real-world transaction as one already on a different account; the row stays out of the active ledger."),
+    # Legacy keys retained so labels still render correctly for old rows that may exist before
+    # the migration sweep has touched them. New rows use the cross_account key above.
+    "import_new_account":              ("Cross-account match",
+                                        "Same date, amount, and payee as a transaction on a different account."),
+    "account_merge":                   ("Cross-account match",
+                                        "Same date, amount, and payee as a transaction on a different account."),
+    "import_new_account_confirmed":    ("Cross-account match (confirmed)",
+                                        "Confirmed duplicate of a transaction on a different account."),
+    "account_merge_confirmed":         ("Cross-account match (confirmed)",
+                                        "Confirmed duplicate of a transaction on a different account."),
+    "other_hard":                      ("Other (hard-reject)", "Hard-rejected with a reason this report does not yet have a friendly label for."),
+    "other_soft":                      ("Other (review)",     "Soft-flagged with a reason this report does not yet have a friendly label for."),
+}
+
+
+def rule_label_for(rule_key: str) -> tuple[str, str]:
+    """Return (short_label, long_description) for a rule_key. Falls back to (rule_key, '') if the
+    key is unknown — keeps the UI rendering instead of blowing up when a new rule lands."""
+    return _RULE_LABELS.get(rule_key, (rule_key, ""))
+
+
+def _classify_hard_reject_reason(reason_text: str) -> tuple[str, str]:
+    text = (reason_text or "").strip()
+    for needle, key, confidence in _RULE_REASON_CLASSIFIERS:
+        if needle in text:
+            return key, confidence
+    return "other_hard", "medium"
+
+
+def _classify_soft_flag_reason(reason_key: str) -> tuple[str, str]:
+    return _SOFT_FLAG_CLASSIFIERS.get((reason_key or "").strip(), ("other_soft", "low"))
+
+
+def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> list[dict]:
+    """Return the combined list of hard-reject and soft-flag dedupe entries for a single batch.
+    Each entry has the same outer shape; `kind` distinguishes the two pools. Hard rejects carry
+    the CSV row number and full CSV values; soft flags carry the resulting `txn` id.
+
+    Every matched-existing row is enriched with `source_batch_id`, `source_filename`, and
+    `source_imported_at` so the UI can show where the row came from and offer a drill-through
+    into the source file's transactions. Coverage-rule hard-rejects already carry source info on
+    their `covered` block (the prior import whose date range caused the rejection).
+    """
+    import json
+
+    # Load a batch_id → filename/imported_at map once. Used to enrich every matched-existing
+    # reference (specific rows AND coverage entries) with human-readable source context.
+    batch_meta: dict[str, dict] = {}
+    for row in conn.execute(
+        "SELECT id, filename, imported_at FROM import_batch"
+    ).fetchall():
+        batch_meta[str(row["id"])] = {
+            "source_filename":     row["filename"],
+            "source_imported_at":  row["imported_at"],
+        }
+
+    def enrich_with_source(target: dict, source_batch_id: Optional[str]) -> dict:
+        """Merge filename/imported_at into target if we know the source batch. No-op if unknown."""
+        if not source_batch_id:
+            return target
+        meta = batch_meta.get(str(source_batch_id))
+        if not meta:
+            return target
+        out = dict(target)
+        out["source_batch_id"]     = source_batch_id
+        out["source_filename"]     = meta.get("source_filename")
+        out["source_imported_at"]  = meta.get("source_imported_at")
+        return out
+
+    entries: list[dict] = []
+
+    # Hard rejects (never made it into the ledger).
+    for row in conn.execute(
+        """
+        SELECT row_number, reason, values_json, matched_transaction_json, txn_payload_json
+        FROM   import_batch_duplicate
+        WHERE  batch_id = ?
+        ORDER  BY row_number
+        """,
+        (batch_id,),
+    ).fetchall():
+        try:
+            values = json.loads(row["values_json"]) if row["values_json"] else {}
+        except Exception:
+            values = {}
+        try:
+            matched = json.loads(row["matched_transaction_json"]) if row["matched_transaction_json"] else {}
+        except Exception:
+            matched = {}
+        try:
+            txn_payload = json.loads(row["txn_payload_json"]) if row["txn_payload_json"] else {}
+        except Exception:
+            txn_payload = {}
+        rule_key, confidence = _classify_hard_reject_reason(row["reason"])
+        rule_label, rule_description = rule_label_for(rule_key)
+        # Hard-reject incoming side comes from the CSV — the row never became a txn — so we surface
+        # both the parsed payload fields (date/amount/merchant) and the raw CSV columns the user
+        # would recognize, plus the source account string straight from the CSV.
+        incoming_account = (
+            (values.get("Account") if isinstance(values, dict) else None)
+            or txn_payload.get("csv_value")
+            or ""
+        )
+
+        # Enrich the matched dict with source filename info. The shape varies by rule:
+        #   - coverage hard-reject (newer):  matched = {covered: {source_batch_id, ...},
+        #                                                candidates: [{id, import_batch_id, ...}], ...}
+        #   - exact-hash hard-reject:        matched = {id, date, merchant_name, amount,
+        #                                                import_batch_id, ...}
+        #   - legacy entries (pre-upgrade):  matched = {date, merchant_name, amount}
+        # The newer shapes carry import_batch_id; we add filename lookup. Legacy entries get the
+        # raw matched dict unchanged.
+        enriched_matched: dict = matched if isinstance(matched, dict) else {}
+        if isinstance(enriched_matched, dict):
+            if "covered" in enriched_matched:
+                covered = enriched_matched.get("covered") or {}
+                enriched_matched = dict(enriched_matched)
+                enriched_matched["covered"] = enrich_with_source(covered, covered.get("source_batch_id"))
+                enriched_matched["candidates"] = [
+                    enrich_with_source(c, c.get("import_batch_id"))
+                    for c in (enriched_matched.get("candidates") or [])
+                ]
+            elif enriched_matched.get("import_batch_id"):
+                enriched_matched = enrich_with_source(enriched_matched, enriched_matched.get("import_batch_id"))
+
+        entries.append({
+            "kind": "hard_reject",
+            "rule_key": rule_key,
+            "rule_label": rule_label,
+            "rule_description": rule_description,
+            "confidence": confidence,
+            "reason_text": row["reason"] or "",
+            "incoming": {
+                "row_number": row["row_number"],
+                "date": txn_payload.get("date"),
+                "amount": txn_payload.get("amount"),
+                "merchant": txn_payload.get("display_name") or txn_payload.get("merchant_name") or txn_payload.get("raw_name"),
+                "account_name": incoming_account,
+                "csv_values": values if isinstance(values, dict) else {},
+            },
+            "matched": enriched_matched,
+        })
+
+    # Soft flags (in the ledger with suspect_duplicate_of set) AND confirmed-duplicate rows
+    # (soft flags that were resolved as real duplicates — rejection_reason='duplicate_confirmed').
+    # Both share the same base shape; the WHERE clause distinguishes their state:
+    #   * unresolved soft flag: suspect_duplicate_of set, rejection_reason NULL, trashed_at NULL
+    #   * confirmed duplicate:  suspect_duplicate_of set (kept as audit trail),
+    #                           rejection_reason='duplicate_confirmed', trashed_at set
+    for row in conn.execute(
+        f"""
+        SELECT
+            t1.id                       AS new_id,
+            t1.date                     AS new_date,
+            t1.amount                   AS new_amount,
+            COALESCE(NULLIF(t1.display_name, ''), NULLIF(t1.merchant_name, ''), NULLIF(t1.raw_name, '')) AS new_merchant,
+            a1.display_name             AS new_account_display_name,
+            a1.name                     AS new_account_name,
+            t1.suspect_duplicate_reason AS reason_key,
+            t1.suspect_resolved_at      AS resolved_at,
+            t1.rejection_reason         AS rejection_reason,
+            t2.id                       AS existing_id,
+            t2.date                     AS existing_date,
+            t2.amount                   AS existing_amount,
+            COALESCE(NULLIF(t2.display_name, ''), NULLIF(t2.merchant_name, ''), NULLIF(t2.raw_name, '')) AS existing_merchant,
+            a2.display_name             AS existing_account_display_name,
+            a2.name                     AS existing_account_name,
+            t2.import_batch_id          AS existing_batch_id
+        FROM   txn t1
+        JOIN   txn t2                ON t2.id = t1.suspect_duplicate_of
+        LEFT JOIN account a1         ON a1.id = t1.account_id
+        LEFT JOIN account a2         ON a2.id = t2.account_id
+        WHERE  t1.suspect_duplicate_of IS NOT NULL
+          AND  t1.import_batch_id = ?
+          AND  (
+                (t1.trashed_at IS NULL)
+             OR (t1.rejection_reason = 'duplicate_confirmed')
+          )
+        ORDER  BY t1.date DESC, t1.id
+        """,
+        (batch_id,),
+    ).fetchall():
+        is_confirmed = row["rejection_reason"] == "duplicate_confirmed"
+        base_rule_key, confidence = _classify_soft_flag_reason(row["reason_key"])
+        rule_key = f"{base_rule_key}_confirmed" if is_confirmed else base_rule_key
+        rule_label, rule_description = rule_label_for(rule_key)
+        incoming = {
+            "txn_id": row["new_id"],
+            "date": row["new_date"],
+            "amount": row["new_amount"],
+            "merchant": row["new_merchant"],
+            "account_name": row["new_account_display_name"] or row["new_account_name"],
+        }
+        matched = enrich_with_source({
+            "id": row["existing_id"],
+            "date": row["existing_date"],
+            "amount": row["existing_amount"],
+            "merchant": row["existing_merchant"],
+            "account_name": row["existing_account_display_name"] or row["existing_account_name"],
+            "import_batch_id": row["existing_batch_id"],
+        }, row["existing_batch_id"])
+        if is_confirmed:
+            # Confirmed soft-flags graduate into `kind: 'hard_reject'` so the unified report
+            # routes them through the same UI path as import-time rejects. The rule_key keeps
+            # `_confirmed` so the badge text can distinguish the two histories; the confidence
+            # band is overridden to 'medium' so the pill renders in the "settled" blue family
+            # rather than the "needs attention" orange used for unresolved soft-flags.
+            entries.append({
+                "kind": "hard_reject",
+                "rule_key": rule_key,
+                "rule_label": rule_label,
+                "rule_description": rule_description,
+                "confidence": "medium",
+                "reason_text": "Confirmed duplicate of a transaction on a different account (resolved from soft-flag review)",
+                "resolved": True,
+                "incoming": incoming,
+                "matched": matched,
+            })
+        else:
+            entries.append({
+                "kind": "soft_flag",
+                "rule_key": rule_key,
+                "rule_label": rule_label,
+                "rule_description": rule_description,
+                "confidence": confidence,
+                "reason_text": "Suspect duplicate of a transaction on a different account",
+                "resolved": False,
+                "incoming": incoming,
+                "matched": matched,
+            })
+
+    return entries
+
+
+def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> dict:
+    """Resolve a soft-flagged suspect.
+
+    Actions:
+      - 'keep' / 'not_duplicate': clears the suspect flag; the row stays in the active ledger as
+        a confirmed-distinct transaction.
+      - 'reject' / 'trash': confirms the suspect as a real duplicate; the row is hidden from
+        active ledger queries (`trashed_at` set) and tagged with `rejection_reason =
+        'duplicate_confirmed'` so the unified duplicate report can surface it alongside the
+        import-time hard-rejects. The `suspect_duplicate_of` pointer is intentionally kept as
+        an audit trail of *which* existing row the user accepted as the canonical copy.
+        ('trash' is preserved as an alias of 'reject' for back-compat with the existing API.)
+    """
+    row = conn.execute(
+        "SELECT id, suspect_duplicate_of, trashed_at FROM txn WHERE id = ?",
+        (txn_id,),
+    ).fetchone()
+    if not row:
+        return {"resolved": False, "reason": "not_found"}
+    if not row["suspect_duplicate_of"]:
+        return {"resolved": False, "reason": "not_suspect"}
+    if action in ("reject", "trash"):
+        # `dedupe_resolved_by='user'` records that this resolution is the user's explicit decision,
+        # not an automatic side effect. The marker is what protects this row from being auto-
+        # restored when accounts are detached — see detach_account / restore_auto_merged_after_detach.
+        conn.execute(
+            """
+            UPDATE txn
+            SET    trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                   suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                   rejection_reason = 'duplicate_confirmed',
+                   dedupe_resolved_by = 'user'
+            WHERE  id = ?
+            """,
+            (txn_id,),
+        )
+        return {"resolved": True, "action": "reject"}
+    if action in ("keep", "not_duplicate"):
+        # Broad-reading Keep: the user is asserting the two ACCOUNTS are distinct, not just
+        # this one row. Record that assertion in account_pair_distinct so the cross-account
+        # check skips this pair on all future imports, then cascade-resolve every other
+        # unresolved soft-flag suspect between the same pair — the user shouldn't have to
+        # click Keep N times for N coincidences when one click conveys the whole assertion.
+        matched_row = conn.execute(
+            "SELECT account_id FROM txn WHERE id = ?",
+            (row["suspect_duplicate_of"],),
+        ).fetchone()
+        suspect_account = conn.execute(
+            "SELECT account_id FROM txn WHERE id = ?", (txn_id,),
+        ).fetchone()
+        if matched_row and suspect_account and matched_row["account_id"] and suspect_account["account_id"]:
+            low, high = _sorted_pair(suspect_account["account_id"], matched_row["account_id"])
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO account_pair_distinct
+                  (account_id_low, account_id_high, asserted_at)
+                VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """,
+                (low, high),
+            )
+            # Cascade: clear suspect flags on every other unresolved row whose endpoints are
+            # the same account pair (in either direction).
+            conn.execute(
+                """
+                UPDATE txn
+                SET    suspect_duplicate_of = NULL,
+                       suspect_duplicate_reason = NULL,
+                       suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE  id IN (
+                    SELECT t1.id
+                    FROM   txn t1
+                    JOIN   txn t2 ON t2.id = t1.suspect_duplicate_of
+                    WHERE  t1.suspect_duplicate_of IS NOT NULL
+                      AND  t1.suspect_resolved_at IS NULL
+                      AND  t1.trashed_at IS NULL
+                      AND  ((t1.account_id = ? AND t2.account_id = ?)
+                         OR (t1.account_id = ? AND t2.account_id = ?))
+                )
+                """,
+                (low, high, high, low),
+            )
+        else:
+            # No account info available (shouldn't normally happen, but be defensive); just
+            # clear the single flag we were asked about.
+            conn.execute(
+                """
+                UPDATE txn
+                SET    suspect_duplicate_of = NULL,
+                       suspect_duplicate_reason = NULL,
+                       suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE  id = ?
+                """,
+                (txn_id,),
+            )
+        return {"resolved": True, "action": "keep"}
+    return {"resolved": False, "reason": "invalid_action"}
+
+
+def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
+                                            account_ids: Iterable[str]) -> int:
+    """After accounts are attached into a linked group, any pre-existing soft-flag whose suspect
+    and matched-existing rows are now on accounts that share the same effective root has had
+    its 'cross-account' premise invalidated by the merge — the user just declared the two
+    accounts as the same physical account, so an exact (date, amount, payee) match across them
+    is the same case that `exact_hash_linked_group` would have hard-rejected at import time.
+
+    Promote each such flag to a confirmed duplicate: set `trashed_at` +
+    `rejection_reason='duplicate_confirmed'` + `suspect_resolved_at`, matching what
+    `resolve_suspect(action='reject')` does. The audit pointer `suspect_duplicate_of` stays so
+    the user can still see what was matched and Restore if the auto-promotion was wrong.
+
+    Soft-flag suspects in the new dedupe model all carry `'cross_account'` as their reason and
+    are created at import time only. This function is the merge-time resolution sweep.
+    """
+    account_id_list = [aid for aid in (account_ids or []) if aid]
+    if not account_id_list:
+        return 0
+    ph = _placeholders(account_id_list)
+    rows = conn.execute(
+        f"""
+        SELECT t1.id
+        FROM   txn t1
+        JOIN   txn t2 ON t2.id = t1.suspect_duplicate_of
+        JOIN   account a1 ON a1.id = t1.account_id
+        JOIN   account a2 ON a2.id = t2.account_id
+        WHERE  t1.suspect_duplicate_of IS NOT NULL
+          AND  t1.suspect_resolved_at IS NULL
+          AND  t1.rejection_reason IS NULL
+          AND  t1.trashed_at IS NULL
+          AND  COALESCE(a1.parent_account_id, a1.id) = COALESCE(a2.parent_account_id, a2.id)
+          AND  (t1.account_id IN ({ph}) OR t2.account_id IN ({ph}))
+        """,
+        [*account_id_list, *account_id_list],
+    ).fetchall()
+    if not rows:
+        return 0
+    ids = [r["id"] for r in rows]
+    # `dedupe_resolved_by='auto_merge'` marks this as an automatic, undoable resolution. If the
+    # user subsequently detaches the accounts, `restore_auto_merged_after_detach` looks for this
+    # marker and reverses these promotions. Rows the user explicitly Reject (with
+    # `dedupe_resolved_by='user'`) are left alone on detach.
+    conn.executemany(
+        """
+        UPDATE txn
+        SET    trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+               rejection_reason = 'duplicate_confirmed',
+               suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+               dedupe_resolved_by = 'auto_merge'
+        WHERE  id = ?
+        """,
+        [(i,) for i in ids],
+    )
+    # Same-batch transitive clear: a single CSV asserts (via account-column) that rows on
+    # different accounts in that file are distinct transactions. If a promoted row Y (now
+    # identified with its canonical target via the merge) had a same-batch sibling Z on a
+    # different account, and Z's own suspect points at a row in the same merged group as Y's
+    # target, then Z's suspect is necessarily a false positive: Z ≠ Y (CSV assertion) and
+    # Y ≡ canonical (merge), so Z ≠ canonical. Clear Z's suspect flag.
+    _clear_same_batch_siblings_after_promotion(conn, ids)
+    return len(ids)
+
+
+def _clear_same_batch_siblings_after_promotion(conn: sqlite3.Connection, promoted_ids: list[str]) -> int:
+    """Helper for promote_in_group_suspects_to_confirmed. Finds rows that share an
+    import_batch_id with one of the freshly-promoted rows but live on a different account in
+    that batch, and whose own suspect points into the same merged group as the promoted row's
+    target. Clears those suspect flags.
+    """
+    if not promoted_ids:
+        return 0
+    placeholders = _placeholders(promoted_ids)
+    cleared_ids: list[str] = []
+    for row in conn.execute(
+        f"""
+        SELECT t.id          AS promoted_id,
+               t.import_batch_id,
+               t.account_id  AS promoted_account_id,
+               COALESCE(ta.parent_account_id, ta.id) AS target_root
+        FROM   txn t
+        JOIN   txn target ON target.id = t.suspect_duplicate_of
+        JOIN   account ta ON ta.id = target.account_id
+        WHERE  t.id IN ({placeholders})
+          AND  t.import_batch_id IS NOT NULL
+        """,
+        promoted_ids,
+    ).fetchall():
+        siblings = conn.execute(
+            """
+            SELECT z.id
+            FROM   txn z
+            JOIN   txn z_target ON z_target.id = z.suspect_duplicate_of
+            JOIN   account z_target_acc ON z_target_acc.id = z_target.account_id
+            WHERE  z.import_batch_id = ?
+              AND  z.account_id != ?
+              AND  z.suspect_duplicate_of IS NOT NULL
+              AND  z.suspect_resolved_at IS NULL
+              AND  z.rejection_reason IS NULL
+              AND  z.trashed_at IS NULL
+              AND  COALESCE(z_target_acc.parent_account_id, z_target_acc.id) = ?
+            """,
+            (row["import_batch_id"], row["promoted_account_id"], row["target_root"]),
+        ).fetchall()
+        cleared_ids.extend(str(s["id"]) for s in siblings)
+    if not cleared_ids:
+        return 0
+    unique_cleared = list({i for i in cleared_ids})
+    conn.executemany(
+        """
+        UPDATE txn
+        SET    suspect_duplicate_of = NULL,
+               suspect_duplicate_reason = NULL,
+               suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE  id = ?
+        """,
+        [(i,) for i in unique_cleared],
+    )
+    return len(unique_cleared)
+
+
+def restore_rejected_duplicate(conn: sqlite3.Connection, txn_id: str) -> dict:
+    """Reverse a 'reject' on a previously-resolved soft-flag suspect. Clears `trashed_at` and
+    `rejection_reason` so the row returns to the active ledger. The `suspect_duplicate_of`
+    pointer stays NULL (the suspect was already resolved); the user is asserting this is a real,
+    distinct transaction after all."""
+    row = conn.execute(
+        "SELECT id, rejection_reason, trashed_at FROM txn WHERE id = ?",
+        (txn_id,),
+    ).fetchone()
+    if not row:
+        return {"restored": False, "reason": "not_found"}
+    if row["rejection_reason"] != "duplicate_confirmed":
+        return {"restored": False, "reason": "not_rejected"}
+    # Clear `dedupe_resolved_by` too: the row is no longer in a resolved state, so the
+    # provenance marker is moot. If the user re-rejects via the dialog later, it'll be set
+    # back to 'user' at that point.
+    conn.execute(
+        """
+        UPDATE txn
+        SET    trashed_at = NULL,
+               rejection_reason = NULL,
+               suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+               dedupe_resolved_by = NULL
+        WHERE  id = ?
+        """,
+        (txn_id,),
+    )
+    return {"restored": True}

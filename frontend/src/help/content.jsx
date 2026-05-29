@@ -16,6 +16,10 @@
  *      `/help/:topic` URLs).
  *   2. Add an entry below.
  *   3. Drop a `<FeatureExplainer topic="..."/>` next to the feature surface.
+ *
+ * Cross-linking between help topics: use `<HelpLink to="/help/...">` (not the
+ * bare react-router `<Link>`) so the "Back to <page>" affordance survives hops
+ * between topics; HelpLink forwards the original source path through state.
  */
 
 import HelpLink from './HelpLink.jsx'

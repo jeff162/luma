@@ -4,9 +4,9 @@ Follow the commenting style defined in `docs/code-commenting-style.md`.
 
 Review `docs/collaboration-notes.md` for project decision-making preferences and collaboration guidance.
 
-When changing shared UI behavior, review `docs/ui-patterns.md`.
+Before working on shared UI behavior — whether changing it, investigating it, debugging it, or designing against it — read `docs/ui-patterns.md` first. The docs are the authoritative high-level map; treat the code as the implementation to verify against, not the source of truth for intent.
 
-When changing shared systems, persistence, or invariants, review `docs/architecture.md` and `docs/data-model.md`.
+Before working on shared systems, persistence, or invariants — same rule — read `docs/architecture.md` and `docs/data-model.md` first. "I'm only investigating" or "I'm only answering a question" is not an exemption: investigations shape later design, and rediscovering the model from code wastes time and tends to miss the *why*.
 
 ## Core Rules
 
@@ -68,18 +68,24 @@ When changing shared systems, persistence, or invariants, review `docs/architect
 
 ## Documentation Consistency
 
-When modifying code:
+The `docs/` directory captures the **intent** of the system: what it does, **why** it works the way it does, and **how the pieces fit together at a high level**. Git history records what changed; `docs/` records what the system *is* and *why*. Keep them in sync.
 
-- Follow the commenting style in `docs/code-commenting-style.md`
+When working on the codebase:
 
-- If a change introduces or alters a system, update the relevant documentation:
+- Follow the commenting style in `docs/code-commenting-style.md`.
 
-  - `docs/architecture.md` for structure and data flow
+- If your work introduces a system, alters one, shifts an invariant, or settles a design decision that future readers would need to know to understand the code, update the relevant doc in the same change:
 
-  - `docs/data-model.md` for data semantics or invariants
+  - `docs/architecture.md` — structure, data flow, cross-cutting contracts between subsystems
 
-  - `docs/ui-patterns.md` for shared UI behavior
+  - `docs/data-model.md` — data semantics, invariants, what each field means and what it is *not* allowed to mean
 
-Do not add documentation for trivial or localized changes.
+  - `docs/ui-patterns.md` — shared UI behavior and interaction models
 
-Keep documentation aligned with the current behavior of the system.
+- Document the **why** (the design decision and the constraints it's responding to) and the **how at a high level** (the shape of the solution, the contracts it depends on, the alternatives that were rejected and the reason). Do **not** narrate the change itself — phrases like "we now do X", "added Y", "changed Z to W" belong in commit messages and PR descriptions, not in `docs/`. A reader picking up the file a year from now should see the system as it is, not as a sequence of edits.
+
+- After any substantive piece of work — including investigations that produce conclusions — pause and ask: *did this shape the design, settle an open question, or reveal an invariant that wasn't written down?* If yes, update the docs. The check is "did the model shift," not "did the diff touch a particular file."
+
+- Skip doc updates for trivial or localized changes that don't move the high-level model (bug fixes confined to one function, renames, dependency bumps, etc.).
+
+- When you find a doc claim that no longer matches the code, fix the doc — stale docs are worse than missing ones. If the discrepancy reveals a real design question rather than a clean stale-fact, surface it to the user before guessing.

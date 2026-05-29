@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { refreshTaskBadge } from '../App.jsx'
 import { FilterProvider, useFilters } from '../lib/FilterContext.jsx'
@@ -28,6 +28,8 @@ import ImportColumnMappingSection from '../components/ImportColumnMappingSection
 import ImportProfilesManager from '../components/ImportProfilesManager.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
+import { DetailPanelShell, useDetailPanelChrome } from '../components/detailShared.jsx'
+import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 import { cloneCategoryImportSnapshot, createCategoryImportDraftState, findNodeById, sanitizeCategoryImportDraftAgainstExistingCategories } from '../lib/categoryImportState.js'
 import {
   analyzeImportColumns,
@@ -1508,6 +1510,11 @@ function DuplicateRowsDialog({
   )
 }
 
+// `UnifiedDuplicatesDialog` lives at the App level so it can stay open while the user navigates
+// between Import/Export, Accounts, Transactions, etc. — see
+// `contexts/UnifiedDuplicatesViewerContext.jsx`. Open it via the `useUnifiedDuplicatesViewer`
+// hook's `open({batchId, title})`.
+
 function DuplicateImportConfirmDialog({
   pending,
   importing = false,
@@ -1927,13 +1934,62 @@ function normalizeAccountMatchStem(value) {
     .trim()
 }
 
+// Account-type words that are too generic to anchor a suggestion on their own. They're kept in
+// the stem (so "eastern checking" doesn't collapse to "eastern" and match "eastern savings"),
+// but a subset match whose overlapping tokens are ALL generic ("Savings (...7304)" ⊂ "xyz
+// savings") is rejected — there's no real signal beyond the account category.
+const GENERIC_ACCOUNT_TOKENS = new Set([
+  'checking', 'savings', 'cash', 'account', 'card',
+])
+
+function accountStemTokenSet(value) {
+  const normalized = normalizeAccountMatchStem(value)
+  if (!normalized) return new Set()
+  return new Set(normalized.split(' ').filter(Boolean))
+}
+
+function isTokenSubset(maybeSubset, superset) {
+  for (const token of maybeSubset) {
+    if (!superset.has(token)) return false
+  }
+  return true
+}
+
+function hasNonGenericToken(tokens) {
+  for (const token of tokens) {
+    if (!GENERIC_ACCOUNT_TOKENS.has(token)) return true
+  }
+  return false
+}
+
 function findLikelyAccountMatch(accounts, value) {
   const exactMatch = findExactAccountNameMatch(accounts, value)
   if (exactMatch) return null
   const normalized = normalizeAccountMatchStem(value)
   if (!normalized) return null
-  const candidates = accounts.filter(account => normalizeAccountMatchStem(getAccountMatchLabel(account)) === normalized)
-  return candidates.length === 1 ? candidates[0] : null
+  // 1. Strong signal: stems are byte-identical after stripping the mask suffix. e.g.,
+  //    "Checking (...1234)" and "Checking" both reduce to "checking" — exactly one such match
+  //    is a high-confidence suggestion.
+  const stemMatches = accounts.filter(account => normalizeAccountMatchStem(getAccountMatchLabel(account)) === normalized)
+  if (stemMatches.length === 1) return stemMatches[0]
+  if (stemMatches.length > 1) return null
+  // 2. Fallback: token-subset match in either direction. e.g., csv ["foo", "bar"] is a subset
+  //    of an existing account's ["acme", "foo", "bar"]. Require at least one non-generic token
+  //    in the subset side so generics like "Savings (...0000)" don't surface every savings
+  //    account on the strength of "savings" alone.
+  const csvTokens = accountStemTokenSet(value)
+  if (!csvTokens.size || !hasNonGenericToken(csvTokens)) return null
+  const subsetCandidates = []
+  for (const account of accounts) {
+    const accountTokens = accountStemTokenSet(getAccountMatchLabel(account))
+    if (!accountTokens.size) continue
+    const subset = isTokenSubset(csvTokens, accountTokens) ? csvTokens
+                 : isTokenSubset(accountTokens, csvTokens) ? accountTokens
+                 : null
+    if (!subset || !hasNonGenericToken(subset)) continue
+    subsetCandidates.push(account)
+  }
+  return subsetCandidates.length === 1 ? subsetCandidates[0] : null
 }
 
 function buildAccountImportStateSnapshot(accountMap) {
@@ -2282,6 +2338,10 @@ function ImportTab() {
   const [showRaw, setShowRaw] = useState(false)
   const [rejectedRowsViewer, setRejectedRowsViewer] = useState(null)
   const [duplicateRowsViewer, setDuplicateRowsViewer] = useState(null)
+  // Unified duplicates viewer state was lifted to UnifiedDuplicatesViewerContext so the floating
+  // report can survive route changes. We hold onto the context handles here to open it and to
+  // know when it has reloaded (so the file-card pill counts can be refreshed in step).
+  const unifiedDuplicatesViewer = useUnifiedDuplicatesViewer()
   const [batchDetailPanels, setBatchDetailPanels] = useState([])
   const [duplicateImporting, setDuplicateImporting] = useState(false)
   const [pendingDuplicateImport, setPendingDuplicateImport] = useState(null)
@@ -2391,14 +2451,72 @@ function ImportTab() {
     [batches],
   )
 
+  // Also invoked by the App-level duplicate-detection dialog's drill-through arrow — through
+  // the viewer-context drill-through registration in the effect below (when ImportExport is
+  // mounted), or via a URL-param fallback (the effect after that) when it isn't.
   function openBatchDetail(batch) {
     if (!batch?.id) return
-    setBatchDetailPanels(prev => prev.some(panel => panel.id === batch.id) ? prev : [...prev, batch])
+    // If the panel for this batch is already open, REPLACE its entry with the new payload
+    // rather than no-op'ing. The drill-through link from the duplicate-detection dialog can
+    // be invoked with different `_dateFilter` values (none, or a covered-range), and silently
+    // dropping the second invocation would leave the user staring at the panel with whatever
+    // filter the first invocation set — see "transaction register opens with the wrong date
+    // range" symptom when both a coverage row and a Shape-2 row in the report point at the
+    // same batch.
+    setBatchDetailPanels(prev => {
+      const existingIndex = prev.findIndex(panel => panel.id === batch.id)
+      if (existingIndex === -1) return [...prev, batch]
+      const next = [...prev]
+      next[existingIndex] = batch
+      return next
+    })
   }
 
   function closeBatchDetail(batchId) {
     setBatchDetailPanels(prev => prev.filter(panel => panel.id !== batchId))
   }
+
+  // Register an in-place drill-through handler with the App-level duplicates viewer. While
+  // we're mounted, clicking the source-batch link inside the floating dialog opens the batch
+  // detail panel here without a URL navigation. When we unmount, the context falls back to
+  // navigating to `/import-export?openBatch=…` so the same action still works from any page.
+  useEffect(() => {
+    return unifiedDuplicatesViewer.registerDrillThroughHandler(({ batchId: targetBatchId, dateStart, dateEnd }) => {
+      const sourceBatch = batches.find(b => b.id === targetBatchId)
+      if (!sourceBatch) return
+      const _dateFilter = (dateStart || dateEnd) ? { dateStart, dateEnd } : undefined
+      openBatchDetail({ ...sourceBatch, _dateFilter })
+    })
+  }, [unifiedDuplicatesViewer, batches])
+
+  // Drill-through fallback: when the user is on another page and clicks the source-batch link,
+  // the context navigates here with these query params. Honor them once on arrival, then clean
+  // the URL so a later refresh doesn't re-open the panel.
+  const location = useLocation()
+  useEffect(() => {
+    if (!batches.length) return
+    const params = new URLSearchParams(location.search)
+    const targetBatchId = params.get('openBatch')
+    if (!targetBatchId) return
+    const sourceBatch = batches.find(b => b.id === targetBatchId)
+    if (sourceBatch) {
+      const dateStart = params.get('dateStart') || ''
+      const dateEnd = params.get('dateEnd') || ''
+      const _dateFilter = (dateStart || dateEnd) ? { dateStart, dateEnd } : undefined
+      openBatchDetail({ ...sourceBatch, _dateFilter })
+    }
+    navigate('/import-export', { replace: true })
+  }, [location.search, batches, navigate])
+
+  // When the user resolves rows from the floating dialog, the file-card pill counts on this
+  // page need to refresh so the displayed numbers stay honest. The context advances
+  // `viewer.version` on every reload; we watch that counter (only when mounted) and re-fetch
+  // the batch list when it changes.
+  const viewerVersion = unifiedDuplicatesViewer.viewer?.version || 0
+  useEffect(() => {
+    if (viewerVersion === 0) return
+    api.listBatches().then(setBatches).catch(() => {})
+  }, [viewerVersion])
 
   function selectUploadSource(nextSourceId, options = {}) {
     const { persist = true } = options
@@ -4777,6 +4895,15 @@ function ImportTab() {
     })
   }
 
+  // Opens the unified duplicate-detection report for a batch. The dialog is rendered at the
+  // App level by `UnifiedDuplicatesViewerRenderer` so it persists across route navigation; this
+  // thin wrapper just normalizes the file-card payload into the context's `open` contract.
+  function openUnifiedDuplicatesViewer({ source, title }) {
+    const batchId = source?.batch_id || source?.id || ''
+    if (!batchId) return
+    unifiedDuplicatesViewer.open({ batchId, title })
+  }
+
   async function openDuplicateRowsViewer({
     source,
     title,
@@ -5859,7 +5986,7 @@ function ImportTab() {
                               skip: false,
                             })}
                             style={{
-                              justifySelf: 'start',
+                              justifySelf: 'end',
                               maxWidth: '100%',
                               border: '1px solid color-mix(in srgb, var(--accent2) 28%, var(--border))',
                               background: 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
@@ -6725,49 +6852,52 @@ function ImportTab() {
                                         {summary.rejectedCount} rejected
                                       </button>
                                     ) : null}
-                                    {summary.dedupedCount > 0 ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => openDuplicateRowsViewer({
-                                          source: b,
-                                          title: b.filename,
-                                        })}
-                                        style={{
-                                          display: 'inline-flex',
-                                          alignItems: 'center',
-                                          gap: 4,
-                                          fontSize: 11,
-                                          padding: '2px 7px',
-                                          borderRadius: 99,
-                                          background: 'var(--surface2)',
-                                          color: 'var(--muted)',
-                                          border: '1px solid var(--border)',
-                                          cursor: 'pointer',
-                                        }}
-                                      >
-                                        {summary.dedupedCount} duplicates
-                                      </button>
-                                    ) : null}
-                                    {Number(b.suspect_duplicate_count || 0) > 0 ? (
-                                      <Link
-                                        to={`/suspect-duplicates?batch=${b.id}`}
-                                        style={{
-                                          display: 'inline-flex',
-                                          alignItems: 'center',
-                                          gap: 4,
-                                          fontSize: 11,
-                                          padding: '2px 7px',
-                                          borderRadius: 99,
-                                          background: 'color-mix(in srgb, #f59e0b 12%, var(--surface2))',
-                                          color: '#f59e0b',
-                                          border: '1px solid color-mix(in srgb, #f59e0b 50%, var(--border))',
-                                          textDecoration: 'none',
-                                          fontWeight: 600,
-                                        }}
-                                      >
-                                        ⚠ {b.suspect_duplicate_count} suspect →
-                                      </Link>
-                                    ) : null}
+                                    {(() => {
+                                      // Unified pill: combines hard-reject (`deduped_count`)
+                                      // and soft-flag (`suspect_duplicate_count`) totals into
+                                      // one entry point. Pill colors warm when soft flags are
+                                      // present — those need user review, whereas hard rejects
+                                      // are already resolved.
+                                      const hard = summary.dedupedCount
+                                      const soft = Number(b.suspect_duplicate_count || 0)
+                                      const total = hard + soft
+                                      if (total <= 0) return null
+                                      const hasSoft = soft > 0
+                                      return (
+                                        <button
+                                          type="button"
+                                          onClick={() => openUnifiedDuplicatesViewer({
+                                            source: b,
+                                            title: b.filename,
+                                          })}
+                                          title={
+                                            hasSoft
+                                              ? `${hard} rejected at import, ${soft} flagged for review`
+                                              : `${hard} rejected at import`
+                                          }
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: 4,
+                                            fontSize: 11,
+                                            padding: '2px 7px',
+                                            borderRadius: 99,
+                                            background: hasSoft
+                                              ? 'color-mix(in srgb, #f59e0b 12%, var(--surface2))'
+                                              : 'var(--surface2)',
+                                            color: hasSoft ? '#f59e0b' : 'var(--muted)',
+                                            border: hasSoft
+                                              ? '1px solid color-mix(in srgb, #f59e0b 50%, var(--border))'
+                                              : '1px solid var(--border)',
+                                            cursor: 'pointer',
+                                            fontWeight: hasSoft ? 600 : 400,
+                                          }}
+                                        >
+                                          {hasSoft ? '⚠ ' : ''}{total} duplicate{total === 1 ? '' : 's'}
+                                          {hasSoft ? ` (${soft} to review)` : ''}
+                                        </button>
+                                      )
+                                    })()}
                                   </div>
                                 )}
                               </div>

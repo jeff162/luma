@@ -1,6 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+/*
+ * Shared transaction-list renderer. `usePillTable` switches between a compact block-grid
+ * header and the full sortable/draggable/resizable `PillGridTable` header. `fillHeight`
+ * switches between a max-height inner-scroll container and a flex-fill chain that stretches
+ * to the parent.
+ *
+ * Scroll-container contract (when `usePillTable=true` AND `fillHeight=true`): the actual
+ * scroll viewport is the body div assigned to `scrollRef`. EVERY ancestor from this
+ * component down to that div must propagate height via a flex-column chain (`flex: 1,
+ * minHeight: 0`). A plain block wrapper anywhere in the chain silently breaks percentage-
+ * height resolution for descendants — the body ends up sized to its content (no overflow,
+ * no scrollbar) and wheel events bubble out through the floating-panel backdrop into the
+ * page behind. The `display: flex, flexDirection: column` on the horizontal-scroll wrapper
+ * below exists specifically to keep that chain intact.
+ */
+
 import { useMemo, useState } from 'react'
 import { formatDate } from '../lib/utils.js'
 import { CategoryCell, MerchantCell, TransactionAmountCell, getTxnMerchantLabel } from './TransactionRow.jsx'
@@ -70,11 +86,6 @@ function normalizeInteractiveColumns(columnConfig, availableColumns) {
   return normalized
 }
 
-/*
- * This shared transaction table keeps row rendering consistent while letting each surface
- * choose how heavy the table chrome should be. Detail drawers can stay lightweight, while
- * pages that need layout control can opt into the shared pill-header shell for resize/reorder.
- */
 export default function TransactionListTable({
   rows,
   categories = [],
@@ -255,7 +266,8 @@ export default function TransactionListTable({
         flexDirection: 'column',
         ...(fillHeight ? { flex: 1, minHeight: 0, height: '100%' } : null),
       }}>
-        <div style={{ flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'hidden' }}>
+        {/* Must be a flex container — see the scroll-container contract at the top of the file. */}
+        <div style={{ flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <PillGridTable
             columns={pillColumns}
             onColumnsChange={onColumnConfigChange}

@@ -198,7 +198,7 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_coverage_window_and_terminal_day_reconciliation(self):
         rewards_id = self._insert_account("Travel Rewards", account_type="credit", mask="1234")
 
-        fullview_config = self._account_mapping_config(
+        prior_config = self._account_mapping_config(
             headers={
                 "date": "Date",
                 "description": "Description",
@@ -209,11 +209,11 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
             },
             account_map={"Travel Rewards": rewards_id},
         )
-        result_one = await self._run_import_fixture("duplicate_fullview_base.csv", fullview_config)
+        result_one = await self._run_import_fixture("duplicate_prior_base.csv", prior_config)
         self.assertEqual(result_one["imported"], 6)
         self.assertEqual(result_one["deduped"], 0)
 
-        monarch_config = self._account_mapping_config(
+        new_config = self._account_mapping_config(
             headers={
                 "date": "Date",
                 "description": "Merchant",
@@ -225,7 +225,7 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
             },
             account_map={"CREDIT CARD (...1234)": rewards_id},
         )
-        result_two = await self._run_import_fixture("duplicate_monarch_overlap.csv", monarch_config)
+        result_two = await self._run_import_fixture("duplicate_new_overlap.csv", new_config)
         self.assertEqual(result_two["imported"], 1)
         self.assertEqual(result_two["deduped"], 4)
 
@@ -249,7 +249,7 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
             },
             account_map={"Travel Rewards": rewards_id},
         )
-        await self._run_import_fixture("duplicate_fullview_base.csv", base_config)
+        await self._run_import_fixture("duplicate_prior_base.csv", base_config)
 
         exact_config = self._account_mapping_config(
             headers={
@@ -263,14 +263,14 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
             },
             account_map={"CREDIT CARD (...1234)": rewards_id},
         )
-        result = await self._run_import_fixture("duplicate_monarch_exact.csv", exact_config)
+        result = await self._run_import_fixture("duplicate_new_exact.csv", exact_config)
         self.assertEqual(result["imported"], 0)
         self.assertEqual(result["deduped"], 1)
 
         duplicates = self._get_duplicates(result["batch_id"])
         self.assertEqual(len(duplicates["rows"]), 1)
         self.assertEqual(duplicates["rows"][0]["reason"], "Matches an existing transaction")
-        self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_fullview_base_ledger.csv"))
+        self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_prior_base_ledger.csv"))
 
     async def test_cross_source_text_match_without_coverage_window(self):
         checking_id = self._insert_account("Home Checking", account_type="depository", mask="4321")
@@ -295,7 +295,7 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
             },
             account_map={"CHECKING (...4321)": checking_id},
         )
-        result = await self._run_import_fixture("duplicate_monarch_text_match.csv", config)
+        result = await self._run_import_fixture("duplicate_new_text_match.csv", config)
         self.assertEqual(result["imported"], 0)
         self.assertEqual(result["deduped"], 1)
 
@@ -449,7 +449,7 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self._insert_existing_transaction(
             account_id=child_b_id,
             date="2025-10-20",
-            amount=-125.00,
+            amount=125.00,
             merchant_name="PAYPAL INST XFER CLEANING CREW",
             raw_name="PAYPAL INST XFER CLEANING CREW",
             display_name="PAYPAL INST XFER CLEANING CREW",
@@ -533,6 +533,93 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum("terminal covered day" in reason for reason in reasons), 2)
         self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_terminal_same_amount_ledger.csv"))
 
+    async def test_undo_cleans_up_dedupe_state_left_by_the_batch(self):
+        # When a batch is undone we expect three pieces of dedupe state to be cleaned up:
+        #   1. The batch's own import_batch_duplicate rows (decisions about a now-defunct import).
+        #   2. The batch's import_batch_account coverage records (otherwise future imports would
+        #      spuriously hard-reject rows on those dates).
+        #   3. Any soft-flag (suspect_duplicate_of) pointers from OTHER batches that referenced
+        #      a row in this batch — those pointers go dangling when the rows are deleted.
+        rewards_id = self._insert_account("Travel Rewards", account_type="credit", mask="1234")
+        config = self._account_mapping_config(
+            headers={
+                "date": "Date", "description": "Description", "account": "Account",
+                "amount": "Amount", "category": "Category", "date_format": "%m/%d/%Y",
+            },
+            account_map={"Travel Rewards": rewards_id},
+        )
+
+        # Run a real import so import_batch_account coverage records get written naturally.
+        result = await self._run_import_fixture("duplicate_prior_base.csv", config)
+        batch_id = result["batch_id"]
+
+        # Manually plant the other two pieces of state we want to verify the undo cleans up:
+        #   - a hard-reject record FOR this batch (simulating a row that would have been rejected
+        #     against an earlier import in a real flow), and
+        #   - a soft-flag from a row on a different account pointing AT a row in this batch.
+        other_account = self._insert_account("Other", account_type="credit", mask="9999")
+        with self._use_db_path():
+            with get_db() as conn:
+                this_batch_txn_id = conn.execute(
+                    "SELECT id, date, amount, raw_name FROM txn WHERE import_batch_id = ? LIMIT 1",
+                    (batch_id,),
+                ).fetchone()
+                conn.execute(
+                    """
+                    INSERT INTO import_batch_duplicate
+                      (batch_id, row_number, reason, values_json, matched_transaction_json, txn_payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (batch_id, 99, "Matches an existing transaction", "{}", "{}", "{}"),
+                )
+
+        other_txn_id = self._insert_existing_transaction(
+            account_id=other_account,
+            date=this_batch_txn_id["date"],
+            amount=this_batch_txn_id["amount"],
+            merchant_name=this_batch_txn_id["raw_name"] or "X",
+        )
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET suspect_duplicate_of = ?, suspect_duplicate_reason = 'import_new_account' WHERE id = ?",
+                    (this_batch_txn_id["id"], other_txn_id),
+                )
+
+                # Sanity: all three pieces of state are present before undo.
+                self.assertGreater(
+                    conn.execute("SELECT COUNT(*) FROM import_batch_account WHERE batch_id = ?",
+                                  (batch_id,)).fetchone()[0], 0,
+                )
+                self.assertGreater(
+                    conn.execute("SELECT COUNT(*) FROM import_batch_duplicate WHERE batch_id = ?",
+                                  (batch_id,)).fetchone()[0], 0,
+                )
+                self.assertEqual(
+                    conn.execute("SELECT suspect_duplicate_of FROM txn WHERE id = ?", (other_txn_id,)).fetchone()["suspect_duplicate_of"],
+                    this_batch_txn_id["id"],
+                )
+
+        self._undo_batch(batch_id)
+
+        with self._use_db_path():
+            with get_db() as conn:
+                # 1. The batch's hard-reject records are gone.
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM import_batch_duplicate WHERE batch_id = ?",
+                                  (batch_id,)).fetchone()[0], 0,
+                )
+                # 2. The batch's coverage records are gone.
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM import_batch_account WHERE batch_id = ?",
+                                  (batch_id,)).fetchone()[0], 0,
+                )
+                # 3. The dangling soft-flag pointer was cleared (the row it pointed at is gone).
+                cleared = conn.execute(
+                    "SELECT suspect_duplicate_of FROM txn WHERE id = ?", (other_txn_id,),
+                ).fetchone()
+                self.assertIsNone(cleared["suspect_duplicate_of"])
+
     async def test_undo_then_reimport_same_file_imports_again_cleanly(self):
         rewards_id = self._insert_account("Travel Rewards", account_type="credit", mask="1234")
         config = self._account_mapping_config(
@@ -547,19 +634,19 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
             account_map={"Travel Rewards": rewards_id},
         )
 
-        first_result = await self._run_import_fixture("duplicate_fullview_base.csv", config)
+        first_result = await self._run_import_fixture("duplicate_prior_base.csv", config)
         self.assertEqual(first_result["imported"], 6)
         self.assertEqual(first_result["deduped"], 0)
-        self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_fullview_base_ledger.csv"))
+        self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_prior_base_ledger.csv"))
 
         undo_result = self._undo_batch(first_result["batch_id"])
         self.assertEqual(undo_result, {"ok": True})
         self.assertEqual(self._ledger_snapshot(), [])
 
-        second_result = await self._run_import_fixture("duplicate_fullview_base.csv", config)
+        second_result = await self._run_import_fixture("duplicate_prior_base.csv", config)
         self.assertEqual(second_result["imported"], 6)
         self.assertEqual(second_result["deduped"], 0)
-        self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_fullview_base_ledger.csv"))
+        self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_prior_base_ledger.csv"))
 
 
 if __name__ == "__main__":

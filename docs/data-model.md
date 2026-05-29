@@ -86,6 +86,8 @@ Important behavior:
 
 - `trashed_at != NULL` means the child account is hidden but still recoverable; emptying the trash is the irreversible step that folds remaining references into the parent and deletes the child row
 
+- the sparse table `account_pair_distinct` records the user's explicit "these two accounts are different physical accounts" assertions, written automatically when the user clicks Keep on a cross-account soft-flag suspect. Rows are stored canonically with `account_id_low < account_id_high` so each pair has exactly one row. The dedupe sweep consults this table to skip pairs the user has already reviewed, and the management UI on the SuspectDuplicates page can forget an assertion to re-enable detection. Merging two accounts deletes any row between them (the merge contradicts the distinct assertion)
+
 ## Transactions
 
 Transactions are the central fact table.
@@ -106,7 +108,11 @@ Important conventions:
 
 - `trashed_at != NULL` means the row is soft-deleted; every read path (the raw list, the summary endpoints, the dashboard, the import-card counts) filters it out, but the record stays in `txn` until the user empties the transaction trash from Settings, mirroring the account-trash pattern
 
-- `suspect_duplicate_of`, `suspect_duplicate_reason`, and `suspect_resolved_at` together carry the soft-duplicate flag set by the import flow (when the receiving account is brand new to the database) or by the account-merge sweep (when overlapping rows surface across two accounts that just got grouped together); flagged rows show a badge in lists and surface in a review report under Tasks until the user resolves each with Keep or Trash
+- `suspect_duplicate_of`, `suspect_duplicate_reason`, and `suspect_resolved_at` together carry the soft-duplicate flag set by the post-import sweep when an imported row matches an existing row on a different account by (date, amount, normalized payee); the reason is `cross_account`. The sweep runs unconditionally for every batch row — there is no "brand-new account" precondition — and is gated only by the per-pair-distinct table `account_pair_distinct`. Flagged rows show a badge in lists and surface in a review report under Tasks until the user resolves each with Keep (asserts the two accounts are distinct, cascade-clears every other flagged row between the same pair, records the pair in `account_pair_distinct`) or Reject (confirms the row is a real duplicate)
+
+- `rejection_reason` discriminates *why* a `trashed_at` row was excluded from the active ledger: `NULL` means user-driven cleanup ("trash"), while `'duplicate_confirmed'` means the user accepted a soft-flag suspect as a real duplicate via the unified duplicate-detection report. Both states hide the row from active reads through the same `trashed_at` filter; the discriminator lets the unified report group confirmed soft-flags alongside the import-time hard-rejects in `import_batch_duplicate` while keeping user trash a separate concern. The `suspect_duplicate_of` pointer is intentionally kept after a confirmed-duplicate rejection as an audit trail of which existing row the user accepted as the canonical copy
+
+- `dedupe_resolved_by` records the provenance of a `rejection_reason='duplicate_confirmed'` resolution: `'user'` means the user explicitly clicked Reject in the dialog, `'auto_merge'` means `promote_in_group_suspects_to_confirmed` flagged it as a side effect of an account merge, and `NULL` means either unresolved (active suspect) or legacy data from before the marker existed. This is what lets `detach_account` safely reverse merge-time auto-promotions without trampling deliberate user decisions: detach restores only `'auto_merge'` rows
 
 These conventions are meant to preserve user intent and keep reporting stable.
 `category_overridden` and `category_source` exist so automated categorization can stay helpful without silently undoing deliberate user choices or imported categories the user chose to keep.
@@ -157,7 +163,7 @@ Groups also carry important reporting behavior:
 
 This is used for things like transfers and credit-card-payment categories.
 
-Categories and groups themselves do **not** have an `owner_id`. The dimensions a user wants to report by — personal/shared, essential/discretionary, business/personal, and similar — are expressed through tags, attached at whichever level matches the user's intent (group, leaf category, or individual transaction). Tag attachment for categories is stored in `category_tag(category_id, tag_id)`.
+Categories and groups themselves do **not** have an `owner_id`; the column was dropped in migration `m19_drop_category_owner_id`. The dimensions a user wants to report by — personal/shared, essential/discretionary, business/personal, and similar — are expressed through tags, attached at whichever level matches the user's intent (group, leaf category, or individual transaction). Tag attachment for categories is stored in `category_tag(category_id, tag_id)` with `ON DELETE CASCADE` on both foreign keys, so deleting a tag also drops its `category_tag` rows and deleting a category also drops its attachments. Reporting endpoints (`/summary/by-group`, `/summary/by-category`, `/summary/monthly-trend`, `/summary/monthly-by-group`) no longer accept the old `category_owner_ids` parameter; tag-aware filtering via `tag_ids` is the replacement.
 
 Reporting should not assume every transaction inside an expense or income branch shares the same sign.
 
@@ -233,11 +239,13 @@ Important import-batch behavior:
 
 - exact duplicate protection remains the highest-confidence rule; heuristic matching only considers existing transactions in the same effective account scope with the same date and signed amount, then compares stored import evidence/source text to decide whether the row should be reviewed as a possible duplicate
 
-- a separate **soft-duplicate** check runs after a batch finalizes: when the receiving account is brand new to the database, any imported row that matches an existing row on another account by (date, amount, normalized payee) is flagged (not blocked) via the `suspect_duplicate_of` columns and surfaces in the duplicate-review report; account merges run the same check across the now-grouped accounts so previously-distinct rows can be reconciled after the fact
+- a separate **soft-duplicate** check runs after a batch finalizes: every imported row is compared against existing rows on *other* accounts by (date, amount, normalized payee), and matches are flagged (not blocked) via the `suspect_duplicate_of` columns with reason `cross_account`. The check is gated only by `account_pair_distinct` — pairs the user has previously asserted as distinct (via Keep on a soft-flag) are skipped, since the user has already declared the accounts to be different physical accounts. Same-batch sibling rows on different accounts are trusted as distinct (the CSV asserts via its account column that two rows on different accounts in one statement file are separate transactions, even if their date/amount/payee match); cross-batch matches are the candidates. There is no longer a "brand-new account" precondition: the check runs for every batch row, and `account_pair_distinct` is the mechanism that keeps the output non-noisy after the user has reviewed each pair. Account merges run `promote_in_group_suspects_to_confirmed` to graduate any pre-existing soft-flag whose two sides are now in the merged group, and `clear_account_pair_distinct_for_merge` to drop any prior distinct assertion between the now-merged accounts (the merge contradicts it)
 
 - duplicate rows within the same CSV are allowed
 
 - each imported raw account label also stores a trusted coverage window plus the source file's terminal date on `import_batch_account`; later imports auto-exclude rows that fall inside already-covered days, and on that shared terminal day they reconcile against the finite set of rows imported from earlier files on the same day so any remaining new rows import once the historical overlap has been consumed
+
+- the coverage-window, terminal-day, and text-strategy medium-confidence rules only hard-dedupe against prior coverage when the receiving account itself appeared in that coverage (or was explicitly declared an alias of an existing account via `duplicate_compare_account_id` at import time); a brand-new sibling account inheriting only its linked-group's coverage does not satisfy the precondition and the row passes through to the soft-duplicate review instead, because the prior import provably did not contain transactions from this new account and "covered" cannot mean "covered for this account." Exact content-hash matches are unconditional — same date+amount+payee is high-confidence enough to drop regardless of which account the receiving row lands on
 
 - saved data sources keep reusable import mapping defaults plus a default `use_imported_categories` flag for future files from that source; in the UI this is exposed as whether categories present in the data should be used by default
 

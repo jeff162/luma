@@ -7,18 +7,18 @@ These CSVs are are crafted to exercise the duplicate-detection logic.
 
 Covered scenarios:
 
-- `duplicate_fullview_base.csv`
+- `duplicate_prior_base.csv`
   - baseline import that establishes a coverage window ending before the file's terminal day
 
-- `duplicate_monarch_overlap.csv`
+- `duplicate_new_overlap.csv`
   - cross-source overlap against that baseline
   - includes covered-day duplicates on non-terminal days
   - includes terminal-day overlap plus one genuinely new row on the same day
 
-- `duplicate_monarch_exact.csv`
+- `duplicate_new_exact.csv`
   - exact content-hash duplicate that should be rejected before covered-day logic
 
-- `duplicate_monarch_text_match.csv`
+- `duplicate_new_text_match.csv`
   - cross-source text/evidence duplicate without a prior coverage window
 
 - `duplicate_same_file_allowed.csv`
@@ -37,7 +37,7 @@ Covered scenarios:
   - proves the importer only consumes the finite set of historical same-day rows and still imports the extra same-amount row
 
 - undo then reimport
-  - covered by reusing `duplicate_fullview_base.csv` in the test module
+  - covered by reusing `duplicate_prior_base.csv` in the test module
   - proves an undone batch no longer blocks a clean reimport of the same file
 
 Expected final-ledger snapshots are stored as companion CSVs so tests can

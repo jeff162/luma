@@ -168,6 +168,9 @@ export const api = {
   restoreAccount: (id) => request(`/accounts/${id}/restore`, { method: 'POST' }),
   getTrashedAccounts: () => request('/accounts/trash'),
   emptyAccountTrash: () => request('/accounts/trash/empty', { method: 'POST' }),
+  getDistinctAccountPairs: () => request('/accounts/distinct-pairs'),
+  forgetDistinctAccountPair: (accountIdA, accountIdB) =>
+    request(`/accounts/distinct-pairs/${accountIdA}/${accountIdB}`, { method: 'DELETE' }),
 
   getCategoryTree: () => request('/categories'),
   getCategories: () => request('/categories/flat'),
@@ -210,6 +213,8 @@ export const api = {
   getSuspectDuplicateCount: () => request('/transactions/suspect-duplicates/count'),
   resolveSuspectDuplicate: (id, action) =>
     request(`/transactions/${id}/resolve-suspect`, { method: 'POST', body: JSON.stringify({ action }) }),
+  restoreRejectedDuplicate: (id) =>
+    request(`/transactions/${id}/restore-rejected`, { method: 'POST' }),
 
   getRules: (search) => {
     const q = search ? '?' + new URLSearchParams({ search }) : ''
@@ -272,6 +277,7 @@ export const api = {
   listBatches:      ()      => request('/import-export/batches'),
   getBatchEdited:   (id)    => request(`/import-export/batches/${id}/edited`),
   getBatchDuplicates: (id)  => request(`/import-export/batches/${id}/duplicates`),
+  getBatchDuplicatesUnified: (id) => request(`/import-export/batches/${id}/duplicates-unified`),
   getBatchCategoryMappings: (id) => request(`/import-export/batches/${id}/category-mappings`),
   getBatchRuleSuggestions: (id, ownerIds = []) => {
     const q = new URLSearchParams()

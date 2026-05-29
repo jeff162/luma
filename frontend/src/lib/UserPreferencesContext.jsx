@@ -1,6 +1,29 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+/*
+ * App-wide user preference store. Two model invariants worth knowing about:
+ *
+ * 1. Optimistic local state + async backend save. `setPreference` updates the in-memory
+ *    map immediately so controls feel responsive, then fires `api.saveUserPreference`. If
+ *    the save fails AND no newer write has superseded ours in the meantime, we roll the
+ *    in-memory map back to the previous value. The "newer write" check matters: a user
+ *    rapidly changing the same preference shouldn't have a failed early save roll back a
+ *    later successful one.
+ *
+ * 2. Symmetric reader/setter for defaults. `useUserPreference(key, defaultValue)` plumbs
+ *    the default into both the read path (returns defaultValue when no value has been
+ *    saved) AND the setter — so a functional updater (`setX(prev => ...)`) sees the same
+ *    resolved-with-default value the reader returned, not the raw stored `undefined`. This
+ *    matters because callers naturally assume `prev` is the "current value of X" and write
+ *    things like `prev.field` against it; without the symmetry, the first ever write for a
+ *    key would hand `undefined` to the updater and crash.
+ *
+ * Preferences are gated behind `preferencesReady`: until the initial load resolves, the
+ * provider shows a tiny loading state rather than render children with stale defaults that
+ * would flash to the real values a moment later.
+ */
+
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.js'
 
@@ -17,10 +40,6 @@ function getPreferenceValue(preferences, key, defaultValue) {
 }
 
 export function UserPreferencesProvider({ children, initialPreferences = null }) {
-  /*
-   * Preferences are loaded once here and then treated as optimistic local state so controls stay responsive
-   * while this provider owns the save/rollback bookkeeping.
-   */
   const [preferences, setPreferences] = useState(() => normalizePreferences(initialPreferences))
   const [preferencesReady, setPreferencesReady] = useState(() => initialPreferences !== null)
   const mountedRef = useRef(true)
@@ -70,12 +89,16 @@ export function UserPreferencesProvider({ children, initialPreferences = null })
     }
   }, [initialPreferences])
 
-  const setPreference = useCallback((key, nextValueOrUpdater) => {
+  const setPreference = useCallback((key, nextValueOrUpdater, defaultValue) => {
     const currentPreferences = preferencesRef.current
     const hadPreviousValue = Object.prototype.hasOwnProperty.call(currentPreferences, key)
     const previousValue = currentPreferences[key]
+    // Fall back to defaultValue (which useUserPreference threads in) so functional updaters
+    // see the same value the reader returned, not raw `undefined` from a never-saved key —
+    // see "Symmetric reader/setter" in the top-of-file model.
+    const updaterInput = hadPreviousValue ? previousValue : defaultValue
     const resolvedNextValue = typeof nextValueOrUpdater === 'function'
-      ? nextValueOrUpdater(previousValue)
+      ? nextValueOrUpdater(updaterInput)
       : nextValueOrUpdater
 
     if (hadPreviousValue && Object.is(previousValue, resolvedNextValue)) {
@@ -162,8 +185,8 @@ export function useUserPreference(key, defaultValue) {
   const { preferences, setPreference } = useUserPreferences()
   const value = getPreferenceValue(preferences, key, defaultValue)
   const setValue = useCallback(
-    nextValueOrUpdater => setPreference(key, nextValueOrUpdater),
-    [key, setPreference],
+    nextValueOrUpdater => setPreference(key, nextValueOrUpdater, defaultValue),
+    [key, setPreference, defaultValue],
   )
   return [value, setValue]
 }

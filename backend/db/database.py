@@ -92,7 +92,7 @@ def get_db(db_path: str | None = None):
 # Migrations are additive startup upgrades for existing databases only; fresh installs
 # are created directly at `CURRENT_VERSION` and should not replay the migration chain.
 
-CURRENT_VERSION = 21
+CURRENT_VERSION = 24
 
 MIGRATIONS = {}
 
@@ -682,6 +682,79 @@ def m18_category_tags(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_category_tag_tag ON category_tag(tag_id)")
 
 
+@migration(23)
+def m23_account_pair_distinct(conn):
+    """Replaces the "brand-new account" proxy for cross-account suspect detection with explicit
+    per-pair user assertions. See `docs/architecture.md` (Dedupe state lifecycle) for the model.
+
+    Two pieces:
+      1. New `account_pair_distinct` table — sparse record of which account pairs the user has
+         declared distinct via Keep. The cross-account suspect check filters out pairs present
+         in this table.
+      2. Existing soft-flag suspect reason values (`'import_new_account'`, `'account_merge'`)
+         are functionally equivalent in the new model — both signify a cross-account suspect.
+         Migrated forward to a single neutral name, `'cross_account'`.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS account_pair_distinct (
+            account_id_low  TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+            account_id_high TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+            asserted_at     TEXT NOT NULL,
+            PRIMARY KEY (account_id_low, account_id_high),
+            CHECK (account_id_low < account_id_high)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_account_pair_distinct_high ON account_pair_distinct(account_id_high)"
+    )
+    conn.execute(
+        """
+        UPDATE txn
+        SET    suspect_duplicate_reason = 'cross_account'
+        WHERE  suspect_duplicate_reason IN ('import_new_account', 'account_merge')
+        """
+    )
+
+
+@migration(24)
+def m24_dedupe_resolved_by(conn):
+    """Provenance marker on dedupe resolutions so detach can safely auto-restore promoted rows
+    without trampling user decisions.
+
+    Values:
+      NULL          — row is not in a resolved state (active suspect, or never was a suspect)
+      'user'        — the user explicitly resolved this row via the dialog (Reject / Trash)
+      'auto_merge'  — promote_in_group_suspects_to_confirmed promoted this row when its
+                      cross-account pair was merged together
+
+    On detach, only `'auto_merge'` rows are restored — user decisions are preserved. Pre-existing
+    confirmed_duplicate rows have NULL after this migration; the safe interpretation is "treat
+    as user" (don't auto-restore). If you need to roll back a specific pre-marker merge, use
+    the one-off restore-by-account-pair path (added in the same change).
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(txn)").fetchall()}
+    if "dedupe_resolved_by" not in columns:
+        conn.execute("ALTER TABLE txn ADD COLUMN dedupe_resolved_by TEXT")
+
+
+@migration(22)
+def m22_rejection_reason(conn):
+    """Discriminator that distinguishes user-driven trash (cleanup) from a row that was excluded
+    because a soft-duplicate suspect was confirmed as a real duplicate. Both states set
+    `trashed_at` (the row is hidden from active ledger queries either way) but only the second
+    sets `rejection_reason='duplicate_confirmed'`, which is what the unified duplicate-detection
+    report uses to surface confirmed soft-flags alongside import-time hard-rejects."""
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(txn)").fetchall()
+    }
+    if "rejection_reason" not in columns:
+        conn.execute("ALTER TABLE txn ADD COLUMN rejection_reason TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_txn_rejection_reason ON txn(rejection_reason) WHERE rejection_reason IS NOT NULL")
+
+
 @migration(21)
 def m21_suspect_duplicates(conn):
     """Suspect-duplicate bookkeeping. A transaction can be flagged as a possible duplicate of
@@ -843,7 +916,9 @@ def init_db(db_path: str | None = None):
                 trashed_at           TEXT,
                 suspect_duplicate_of     TEXT,
                 suspect_duplicate_reason TEXT,
-                suspect_resolved_at      TEXT
+                suspect_resolved_at      TEXT,
+                rejection_reason         TEXT,
+                dedupe_resolved_by       TEXT
             );
 
             CREATE TABLE IF NOT EXISTS tag (
@@ -876,6 +951,20 @@ def init_db(db_path: str | None = None):
                 tag_id      TEXT NOT NULL REFERENCES tag(id) ON DELETE CASCADE,
                 PRIMARY KEY (category_id, tag_id)
             );
+
+            -- Records account pairs the user has explicitly declared distinct via Keep on a
+            -- soft-flag suspect. The cross-account suspect check filters out pairs present
+            -- here. Pair is stored sorted (low, high) so each pair has a single row regardless
+            -- of which side surfaced first.
+            CREATE TABLE IF NOT EXISTS account_pair_distinct (
+                account_id_low  TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+                account_id_high TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+                asserted_at     TEXT NOT NULL,
+                PRIMARY KEY (account_id_low, account_id_high),
+                CHECK (account_id_low < account_id_high)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_account_pair_distinct_high ON account_pair_distinct(account_id_high);
 
             CREATE INDEX IF NOT EXISTS idx_txn_date        ON txn(date);
             CREATE INDEX IF NOT EXISTS idx_txn_account     ON txn(account_id);
