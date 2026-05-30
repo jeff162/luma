@@ -1002,6 +1002,10 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
       merchantName,
       keywordSource,
       transactionId: txn.id,
+      // Category the row carried before this save (null when it was uncategorized). Consumers can
+      // gate the suggestion on it — e.g. only prompt when an unassigned transaction is first
+      // categorized, not when an existing assignment is changed.
+      previousCategoryId: txn.category_id ?? null,
       categoryId: cat.id,
       categoryName: cat.name,
       categoryColor: null,

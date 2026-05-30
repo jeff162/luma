@@ -17,6 +17,9 @@ import {
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
+import TransactionDetail from '../components/TransactionDetail.jsx'
+import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
+import { refreshTaskBadge } from '../App.jsx'
 import { usePagedTransactions } from '../components/detailShared.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import { TagGlyph } from '../components/TagUi.jsx'
@@ -634,6 +637,10 @@ export default function Categories() {
   const [uncategorizedExpenseTxnCount, setUncategorizedExpenseTxnCount] = useState(0)
   const [uncategorizedIncomeTxnCount, setUncategorizedIncomeTxnCount] = useState(0)
   const [matchingTxnsTotal, setMatchingTxnsTotal] = useState(0)
+  // Bumped to force the matching-transactions list to reload (e.g. after a rule the toast created
+  // is applied to existing rows, which can change which transactions match the selected category).
+  const [matchingReloadNonce, setMatchingReloadNonce] = useState(0)
+  const [rulePrompt, setRulePrompt] = useState(null)
   const [selected, setSelected] = useState(null)
   const [selectedCategoryIds, setSelectedCategoryIds] = useState([])
   const [detailPanels, setDetailPanels] = useState([])
@@ -1518,11 +1525,14 @@ export default function Categories() {
   const selectedCategoryIdsFilter = isMultiCategorySelection
     ? selectedCategories.map(cat => cat.id).join(',')
     : null
-  const matchingTxnsKey = selectedCategoryFilter
+  const matchingTxnsBaseKey = selectedCategoryFilter
     ? `${selectedCategoryFilter}|${filters.date?.start || ''}|${filters.date?.end || ''}`
     : selectedCategoryIdsFilter
       ? `${selectedCategoryIdsFilter}|${filters.date?.start || ''}|${filters.date?.end || ''}`
       : null
+  const matchingTxnsKey = matchingTxnsBaseKey
+    ? `${matchingTxnsBaseKey}|${matchingReloadNonce}`
+    : null
 
   const loadMatchingTxnPage = useCallback((offset, limit) => (
     api.getTransactions({
@@ -1562,6 +1572,8 @@ export default function Categories() {
         category_overridden: 1,
       } : txn
     ))
+    // Categorizing here changes the uncategorized total, so keep the Tasks badge current.
+    refreshTaskBadge()
   }
 
   function handleMatchingTxnColumnUpdate(nextColumns) {
@@ -2081,6 +2093,12 @@ export default function Categories() {
                     categories={flatCats}
                     onCategorySave={saveMatchingTxnCategory}
                     onCategoryOpenDetail={category => openDetailPanel('category', category)}
+                    onTransactionOpenDetail={detailTxn => openDetailPanel('txn', detailTxn)}
+                    onRulePrompt={prompt => {
+                      // Only suggest a rule when an *unassigned* transaction gets its first category;
+                      // changing an existing assignment should not nag with the toast.
+                      if (!prompt.previousCategoryId) setRulePrompt(prompt)
+                    }}
                     onAddCategory={addMatchingCategory}
                     onRowsChange={setPagedMatchingTxns}
                     scrollRef={matchingTxnsListRef}
@@ -2102,6 +2120,35 @@ export default function Categories() {
       </div>
 
       {detailPanels.map((panel, index) => {
+        if (panel.type === 'txn') {
+          return (
+            <TransactionDetail
+              key={`txn:${panel.item.id}`}
+              txn={panel.item}
+              categories={flatCats}
+              forceFloating={true}
+              stackIndex={index}
+              isTopmost={index === detailPanels.length - 1}
+              onClose={() => closeDetailPanel('txn', panel.item.id)}
+              onCategorized={(txnId, cat) => {
+                setPagedMatchingTxns(prev => prev.map(txn =>
+                  txn.id === txnId ? {
+                    ...txn,
+                    category_id: cat?.id ?? null,
+                    category_name: cat?.name ?? null,
+                    category_color: null,
+                    category_overridden: 1,
+                  } : txn
+                ))
+                refreshTaskBadge()
+              }}
+              onTrashed={txnId => {
+                setPagedMatchingTxns(prev => prev.filter(txn => txn.id !== txnId))
+                setMatchingTxnsTotal(prev => Math.max(0, prev - 1))
+              }}
+            />
+          )
+        }
         if (panel.type === 'category') {
           return (
             <CategoryDetail
@@ -2151,6 +2198,21 @@ export default function Categories() {
           move={bulkMoveToast}
           onUndo={undoBulkMove}
           onDismiss={() => setBulkMoveToast(null)}
+        />
+      ) : null}
+
+      {rulePrompt ? (
+        <RuleSuggestionToast
+          prompt={rulePrompt}
+          onSaved={({ applyToExisting }) => {
+            if (applyToExisting) {
+              // Applying the new rule to existing rows can change the matching set and the
+              // uncategorized total, so reload the list and refresh the Tasks badge.
+              setMatchingReloadNonce(n => n + 1)
+              refreshTaskBadge()
+            }
+          }}
+          onDismiss={() => setRulePrompt(null)}
         />
       ) : null}
 
