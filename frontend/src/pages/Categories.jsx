@@ -165,7 +165,7 @@ function DeleteCategoryDialog({ category, preview, categories, replacementId, on
           <div>
             <div style={{ fontSize: 16, fontWeight: 600 }}>Delete category</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
-              "{category?.name}" is assigned to {preview?.txn_count} transaction{preview?.txn_count === 1 ? '' : 's'}.
+              &quot;{category?.name}&quot; is assigned to {preview?.txn_count} transaction{preview?.txn_count === 1 ? '' : 's'}.
             </div>
           </div>
         </FloatingPanelHeader>
@@ -356,7 +356,7 @@ function ContextMenu({
                 onAddCategory(target)
               }}
             >
-              + Add category to "{target.groupName}"
+              + Add category to &quot;{target.groupName}&quot;
             </button>
           ) : (
             <div style={{ ...itemStyle, color: 'var(--muted)', cursor: 'default', opacity: 0.55 }}>
@@ -454,7 +454,7 @@ function ContextMenu({
   )
 }
 
-function InlineAddForm({ label, value, onNameChange, onSubmit, onCancel, indent = 'category' }) {
+function InlineAddForm({ onSubmit, onCancel, indent = 'category' }) {
   if (indent === 'category') {
     return (
       <InlineCategoryDraftRow
@@ -1214,7 +1214,7 @@ export default function Categories() {
     setDeleteMode('replace')
   }
 
-  function selectCategory(cat, event) {
+  function selectCategory(cat) {
     const fullCat = getFullCategoryRecord(cat, flatCats)
     if (!fullCat) return
     if (bulkMoveMode) {
@@ -1313,15 +1313,6 @@ export default function Categories() {
       await loadCategories()
     }
     setContextMenu(null)
-  }
-
-  function openGroupForm(sectionType) {
-    setContextMenu(null)
-    setBulkMoveMode(false)
-    setSelected(null)
-    setSelectedCategoryIds([])
-    setNewName('')
-    setInlineForm({ mode: 'group', sectionType, anchorGroupId: null, insertPosition: 'after' })
   }
 
   function openGroupFormNear(sectionType, anchorGroupId = null, insertPosition = 'after') {
@@ -2094,7 +2085,6 @@ export default function Categories() {
                     onRowsChange={setPagedMatchingTxns}
                     scrollRef={matchingTxnsListRef}
                     fillHeight={true}
-                    usePillTable={true}
                     columnConfig={matchingTxnColumns}
                     onColumnConfigChange={handleMatchingTxnColumnUpdate}
                   />

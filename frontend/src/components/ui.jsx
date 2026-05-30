@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+/* eslint-disable react-refresh/only-export-components -- shared UI kit: primitive components live alongside style helpers used to compose them */
+
 import { forwardRef, useEffect, useRef } from 'react'
 import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
 

@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+/* eslint-disable react-refresh/only-export-components -- shared category-tree row component + tree-traversal helpers used by callers */
+
 import { useEffect, useRef, useState } from 'react'
 import { CategoryMarker } from './ui.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
@@ -113,7 +115,6 @@ export function EditableName({
   const [error, setError] = useState('')
   const {
     editing,
-    setEditing,
     draft,
     setDraft,
     beginEdit,

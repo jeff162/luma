@@ -101,7 +101,6 @@ export default function MonthDetail({
           rows={transactions}
           categories={categories}
           onRowsChange={setTransactions}
-          usePillTable={true}
           columnConfig={columnConfig}
           onColumnConfigChange={setColumnConfig}
           maxHeight={DETAIL_LIST_MAX_HEIGHT}

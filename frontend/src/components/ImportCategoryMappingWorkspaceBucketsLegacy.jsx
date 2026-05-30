@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+/* eslint-disable react-refresh/only-export-components -- re-exports the draft-state factory so callers can import both component + helper from one place */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import {
   cloneImportCategoryMappingSnapshot,
@@ -539,21 +541,22 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
   const sourceScrollRef = useRef(null)
   const bucketScrollRef = useRef(null)
 
-  function buildCurrentDraftState() {
-    return {
-      snapshot: sanitizeSnapshotForPersistence(snapshot),
-      undoStack: undoStack.map(sanitizeSnapshotForPersistence),
-      redoStack: redoStack.map(sanitizeSnapshotForPersistence),
-      selectionAnchor,
-      selectedBucketCategoryIds,
-      bucketSelectionAnchor,
-      activeSection,
-    }
-  }
+  const buildCurrentDraftState = useCallback(() => ({
+    snapshot: sanitizeSnapshotForPersistence(snapshot),
+    undoStack: undoStack.map(sanitizeSnapshotForPersistence),
+    redoStack: redoStack.map(sanitizeSnapshotForPersistence),
+    selectionAnchor,
+    selectedBucketCategoryIds,
+    bucketSelectionAnchor,
+    activeSection,
+  }), [
+    snapshot, undoStack, redoStack,
+    selectionAnchor, selectedBucketCategoryIds, bucketSelectionAnchor, activeSection,
+  ])
 
   useEffect(() => {
     onDraftStateChange?.(buildCurrentDraftState())
-  }, [activeSection, bucketSelectionAnchor, onDraftStateChange, redoStack, selectedBucketCategoryIds, selectionAnchor, snapshot, undoStack])
+  }, [buildCurrentDraftState, onDraftStateChange])
 
   useEffect(() => {
     let cancelled = false
@@ -638,6 +641,12 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
       window.removeEventListener('scroll', dismiss, true)
       window.removeEventListener('resize', dismiss)
     }
+    // Listener (re)binding is intentionally scoped to floatingGroupDraft changes.
+    // finalizeFloatingGroupDraft would need useCallback to be addable here, which
+    // would cascade through applySnapshotChange (closes over snapshot) and force
+    // listener re-binding on every snapshot mutation — pointless churn since the
+    // dismiss closure already captures the current finalize via the same render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [floatingGroupDraft])
 
   function applySnapshotChange(mutator) {

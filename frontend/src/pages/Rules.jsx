@@ -5,8 +5,18 @@ import { useState, useEffect, useCallback } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState } from '../components/ui.jsx'
+import PillGridTable from '../components/PillGridTable.jsx'
 import RuleForm, { amountConditionSummary } from '../components/RuleForm.jsx'
 import { TagBadge } from '../components/TagUi.jsx'
+
+// Static, non-interactive columns: the rules list isn't sorted/reordered/resized by the user,
+// it just needs the consistent table chrome and a pinned header. Sticky header is wired below
+// via PillGridTable's `headerStyle`.
+const RULE_COLUMNS = [
+  { key: 'keyword', label: 'Keyword + Condition', width: 360, sortable: false, draggable: false, resizable: false },
+  { key: 'action',  label: 'Action',              width: '1fr', sortable: false, draggable: false, resizable: false },
+  { key: 'rowActions', label: '',                 width: 80,  sortable: false, draggable: false, resizable: false },
+]
 
 function describeRule(rule, owners, accounts) {
   const parts = []
@@ -31,7 +41,7 @@ function describeRule(rule, owners, accounts) {
   return parts
 }
 
-function RuleRow({ rule, owners, accounts, onSave, onDelete }) {
+function RuleRow({ rule, owners, accounts, onSave, onDelete, gridTemplateColumns }) {
   const [confirmDel,  setConfirmDel]  = useState(false)
 
   const conditions = describeRule(rule, owners, accounts)
@@ -39,7 +49,7 @@ function RuleRow({ rule, owners, accounts, onSave, onDelete }) {
 
   return (
     <div style={{
-      display: 'grid', gridTemplateColumns: '360px 1fr 80px',
+      display: 'grid', gridTemplateColumns,
       padding: '10px 16px', alignItems: 'center',
       borderBottom: '1px solid var(--border)', gap: 12,
     }}>
@@ -388,7 +398,10 @@ export default function Rules() {
         </span>
       </div>
 
-      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 32px 32px' }}>
+      {/* No padding-top on this scroll container — the rules Card's sticky header references
+          top: 0 of the scrollport, and any padding-top here would leave a band above the
+          pinned header where scrolling rows are visible. */}
+      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
         {showCreateForm && (
           <Card style={{ padding: 0, overflow: 'hidden', marginBottom: 20 }}>
             <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)', fontSize: 14, fontWeight: 600 }}>
@@ -407,31 +420,37 @@ export default function Rules() {
           </Card>
         )}
 
-        <Card style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{
-            display: 'grid', gridTemplateColumns: '360px 1fr 80px',
-            padding: '8px 16px', gap: 12,
-            fontSize: 11, fontWeight: 600, color: 'var(--muted)',
-            textTransform: 'uppercase', letterSpacing: '0.05em',
-            borderBottom: '1px solid var(--border)',
-          }}>
-            <span>Keyword + Condition</span>
-            <span style={{ paddingLeft: 28 }}>Action</span>
-            <span />
-          </div>
-
-          {loading ? <Spinner /> : rules.length === 0 ? (
-            <EmptyState message={search ? 'No rules match that keyword' : 'No rules yet — click "Add rule" to create one'} />
-          ) : rules.map(rule => (
-            <RuleRow
-              key={rule.id}
-              rule={rule}
-              owners={owners}
-              accounts={accounts}
-              onSave={openEditForm}
-              onDelete={handleDelete}
-            />
-          ))}
+        <Card style={{ padding: 0 }}>
+          <PillGridTable
+            columns={RULE_COLUMNS}
+            headerStyle={{
+              padding: '8px 16px',
+              background: 'var(--surface)',
+              borderBottom: '1px solid var(--border)',
+              position: 'sticky',
+              top: 0,
+              zIndex: 2,
+            }}
+            renderBody={({ gridTemplateColumns }) => (
+              loading ? <Spinner /> : rules.length === 0 ? (
+                <EmptyState message={search ? 'No rules match that keyword' : 'No rules yet — click "Add rule" to create one'} />
+              ) : (
+                <div>
+                  {rules.map(rule => (
+                    <RuleRow
+                      key={rule.id}
+                      rule={rule}
+                      owners={owners}
+                      accounts={accounts}
+                      onSave={openEditForm}
+                      onDelete={handleDelete}
+                      gridTemplateColumns={gridTemplateColumns}
+                    />
+                  ))}
+                </div>
+              )
+            )}
+          />
         </Card>
         <p style={{ marginTop: 12, fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
           Rules are evaluated most-specific first: longer keywords beat shorter ones,

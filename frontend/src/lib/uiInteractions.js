@@ -107,6 +107,10 @@ export function useDismissiblePopup({
       ? (spaceBelow < popupHeight && spaceAbove > spaceBelow)
       : (spaceBelow < spaceAbove)
     setOpenUp(shouldOpenUp)
+    // placementDeps is a caller-provided array spread into our deps so consumers can opt
+    // additional inputs into the recompute trigger. eslint can't statically verify spread
+    // deps but the contract is part of this hook's API.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [anchorRef, open, popupRef, popupGap, preferredPopupHeight, viewportPadding, ...placementDeps])
 
   return { openUp }

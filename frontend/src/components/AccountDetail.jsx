@@ -136,7 +136,6 @@ export default function AccountDetail({ account, categories = [], onClose, force
                     onCategorySave={saveCategory}
                     onRowsChange={setLocalMonthTxns}
                     showAccount={false}
-                    usePillTable={true}
                     columnConfig={columnConfig}
                     onColumnConfigChange={setColumnConfig}
                     maxHeight={DETAIL_LIST_MAX_HEIGHT}

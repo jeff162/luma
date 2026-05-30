@@ -2794,10 +2794,14 @@ async def preview_csv(file: UploadFile = File(...)):
             previous_batch_accounts = []
             config_snapshot         = None
             if previous_batch:
+                # Report the raw data-source account the batch was mapped to, not its
+                # current parent. The import mapping UI deals in data-source accounts —
+                # whether the user has since grouped that account under another on the
+                # Accounts page is irrelevant here.
                 acc_rows = conn.execute("""
                     SELECT iba.csv_value, iba.row_count, iba.was_skipped,
-                           COALESCE(a.parent_account_id, a.id) AS account_id,
-                           COALESCE(a.display_name, a.name) AS account_name
+                           a.id AS account_id,
+                           COALESCE(a.name, a.display_name) AS account_name
                     FROM   import_batch_account iba
                     LEFT JOIN account a ON a.id = iba.account_id
                     WHERE  iba.batch_id = ? AND iba.was_skipped = 0
@@ -3997,7 +4001,7 @@ def list_batches():
 
             accs = conn.execute("""
                 SELECT iba.csv_value, iba.account_id, iba.row_count, iba.was_skipped,
-                       COALESCE(a.display_name, a.name, iba.csv_value) AS account_name
+                       COALESCE(a.name, a.display_name, iba.csv_value) AS account_name
                 FROM   import_batch_account iba
                 LEFT JOIN account a ON a.id = iba.account_id
                 WHERE  iba.batch_id = ?

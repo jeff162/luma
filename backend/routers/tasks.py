@@ -84,14 +84,19 @@ def get_tasks():
         """).fetchone()["n"]
 
         if suspect_dupes:
+            # The unified duplicate-detection report is scoped to a single import batch and
+            # is opened from /import-export (each file card with unresolved soft flags carries
+            # its own entry-point pill, and collapsed data-source rows surface an aggregate
+            # badge). Linking the task here to /import-export lets the user pick which
+            # batch's report to open rather than dropping them into a global cross-batch view.
             tasks.append({
                 "id":          "suspect_duplicates",
                 "title":       "Possible duplicate transactions",
                 "description": f"{suspect_dupes} transaction{'s match' if suspect_dupes != 1 else ' matches'} "
-                               "an existing row on a different account. Review them and either keep or trash each.",
+                               "an existing row on a different account. Open the import that flagged them to review each one.",
                 "count":       suspect_dupes,
-                "link":        "/suspect-duplicates",
-                "link_label":  "Review duplicates",
+                "link":        "/import-export",
+                "link_label":  "Open Import / Export",
                 "severity":    SEVERITY_WARNING,
             })
 

@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+/* eslint-disable react-refresh/only-export-components -- re-exports the draft-state factory so callers can import both component + helper from one place */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Button } from './ui.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
@@ -95,88 +97,6 @@ function autoScrollContainer(container, clientY, threshold = 48, maxStep = 22) {
   }
 
   if (delta) container.scrollTop += delta
-}
-
-function buildMultiDragPreview(categories) {
-  if (!categories.length || typeof document === 'undefined') return null
-  const visibleDepth = Math.max(1, Math.min(categories.length, 10))
-  const width = 220 + (visibleDepth - 1) * 14
-  const height = 68 + (visibleDepth - 1) * 11
-  const canvas = document.createElement('canvas')
-  const scale = window.devicePixelRatio || 1
-  canvas.width = width * scale
-  canvas.height = height * scale
-  canvas.style.width = `${width}px`
-  canvas.style.height = `${height}px`
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return null
-  ctx.scale(scale, scale)
-
-  function roundRectPath(x, y, w, h, r) {
-    ctx.beginPath()
-    ctx.moveTo(x + r, y)
-    ctx.lineTo(x + w - r, y)
-    ctx.quadraticCurveTo(x + w, y, x + w, y + r)
-    ctx.lineTo(x + w, y + h - r)
-    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
-    ctx.lineTo(x + r, y + h)
-    ctx.quadraticCurveTo(x, y + h, x, y + h - r)
-    ctx.lineTo(x, y + r)
-    ctx.quadraticCurveTo(x, y, x + r, y)
-    ctx.closePath()
-  }
-
-  for (let i = visibleDepth - 1; i >= 0; i -= 1) {
-    const x = 16 + i * 14
-    const y = 12 + i * 11
-    const w = 170
-    const h = 38
-    ctx.save()
-    ctx.shadowColor = 'rgba(15, 23, 42, 0.22)'
-    ctx.shadowBlur = 18
-    ctx.shadowOffsetY = 8
-    roundRectPath(x, y, w, h, 19)
-    ctx.fillStyle = i === 0 ? '#3730a3' : '#262c43'
-    ctx.fill()
-    ctx.restore()
-    roundRectPath(x, y, w, h, 19)
-    ctx.lineWidth = 1.5
-    ctx.strokeStyle = i === 0 ? '#6366f1' : '#4f5aa8'
-    ctx.stroke()
-
-    if (i === 0) {
-      ctx.fillStyle = '#f8fafc'
-      ctx.font = 'italic 600 12px Segoe UI'
-      ctx.textBaseline = 'middle'
-      const lead = categories[0]
-      const label = String(lead?.name || '').trim() || 'Category'
-      const maxChars = 18
-      const text = label.length > maxChars ? `${label.slice(0, maxChars - 1)}…` : label
-      ctx.fillText(text, x + 14, y + h / 2)
-    }
-  }
-
-  if (categories.length > 1) {
-    const badgeX = 12
-    const badgeY = 6
-    const badgeW = 28
-    const badgeH = 22
-    roundRectPath(badgeX, badgeY, badgeW, badgeH, 11)
-    ctx.fillStyle = '#6366f1'
-    ctx.fill()
-    roundRectPath(badgeX, badgeY, badgeW, badgeH, 11)
-    ctx.lineWidth = 1
-    ctx.strokeStyle = 'rgba(255,255,255,0.22)'
-    ctx.stroke()
-    ctx.fillStyle = '#ffffff'
-    ctx.font = '700 12px Segoe UI'
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(String(categories.length), badgeX + badgeW / 2, badgeY + badgeH / 2 + 0.5)
-    ctx.textAlign = 'start'
-  }
-
-  return canvas
 }
 
 function findNode(tree, nodeId) {
@@ -682,6 +602,10 @@ export default function CategoryImportWorkspace({
       const next = sanitizeSnapshot(prev, sourceValues)
       return snapshotsMatch(prev, next) ? prev : next
     })
+    // Keyed on the stringified sourceValuesKey rather than sourceValues itself so a
+    // parent re-render that hands us a fresh array with the same contents doesn't
+    // pointlessly re-run sanitizeSnapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceValuesKey])
 
   useDismissibleLayer({
@@ -779,22 +703,24 @@ export default function CategoryImportWorkspace({
     escapeBehavior: ESCAPE_BEHAVIOR.CLEAR_SELECTION,
   })
 
-  function buildDraftState() {
-    return {
-      snapshot: sanitizeSnapshot(snapshot, sourceValues),
-      undoStack: undoStack.map(item => sanitizeSnapshot(item, sourceValues)),
-      redoStack: redoStack.map(item => sanitizeSnapshot(item, sourceValues)),
-      selectionAnchor,
-      selectedBucketCategoryIds,
-      bucketSelectionAnchor,
-      activeSection,
-      leftPanelWidth,
-    }
-  }
+  const buildDraftState = useCallback(() => ({
+    snapshot: sanitizeSnapshot(snapshot, sourceValues),
+    undoStack: undoStack.map(item => sanitizeSnapshot(item, sourceValues)),
+    redoStack: redoStack.map(item => sanitizeSnapshot(item, sourceValues)),
+    selectionAnchor,
+    selectedBucketCategoryIds,
+    bucketSelectionAnchor,
+    activeSection,
+    leftPanelWidth,
+  }), [
+    snapshot, sourceValues, undoStack, redoStack,
+    selectionAnchor, selectedBucketCategoryIds, bucketSelectionAnchor,
+    activeSection, leftPanelWidth,
+  ])
 
   useEffect(() => {
     onDraftStateChange?.(buildDraftState())
-  }, [activeSection, bucketSelectionAnchor, leftPanelWidth, onDraftStateChange, redoStack, selectedBucketCategoryIds, selectionAnchor, snapshot, undoStack])
+  }, [buildDraftState, onDraftStateChange])
 
   function applySnapshotChange(mutator) {
     // Funnel every structural edit through one path so undo/redo always captures a clean, source-aware snapshot.
@@ -1375,7 +1301,7 @@ export default function CategoryImportWorkspace({
     setSelectionAnchor(null)
   }
 
-  const groups = snapshot.tree[activeSection] || []
+  const groups = useMemo(() => snapshot.tree[activeSection] || [], [snapshot.tree, activeSection])
   const remainingCount = snapshot.sourceOrder.length
   const processedCount = Math.max(0, (sourceValues || []).filter(Boolean).length - remainingCount)
   const remainingItemLabel = remainingCount === 1 ? remainingItemLabelSingular : remainingItemLabelPlural

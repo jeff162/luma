@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { refreshTaskBadge, notifyAccountsChanged } from '../App.jsx'
 import { Card, Button, Spinner, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog } from '../components/ui.jsx'
@@ -933,7 +933,7 @@ function AccountRow({
   onDragStart,
   onDragEnd,
 }) {
-  const [savingName, setSavingName] = useState(false)
+  const [, setSavingName] = useState(false)
   const [creatingOwner, setCreatingOwner] = useState(false)
   const [ownerDraft, setOwnerDraft] = useState('')
   const [showOwnerCreate, setShowOwnerCreate] = useState(false)
@@ -967,7 +967,7 @@ function AccountRow({
 
   useEffect(() => {
     if (interactionDisabled) setEditingName(false)
-  }, [interactionDisabled])
+  }, [interactionDisabled, setEditingName])
 
   useEffect(() => {
     if (!interactionDisabled) return
@@ -1030,12 +1030,10 @@ function AccountRow({
   const deletePrompt = transactionCount > 0
     ? <>Remove <strong>{account.name}</strong> and {transactionCount} transaction{transactionCount === 1 ? '' : 's'}?</>
     : <>Remove <strong>{account.name}</strong>?</>
-  const personalOwners = getPersonalOwners(owners)
   const assignableOwners = getAssignableOwners(owners)
   // Parents with children may toggle between their personal owner and shared — restricted options
   // are passed in from the parent to enforce this. Children and plain accounts use all assignable owners.
   const effectiveOwnerOptions = restrictedOwnerOptions ?? assignableOwners
-  const parentDisplayName = parentAccount?.display_name || parentAccount?.name || ''
   const detailAccount = parentAccount || account
   const canShowOwnerControls = !isChild
   // Allow owner change on parents-with-children but only between personal owner and shared.
@@ -1722,10 +1720,10 @@ export default function Accounts() {
     api.saveUserPreference(ACCOUNTS_SORT_PREF_KEY, value).catch(() => { })
   }, [dbInstanceId, userId, sortDirections, sortKey, sortDir, sortLoaded])
 
-  function applyAccountSort(nextSortKey = sortKey, nextSortDir = sortDir) {
+  const applyAccountSort = useCallback((nextSortKey = sortKey, nextSortDir = sortDir) => {
     setAccounts(prev => orderAccountsForDisplay(prev, nextSortKey, nextSortDir))
     setSortIndicatorActive(true)
-  }
+  }, [sortKey, sortDir])
 
   function toggleAccountSort(nextSortKey) {
     const rememberedDir = sortDirections[nextSortKey] || 'asc'
@@ -1745,7 +1743,7 @@ export default function Accounts() {
     if (initialSortSeedRef.current === seed) return
     applyAccountSort(sortKey, sortDir)
     initialSortSeedRef.current = seed
-  }, [dbInstanceId, loading, sortDir, sortKey, sortLoaded, userId])
+  }, [applyAccountSort, dbInstanceId, loading, sortDir, sortKey, sortLoaded, userId])
 
   function bindSection(sectionKey) {
     return {

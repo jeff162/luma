@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import {
   analyzeImportColumns,
@@ -104,14 +104,14 @@ function ProfileForm({
   const [accountId, setAccountId] = useState(profile?.account_id || '')
   const [dateFormat, setDateFormat] = useState(profile?.date_format || DEFAULT_IMPORT_DATE_FORMAT)
   const [amtConv, setAmtConv] = useState(profile?.amount_convention || 'single_signed')
-  const [skipRows, setSkipRows] = useState(profile?.skip_rows ?? 0)
+  const [skipRows] = useState(profile?.skip_rows ?? 0)
   const [applyCat, setApplyCat] = useState(profile?.apply_categorization !== false)
   const [useImportedCategories, setUseImportedCategories] = useState(
     profile?.use_imported_categories != null
       ? !!profile.use_imported_categories
       : normalizeImportCategoryUsageMode(defaultImportCategoryUsageMode) === IMPORT_CATEGORY_USAGE_MODE_ALL
   )
-  const [notes, setNotes] = useState(profile?.notes || '')
+  const [notes] = useState(profile?.notes || '')
   const [samplePreview, setSamplePreview] = useState(null)
   const [sampleFileName, setSampleFileName] = useState('')
   const [sampleLoading, setSampleLoading] = useState(false)
@@ -693,7 +693,7 @@ export default function ImportProfilesManager({
     }
   }
 
-  function getDefaultFormPanelPosition(size = { width: ADD_PANEL_WIDTH, height: 740 }) {
+  const getDefaultFormPanelPosition = useCallback((size = { width: ADD_PANEL_WIDTH, height: 740 }) => {
     if (typeof window === 'undefined') return { x: 96, y: 96 }
     const rect = rootRef.current?.getBoundingClientRect()
     const desiredX = rect
@@ -701,19 +701,19 @@ export default function ImportProfilesManager({
       : Math.round((window.innerWidth - (size.width || ADD_PANEL_WIDTH)) / 2)
     const desiredY = Math.max(72, Math.round(window.innerHeight * 0.28))
     return clampFormPanelPosition({ x: desiredX, y: desiredY }, size)
-  }
+  }, [])
 
-  async function refreshManagerData() {
+  const refreshManagerData = useCallback(async () => {
     const [p, a, b] = await Promise.all([api.getImportProfiles(), api.getAccounts(), api.listBatches()])
     setProfiles(p)
     setAccounts(a)
     setBatches(b)
     onDataChange?.({ profiles: p, accounts: a, batches: b })
-  }
+  }, [onDataChange])
 
   useEffect(() => {
     refreshManagerData().finally(() => setLoading(false))
-  }, [])
+  }, [refreshManagerData])
 
   useEffect(() => {
     onEditingChange?.(showAdd || !!editId)
@@ -732,7 +732,7 @@ export default function ImportProfilesManager({
       return
     }
     setFormPanelPos(getDefaultFormPanelPosition())
-  }, [activeFormKey])
+  }, [activeFormKey, getDefaultFormPanelPosition])
 
   useEffect(() => {
     if (!formPanelDragging) return undefined
@@ -766,7 +766,7 @@ export default function ImportProfilesManager({
     }
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
-  }, [activeFormKey])
+  }, [activeFormKey, getDefaultFormPanelPosition])
 
   function startFormPanelDrag(event) {
     const rect = formPanelRef.current?.getBoundingClientRect()

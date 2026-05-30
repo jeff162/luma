@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+/* eslint-disable react-refresh/only-export-components -- provider + useUnifiedDuplicatesViewer hook + nav-bar pill live together by design */
+
 // App-level state for the unified duplicate-detection report dialog. The dialog used to live
 // inside the Import/Export page tree and would unmount whenever the user navigated away —
 // frustrating for the cross-account-merge workflow where the user wants to investigate flagged

@@ -22,13 +22,6 @@ import { useFilters } from '../lib/FilterContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 
-const NEW_CATEGORY_SENTINEL = '__new__'
-
-const NEW_CAT_COLORS = [
-  '#6366f1', '#ec4899', '#f97316', '#eab308', '#22c55e',
-  '#14b8a6', '#3b82f6', '#a855f7', '#ef4444', '#64748b',
-]
-
 const COLUMN_DEFS = [
   { key: 'date', label: 'Date', defaultWidth: 100, minWidth: 70 },
   { key: 'merchant', label: 'Merchant', defaultWidth: 220, minWidth: 120 },
@@ -752,9 +745,6 @@ export default function Transactions() {
             </span>
           )
         }
-        const accountLabel = txn.category_name
-          ? `${txn.category_name} — click to view spending history`
-          : 'Uncategorized'
         return (
           <CategoryCell
             txn={txn}
@@ -888,66 +878,77 @@ export default function Transactions() {
           </div>
         </div>
 
-        <Card style={{ padding: 0, overflowX: 'auto', overflowY: 'hidden', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <PillGridTable
-            columns={tableColumns}
-            onColumnsChange={handleColUpdate}
-            sortState={sortState}
-            onSort={toggleSort}
-            fillHeight
-            renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
-              <div
-                ref={listScrollRef}
-                onScroll={maybeLoadMore}
-                onCopy={handleTransactionCopy}
-                style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
-              >
-                {initialLoading ? <Spinner /> : data.transactions.length === 0 ? (
-                  <EmptyState message={quickFilter.trim() ? 'No matching transactions' : 'No transactions found'} />
-                ) : (
-                  data.transactions.map(txn => (
-                    <div
-                      key={txn.id}
-                      data-txn-copy-row={txn.id}
-                      onContextMenu={e => onContextMenu(e, txn)}
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns,
-                        padding: '9px 14px', alignItems: 'center',
-                        borderBottom: '1px solid var(--border)',
-                        fontSize: 13,
-                        background: editId === txn.id ? 'var(--surface2)' : 'transparent',
-                        minWidth: 0,
-                      }}
-                    >
-                      {activeColumns.map(col => (
-                        <div
-                          key={col.key}
-                          style={{
-                            minWidth: 0,
-                            ...(col.key === 'amount'
-                              ? {}
-                              : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
-                          }}
-                        >
-                          {renderCell(col, txn)}
-                        </div>
-                      ))}
+        {/* Card clips the rounded corners; the inner div is the actual scroll viewport
+            so the sticky PillTableHeader inside pins to it. listScrollRef + maybeLoadMore
+            stay on the scroll viewport so infinite-scroll fires from the same element
+            the rows scroll inside. */}
+        <Card style={{ padding: 0, overflow: 'hidden', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <div
+            ref={listScrollRef}
+            onScroll={maybeLoadMore}
+            onCopy={handleTransactionCopy}
+            style={{ overflowX: 'auto', overflowY: 'auto', flex: 1, minHeight: 0 }}
+          >
+            <PillGridTable
+              columns={tableColumns}
+              onColumnsChange={handleColUpdate}
+              sortState={sortState}
+              onSort={toggleSort}
+              headerStyle={{
+                position: 'sticky',
+                top: 0,
+                background: 'var(--surface)',
+                zIndex: 2,
+              }}
+              renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
+                <div>
+                  {initialLoading ? <Spinner /> : data.transactions.length === 0 ? (
+                    <EmptyState message={quickFilter.trim() ? 'No matching transactions' : 'No transactions found'} />
+                  ) : (
+                    data.transactions.map(txn => (
+                      <div
+                        key={txn.id}
+                        data-txn-copy-row={txn.id}
+                        onContextMenu={e => onContextMenu(e, txn)}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns,
+                          padding: '9px 14px', alignItems: 'center',
+                          borderBottom: '1px solid var(--border)',
+                          fontSize: 13,
+                          background: editId === txn.id ? 'var(--surface2)' : 'transparent',
+                          minWidth: 0,
+                        }}
+                      >
+                        {activeColumns.map(col => (
+                          <div
+                            key={col.key}
+                            style={{
+                              minWidth: 0,
+                              ...(col.key === 'amount'
+                                ? {}
+                                : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+                            }}
+                          >
+                            {renderCell(col, txn)}
+                          </div>
+                        ))}
+                      </div>
+                    ))
+                  )}
+                  {!initialLoading && data.transactions.length > 0 ? (
+                    <div style={{ padding: '12px 14px', textAlign: 'center', color: 'var(--muted)', fontSize: 11 }}>
+                      {loadingMore
+                        ? 'Loading more transactions…'
+                        : data.transactions.length < data.total
+                          ? 'Scroll for older transactions'
+                          : 'All matching transactions loaded'}
                     </div>
-                  ))
-                )}
-                {!initialLoading && data.transactions.length > 0 ? (
-                  <div style={{ padding: '12px 14px', textAlign: 'center', color: 'var(--muted)', fontSize: 11 }}>
-                    {loadingMore
-                      ? 'Loading more transactions…'
-                      : data.transactions.length < data.total
-                        ? 'Scroll for older transactions'
-                        : 'All matching transactions loaded'}
-                  </div>
-                ) : null}
-              </div>
-            )}
-          />
+                  ) : null}
+                </div>
+              )}
+            />
+          </div>
         </Card>
 
         {menu && (

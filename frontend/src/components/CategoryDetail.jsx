@@ -141,7 +141,6 @@ export default function CategoryDetail({ category, categories = [], onClose, for
                     categories={categories}
                     onCategorySave={saveCategory}
                     onRowsChange={setLocalMonthTxns}
-                    usePillTable={true}
                     columnConfig={columnConfig}
                     onColumnConfigChange={setColumnConfig}
                     maxHeight={DETAIL_LIST_MAX_HEIGHT}

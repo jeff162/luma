@@ -107,10 +107,10 @@ test('shared mapping suggestions stay aligned between import flow and data sourc
   await page.goto('/import-export')
   await page.getByRole('button', { name: 'Manage sources' }).click()
   await expect(page.getByText('Manage data sources')).toBeVisible()
-  const managerPanel = page.locator('div').filter({
-    has: page.getByText('Manage data sources'),
-    has: page.getByRole('button', { name: 'Close' }),
-  }).first()
+  const managerPanel = page.locator('div')
+    .filter({ has: page.getByText('Manage data sources') })
+    .filter({ has: page.getByRole('button', { name: 'Close' }) })
+    .first()
 
   const createFirst = managerPanel.getByRole('button', { name: '+ Create first data source' })
   if (await createFirst.isVisible()) {

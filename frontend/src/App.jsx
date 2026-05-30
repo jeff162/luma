@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+/* eslint-disable react-refresh/only-export-components -- App component + refreshTaskBadge/notifyAccountsChanged broadcast helpers live together as the app-level shell */
+
 import { useState, useEffect, useRef, Component, lazy, Suspense, useMemo } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { FilterProvider, pastTwelveMonthsRange } from './lib/FilterContext.jsx'
@@ -109,7 +111,6 @@ const loadSettingsPage = () => import('./pages/Settings.jsx')
 const loadImportExportPage = () => import('./pages/ImportExport.jsx')
 const loadImportRuleSuggestionsPage = () => import('./pages/ImportRuleSuggestions.jsx')
 const loadTasksPage = () => import('./pages/Tasks.jsx')
-const loadSuspectDuplicatesPage = () => import('./pages/SuspectDuplicates.jsx')
 const loadHelpPage = () => import('./pages/Help.jsx')
 const Dashboard = lazy(loadDashboardPage)
 const Transactions = lazy(loadTransactionsPage)
@@ -120,7 +121,6 @@ const Settings = lazy(loadSettingsPage)
 const ImportExport = lazy(loadImportExportPage)
 const ImportRuleSuggestions = lazy(loadImportRuleSuggestionsPage)
 const Tasks = lazy(loadTasksPage)
-const SuspectDuplicates = lazy(loadSuspectDuplicatesPage)
 const Help = lazy(loadHelpPage)
 const ROUTE_PREFETCHERS = [
   loadDashboardPage,
@@ -132,9 +132,29 @@ const ROUTE_PREFETCHERS = [
   loadImportExportPage,
   loadImportRuleSuggestionsPage,
   loadTasksPage,
-  loadSuspectDuplicatesPage,
   loadHelpPage,
 ]
+
+// Severity-to-color mapping for the nav Tasks badge. Mirrors the palette used by
+// `SEVERITY_COLORS` in Tasks.jsx so the badge in the nav reads as the same severity
+// the task cards on the page render with. Ordered by ascending urgency so that
+// pickTopTaskSeverity() can pick the worst pending task. Extending: add the new
+// severity here AND in TASK_SEVERITY_ORDER, then ensure the backend uses the same key.
+const TASK_BADGE_COLORS = {
+  info:    'var(--accent)',
+  warning: '#f59e0b',
+}
+const TASK_SEVERITY_ORDER = ['info', 'warning']
+function pickTopTaskSeverity(tasks) {
+  let best = null
+  let bestRank = -1
+  for (const task of tasks || []) {
+    const rank = TASK_SEVERITY_ORDER.indexOf(task?.severity)
+    if (rank > bestRank) { bestRank = rank; best = task?.severity || null }
+  }
+  return best
+}
+
 const GLOBAL_SCROLLBAR_STYLES = `
   * {
     scrollbar-width: thin;
@@ -430,12 +450,6 @@ function LocalPreferenceProfileScreen({
   const menuRef = useRef(null)
 
   const hasProfiles = profiles.length > 0
-
-  function welcomeCategoryUsageModeLabel(mode) {
-    return mode === IMPORT_CATEGORY_USAGE_MODE_ALL
-      ? 'Use imported categories by default'
-      : 'Do not use imported categories by default'
-  }
 
   function normalizeName(nextValue) {
     return String(nextValue || '').trim()
@@ -1160,6 +1174,7 @@ export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
   const [taskCount, setTaskCount] = useState(0)
+  const [topTaskSeverity, setTopTaskSeverity] = useState(null)
   const [navPaneWidth, setNavPaneWidth] = useState(readStoredNavPaneWidth)
   const [navResizing, setNavResizing] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
@@ -1314,6 +1329,12 @@ export default function App() {
 
     loadAuth()
     return () => { cancelled = true }
+    // This is a true once-per-mount bootstrap. hydrateStartupRoute closes over
+    // location.pathname + navigate; wrapping it in useCallback and listing it
+    // here would re-fire the auth check on every URL change, which is wrong.
+    // Other call sites invoke hydrateStartupRoute directly from click handlers
+    // and don't need stable identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -1350,14 +1371,20 @@ export default function App() {
 
     function fetchTasks() {
       api.getTasks()
-        .then(r => setTaskCount(r?.open_items || 0))
+        .then(r => {
+          setTaskCount(r?.open_items || 0)
+          setTopTaskSeverity(pickTopTaskSeverity(r?.tasks))
+        })
         .catch(() => { })
     }
 
     fetchTasks()
     window.addEventListener('fintrack:refresh-tasks', fetchTasks)
     return () => window.removeEventListener('fintrack:refresh-tasks', fetchTasks)
-  }, [authEnabled, currentUser, runtimeConfig])
+    // activeLocalProfile gated by the !authEnabled guard above — without it in deps the effect
+    // never re-runs after the local profile loads on cold start, so the nav badge stays at 0
+    // even when /tasks itself is showing pending items.
+  }, [authEnabled, currentUser, runtimeConfig, activeLocalProfile])
 
   useEffect(() => {
     if (!startupRouteApplied) return
@@ -1460,6 +1487,7 @@ export default function App() {
     await api.logout().catch(() => { })
     setCurrentUser(null)
     setTaskCount(0)
+    setTopTaskSeverity(null)
   }
 
   function handleSwitchLocalProfile() {
@@ -1769,7 +1797,8 @@ export default function App() {
                     <span>{label}</span>
                     {to === '/tasks' && taskCount > 0 && (
                       <span style={{
-                        background: '#f59e0b', color: '#fff',
+                        background: TASK_BADGE_COLORS[topTaskSeverity] || TASK_BADGE_COLORS.info,
+                        color: '#fff',
                         fontSize: 11, fontWeight: 700,
                         padding: '1px 7px', borderRadius: 99,
                         lineHeight: '18px', minWidth: 20, textAlign: 'center',
@@ -1889,7 +1918,6 @@ export default function App() {
                       <Route path="/import-export/profiles/:profileId/rule-suggestions" element={<ImportRuleSuggestions />} />
                       <Route path="/import-export" element={<ImportExport />} />
                       <Route path="/tasks" element={<Tasks />} />
-                      <Route path="/suspect-duplicates" element={<SuspectDuplicates />} />
                       <Route path="/settings" element={<Settings />} />
                       <Route path="/help" element={<Help />} />
                       <Route path="/help/:topic" element={<Help />} />

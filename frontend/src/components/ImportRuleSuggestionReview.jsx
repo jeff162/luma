@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { formatTransactionAmount, getTransactionAmountColor } from '../lib/moneyDisplay.js'
@@ -1143,7 +1144,7 @@ export default function ImportRuleSuggestionReview({
 }) {
   const rootRef = useRef(null)
   const { getPreference, hasPreference, setPreference } = useUserPreferences()
-  const suggestions = ruleSuggestionState?.suggestions || []
+  const suggestions = useMemo(() => ruleSuggestionState?.suggestions || [], [ruleSuggestionState?.suggestions])
   const summary = ruleSuggestionState?.review_summary || {}
   const [suggestionActionOverrides, setSuggestionActionOverrides] = useState({})
   const [editingActionPill, setEditingActionPill] = useState(null)
@@ -1222,7 +1223,7 @@ export default function ImportRuleSuggestionReview({
     return suggestion.review_status === 'pending'
   }
 
-  function sortSuggestionsForDisplay(list) {
+  const sortSuggestionsForDisplay = useCallback(list => {
     const next = [...list]
     if (sortOrder === 'row_count') {
       const grouped = new Map()
@@ -1255,7 +1256,7 @@ export default function ImportRuleSuggestionReview({
 
     next.sort((a, b) => String(a.merchant_label || '').localeCompare(String(b.merchant_label || ''), undefined, { sensitivity: 'base' }))
     return next
-  }
+  }, [sortOrder])
 
   function getConflictContext(orderedSuggestions) {
     const byGroup = new Map()
@@ -1283,7 +1284,7 @@ export default function ImportRuleSuggestionReview({
   })
   const visibleSuggestions = useMemo(
     () => sortSuggestionsForDisplay(filteredSuggestions),
-    [filteredSuggestions, sortOrder],
+    [filteredSuggestions, sortSuggestionsForDisplay],
   )
   const visibleConflictContext = useMemo(
     () => getConflictContext(visibleSuggestions),
@@ -1328,7 +1329,7 @@ export default function ImportRuleSuggestionReview({
         }
       })
       .filter(Boolean)
-  }, [conflictSetSuggestions, sortOrder])
+  }, [conflictSetSuggestions, sortSuggestionsForDisplay])
 
   const emptyMessages = {
     total: 'No rule suggestions are available for this import.',
@@ -1555,16 +1556,6 @@ export default function ImportRuleSuggestionReview({
     ))
   }
 
-  function toggleConflictGroupSelection(groupId) {
-    const memberIds = (visibleConflictGroupMembers.get(groupId) || []).map(getSuggestionKey)
-    if (!memberIds.length) return
-    setSelectedSuggestionIds(prev => {
-      const allSelected = memberIds.every(id => prev.includes(id))
-      if (allSelected) return prev.filter(id => !memberIds.includes(id))
-      return [...new Set([...prev, ...memberIds])]
-    })
-  }
-
   function toggleConflictParentSelection(suggestion) {
     const suggestionKey = getSuggestionKey(suggestion.id)
     const memberIds = (visibleConflictGroupMembers.get(suggestion.conflict_group_id) || []).map(getSuggestionKey)
@@ -1587,16 +1578,6 @@ export default function ImportRuleSuggestionReview({
 
       return [...next]
     })
-  }
-
-  function selectAllVisible() {
-    setSelectedSuggestionIds(visibleSuggestions.map(suggestion => getSuggestionKey(suggestion.id)))
-    setBulkMenu(null)
-  }
-
-  function clearBulkSelection() {
-    setSelectedSuggestionIds([])
-    setBulkMenu(null)
   }
 
   function getScopedBulkIdsForSuggestion(suggestion) {
@@ -1837,11 +1818,6 @@ export default function ImportRuleSuggestionReview({
         removeCategory: !categoryId,
       },
     }))
-    setEditingCategorySuggestionId(null)
-    categoryPickerHasOpenedRef.current = false
-  }
-
-  function cancelCategoryActionEdit() {
     setEditingCategorySuggestionId(null)
     categoryPickerHasOpenedRef.current = false
   }

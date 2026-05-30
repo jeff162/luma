@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+/* eslint-disable react-refresh/only-export-components -- shared transaction-cell components live alongside their tag/label helpers used across the app */
+
 import { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
@@ -10,6 +12,7 @@ import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions
 import TransientTextInput from './TransientTextInput.jsx'
 import AmountDisplay from './AmountDisplay.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
+import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 
 /*
  * These cells centralize transaction editing semantics across every table in the app. Parents keep the row data;
@@ -258,7 +261,7 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTag
   )
 }
 
-export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
+export function MerchantCell({ txn, onOpenDetail, onRename }) {
   const [name, setName] = useState(getTxnMerchantLabel(txn))
   const labelRef = useRef(null)
   const [nameTruncated, setNameTruncated] = useState(false)
@@ -285,6 +288,9 @@ export function MerchantCell({ txn, onOpenDetail, onRename, onUpdateNote }) {
 
   useEffect(() => {
     if (!editing) setName(getTxnMerchantLabel(txn))
+    // Listing the three fields getTxnMerchantLabel reads (not txn itself) is deliberate:
+    // tag/note edits patch txn too and we don't want them to reset the inline name mid-edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [txn.display_name, txn.merchant_name, txn.raw_name, editing])
 
   useLayoutEffect(() => {
@@ -586,6 +592,7 @@ function TagStackChip({ tags, onClick }) {
 
 export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenDetail }) {
   const navigate = useNavigate()
+  const unifiedDuplicatesViewer = useUnifiedDuplicatesViewer()
   const [showNote, setShowNote] = useState(false)
   const [showTags, setShowTags] = useState(false)
   // null sentinel = not fetched yet; an array (possibly empty) = fetched.
@@ -636,7 +643,18 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
               type="button"
               onClick={event => {
                 event.stopPropagation()
-                navigate('/suspect-duplicates')
+                // Open the unified per-batch report scoped to this transaction's import batch.
+                // Soft-flagged rows always carry an import_batch_id (the flagging happens at
+                // import time); the navigate() fallback covers the impossible case so the
+                // click does something rather than silently nothing.
+                if (txn.import_batch_id) {
+                  unifiedDuplicatesViewer.open({
+                    batchId: txn.import_batch_id,
+                    title: txn.import_batch_filename || 'Possible duplicates',
+                  })
+                } else {
+                  navigate('/import-export')
+                }
               }}
               aria-label="Possible duplicate — review"
               style={{

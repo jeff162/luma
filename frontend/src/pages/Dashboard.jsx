@@ -1,20 +1,19 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useState, useEffect, useMemo, useRef } from 'react'
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
-  BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Legend, ReferenceLine,
+  BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, ReferenceLine,
 } from 'recharts'
 import { api } from '../lib/api.js'
-import { Link } from 'react-router-dom'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import MonthDetail from '../components/MonthDetail.jsx'
 import TagDetail from '../components/TagDetail.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
-import { useFilters, resolveDateMonths } from '../lib/FilterContext.jsx'
-import { currentMonth, formatCurrency, formatDate, monthLabel, lastNMonths } from '../lib/utils.js'
+import { useFilters } from '../lib/FilterContext.jsx'
+import { formatCurrency, monthLabel, lastNMonths } from '../lib/utils.js'
 import {
   CHART_TOOLTIP_CONTENT_STYLE,
   CHART_TOOLTIP_ITEM_STYLE,
@@ -24,7 +23,7 @@ import {
 } from '../lib/moneyDisplay.js'
 import { AppDialog, Button, Card, Input, PageHeader, Select, Spinner, EmptyState, CategoryMarker } from '../components/ui.jsx'
 import { TagGlyph } from '../components/TagUi.jsx'
-import { format, subMonths, subYears, startOfYear, endOfYear, startOfMonth, endOfMonth } from 'date-fns'
+import { format, subMonths } from 'date-fns'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
@@ -764,7 +763,7 @@ function RenameTagReportDialog({ initialName, onCancel, onSave }) {
   )
 }
 
-function PeriodPicker({ label, value, onChange }) {
+function PeriodPicker({ label, onChange }) {
   const [preset, setPreset] = useState('this_month')
   const [customStart, setCustomStart] = useState(lastM)
   const [customEnd,   setCustomEnd]   = useState(thisM)
@@ -1506,6 +1505,10 @@ export default function Dashboard() {
       const options = priorModeOptionsFor(periodA)
       if (options.length) setBMode(options[0].value)
     }
+    // Deliberately keyed only on `periodA?.type` — we want the shape-change
+    // auto-correct, NOT a re-evaluation every time periodA's date range or bMode
+    // itself shifts (which would fight the user's normal B-mode selection).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [periodA?.type])
   const [cmpGroupsA, setCmpGroupsA] = useState([])
   const [cmpGroupsB, setCmpGroupsB] = useState([])
@@ -1652,6 +1655,8 @@ export default function Dashboard() {
   // expense group has no meaning in income view (and vice versa), so jump back to "all groups".
   useEffect(() => {
     if (mode === 'trends') setTrendGroup(null)
+    // Keyed only on dashboardView; mode changes are unrelated and should not retrigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dashboardView])
 
   // Consume a pending Single-mode drill once the date-scoped groupRows have loaded. If the
@@ -1662,7 +1667,7 @@ export default function Dashboard() {
     const target = groupRows.find(r => r.group_id === pendingSingleDrill)
     setPendingSingleDrill(null)
     if (target) drillToCategories(target)
-  }, [groupRows, pendingSingleDrill, mode])
+  }, [drillToCategories, groupRows, pendingSingleDrill, mode])
 
   // Switch into Single mode focused on the given YYYY-MM month. Optionally preserves the active
   // trend-group drill so a "this group, this month" view comes up in one gesture.
@@ -1677,7 +1682,7 @@ export default function Dashboard() {
     setMode('single')
   }
 
-  async function drillToCategories(group) {
+  const drillToCategories = useCallback(async (group) => {
     const groupId  = group.group_id ?? group.payload?.group_id
     const groupRow = groupRows.find(r => r.group_id === groupId) || group
     setDrillLoading(true)
@@ -1697,7 +1702,7 @@ export default function Dashboard() {
     setGroupTxnData(txnResp.transactions)
     setLevel('categories')
     setDrillLoading(false)
-  }
+  }, [groupRows, accountId, dateStart, dateEnd, tagIds, filters.date?.start, filters.date?.end])
 
   async function drillToTransactions(cat) {
     const categoryId = cat.category_id ?? cat.payload?.category_id
@@ -2222,7 +2227,6 @@ export default function Dashboard() {
                             onRowsChange={setTxnData}
                             onTransactionOpenDetail={openTransactionDetail}
                             showCategory={false}
-                            usePillTable={true}
                             columnConfig={categoryTxnColumns}
                             onColumnConfigChange={setCategoryTxnColumns}
                           />
@@ -2335,7 +2339,6 @@ export default function Dashboard() {
                     onRulePrompt={setRulePrompt}
                     onRowsChange={setGroupTxnData}
                     onTransactionOpenDetail={openTransactionDetail}
-                    usePillTable={true}
                     columnConfig={groupTxnColumns}
                     onColumnConfigChange={setGroupTxnColumns}
                     maxHeight={320}

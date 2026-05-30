@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+/* eslint-disable react-refresh/only-export-components -- DetailPanelShell + chart components + paging hooks + sizing helpers live together as the detail-panel kit */
+
 /*
  * Shared chrome for every floating detail panel (AccountDetail, CategoryDetail, MonthDetail,
  * TagDetail, TransactionDetail, ImportBatchDetail, the duplicate-detection dialog). Three
@@ -25,7 +27,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, LabelList,
 } from 'recharts'
-import { formatCurrency, monthLabel } from '../lib/utils.js'
+import { monthLabel } from '../lib/utils.js'
 import { formatSignedAxisTick, formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground } from './ui.jsx'
 import { usePanelStackSlot } from '../contexts/PanelStackContext.jsx'
@@ -396,7 +398,7 @@ export function usePagedTransactions({ activeKey, loadPage }) {
   }
 }
 
-function YearTick({ x, y, width, payload, data }) {
+function YearTick({ x, y, payload }) {
   if (!payload?.value) return null
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   const monthName = months[parseInt(payload.value.slice(5), 10) - 1] ?? ''
@@ -655,7 +657,12 @@ export function DetailPanelShell({
           >×</button>
         </div>
 
-        <div style={{ flex: 1, overflow: 'hidden', padding: '20px 24px', display: 'flex', flexDirection: 'column' }}>
+        {/* overflow:auto so panels whose total content (header rows + trend chart + selected
+            month section) exceeds the panel's max-height let the user scroll to see the rest
+            instead of silently clipping at the bottom. The transaction list inside still owns
+            its own bounded scroll for the rows; the outer scroll here is for the panel-level
+            content stack. */}
+        <div style={{ flex: 1, overflow: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column' }}>
           {children}
         </div>
         {onResizeStart && (

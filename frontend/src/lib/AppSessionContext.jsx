@@ -1,3 +1,5 @@
+/* eslint-disable react-refresh/only-export-components -- provider + useAppSession hook live together by design */
+
 import { createContext, useContext } from 'react'
 
 const AppSessionContext = createContext(null)

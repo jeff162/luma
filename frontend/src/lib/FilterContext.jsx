@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+/* eslint-disable react-refresh/only-export-components -- context provider + useFilters hook + helper utilities live in one file by design */
+
 /*
  * Filters live above individual pages so the shared FilterBar can preserve one cross-app view of
  * "what the user is looking at" while each screen translates the same typed selections into its own API params.

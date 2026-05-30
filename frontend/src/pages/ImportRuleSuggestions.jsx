@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Card, PageHeader, Button, Spinner } from '../components/ui.jsx'
 import ImportRuleSuggestionReview from '../components/ImportRuleSuggestionReview.jsx'
@@ -106,13 +106,13 @@ export default function ImportRuleSuggestions() {
     () => batches.filter(item => item.profile_id === profileId),
     [batches, profileId],
   )
-  const loadSuggestionsForContext = (ownerIds = []) => (
+  const loadSuggestionsForContext = useCallback((ownerIds = []) => (
     isSystemContext
       ? api.getSystemRuleSuggestions(ownerIds)
       : isProfileContext
       ? api.getProfileRuleSuggestions(profileId, ownerIds)
       : api.getBatchRuleSuggestions(batchId, ownerIds)
-  )
+  ), [isSystemContext, isProfileContext, profileId, batchId])
   const updateSuggestionReviewForContext = payload => (
     isSystemContext
       ? api.updateSystemRuleSuggestionReview(payload)
@@ -203,7 +203,7 @@ export default function ImportRuleSuggestions() {
 
     loadRuleSuggestions()
     return () => { cancelled = true }
-  }, [batchId, profileId, selectedOwnerIds, isSystemContext])
+  }, [batchId, profileId, selectedOwnerIds, isSystemContext, loadSuggestionsForContext])
 
   useEffect(() => {
     const availableOwnerIds = new Set(owners.map(owner => owner.id))
@@ -396,6 +396,9 @@ export default function ImportRuleSuggestions() {
   }
 
   async function saveAcceptedSuggestion(suggestion, data) {
+    // applyToExisting is irrelevant for already-accepted suggestions (just edits/re-saves
+    // the rule); destructure-and-discard so it isn't forwarded into the rule API payload.
+    // eslint-disable-next-line no-unused-vars
     const { applyToExisting, ...ruleData } = data
     let ruleId = suggestion.rule_id || null
     const coveredSuggestionIds = getCoveredSuggestionIds(suggestion, data)

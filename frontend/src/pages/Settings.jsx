@@ -7,8 +7,7 @@ import { APP_NAME, APP_VERSION } from '../lib/appConfig.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, AppConfirmDialog } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
-import { PASSWORD_POLICIES, passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
-import { SECURITY_PROFILES, getSecurityProfile } from '../lib/securityProfiles.js'
+import { passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
@@ -27,126 +26,7 @@ function clearBrowserStoredState() {
   } catch { }
 }
 
-function AuthModeSection({ authEnabled, onEnabled, embedded = false }) {
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-
-  if (authEnabled) return null
-
-  async function enableAuthMode() {
-    setSaving(true)
-    setError('')
-    try {
-      const resp = await api.enableAuth()
-      onEnabled?.(resp)
-      window.location.reload()
-    } catch (err) {
-      setError(err.message || 'Failed to enable sign-in protection')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Card style={{ padding: 20 }}>
-      <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-        Turning this on enables authenticated mode. You&apos;ll then create the first user account and use that account to manage any additional users.
-      </div>
-      <div style={{ marginTop: 14 }}>
-        <Button small onClick={enableAuthMode} disabled={saving}>
-          {saving ? 'Enabling...' : 'Enable sign-in protection'}
-        </Button>
-      </div>
-      {error && (
-        <div style={{ marginTop: 12, color: '#ef4444', fontSize: 13 }}>
-          {error}
-        </div>
-      )}
-    </Card>
-  )
-}
-
-function SecurityProfileSection({ authEnabled, securityProfile, passwordPolicy, onChange }) {
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const currentProfile = getSecurityProfile(securityProfile)
-
-  async function handleChange(nextProfile) {
-    setSaving(true)
-    setError('')
-    try {
-      const resp = await api.saveSecurityProfile(nextProfile)
-      onChange?.(resp)
-    } catch (err) {
-      setError(err.message || 'Failed to save security mode')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Card style={{ padding: 20 }}>
-      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Security mode</div>
-      <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, marginBottom: 14 }}>
-        Choose the target deployment model. This does not force auth on or off by itself, but it sets expectations for password strength and sign-in protection.
-      </div>
-      <div style={{ display: 'grid', gap: 8 }}>
-        {SECURITY_PROFILES.map(option => (
-          <label
-            key={option.value}
-            style={{
-              display: 'grid',
-              gap: 4,
-              padding: '12px 14px',
-              border: `1px solid ${securityProfile === option.value ? 'var(--accent)' : 'var(--border)'}`,
-              borderRadius: 12,
-              background: securityProfile === option.value
-                ? 'color-mix(in srgb, var(--accent) 7%, var(--surface2))'
-                : 'var(--surface2)',
-              cursor: saving ? 'default' : 'pointer',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <input
-                type="radio"
-                name="security-profile"
-                checked={securityProfile === option.value}
-                onChange={() => handleChange(option.value)}
-                disabled={saving}
-              />
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{option.label}</span>
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, paddingLeft: 24 }}>
-              {option.summary}
-            </div>
-          </label>
-        ))}
-      </div>
-
-      <div style={{ marginTop: 14, padding: 12, borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
-        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Current recommendation</div>
-        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
-          {currentProfile.recommendedAuth
-            ? `This mode usually should have sign-in protection enabled. Suggested password policy: ${currentProfile.suggestedPasswordPolicy.replace('_', ' ')}.`
-            : 'This mode can reasonably stay in local no-login mode if the app is only exposed on localhost.'}
-        </div>
-        {authEnabled && (
-          <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6, marginTop: 6 }}>
-            Active password policy: {passwordPolicyHelpText(passwordPolicy)}
-          </div>
-        )}
-      </div>
-
-      {error && (
-        <div style={{ marginTop: 12, color: '#ef4444', fontSize: 13 }}>
-          {error}
-        </div>
-      )}
-    </Card>
-  )
-}
-
-function UserAdminSection({ passwordPolicy, embedded = false }) {
+function UserAdminSection({ passwordPolicy }) {
   const [viewer, setViewer] = useState(null)
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
@@ -444,68 +324,7 @@ function UserAdminSection({ passwordPolicy, embedded = false }) {
   )
 }
 
-function PasswordPolicyPanel({ passwordPolicy, onChange }) {
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-
-  async function handleChange(nextPolicy) {
-    setSaving(true)
-    setError('')
-    try {
-      const resp = await api.savePasswordPolicy(nextPolicy)
-      onChange?.(resp.password_policy || nextPolicy)
-    } catch (err) {
-      setError(err.message || 'Failed to save password policy')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <div style={{ display: 'grid', gap: 8, marginBottom: 18 }}>
-      <div style={{ fontSize: 14, fontWeight: 600 }}>Password policy</div>
-      <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-        Choose how strictly passwords are validated for new sign-ins and user accounts.
-      </div>
-      <div style={{ display: 'grid', gap: 6, paddingLeft: 14 }}>
-        {PASSWORD_POLICIES.map(option => (
-          <label
-            key={option.value}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              padding: '8px 12px',
-              border: `1px solid ${passwordPolicy === option.value ? 'var(--accent)' : 'var(--border)'}`,
-              borderRadius: 999,
-              background: passwordPolicy === option.value
-                ? 'color-mix(in srgb, var(--accent) 8%, var(--surface2))'
-                : 'var(--surface2)',
-              cursor: saving ? 'default' : 'pointer',
-            }}
-          >
-            <input
-              type="radio"
-              name="password-policy"
-              checked={passwordPolicy === option.value}
-              onChange={() => handleChange(option.value)}
-              disabled={saving}
-            />
-            <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>{option.label}</span>
-            <span style={{ fontSize: 12, color: 'var(--muted)' }}>{option.hint}</span>
-          </label>
-        ))}
-      </div>
-      {error && (
-        <div style={{ color: '#ef4444', fontSize: 13 }}>
-          {error}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange, embedded = false }) {
+function AccountSecuritySection() {
   const [currentUser, setCurrentUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [setup, setSetup] = useState(null)
@@ -603,8 +422,6 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange, embedd
 
   return (
     <Card style={{ padding: 20 }}>
-      <PasswordPolicyPanel passwordPolicy={passwordPolicy} onChange={onPasswordPolicyChange} />
-
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>Authenticator app</div>
@@ -726,7 +543,7 @@ function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange, embedd
   )
 }
 
-function PlaidTokenProtectionSection({ embedded = false }) {
+function PlaidTokenProtectionSection() {
   const [currentUser, setCurrentUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -849,7 +666,7 @@ function StickySection({ title, description, actions, children, defaultCollapsed
       if (frame2 !== null) window.cancelAnimationFrame(frame2)
       if (timeoutId !== null) window.clearTimeout(timeoutId)
     }
-  }, [open])
+  }, [open, scrollContainerRef])
 
   return (
     <section ref={sectionRef} style={{ marginBottom: 18, display: 'grid', justifyItems: 'stretch', width: '100%' }}>
@@ -2068,7 +1885,7 @@ function TransactionsTrashSection() {
       <Card style={{ display: 'grid', gap: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, maxWidth: 620 }}>
-            Transactions you've sent to the trash live here until you restore them or empty the trash.
+            Transactions you&apos;ve sent to the trash live here until you restore them or empty the trash.
           </div>
           <Button
             small
@@ -2185,8 +2002,6 @@ export default function Settings() {
     authEnabled,
     currentUser,
     passwordPolicy,
-    securityProfile,
-    experimentalSecuritySettings,
     developerOptionsEnabled,
     dbInstanceId,
     preferenceSubjectId: userId,
@@ -2241,7 +2056,6 @@ export default function Settings() {
   }
 
   const canManageEnvironment = !authEnabled || currentUser?.role === 'admin'
-  const showPreAuthSecuritySettings = experimentalSecuritySettings || authEnabled
 
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -2272,51 +2086,14 @@ export default function Settings() {
             </StickySection>
           )}
 
-          {showPreAuthSecuritySettings && (
-            <StickySection
-              title="Security model"
-              description={`Match ${APP_NAME}'s sign-in posture to how this instance is deployed and who can reach it.`}
-              scrollContainerRef={settingsScrollRef}
-              {...bindSection('securityModel')}
-            >
-              <SecurityProfileSection
-                authEnabled={authEnabled}
-                securityProfile={securityProfile}
-                passwordPolicy={passwordPolicy}
-                onChange={resp => {
-                  setSecurityProfile(resp.security_profile || 'local_private')
-                }}
-              />
-            </StickySection>
-          )}
-
-          {showPreAuthSecuritySettings && !authEnabled && (
-            <StickySection
-              title="Sign-in protection"
-              description="Enable login when you want passwords, 2FA, or multiple sign-in accounts for the same installation."
-              scrollContainerRef={settingsScrollRef}
-              {...bindSection('signInProtection')}
-            >
-              <AuthModeSection
-                authEnabled={authEnabled}
-                onEnabled={status => {
-                  setAuthEnabled(!!status.auth_enabled)
-                  setPasswordPolicy(status.password_policy || 'min_8')
-                  setSecurityProfile(status.security_profile || 'local_private')
-                }}
-                embedded
-              />
-            </StickySection>
-          )}
-
           {authEnabled && (
             <StickySection
               title="Account security"
-              description="Manage password requirements and authenticator-based sign-in protection."
+              description="Manage authenticator-based sign-in protection for this user."
               scrollContainerRef={settingsScrollRef}
               {...bindSection('accountSecurity')}
             >
-              <AccountSecuritySection passwordPolicy={passwordPolicy} onPasswordPolicyChange={setPasswordPolicy} embedded />
+              <AccountSecuritySection />
             </StickySection>
           )}
 
@@ -2327,7 +2104,7 @@ export default function Settings() {
               scrollContainerRef={settingsScrollRef}
               {...bindSection('plaidTokenProtection')}
             >
-              <PlaidTokenProtectionSection embedded />
+              <PlaidTokenProtectionSection />
             </StickySection>
           )}
 
@@ -2338,7 +2115,7 @@ export default function Settings() {
               scrollContainerRef={settingsScrollRef}
               {...bindSection('userManagement')}
             >
-              <UserAdminSection passwordPolicy={passwordPolicy} embedded />
+              <UserAdminSection passwordPolicy={passwordPolicy} />
             </StickySection>
           )}
 

@@ -734,25 +734,10 @@ def empty_transaction_trash():
     return {"removed": removed}
 
 
-# Suspect-duplicate review. The flag itself is set by services/duplicate_detection.py during the
-# import and account-merge flows; these endpoints just expose listing and per-row resolution.
-@router.get("/suspect-duplicates")
-def list_suspect_duplicates(
-    batch_id: Optional[str] = Query(None, description="Filter to a specific import batch."),
-    limit:    int           = Query(500, le=2000),
-):
-    from backend.services.duplicate_detection import list_suspects
-    with get_db() as conn:
-        return {"pairs": list_suspects(conn, batch_id=batch_id, limit=limit)}
-
-
-@router.get("/suspect-duplicates/count")
-def count_suspect_duplicates():
-    from backend.services.duplicate_detection import count_active_suspects
-    with get_db() as conn:
-        return {"count": count_active_suspects(conn)}
-
-
+# Soft-flag duplicate review. The flag is set by services/duplicate_detection.py during import
+# and account-merge flows; the per-row resolve endpoint below is the live entry point. The
+# old cross-batch listing endpoints have been retired in favor of the per-batch unified report
+# served by /import-export/batches/{id}/duplicates-unified (see import_export.py).
 class SuspectResolveBody(BaseModel):
     action: str  # 'keep' | 'trash'
 

@@ -90,7 +90,6 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
     rows: monthTxns,
     setRows: setMonthTxns,
     loading: txnLoading,
-    loadingMore: txnLoadingMore,
     listRef,
   } = usePagedMonthTransactions({ selectedMonth, loadPage: loadMonthPage })
 
@@ -177,6 +176,10 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
 
   useEffect(() => {
     if (!editingName) setDisplayName(getTxnMerchantLabel(detailTxn))
+    // Listing the three fields getTxnMerchantLabel reads (not detailTxn itself) is
+    // deliberate: notes/tags edits patch detailTxn too and we don't want them to
+    // reset displayName mid-edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailTxn.display_name, detailTxn.merchant_name, detailTxn.raw_name, editingName])
 
   async function handleSaveNotes() {
@@ -463,7 +466,7 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
                         evidence = detailTxn.import_evidence_json
                           ? JSON.parse(detailTxn.import_evidence_json)
                           : null
-                      } catch (_) {
+                      } catch {
                         evidence = null
                       }
                       if (!evidence) return null
@@ -545,7 +548,6 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
                       externalRulePrompt?.(p)
                     }}
                     onRowsChange={setMonthTxns}
-                    usePillTable={true}
                     columnConfig={columnConfig}
                     onColumnConfigChange={setColumnConfig}
                     maxHeight={DETAIL_LIST_MAX_HEIGHT}

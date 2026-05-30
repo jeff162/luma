@@ -2,19 +2,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 /*
- * Shared transaction-list renderer. `usePillTable` switches between a compact block-grid
- * header and the full sortable/draggable/resizable `PillGridTable` header. `fillHeight`
- * switches between a max-height inner-scroll container and a flex-fill chain that stretches
- * to the parent.
+ * Shared transaction-list renderer built on PillGridTable. The outer wrapper is the
+ * scroll viewport (where `scrollRef` lands), and the PillTableHeader pins via
+ * `position: sticky; top: 0` so column labels stay put as rows scroll past. `fillHeight`
+ * switches the wrapper between a max-height bounded scroller and a flex-fill chain that
+ * stretches to its parent.
  *
- * Scroll-container contract (when `usePillTable=true` AND `fillHeight=true`): the actual
- * scroll viewport is the body div assigned to `scrollRef`. EVERY ancestor from this
- * component down to that div must propagate height via a flex-column chain (`flex: 1,
- * minHeight: 0`). A plain block wrapper anywhere in the chain silently breaks percentage-
- * height resolution for descendants — the body ends up sized to its content (no overflow,
- * no scrollbar) and wheel events bubble out through the floating-panel backdrop into the
- * page behind. The `display: flex, flexDirection: column` on the horizontal-scroll wrapper
- * below exists specifically to keep that chain intact.
+ * Scroll-container contract (`fillHeight=true`): every ancestor between this component
+ * and its rendered root must be a flex-column with `flex: 1, minHeight: 0`. A plain
+ * block anywhere in the chain breaks percentage-height resolution, the wrapper sizes
+ * to content (no overflow, no scrollbar), and wheel events bubble out through any
+ * floating-panel backdrop to whatever's behind.
  */
 
 import { useMemo, useState } from 'react'
@@ -102,7 +100,6 @@ export default function TransactionListTable({
   emptyMessage = 'No transactions found.',
   scrollRef = null,
   fillHeight = false,
-  usePillTable = false,
   columnConfig = null,
   onColumnConfigChange = null,
   // Callers that own row fetching (and thus do sort server-side) can pass a controlled pair;
@@ -131,14 +128,6 @@ export default function TransactionListTable({
   }, [rows, externallyControlled, sortState])
 
   const availableColumns = getAvailableColumns({ showCategory, showAccount })
-  const simpleColumns = [
-    { key: 'date', label: 'Date', width: '96px' },
-    { key: 'merchant', label: 'Merchant', width: '1fr' },
-    ...(showCategory ? [{ key: 'category', label: 'Category', width: '150px' }] : []),
-    ...(showAccount ? [{ key: 'account', label: 'Account', width: '130px' }] : []),
-    { key: 'amount', label: 'Amount', width: '100px' },
-  ]
-  const simpleGridTemplateColumns = simpleColumns.map(col => col.width).join(' ')
   const interactiveColumns = normalizeInteractiveColumns(columnConfig, availableColumns)
 
   function patchRows(txnId, patch) {
@@ -215,7 +204,6 @@ export default function TransactionListTable({
           alignItems: 'center',
           fontSize: 13,
           borderBottom: '1px solid var(--border)',
-          gap: usePillTable ? 0 : 12,
           ...getRowStyle?.(txn),
         }}
       >
@@ -242,91 +230,53 @@ export default function TransactionListTable({
     )
   }
 
-  if (usePillTable) {
-    const pillColumns = interactiveColumns.map(column => {
-      const def = COLUMN_DEFS[column.key]
-      return {
-        key: def.key,
-        label: def.label,
-        width: column.width,
-        minWidth: def.minWidth,
-        align: def.align,
-        draggable: true,
-        resizable: true,
-        title: `Drag middle to move ${def.label}`,
-      }
-    })
-
-    return (
-      <div style={{
-        border: '1px solid var(--border)',
-        borderRadius: 10,
-        overflow: 'hidden',
-        display: 'flex',
-        flexDirection: 'column',
-        ...(fillHeight ? { flex: 1, minHeight: 0, height: '100%' } : null),
-      }}>
-        {/* Must be a flex container — see the scroll-container contract at the top of the file. */}
-        <div style={{ flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          <PillGridTable
-            columns={pillColumns}
-            onColumnsChange={onColumnConfigChange}
-            sortState={sortState}
-            onSort={onSort}
-            fillHeight={fillHeight}
-            renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
-              <div
-                ref={scrollRef}
-                style={fillHeight ? { flex: 1, minHeight: 0, overflowY: 'auto' } : { maxHeight, overflowY: 'auto' }}
-              >
-                {renderRows(activeColumns, gridTemplateColumns)}
-              </div>
-            )}
-          />
-        </div>
-      </div>
-    )
-  }
+  const pillColumns = interactiveColumns.map(column => {
+    const def = COLUMN_DEFS[column.key]
+    return {
+      key: def.key,
+      label: def.label,
+      width: column.width,
+      minWidth: def.minWidth,
+      align: def.align,
+      draggable: true,
+      resizable: true,
+      title: `Drag middle to move ${def.label}`,
+    }
+  })
 
   return (
-    <div style={{
-      border: '1px solid var(--border)',
-      borderRadius: 10,
-      overflow: 'hidden',
-      display: 'flex',
-      flexDirection: 'column',
-      ...(fillHeight ? { flex: 1, minHeight: 0, height: '100%' } : null),
-    }}>
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: simpleGridTemplateColumns,
-        gap: 12,
-        padding: '8px 14px',
-        fontSize: 11,
-        fontWeight: 600,
-        color: 'var(--muted)',
-        textTransform: 'uppercase',
-        letterSpacing: '0.05em',
-        background: 'var(--surface2)',
-        borderBottom: '1px solid var(--border)',
+    // This wrapper is the scroll viewport: vertical scroll feeds the sticky header below,
+    // horizontal scroll feeds the wide grid. scrollRef lands here so caller-side infinite
+    // scroll hooks can attach to the same element the rows scroll inside. It is intentionally
+    // NOT a flex container — combining `display:flex,flex-direction:column` with `overflow:auto`
+    // and a height cap causes the block child to be flex-shrunk rather than allowed to overflow,
+    // which subtly changes the wrapper's measured size and throws off the floating detail
+    // panel's initial centered position.
+    <div
+      ref={scrollRef}
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: 10,
+        overflow: 'auto',
+        ...(fillHeight ? { flex: 1, minHeight: 0, height: '100%' } : { maxHeight }),
       }}>
-        {simpleColumns.map(col => (
-          <span
-            key={col.key}
-            style={col.key === 'amount'
-              ? { display: 'block', width: '100%', textAlign: 'right' }
-              : undefined}
-          >
-            {col.label}
-          </span>
-        ))}
-      </div>
-      <div
-        ref={scrollRef}
-        style={fillHeight ? { flex: 1, minHeight: 0, overflowY: 'auto' } : { maxHeight, overflowY: 'auto' }}
-      >
-        {renderRows(simpleColumns, simpleGridTemplateColumns)}
-      </div>
+      <PillGridTable
+        columns={pillColumns}
+        onColumnsChange={onColumnConfigChange}
+        sortState={sortState}
+        onSort={onSort}
+        headerStyle={{
+          position: 'sticky',
+          top: 0,
+          background: 'var(--surface)',
+          zIndex: 2,
+        }}
+        renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
+          <div>
+            {renderRows(activeColumns, gridTemplateColumns)}
+          </div>
+        )}
+      />
     </div>
   )
 }

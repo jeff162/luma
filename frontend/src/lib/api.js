@@ -184,8 +184,6 @@ export const api = {
   setCategoryTags: (id, tag_ids) =>
     request(`/categories/${id}/tags`, { method: 'PUT', body: JSON.stringify({ tag_ids }) }),
 
-  deleteRule: (ruleId) => request(`/categories/rules/${ruleId}`, { method: 'DELETE' }),
-
   getLinkToken: () => request('/plaid/link-token'),
   exchangeToken: (public_token, institution_name) =>
     request('/plaid/exchange', {
@@ -204,13 +202,9 @@ export const api = {
   restoreTransaction:  (id)         => request(`/transactions/${id}/restore`,   { method: 'POST'   }),
   getTrashedTransactions: ()        => request('/transactions/trash'),
   emptyTransactionTrash: ()         => request('/transactions/trash/empty',     { method: 'POST'   }),
-  // Suspect-duplicate review. The backend flags rows during import (new account, soft match)
-  // and account merge; this surface lets the user keep or trash each flagged row.
-  getSuspectDuplicates: ({ batchId } = {}) => {
-    const q = batchId ? `?${new URLSearchParams({ batch_id: batchId })}` : ''
-    return request(`/transactions/suspect-duplicates${q}`)
-  },
-  getSuspectDuplicateCount: () => request('/transactions/suspect-duplicates/count'),
+  // Soft-flag duplicate review. Flagging happens in the backend during import (new account,
+  // soft match) and account merge; the per-batch unified report (UnifiedDuplicatesDialog)
+  // calls these to let the user keep, reject, or undo a previous rejection on a flagged row.
   resolveSuspectDuplicate: (id, action) =>
     request(`/transactions/${id}/resolve-suspect`, { method: 'POST', body: JSON.stringify({ action }) }),
   restoreRejectedDuplicate: (id) =>

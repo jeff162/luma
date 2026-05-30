@@ -175,7 +175,6 @@ export default function ImportBatchDetail({
             onCategorySave={handleCategorySave}
             onAddCategory={onAddCategory}
             onRowsChange={setRows}
-            usePillTable={true}
             columnConfig={columnConfig}
             onColumnConfigChange={setColumnConfig}
             fillHeight

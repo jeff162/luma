@@ -1,8 +1,5 @@
 #!/bin/bash
 
-# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-# SPDX-License-Identifier: GPL-3.0-or-later
-
 # Nightly transaction sync
 # Install: crontab -e
 # Add:     0 3 * * * /path/to/fintrack/scripts/sync.sh >> /var/log/fintrack-sync.log 2>&1

@@ -254,7 +254,6 @@ export default function CategoryPicker({
       Math.max(triggerRect.width, minPanelWidth),
       window.innerWidth - viewportPadding * 2,
     )
-    const measuredPanelHeight = panelRef.current?.offsetHeight || 300
     const triggerMidpoint = triggerRect.top + (triggerRect.height / 2)
     const availableBelow = Math.max(0, window.innerHeight - triggerRect.bottom - viewportPadding - panelGap)
     const availableAbove = Math.max(0, triggerRect.top - viewportPadding - panelGap)

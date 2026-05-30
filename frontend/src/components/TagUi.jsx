@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+/* eslint-disable react-refresh/only-export-components -- shared tag UI: TAG_COLOR_PALETTE + tag-rendering components live together so callers get one import */
+
 /*
  * Tags are lightweight cross-cutting markers, so this file keeps their shared visual language stable across
  * settings, rules, filters, and transaction rows. The shape stays fixed; only the user-selected color varies.

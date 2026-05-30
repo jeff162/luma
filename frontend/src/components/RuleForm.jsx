@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { forwardRef, useMemo, useState, useEffect, useImperativeHandle, useLayoutEffect, useRef } from 'react'
+/* eslint-disable react-refresh/only-export-components -- RuleForm + amountConditionSummary helper used to describe a rule's amount clause in the rules list */
+
+import { forwardRef, useCallback, useMemo, useState, useEffect, useImperativeHandle, useLayoutEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import {
@@ -614,7 +616,7 @@ const RuleForm = forwardRef(function RuleForm({
   const [tagsOpen, setTagsOpen] = useState(!!((initialValues.tagIds ?? initialValues.tag_ids ?? []).length))
   const [availableTags, setAvailableTags] = useState([])
 
-  const [matchCount, setMatchCount] = useState(0)
+  const [, setMatchCount] = useState(0)
   const [applyToExisting, setApplyToExisting] = useState(false)
   const [changeCount, setChangeCount] = useState(0)
   const [changeTransactions, setChangeTransactions] = useState([])
@@ -713,46 +715,41 @@ const RuleForm = forwardRef(function RuleForm({
       }
     }, 700)
     return () => clearTimeout(changeDebounceRef.current)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keyword, amtLow, amtHigh, amtSide, ownerId, accountId, catId, cleanName, tagIds, hasAction])
 
-  function buildDraftPayload() {
-    return {
-      keyword: keyword.trim(),
-      category_id: catId || null,
-      amount_min: amtLow,
-      amount_max: amtHigh,
-      debit_credit: amtSide,
-      clean_name: cleanName.trim() || null,
-      owner_id: ownerId || null,
-      account_id: accountId || null,
-      tag_ids: tagIds,
-      clear_amount_min: amtLow === null,
-      clear_amount_max: amtHigh === null,
-      clear_clean_name: !cleanName.trim(),
-      clear_owner: !ownerId,
-      clear_account: !accountId,
-      applyToExisting,
-    }
-  }
+  const buildDraftPayload = useCallback(() => ({
+    keyword: keyword.trim(),
+    category_id: catId || null,
+    amount_min: amtLow,
+    amount_max: amtHigh,
+    debit_credit: amtSide,
+    clean_name: cleanName.trim() || null,
+    owner_id: ownerId || null,
+    account_id: accountId || null,
+    tag_ids: tagIds,
+    clear_amount_min: amtLow === null,
+    clear_amount_max: amtHigh === null,
+    clear_clean_name: !cleanName.trim(),
+    clear_owner: !ownerId,
+    clear_account: !accountId,
+    applyToExisting,
+  }), [keyword, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, tagIds, applyToExisting])
 
-  function getDraftState() {
-    return {
-      data: buildDraftPayload(),
-      canSave,
-    }
-  }
+  const getDraftState = useCallback(() => ({
+    data: buildDraftPayload(),
+    canSave,
+  }), [buildDraftPayload, canSave])
 
   useLayoutEffect(() => {
     onDraftChange?.({
       data: buildDraftPayload(),
       canSave,
     })
-  }, [keyword, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, tagIds, applyToExisting, canSave])
+  }, [buildDraftPayload, canSave, onDraftChange])
 
   useImperativeHandle(ref, () => ({
     getDraftState,
-  }), [keyword, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, tagIds, applyToExisting, canSave])
+  }), [getDraftState])
 
   function handleAmtChange({ low, lowOp, high, highOp, side }) {
     setAmtLow(low); setAmtLowOp(lowOp ?? '>=')
@@ -1014,7 +1011,7 @@ const RuleForm = forwardRef(function RuleForm({
                 <option value="">— Select owner —</option>
                 {owners.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
               </select>
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>Restrict this rule to one owner's transactions</div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>Restrict this rule to one owner&apos;s transactions</div>
             </ConditionChip>
           )}
 

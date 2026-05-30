@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+/* eslint-disable react-refresh/only-export-components -- provider + hooks live together by design */
+
 /*
  * App-wide user preference store. Two model invariants worth knowing about:
  *

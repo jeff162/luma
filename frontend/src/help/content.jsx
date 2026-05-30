@@ -101,7 +101,7 @@ export const HELP_TOPICS = [
     body: () => (
       <>
         <p>
-          The dashboard’s "Spending by…" picker offers two built-in breakdowns
+          The dashboard’s &quot;Spending by…&quot; picker offers two built-in breakdowns
           (<em>group</em>, <em>category</em>) plus any tag reports you save. A tag report is just a
           named set of tags you want as wedges &mdash; for example a <em>Per-owner</em> report
           might select tags Alice, Bob, Shared.
@@ -116,7 +116,7 @@ export const HELP_TOPICS = [
         <p>
           Each unique combination of selected tags that any transaction carries becomes its own
           wedge &mdash; so a transaction tagged both <em>Alice</em> and <em>Essential</em> shows up
-          in an "Alice + Essential" wedge rather than being assigned to one or the other. A
+          in an &quot;Alice + Essential&quot; wedge rather than being assigned to one or the other. A
           transaction matching none of the selected tags falls into a synthetic
           <em> Other / Untagged</em> wedge. Wedges sum to 100% of the matching transactions, so
           the chart is always honest about overlap.

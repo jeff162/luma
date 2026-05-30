@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+/* eslint-disable react-refresh/only-export-components -- re-exports the draft-state factory so callers can import both component + helper from one place */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import {
   cloneImportCategoryMappingSnapshot,
@@ -546,21 +548,22 @@ export default function ImportCategoryMappingWorkspaceBuckets({ sourceValues, so
   const sourceMenuRef = useRef(null)
   const floatingGroupDraftRef = useRef(null)
 
-  function buildCurrentDraftState() {
-    return {
-      snapshot: sanitizeSnapshotForPersistence(snapshot),
-      undoStack: undoStack.map(sanitizeSnapshotForPersistence),
-      redoStack: redoStack.map(sanitizeSnapshotForPersistence),
-      selectionAnchor,
-      selectedBucketCategoryIds,
-      bucketSelectionAnchor,
-      activeSection,
-    }
-  }
+  const buildCurrentDraftState = useCallback(() => ({
+    snapshot: sanitizeSnapshotForPersistence(snapshot),
+    undoStack: undoStack.map(sanitizeSnapshotForPersistence),
+    redoStack: redoStack.map(sanitizeSnapshotForPersistence),
+    selectionAnchor,
+    selectedBucketCategoryIds,
+    bucketSelectionAnchor,
+    activeSection,
+  }), [
+    snapshot, undoStack, redoStack,
+    selectionAnchor, selectedBucketCategoryIds, bucketSelectionAnchor, activeSection,
+  ])
 
   useEffect(() => {
     onDraftStateChange?.(buildCurrentDraftState())
-  }, [activeSection, bucketSelectionAnchor, onDraftStateChange, redoStack, selectedBucketCategoryIds, selectionAnchor, snapshot, undoStack])
+  }, [buildCurrentDraftState, onDraftStateChange])
 
   useEffect(() => {
     let cancelled = false

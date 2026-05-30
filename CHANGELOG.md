@@ -30,8 +30,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   story, with advanced overrides documented separately.
 - Accounts and Settings were reorganized so account editing lives on the
   Accounts page, owner/category ownership is managed where it is used, and
-  security settings now cover password policy, 2FA, backup recipients, and
-  environment-backed options more cleanly.
+  security settings now cover 2FA, backup recipients, and environment-backed
+  options more cleanly.
 - Rule evaluation now uses computed specificity instead of manual priority, and
   the Rules page is organized around readable descriptions rather than grid-style
   editing.
@@ -62,3 +62,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Merchant rename API methods from `api.js` (`getMerchantRenames`,
   `createMerchantRename`, `updateMerchantRename`, `deleteMerchantRename`,
   `applyMerchantRenames`). The `merchants.py` router was already unregistered.
+- Pre-auth security UI in Settings: the security-profile picker, the
+  sign-in protection toggle, and the password-policy picker were removed
+  pending decisions on the eventual security model. Supporting backend
+  endpoints (`/auth/enable`, `/auth/security-profile`,
+  `/auth/password-policy`) and the `securityProfiles.js` / `passwordPolicy.js`
+  lib helpers remain in place. The 2FA, user management, and Plaid token
+  protection sections — all gated on auth-enabled mode — are unchanged.
+  See `TODO.md` for rebuild notes.

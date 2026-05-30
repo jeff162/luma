@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+/* eslint-disable react-refresh/only-export-components -- provider + usePanelStackSlot hook live together by design */
+
 // Click-to-focus stacking for floating detail panels.
 //
 // The detail-panel system (`DetailPanelShell`) used to assign every panel the same fixed
