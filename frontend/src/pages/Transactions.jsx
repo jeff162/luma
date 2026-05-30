@@ -351,19 +351,19 @@ export default function Transactions() {
   )
 
   useEffect(() => {
-      const saved = preferences?.[TXN_COLUMNS_PREF_KEY]
-      const normalizedSaved = normalizeColumnConfig(saved)
-      if (normalizedSaved) {
-        setCols(normalizedSaved)
-        saveColumnConfig(dbInstanceId, userId, normalizedSaved)
-        return
-      }
-      const local = loadColumnConfig(dbInstanceId, userId)
-      if (local) {
-        setCols(local)
-        return
-      }
-      setCols(defaultColumnConfig())
+    const saved = preferences?.[TXN_COLUMNS_PREF_KEY]
+    const normalizedSaved = normalizeColumnConfig(saved)
+    if (normalizedSaved) {
+      setCols(normalizedSaved)
+      saveColumnConfig(dbInstanceId, userId, normalizedSaved)
+      return
+    }
+    const local = loadColumnConfig(dbInstanceId, userId)
+    if (local) {
+      setCols(local)
+      return
+    }
+    setCols(defaultColumnConfig())
   }, [dbInstanceId, preferences, userId])
 
   useEffect(() => {
@@ -504,14 +504,12 @@ export default function Transactions() {
     return () => { cancelled = true }
   }, [menu?.txn?.id])
 
-  function saveCategory(txnId, catId, catObj) {
-    const cat = catObj || categories.find(c => c.id === catId)
-    if (catObj && !categories.find(c => c.id === catObj.id)) {
-      setCategories(prev => [...prev, catObj])
-    }
+  // Reflect a resolved category onto the page list. In "uncategorized only" mode a freshly
+  // categorized row should leave the list immediately instead of waiting for a refetch;
+  // otherwise it is patched in place. Shared by inline edits and by edits made inside an open
+  // transaction detail panel.
+  function reconcileCategorizedRow(txnId, cat) {
     setData(prev => {
-      // In "uncategorized only" mode, recategorizing a row should remove it from the
-      // list immediately instead of waiting for a refetch.
       if (uncategorizedOnly) {
         return {
           ...prev,
@@ -524,7 +522,7 @@ export default function Transactions() {
         transactions: prev.transactions.map(t =>
           t.id === txnId ? {
             ...t,
-            category_id: catId,
+            category_id: cat?.id ?? null,
             category_name: cat?.name ?? null,
             category_color: null,
             category_overridden: 1,
@@ -532,8 +530,23 @@ export default function Transactions() {
         ),
       }
     })
+  }
+
+  function saveCategory(txnId, catId, catObj) {
+    const cat = catObj || categories.find(c => c.id === catId)
+    if (catObj && !categories.find(c => c.id === catObj.id)) {
+      setCategories(prev => [...prev, catObj])
+    }
+    reconcileCategorizedRow(txnId, cat)
     setEditId(null)
     api.overrideCategory(txnId, catId).then(refreshTaskBadge)
+  }
+
+  // A transaction detail panel persisted its own override; reconcile the page list and refresh
+  // the Tasks count without issuing a second override request.
+  function handlePanelCategorized(txnId, cat) {
+    reconcileCategorizedRow(txnId, cat)
+    refreshTaskBadge()
   }
 
   function updateNote(txnId, notes) {
@@ -873,7 +886,7 @@ export default function Transactions() {
               {uncategorizedOnly ? '✕ Uncategorized only' : 'Uncategorized only'}
             </button>
             <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-              {data.total} transactions
+              {data.total} transaction{data.total === 1 ? '' : 's'}
             </span>
           </div>
         </div>
@@ -1081,6 +1094,7 @@ export default function Transactions() {
                 stackIndex={index}
                 isTopmost={index === totalDetailPanelCount - 1}
                 onClose={() => closeDetailPanel('txn', panel.item.id)}
+                onCategorized={handlePanelCategorized}
                 onTrashed={txnId => setData(prev => ({
                   ...prev,
                   transactions: prev.transactions.filter(t => t.id !== txnId),

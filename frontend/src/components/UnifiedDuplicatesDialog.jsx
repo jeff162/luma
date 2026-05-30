@@ -50,7 +50,7 @@ import {
 const UNIFIED_DUPLICATES_SORT_PREF_KEY = 'ui.unifiedDuplicates.sort'
 const UNIFIED_DUPLICATES_PANEL_PREF_KEY = 'ui.unifiedDuplicates.panel'
 
-const DEFAULT_SORT_STATE = { key: 'date', dir: 'desc' }
+const DEFAULT_SORT_STATE = { key: 'kind', dir: 'asc' }
 
 function formatAmount(value) {
   const num = Number(value)

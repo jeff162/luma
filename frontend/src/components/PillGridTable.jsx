@@ -26,6 +26,11 @@ function buildGridTemplate(columns) {
   )).join(' ')
 }
 
+function getColumnFixedWidth(column) {
+  const width = Number(column.width)
+  return Number.isFinite(width) ? width : 0
+}
+
 function getHeaderPillCellPadding(index, count) {
   if (index === 0) return '0 5px 0 0'
   if (index === count - 1) return '0 0 0 5px'
@@ -65,7 +70,7 @@ export default function PillGridTable({
     [columns],
   )
   const contentMinWidth = useMemo(
-    () => columns.reduce((sum, column) => sum + Number(column.width || 0), 0),
+    () => columns.reduce((sum, column) => sum + getColumnFixedWidth(column), 0),
     [columns],
   )
 

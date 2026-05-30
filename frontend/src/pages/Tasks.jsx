@@ -104,10 +104,22 @@ export default function Tasks() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    api.getTasks().then(r => {
-      setResult(r)
-      setLoading(false)
-    })
+    let cancelled = false
+    function fetchTasks() {
+      api.getTasks().then(r => {
+        if (cancelled) return
+        setResult(r)
+        setLoading(false)
+      })
+    }
+    fetchTasks()
+    // Re-fetch when work elsewhere (categorizing transactions, etc.) resolves task items,
+    // so the per-task counts shown here stay current without a manual reload.
+    window.addEventListener('fintrack:refresh-tasks', fetchTasks)
+    return () => {
+      cancelled = true
+      window.removeEventListener('fintrack:refresh-tasks', fetchTasks)
+    }
   }, [])
 
   return (

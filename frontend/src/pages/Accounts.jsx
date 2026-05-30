@@ -305,7 +305,7 @@ function PillSelect({ value, options, onChange, placeholder = '—', minOpenWidt
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
   const listRef = useRef(null)
-  const [menuPos, setMenuPos] = useState({ left: 0, top: 0, width: minOpenWidth })
+  const [menuPos, setMenuPos] = useState(null)
   const selectedLabel = options.find(o => o.value === (value || ''))?.label || placeholder
 
   const { openUp } = useDismissiblePopup({
@@ -317,8 +317,12 @@ function PillSelect({ value, options, onChange, placeholder = '—', minOpenWidt
     disabled,
   })
 
-  useEffect(() => {
-    if (!open || !listRef.current || !wrapRef.current) return
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuPos(null)
+      return
+    }
+    if (!listRef.current || !wrapRef.current) return
     const rect = wrapRef.current.getBoundingClientRect()
     setMenuPos({
       left: rect.left,
@@ -333,6 +337,14 @@ function PillSelect({ value, options, onChange, placeholder = '—', minOpenWidt
         type="button"
         onClick={() => {
           if (disabled) return
+          if (!open && wrapRef.current) {
+            const rect = wrapRef.current.getBoundingClientRect()
+            setMenuPos({
+              left: rect.left,
+              top: rect.bottom + 4,
+              width: Math.max(minOpenWidth, rect.width),
+            })
+          }
           setOpen(prev => !prev)
         }}
         onContextMenu={disabled ? undefined : onContextMenu}
@@ -363,8 +375,8 @@ function PillSelect({ value, options, onChange, placeholder = '—', minOpenWidt
           ref={listRef}
           style={{
             position: 'fixed',
-            left: menuPos.left,
-            minWidth: menuPos.width,
+            left: menuPos?.left ?? 0,
+            minWidth: menuPos?.width ?? minOpenWidth,
             width: 'max-content',
             maxWidth: 240,
             background: 'var(--surface2)',
@@ -373,7 +385,8 @@ function PillSelect({ value, options, onChange, placeholder = '—', minOpenWidt
             boxShadow: '0 2px 8px rgba(0,0,0,0.12), 0 12px 40px rgba(0,0,0,0.36)',
             padding: 4,
             zIndex: 200,
-            ...(openUp ? { top: Math.max(8, menuPos.top - (listRef.current?.offsetHeight || 0) - 32) } : { top: menuPos.top }),
+            visibility: menuPos ? 'visible' : 'hidden',
+            ...(openUp ? { top: Math.max(8, (menuPos?.top ?? 0) - (listRef.current?.offsetHeight || 0) - 32) } : { top: menuPos?.top ?? 0 }),
           }}
         >
           {options.map(option => {
@@ -620,7 +633,7 @@ function OwnerPill({ owner, editing, draft, onDraftChange, onStartEdit, onCommit
   )
 }
 
-function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabled = false, width, expanded, onExpandedChange }) {
+function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onError = () => {}, disabled = false, width, expanded, onExpandedChange }) {
   const visibleOwners = getPersonalOwners(owners)
   const ownersSummary = formatCountSummary(visibleOwners.length, 'owner')
   const [editingOwnerId, setEditingOwnerId] = useState(null)
@@ -678,9 +691,13 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabl
   async function submitNewOwner() {
     const trimmed = newOwnerDraft.trim()
     if (!trimmed) return
-    await onCreateOwner(trimmed)
-    setCreatingOwner(false)
-    setNewOwnerDraft('')
+    try {
+      await onCreateOwner(trimmed)
+      setCreatingOwner(false)
+      setNewOwnerDraft('')
+    } catch (error) {
+      onError('Could not create owner', error)
+    }
   }
 
   return (
@@ -892,7 +909,11 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, disabl
                 const owner = ownerMenu.owner
                 setOwnerMenu(null)
                 if (isSharedOwner(owner)) return
-                await onDeleteOwner(owner)
+                try {
+                  await onDeleteOwner(owner)
+                } catch (error) {
+                  onError('Could not delete owner', error)
+                }
               }}
               style={{
                 display: 'block', width: '100%', textAlign: 'left',
@@ -927,6 +948,7 @@ function AccountRow({
   onRequestRenameOwner,
   onRequestDeleteOwner,
   onRequestTrash,
+  onError = () => {},
   interactionDisabled = false,
   dragDisabled = false,
   dropActive = false,
@@ -1065,6 +1087,8 @@ function AccountRow({
     setCreatingOwner(true)
     try {
       await onCreateOwnerForAccount(account.id, trimmed)
+    } catch (error) {
+      onError('Could not create owner', error)
     } finally {
       setCreatingOwner(false)
     }
@@ -1541,6 +1565,13 @@ export default function Accounts() {
   const [accountsPanelWidth, setAccountsPanelWidth] = useState(ACCOUNTS_SECTION_BASE_WIDTH)
   const sectionPanelWidth = accountsPanelWidth
 
+  function showAsyncNotice(title, error) {
+    setNoticeDialog({
+      title,
+      description: error?.message || 'Something went wrong.',
+    })
+  }
+
   function openAccountDetail(account) {
     if (!account?.id) return
     setDetailAccounts(prev => [
@@ -1882,6 +1913,7 @@ export default function Accounts() {
   }
 
   async function deleteOwner(owner) {
+    if (!owner?.id) return
     await api.deleteOwner(owner.id)
     loadData()
     refreshTaskBadge()
@@ -1889,6 +1921,7 @@ export default function Accounts() {
 
   async function createOwner(name) {
     const owner = await api.createOwner({ name })
+    if (!owner?.id) throw new Error('Owner response did not include an id.')
     setOwners(prev => [...prev, owner])
     refreshTaskBadge()
     return owner
@@ -1896,6 +1929,7 @@ export default function Accounts() {
 
   async function createOwnerForAccount(accountId, name) {
     const owner = await createOwner(name)
+    if (!owner?.id) throw new Error('Owner response did not include an id.')
     await api.updateAccount(accountId, { owner_id: owner.id })
     setAccounts(prev => prev.map(account => (
       account.id === accountId
@@ -2210,14 +2244,22 @@ export default function Accounts() {
     const ownerId = ownerRenameDialog.id
     const nextName = renameOwnerName.trim()
     setOwnerRenameDialog(null)
-    await saveOwner(ownerId, { name: nextName })
+    try {
+      await saveOwner(ownerId, { name: nextName })
+    } catch (error) {
+      showAsyncNotice('Could not rename owner', error)
+    }
   }
 
   async function confirmOwnerDelete() {
     if (!pendingOwnerDelete) return
     const owner = pendingOwnerDelete
     setPendingOwnerDelete(null)
-    await deleteOwner(owner)
+    try {
+      await deleteOwner(owner)
+    } catch (error) {
+      showAsyncNotice('Could not delete owner', error)
+    }
   }
 
   return (
@@ -2556,12 +2598,16 @@ export default function Accounts() {
                                 onCancelDelete={cancelOrConfirmDelete}
                                 onOpenDetail={openAccountDetail}
                                 onCreateOwnerForAccount={createOwnerForAccount}
-                                onRequestRenameOwner={owner => setOwnerRenameDialog({
-                                  id: owner.id,
-                                  name: owner.name || '',
-                                })}
+                                onRequestRenameOwner={owner => {
+                                  if (!owner?.id) return
+                                  setOwnerRenameDialog({
+                                    id: owner.id,
+                                    name: owner.name || '',
+                                  })
+                                }}
                                 onRequestDeleteOwner={owner => setPendingOwnerDelete(owner)}
                                 onRequestTrash={setPendingTrashAccount}
+                                onError={showAsyncNotice}
                                 interactionDisabled={showCreateAccount || !!movingAccountId}
                                 dragDisabled={rootDragDisabled}
                                 dropActive={groupMergeActive}
@@ -2581,12 +2627,16 @@ export default function Accounts() {
                                   onCancelDelete={cancelOrConfirmDelete}
                                   onOpenDetail={openAccountDetail}
                                   onCreateOwnerForAccount={createOwnerForAccount}
-                                  onRequestRenameOwner={owner => setOwnerRenameDialog({
-                                    id: owner.id,
-                                    name: owner.name || '',
-                                  })}
+                                  onRequestRenameOwner={owner => {
+                                    if (!owner?.id) return
+                                    setOwnerRenameDialog({
+                                      id: owner.id,
+                                      name: owner.name || '',
+                                    })
+                                  }}
                                   onRequestDeleteOwner={owner => setPendingOwnerDelete(owner)}
                                   onRequestTrash={setPendingTrashAccount}
+                                  onError={showAsyncNotice}
                                   interactionDisabled={showCreateAccount || !!movingAccountId}
                                   dragDisabled={!!movingAccountId}
                                   dropActive={groupMergeActive}
@@ -2659,6 +2709,7 @@ export default function Accounts() {
             onCreateOwner={createOwner}
             onSaveOwner={saveOwner}
             onDeleteOwner={owner => setPendingOwnerDelete(owner)}
+            onError={showAsyncNotice}
             disabled={showCreateAccount}
             width={sectionPanelWidth}
             expanded={ownersSection.expanded}

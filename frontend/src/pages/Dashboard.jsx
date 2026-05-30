@@ -1659,6 +1659,28 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dashboardView])
 
+  const drillToCategories = useCallback(async (group) => {
+    const groupId  = group.group_id ?? group.payload?.group_id
+    const groupRow = groupRows.find(r => r.group_id === groupId) || group
+    setDrillLoading(true)
+    setSelectedGroup(groupRow)
+    const [rows, txnResp] = await Promise.all([
+      api.getCategoryTotalsInGroup(null, groupId, accountId || undefined, dateStart, dateEnd, undefined, tagIds),
+      api.getTransactions({
+        date_start:  filters.date?.start || undefined,
+        date_end:    filters.date?.end   || undefined,
+        group_ids:   groupId,
+        account_id:  accountId || undefined,
+        tag_ids:     tagIds,
+        limit: 500,
+      }),
+    ])
+    setCatRows(rows)
+    setGroupTxnData(txnResp.transactions)
+    setLevel('categories')
+    setDrillLoading(false)
+  }, [groupRows, accountId, dateStart, dateEnd, tagIds, filters.date?.start, filters.date?.end])
+
   // Consume a pending Single-mode drill once the date-scoped groupRows have loaded. If the
   // queued group isn't present in this slice (e.g. zero spend that month), drop the queue
   // silently rather than leave it dangling.
@@ -1681,28 +1703,6 @@ export default function Dashboard() {
     if (trendGroup?.series_id) setPendingSingleDrill(trendGroup.series_id)
     setMode('single')
   }
-
-  const drillToCategories = useCallback(async (group) => {
-    const groupId  = group.group_id ?? group.payload?.group_id
-    const groupRow = groupRows.find(r => r.group_id === groupId) || group
-    setDrillLoading(true)
-    setSelectedGroup(groupRow)
-    const [rows, txnResp] = await Promise.all([
-      api.getCategoryTotalsInGroup(null, groupId, accountId || undefined, dateStart, dateEnd, undefined, tagIds),
-      api.getTransactions({
-        date_start:  filters.date?.start || undefined,
-        date_end:    filters.date?.end   || undefined,
-        group_ids:   groupId,
-        account_id:  accountId || undefined,
-        tag_ids:     tagIds,
-        limit: 500,
-      }),
-    ])
-    setCatRows(rows)
-    setGroupTxnData(txnResp.transactions)
-    setLevel('categories')
-    setDrillLoading(false)
-  }, [groupRows, accountId, dateStart, dateEnd, tagIds, filters.date?.start, filters.date?.end])
 
   async function drillToTransactions(cat) {
     const categoryId = cat.category_id ?? cat.payload?.category_id

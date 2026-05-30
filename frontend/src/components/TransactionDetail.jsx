@@ -36,7 +36,7 @@ const TRANSACTION_DETAIL_TABLE_PREF_KEY = 'ui.transactionDetail.transactions.col
  * locally editable, but it can also branch straight into rule creation when a manual recategorization looks
  * like the start of a repeatable pattern.
  */
-export default function TransactionDetail({ txn, categories, onClose, onTrashed, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true }) {
+export default function TransactionDetail({ txn, categories, onClose, onTrashed, onCategorized, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true }) {
   const { filters } = useFilters()
   const dateStart = filters.date?.start || null
   const dateEnd   = filters.date?.end   || null
@@ -157,6 +157,10 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
     await api.overrideCategory(txnId, catId)
     const resolvedCat = catObj || detailCategories.find(c => c.id === catId)
     handleCatSaved(txnId, resolvedCat || null)
+    // Notify the host (e.g. the Transactions list) so it can reconcile the row that was
+    // categorized from inside this panel — otherwise the change only lives in the panel's
+    // local state and the page behind it stays stale.
+    onCategorized?.(txnId, resolvedCat || null)
   }
 
   const {
