@@ -353,3 +353,48 @@ array, an `onChange` that calls the existing API helper, and a status
 callback that updates the session via setters that would need to be
 exposed from `useAppSession()` (currently only getters are exposed —
 adding the setters is the wiring this incomplete UI never finished).
+
+---
+
+## Import / duplicate detection
+
+### Auto-restore deduped rows when a contributing import is undone
+
+**Context.** Exact-match (hard-reject) duplicates are dropped at import
+time, never inserted into `txn`; only their payload is kept in
+`import_batch_duplicate`. So if file B has rows that were skipped because
+they matched file A, then undoing file A leaves those B rows absent even
+though re-importing B fresh would now create them (A's rows are gone, so
+they would no longer be duplicates). Today the only recovery is the manual
+"Import duplicates" action on file B (`POST
+/import-export/batches/{id}/duplicates/import`) or re-importing B. The idea
+here is to automate it: when an import is undone, survey subsequent batches'
+`import_batch_duplicate` records and re-materialize the rows whose only
+reason for rejection was the batch being undone.
+
+**Why deferred.** Unclear how often it actually matters, and it is not
+trivial to do correctly. Rejections form a chain: files A, B, C may each
+contain overlapping slices of earlier ones. A row in C that was dropped
+because of A might *still* be a duplicate after A is undone — now because of
+B. So "restore everything C deduped against A" is wrong; each candidate has
+to be re-evaluated against the *current* ledger state (re-run through
+`evaluate_duplicate`), not just blindly re-inserted because its original
+matched-row disappeared. There is also an ordering question (process
+candidates oldest-first so a restored B row can legitimately re-suppress a C
+row) and a UX question (auto-restore silently vs. surface "N rows can be
+restored" for confirmation).
+
+**Suggested approach when picked up.**
+
+- In `undo_batch`, after deleting the batch's rows, collect every *other*
+  batch's `import_batch_duplicate` payloads and re-run each through
+  `evaluate_duplicate` against the post-undo ledger.
+- Re-insert only those that now pass (no longer hard-reject); leave the rest
+  as duplicate records. Process oldest batch first so re-inserted rows can
+  re-suppress later candidates within the same pass.
+- Decide auto vs. confirm: likely surface a count ("Undoing this import lets
+  N previously-skipped rows from later imports be restored — review?") rather
+  than silently mutating other batches.
+- Watch the interaction with soft-flags: a re-materialized row should also go
+  through `mark_import_suspects`/the cross-account sweep, the same as the
+  manual "Import duplicates" path already does.

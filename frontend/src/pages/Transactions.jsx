@@ -1152,6 +1152,9 @@ export default function Transactions() {
               if (applyToExisting) {
                 isFirstLoad.current = true
                 load()
+                // Applying a rule to existing rows categorizes many transactions at once,
+                // so the Tasks "uncategorized" count needs to refresh just like single-row edits.
+                refreshTaskBadge()
               }
             }}
             onDismiss={() => setRulePrompt(null)}
@@ -1166,6 +1169,9 @@ export default function Transactions() {
               if (applyToExisting) {
                 isFirstLoad.current = true
                 load()
+                // Applying a rule to existing rows categorizes many transactions at once,
+                // so the Tasks "uncategorized" count needs to refresh just like single-row edits.
+                refreshTaskBadge()
               }
             }}
           />

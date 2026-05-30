@@ -1,5 +1,5 @@
 # ── Working storage ──────────────────────────────────────────────────────────
-# Local storage for files not to be commited (eg. db backups, private
+# Local storage for files not to be committed (eg. db backups, private
 # keys, test scripts). Not created by the system.
 data/
 
@@ -55,5 +55,3 @@ desktop.ini
 *.log
 logs/
 
-# ── project zip files from make_dist ─────────────────────────────────────────
-fintrack-dist-*.zip

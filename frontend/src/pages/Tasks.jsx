@@ -4,6 +4,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import { useFilters } from '../lib/FilterContext.jsx'
 import { Card, PageHeader, Spinner } from '../components/ui.jsx'
 
 const SEVERITY_COLORS = {
@@ -45,6 +46,11 @@ function TaskSeverityIcon({ severity }) {
 
 function TaskCard({ task }) {
   const style = SEVERITY_COLORS[task.severity] || SEVERITY_COLORS.info
+  const { clearAll } = useFilters()
+  // Task counts are global (e.g. all-time uncategorized), but the shared FilterBar defaults to a
+  // "Past 12 months" date window. Clear filters when jumping to a transaction view so the user lands
+  // on the same set the badge counted instead of a narrower, confusingly-different number.
+  const handleClick = task.link.startsWith('/transactions') ? () => clearAll() : undefined
   return (
     <div
       style={{
@@ -80,6 +86,7 @@ function TaskCard({ task }) {
         </div>
         <Link
           to={task.link}
+          onClick={handleClick}
           style={{
             display: 'inline-block',
             fontSize: 13,

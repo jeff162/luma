@@ -718,6 +718,14 @@ def list_trashed_transactions(limit: int = Query(200, le=1000)):
             LEFT JOIN category c ON c.id = t.category_id
             LEFT JOIN category p ON p.id = c.parent_id
             WHERE  t.trashed_at IS NOT NULL
+              -- Confirmed-duplicate rows are soft-deleted by the dedupe flow, not by the user:
+              -- either as a side effect of merging accounts (dedupe_resolved_by='auto_merge') or
+              -- by an explicit Reject in the duplicate report (dedupe_resolved_by='user'). Both set
+              -- rejection_reason='duplicate_confirmed'. They belong to the originating file's
+              -- duplicate report and are restorable from there (detach the accounts, or "undo
+              -- reject"), so they're kept out of the manual Trash view to avoid implying the user
+              -- deleted them or should empty them here.
+              AND COALESCE(t.rejection_reason, '') <> 'duplicate_confirmed'
             ORDER  BY t.trashed_at DESC, t.date DESC
             LIMIT  ?
             """,
@@ -729,7 +737,12 @@ def list_trashed_transactions(limit: int = Query(200, le=1000)):
 @router.post("/trash/empty")
 def empty_transaction_trash():
     with get_db() as conn:
-        cursor = conn.execute("DELETE FROM txn WHERE trashed_at IS NOT NULL")
+        # Mirror the /trash exclusion: confirmed-duplicate rows aren't shown in the Trash view, so
+        # emptying it must not permanently delete them either — doing so would silently destroy the
+        # rows that account-detach (auto_merge) and "undo reject" (user) rely on to restore them.
+        cursor = conn.execute(
+            "DELETE FROM txn WHERE trashed_at IS NOT NULL AND COALESCE(rejection_reason, '') <> 'duplicate_confirmed'"
+        )
         removed = cursor.rowcount or 0
     return {"removed": removed}
 

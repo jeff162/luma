@@ -20,6 +20,7 @@ from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.transactions import (
+    empty_transaction_trash,
     list_transactions,
     list_trashed_transactions,
     monthly_trend,
@@ -97,6 +98,27 @@ class TrashFilterCoverageTests(unittest.TestCase):
         keep = self._insert_txn(account_id=account, category_id=group, amount=10.00, date="2026-04-10")
         trash = self._insert_txn(account_id=account, category_id=group, amount=25.00, date="2026-04-20")
         return account, group, keep, trash
+
+    def _mark_confirmed_duplicate(self, txn_id: str, *, resolved_by: str) -> None:
+        """Soft-delete a row the way the dedupe flow does: trashed + rejection_reason set.
+        `resolved_by` is 'auto_merge' (account merge) or 'user' (explicit Reject)."""
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    """
+                    UPDATE txn
+                    SET    trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                           rejection_reason = 'duplicate_confirmed',
+                           dedupe_resolved_by = ?
+                    WHERE  id = ?
+                    """,
+                    (resolved_by, txn_id),
+                )
+
+    def _txn_exists(self, txn_id: str) -> bool:
+        with self._use_db_path():
+            with get_db() as conn:
+                return conn.execute("SELECT 1 FROM txn WHERE id = ?", (txn_id,)).fetchone() is not None
 
     # ---- list_transactions ----------------------------------------------
 
@@ -210,6 +232,43 @@ class TrashFilterCoverageTests(unittest.TestCase):
         ids = [row["id"] for row in rows]
         self.assertIn(trash, ids)
         self.assertNotIn(keep, ids)
+
+    # ---- confirmed-duplicate exclusion from the manual Trash --------------
+    # Confirmed duplicates are soft-deleted by the dedupe flow, not by the user. They are owned
+    # by the originating file's duplicate report and stay restorable (account detach for
+    # 'auto_merge', "undo reject" for 'user'), so the manual Trash must neither list them nor
+    # let an empty-trash permanently delete them.
+
+    def test_list_trashed_hides_confirmed_duplicates(self):
+        account, group, keep, user_trash = self._seed_two()
+        auto = self._insert_txn(account_id=account, category_id=group, amount=30.00, date="2026-04-25")
+        user_dup = self._insert_txn(account_id=account, category_id=group, amount=40.00, date="2026-04-26")
+        with self._use_db_path():
+            trash_transaction(user_trash)  # ordinary user delete
+            self._mark_confirmed_duplicate(auto, resolved_by="auto_merge")
+            self._mark_confirmed_duplicate(user_dup, resolved_by="user")
+            rows = list_trashed_transactions(limit=200)
+        ids = [row["id"] for row in rows]
+        self.assertIn(user_trash, ids)        # plain trash still shows
+        self.assertNotIn(auto, ids)           # merge-confirmed hidden
+        self.assertNotIn(user_dup, ids)       # reject-confirmed hidden
+        self.assertNotIn(keep, ids)
+
+    def test_empty_trash_preserves_confirmed_duplicates_but_removes_user_trash(self):
+        account, group, _, user_trash = self._seed_two()
+        auto = self._insert_txn(account_id=account, category_id=group, amount=30.00, date="2026-04-25")
+        user_dup = self._insert_txn(account_id=account, category_id=group, amount=40.00, date="2026-04-26")
+        with self._use_db_path():
+            trash_transaction(user_trash)
+            self._mark_confirmed_duplicate(auto, resolved_by="auto_merge")
+            self._mark_confirmed_duplicate(user_dup, resolved_by="user")
+            result = empty_transaction_trash()
+        # Only the ordinary user-trashed row is purged.
+        self.assertEqual(result["removed"], 1)
+        self.assertFalse(self._txn_exists(user_trash))
+        # Confirmed duplicates survive so detach / undo-reject can still restore them.
+        self.assertTrue(self._txn_exists(auto))
+        self.assertTrue(self._txn_exists(user_dup))
 
 
 if __name__ == "__main__":  # pragma: no cover

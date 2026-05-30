@@ -54,11 +54,14 @@ def get_tasks():
 
         # Pending transactions are intentionally excluded because the rest of the product
         # also keeps them out of reporting and categorization chores until they settle.
+        # Trashed rows are excluded too: they no longer appear in the Transactions list the
+        # task links to, so counting them here would overstate the work and never reach zero.
         uncategorized = conn.execute("""
             SELECT COUNT(*) AS n
             FROM   txn
             WHERE  category_id IS NULL
               AND  is_pending   = 0
+              AND  trashed_at   IS NULL
         """).fetchone()["n"]
 
         if uncategorized:
