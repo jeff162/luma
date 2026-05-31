@@ -48,6 +48,7 @@ filter of "I've already decided these are different accounts."
 
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any, Iterable, Optional
 
 
@@ -115,6 +116,22 @@ class DedupeVerdict:
     terminal_day_reconciled: bool = False
 
 
+def _adjacent_date_offsets(parsed_date: str) -> list[tuple[str, int]]:
+    """(date_string, day_offset) pairs for a ±1-day candidate-display window. Exact date first so it
+    ranks ahead of the near-date fallbacks; falls back to just the exact date if it can't be parsed.
+    Two sources for the same transaction routinely disagree on the posting day by one (timezone /
+    settlement), which otherwise leaves a covered row with 'no specific match'."""
+    try:
+        d = datetime.strptime(parsed_date, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return [(parsed_date, 0)]
+    return [
+        (parsed_date, 0),
+        ((d - timedelta(days=1)).isoformat(), -1),
+        ((d + timedelta(days=1)).isoformat(), 1),
+    ]
+
+
 def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_account_id: str,
                                           parsed_date: str, amount: float,
                                           duplicate_amount_key, include_scope: bool) -> list[dict]:
@@ -122,43 +139,48 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
     Returns a list of compact dicts the unified report renders directly. Empty list means
     'covered date but no specific match' — the report flags those for manual review.
 
+    This is display-only: the coverage rule has already returned its hard-reject verdict, so widening
+    the lookup to the day before/after (same amount) cannot change a decision — it only lets the
+    report point at the specific prior transaction when the two sources disagree on the posting day by
+    one. Near-date hits carry a `day_offset` so the UI can label them. Exact-date matches still rank
+    first. When even ±1 finds nothing, the row stays 'no specific match' for manual review.
+
     The lookup re-uses the per-account amount index that text-strategy already populates, so the
     cost is dict lookups, not extra queries. For in-scope coverage we also fold in candidates from
     sibling accounts in the linked group, since the rule's premise is that the prior import covered
     the whole effective-account scope.
     """
-    key = duplicate_amount_key(parsed_date, amount)
     seen_ids: set[str] = set()
     out: list[dict] = []
-    for candidate in context.existing_rows_by_account_amount.get(receiving_account_id, {}).get(key, []):
+
+    def _append(candidate: dict, day_offset: int) -> None:
         cid = candidate.get("id")
-        if cid and cid not in seen_ids:
-            seen_ids.add(cid)
-            out.append({
-                "id":            cid,
-                "date":          candidate.get("date"),
-                "merchant_name": candidate.get("merchant_name"),
-                "amount":        candidate.get("amount"),
-                "account_id":    candidate.get("account_id"),
-                "import_batch_id": candidate.get("import_batch_id"),
-            })
-    if include_scope:
-        # Try the linked-group rows too. We don't have compare_target_id at this point in the
-        # signature, so we iterate the whole effective-account map looking up by amount-key —
-        # cheap because the second-level dict is keyed by amount-key.
-        for scope_map in context.existing_rows_by_effective_account_amount.values():
-            for candidate in scope_map.get(key, []):
-                cid = candidate.get("id")
-                if cid and cid not in seen_ids:
-                    seen_ids.add(cid)
-                    out.append({
-                        "id":            cid,
-                        "date":          candidate.get("date"),
-                        "merchant_name": candidate.get("merchant_name"),
-                        "amount":        candidate.get("amount"),
-                        "account_id":    candidate.get("account_id"),
-                        "import_batch_id": candidate.get("import_batch_id"),
-                    })
+        if not cid or cid in seen_ids:
+            return
+        seen_ids.add(cid)
+        row = {
+            "id":            cid,
+            "date":          candidate.get("date"),
+            "merchant_name": candidate.get("merchant_name"),
+            "amount":        candidate.get("amount"),
+            "account_id":    candidate.get("account_id"),
+            "import_batch_id": candidate.get("import_batch_id"),
+        }
+        if day_offset:
+            row["day_offset"] = day_offset  # candidate's date is this many days off the incoming row's
+        out.append(row)
+
+    for day, day_offset in _adjacent_date_offsets(parsed_date):
+        key = duplicate_amount_key(day, amount)
+        for candidate in context.existing_rows_by_account_amount.get(receiving_account_id, {}).get(key, []):
+            _append(candidate, day_offset)
+        if include_scope:
+            # Linked-group rows too. We don't have compare_target_id at this point in the signature,
+            # so we iterate the whole effective-account map looking up by amount-key — cheap because
+            # the second-level dict is keyed by amount-key.
+            for scope_map in context.existing_rows_by_effective_account_amount.values():
+                for candidate in scope_map.get(key, []):
+                    _append(candidate, day_offset)
     return out
 
 

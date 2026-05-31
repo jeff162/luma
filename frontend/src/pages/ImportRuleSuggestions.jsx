@@ -85,6 +85,10 @@ export default function ImportRuleSuggestions() {
     review_summary: null,
     generated_at: null,
   })
+  // Recap of the last accept action's collision reconciliation (merged into / skipped as duplicate of
+  // an existing rule, or conflicts left pending for the user). Kept outside ruleSuggestionState so a
+  // reload doesn't wipe it. Shape: { created, merged, skipped, conflicts: string[] } | null.
+  const [resolveSummary, setResolveSummary] = useState(null)
   // Owner resolution is intentionally one-at-a-time: ambiguous imports need a
   // single ownership lens before the suggested rules are meaningful.
   const [selectedOwnerIds, setSelectedOwnerIds] = useState([])
@@ -373,10 +377,21 @@ export default function ImportRuleSuggestions() {
   }
 
   async function saveSuggestion(suggestion, data) {
+    setResolveSummary(null)
     const { applyToExisting, ...ruleData } = data
+    // Auto-resolve against an existing same-matcher rule (Generate Rules is the bulk flow): merge a
+    // mergeable/duplicate save into it. A conflict (a different category/rename on the same matcher)
+    // is left for the user — we don't fork or overwrite, so the suggestion stays pending and is named
+    // in the summary banner.
+    const createdRule = await api.createRule(ruleData, { onExisting: 'merge' })
+    if (createdRule?.status === 'conflict') {
+      setResolveSummary({ created: 0, merged: 0, skipped: 0, conflicts: [suggestion.merchant_label || suggestion.keyword] })
+      setEditingSuggestionId(null)
+      await reloadSuggestions()
+      return
+    }
     const coveredSuggestionIds = getCoveredSuggestionIds(suggestion, data)
     pushUndo([suggestion.id, ...coveredSuggestionIds])
-    const createdRule = await api.createRule(ruleData)
     await updateSuggestionReviewForContext({
       suggestion_id: suggestion.id,
       status: 'accepted',
@@ -406,9 +421,24 @@ export default function ImportRuleSuggestions() {
     pushUndo([suggestion.id, ...coveredSuggestionIds])
 
     if (ruleId) {
-      await api.updateRule(ruleId, ruleData)
+      // Editing an accepted suggestion's rule can make it collide with another rule; auto-resolve
+      // (merge folds it in and removes this one). A conflict can't be auto-merged — surface it.
+      const updated = await api.updateRule(ruleId, ruleData, { onExisting: 'merge' })
+      if (updated?.status === 'conflict') {
+        setResolveSummary({ created: 0, merged: 0, skipped: 0, conflicts: [suggestion.merchant_label || suggestion.keyword] })
+        setEditingSuggestionId(null)
+        await reloadSuggestions()
+        return
+      }
+      if (updated?.status === 'merged' && updated.id) ruleId = updated.id
     } else {
-      const createdRule = await api.createRule(ruleData)
+      const createdRule = await api.createRule(ruleData, { onExisting: 'merge' })
+      if (createdRule?.status === 'conflict') {
+        setResolveSummary({ created: 0, merged: 0, skipped: 0, conflicts: [suggestion.merchant_label || suggestion.keyword] })
+        setEditingSuggestionId(null)
+        await reloadSuggestions()
+        return
+      }
       ruleId = createdRule?.id || null
     }
 
@@ -446,11 +476,15 @@ export default function ImportRuleSuggestions() {
 
   async function saveSuggestionsAsIsBulk(suggestions) {
     setEditingSuggestionId(null)
+    setResolveSummary(null)
     setRuleSuggestionState(prev => ({ ...prev, error: '' }))
     pushUndo(suggestions.map(s => s.id))
     try {
       let lastResult = null
       const updatesById = {}
+      // Auto-resolve collisions without interrupting the batch: 'merge' folds mergeable saves into the
+      // existing rule and no-ops pure duplicates; conflicts are left pending and named in the summary.
+      const summary = { created: 0, merged: 0, skipped: 0, conflicts: [] }
       for (const suggestion of suggestions) {
         const createdRule = await api.createRule({
           keyword: suggestion.keyword,
@@ -460,7 +494,17 @@ export default function ImportRuleSuggestions() {
           clean_name: suggestion.clean_name_suggestion || null,
           owner_id: suggestion.owner_id || null,
           account_id: suggestion.account_id || null,
-        })
+        }, { onExisting: 'merge' })
+        if (createdRule?.status === 'conflict') {
+          summary.conflicts.push(suggestion.merchant_label || suggestion.keyword)
+          continue
+        }
+        if (createdRule?.status === 'merged') {
+          if (createdRule.relation === 'duplicate') summary.skipped += 1
+          else summary.merged += 1
+        } else {
+          summary.created += 1
+        }
         lastResult = await updateSuggestionReviewForContext({
           suggestion_id: suggestion.id,
           status: 'accepted',
@@ -478,6 +522,7 @@ export default function ImportRuleSuggestions() {
         review_summary: lastResult?.review_summary || undefined,
         generated_at: lastResult?.generated_at || undefined,
       })
+      if (summary.merged || summary.skipped || summary.conflicts.length) setResolveSummary(summary)
     } catch (err) {
       setRuleSuggestionState(prev => ({
         ...prev,
@@ -588,6 +633,31 @@ export default function ImportRuleSuggestions() {
                         : 'Generate categorization rules from imported transactions in this file that used categories present in the data.'}
                     </div>
                   </Card>
+
+                  {resolveSummary ? (
+                    <Card style={{
+                      display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16,
+                      borderColor: resolveSummary.conflicts.length ? 'var(--danger)' : 'var(--border)',
+                    }}>
+                      <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 2 }}>Existing rules reconciled</div>
+                        {(resolveSummary.merged || resolveSummary.skipped) ? (
+                          <div style={{ color: 'var(--muted)' }}>
+                            {[
+                              resolveSummary.merged ? `${resolveSummary.merged} merged into an existing rule` : null,
+                              resolveSummary.skipped ? `${resolveSummary.skipped} already existed (skipped)` : null,
+                            ].filter(Boolean).join(' · ')}
+                          </div>
+                        ) : null}
+                        {resolveSummary.conflicts.length ? (
+                          <div style={{ color: 'var(--danger)', marginTop: 6 }}>
+                            Left pending — an existing rule for {resolveSummary.conflicts.length === 1 ? 'this merchant' : 'these merchants'} assigns a different category, so resolve it by editing the existing rule or narrowing the scope: {resolveSummary.conflicts.join(', ')}.
+                          </div>
+                        ) : null}
+                      </div>
+                      <Button variant="ghost" small onClick={() => setResolveSummary(null)}>Dismiss</Button>
+                    </Card>
+                  ) : null}
 
                   <ImportRuleSuggestionReview
                     onLoadSuggestionMatches={loadSuggestionMatchesForContext}

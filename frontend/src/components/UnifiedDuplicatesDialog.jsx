@@ -52,6 +52,25 @@ const UNIFIED_DUPLICATES_PANEL_PREF_KEY = 'ui.unifiedDuplicates.panel'
 
 const DEFAULT_SORT_STATE = { key: 'kind', dir: 'asc' }
 
+// The two "needs attention" kinds get their own quick-filter pills so the user can isolate them and
+// bulk-select (filter → header select-all). The resolved/plain-rejected kinds get none — they need no
+// action. Mirrors the Kind-cell label precedence below (soft flag → Review; a coverage hard-reject
+// with no specific match and not yet resolved → Rejected · review). Returns null for the rest.
+const REVIEW_KIND_PILLS = [
+  { key: 'review', label: 'Review' },
+  { key: 'rejected_review', label: 'Rejected · review' },
+]
+
+function reviewKindOf(entry) {
+  if (entry.kind === 'soft_flag') return 'review'
+  if (entry.kind === 'hard_reject' && !entry.incoming?.txn_id
+      && entry.matched && entry.matched.covered
+      && (!entry.matched.candidates || entry.matched.candidates.length === 0)) {
+    return 'rejected_review'
+  }
+  return null
+}
+
 function formatAmount(value) {
   const num = Number(value)
   if (!Number.isFinite(num)) return ''
@@ -133,6 +152,8 @@ export default function UnifiedDuplicatesDialog({
 
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [activeRuleFilter, setActiveRuleFilter] = useState(null)
+  // Kind/status quick-filter, mutually exclusive with the rule filter (picking one clears the other).
+  const [activeKindFilter, setActiveKindFilter] = useState(null)
   const [sortState, setSortState] = useUserPreference(UNIFIED_DUPLICATES_SORT_PREF_KEY, DEFAULT_SORT_STATE)
   const [pendingBulk, setPendingBulk] = useState(false)
   const [actionError, setActionError] = useState('')
@@ -158,10 +179,21 @@ export default function UnifiedDuplicatesDialog({
     return 3                                  // Rejected
   }
 
+  const reviewKindBreakdown = useMemo(() => {
+    const counts = { review: 0, rejected_review: 0 }
+    for (const e of entries) {
+      const k = reviewKindOf(e)
+      if (k) counts[k] += 1
+    }
+    return counts
+  }, [entries])
+
   const visibleEntries = useMemo(() => {
-    const filtered = activeRuleFilter
-      ? entries.filter(e => (e.rule_key || '') === activeRuleFilter)
-      : entries
+    const filtered = activeKindFilter
+      ? entries.filter(e => reviewKindOf(e) === activeKindFilter)
+      : activeRuleFilter
+        ? entries.filter(e => (e.rule_key || '') === activeRuleFilter)
+        : entries
     const dir = sortState.dir === 'asc' ? 1 : -1
     const getKey = (entry) => {
       switch (sortState.key) {
@@ -189,7 +221,7 @@ export default function UnifiedDuplicatesDialog({
       }
       return 0
     })
-  }, [entries, activeRuleFilter, sortState])
+  }, [entries, activeRuleFilter, activeKindFilter, sortState])
 
   const visibleIds = useMemo(() => new Set(visibleEntries.map(entryId)), [visibleEntries])
 
@@ -399,6 +431,11 @@ export default function UnifiedDuplicatesDialog({
             <div key={c.id || idx} style={{ fontSize: 11, paddingLeft: 6, borderLeft: '2px solid color-mix(in srgb, var(--accent2) 30%, var(--border))' }}>
               <div>
                 <span style={{ fontVariantNumeric: 'tabular-nums' }}>{c.date || ''}</span>
+                {c.day_offset ? (
+                  <span style={{ marginLeft: 4, fontSize: 9.5, fontWeight: 600, color: 'var(--accent2)', whiteSpace: 'nowrap' }}>
+                    ({Math.abs(c.day_offset)} day{Math.abs(c.day_offset) === 1 ? '' : 's'} {c.day_offset < 0 ? 'earlier' : 'later'})
+                  </span>
+                ) : null}
                 {' · '}<span>{c.merchant_name || ''}</span>
                 {' · '}<span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{formatAmount(c.amount)}</span>
               </div>
@@ -485,21 +522,24 @@ export default function UnifiedDuplicatesDialog({
       isTopmost={isTopmost}
     >
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, margin: '-20px -24px', overflow: 'hidden' }}>
-        {ruleBreakdown.length > 0 ? (
-          <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', background: 'color-mix(in srgb, var(--surface2) 50%, transparent)' }}>
-            <span style={{ fontSize: 11, color: 'var(--muted)', marginRight: 4 }}>Show:</span>
+        {(ruleBreakdown.length > 0 || reviewKindBreakdown.review || reviewKindBreakdown.rejected_review) ? (
+          <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 6, alignItems: 'baseline', background: 'color-mix(in srgb, var(--surface2) 50%, transparent)' }}>
+            <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>Show:</span>
             <button
               type="button"
-              onClick={() => setActiveRuleFilter(null)}
+              onClick={() => { setActiveRuleFilter(null); setActiveKindFilter(null) }}
               style={{
-                fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer',
-                background: activeRuleFilter === null ? 'var(--accent)' : 'var(--surface2)',
-                color: activeRuleFilter === null ? 'white' : 'var(--muted)',
+                fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer', flexShrink: 0,
+                background: (activeRuleFilter === null && activeKindFilter === null) ? 'var(--accent)' : 'var(--surface2)',
+                color: (activeRuleFilter === null && activeKindFilter === null) ? 'white' : 'var(--muted)',
                 border: '1px solid var(--border)',
               }}
             >
               All ({entries.length})
             </button>
+            {/* "Show:" and "All" stay fixed; only the rule + kind pills wrap, so wrapped rows line up
+                under the first rule pill (to the right of All) rather than under "Show:" or "All". */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1, minWidth: 0 }}>
             {ruleBreakdown.map(rule => {
               const active = activeRuleFilter === rule.rule_key
               const accent = rule.confidence === 'high' ? 'var(--accent)'
@@ -510,7 +550,7 @@ export default function UnifiedDuplicatesDialog({
                   key={rule.rule_key}
                   type="button"
                   title={rule.rule_description}
-                  onClick={() => setActiveRuleFilter(active ? null : rule.rule_key)}
+                  onClick={() => { setActiveRuleFilter(active ? null : rule.rule_key); setActiveKindFilter(null) }}
                   style={{
                     fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer',
                     background: active ? accent : `color-mix(in srgb, ${accent} 10%, var(--surface2))`,
@@ -523,6 +563,33 @@ export default function UnifiedDuplicatesDialog({
                 </button>
               )
             })}
+            {(reviewKindBreakdown.review || reviewKindBreakdown.rejected_review) ? (
+              <span style={{ width: 1, alignSelf: 'stretch', margin: '0 2px', background: 'var(--border)' }} />
+            ) : null}
+            {REVIEW_KIND_PILLS.map(k => {
+              const count = reviewKindBreakdown[k.key]
+              if (!count) return null
+              const active = activeKindFilter === k.key
+              const accent = '#f59e0b'  // amber = needs attention, matching the Kind-cell styling
+              return (
+                <button
+                  key={k.key}
+                  type="button"
+                  title={`Show only "${k.label}" entries (then use the header checkbox to select all)`}
+                  onClick={() => { setActiveKindFilter(active ? null : k.key); setActiveRuleFilter(null) }}
+                  style={{
+                    fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer',
+                    background: active ? accent : `color-mix(in srgb, ${accent} 10%, var(--surface2))`,
+                    color: active ? 'white' : accent,
+                    border: `1px solid color-mix(in srgb, ${accent} 40%, var(--border))`,
+                    fontWeight: active ? 600 : 500,
+                  }}
+                >
+                  {k.label} ({count})
+                </button>
+              )
+            })}
+            </div>
           </div>
         ) : null}
 

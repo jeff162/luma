@@ -2542,7 +2542,7 @@ export default function ImportRuleSuggestionReview({
           />
         ) : null}
         {bulkMode ? (
-          <label style={{
+          <label aria-label="Select this suggestion" style={{
             position: 'absolute',
             top: 13,
             left: 14,

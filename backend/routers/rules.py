@@ -379,17 +379,107 @@ def match_rule_for_transaction(txn_id: str):
     return {"rule_id": rule_id}
 
 
+def _normalize_clean_name(value: Optional[str]) -> str:
+    return " ".join((value or "").strip().split()).lower()
+
+
+def _existing_rule_for_matcher(conn, keyword: str, body: "RuleCreate"):
+    # The matcher is keyword + the full scope (owner, account, amount range, direction). `IS` is
+    # SQLite's null-safe comparison, so the nullable scope columns match NULL-to-NULL too.
+    return conn.execute(
+        """SELECT id, category_id, clean_name FROM category_rule
+           WHERE keyword = ?
+             AND owner_id     IS ?
+             AND account_id   IS ?
+             AND amount_min   IS ?
+             AND amount_max   IS ?
+             AND debit_credit IS ?""",
+        (keyword, body.owner_id, body.account_id, body.amount_min, body.amount_max, body.debit_credit),
+    ).fetchone()
+
+
+def _classify_rule_collision(existing: dict, existing_tag_ids: set, *, category_id, clean_name, tag_ids) -> str:
+    """Relationship of a proposed/edited rule's actions to an existing rule that shares its matcher.
+
+    - 'conflict':  the actions set a category or rename that *disagrees* with the existing one;
+                   merging would silently change behavior, so the user has to decide.
+    - 'mergeable': the actions only *add* what the existing rule lacks (a missing category/rename, or
+                   new tags), so they can fold into the existing rule.
+    - 'duplicate': the actions contribute nothing the existing rule does not already do.
+    """
+    if category_id and existing["category_id"] and category_id != existing["category_id"]:
+        return "conflict"
+    if _normalize_clean_name(clean_name) and _normalize_clean_name(existing["clean_name"]) \
+            and _normalize_clean_name(clean_name) != _normalize_clean_name(existing["clean_name"]):
+        return "conflict"
+    adds_category = bool(category_id) and not existing["category_id"]
+    adds_clean_name = bool(_normalize_clean_name(clean_name)) and not _normalize_clean_name(existing["clean_name"])
+    adds_tags = bool(set(tag_ids or []) - set(existing_tag_ids))
+    if adds_category or adds_clean_name or adds_tags:
+        return "mergeable"
+    return "duplicate"
+
+
+def _merge_actions_into_rule(conn, target: dict, *, category_id, clean_name, tag_ids) -> None:
+    # Additive only: fill a category/rename the target rule is missing and union in new tags. We never
+    # overwrite an action the target already has — a disagreement is a 'conflict', surfaced instead.
+    fields, params = [], []
+    if category_id and not target["category_id"]:
+        fields.append("category_id = ?"); params.append(category_id)
+    if _normalize_clean_name(clean_name) and not _normalize_clean_name(target["clean_name"]):
+        fields.append("clean_name = ?"); params.append(clean_name)
+    if fields:
+        params.append(target["id"])
+        conn.execute(f"UPDATE category_rule SET {', '.join(fields)} WHERE id = ?", params)
+    for tag_id in (tag_ids or []):
+        conn.execute("INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)", (target["id"], tag_id))
+
+
 @router.post("")
-def create_rule(body: RuleCreate):
+def create_rule(body: RuleCreate, on_existing: Literal["reject", "merge"] = "reject"):
+    """Create a rule, reconciling against any existing rule with the same matcher.
+
+    Two rules sharing a matcher can't coexist cleanly — whichever the engine orders first wins, and
+    editing one leaves the other firing. So rather than fork a duplicate, a collision is classified
+    (duplicate / mergeable / conflict) and, by default (`on_existing='reject'`), reported back without
+    writing. Callers then decide: a single manual save prompts the user (merge, or open the existing
+    rule); the bulk Generate Rules flow re-calls with `on_existing='merge'` to fold mergeable saves in
+    and skip duplicates, surfacing only conflicts. A genuinely different matcher is not a collision and
+    is created normally. `status` in the response is 'created' | 'merged' | 'duplicate' | 'mergeable'
+    | 'conflict'.
+    """
     if not body.category_id and not (body.clean_name or "").strip() and not body.tag_ids:
         raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, or tag")
-    rid = str(uuid.uuid4())
+    keyword = body.keyword.lower().strip()
     with get_db() as conn:
+        existing = _existing_rule_for_matcher(conn, keyword, body)
+        if existing:
+            existing_tag_ids = {
+                row["tag_id"] for row in
+                conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (existing["id"],)).fetchall()
+            }
+            relation = _classify_rule_collision(
+                existing, existing_tag_ids,
+                category_id=body.category_id, clean_name=body.clean_name, tag_ids=body.tag_ids,
+            )
+            if on_existing == "merge" and relation in ("mergeable", "duplicate"):
+                _merge_actions_into_rule(
+                    conn, existing,
+                    category_id=body.category_id, clean_name=body.clean_name, tag_ids=body.tag_ids,
+                )
+                return {"id": existing["id"], "status": "merged", "relation": relation}
+            return {
+                "id": existing["id"],
+                "status": relation,
+                "existing_rule_id": existing["id"],
+                "existing_category_id": existing["category_id"],
+            }
+        rid = str(uuid.uuid4())
         conn.execute(
             """INSERT INTO category_rule
                (id, category_id, keyword, priority, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (rid, body.category_id, body.keyword.lower().strip(),
+            (rid, body.category_id, keyword,
              body.priority, body.amount_min, body.amount_max, body.debit_credit, body.clean_name, body.owner_id, body.account_id),
         )
         for tag_id in body.tag_ids:
@@ -397,14 +487,85 @@ def create_rule(body: RuleCreate):
                 "INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)",
                 (rid, tag_id),
             )
-    return {"id": rid, **body.model_dump()}
+    return {"id": rid, "status": "created", **body.model_dump()}
+
+
+def _resulting_rule_state(current: dict, body: RuleUpdate) -> dict:
+    """The rule's field values after applying the patch — used to detect an edit-induced collision
+    before writing. Mirrors update_rule's precedence below, where the clear_* flags win."""
+    return {
+        "keyword":      body.keyword.lower().strip() if body.keyword is not None else current["keyword"],
+        "owner_id":     None if body.clear_owner      else (body.owner_id   if body.owner_id   is not None else current["owner_id"]),
+        "account_id":   None if body.clear_account    else (body.account_id if body.account_id is not None else current["account_id"]),
+        "amount_min":   None if body.clear_amount_min else (body.amount_min if body.amount_min is not None else current["amount_min"]),
+        "amount_max":   None if body.clear_amount_max else (body.amount_max if body.amount_max is not None else current["amount_max"]),
+        "debit_credit": body.debit_credit if body.debit_credit is not None else current["debit_credit"],
+        "category_id":  body.category_id  if body.category_id  is not None else current["category_id"],
+        "clean_name":   None if body.clear_clean_name else (body.clean_name if body.clean_name is not None else current["clean_name"]),
+    }
 
 
 @router.patch("/{rule_id}")
-def update_rule(rule_id: str, body: RuleUpdate):
+def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "merge"] = "reject"):
+    """Update a rule, guarding the case where the edit makes its matcher collide with *another* rule.
+
+    Unlike create, both rules already exist, so reconciling means one has to go: by default
+    (`on_existing='reject'`) the collision is classified and reported without writing; with 'merge' the
+    edited rule's actions fold into the other rule and the edited rule is deleted. A 'conflict' (the
+    edit would assign a different category than the other rule) is never auto-merged — the user
+    resolves it (edit the other rule, delete one, or change scope). `status` is 'updated' | 'merged' |
+    'duplicate' | 'mergeable' | 'conflict'.
+    """
     with get_db() as conn:
+        current = conn.execute(
+            """SELECT id, keyword, category_id, clean_name, owner_id, account_id,
+                      amount_min, amount_max, debit_credit
+               FROM category_rule WHERE id = ?""",
+            (rule_id,),
+        ).fetchone()
+        if not current:
+            raise HTTPException(status_code=404, detail="Rule not found")
+
+        resulting = _resulting_rule_state(current, body)
+        resulting_tag_ids = (
+            list(body.tag_ids) if body.tag_ids is not None
+            else [r["tag_id"] for r in conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (rule_id,)).fetchall()]
+        )
+        # Another rule (not this one) that the edited matcher would now collide with. `IS` is null-safe.
+        other = conn.execute(
+            """SELECT id, category_id, clean_name FROM category_rule
+               WHERE id != ?
+                 AND keyword = ?
+                 AND owner_id     IS ?
+                 AND account_id   IS ?
+                 AND amount_min   IS ?
+                 AND amount_max   IS ?
+                 AND debit_credit IS ?""",
+            (rule_id, resulting["keyword"], resulting["owner_id"], resulting["account_id"],
+             resulting["amount_min"], resulting["amount_max"], resulting["debit_credit"]),
+        ).fetchone()
+        if other:
+            other_tag_ids = {
+                r["tag_id"] for r in
+                conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (other["id"],)).fetchall()
+            }
+            relation = _classify_rule_collision(
+                other, other_tag_ids,
+                category_id=resulting["category_id"], clean_name=resulting["clean_name"], tag_ids=resulting_tag_ids,
+            )
+            if on_existing == "merge" and relation in ("mergeable", "duplicate"):
+                _merge_actions_into_rule(
+                    conn, other,
+                    category_id=resulting["category_id"], clean_name=resulting["clean_name"], tag_ids=resulting_tag_ids,
+                )
+                conn.execute("DELETE FROM rule_tag WHERE rule_id = ?", (rule_id,))
+                conn.execute("DELETE FROM category_rule WHERE id = ?", (rule_id,))
+                return {"id": other["id"], "status": "merged", "relation": relation, "deleted_rule_id": rule_id}
+            return {"status": relation, "existing_rule_id": other["id"], "edited_rule_id": rule_id}
+
+        # No collision — apply the patch.
         fields, params = [], []
-        if body.keyword     is not None: fields.append("keyword = ?");     params.append(body.keyword.lower().strip())
+        if body.keyword     is not None: fields.append("keyword = ?");     params.append(resulting["keyword"])
         if body.category_id is not None: fields.append("category_id = ?"); params.append(body.category_id)
         if body.priority    is not None: fields.append("priority = ?");    params.append(body.priority)
         if body.amount_min  is not None: fields.append("amount_min = ?");  params.append(body.amount_min)
@@ -429,17 +590,17 @@ def update_rule(rule_id: str, body: RuleUpdate):
                     "INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)",
                     (rule_id, tag_id),
                 )
-        current = conn.execute(
+        post = conn.execute(
             "SELECT category_id, clean_name FROM category_rule WHERE id = ?",
             (rule_id,),
         ).fetchone()
-        current_tag_ids = [
+        post_tag_ids = [
             row["tag_id"]
             for row in conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (rule_id,)).fetchall()
         ]
-        if current and current["category_id"] is None and not (current["clean_name"] or "").strip() and not current_tag_ids:
+        if post and post["category_id"] is None and not (post["clean_name"] or "").strip() and not post_tag_ids:
             raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, or tag")
-    return {"ok": True}
+    return {"ok": True, "status": "updated"}
 
 
 @router.post("/{rule_id}/apply")

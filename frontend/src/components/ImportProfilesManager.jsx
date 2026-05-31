@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import {
   analyzeImportColumns,
@@ -96,6 +96,7 @@ function ProfileForm({
   const [defaultImportCategoryUsageMode] = useUserPreference(IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY, IMPORT_CATEGORY_USAGE_MODE_PER_SOURCE)
   const floatingPanelStyle = getFloatingPanelSurfaceStyle({ active: true, radius: 18 })
   const sampleFileInputRef = useRef(null)
+  const fid = useId()  // base for associating each field's <label htmlFor> with its control id
   const [name, setName] = useState(profile?.name || '')
   const [filePattern, setFilePattern] = useState(profile?.filename_pattern || '')
   const [headerFp, setHeaderFp] = useState(profile?.header_fingerprint || '')
@@ -399,32 +400,32 @@ function ProfileForm({
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <div>
-          <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
+          <label htmlFor={`${fid}-name`} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
             Data source name *
           </label>
-          <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Chase Checking" style={inputStyle} />
+          <input id={`${fid}-name`} value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Chase Checking" style={inputStyle} />
         </div>
         <div>
-          <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
+          <label htmlFor={`${fid}-pattern`} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
             Filename pattern (auto-detect)
           </label>
-          <input value={filePattern} onChange={e => setFilePattern(e.target.value)} placeholder="e.g. Chase" style={inputStyle} />
+          <input id={`${fid}-pattern`} value={filePattern} onChange={e => setFilePattern(e.target.value)} placeholder="e.g. Chase" style={inputStyle} />
         </div>
         <div>
-          <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
+          <label htmlFor={`${fid}-header`} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
             Header fingerprint (auto-detect)
           </label>
-          <input value={headerFp} onChange={e => setHeaderFp(e.target.value)} placeholder="Paste header row from CSV" style={inputStyle} />
+          <input id={`${fid}-header`} value={headerFp} onChange={e => setHeaderFp(e.target.value)} placeholder="Paste header row from CSV" style={inputStyle} />
         </div>
         <div>
-          <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Date format</label>
-          <select value={dateFormat} onChange={e => setDateFormat(e.target.value)} style={selStyle}>
+          <label htmlFor={`${fid}-dateformat`} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Date format</label>
+          <select id={`${fid}-dateformat`} value={dateFormat} onChange={e => setDateFormat(e.target.value)} style={selStyle}>
             {DATE_FORMATS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
           </select>
         </div>
         <div>
-          <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Amount convention</label>
-          <select value={amtConv} onChange={e => setAmtConv(e.target.value)} style={selStyle}>
+          <label htmlFor={`${fid}-amtconv`} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Amount convention</label>
+          <select id={`${fid}-amtconv`} value={amtConv} onChange={e => setAmtConv(e.target.value)} style={selStyle}>
             {AMOUNT_CONVENTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
           </select>
         </div>

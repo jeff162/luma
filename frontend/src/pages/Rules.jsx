@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useId } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState } from '../components/ui.jsx'
+import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState, AppDialog } from '../components/ui.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
 import RuleForm, { amountConditionSummary } from '../components/RuleForm.jsx'
 import { TagBadge } from '../components/TagUi.jsx'
@@ -207,8 +207,12 @@ export default function Rules() {
   const [accounts,   setAccounts]   = useState([])
   const [loading,    setLoading]    = useState(true)
   const [search,     setSearch]     = useState('')
+  const searchId = useId()
   const [showAdd,    setShowAdd]    = useState(false)
   const [editingRuleId, setEditingRuleId] = useState(null)
+  // A pending rule save that collided with an existing same-matcher rule, awaiting the user's choice
+  // (merge into it / open it / cancel). Shape: { status, existingRuleId, ruleData, applyToExisting }.
+  const [collision, setCollision] = useState(null)
   const [createInitialValues, setCreateInitialValues] = useState({})
   const [createTransactionData, setCreateTransactionData] = useState(null)
   const [recategorizeResult, setRecategorizeResult] = useState(null)
@@ -232,8 +236,19 @@ export default function Rules() {
 
   async function handleAdd(data) {
     const { applyToExisting, ...ruleData } = data
+    // Default create only classifies a same-matcher collision (it doesn't write). On a collision we
+    // ask the user rather than fork a duplicate; the add form stays open behind the dialog so they
+    // can cancel and adjust scope instead.
     const created = await api.createRule(ruleData)
+    if (created?.status && created.status !== 'created') {
+      setCollision({ status: created.status, existingRuleId: created.existing_rule_id, ruleData, applyToExisting })
+      return
+    }
     if (applyToExisting) await txnMutations.applyRule(created.id)
+    closeAddAfterSave()
+  }
+
+  function closeAddAfterSave() {
     setShowAdd(false)
     setCreateInitialValues({})
     setCreateTransactionData(null)
@@ -241,9 +256,43 @@ export default function Rules() {
     loadRecategorizePreview()
   }
 
+  async function mergeCollision() {
+    const { ruleData, applyToExisting, existingRuleId, fromEdit, editedRuleId } = collision
+    if (fromEdit) {
+      // Folds this rule's actions into the other rule and deletes this one (backend).
+      await api.updateRule(editedRuleId, ruleData, { onExisting: 'merge' })
+    } else {
+      await api.createRule(ruleData, { onExisting: 'merge' })
+    }
+    if (applyToExisting && existingRuleId) await txnMutations.applyRule(existingRuleId)
+    setCollision(null)
+    if (fromEdit) {
+      setEditingRuleId(null)
+      loadRules()
+      loadRecategorizePreview()
+    } else {
+      closeAddAfterSave()
+    }
+  }
+
+  function openExistingFromCollision() {
+    const id = collision.existingRuleId
+    setCollision(null)
+    setShowAdd(false)
+    setCreateInitialValues({})
+    setCreateTransactionData(null)
+    setEditingRuleId(id)
+  }
+
   async function handleEditSave(data) {
     const { applyToExisting, ...ruleData } = data
-    await api.updateRule(editingRuleId, ruleData)
+    // An edit can make this rule's matcher collide with another rule. Default update only classifies;
+    // we ask before merging (which removes this rule) or surfacing a conflict.
+    const result = await api.updateRule(editingRuleId, ruleData)
+    if (result?.status && result.status !== 'updated') {
+      setCollision({ status: result.status, existingRuleId: result.existing_rule_id, ruleData, applyToExisting, fromEdit: true, editedRuleId: editingRuleId })
+      return
+    }
     if (applyToExisting) await txnMutations.applyRule(editingRuleId)
     setEditingRuleId(null)
     loadRules()
@@ -393,7 +442,15 @@ export default function Rules() {
         background: 'var(--surface)',
         display: 'flex', alignItems: 'center', gap: 12,
       }}>
-        <Input value={search} onChange={setSearch} placeholder="Filter by keyword…" style={{ width: 280 }} />
+        {/* Visually-hidden but real <label htmlFor> — Chrome's "no label associated" check wants an
+            actual label association (a placeholder/aria-label alone doesn't satisfy it). */}
+        <label htmlFor={searchId} style={{
+          position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
+          overflow: 'hidden', clip: 'rect(0, 0, 0, 0)', whiteSpace: 'nowrap', border: 0,
+        }}>
+          Filter rules by keyword
+        </label>
+        <Input id={searchId} value={search} onChange={setSearch} placeholder="Filter by keyword…" style={{ width: 280 }} />
         <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 'auto' }}>
           {rules.length} rule{rules.length !== 1 ? 's' : ''}
         </span>
@@ -469,6 +526,36 @@ export default function Rules() {
         onSave={handleEditSave}
         onCancel={closeForm}
       />
+
+      {collision ? (
+        <AppDialog
+          title={collision.fromEdit ? 'This edit matches another rule' : 'A rule for this already exists'}
+          description={
+            collision.status === 'conflict'
+              ? `Another rule matches the same merchant and scope but assigns a different category. Open it to edit, ${collision.fromEdit ? 'delete one of the two,' : ''} or narrow this rule’s scope (owner, account, or amount) so they don’t overlap.`
+              : collision.fromEdit
+              ? (collision.status === 'duplicate'
+                ? 'This rule is now identical to another rule. You can remove this one and keep the other.'
+                : 'This edit makes the rule match the same merchant and scope as another rule. Fold your changes into it — this rule will then be removed.')
+              : collision.status === 'mergeable'
+              ? 'Another rule already matches the same merchant and scope. Your changes can be folded into it instead of creating a second rule.'
+              : 'An identical rule already exists, so nothing was created. Open it to review or edit.'
+          }
+          borderColor={collision.status === 'conflict' ? 'var(--danger)' : 'var(--border)'}
+          onClose={() => setCollision(null)}
+          actions={(
+            <>
+              <Button variant="ghost" onClick={() => setCollision(null)}>Cancel</Button>
+              <Button variant="ghost" onClick={openExistingFromCollision}>Open the other rule</Button>
+              {(collision.status === 'mergeable' || (collision.fromEdit && collision.status === 'duplicate')) ? (
+                <Button onClick={mergeCollision}>
+                  {collision.fromEdit ? (collision.status === 'duplicate' ? 'Remove this rule' : 'Merge & remove this rule') : 'Add to existing rule'}
+                </Button>
+              ) : null}
+            </>
+          )}
+        />
+      ) : null}
     </div>
   )
 }

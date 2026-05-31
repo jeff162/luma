@@ -7,6 +7,8 @@ needing the conversation that produced it.
 Convention: items are roughly grouped by area. When an item gets done,
 delete it or move it to `CHANGELOG.md` if it was user-visible.
 
+Tests we still owe (unit, HTTP, and end-to-end UI) live in `TODO-TESTING.md`.
+
 ---
 
 ## Tag inheritance follow-ups
@@ -445,3 +447,51 @@ migrate read paths to query keys first (leaving `txnMutations` as the write
 seam), then switch `notifyTransactionsChanged` to invalidate keys instead of
 calling refreshers directly. The `txnMutations` boundary is deliberately the
 right place to make this swap — callers won't need to change.
+
+---
+
+## Tooling
+
+### Raise lint strictness to a reasonable baseline and triage the results
+
+**Context.** `frontend/eslint.config.js` keeps its rule set deliberately
+narrow (react-hooks, react-refresh, a couple of project-specific guards, and —
+recently — `jsx-a11y/label-has-associated-control`). There is a backlog of
+stricter-but-reasonable rules that flag real-ish issues and were left off only
+to avoid flooding. Worth a deliberate pass: enable candidate rules, measure,
+fix the cheap/genuine hits, and decide error/warn/off per rule rather than
+adopting a recommended preset wholesale.
+
+Concrete starting data (measured when the a11y label rule went in):
+
+- `jsx-a11y/control-has-associated-label` — **~89 hits**, currently `off`.
+  Most are placeholder-only inputs. The browser counts a placeholder as the
+  field's accessible name (so DevTools flags ~1), but this rule does not — so
+  the count is inflated and chasing all 89 is *not* obviously worth it for a
+  single-user, local-first app. Triage before enabling.
+- Chrome DevTools "**A form field element should have an `id` or `name`**" —
+  **~24** in the console. This is an autofill/tooling check, *not* an eslint
+  rule, so the linter won't enforce it; addressing it means adding `id`/`name`
+  to form controls, which has low value for this app's inline editors. Decide
+  whether to bother at all.
+- Beyond a11y: consider whether to tighten `react-hooks/exhaustive-deps`
+  (currently `warn`), turn on more of `eslint-plugin-react`, or add rules like
+  `react/no-unstable-nested-components`.
+
+**Why deferred.** Each rule needs case-by-case triage (genuine bug vs. false
+positive vs. not-worth-it here), and several would require touching many files.
+None of it is blocking. The narrow-by-design philosophy means we add strictness
+only where it earns its keep.
+
+**Suggested approach when picked up.**
+
+- Enable one candidate rule at a time as `warn`, run `npm run lint:frontend`,
+  and read the count/locations before deciding.
+- Fix the genuine, cheap hits; for false positives prefer tuning the rule's
+  options (e.g. the `depth` bump already used for
+  `label-has-associated-control`) over restructuring correct markup.
+- Promote a rule to `error` only once its existing hits are cleared, so it
+  becomes a real regression gate; leave noisy/low-value rules `off` with a
+  one-line comment saying why (the config already documents this pattern).
+- Watch the placeholder-vs-label and autofill-id semantics above so the count
+  doesn't get chased blindly.

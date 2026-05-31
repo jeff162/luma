@@ -12,6 +12,7 @@ import react from 'eslint-plugin-react'
 import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import jsdoc from 'eslint-plugin-jsdoc'
+import jsxA11y from 'eslint-plugin-jsx-a11y'
 import globals from 'globals'
 
 export default [
@@ -37,6 +38,7 @@ export default [
     plugins: {
       'react-hooks': reactHooks,
       'react-refresh': reactRefresh,
+      'jsx-a11y': jsxA11y,
       jsdoc,
     },
     rules: {
@@ -62,6 +64,18 @@ export default [
 
       // Catches non-component exports from .jsx modules that would break Vite HMR.
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+
+      // Accessibility (label association only — not the full jsx-a11y recommended set).
+      // `control-has-associated-label` is OFF on purpose: this codebase uses placeholder-only inputs
+      // widely, which it counts as unlabeled (89 hits) while the browser counts the placeholder as
+      // the accessible name (≈1 hit) — so it floods and can't isolate the real runtime issue. Revisit
+      // only as part of a dedicated a11y sweep. `label-has-associated-control` catches the smaller,
+      // genuinely-broken class (a <label> wired to no control / with no text) and is kept as a warn.
+      // The autofill-oriented "needs id/name" console warnings are not a11y rules; left for later.
+      'jsx-a11y/control-has-associated-label': 'off',
+      // depth 4 (default 2) so labels that wrap their control with the visible text a couple <div>s
+      // deep (e.g. the delete-category radio rows) are correctly seen as labelled, not false-flagged.
+      'jsx-a11y/label-has-associated-control': ['error', { depth: 4 }],
 
       // Transaction writes that change derived counts must route through `txnMutations`
       // (src/lib/txnMutations.js) so the Tasks badge / future invalidations fire automatically.

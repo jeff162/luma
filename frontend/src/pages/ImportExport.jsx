@@ -5676,6 +5676,7 @@ function ImportTab() {
                 boxShadow: '0 1px 1px rgba(0,0,0,0.04)',
               }}>
                 <input
+                  name="single-new-account-name"
                   value={singleAccountNew.name}
                   onChange={e => setSingleAccountNew(prev => ({ ...prev, name: e.target.value }))}
                   placeholder="New account name"
@@ -5686,6 +5687,7 @@ function ImportTab() {
                   }}
                 />
                 <select
+                  name="single-new-account-type"
                   value={singleAccountNew.type}
                   onChange={e => setSingleAccountNew(prev => ({ ...prev, type: e.target.value }))}
                   style={{
@@ -5776,6 +5778,7 @@ function ImportTab() {
                       <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
                         <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
                           <select
+                            name={`account-map-target-${csvVal}`}
                             value={m.accountId}
                             onChange={e => update({
                               accountId: e.target.value,
@@ -5868,7 +5871,7 @@ function ImportTab() {
                       <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
                         <div style={{ display: 'flex', gap: 4, alignItems: 'center', minWidth: 0, flexWrap: 'nowrap' }}>
                           <div style={{ width: 132, maxWidth: '100%' }}>
-                            <input value={m.newName} onChange={e => update({ newName: e.target.value })}
+                            <input name={`account-new-name-${csvVal}`} value={m.newName} onChange={e => update({ newName: e.target.value })}
                               placeholder="Name" style={{
                                 width: '100%', background: 'var(--surface2)', color: 'var(--text)',
                                 border: `1px solid ${accounts.some(a => a.name.toLowerCase() === m.newName.trim().toLowerCase()) ? 'var(--danger)' : 'var(--accent)'}`,
@@ -5880,7 +5883,7 @@ function ImportTab() {
                               </div>
                             )}
                           </div>
-                          <select value={m.newType} onChange={e => update({ newType: e.target.value })}
+                          <select name={`account-new-type-${csvVal}`} value={m.newType} onChange={e => update({ newType: e.target.value })}
                             style={{ width: 88, background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 5px', fontSize: 11 }}>
                             <option value="">— Type —</option>
                             {ACCOUNT_TYPES.map(option => (

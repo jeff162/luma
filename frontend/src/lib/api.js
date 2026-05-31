@@ -225,8 +225,16 @@ export const api = {
   },
   getMatchingRuleForTransaction: (txnId) => request(`/rules/match/transaction/${txnId}`),
   previewRule: (data) => request('/rules/preview', { method: 'POST', body: JSON.stringify(data) }),
-  createRule: (data) => request('/rules', { method: 'POST', body: JSON.stringify(data) }),
-  updateRule: (id, data) => request(`/rules/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  // `onExisting`: how to reconcile a same-matcher collision. Default (omitted) classifies and reports
+  // without writing (status: duplicate|mergeable|conflict); 'merge' folds a mergeable/duplicate save
+  // into the existing rule. Response carries `status` ('created'|'merged'|'duplicate'|'mergeable'|'conflict').
+  createRule: (data, { onExisting } = {}) =>
+    request(`/rules${onExisting ? `?on_existing=${onExisting}` : ''}`, { method: 'POST', body: JSON.stringify(data) }),
+  // `onExisting`: like createRule, but for an edit that makes this rule's matcher collide with another
+  // rule. Default classifies without writing; 'merge' folds this rule's actions into the other and
+  // deletes this one. Response `status`: 'updated'|'merged'|'duplicate'|'mergeable'|'conflict'.
+  updateRule: (id, data, { onExisting } = {}) =>
+    request(`/rules/${id}${onExisting ? `?on_existing=${onExisting}` : ''}`, { method: 'PATCH', body: JSON.stringify(data) }),
   applyRule: (id) => request(`/rules/${id}/apply`, { method: 'POST' }),
   deleteRule: (id) => request(`/rules/${id}`, { method: 'DELETE' }),
 

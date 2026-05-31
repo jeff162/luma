@@ -15,7 +15,7 @@ import {
   SectionEyebrow,
   getFormControlStyle,
 } from './ui.jsx'
-import { TagGlyph } from './TagUi.jsx'
+import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import PillGridTable from './PillGridTable.jsx'
 import { CategoryCell, MerchantCell, TransactionAmountCell } from './TransactionRow.jsx'
 import { formatDate } from '../lib/utils.js'
@@ -1090,43 +1090,26 @@ const RuleForm = forwardRef(function RuleForm({
             onActivate={() => setTagsOpen(true)}
             onClear={() => { setTagIds([]); setTagsOpen(false) }}
           >
-            {availableTags.length === 0 ? (
-              <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
-                No tags yet. Create them in Settings first.
-              </div>
-            ) : (
-              <div style={{ display: 'grid', gap: 6 }}>
-                {availableTags.map(tag => {
-                  const checked = tagIds.includes(tag.id)
-                  return (
-                    <label
-                      key={tag.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        cursor: 'pointer',
-                        fontSize: 13,
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => {
-                          setTagIds(current => (
-                            checked
-                              ? current.filter(id => id !== tag.id)
-                              : [...current, tag.id]
-                          ))
-                        }}
-                      />
-                      <TagGlyph color={tag.color} size={13} />
-                      <span>{tag.name}</span>
-                    </label>
-                  )
-                })}
-              </div>
-            )}
+            {/* Shared picker: existing tags as checkboxes plus an inline "+ New tag" so the user
+                doesn't have to leave the rule editor to invent a tag. Rendered inline (relative). */}
+            <TagPickerWithCreate
+              allTags={availableTags}
+              selectedTagIds={new Set(tagIds)}
+              onToggleTag={(tag, present) => {
+                setTagIds(current => (
+                  present
+                    ? (current.includes(tag.id) ? current : [...current, tag.id])
+                    : current.filter(id => id !== tag.id)
+                ))
+              }}
+              onTagCreated={created => {
+                setAvailableTags(current => (
+                  current.some(tag => tag.id === created.id) ? current : [...current, created]
+                ))
+              }}
+              onClose={() => {}}
+              positioning="relative"
+            />
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>
               Matching transactions will gain these tags without replacing tags from other matching rules.
             </div>

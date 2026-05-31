@@ -3,7 +3,7 @@
 
 /* eslint-disable react-refresh/only-export-components -- shared UI kit: primitive components live alongside style helpers used to compose them */
 
-import { forwardRef, useEffect, useRef } from 'react'
+import { forwardRef, useEffect, useId, useRef } from 'react'
 import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
 
 /*
@@ -504,9 +504,12 @@ export function Button({ children, onClick, onMouseDown, variant = 'primary', sm
   )
 }
 
-export function Select({ value, onChange, options, style }) {
+export function Select({ value, onChange, options, style, id, ...rest }) {
+  const autoId = useId()  // self-assigned id (caller's wins) clears the "field needs an id/name" check
   return (
     <select
+      {...rest}
+      id={id || autoId}
       value={value}
       onChange={e => onChange(e.target.value)}
       style={{
@@ -521,9 +524,16 @@ export function Select({ value, onChange, options, style }) {
   )
 }
 
-export function Input({ value, onChange, placeholder, style }) {
+export function Input({ value, onChange, placeholder, style, id, ...rest }) {
+  // `...rest` forwards a11y/form props (aria-label, name, type, …) the wrapper used to swallow —
+  // a placeholder alone isn't an accessible name, so callers can give the field a real label.
+  // A stable auto-`id` (caller-supplied wins) satisfies the browser's "field needs an id/name"
+  // check for every Input without each call site having to invent one.
+  const autoId = useId()
   return (
     <input
+      {...rest}
+      id={id || autoId}
       value={value}
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
@@ -574,9 +584,12 @@ export function EmptyState({ message }) {
   )
 }
 
-export function GroupedSelect({ value, onChange, groups, extra = [], style }) {
+export function GroupedSelect({ value, onChange, groups, extra = [], style, id, ...rest }) {
+  const autoId = useId()  // self-assigned id (caller's wins) clears the "field needs an id/name" check
   return (
     <select
+      {...rest}
+      id={id || autoId}
       value={value}
       onChange={e => onChange(e.target.value)}
       style={{

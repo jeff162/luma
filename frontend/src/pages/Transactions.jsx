@@ -178,6 +178,9 @@ function RuleActionModal({ state, onClose, onSaved }) {
   const [accounts, setAccounts] = useState([])
   const [rule, setRule] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  // A save that collided with another rule on the same matcher, awaiting confirm to merge.
+  const [pendingMerge, setPendingMerge] = useState(null)
 
   useEffect(() => {
     if (!state) return
@@ -205,21 +208,60 @@ function RuleActionModal({ state, onClose, onSaved }) {
 
   if (!state) return null
 
+  const conflictMessage = 'Another rule already matches this merchant and scope but assigns a different category. Edit that rule instead, or narrow this one’s scope.'
+
   async function handleSave(data) {
     const { applyToExisting, ...ruleData } = data
+    setError('')
     if (state.mode === 'edit') {
-      await api.updateRule(state.ruleId, ruleData)
+      // An edit can make this rule collide with another. Default update only classifies; merging
+      // folds this rule into the other and removes this one, so we ask first.
+      const updated = await api.updateRule(state.ruleId, ruleData)
+      if (updated?.status === 'conflict') {
+        setError(conflictMessage)
+        return
+      }
+      if (updated?.status === 'mergeable' || updated?.status === 'duplicate') {
+        setPendingMerge({ ruleData, applyToExisting, existingRuleId: updated.existing_rule_id, fromEdit: true, editedRuleId: state.ruleId })
+        return
+      }
       if (applyToExisting) await txnMutations.applyRule(state.ruleId)
       onSaved?.({ applyToExisting, mode: 'edit', ruleId: state.ruleId })
       onClose()
       return
     }
 
+    // Default create only classifies a same-matcher collision (it doesn't write): a conflict is
+    // surfaced so the user edits that rule instead; a mergeable save asks before folding in; a
+    // duplicate already exists, so we resolve to it.
     const created = await api.createRule(ruleData)
-    if (applyToExisting) {
+    if (created?.status === 'conflict') {
+      setError(conflictMessage)
+      return
+    }
+    if (created?.status === 'mergeable') {
+      setPendingMerge({ ruleData, applyToExisting, existingRuleId: created.existing_rule_id })
+      return
+    }
+    if (applyToExisting && created?.id) {
       await txnMutations.applyRule(created.id)
     }
-    onSaved?.({ applyToExisting, mode: 'create', ruleId: created.id })
+    onSaved?.({ applyToExisting, mode: 'create', ruleId: created?.id })
+    onClose()
+  }
+
+  async function confirmMerge() {
+    const { ruleData, applyToExisting, existingRuleId, fromEdit, editedRuleId } = pendingMerge
+    if (fromEdit) {
+      await api.updateRule(editedRuleId, ruleData, { onExisting: 'merge' })
+    } else {
+      await api.createRule(ruleData, { onExisting: 'merge' })
+    }
+    if (applyToExisting && existingRuleId) {
+      await txnMutations.applyRule(existingRuleId)
+    }
+    setPendingMerge(null)
+    onSaved?.({ applyToExisting, mode: fromEdit ? 'edit' : 'create', ruleId: existingRuleId })
     onClose()
   }
 
@@ -260,16 +302,48 @@ function RuleActionModal({ state, onClose, onSaved }) {
               {state.mode === 'edit' ? 'Loading rule…' : 'Loading…'}
             </div>
           ) : (
-            <RuleForm
-              initialValues={initialValues}
-              categories={categories}
-              owners={owners}
-              accounts={accounts}
-              onSave={handleSave}
-              onCancel={onClose}
-              saveLabel={state.mode === 'edit' ? 'Save changes' : 'Save rule'}
-              transactionData={state.mode === 'create' ? state.transactionData : null}
-            />
+            <>
+              {error ? (
+                <div style={{
+                  margin: '12px 20px 0', padding: '10px 12px', borderRadius: 8,
+                  border: '1px solid var(--danger)', background: 'color-mix(in srgb, var(--danger) 10%, transparent)',
+                  color: 'var(--danger)', fontSize: 13, lineHeight: 1.5,
+                }}>
+                  {error}
+                </div>
+              ) : null}
+              {pendingMerge ? (
+                <div style={{
+                  margin: '12px 20px 0', padding: '10px 12px', borderRadius: 8,
+                  border: '1px solid var(--border)', background: 'var(--surface2)',
+                  fontSize: 13, lineHeight: 1.5, display: 'flex', flexDirection: 'column', gap: 8,
+                }}>
+                  <span>{pendingMerge.fromEdit
+                    ? 'This edit makes the rule match another rule. Fold your changes into it? This rule will then be removed.'
+                    : 'A rule already matches this merchant and scope. Add your changes to it instead of creating a second rule?'}</span>
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                    <button onClick={() => setPendingMerge(null)} style={{
+                      background: 'none', border: '1px solid var(--border)', borderRadius: 6,
+                      padding: '5px 12px', fontSize: 13, cursor: 'pointer', color: 'var(--text)',
+                    }}>Cancel</button>
+                    <button onClick={confirmMerge} style={{
+                      background: 'var(--accent)', border: 'none', borderRadius: 6,
+                      padding: '5px 12px', fontSize: 13, cursor: 'pointer', color: '#fff',
+                    }}>Add to existing rule</button>
+                  </div>
+                </div>
+              ) : null}
+              <RuleForm
+                initialValues={initialValues}
+                categories={categories}
+                owners={owners}
+                accounts={accounts}
+                onSave={handleSave}
+                onCancel={onClose}
+                saveLabel={state.mode === 'edit' ? 'Save changes' : 'Save rule'}
+                transactionData={state.mode === 'create' ? state.transactionData : null}
+              />
+            </>
           )}
         </div>
       </FloatingPanel>

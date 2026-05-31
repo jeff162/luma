@@ -129,9 +129,11 @@ export default function ImportAccountHandlingPicker({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)' }}>
+      {/* Not a <label>: the control below is a custom dropdown (a <div>), not a labelable form
+          field, so a <label> would have nothing to associate with. */}
+      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)' }}>
         Account <span style={{ color: 'var(--danger)' }}>*</span>
-      </label>
+      </div>
       <div ref={wrapRef} style={{ position: 'relative' }}>
         <div style={triggerStyle} onClick={() => setOpen(v => !v)}>
           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

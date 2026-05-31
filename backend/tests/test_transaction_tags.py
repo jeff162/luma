@@ -142,8 +142,10 @@ class TransactionTagsTests(unittest.TestCase):
     def test_manual_remove_blocks_rule_tag_during_recategorize(self):
         account_id = self._insert_account("Primary Checking")
         essential_tag_id = self._insert_tag("Essential", "#22c55e")
-        txn_id = self._insert_transaction(account_id=account_id, merchant_name="SAFEWAY")
-        self._create_rule(keyword="safeway", tag_ids=[essential_tag_id])
+        # Fixture keyword (not one of the seeded default rules) so this exercises tag sync in
+        # isolation rather than colliding with the seeded matcher.
+        txn_id = self._insert_transaction(account_id=account_id, merchant_name="FIXTURE GROCER")
+        self._create_rule(keyword="fixture grocer", tag_ids=[essential_tag_id])
 
         with self._use_db_path():
             with get_db() as conn:
@@ -189,9 +191,11 @@ class TransactionTagsTests(unittest.TestCase):
                 spending_group = groceries["group_id"]
         essential_tag_id = self._insert_tag("Essential", "#22c55e")
         other_tag_id = self._insert_tag("Optional", "#a855f7")
-        tagged_txn_id = self._insert_transaction(account_id=account_id, merchant_name="TARGET", amount=81.0)
+        # Fixture keyword (not a seeded default rule) so the rule is created fresh rather than
+        # colliding with the seeded matcher.
+        tagged_txn_id = self._insert_transaction(account_id=account_id, merchant_name="FIXTURE BULLSEYE", amount=81.0)
         self._insert_transaction(account_id=account_id, merchant_name="MOVIE", amount=18.0)
-        rule_id = self._create_rule(keyword="target", category_id=groceries_id, tag_ids=[essential_tag_id])
+        rule_id = self._create_rule(keyword="fixture bullseye", category_id=groceries_id, tag_ids=[essential_tag_id])
 
         with self._use_db_path():
             with get_db() as conn:

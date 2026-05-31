@@ -20,6 +20,10 @@ function RuleModal({ prompt, onSave, onCancel }) {
   const [accounts,   setAccounts]   = useState([])
   const [existingRule, setExistingRule] = useState(null)
   const [loading,    setLoading]    = useState(true)
+  const [error,      setError]      = useState('')
+  // A save that collided with another rule on the same matcher and is awaiting the user's confirm to
+  // merge. Shape: { ruleData, applyToExisting, existingRuleId }.
+  const [pendingMerge, setPendingMerge] = useState(null)
 
   useEffect(() => {
     let cancelled = false
@@ -52,8 +56,19 @@ function RuleModal({ prompt, onSave, onCancel }) {
 
   async function handleSave(data) {
     const { applyToExisting, ...ruleData } = data
+    setError('')
     if (existingRule) {
-      await api.updateRule(existingRule.id, ruleData)
+      // Editing the matched rule can make it collide with a different rule; reconcile the same way
+      // (merge folds this rule into the other and removes it).
+      const updated = await api.updateRule(existingRule.id, ruleData)
+      if (updated?.status === 'conflict') {
+        setError('Your changes make this match another rule that assigns a different category. Edit that rule instead, or narrow the scope.')
+        return
+      }
+      if (updated?.status === 'mergeable' || updated?.status === 'duplicate') {
+        setPendingMerge({ ruleData, applyToExisting, existingRuleId: updated.existing_rule_id, fromEdit: true, editedRuleId: existingRule.id })
+        return
+      }
       if (applyToExisting) {
         await txnMutations.applyRule(existingRule.id)
       }
@@ -61,11 +76,40 @@ function RuleModal({ prompt, onSave, onCancel }) {
       return
     }
 
+    // No rule matched this transaction, but the proposed matcher may still collide with another rule.
+    // Default create only classifies (it doesn't write): a conflict (different category on the same
+    // matcher) is surfaced so the user edits that rule instead; a mergeable save asks before folding
+    // in; a pure duplicate already exists, so we just resolve to it.
+    setError('')
     const created = await api.createRule(ruleData)
-    if (applyToExisting) {
-      await txnMutations.applyRule(created.id)
+    if (created?.status === 'conflict') {
+      setError('Another rule already matches this merchant and scope but assigns a different category. Edit that rule instead, or narrow this one’s scope.')
+      return
     }
-    onSave({ applyToExisting, ruleData, ruleId: created.id, updatedExisting: false })
+    if (created?.status === 'mergeable') {
+      setPendingMerge({ ruleData, applyToExisting, existingRuleId: created.existing_rule_id })
+      return
+    }
+    // 'created' (new rule) or 'duplicate' (already exists — resolve to it).
+    const ruleId = created?.id
+    if (applyToExisting && ruleId) {
+      await txnMutations.applyRule(ruleId)
+    }
+    onSave({ applyToExisting, ruleData, ruleId, updatedExisting: created?.status === 'duplicate' })
+  }
+
+  async function confirmMerge() {
+    const { ruleData, applyToExisting, existingRuleId, fromEdit, editedRuleId } = pendingMerge
+    if (fromEdit) {
+      await api.updateRule(editedRuleId, ruleData, { onExisting: 'merge' })
+    } else {
+      await api.createRule(ruleData, { onExisting: 'merge' })
+    }
+    if (applyToExisting && existingRuleId) {
+      await txnMutations.applyRule(existingRuleId)
+    }
+    setPendingMerge(null)
+    onSave({ applyToExisting, ruleData, ruleId: existingRuleId, updatedExisting: true })
   }
 
   return (
@@ -82,6 +126,37 @@ function RuleModal({ prompt, onSave, onCancel }) {
         {loading ? (
           <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>Loading…</div>
         ) : (
+          <>
+          {error ? (
+            <div style={{
+              margin: '12px 20px 0', padding: '10px 12px', borderRadius: 8,
+              border: '1px solid var(--danger)', background: 'color-mix(in srgb, var(--danger) 10%, transparent)',
+              color: 'var(--danger)', fontSize: 13, lineHeight: 1.5,
+            }}>
+              {error}
+            </div>
+          ) : null}
+          {pendingMerge ? (
+            <div style={{
+              margin: '12px 20px 0', padding: '10px 12px', borderRadius: 8,
+              border: '1px solid var(--border)', background: 'var(--surface2)',
+              fontSize: 13, lineHeight: 1.5, display: 'flex', flexDirection: 'column', gap: 8,
+            }}>
+              <span>{pendingMerge.fromEdit
+                ? 'Your changes make this match another rule. Fold them into it? This rule will then be removed.'
+                : 'A rule already matches this merchant and scope. Add your changes to it instead of creating a second rule?'}</span>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button onClick={() => setPendingMerge(null)} style={{
+                  background: 'none', border: '1px solid var(--border)', borderRadius: 6,
+                  padding: '5px 12px', fontSize: 13, cursor: 'pointer', color: 'var(--text)',
+                }}>Cancel</button>
+                <button onClick={confirmMerge} style={{
+                  background: 'var(--accent)', border: 'none', borderRadius: 6,
+                  padding: '5px 12px', fontSize: 13, cursor: 'pointer', color: '#fff',
+                }}>Add to existing rule</button>
+              </div>
+            </div>
+          ) : null}
           <RuleForm
             initialValues={{
               keyword: existingRule?.keyword ?? (prompt.keywordSource || prompt.merchantName || '').toLowerCase().trim(),
@@ -101,6 +176,7 @@ function RuleModal({ prompt, onSave, onCancel }) {
             saveLabel={existingRule ? 'Save changes' : 'Save rule'}
             transactionData={prompt.transactionData}
           />
+          </>
         )}
       </FloatingPanel>
     </OverlayBackdrop>
