@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { Spinner } from './ui.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
@@ -69,7 +70,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
         category_overridden: 1,
       } : t
     )))
-    api.overrideCategory(txnId, catId)
+    txnMutations.setCategory(txnId, catId)
   }
 
   useEffect(() => {

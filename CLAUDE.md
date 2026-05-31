@@ -1,7 +1,11 @@
 # Project Instructions
 
-`AGENTS.md` is the repo-wide conventions/architecture index — read it. The record of what
-the system *is* and *why* lives in `docs/`.
+Read `AGENTS.md` first if you haven't already — it is the shared, open-standard instruction
+file for every agent on this repo; this file only adds the Claude/harness-specific layer on
+top of it (`AGENTS.md` points back here with the same "if you haven't already" guard, so the
+cross-reference can't loop). Where this file and `AGENTS.md` overlap they are meant to agree; if
+they ever seem to conflict, follow the stricter statement and surface the discrepancy rather than
+acting on the looser one. The record of what the system *is* and *why* lives in `docs/`.
 
 **Read-first rule.** Before working on *or answering questions about* shared systems,
 persistence, invariants, imports/dedupe, or shared UI, read the relevant doc below first.
@@ -9,6 +13,12 @@ Investigations and "I'm only answering a question" are not exemptions — recons
 model from source wastes time and misses the *why*. Use source reading and DB queries to
 *verify* the docs (and fix them if stale) and to answer live-data questions the docs can't,
 not as the first resort.
+
+**Quality bar.** Before any non-trivial change, the working habits and decision principles in
+`docs/collaboration-notes.md` apply — the standard is first-class code conforming to accepted
+best practice, not just something that works. When doing it right reveals a needed refactor or
+a real tradeoff, surface it for a decision rather than silently working around it or silently
+expanding scope.
 
 **Where things live:**
 

@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { Spinner, Badge, CategoryMarker } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
@@ -80,7 +81,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
         category_overridden: 1,
       } : t
     )))
-    api.overrideCategory(txnId, catId)
+    txnMutations.setCategory(txnId, catId)
   }
 
   const header = (

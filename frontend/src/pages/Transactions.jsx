@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { refreshTaskBadge } from '../App.jsx'
+import { txnMutations } from '../lib/txnMutations.js'
 import { formatDate } from '../lib/utils.js'
 import ImportBatchDetail from '../components/ImportBatchDetail.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
@@ -209,7 +209,7 @@ function RuleActionModal({ state, onClose, onSaved }) {
     const { applyToExisting, ...ruleData } = data
     if (state.mode === 'edit') {
       await api.updateRule(state.ruleId, ruleData)
-      if (applyToExisting) await api.applyRule(state.ruleId)
+      if (applyToExisting) await txnMutations.applyRule(state.ruleId)
       onSaved?.({ applyToExisting, mode: 'edit', ruleId: state.ruleId })
       onClose()
       return
@@ -217,7 +217,7 @@ function RuleActionModal({ state, onClose, onSaved }) {
 
     const created = await api.createRule(ruleData)
     if (applyToExisting) {
-      await api.applyRule(created.id)
+      await txnMutations.applyRule(created.id)
     }
     onSaved?.({ applyToExisting, mode: 'create', ruleId: created.id })
     onClose()
@@ -539,14 +539,13 @@ export default function Transactions() {
     }
     reconcileCategorizedRow(txnId, cat)
     setEditId(null)
-    api.overrideCategory(txnId, catId).then(refreshTaskBadge)
+    txnMutations.setCategory(txnId, catId)
   }
 
-  // A transaction detail panel persisted its own override; reconcile the page list and refresh
-  // the Tasks count without issuing a second override request.
+  // A transaction detail panel persisted its own override through txnMutations (which already
+  // invalidated the derived counts); just reconcile the page list, no second request needed.
   function handlePanelCategorized(txnId, cat) {
     reconcileCategorizedRow(txnId, cat)
-    refreshTaskBadge()
   }
 
   function updateNote(txnId, notes) {
@@ -563,7 +562,7 @@ export default function Transactions() {
     const target = pendingTrash
     setPendingTrash(null)
     try {
-      await api.trashTransaction(target.id)
+      await txnMutations.trashTransaction(target.id)
       // Drop the row from local state so the list updates without a full refetch. The total count
       // is decremented to keep the "N transactions" label honest.
       setData(prev => ({
@@ -1149,12 +1148,11 @@ export default function Transactions() {
           <RuleSuggestionToast
             prompt={rulePrompt}
             onSaved={({ applyToExisting }) => {
+              // Applying the rule to existing rows is done through txnMutations.applyRule, which
+              // already refreshed the Tasks count; here we just reload the visible list.
               if (applyToExisting) {
                 isFirstLoad.current = true
                 load()
-                // Applying a rule to existing rows categorizes many transactions at once,
-                // so the Tasks "uncategorized" count needs to refresh just like single-row edits.
-                refreshTaskBadge()
               }
             }}
             onDismiss={() => setRulePrompt(null)}
@@ -1166,12 +1164,11 @@ export default function Transactions() {
             state={ruleModalState}
             onClose={() => setRuleModalState(null)}
             onSaved={({ applyToExisting }) => {
+              // Rule application runs through txnMutations.applyRule, which already refreshed the
+              // Tasks count; here we just reload the visible list.
               if (applyToExisting) {
                 isFirstLoad.current = true
                 load()
-                // Applying a rule to existing rows categorizes many transactions at once,
-                // so the Tasks "uncategorized" count needs to refresh just like single-row edits.
-                refreshTaskBadge()
               }
             }}
           />

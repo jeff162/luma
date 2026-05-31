@@ -62,7 +62,24 @@ export default [
 
       // Catches non-component exports from .jsx modules that would break Vite HMR.
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+
+      // Transaction writes that change derived counts must route through `txnMutations`
+      // (src/lib/txnMutations.js) so the Tasks badge / future invalidations fire automatically.
+      // Calling these `api.*` methods directly is how the badge kept going stale; the wrapper is
+      // the only sanctioned caller (it overrides this rule for itself below).
+      'no-restricted-properties': ['error',
+        { object: 'api', property: 'overrideCategory', message: 'Use txnMutations.setCategory so derived counts (Tasks badge, etc.) get invalidated.' },
+        { object: 'api', property: 'clearOverride', message: 'Use txnMutations.uncategorize so derived counts get invalidated.' },
+        { object: 'api', property: 'applyRule', message: 'Use txnMutations.applyRule so derived counts get invalidated.' },
+        { object: 'api', property: 'trashTransaction', message: 'Use txnMutations.trashTransaction so derived counts get invalidated.' },
+        { object: 'api', property: 'restoreTransaction', message: 'Use txnMutations.restoreTransaction so derived counts get invalidated.' },
+      ],
     },
+  },
+  {
+    // The mutation layer is the one sanctioned place that calls the wrapped api.* writes directly.
+    files: ['src/lib/txnMutations.js'],
+    rules: { 'no-restricted-properties': 'off' },
   },
   {
     // Build/tool scripts run in Node, not the browser.

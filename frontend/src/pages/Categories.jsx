@@ -19,7 +19,7 @@ import { useFilters } from '../lib/FilterContext.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
-import { refreshTaskBadge } from '../App.jsx'
+import { txnMutations } from '../lib/txnMutations.js'
 import { usePagedTransactions } from '../components/detailShared.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import { TagGlyph } from '../components/TagUi.jsx'
@@ -1561,8 +1561,13 @@ export default function Categories() {
   }
 
   async function saveMatchingTxnCategory(txnId, catId, catObj) {
-    await api.overrideCategory(txnId, catId)
+    // txnMutations.setCategory invalidates the derived counts (Tasks badge, etc.) for us.
+    await txnMutations.setCategory(txnId, catId)
     const cat = catObj || flatCats.find(c => c.id === catId)
+    // Even in the synthetic Unassigned/Uncategorized buckets, a freshly categorized row is left in
+    // place (restyled, not removed) so a mis-tap stays visible and correctable; the user prunes the
+    // list on demand with the Refresh button. Applying a rule still sweeps rows immediately — undoing
+    // that is heavier (edit the rule, restore the other affected txns), so it does not wait.
     setPagedMatchingTxns(prev => prev.map(txn =>
       txn.id === txnId ? {
         ...txn,
@@ -1572,8 +1577,6 @@ export default function Categories() {
         category_overridden: 1,
       } : txn
     ))
-    // Categorizing here changes the uncategorized total, so keep the Tasks badge current.
-    refreshTaskBadge()
   }
 
   function handleMatchingTxnColumnUpdate(nextColumns) {
@@ -2067,12 +2070,25 @@ export default function Categories() {
               )}
 
               <div style={{ marginTop: 22, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
                   <div style={{ fontSize: 14, fontWeight: 600 }}>
                     Matching transactions
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    {matchingTxnsTotal} total{matchingTxnsTotal > pagedMatchingTxns.length ? ` · showing ${pagedMatchingTxns.length}` : ''}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                      {matchingTxnsTotal} total{matchingTxnsTotal > pagedMatchingTxns.length ? ` · showing ${pagedMatchingTxns.length}` : ''}
+                    </div>
+                    {/* Categorized rows are left in place so a mis-tap stays correctable; this re-queries the
+                        server on demand to drop rows that no longer match the selected category. */}
+                    <Button
+                      variant="ghost"
+                      small
+                      onClick={() => setMatchingReloadNonce(n => n + 1)}
+                      disabled={matchingTxnsLoading || !matchingTxnsKey}
+                      title="Re-query the list and drop transactions that no longer match"
+                    >
+                      ↻ Refresh
+                    </Button>
                   </div>
                 </div>
 
@@ -2131,6 +2147,9 @@ export default function Categories() {
               isTopmost={index === detailPanels.length - 1}
               onClose={() => closeDetailPanel('txn', panel.item.id)}
               onCategorized={(txnId, cat) => {
+                // The panel saved through txnMutations, which already invalidated the counts;
+                // just reconcile the local row in place (see saveMatchingTxnCategory: categorized
+                // rows linger until the user prunes the list with Refresh).
                 setPagedMatchingTxns(prev => prev.map(txn =>
                   txn.id === txnId ? {
                     ...txn,
@@ -2140,7 +2159,6 @@ export default function Categories() {
                     category_overridden: 1,
                   } : txn
                 ))
-                refreshTaskBadge()
               }}
               onTrashed={txnId => {
                 setPagedMatchingTxns(prev => prev.filter(txn => txn.id !== txnId))
@@ -2205,11 +2223,10 @@ export default function Categories() {
         <RuleSuggestionToast
           prompt={rulePrompt}
           onSaved={({ applyToExisting }) => {
+            // The rule is applied via txnMutations.applyRule, which already refreshed the Tasks
+            // count; here we only reload the matching list, whose membership can have changed.
             if (applyToExisting) {
-              // Applying the new rule to existing rows can change the matching set and the
-              // uncategorized total, so reload the list and refresh the Tasks badge.
               setMatchingReloadNonce(n => n + 1)
-              refreshTaskBadge()
             }
           }}
           onDismiss={() => setRulePrompt(null)}

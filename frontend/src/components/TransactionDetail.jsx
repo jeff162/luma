@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { AppConfirmDialog, Spinner, Badge } from './ui.jsx'
 import { getTxnMerchantLabel } from './TransactionRow.jsx'
@@ -58,7 +59,7 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
   async function confirmTrash() {
     setTrashConfirmOpen(false)
     try {
-      await api.trashTransaction(txn.id)
+      await txnMutations.trashTransaction(txn.id)
       onTrashed?.(txn.id)
       onClose?.()
     } catch (err) {
@@ -154,7 +155,7 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
   }
 
   async function handleOverrideCategory(txnId, catId, catObj) {
-    await api.overrideCategory(txnId, catId)
+    await txnMutations.setCategory(txnId, catId)
     const resolvedCat = catObj || detailCategories.find(c => c.id === catId)
     handleCatSaved(txnId, resolvedCat || null)
     // Notify the host (e.g. the Transactions list) so it can reconcile the row that was

@@ -7,6 +7,7 @@ import {
   BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, ReferenceLine,
 } from 'recharts'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import MonthDetail from '../components/MonthDetail.jsx'
 import TagDetail from '../components/TagDetail.jsx'
@@ -2221,7 +2222,7 @@ export default function Dashboard() {
                                 category_color: null,
                                 category_overridden: 1,
                               } : x))
-                              api.overrideCategory(txnId, catId)
+                              txnMutations.setCategory(txnId, catId)
                             }}
                             onRulePrompt={setRulePrompt}
                             onRowsChange={setTxnData}
@@ -2334,7 +2335,7 @@ export default function Dashboard() {
                         category_color: null,
                         category_overridden: 1,
                       } : x))
-                      api.overrideCategory(txnId, catId)
+                      txnMutations.setCategory(txnId, catId)
                     }}
                     onRulePrompt={setRulePrompt}
                     onRowsChange={setGroupTxnData}

@@ -24,6 +24,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import { Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
@@ -101,7 +102,7 @@ export default function ImportBatchDetail({
   }, [batch.id, dateStart, dateEnd, debouncedSearch])
 
   async function handleCategorySave(txnId, categoryId, categoryObj) {
-    await api.overrideCategory(txnId, categoryId)
+    await txnMutations.setCategory(txnId, categoryId)
     const resolvedCategory = categoryObj || categories.find(category => category.id === categoryId) || null
     setRows(prev => prev.map(txn => (
       txn.id === txnId

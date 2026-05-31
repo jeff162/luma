@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { formatTransactionAmount, getTransactionAmountColor } from '../lib/moneyDisplay.js'
 import { Button, Spinner } from './ui.jsx'
@@ -1728,7 +1728,7 @@ export default function ImportRuleSuggestionReview({
       )),
     }))
     try {
-      await api.overrideCategory(row.id, row.target_category_id)
+      await txnMutations.setCategory(row.id, row.target_category_id)
       await onReloadSuggestions?.()
       const result = await onLoadSuggestionMatches?.({
         keyword: matchViewerState.keyword,

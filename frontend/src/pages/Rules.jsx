@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState } from '../components/ui.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
 import RuleForm, { amountConditionSummary } from '../components/RuleForm.jsx'
@@ -232,7 +233,7 @@ export default function Rules() {
   async function handleAdd(data) {
     const { applyToExisting, ...ruleData } = data
     const created = await api.createRule(ruleData)
-    if (applyToExisting) await api.applyRule(created.id)
+    if (applyToExisting) await txnMutations.applyRule(created.id)
     setShowAdd(false)
     setCreateInitialValues({})
     setCreateTransactionData(null)
@@ -243,7 +244,7 @@ export default function Rules() {
   async function handleEditSave(data) {
     const { applyToExisting, ...ruleData } = data
     await api.updateRule(editingRuleId, ruleData)
-    if (applyToExisting) await api.applyRule(editingRuleId)
+    if (applyToExisting) await txnMutations.applyRule(editingRuleId)
     setEditingRuleId(null)
     loadRules()
     loadRecategorizePreview()

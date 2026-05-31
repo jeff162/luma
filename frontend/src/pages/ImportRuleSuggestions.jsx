@@ -6,6 +6,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Card, PageHeader, Button, Spinner } from '../components/ui.jsx'
 import ImportRuleSuggestionReview from '../components/ImportRuleSuggestionReview.jsx'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 
 const IMPORT_RULE_MERCHANT_FILTER_OPEN_PREF_KEY = 'ui.importRuleSuggestions.merchantFilterOpen'
@@ -390,7 +391,7 @@ export default function ImportRuleSuggestions() {
       amount_max: data.amount_max,
       clean_name_suggestion: data.clean_name || null,
     })
-    if (applyToExisting && createdRule?.id) await api.applyRule(createdRule.id)
+    if (applyToExisting && createdRule?.id) await txnMutations.applyRule(createdRule.id)
     setEditingSuggestionId(null)
     await reloadSuggestions()
   }

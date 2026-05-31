@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import { APP_NAME, APP_VERSION } from '../lib/appConfig.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, AppConfirmDialog } from '../components/ui.jsx'
@@ -1844,7 +1845,7 @@ function TransactionsTrashSection() {
     setWorkingId(txnId)
     setError('')
     try {
-      await api.restoreTransaction(txnId)
+      await txnMutations.restoreTransaction(txnId)
       await load()
     } catch (err) {
       setError(err.message || 'Failed to restore transaction')

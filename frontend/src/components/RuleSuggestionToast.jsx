@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import { Badge, OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from './ui.jsx'
 import RuleForm from './RuleForm.jsx'
 
@@ -54,7 +55,7 @@ function RuleModal({ prompt, onSave, onCancel }) {
     if (existingRule) {
       await api.updateRule(existingRule.id, ruleData)
       if (applyToExisting) {
-        await api.applyRule(existingRule.id)
+        await txnMutations.applyRule(existingRule.id)
       }
       onSave({ applyToExisting, ruleData, ruleId: existingRule.id, updatedExisting: true })
       return
@@ -62,7 +63,7 @@ function RuleModal({ prompt, onSave, onCancel }) {
 
     const created = await api.createRule(ruleData)
     if (applyToExisting) {
-      await api.applyRule(created.id)
+      await txnMutations.applyRule(created.id)
     }
     onSave({ applyToExisting, ruleData, ruleId: created.id, updatedExisting: false })
   }

@@ -8,6 +8,10 @@ It is meant to help agents, and perhaps other contributors, make decisions that 
 
 ## Decision-Making Principles
 
+**Calibrate care to blast radius.** How much rigor a decision warrants — how hard to verify it, whether to ask first, how conservative to be — scales with how reversible it is, how likely the user is to *notice* if it's wrong, and how costly it would be to undo later. Cheap + reversible + visible: act, and say what you did. Irreversible, *or* hard for the user to observe, *or* expensive to unwind: slow down — prefer the reversible option, surface the decision before committing, and verify to the point of *proof*. Confirm the change actually behaves; don't accept a result that is merely consistent with success (a passing check you have never watched fail proves little). This is the dial behind the more specific principles in this section — they are what "slow down" looks like in practice.
+
+A key input to that dial: the user does not review most of the code directly and, even if they did, is unlikely to catch frontend/UI or backend problems even when looking. Changes the user can't easily observe or exercise are therefore **low-observability by default**, which by itself raises the bar — for those, the user's review cannot be the backstop, so you are. Prove the behavior and flag the non-obvious choices you made rather than relying on "they'll catch it."
+
 - Prefer explicit user choice over hidden inference when a decision changes meaning.
 
 - If there is exactly one strong likely match, surfacing it as a suggested default is fine. If there is real ambiguity, do not silently choose for the user.

@@ -33,6 +33,15 @@ async function request(path, options = {}) {
   return res.json()
 }
 
+// Owner/tag/category-owner filters travel on the wire as a single comma-separated string, which the backend rebuilds
+// by splitting on ',' (see backend/routers/transactions.py). Joining here states that contract explicitly instead of
+// relying on URLSearchParams' implicit Array→String coercion, and folds an empty selection back to an omitted param.
+// Returns a spreadable fragment so call sites read `...csvParam('tag_ids', ids)`.
+function csvParam(key, ids) {
+  const value = Array.isArray(ids) ? ids.join(',') : ids
+  return value ? { [key]: value } : {}
+}
+
 export const api = {
   getAuthStatus: () => request('/auth/status'),
   getUserPreferences: () => request('/auth/preferences'),
@@ -91,9 +100,9 @@ export const api = {
       ...(date_start          ? { date_start }          : {}),
       ...(date_end            ? { date_end }            : {}),
       ...(account_id          ? { account_id }          : {}),
-      ...(owner_ids           ? { owner_ids }           : {}),
-      ...(category_owner_ids  ? { category_owner_ids }  : {}),
-      ...(tag_ids             ? { tag_ids }             : {}),
+      ...csvParam('owner_ids', owner_ids),
+      ...csvParam('category_owner_ids', category_owner_ids),
+      ...csvParam('tag_ids', tag_ids),
     }
     return request(`/transactions/summary/by-group?${new URLSearchParams(p)}`)
   },
@@ -104,8 +113,8 @@ export const api = {
       ...(date_start ? { date_start } : {}),
       ...(date_end   ? { date_end }   : {}),
       ...(account_id ? { account_id } : {}),
-      ...(owner_ids  ? { owner_ids }  : {}),
-      ...(tag_ids    ? { tag_ids }    : {}),
+      ...csvParam('owner_ids', owner_ids),
+      ...csvParam('tag_ids', tag_ids),
     }
     return request(`/transactions/summary/by-category-in-group?${new URLSearchParams(p)}`)
   },
@@ -115,9 +124,9 @@ export const api = {
       ...(date_start   ? { date_start }   : {}),
       ...(date_end     ? { date_end }     : {}),
       ...(account_id   ? { account_id }   : {}),
-      ...(owner_ids    ? { owner_ids }    : {}),
-      ...(category_owner_ids ? { category_owner_ids } : {}),
-      ...(tag_ids      ? { tag_ids }      : {}),
+      ...csvParam('owner_ids', owner_ids),
+      ...csvParam('category_owner_ids', category_owner_ids),
+      ...csvParam('tag_ids', tag_ids),
       ...(exclude_income ? { exclude_income: 'true' } : {}),
       ...(exclude_expense ? { exclude_expense: 'true' } : {}),
     }
@@ -128,12 +137,12 @@ export const api = {
       months,
       ...(account_id ? { account_id } : {}),
       ...(group_id   ? { group_id }   : {}),
-      ...(tag_ids    ? { tag_ids }    : {}),
+      ...csvParam('tag_ids', tag_ids),
     })
     return request(`/transactions/summary/monthly-by-group?${q}`)
   },
   getPayeeTrend: (payee, date_start, date_end, tag_ids) => {
-    const q = new URLSearchParams({ payee, ...(date_start ? { date_start } : {}), ...(date_end ? { date_end } : {}), ...(tag_ids ? { tag_ids } : {}) })
+    const q = new URLSearchParams({ payee, ...(date_start ? { date_start } : {}), ...(date_end ? { date_end } : {}), ...csvParam('tag_ids', tag_ids) })
     return request(`/transactions/summary/monthly-trend?${q}`)
   },
   getMonthlyTrend: (months = 6, category_id, account_id, date_start, date_end, tag_ids, view) => {
@@ -143,7 +152,7 @@ export const api = {
       ...(account_id ? { account_id } : {}),
       ...(date_start ? { date_start } : {}),
       ...(date_end ? { date_end } : {}),
-      ...(tag_ids ? { tag_ids } : {}),
+      ...csvParam('tag_ids', tag_ids),
       ...(view ? { view } : {}),
     })
     return request(`/transactions/summary/monthly-trend?${q}`)
@@ -274,20 +283,17 @@ export const api = {
   getBatchDuplicatesUnified: (id) => request(`/import-export/batches/${id}/duplicates-unified`),
   getBatchCategoryMappings: (id) => request(`/import-export/batches/${id}/category-mappings`),
   getBatchRuleSuggestions: (id, ownerIds = []) => {
-    const q = new URLSearchParams()
-    if (ownerIds?.length) q.set('owner_ids', ownerIds.join(','))
+    const q = new URLSearchParams(csvParam('owner_ids', ownerIds))
     const suffix = q.toString() ? `?${q}` : ''
     return request(`/import-export/batches/${id}/rule-suggestions${suffix}`)
   },
   getSystemRuleSuggestions: (ownerIds = []) => {
-    const q = new URLSearchParams()
-    if (ownerIds?.length) q.set('owner_ids', ownerIds.join(','))
+    const q = new URLSearchParams(csvParam('owner_ids', ownerIds))
     const suffix = q.toString() ? `?${q}` : ''
     return request(`/import-export/rule-suggestions${suffix}`)
   },
   getProfileRuleSuggestions: (id, ownerIds = []) => {
-    const q = new URLSearchParams()
-    if (ownerIds?.length) q.set('owner_ids', ownerIds.join(','))
+    const q = new URLSearchParams(csvParam('owner_ids', ownerIds))
     const suffix = q.toString() ? `?${q}` : ''
     return request(`/import-export/profiles/${id}/rule-suggestions${suffix}`)
   },

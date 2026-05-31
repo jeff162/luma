@@ -2,7 +2,7 @@
 
 Follow the commenting style defined in `docs/code-commenting-style.md`.
 
-Review `docs/collaboration-notes.md` for project decision-making preferences and collaboration guidance.
+Before any non-trivial change, read `docs/collaboration-notes.md` for project decision-making preferences and working habits. The bar is first-class code conforming to accepted best practice, not just something that works; when getting it right reveals a needed refactor or a real tradeoff, surface it for a decision rather than silently working around it or expanding scope.
 
 Before working on shared UI behavior — whether changing it, investigating it, debugging it, or designing against it — read `docs/ui-patterns.md` first. The docs are the authoritative high-level map; treat the code as the implementation to verify against, not the source of truth for intent.
 
@@ -70,6 +70,8 @@ Before working on shared systems, persistence, or invariants — same rule — r
 
 The `docs/` directory captures the **intent** of the system: what it does, **why** it works the way it does, and **how the pieces fit together at a high level**. Git history records what changed; `docs/` records what the system *is* and *why*. Keep them in sync.
 
+**Overlap and precedence.** Some rules are intentionally stated in more than one place — most notably, `CLAUDE.md` and this file both carry the read-first rule and the quality bar so that each entry point is self-sufficient (an agent that reads only one of them still gets the rule). These copies are meant to agree. If two statements ever appear to conflict, follow the **stricter** one and surface the discrepancy to the user to reconcile — do not act on the looser reading, and do not silently rewrite one to match the other. This keeps intentional duplication safe and turns drift into a flagged question instead of a silent regression. The same rule applies to any apparent inconsistency between docs, code comments, and these instruction files.
+
 When working on the codebase:
 
 - Follow the commenting style in `docs/code-commenting-style.md`.
@@ -89,3 +91,9 @@ When working on the codebase:
 - Skip doc updates for trivial or localized changes that don't move the high-level model (bug fixes confined to one function, renames, dependency bumps, etc.).
 
 - When you find a doc claim that no longer matches the code, fix the doc — stale docs are worse than missing ones. If the discrepancy reveals a real design question rather than a clean stale-fact, surface it to the user before guessing.
+
+## For Claude / harness-based agents
+
+If you are running with a `CLAUDE.md` (e.g. Claude Code) and haven't read it yet, read it now. It adds a Claude/harness-specific layer on top of this file — the persistent-memory workflow, a consolidated read-first routing index for the `docs/`, and tool conventions. Both files carry the "if you haven't already" guard so this cross-reference can't loop.
+
+Agents without a `CLAUDE.md` can ignore that file: this `AGENTS.md` plus `docs/` are self-contained. In particular the read-first rule above and the `docs/` pointers (commenting style, collaboration notes, ui-patterns, architecture, data-model) are the full set you need to get oriented — `CLAUDE.md` only re-states and consolidates them for the agent whose harness loads it automatically.
