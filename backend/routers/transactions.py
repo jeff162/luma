@@ -225,6 +225,79 @@ def _append_tag_filter(clauses, params, *, tag_ids: Optional[str]):
     params.extend(ids)
 
 
+def _append_owner_filter(clauses, params, *, owner_ids: Optional[str]):
+    # Mirrors the inline owner filter used by the transaction list and the totals summaries: a comma list
+    # of owner ids, with 'unassigned' expressing the first-class unowned bucket as `owner_id IS NULL`.
+    if not owner_ids or not isinstance(owner_ids, str):
+        return
+    ids = [i.strip() for i in owner_ids.split(',') if i.strip()]
+    if not ids:
+        return
+    if 'unassigned' in ids:
+        other_ids = [i for i in ids if i != 'unassigned']
+        if other_ids:
+            placeholders = ','.join('?' * len(other_ids))
+            clauses.append(f"(t.owner_id IS NULL OR t.owner_id IN ({placeholders}))")
+            params.extend(other_ids)
+        else:
+            clauses.append("t.owner_id IS NULL")
+    else:
+        placeholders = ','.join('?' * len(ids))
+        clauses.append(f"t.owner_id IN ({placeholders})")
+        params.extend(ids)
+
+
+def _append_group_filter(clauses, params, *, group_ids: Optional[str]):
+    # Restrict to transactions whose leaf category sits under one of the selected top-level groups
+    # (plus any synthetic uncategorized buckets). Mirrors the transaction list's group_ids handling.
+    if not group_ids or not isinstance(group_ids, str):
+        return
+    ids = [i.strip() for i in group_ids.split(',') if i.strip()]
+    if not ids:
+        return
+    group_filter = _build_uncategorized_multi_filter("t.category_id", ids)
+    normal_group_ids = [
+        value for value in ids
+        if value not in {UNCATEGORIZED_CATEGORY_ID, UNCATEGORIZED_EXPENSE_CATEGORY_ID, UNCATEGORIZED_INCOME_CATEGORY_ID}
+    ]
+    group_clauses, group_params = [], []
+    if normal_group_ids:
+        placeholders = ','.join('?' * len(normal_group_ids))
+        group_clauses.append(f"t.category_id IN (SELECT id FROM category WHERE parent_id IN ({placeholders}))")
+        group_params.extend(normal_group_ids)
+    if group_filter:
+        group_clauses.append(group_filter[0])
+        group_params.extend(group_filter[1])
+    if group_clauses:
+        clauses.append(f"({' OR '.join(group_clauses)})")
+        params.extend(group_params)
+
+
+def _append_category_ids_filter(clauses, params, *, category_ids: Optional[str]):
+    # Restrict to the selected leaf categories (plus synthetic uncategorized buckets). Mirrors the list.
+    if not category_ids or not isinstance(category_ids, str):
+        return
+    category_filter = _build_uncategorized_multi_filter(
+        "t.category_id", [i.strip() for i in category_ids.split(',') if i.strip()]
+    )
+    if category_filter:
+        clauses.append(category_filter[0])
+        params.extend(category_filter[1])
+
+
+def _append_payee_filter(clauses, params, *, payees: Optional[str]):
+    # Pipe-separated payee names; matches whichever merchant field carries the visible name. Mirrors the list.
+    if not payees or not isinstance(payees, str):
+        return
+    names = [n.strip() for n in payees.split('|') if n.strip()]
+    if not names:
+        return
+    or_clauses = ' OR '.join(['(t.display_name = ? OR t.merchant_name = ? OR t.raw_name = ?)'] * len(names))
+    clauses.append(f"({or_clauses})")
+    for n in names:
+        params.extend([n, n, n])
+
+
 # Quick filter parsing keeps the Transactions page's one-box workflow lightweight:
 # - merchant and category stay broad substring matches so partial labels still work naturally
 # - account labels match normalized whole words/phrases so generic fragments like `check` do not expand to every
@@ -803,6 +876,9 @@ def spending_by_category(
     account_ids:        Optional[str] = Query(None),
     tag_ids:            Optional[str] = Query(None),
     owner_ids:          Optional[str] = Query(None, description="filter by transaction owner (comma-separated)"),
+    category_ids:       Optional[str] = Query(None, description="comma-separated leaf category IDs"),
+    group_ids:          Optional[str] = Query(None, description="comma-separated top-level group IDs"),
+    payees:             Optional[str] = Query(None, description="pipe-separated payee names"),
     exclude_income:     bool          = Query(False, description="omit income categories from results"),
     exclude_expense:    bool          = Query(False, description="omit expense categories from results"),
 ):
@@ -821,20 +897,10 @@ def spending_by_category(
     _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
     _append_tag_filter(clauses, params, tag_ids=tag_ids)
 
-    if owner_ids:
-        ids = [i.strip() for i in owner_ids.split(',') if i.strip()]
-        if 'unassigned' in ids:
-            other_ids = [i for i in ids if i != 'unassigned']
-            if other_ids:
-                placeholders = ','.join('?' * len(other_ids))
-                clauses.append(f"(t.owner_id IS NULL OR t.owner_id IN ({placeholders}))")
-                params.extend(other_ids)
-            else:
-                clauses.append("t.owner_id IS NULL")
-        else:
-            placeholders = ','.join('?' * len(ids))
-            clauses.append(f"t.owner_id IN ({placeholders})")
-            params.extend(ids)
+    _append_owner_filter(clauses, params, owner_ids=owner_ids)
+    _append_group_filter(clauses, params, group_ids=group_ids)
+    _append_category_ids_filter(clauses, params, category_ids=category_ids)
+    _append_payee_filter(clauses, params, payees=payees)
 
     if exclude_income:
         clauses.append(
@@ -883,6 +949,9 @@ def spending_by_group(
     account_ids:        Optional[str] = Query(None),
     tag_ids:            Optional[str] = Query(None),
     owner_ids:          Optional[str] = Query(None, description="filter by transaction owner (comma-separated)"),
+    category_ids:       Optional[str] = Query(None, description="comma-separated leaf category IDs"),
+    group_ids:          Optional[str] = Query(None, description="comma-separated top-level group IDs"),
+    payees:             Optional[str] = Query(None, description="pipe-separated payee names"),
     category_owner_ids: Optional[str] = Query(None, description="reserved for summary filter parity"),
 ):
     clauses = ["t.is_pending = 0", "t.trashed_at IS NULL",
@@ -899,20 +968,10 @@ def spending_by_group(
 
     _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
     _append_tag_filter(clauses, params, tag_ids=tag_ids)
-    if owner_ids:
-        ids = [i.strip() for i in owner_ids.split(',') if i.strip()]
-        if 'unassigned' in ids:
-            other_ids = [i for i in ids if i != 'unassigned']
-            if other_ids:
-                placeholders = ','.join('?' * len(other_ids))
-                clauses.append(f"(t.owner_id IS NULL OR t.owner_id IN ({placeholders}))")
-                params.extend(other_ids)
-            else:
-                clauses.append("t.owner_id IS NULL")
-        else:
-            placeholders = ','.join('?' * len(ids))
-            clauses.append(f"t.owner_id IN ({placeholders})")
-            params.extend(ids)
+    _append_owner_filter(clauses, params, owner_ids=owner_ids)
+    _append_group_filter(clauses, params, group_ids=group_ids)
+    _append_category_ids_filter(clauses, params, category_ids=category_ids)
+    _append_payee_filter(clauses, params, payees=payees)
 
     with get_db() as conn:
         where = "WHERE " + " AND ".join(clauses)
@@ -948,6 +1007,9 @@ def spending_by_category_in_group(
     account_ids: Optional[str] = Query(None),
     tag_ids:     Optional[str] = Query(None),
     owner_ids:   Optional[str] = Query(None, description="comma-separated owner IDs"),
+    category_ids: Optional[str] = Query(None, description="comma-separated leaf category IDs"),
+    group_ids:   Optional[str] = Query(None, description="comma-separated top-level group IDs"),
+    payees:      Optional[str] = Query(None, description="pipe-separated payee names"),
 ):
     clauses = ["t.is_pending = 0", "t.trashed_at IS NULL"]
     params  = []
@@ -977,20 +1039,10 @@ def spending_by_category_in_group(
     _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
     _append_tag_filter(clauses, params, tag_ids=tag_ids)
 
-    if owner_ids:
-        ids = [i.strip() for i in owner_ids.split(',') if i.strip()]
-        if 'unassigned' in ids:
-            other_ids = [i for i in ids if i != 'unassigned']
-            if other_ids:
-                placeholders = ','.join('?' * len(other_ids))
-                clauses.append(f"(t.owner_id IS NULL OR t.owner_id IN ({placeholders}))")
-                params.extend(other_ids)
-            else:
-                clauses.append("t.owner_id IS NULL")
-        else:
-            placeholders = ','.join('?' * len(ids))
-            clauses.append(f"t.owner_id IN ({placeholders})")
-            params.extend(ids)
+    _append_owner_filter(clauses, params, owner_ids=owner_ids)
+    _append_group_filter(clauses, params, group_ids=group_ids)
+    _append_category_ids_filter(clauses, params, category_ids=category_ids)
+    _append_payee_filter(clauses, params, payees=payees)
 
     where = "WHERE " + " AND ".join(clauses)
 
@@ -1032,6 +1084,10 @@ def monthly_trend(
     account_id:  Optional[str] = Query(None),
     account_ids: Optional[str] = Query(None),
     tag_ids:     Optional[str] = Query(None),
+    owner_ids:   Optional[str] = Query(None),
+    category_ids: Optional[str] = Query(None, description="comma-separated leaf category IDs"),
+    group_ids:   Optional[str] = Query(None, description="comma-separated top-level group IDs"),
+    payees:      Optional[str] = Query(None, description="pipe-separated payee names"),
     months:      int            = Query(18, le=120),
     date_start:  Optional[str] = Query(None),
     date_end:    Optional[str] = Query(None),
@@ -1095,6 +1151,10 @@ def monthly_trend(
 
     _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
     _append_tag_filter(clauses, params, tag_ids=tag_ids)
+    _append_owner_filter(clauses, params, owner_ids=owner_ids)
+    _append_group_filter(clauses, params, group_ids=group_ids)
+    _append_category_ids_filter(clauses, params, category_ids=category_ids)
+    _append_payee_filter(clauses, params, payees=payees)
 
     if date_start:
         clauses.append("t.date >= ?")
@@ -1152,6 +1212,10 @@ def monthly_by_group(
     account_id:  Optional[str] = Query(None),
     account_ids: Optional[str] = Query(None),
     tag_ids:     Optional[str] = Query(None),
+    owner_ids:   Optional[str] = Query(None),
+    category_ids: Optional[str] = Query(None, description="comma-separated leaf category IDs"),
+    group_ids:   Optional[str] = Query(None, description="comma-separated top-level group IDs"),
+    payees:      Optional[str] = Query(None, description="pipe-separated payee names"),
     group_id:    Optional[str] = Query(None),
 ):
     clauses = [
@@ -1165,6 +1229,10 @@ def monthly_by_group(
 
     _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
     _append_tag_filter(clauses, params, tag_ids=tag_ids)
+    _append_owner_filter(clauses, params, owner_ids=owner_ids)
+    _append_group_filter(clauses, params, group_ids=group_ids)
+    _append_category_ids_filter(clauses, params, category_ids=category_ids)
+    _append_payee_filter(clauses, params, payees=payees)
 
     if group_id == UNCATEGORIZED_EXPENSE_CATEGORY_ID:
         clauses.extend(["t.category_id IS NULL", "t.amount > 0"])

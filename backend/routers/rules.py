@@ -113,7 +113,11 @@ def _rule_matches_txn(rule, txn) -> bool:
     return _amount_rule_matches(txn["amount"], rule["amount_min"], rule["amount_max"], rule["debit_credit"])
 
 
-def _apply_rule_to_existing(conn, rule_id: str) -> int:
+def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False) -> int:
+    # `preserve_manual` reclaims the rows a rule should own — including import-locked ones
+    # (category_source = 'import') — while leaving a deliberate per-transaction manual edit
+    # (category_source = 'manual') untouched. Used when a merge/replace changes the governing rule:
+    # the rule's prior matches should follow it, but a manual override is the user's final say.
     rule = conn.execute(
         """SELECT id, keyword, category_id, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id
            FROM category_rule
@@ -124,7 +128,7 @@ def _apply_rule_to_existing(conn, rule_id: str) -> int:
         raise HTTPException(status_code=404, detail="Rule not found")
 
     txns = conn.execute(
-        """SELECT
+        f"""SELECT
                t.id,
                t.merchant_name,
                t.display_name,
@@ -134,7 +138,8 @@ def _apply_rule_to_existing(conn, rule_id: str) -> int:
                t.account_id,
                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id
            FROM txn t
-           JOIN account a ON a.id = t.account_id"""
+           JOIN account a ON a.id = t.account_id
+           {"WHERE t.category_source IS NOT 'manual'" if preserve_manual else ""}"""
     ).fetchall()
 
     rule_tag_ids = [
@@ -473,6 +478,7 @@ def create_rule(body: RuleCreate, on_existing: Literal["reject", "merge"] = "rej
                 "status": relation,
                 "existing_rule_id": existing["id"],
                 "existing_category_id": existing["category_id"],
+                "existing_clean_name": existing["clean_name"],
             }
         rid = str(uuid.uuid4())
         conn.execute(
@@ -561,7 +567,13 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
                 conn.execute("DELETE FROM rule_tag WHERE rule_id = ?", (rule_id,))
                 conn.execute("DELETE FROM category_rule WHERE id = ?", (rule_id,))
                 return {"id": other["id"], "status": "merged", "relation": relation, "deleted_rule_id": rule_id}
-            return {"status": relation, "existing_rule_id": other["id"], "edited_rule_id": rule_id}
+            return {
+                "status": relation,
+                "existing_rule_id": other["id"],
+                "existing_category_id": other["category_id"],
+                "existing_clean_name": other["clean_name"],
+                "edited_rule_id": rule_id,
+            }
 
         # No collision — apply the patch.
         fields, params = [], []
@@ -604,9 +616,9 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
 
 
 @router.post("/{rule_id}/apply")
-def apply_rule(rule_id: str):
+def apply_rule(rule_id: str, preserve_manual: bool = False):
     with get_db() as conn:
-        updated = _apply_rule_to_existing(conn, rule_id)
+        updated = _apply_rule_to_existing(conn, rule_id, preserve_manual=preserve_manual)
     return {"updated": updated}
 
 

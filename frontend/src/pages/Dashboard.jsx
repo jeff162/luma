@@ -390,10 +390,10 @@ function presetToPeriod(preset) {
 
 const RECENT_MONTHS = lastNMonths(24).map(m => ({ value: m, label: monthLabel(m) }))
 
-async function fetchPeriodGroupTotals(period, accountId, tagIds) {
+async function fetchPeriodGroupTotals(period, accountId, tagIds, ownerIds, filters) {
   const months = periodMonths(period)
   const results = await Promise.all(
-    months.map(m => api.getGroupTotals(m, accountId || undefined, undefined, undefined, undefined, undefined, tagIds))
+    months.map(m => api.getGroupTotals(m, accountId || undefined, undefined, undefined, ownerIds, undefined, tagIds, filters))
   )
   const merged = {}
   for (const monthRows of results) {
@@ -410,10 +410,10 @@ async function fetchPeriodGroupTotals(period, accountId, tagIds) {
     .sort((a, b) => b.total - a.total)
 }
 
-async function fetchPeriodCatTotals(period, groupId, accountId, tagIds) {
+async function fetchPeriodCatTotals(period, groupId, accountId, tagIds, ownerIds, filters) {
   const months = periodMonths(period)
   const results = await Promise.all(
-    months.map(m => api.getCategoryTotalsInGroup(m, groupId, accountId || undefined, undefined, undefined, undefined, tagIds))
+    months.map(m => api.getCategoryTotalsInGroup(m, groupId, accountId || undefined, undefined, undefined, ownerIds, tagIds, filters))
   )
   const merged = {}
   for (const monthRows of results) {
@@ -1392,6 +1392,22 @@ export default function Dashboard() {
   const accountId = accountSelections.length === 1 ? accountSelections[0].id : undefined
   const tagSelections = filters.selections.filter(s => s.type === 'tag')
   const tagIds = tagSelections.length > 0 ? tagSelections.map(s => s.id).join(',') : undefined
+  const ownerSelections = filters.selections.filter(s => s.type === 'owner')
+  const ownerIds = ownerSelections.length > 0 ? ownerSelections.map(s => s.id).join(',') : undefined
+  const accountIds = accountSelections.length > 0 ? accountSelections.map(s => s.id).join(',') : undefined
+  const groupSelections = filters.selections.filter(s => s.type === 'group')
+  const groupIds = groupSelections.length > 0 ? groupSelections.map(s => s.id).join(',') : undefined
+  const categorySelections = filters.selections.filter(s => s.type === 'category')
+  const categoryIds = categorySelections.length > 0 ? categorySelections.map(s => s.id).join(',') : undefined
+  const payeeSelections = filters.selections.filter(s => s.type === 'payee')
+  const payees = payeeSelections.length > 0 ? payeeSelections.map(s => s.label).join('|') : undefined
+  // The cross-cutting filters (beyond date/tag/owner) that the summary, trend, and list endpoints accept.
+  // Passed as trailing opts to every totals/trend call and spread into drill lists so the filter chips
+  // narrow the whole dashboard, not just bits of it. Keys match both the summary opts and the list params.
+  const summaryFilters = useMemo(
+    () => ({ account_ids: accountIds, group_ids: groupIds, category_ids: categoryIds, payees }),
+    [accountIds, groupIds, categoryIds, payees],
+  )
 
   // Picker resolution is hoisted ahead of the tag-mode fetch effect so the effect's
   // dependency expression can read activeTagReport without hitting a temporal dead zone.
@@ -1416,7 +1432,7 @@ export default function Dashboard() {
   // transactions (already scoped to view + filters by the backend). Skipping the fetch when
   // the active mode is group/category keeps the network surface unchanged for those modes.
   const tagModeFetchKey = activeTagReport
-    ? `${activeTagReport.id}|${dashboardView}|${dateStart || ''}|${dateEnd || ''}|${accountId || ''}|${tagIds || ''}`
+    ? `${activeTagReport.id}|${dashboardView}|${dateStart || ''}|${dateEnd || ''}|${accountId || ''}|${tagIds || ''}|${ownerIds || ''}|${accountIds || ''}|${groupIds || ''}|${categoryIds || ''}|${payees || ''}`
     : null
   useEffect(() => {
     if (mode !== 'single' || !activeTagReport) {
@@ -1431,6 +1447,8 @@ export default function Dashboard() {
       ...(dateEnd ? { date_end: dateEnd } : {}),
       ...(accountId ? { account_id: accountId } : {}),
       ...(tagIds ? { tag_ids: tagIds } : {}),
+      ...(ownerIds ? { owner_ids: ownerIds } : {}),
+      ...summaryFilters,
       view: dashboardView,
       limit: 1000,
     }).then(resp => {
@@ -1590,29 +1608,45 @@ export default function Dashboard() {
     setDetailTagSignatures(prev => prev.filter(item => item.key !== key))
   }
 
+  // Factored out of the effect so a transaction edit can refresh the breakdown/trend *in place* without
+  // the drill-reset that a real mode/filter navigation does. The top-half summary respects the selected
+  // date slice; the bottom-half trend uses it only for bucket size, always showing a run of buckets.
+  const loadSingleTotals = useCallback(async () => {
+    const isIncomeView = dashboardView === 'income'
+    const { buckets } = computeTrendBuckets(filters.date)
+    const trendStart = `${buckets[0].start}-01`
+    const trendEnd = lastDayOfMonthISO(buckets[buckets.length - 1].end)
+    const [g, tr, c] = await Promise.all([
+      api.getGroupTotals(null, accountId || undefined, dateStart, dateEnd, ownerIds, undefined, tagIds, summaryFilters),
+      api.getMonthlyTrend(120, undefined, accountId || undefined, trendStart, trendEnd, tagIds, dashboardView, ownerIds, summaryFilters),
+      api.getCategoryTotals(null, accountId || undefined, dateStart, dateEnd, ownerIds, undefined, tagIds, !isIncomeView, isIncomeView, summaryFilters),
+    ])
+    setGroupRows(g.filter(r => r.category_type !== 'income'))
+    setIncomeRows(g.filter(r => r.category_type === 'income'))
+    setTrend(trimEmptyTrendBuckets(aggregateMonthlyIntoBuckets(tr, buckets)))
+    setTopCatRows(c)
+  }, [accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, dashboardView, filters.date])
+
   useEffect(() => {
     if (mode !== 'single') return
     setLoading(true)
     setLevel('groups'); setSelectedGroup(null); setSelectedCat(null); setOtherDrillDepth(0)
-    const isIncomeView = dashboardView === 'income'
-    // The top-half summary respects the user's selected date slice. The bottom-half trend
-    // uses that slice only to determine bucket size — it always shows a generous run of
-    // buckets around the selected one, so the user can read context.
-    const { buckets } = computeTrendBuckets(filters.date)
-    const trendStart = `${buckets[0].start}-01`
-    const trendEnd = lastDayOfMonthISO(buckets[buckets.length - 1].end)
-    Promise.all([
-      api.getGroupTotals(null, accountId || undefined, dateStart, dateEnd, undefined, undefined, tagIds),
-      api.getMonthlyTrend(120, undefined, accountId || undefined, trendStart, trendEnd, tagIds, dashboardView),
-      api.getCategoryTotals(null, accountId || undefined, dateStart, dateEnd, undefined, undefined, tagIds, !isIncomeView, isIncomeView),
-    ]).then(([g, tr, c]) => {
-      setGroupRows(g.filter(r => r.category_type !== 'income'))
-      setIncomeRows(g.filter(r => r.category_type === 'income'))
-      setTrend(trimEmptyTrendBuckets(aggregateMonthlyIntoBuckets(tr, buckets)))
-      setTopCatRows(c)
-      setLoading(false)
-    })
-  }, [accountId, mode, filters, dateStart, dateEnd, tagIds, dashboardView])
+    loadSingleTotals().then(() => setLoading(false))
+  }, [mode, loadSingleTotals])
+
+  // Recategorizing (here or from a detail panel) changes the aggregates, so refresh the breakdown/trend
+  // and the open group's category totals in place — otherwise a moved transaction lingers in the list.
+  useEffect(() => {
+    function onTxnChange() {
+      if (mode === 'single') loadSingleTotals()
+      if (selectedGroup?.group_id) {
+        api.getCategoryTotalsInGroup(null, selectedGroup.group_id, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters)
+          .then(setCatRows)
+      }
+    }
+    window.addEventListener('fintrack:transactions-changed', onTxnChange)
+    return () => window.removeEventListener('fintrack:transactions-changed', onTxnChange)
+  }, [mode, loadSingleTotals, selectedGroup, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters])
 
   useEffect(() => {
     api.getCategories().then(setCategories)
@@ -1623,34 +1657,34 @@ export default function Dashboard() {
     setLoading(true)
     setCmpLevel('groups'); setCmpGroup(null)
     Promise.all([
-      fetchPeriodGroupTotals(periodA, accountId, tagIds),
-      fetchPeriodGroupTotals(periodB, accountId, tagIds),
+      fetchPeriodGroupTotals(periodA, accountId, tagIds, ownerIds, summaryFilters),
+      fetchPeriodGroupTotals(periodB, accountId, tagIds, ownerIds, summaryFilters),
     ]).then(([a, b]) => {
       setCmpGroupsA(a)
       setCmpGroupsB(b)
       setLoading(false)
     })
-  }, [periodA, periodB, accountId, mode, tagIds])
+  }, [periodA, periodB, accountId, mode, tagIds, ownerIds, summaryFilters])
 
   useEffect(() => {
     if (mode !== 'trends') return
     setTrendLoading(true)
-    api.getMonthlyByGroup(60, accountId || undefined, trendGroup?.series_id || undefined, tagIds)
+    api.getMonthlyByGroup(60, accountId || undefined, trendGroup?.series_id || undefined, tagIds, ownerIds, summaryFilters)
       .then(rows => {
         setTrendRows(rows)
         setTrendLoading(false)
       })
-  }, [mode, accountId, trendGroup, tagIds])
+  }, [mode, accountId, trendGroup, tagIds, ownerIds, summaryFilters])
 
   useEffect(() => {
     if (mode !== 'trends') return
     // The drill dropdown lists only the side of the ledger the user is currently viewing —
     // expense groups in spending mode, income groups in income mode.
     const wantIncome = dashboardView === 'income'
-    api.getGroupTotals(thisM, accountId || undefined, undefined, undefined, undefined, undefined, tagIds).then(g => {
+    api.getGroupTotals(thisM, accountId || undefined, undefined, undefined, ownerIds, undefined, tagIds, summaryFilters).then(g => {
       setTrendGroups(g.filter(r => (wantIncome ? r.category_type === 'income' : r.category_type !== 'income')))
     })
-  }, [mode, accountId, tagIds, dashboardView])
+  }, [mode, accountId, tagIds, ownerIds, summaryFilters, dashboardView])
 
   // Clear an active drill when the user toggles between spending and income — a drilled
   // expense group has no meaning in income view (and vice versa), so jump back to "all groups".
@@ -1666,13 +1700,15 @@ export default function Dashboard() {
     setDrillLoading(true)
     setSelectedGroup(groupRow)
     const [rows, txnResp] = await Promise.all([
-      api.getCategoryTotalsInGroup(null, groupId, accountId || undefined, dateStart, dateEnd, undefined, tagIds),
+      api.getCategoryTotalsInGroup(null, groupId, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters),
       api.getTransactions({
+        ...summaryFilters,
         date_start:  filters.date?.start || undefined,
         date_end:    filters.date?.end   || undefined,
         group_ids:   groupId,
         account_id:  accountId || undefined,
         tag_ids:     tagIds,
+        owner_ids:   ownerIds,
         limit: 500,
       }),
     ])
@@ -1680,7 +1716,7 @@ export default function Dashboard() {
     setGroupTxnData(txnResp.transactions)
     setLevel('categories')
     setDrillLoading(false)
-  }, [groupRows, accountId, dateStart, dateEnd, tagIds, filters.date?.start, filters.date?.end])
+  }, [groupRows, accountId, dateStart, dateEnd, tagIds, ownerIds, summaryFilters, filters.date?.start, filters.date?.end])
 
   // Consume a pending Single-mode drill once the date-scoped groupRows have loaded. If the
   // queued group isn't present in this slice (e.g. zero spend that month), drop the queue
@@ -1711,6 +1747,7 @@ export default function Dashboard() {
     setDrillLoading(true)
     setSelectedCat(catRow)
     const data = await api.getTransactions({
+      ...summaryFilters,
       date_start:  filters.date?.start || undefined,
       date_end:    filters.date?.end   || undefined,
       // Summary rows can surface synthetic uncategorized buckets, so the drill path
@@ -1718,6 +1755,7 @@ export default function Dashboard() {
       category_id: categoryId,
       account_id:  accountId || undefined,
       tag_ids:     tagIds,
+      owner_ids:   ownerIds,
       limit: 200,
     })
     setTxnData(data.transactions)
@@ -1759,8 +1797,8 @@ export default function Dashboard() {
     setDrillLoading(true)
     setCmpGroup(groupRow)
     const [a, b] = await Promise.all([
-      fetchPeriodCatTotals(periodA, groupId, accountId, tagIds),
-      fetchPeriodCatTotals(periodB, groupId, accountId, tagIds),
+      fetchPeriodCatTotals(periodA, groupId, accountId, tagIds, ownerIds, summaryFilters),
+      fetchPeriodCatTotals(periodB, groupId, accountId, tagIds, ownerIds, summaryFilters),
     ])
     setCmpCatsA(a)
     setCmpCatsB(b)

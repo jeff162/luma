@@ -147,6 +147,49 @@ class AccountScopedRulesTests(unittest.TestCase):
         self.assertEqual(txn["category_source"], "rule")
         self.assertEqual(txn["category_overridden"], 0)
 
+    def test_preserve_manual_apply_reclaims_import_locked_but_not_manual(self):
+        # When a merge/replace changes a rule, re-applying with preserve_manual should reclaim the rows
+        # the rule should own — including import-locked ones — while leaving a manual edit as the final say.
+        account_id = self._insert_account("Personal Checking")
+        food = self._insert_income_leaf("Food")
+        other = self._insert_income_leaf("Other Spending")
+        rule_id = self._insert_rule(category_id=food, account_id=account_id, keyword="doordash")
+
+        import_txn = self._insert_transaction(account_id=account_id, merchant_name="DOORDASH ORDER 1")
+        manual_txn = self._insert_transaction(account_id=account_id, merchant_name="DOORDASH ORDER 2")
+        uncat_txn = self._insert_transaction(account_id=account_id, merchant_name="DOORDASH ORDER 3")
+
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET category_id = ?, category_overridden = 1, category_source = 'import' WHERE id = ?",
+                    (other, import_txn),
+                )
+                conn.execute(
+                    "UPDATE txn SET category_id = ?, category_overridden = 1, category_source = 'manual' WHERE id = ?",
+                    (other, manual_txn),
+                )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                updated = _apply_rule_to_existing(conn, rule_id, preserve_manual=True)
+                rows = {
+                    row["id"]: row
+                    for row in conn.execute(
+                        "SELECT id, category_id, category_source FROM txn WHERE id IN (?, ?, ?)",
+                        (import_txn, manual_txn, uncat_txn),
+                    ).fetchall()
+                }
+
+        # Import-locked + uncategorized rows reclaimed by the rule; the manual edit is left untouched.
+        self.assertEqual(updated, 2)
+        self.assertEqual(rows[import_txn]["category_id"], food)
+        self.assertEqual(rows[import_txn]["category_source"], "rule")
+        self.assertEqual(rows[uncat_txn]["category_id"], food)
+        self.assertEqual(rows[uncat_txn]["category_source"], "rule")
+        self.assertEqual(rows[manual_txn]["category_id"], other)
+        self.assertEqual(rows[manual_txn]["category_source"], "manual")
+
 
 if __name__ == "__main__":
     unittest.main()

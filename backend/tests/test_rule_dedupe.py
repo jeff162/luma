@@ -90,6 +90,10 @@ class RuleDedupeTests(unittest.TestCase):
             second = create_rule(RuleCreate(keyword=KW, category_id=dining))
         self.assertEqual(second["status"], "conflict")
         self.assertEqual(second["existing_rule_id"], first["id"])
+        # The conflict report must carry the existing rule's action so the suggestions banner can show
+        # what it collides with and offer Replace/Keep without a second round trip.
+        self.assertEqual(second["existing_category_id"], coffee)
+        self.assertIn("existing_clean_name", second)
         self.assertEqual(self._rule_count(), 1, "a conflicting save must not silently fork a rule")
 
     def test_added_tag_is_mergeable_and_merges_on_request(self):
@@ -159,6 +163,8 @@ class RuleDedupeTests(unittest.TestCase):
             reported = update_rule(a["id"], RuleUpdate(keyword="bbb merch"))
         self.assertEqual(reported["status"], "conflict")
         self.assertEqual(reported["existing_rule_id"], b["id"])
+        self.assertEqual(reported["existing_category_id"], coffee)
+        self.assertIn("existing_clean_name", reported)
         self.assertTrue(self._exists(a["id"]))
         state_a, _ = self._rule_state(a["id"])
         self.assertEqual(state_a["category_id"], dining, "a conflicting edit must not be written")

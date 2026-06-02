@@ -1246,7 +1246,8 @@ def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile
             LEFT JOIN account a ON a.id = t.account_id
             LEFT JOIN owner o ON o.id = t.owner_id
             WHERE t.import_batch_id = ?
-              AND t.category_source = 'import'
+              -- 'manual' counts rows the user reconciled toward the suggestion, like the matching-rows report
+              AND t.category_source IN ('import', 'manual')
               AND t.category_id IS NOT NULL
             """,
             (batch_id,),
@@ -1277,7 +1278,8 @@ def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile
             LEFT JOIN owner o ON o.id = t.owner_id
             WHERE b.profile_id = ?
               AND b.status = 'completed'
-              AND t.category_source = 'import'
+              -- 'manual' counts rows the user reconciled toward the suggestion, like the matching-rows report
+              AND t.category_source IN ('import', 'manual')
               AND t.category_id IS NOT NULL
             """,
             (profile_id,),
@@ -1308,7 +1310,8 @@ def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile
             LEFT JOIN owner o ON o.id = t.owner_id
             WHERE b.status = 'completed'
               AND b.use_imported_categories = 1
-              AND t.category_source = 'import'
+              -- 'manual' counts rows the user reconciled toward the suggestion, like the matching-rows report
+              AND t.category_source IN ('import', 'manual')
               AND t.category_id IS NOT NULL
             """
         ).fetchall()
@@ -1440,6 +1443,22 @@ def _generate_rule_suggestions(conn, candidate_rows: list[dict], selected_owner_
 
     suggestions = []
     for keyword, keyword_rows in all_by_keyword.items():
+        # Only a target evidenced by at least one file-derived ('import') row is a real suggestion. Manual
+        # rows reinforce such a target's count — e.g. rows the user reconciled onto it via "set all to" —
+        # but a target seen *only* through manual edits (e.g. a Preserved one-off kept on a different
+        # category) is dropped, so manual rows never spawn a fresh suggestion or re-create a conflict.
+        import_backed_targets = {
+            (row["target_category_id"] or f"name:{row['target_category_name']}")
+            for row in keyword_rows
+            if row.get("category_source") == "import"
+        }
+        keyword_rows = [
+            row for row in keyword_rows
+            if (row["target_category_id"] or f"name:{row['target_category_name']}") in import_backed_targets
+        ]
+        if not keyword_rows:
+            continue
+
         owner_targets = {}
         for row in keyword_rows:
             owner_targets.setdefault(row["owner_id"] or "__none__", set()).add(
@@ -4618,7 +4637,8 @@ def get_system_rule_suggestion_matches(body: BatchRuleSuggestionMatchRequest):
             LEFT JOIN owner o ON o.id = t.owner_id
             WHERE b.status = 'completed'
               AND b.use_imported_categories = 1
-              AND t.category_source = 'import'
+              -- 'manual' keeps rows the user reconciled in this view visible alongside the still-from-file ones
+              AND t.category_source IN ('import', 'manual')
               AND t.category_id IS NOT NULL
             ORDER BY t.date DESC, t.id DESC
             """
@@ -4656,6 +4676,8 @@ def get_system_rule_suggestion_matches(body: BatchRuleSuggestionMatchRequest):
             body.reference_target_category_id
             and target_category_id
             and target_category_id != body.reference_target_category_id
+            # A manual category is the user's settled decision, not an unresolved file conflict to flag.
+            and row["category_source"] != "manual"
         )
         matching_rows.append(row)
 
@@ -4707,7 +4729,8 @@ def get_batch_rule_suggestion_matches(batch_id: str, body: BatchRuleSuggestionMa
             LEFT JOIN account p ON p.id = a.parent_account_id
             LEFT JOIN owner o ON o.id = t.owner_id
             WHERE t.import_batch_id = ?
-              AND t.category_source = 'import'
+              -- 'manual' keeps rows the user reconciled in this view visible alongside the still-from-file ones
+              AND t.category_source IN ('import', 'manual')
               AND t.category_id IS NOT NULL
             ORDER BY t.date DESC, t.id DESC
             """,
@@ -4746,6 +4769,8 @@ def get_batch_rule_suggestion_matches(batch_id: str, body: BatchRuleSuggestionMa
             body.reference_target_category_id
             and target_category_id
             and target_category_id != body.reference_target_category_id
+            # A manual category is the user's settled decision, not an unresolved file conflict to flag.
+            and row["category_source"] != "manual"
         )
         matching_rows.append(row)
 
@@ -4800,7 +4825,8 @@ def get_profile_rule_suggestion_matches(profile_id: str, body: BatchRuleSuggesti
             LEFT JOIN owner o ON o.id = t.owner_id
             WHERE b.profile_id = ?
               AND b.status = 'completed'
-              AND t.category_source = 'import'
+              -- 'manual' keeps rows the user reconciled in this view visible alongside the still-from-file ones
+              AND t.category_source IN ('import', 'manual')
               AND t.category_id IS NOT NULL
             ORDER BY t.date DESC, t.id DESC
             """,
@@ -4839,6 +4865,8 @@ def get_profile_rule_suggestion_matches(profile_id: str, body: BatchRuleSuggesti
             body.reference_target_category_id
             and target_category_id
             and target_category_id != body.reference_target_category_id
+            # A manual category is the user's settled decision, not an unresolved file conflict to flag.
+            and row["category_source"] != "manual"
         )
         matching_rows.append(row)
 

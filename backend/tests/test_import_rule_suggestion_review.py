@@ -20,9 +20,11 @@ from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export import (
+    BatchRuleSuggestionMatchRequest,
     BatchRuleSuggestionReviewUpdateRequest,
     _get_system_rule_suggestion_review_state,
     _save_system_rule_suggestion_review_state,
+    get_system_rule_suggestion_matches,
     get_system_rule_suggestions,
     update_system_rule_suggestion_review,
 )
@@ -150,6 +152,39 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
                             batch_id,
                         ),
                     )
+
+    def test_matches_report_includes_manually_reconciled_rows_unflagged(self):
+        account_id = self._insert_account("Card")
+        streaming = self._insert_expense_leaf("Streaming Services")
+        entertainment = self._insert_expense_leaf("Entertainment & Recreation")
+        batch_id = self._insert_import_batch()
+        # Majority Streaming (from file); one still-Entertainment (from file); and one the user has
+        # deliberately kept on Entertainment, now category_source = 'manual'. The manual one differs from
+        # the Streaming reference on purpose, so it exercises the manual-not-flagged path.
+        self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=streaming, merchant_name="Paramount+", amount=-11.99)
+        from_file_entertainment = self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=entertainment, merchant_name="Paramount+", amount=-11.99)
+        reconciled_id = self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=entertainment, merchant_name="Paramount+", amount=-11.99)
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET category_source = 'manual', category_overridden = 1 WHERE id = ?",
+                    (reconciled_id,),
+                )
+
+        with self._use_db_path():
+            result = get_system_rule_suggestion_matches(
+                BatchRuleSuggestionMatchRequest(keyword="Paramount+", reference_target_category_id=streaming)
+            )
+
+        rows = {row["id"]: row for row in result["transactions"]}
+        # The manually-decided row stays in the report rather than vanishing...
+        self.assertEqual(result["count"], 3)
+        self.assertIn(reconciled_id, rows)
+        self.assertEqual(rows[reconciled_id]["category_source"], "manual")
+        # ...and is not flagged as a conflict even though it differs from the reference (it's settled),
+        # while the still-from-file row on the same category remains flagged.
+        self.assertFalse(rows[reconciled_id]["conflicts_with_reference"])
+        self.assertTrue(rows[from_file_entertainment]["conflicts_with_reference"])
 
     def test_accepting_broader_keyword_discards_covered_same_category_variants(self):
         self._save_review_state({
@@ -318,6 +353,58 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             ["Home Services", "Trash removal"],
         )
         self.assertTrue(all(suggestion["review_status"] == "pending" for suggestion in black_earth))
+
+    def test_reconciled_manual_rows_reinforce_import_backed_suggestion_count(self):
+        account_id = self._insert_account("Card")
+        streaming = self._insert_expense_leaf("FixtureStreaming")
+        batch_id = self._insert_import_batch()
+        # Three file-derived Streaming rows, plus two the user reconciled onto Streaming (now 'manual').
+        for _ in range(3):
+            self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=streaming, merchant_name="Paramount Plus", amount=-11.99)
+        reconciled = [
+            self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=streaming, merchant_name="Paramount Plus", amount=-11.99)
+            for _ in range(2)
+        ]
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.executemany(
+                    "UPDATE txn SET category_source = 'manual', category_overridden = 1 WHERE id = ?",
+                    [(rid,) for rid in reconciled],
+                )
+
+        with self._use_db_path():
+            result = get_system_rule_suggestions("")
+
+        streaming_suggestions = [s for s in result["suggestions"] if s["target_category_name"] == "FixtureStreaming"]
+        self.assertEqual(len(streaming_suggestions), 1)
+        self.assertFalse(streaming_suggestions[0]["needs_resolution"])
+        # The reconciled manual rows count toward the suggestion, not just the file-derived ones.
+        self.assertEqual(streaming_suggestions[0]["txn_count"], 5)
+
+    def test_preserved_manual_only_category_does_not_create_a_conflict(self):
+        account_id = self._insert_account("Card")
+        rideshare = self._insert_expense_leaf("FixtureRideshare")
+        travel = self._insert_expense_leaf("FixtureTravel")
+        batch_id = self._insert_import_batch()
+        # Majority Rideshare from the file; one row the user Preserved on a different category (manual).
+        for _ in range(3):
+            self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=rideshare, merchant_name="Uber Trip", amount=-23.40)
+        preserved = self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=travel, merchant_name="Uber Trip", amount=-23.40)
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET category_source = 'manual', category_overridden = 1 WHERE id = ?",
+                    (preserved,),
+                )
+
+        with self._use_db_path():
+            result = get_system_rule_suggestions("")
+
+        # The Preserved row's category has no file-derived backing, so it neither spawns its own
+        # suggestion nor re-creates a conflict — only the file-derived Rideshare suggestion stands.
+        self.assertEqual(len(result["suggestions"]), 1)
+        self.assertEqual(result["suggestions"][0]["target_category_name"], "FixtureRideshare")
+        self.assertFalse(result["suggestions"][0]["needs_resolution"])
 
 
 if __name__ == "__main__":

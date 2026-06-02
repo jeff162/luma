@@ -9,6 +9,7 @@ import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState, AppDialog 
 import PillGridTable from '../components/PillGridTable.jsx'
 import RuleForm, { amountConditionSummary } from '../components/RuleForm.jsx'
 import { TagBadge } from '../components/TagUi.jsx'
+import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
 
 // Static, non-interactive columns: the rules list isn't sorted/reordered/resized by the user,
 // it just needs the consistent table chrome and a pinned header. Sticky header is wired below
@@ -215,22 +216,21 @@ export default function Rules() {
   const [collision, setCollision] = useState(null)
   const [createInitialValues, setCreateInitialValues] = useState({})
   const [createTransactionData, setCreateTransactionData] = useState(null)
-  const [recategorizeResult, setRecategorizeResult] = useState(null)
-  const [recategorizePendingCount, setRecategorizePendingCount] = useState(0)
+  const {
+    pendingCount: recategorizePendingCount,
+    result: recategorizeResult,
+    run: runRecategorize,
+    reloadPreview: loadRecategorizePreview,
+    dismissResult: dismissRecategorizeResult,
+  } = useRecategorize()
 
   const loadRules = useCallback(() => {
     api.getRules(search || undefined).then(r => { setRules(r); setLoading(false) })
   }, [search])
   const loadCategories = useCallback(() => { api.getCategories().then(setCategories) }, [])
-  const loadRecategorizePreview = useCallback(() => {
-    api.getRecategorizePreview()
-      .then(result => setRecategorizePendingCount(Number(result?.pending || 0)))
-      .catch(() => setRecategorizePendingCount(0))
-  }, [])
 
   useEffect(() => { loadRules() },      [loadRules])
   useEffect(() => { loadCategories() }, [loadCategories])
-  useEffect(() => { loadRecategorizePreview() }, [loadRecategorizePreview])
   useEffect(() => { api.getOwners().then(setOwners) }, [])
   useEffect(() => { api.getAccounts().then(setAccounts) }, [])
 
@@ -306,31 +306,9 @@ export default function Rules() {
     loadRecategorizePreview()
   }
 
-  async function runRecategorize() {
-    setRecategorizeResult(null)
-    const result = await api.recategorize()
-    setRecategorizeResult(result.updated)
-    setRecategorizePendingCount(0)
-    loadRecategorizePreview()
-    setTimeout(() => setRecategorizeResult(null), 6000)
-  }
-
   const editingRule = editingRuleId ? rules.find(rule => rule.id === editingRuleId) : null
   const showCreateForm = showAdd
   const showAnyEditor = showAdd || !!editingRule
-  const recategorizeHasPendingWork = recategorizePendingCount > 0
-  const recategorizeButtonStyle = recategorizeHasPendingWork
-    ? {
-        background: 'color-mix(in srgb, var(--surface2) 58%, var(--accent) 16%)',
-        border: '1px solid color-mix(in srgb, var(--accent) 36%, var(--border))',
-        boxShadow: '0 1px 0 rgba(255,255,255,0.03), 0 10px 22px rgba(0,0,0,0.12)',
-      }
-    : {
-        background: 'color-mix(in srgb, var(--surface2) 88%, transparent)',
-        border: '1px solid color-mix(in srgb, var(--border) 88%, transparent)',
-        boxShadow: 'none',
-        color: 'color-mix(in srgb, var(--muted) 88%, var(--text))',
-      }
   const addRuleButtonStyle = {
     background: showAnyEditor
       ? 'color-mix(in srgb, var(--surface2) 82%, var(--accent) 6%)'
@@ -388,53 +366,18 @@ export default function Rules() {
 
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
         <PageHeader title="Rules">
-          <Button
-            variant="ghost"
-            small
-            onClick={runRecategorize}
-            style={recategorizeButtonStyle}
-            title={recategorizeHasPendingWork
-              ? `${recategorizePendingCount} transaction${recategorizePendingCount === 1 ? '' : 's'} could be re-categorized`
-              : 'No transactions currently look eligible for re-categorization'}
-          >
-            ↻ Re-run categorization
-          </Button>
+          <RecategorizeButton pendingCount={recategorizePendingCount} onRun={runRecategorize} />
           <Button small onClick={() => (showAnyEditor ? closeForm() : openCreateForm())} style={addRuleButtonStyle}>
             {showAnyEditor ? 'Cancel' : 'Add rule'}
           </Button>
         </PageHeader>
       </div>
 
-      {recategorizeResult !== null && (
-        <div style={{
-          margin: '12px 32px 0',
-          padding: '10px 16px',
-          borderRadius: 8,
-          background: recategorizeResult > 0
-            ? 'color-mix(in srgb, var(--success) 10%, var(--surface2))'
-            : 'var(--surface2)',
-          border: `1px solid ${recategorizeResult > 0
-            ? 'color-mix(in srgb, var(--success) 30%, var(--border))'
-            : 'var(--border)'}`,
-          fontSize: 13,
-          color: recategorizeResult > 0 ? 'var(--success)' : 'var(--muted)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
-          flexShrink: 0,
-        }}>
-          <span>
-            {recategorizeResult > 0
-              ? `↻ ${recategorizeResult} transaction${recategorizeResult === 1 ? '' : 's'} re-categorized.`
-              : '↻ No transactions needed re-categorization.'}
-          </span>
-          <button
-            onClick={() => setRecategorizeResult(null)}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 16, lineHeight: 1, padding: 0 }}
-          >×</button>
-        </div>
-      )}
+      <RecategorizeResultBanner
+        result={recategorizeResult}
+        onDismiss={dismissRecategorizeResult}
+        style={{ margin: '12px 32px 0' }}
+      />
 
       <div style={{
         padding: '8px 32px', flexShrink: 0,

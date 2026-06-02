@@ -11,6 +11,8 @@ import RuleForm from './RuleForm.jsx'
 import CategoryPicker from './CategoryPicker.jsx'
 import CategoryDisplay from './CategoryDisplay.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
+import TagPickerWithCreate from './TagPickerWithCreate.jsx'
+import { TagBadge } from './TagUi.jsx'
 import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 import {
   getSharedPillCornerRemoveButtonStyle,
@@ -207,6 +209,7 @@ function RuleEditorModal({
             amount_max: suggestion.amount_max,
             catId: suggestion.target_category_id || '',
             cleanName: suggestion.clean_name_suggestion || '',
+            tagIds: suggestion.tag_ids || [],
           }}
           categories={categories}
           owners={owners}
@@ -393,7 +396,18 @@ function ConflictSetModal({ sections, onClose, renderSuggestionCard }) {
   )
 }
 
-function MatchingTransactionsModal({ state, categories, onClose, onKeepCategory }) {
+function MatchingTransactionsModal({ state, categories, onClose, onKeepCategory, onSetRowCategory, onSetAllCategories, onCategoriesChanged, applyingAll }) {
+  // Per-row inline category edit: editingRowId picks the row whose Maps-To picker is open; the token
+  // force-opens the picker the moment edit mode is entered (CategoryPicker only auto-opens on a bump).
+  const [editingRowId, setEditingRowId] = useState(null)
+  const [rowPickerToken, setRowPickerToken] = useState(0)
+  // "Set all to" opens the same picker from a button so it reads as a control rather than a faint field.
+  const [bulkEditing, setBulkEditing] = useState(false)
+  const [bulkPickerToken, setBulkPickerToken] = useState(0)
+  // CategoryPicker emits onOpenChange(false) once on mount before openToken actually opens it; these
+  // refs let us ignore that stray close so entering edit mode doesn't instantly cancel (the "blink").
+  const rowPickerOpenedRef = useRef(false)
+  const bulkPickerOpenedRef = useRef(false)
   if (!state?.open) return null
 
   const summaryParts = []
@@ -507,6 +521,52 @@ function MatchingTransactionsModal({ state, categories, onClose, onKeepCategory 
             <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 5 }}>
               {state.loading ? 'Loading matching rows…' : `${state.count || 0} matching row${state.count === 1 ? '' : 's'}`}
             </div>
+            {!state.loading && state.rows?.length ? (
+              <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                {bulkEditing ? (
+                  <div style={{ minWidth: 220, maxWidth: 300 }}>
+                    <CategoryPicker
+                      value={null}
+                      categories={categories}
+                      placeholder="Choose a category…"
+                      onChange={value => { setBulkEditing(false); bulkPickerOpenedRef.current = false; if (value && !applyingAll) onSetAllCategories?.(value) }}
+                      onCategoryCreated={onCategoriesChanged}
+                      compact
+                      openToken={bulkPickerToken}
+                      onOpenChange={open => {
+                        if (open) { bulkPickerOpenedRef.current = true; return }
+                        if (bulkPickerOpenedRef.current) { setBulkEditing(false); bulkPickerOpenedRef.current = false }
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => { setBulkEditing(true); setBulkPickerToken(token => token + 1) }}
+                    disabled={applyingAll}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '7px 14px',
+                      borderRadius: 8,
+                      fontSize: 12.5,
+                      fontWeight: 600,
+                      color: 'var(--text)',
+                      background: 'color-mix(in srgb, var(--accent) 14%, var(--surface2))',
+                      border: '1px solid color-mix(in srgb, var(--accent) 42%, var(--border))',
+                      cursor: applyingAll ? 'wait' : 'pointer',
+                      boxShadow: '0 1px 0 rgba(255,255,255,0.04), 0 6px 14px rgba(15,23,42,0.12)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {applyingAll
+                      ? 'Applying…'
+                      : `Set all ${state.count || state.rows.length} rows to a category…`}
+                  </button>
+                )}
+              </div>
+            ) : null}
           </div>
           <button
             type="button"
@@ -616,12 +676,37 @@ function MatchingTransactionsModal({ state, categories, onClose, onKeepCategory 
                         </div>
                       </div>
                       <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <CategoryDisplay
-                          id={row.target_category_id}
-                          name={resolvedCategoryLabel}
-                          emptyLabel="Unresolved"
-                          emptyFontSize={12}
-                        />
+                        {editingRowId === row.id ? (
+                          <div style={{ minWidth: 200, maxWidth: 280 }}>
+                            <CategoryPicker
+                              value={row.target_category_id}
+                              categories={categories}
+                              onChange={value => { setEditingRowId(null); rowPickerOpenedRef.current = false; if (value) onSetRowCategory?.(row, value) }}
+                              onCategoryCreated={onCategoriesChanged}
+                              compact
+                              openToken={rowPickerToken}
+                              onOpenChange={open => {
+                                if (open) { rowPickerOpenedRef.current = true; return }
+                                if (rowPickerOpenedRef.current) { setEditingRowId(null); rowPickerOpenedRef.current = false }
+                              }}
+                            />
+                          </div>
+                        ) : (
+                        <>
+                        <button
+                          type="button"
+                          onClick={() => { setEditingRowId(row.id); setRowPickerToken(token => token + 1) }}
+                          disabled={row.keeping}
+                          title="Change the category for this transaction"
+                          style={{ background: 'none', border: 'none', padding: 0, margin: 0, cursor: row.keeping ? 'wait' : 'pointer', textAlign: 'left' }}
+                        >
+                          <CategoryDisplay
+                            id={row.target_category_id}
+                            name={resolvedCategoryLabel}
+                            emptyLabel="Unresolved"
+                            emptyFontSize={12}
+                          />
+                        </button>
                         {row.category_source === 'manual' ? (
                           <span style={{
                             display: 'inline-flex',
@@ -680,6 +765,8 @@ function MatchingTransactionsModal({ state, categories, onClose, onKeepCategory 
                             {row.keeping ? 'Keeping…' : 'Preserve This Categorization'}
                           </button>
                         ) : null}
+                        </>
+                        )}
                       </div>
                       <div style={{ textAlign: 'right' }}>
                         <span style={{
@@ -1139,6 +1226,8 @@ export default function ImportRuleSuggestionReview({
   categories,
   owners,
   accounts,
+  tags = [],
+  onTagCreated,
   onCategoriesChanged,
   onReloadSuggestions,
 }) {
@@ -1151,6 +1240,7 @@ export default function ImportRuleSuggestionReview({
   const [editingActionDraft, setEditingActionDraft] = useState('')
   const [editingCategorySuggestionId, setEditingCategorySuggestionId] = useState(null)
   const [categoryPickerOpenToken, setCategoryPickerOpenToken] = useState(0)
+  const [editingTagSuggestionId, setEditingTagSuggestionId] = useState(null)
   const categoryPickerHasOpenedRef = useRef(false)
   const latestCategoriesRef = useRef(categories)
   const sortControlRef = useRef(null)
@@ -1182,6 +1272,7 @@ export default function ImportRuleSuggestionReview({
     amountMax: null,
     count: 0,
     rows: [],
+    applyingAll: false,
   })
 
   useEffect(() => {
@@ -1651,6 +1742,7 @@ export default function ImportRuleSuggestionReview({
       clean_name_suggestion: override.removeRename
         ? null
         : (override.cleanName ?? suggestion.clean_name_suggestion),
+      tag_ids: override.tagIds ?? (suggestion.tag_ids || []),
     }
   }
 
@@ -1719,40 +1811,68 @@ export default function ImportRuleSuggestionReview({
     }
   }
 
-  async function keepMatchingTransactionCategory(row) {
-    if (!row?.id || !row?.target_category_id) return
+  async function reloadMatchViewer() {
+    const result = await onLoadSuggestionMatches?.({
+      keyword: matchViewerState.keyword,
+      reference_target_category_id: matchViewerState.referenceTargetCategoryId,
+      owner_id: matchViewerState.ownerId,
+      account_id: matchViewerState.accountId,
+      amount_min: matchViewerState.amountMin,
+      amount_max: matchViewerState.amountMax,
+    })
     setMatchViewerState(prev => ({
       ...prev,
-      rows: prev.rows.map(current => (
-        current.id === row.id ? { ...current, keeping: true } : current
-      )),
+      loading: false,
+      error: '',
+      count: result?.count || 0,
+      rows: result?.transactions || [],
+    }))
+  }
+
+  // Reconcile a single imported row to a chosen category. Like Preserve, this writes a manual lock
+  // (setCategory), so the row leaves the import-derived learning set and drops out of the conflict view
+  // on reload — the user has made the call for that transaction.
+  async function setMatchRowCategory(row, categoryId) {
+    if (!row?.id || !categoryId) return
+    setMatchViewerState(prev => ({
+      ...prev,
+      rows: prev.rows.map(current => (current.id === row.id ? { ...current, keeping: true } : current)),
     }))
     try {
-      await txnMutations.setCategory(row.id, row.target_category_id)
+      await txnMutations.setCategory(row.id, categoryId)
       await onReloadSuggestions?.()
-      const result = await onLoadSuggestionMatches?.({
-        keyword: matchViewerState.keyword,
-        reference_target_category_id: matchViewerState.referenceTargetCategoryId,
-        owner_id: matchViewerState.ownerId,
-        account_id: matchViewerState.accountId,
-        amount_min: matchViewerState.amountMin,
-        amount_max: matchViewerState.amountMax,
-      })
-      setMatchViewerState(prev => ({
-        ...prev,
-        loading: false,
-        error: '',
-        count: result?.count || 0,
-        rows: result?.transactions || [],
-      }))
+      await reloadMatchViewer()
     } catch (err) {
       setMatchViewerState(prev => ({
         ...prev,
-        error: err.message || 'Unable to keep this category.',
-        rows: prev.rows.map(current => (
-          current.id === row.id ? { ...current, keeping: false } : current
-        )),
+        error: err.message || 'Unable to set this category.',
+        rows: prev.rows.map(current => (current.id === row.id ? { ...current, keeping: false } : current)),
       }))
+    }
+  }
+
+  // Preserve keeps a row's own (conflicting) categorization; it's just a row reconcile to its current target.
+  function keepMatchingTransactionCategory(row) {
+    return setMatchRowCategory(row, row?.target_category_id)
+  }
+
+  // Bulk reconcile: set every matching row that does not already use `categoryId` to it. Rows that already
+  // match are left as import-derived, so the surviving single-category suggestion still yields a rule.
+  async function setAllMatchCategories(categoryId) {
+    if (!categoryId || matchViewerState.applyingAll) return
+    const targets = matchViewerState.rows.filter(row => String(row.target_category_id) !== String(categoryId))
+    if (!targets.length) return
+    setMatchViewerState(prev => ({ ...prev, applyingAll: true, error: '' }))
+    try {
+      for (const row of targets) {
+        await txnMutations.setCategory(row.id, categoryId)
+      }
+      await onReloadSuggestions?.()
+      await reloadMatchViewer()
+    } catch (err) {
+      setMatchViewerState(prev => ({ ...prev, error: err.message || 'Unable to set the category for these rows.' }))
+    } finally {
+      setMatchViewerState(prev => ({ ...prev, applyingAll: false }))
     }
   }
 
@@ -1820,6 +1940,25 @@ export default function ImportRuleSuggestionReview({
     }))
     setEditingCategorySuggestionId(null)
     categoryPickerHasOpenedRef.current = false
+  }
+
+  function beginTagEdit(suggestion) {
+    setSuggestionMenu(null)
+    setEditingTagSuggestionId(getSuggestionKey(suggestion.id))
+  }
+
+  // Tags are held as a transient override (`tagIds`) like the other suggestion edits; they're applied to
+  // the rule on save (createRule accepts tag_ids), not persisted to the review state.
+  function setSuggestionTag(suggestion, tagId, present) {
+    const suggestionKey = getSuggestionKey(suggestion.id)
+    setSuggestionActionOverrides(prev => {
+      const current = prev[suggestionKey] || {}
+      const currentTags = current.tagIds ?? (suggestion.tag_ids || [])
+      const nextTags = present
+        ? (currentTags.includes(tagId) ? currentTags : [...currentTags, tagId])
+        : currentTags.filter(id => id !== tagId)
+      return { ...prev, [suggestionKey]: { ...current, tagIds: nextTags } }
+    })
   }
 
   function beginRenameActionEdit(suggestion) {
@@ -1939,6 +2078,11 @@ export default function ImportRuleSuggestionReview({
         key: 'save',
         label: 'Save',
         onClick: () => onSaveSuggestionAsIs(resolvedSuggestion),
+      })
+      actions.push({
+        key: 'tag',
+        label: 'Add tag…',
+        onClick: () => beginTagEdit(suggestion),
       })
     }
 
@@ -2516,7 +2660,11 @@ export default function ImportRuleSuggestionReview({
           style={{
             position: 'relative',
             marginLeft: isConflictFollower ? 30 : 0,
-            zIndex: hoveredRemoveTooltip?.id === suggestion.id ? 8 : 0,
+            // Each card is its own stacking context (position + z-index), so an inline popover (the tag
+            // picker) can't paint over the *next* card unless this card outranks it while open.
+            zIndex: editingTagSuggestionId === getSuggestionKey(suggestion.id)
+              ? 30
+              : (hoveredRemoveTooltip?.id === suggestion.id ? 8 : 0),
             border: '1px solid var(--border)',
             borderRadius: 14,
             overflow: 'visible',
@@ -2743,6 +2891,59 @@ export default function ImportRuleSuggestionReview({
               )}
             </div>
 
+            {(resolvedSuggestion.tag_ids?.length || editingTagSuggestionId === getSuggestionKey(suggestion.id)) ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>tags:</span>
+                {resolvedSuggestion.tag_ids.map(tagId => {
+                  const tag = tags.find(item => String(item.id) === String(tagId))
+                  if (!tag) return null
+                  return (
+                    <span key={tagId} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <TagBadge tag={tag} />
+                      <button
+                        type="button"
+                        onClick={() => setSuggestionTag(suggestion, tagId, false)}
+                        title={`Remove ${tag.name}`}
+                        style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )
+                })}
+                <span style={{ position: 'relative', display: 'inline-flex' }}>
+                  <button
+                    type="button"
+                    // Open-only: while the picker is open its own outside-click dismissal closes it, so a
+                    // toggling onClick would close-then-reopen on the same click.
+                    onClick={editingTagSuggestionId === getSuggestionKey(suggestion.id)
+                      ? undefined
+                      : () => setEditingTagSuggestionId(getSuggestionKey(suggestion.id))}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 4,
+                      padding: '3px 9px', borderRadius: 999, fontSize: 11.5, fontWeight: 600,
+                      color: 'var(--muted)', background: 'transparent',
+                      border: '1px dashed color-mix(in srgb, var(--border) 80%, var(--text) 12%)',
+                      cursor: 'pointer', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    + tag
+                  </button>
+                  {editingTagSuggestionId === getSuggestionKey(suggestion.id) ? (
+                    <TagPickerWithCreate
+                      allTags={tags}
+                      selectedTagIds={new Set(resolvedSuggestion.tag_ids)}
+                      onToggleTag={(tag, present) => setSuggestionTag(suggestion, tag.id, present)}
+                      onTagCreated={created => onTagCreated?.(created)}
+                      onClose={() => setEditingTagSuggestionId(null)}
+                      positioning="absolute"
+                      align="left"
+                    />
+                  ) : null}
+                </span>
+              </div>
+            ) : null}
+
             {suggestion.needs_resolution && filterKey === 'pending' && isConflictLead ? (
               <div style={{ marginTop: 8, fontSize: 12, color: 'color-mix(in srgb, #f59e0b 72%, var(--text))' }}>
                 Conflicting category assignments for the same merchant. Pick one or add selection criteria to distinguish them.
@@ -2945,6 +3146,10 @@ export default function ImportRuleSuggestionReview({
         state={matchViewerState}
         categories={categories}
         onKeepCategory={keepMatchingTransactionCategory}
+        onSetRowCategory={setMatchRowCategory}
+        onSetAllCategories={setAllMatchCategories}
+        onCategoriesChanged={onCategoriesChanged}
+        applyingAll={matchViewerState.applyingAll}
         onClose={() => setMatchViewerState(prev => ({ ...prev, open: false }))}
       />
 

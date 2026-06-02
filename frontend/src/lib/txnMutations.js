@@ -26,6 +26,11 @@ import { refreshTaskBadge } from '../App.jsx'
 // need to know which views a given mutation affects.
 function notifyTransactionsChanged() {
   refreshTaskBadge()
+  // Broadcast so derived views (e.g. the dashboard's group/category totals) can refresh in place
+  // without each call site having to know which aggregates a given edit invalidated.
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('fintrack:transactions-changed'))
+  }
 }
 
 export const txnMutations = {
@@ -41,8 +46,8 @@ export const txnMutations = {
     return result
   },
 
-  async applyRule(ruleId) {
-    const result = await api.applyRule(ruleId)
+  async applyRule(ruleId, options) {
+    const result = await api.applyRule(ruleId, options)
     notifyTransactionsChanged()
     return result
   },

@@ -42,6 +42,16 @@ function csvParam(key, ids) {
   return value ? { [key]: value } : {}
 }
 
+// Forwards the Dashboard's extra summary filters (account_ids, category_ids, group_ids, payees) onto the
+// totals/trend endpoints. Values are already joined by the caller (comma for ids, pipe for payees).
+function summaryFilterParams(opts = {}) {
+  const out = {}
+  for (const [key, value] of Object.entries(opts)) {
+    if (value != null && value !== '') out[key] = value
+  }
+  return out
+}
+
 export const api = {
   getAuthStatus: () => request('/auth/status'),
   getUserPreferences: () => request('/auth/preferences'),
@@ -94,7 +104,7 @@ export const api = {
     const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))
     return request(`/transactions?${q}`)
   },
-  getGroupTotals: (month, account_id, date_start, date_end, owner_ids, category_owner_ids, tag_ids) => {
+  getGroupTotals: (month, account_id, date_start, date_end, owner_ids, category_owner_ids, tag_ids, opts = {}) => {
     const p = {
       ...(month               ? { month }               : {}),
       ...(date_start          ? { date_start }          : {}),
@@ -103,10 +113,11 @@ export const api = {
       ...csvParam('owner_ids', owner_ids),
       ...csvParam('category_owner_ids', category_owner_ids),
       ...csvParam('tag_ids', tag_ids),
+      ...summaryFilterParams(opts),
     }
     return request(`/transactions/summary/by-group?${new URLSearchParams(p)}`)
   },
-  getCategoryTotalsInGroup: (month, group_id, account_id, date_start, date_end, owner_ids, tag_ids) => {
+  getCategoryTotalsInGroup: (month, group_id, account_id, date_start, date_end, owner_ids, tag_ids, opts = {}) => {
     const p = {
       group_id,
       ...(month      ? { month }      : {}),
@@ -115,10 +126,11 @@ export const api = {
       ...(account_id ? { account_id } : {}),
       ...csvParam('owner_ids', owner_ids),
       ...csvParam('tag_ids', tag_ids),
+      ...summaryFilterParams(opts),
     }
     return request(`/transactions/summary/by-category-in-group?${new URLSearchParams(p)}`)
   },
-  getCategoryTotals: (month, account_id, date_start, date_end, owner_ids, category_owner_ids, tag_ids, exclude_income, exclude_expense) => {
+  getCategoryTotals: (month, account_id, date_start, date_end, owner_ids, category_owner_ids, tag_ids, exclude_income, exclude_expense, opts = {}) => {
     const p = {
       ...(month        ? { month }        : {}),
       ...(date_start   ? { date_start }   : {}),
@@ -129,15 +141,18 @@ export const api = {
       ...csvParam('tag_ids', tag_ids),
       ...(exclude_income ? { exclude_income: 'true' } : {}),
       ...(exclude_expense ? { exclude_expense: 'true' } : {}),
+      ...summaryFilterParams(opts),
     }
     return request(`/transactions/summary/by-category?${new URLSearchParams(p)}`)
   },
-  getMonthlyByGroup: (months = 24, account_id, group_id, tag_ids) => {
+  getMonthlyByGroup: (months = 24, account_id, group_id, tag_ids, owner_ids, opts = {}) => {
     const q = new URLSearchParams({
       months,
       ...(account_id ? { account_id } : {}),
       ...(group_id   ? { group_id }   : {}),
       ...csvParam('tag_ids', tag_ids),
+      ...csvParam('owner_ids', owner_ids),
+      ...summaryFilterParams(opts),
     })
     return request(`/transactions/summary/monthly-by-group?${q}`)
   },
@@ -145,7 +160,7 @@ export const api = {
     const q = new URLSearchParams({ payee, ...(date_start ? { date_start } : {}), ...(date_end ? { date_end } : {}), ...csvParam('tag_ids', tag_ids) })
     return request(`/transactions/summary/monthly-trend?${q}`)
   },
-  getMonthlyTrend: (months = 6, category_id, account_id, date_start, date_end, tag_ids, view) => {
+  getMonthlyTrend: (months = 6, category_id, account_id, date_start, date_end, tag_ids, view, owner_ids, opts = {}) => {
     const q = new URLSearchParams({
       months,
       ...(category_id ? { category_id } : {}),
@@ -154,6 +169,8 @@ export const api = {
       ...(date_end ? { date_end } : {}),
       ...csvParam('tag_ids', tag_ids),
       ...(view ? { view } : {}),
+      ...csvParam('owner_ids', owner_ids),
+      ...summaryFilterParams(opts),
     })
     return request(`/transactions/summary/monthly-trend?${q}`)
   },
@@ -235,7 +252,10 @@ export const api = {
   // deletes this one. Response `status`: 'updated'|'merged'|'duplicate'|'mergeable'|'conflict'.
   updateRule: (id, data, { onExisting } = {}) =>
     request(`/rules/${id}${onExisting ? `?on_existing=${onExisting}` : ''}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  applyRule: (id) => request(`/rules/${id}/apply`, { method: 'POST' }),
+  // `preserveManual` re-categorizes the rule's matches but leaves manual per-transaction edits alone
+  // (used after a merge/replace changes the governing rule); omitted = full force, overwriting all matches.
+  applyRule: (id, { preserveManual } = {}) =>
+    request(`/rules/${id}/apply${preserveManual ? '?preserve_manual=true' : ''}`, { method: 'POST' }),
   deleteRule: (id) => request(`/rules/${id}`, { method: 'DELETE' }),
 
   runSync: (days = 30) => request(`/sync?days=${days}`, { method: 'POST' }),
