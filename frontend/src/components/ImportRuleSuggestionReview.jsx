@@ -765,6 +765,34 @@ function MatchingTransactionsModal({ state, categories, onClose, onKeepCategory,
                             {row.keeping ? 'Keeping…' : 'Preserve This Categorization'}
                           </button>
                         ) : null}
+                        {state.referenceTargetCategoryId
+                          && row.category_source !== 'manual'
+                          && row.conflicts_with_reference
+                          && String(row.target_category_id) !== String(state.referenceTargetCategoryId) ? (
+                          <button
+                            type="button"
+                            onClick={() => onSetRowCategory?.(row, state.referenceTargetCategoryId)}
+                            disabled={row.keeping}
+                            title={`Recategorize this transaction as ${buildCategoryDisplayLabel(categories, state.referenceTargetCategoryId) || 'the majority category'}`}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              fontSize: 10.5,
+                              fontWeight: 600,
+                              color: 'var(--accent)',
+                              background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
+                              border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
+                              cursor: row.keeping ? 'wait' : 'pointer',
+                              opacity: row.keeping ? 0.7 : 1,
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            Use majority
+                          </button>
+                        ) : null}
                         </>
                         )}
                       </div>
@@ -1829,9 +1857,10 @@ export default function ImportRuleSuggestionReview({
     }))
   }
 
-  // Reconcile a single imported row to a chosen category. Like Preserve, this writes a manual lock
-  // (setCategory), so the row leaves the import-derived learning set and drops out of the conflict view
-  // on reload — the user has made the call for that transaction.
+  // Reconcile a single imported row to a chosen category as a *corrected file categorization*: it stays
+  // category_source='import' (so it keeps driving the suggestions — the suggestion re-targets to the new
+  // category) and its recorded file label is rewritten to match. Contrast Preserve, which marks the row
+  // a manual exception. Used by the per-row picker and the "Use majority" button.
   async function setMatchRowCategory(row, categoryId) {
     if (!row?.id || !categoryId) return
     setMatchViewerState(prev => ({
@@ -1839,7 +1868,7 @@ export default function ImportRuleSuggestionReview({
       rows: prev.rows.map(current => (current.id === row.id ? { ...current, keeping: true } : current)),
     }))
     try {
-      await txnMutations.setCategory(row.id, categoryId)
+      await txnMutations.setImportedCategory(row.id, categoryId)
       await onReloadSuggestions?.()
       await reloadMatchViewer()
     } catch (err) {
@@ -1851,13 +1880,29 @@ export default function ImportRuleSuggestionReview({
     }
   }
 
-  // Preserve keeps a row's own (conflicting) categorization; it's just a row reconcile to its current target.
-  function keepMatchingTransactionCategory(row) {
-    return setMatchRowCategory(row, row?.target_category_id)
+  // Preserve marks the row a manual exception: the rules never change it and it drops out of the
+  // suggestions (a deliberate one-off, not part of any rule).
+  async function keepMatchingTransactionCategory(row) {
+    if (!row?.id || !row?.target_category_id) return
+    setMatchViewerState(prev => ({
+      ...prev,
+      rows: prev.rows.map(current => (current.id === row.id ? { ...current, keeping: true } : current)),
+    }))
+    try {
+      await txnMutations.setCategory(row.id, row.target_category_id)
+      await onReloadSuggestions?.()
+      await reloadMatchViewer()
+    } catch (err) {
+      setMatchViewerState(prev => ({
+        ...prev,
+        error: err.message || 'Unable to preserve this categorization.',
+        rows: prev.rows.map(current => (current.id === row.id ? { ...current, keeping: false } : current)),
+      }))
+    }
   }
 
-  // Bulk reconcile: set every matching row that does not already use `categoryId` to it. Rows that already
-  // match are left as import-derived, so the surviving single-category suggestion still yields a rule.
+  // Bulk reconcile: re-pin every matching row that isn't already `categoryId` to it (as a corrected file
+  // categorization, kept as import), collapsing the conflict onto a single suggestion.
   async function setAllMatchCategories(categoryId) {
     if (!categoryId || matchViewerState.applyingAll) return
     const targets = matchViewerState.rows.filter(row => String(row.target_category_id) !== String(categoryId))
@@ -1865,7 +1910,7 @@ export default function ImportRuleSuggestionReview({
     setMatchViewerState(prev => ({ ...prev, applyingAll: true, error: '' }))
     try {
       for (const row of targets) {
-        await txnMutations.setCategory(row.id, categoryId)
+        await txnMutations.setImportedCategory(row.id, categoryId)
       }
       await onReloadSuggestions?.()
       await reloadMatchViewer()

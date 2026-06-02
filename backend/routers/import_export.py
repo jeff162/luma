@@ -1551,6 +1551,9 @@ def _generate_rule_suggestions(conn, candidate_rows: list[dict], selected_owner_
                     "needs_resolution": needs_resolution,
                     "resolution_reason": resolution_reason,
                     "_row_ids": {str(row["id"]) for row in target_rows if row.get("id")},
+                    # The rows this suggestion was generated from — accepting it applies the rule's
+                    # outputs (rename/tags/category) to exactly these, leaving conflicting rows alone.
+                    "source_row_ids": sorted(str(row["id"]) for row in target_rows if row.get("id")),
                 })
 
     suggestions = _prune_redundant_rule_suggestions(suggestions)

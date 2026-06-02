@@ -113,11 +113,14 @@ def _rule_matches_txn(rule, txn) -> bool:
     return _amount_rule_matches(txn["amount"], rule["amount_min"], rule["amount_max"], rule["debit_credit"])
 
 
-def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False) -> int:
+def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False, txn_ids: Optional[list[str]] = None) -> int:
     # `preserve_manual` reclaims the rows a rule should own — including import-locked ones
     # (category_source = 'import') — while leaving a deliberate per-transaction manual edit
     # (category_source = 'manual') untouched. Used when a merge/replace changes the governing rule:
     # the rule's prior matches should follow it, but a manual override is the user's final say.
+    # `txn_ids` restricts the apply to a specific set of rows (still subject to the matcher check) — used
+    # when accepting an import-rule suggestion so the rule's outputs land on exactly the rows that
+    # generated it, leaving conflicting rows for other suggestions alone.
     rule = conn.execute(
         """SELECT id, keyword, category_id, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id
            FROM category_rule
@@ -126,6 +129,16 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     ).fetchone()
     if not rule:
         raise HTTPException(status_code=404, detail="Rule not found")
+
+    where_clauses, where_params = [], []
+    if preserve_manual:
+        where_clauses.append("t.category_source IS NOT 'manual'")
+    if txn_ids is not None:
+        if not txn_ids:
+            return 0
+        where_clauses.append(f"t.id IN ({','.join('?' * len(txn_ids))})")
+        where_params.extend(txn_ids)
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
     txns = conn.execute(
         f"""SELECT
@@ -139,7 +152,8 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id
            FROM txn t
            JOIN account a ON a.id = t.account_id
-           {"WHERE t.category_source IS NOT 'manual'" if preserve_manual else ""}"""
+           {where_sql}""",
+        where_params,
     ).fetchall()
 
     rule_tag_ids = [
@@ -619,6 +633,22 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
 def apply_rule(rule_id: str, preserve_manual: bool = False):
     with get_db() as conn:
         updated = _apply_rule_to_existing(conn, rule_id, preserve_manual=preserve_manual)
+    return {"updated": updated}
+
+
+class ApplyToTransactionsBody(BaseModel):
+    transaction_ids: list[str] = []
+
+
+@router.post("/{rule_id}/apply-to-transactions")
+def apply_rule_to_transactions(rule_id: str, body: ApplyToTransactionsBody):
+    """Apply a rule's outputs (category/rename/tags) to a specific set of transactions — the rows that
+    generated an accepted import-rule suggestion — so the user's review edits land on exactly those
+    rows. Skips manual rows (deliberate exceptions) and rows the matcher no longer matches."""
+    with get_db() as conn:
+        updated = _apply_rule_to_existing(
+            conn, rule_id, preserve_manual=True, txn_ids=body.transaction_ids,
+        )
     return {"updated": updated}
 
 

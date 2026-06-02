@@ -509,6 +509,7 @@ export default function ImportRuleSuggestions() {
         keyword: entry.keyword,
         clean_name_suggestion: entry.proposed_clean_name || null,
       })
+      if (suggestion) await applyRuleToSuggestionRows(ruleId, suggestion)
       recordReconciledRule(ruleId, 'replaced')
       dropConflictEntry(entry.suggestion_id)
       await reloadSuggestions()
@@ -545,6 +546,21 @@ export default function ImportRuleSuggestions() {
     }
   }
 
+  // Accepting a suggestion applies the rule's outputs (category / clean name / tags) to the rows that
+  // generated it — and only those rows. The backend uses preserve_manual, so any row a user Preserved
+  // (manual exception) is left untouched, and rows belonging to other (conflicting) suggestions aren't
+  // in this set — they're left alone rather than silently reassigned to this rule's category.
+  async function applyRuleToSuggestionRows(ruleId, suggestion) {
+    const rowIds = suggestion?.source_row_ids || []
+    if (!ruleId || !rowIds.length) return
+    try {
+      await txnMutations.applyRuleToTransactions(ruleId, rowIds)
+    } catch {
+      // The rule itself saved; a failure to back-apply to its own rows shouldn't fail the accept.
+      // The user can still re-apply from the rule, and the rows surface again on the next generate.
+    }
+  }
+
   async function saveSuggestion(suggestion, data) {
     setResolveSummary(null)
     setReconcileApplyNote(null)
@@ -576,6 +592,9 @@ export default function ImportRuleSuggestions() {
       amount_max: data.amount_max,
       clean_name_suggestion: data.clean_name || null,
     })
+    // Auto-apply the rule's outputs to this suggestion's own source rows (no extra step). The broad
+    // "apply to all matches" action below is opt-in and a superset; this scoped pass is the default.
+    await applyRuleToSuggestionRows(createdRule?.id, suggestion)
     if (applyToExisting && createdRule?.id) await txnMutations.applyRule(createdRule.id)
     // A merge that actually changed the existing rule (filled a category/rename or added tags — i.e. not
     // a pure duplicate) is a candidate for re-categorizing the rows it already matches.
@@ -638,6 +657,7 @@ export default function ImportRuleSuggestions() {
       clean_name_suggestion: data.clean_name || null,
     })
 
+    await applyRuleToSuggestionRows(ruleId, suggestion)
     if (mergedRuleId) recordReconciledRule(mergedRuleId, 'merged')
     setEditingSuggestionId(null)
     await reloadSuggestions()
@@ -706,6 +726,7 @@ export default function ImportRuleSuggestions() {
           target_category_name: suggestion.target_category_name,
           keyword: suggestion.keyword,
         })
+        await applyRuleToSuggestionRows(createdRule?.id, suggestion)
         updatesById[suggestion.id] = {
           review_status: 'accepted',
           rule_id: createdRule?.id || null,

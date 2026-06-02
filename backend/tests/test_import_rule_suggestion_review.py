@@ -24,10 +24,18 @@ from backend.routers.import_export import (
     BatchRuleSuggestionReviewUpdateRequest,
     _get_system_rule_suggestion_review_state,
     _save_system_rule_suggestion_review_state,
+    _set_batch_imported_category_usage,
     get_system_rule_suggestion_matches,
     get_system_rule_suggestions,
     update_system_rule_suggestion_review,
 )
+from backend.routers.rules import (
+    ApplyToTransactionsBody,
+    RuleCreate,
+    apply_rule_to_transactions,
+    create_rule,
+)
+from backend.routers.transactions import CategoryOverride, set_imported_category
 
 
 class ImportRuleSuggestionReviewTests(unittest.TestCase):
@@ -405,6 +413,97 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(len(result["suggestions"]), 1)
         self.assertEqual(result["suggestions"][0]["target_category_name"], "FixtureRideshare")
         self.assertFalse(result["suggestions"][0]["needs_resolution"])
+
+
+    def test_recategorizing_import_rows_collapses_the_conflict(self):
+        account_id = self._insert_account("Primary Checking")
+        trash_id = self._insert_expense_leaf("FixtureTrash")
+        home_services_id = self._insert_expense_leaf("FixtureHomeServices")
+        batch_id = self._insert_import_batch()
+        for _ in range(4):
+            self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=trash_id, merchant_name="Black Earth Compost", amount=-69.99)
+        home_rows = [
+            self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=home_services_id, merchant_name="Black Earth Compost", amount=-44.99)
+            for _ in range(3)
+        ]
+
+        with self._use_db_path():
+            before = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "black earth compost"]
+        # The same merchant is split across two competing import-backed categories — a conflict.
+        self.assertEqual(len(before), 2)
+        self.assertEqual(
+            sorted(s["target_category_name"] for s in before),
+            ["FixtureHomeServices", "FixtureTrash"],
+        )
+
+        with self._use_db_path():
+            for row_id in home_rows:
+                set_imported_category(row_id, CategoryOverride(category_id=trash_id))
+            after = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "black earth compost"]
+
+        # Re-pinning the minority rows as a corrected file categorization (kept as import) collapses the
+        # conflict onto the single surviving suggestion, which now covers every matching row.
+        self.assertEqual(len(after), 1)
+        self.assertEqual(after[0]["target_category_name"], "FixtureTrash")
+        self.assertFalse(after[0]["needs_resolution"])
+        self.assertEqual(after[0]["txn_count"], 7)
+
+    def test_recategorized_import_row_survives_trust_flag_retoggle(self):
+        account_id = self._insert_account("Primary Checking")
+        trash_id = self._insert_expense_leaf("FixtureTrash")
+        home_services_id = self._insert_expense_leaf("FixtureHomeServices")
+        batch_id = self._insert_import_batch()
+        row_id = self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=home_services_id, merchant_name="Black Earth Compost", amount=-44.99)
+
+        with self._use_db_path():
+            set_imported_category(row_id, CategoryOverride(category_id=trash_id))
+            # Re-deriving import rows from their recorded file label (what toggling "trust this batch"
+            # does) must land on the recategorized target, not the original file category — because the
+            # recategorize rewrote imported_category to match.
+            with get_db() as conn:
+                _set_batch_imported_category_usage(conn, batch_id, True)
+                row = conn.execute("SELECT category_id, category_source FROM txn WHERE id = ?", (row_id,)).fetchone()
+
+        self.assertEqual(row["category_id"], trash_id)
+        self.assertEqual(row["category_source"], "import")
+
+    def test_apply_rule_to_transactions_scopes_to_listed_rows_and_skips_manual(self):
+        account_id = self._insert_account("Card")
+        streaming = self._insert_expense_leaf("FixtureStreaming2")
+        other = self._insert_expense_leaf("FixtureOther")
+        batch_id = self._insert_import_batch()
+        src1 = self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=other, merchant_name="Zorptech Widgets", amount=-15.99)
+        src2 = self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=other, merchant_name="Zorptech Widgets", amount=-15.99)
+        preserved = self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=other, merchant_name="Zorptech Widgets", amount=-15.99)
+        bystander = self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=other, merchant_name="Zorptech Widgets", amount=-15.99)
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET category_source = 'manual', category_overridden = 1 WHERE id = ?",
+                    (preserved,),
+                )
+
+        with self._use_db_path():
+            created = create_rule(RuleCreate(keyword="zorptech widgets", category_id=streaming))
+            self.assertEqual(created["status"], "created")
+            # Accept applies to exactly the suggestion's own rows — and even though we list the preserved
+            # row, preserve_manual leaves it alone; the bystander row isn't listed at all.
+            apply_rule_to_transactions(
+                created["id"],
+                ApplyToTransactionsBody(transaction_ids=[src1, src2, preserved]),
+            )
+            with get_db() as conn:
+                cats = {
+                    row["id"]: (row["category_id"], row["category_source"])
+                    for row in conn.execute("SELECT id, category_id, category_source FROM txn").fetchall()
+                }
+
+        self.assertEqual(cats[src1], (streaming, "rule"))
+        self.assertEqual(cats[src2], (streaming, "rule"))
+        # The Preserved (manual) row is untouched even though it was in the apply set.
+        self.assertEqual(cats[preserved], (other, "manual"))
+        # The row that wasn't part of this suggestion is left alone, not reassigned.
+        self.assertEqual(cats[bystander], (other, "import"))
 
 
 if __name__ == "__main__":

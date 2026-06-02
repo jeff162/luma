@@ -180,6 +180,14 @@ export const api = {
       body: JSON.stringify({ category_id, notes }),
     }),
 
+  // Re-pin an imported transaction's category as a corrected *file* categorization (keeps it driving
+  // rule suggestions), vs overrideCategory which marks it a manual exception.
+  setImportedCategory: (txnId, category_id) =>
+    request(`/transactions/${txnId}/imported-category`, {
+      method: 'PATCH',
+      body: JSON.stringify({ category_id }),
+    }),
+
   getAccounts: (params = {}) => {
     const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))
     const suffix = q.toString() ? `?${q}` : ''
@@ -256,6 +264,10 @@ export const api = {
   // (used after a merge/replace changes the governing rule); omitted = full force, overwriting all matches.
   applyRule: (id, { preserveManual } = {}) =>
     request(`/rules/${id}/apply${preserveManual ? '?preserve_manual=true' : ''}`, { method: 'POST' }),
+  // Apply a rule's outputs to a specific set of transactions (the rows that generated an accepted
+  // import-rule suggestion), leaving conflicting rows and manual exceptions alone.
+  applyRuleToTransactions: (id, transaction_ids) =>
+    request(`/rules/${id}/apply-to-transactions`, { method: 'POST', body: JSON.stringify({ transaction_ids }) }),
   deleteRule: (id) => request(`/rules/${id}`, { method: 'DELETE' }),
 
   runSync: (days = 30) => request(`/sync?days=${days}`, { method: 'POST' }),

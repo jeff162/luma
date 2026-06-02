@@ -40,6 +40,14 @@ export const txnMutations = {
     return result
   },
 
+  // Re-pin an imported transaction as a corrected file categorization (keeps it driving suggestions),
+  // vs setCategory which marks a manual exception. Used by the import rule-suggestions matches report.
+  async setImportedCategory(txnId, categoryId) {
+    const result = await api.setImportedCategory(txnId, categoryId)
+    notifyTransactionsChanged()
+    return result
+  },
+
   async uncategorize(txnId) {
     const result = await api.clearOverride(txnId)
     notifyTransactionsChanged()
@@ -48,6 +56,13 @@ export const txnMutations = {
 
   async applyRule(ruleId, options) {
     const result = await api.applyRule(ruleId, options)
+    notifyTransactionsChanged()
+    return result
+  },
+
+  // Apply a rule's outputs to the specific rows that generated an accepted import-rule suggestion.
+  async applyRuleToTransactions(ruleId, transactionIds) {
+    const result = await api.applyRuleToTransactions(ruleId, transactionIds)
     notifyTransactionsChanged()
     return result
   },

@@ -702,6 +702,30 @@ def override_category(txn_id: str, body: CategoryOverride):
     return {"ok": True}
 
 
+@router.patch("/{txn_id}/imported-category")
+def set_imported_category(txn_id: str, body: CategoryOverride):
+    # Used by the import rule-suggestions review to re-pin an imported transaction's category as a
+    # *corrected file categorization*: keep category_source='import' (so it still drives the suggestions)
+    # and rewrite imported_category to match, so the rule-suggestion engine re-targets to it and a later
+    # trust-flag re-toggle (which re-derives 'import' rows from their file label) can't revert it.
+    # Contrast override_category, which marks the row 'manual' — an exception the rules leave alone.
+    with get_db() as conn:
+        txn = conn.execute("SELECT id FROM txn WHERE id = ?", (txn_id,)).fetchone()
+        if not txn:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        cat = conn.execute("SELECT name FROM category WHERE id = ?", (body.category_id,)).fetchone()
+        if not cat:
+            raise HTTPException(status_code=404, detail="Category not found")
+        conn.execute(
+            """
+            UPDATE txn
+            SET category_id = ?, imported_category = ?, category_overridden = 1, category_source = 'import'
+            WHERE id = ?
+            """,
+            (body.category_id, cat["name"], txn_id),
+        )
+    return {"ok": True}
+
 
 @router.patch("/{txn_id}/merchant")
 def update_merchant(txn_id: str, body: dict):
