@@ -4,7 +4,7 @@
 import { useCallback, useState, useEffect, useMemo, useRef } from 'react'
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
-  BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, ReferenceLine,
+  BarChart, Bar, ComposedChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, ReferenceLine,
 } from 'recharts'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
@@ -442,49 +442,53 @@ function SpendBar({ value, total, color }) {
   )
 }
 
-// Reference-line label for the average line on Trends-tab charts. The pill
-// inside the chart says "Avg" so the user can identify the line at a glance,
-// and the numeric value renders in the y-axis tick column at the line's
-// height (in accent color, slightly bold) so it reads as part of the axis
-// scale. Splitting them keeps the in-chart marker tiny and avoids overlapping
-// the chart's hover zone, while the value still sits where users naturally
-// look for axis numbers.
+// X-axis month tick that staggers every other label onto a second row — with a short connector line so
+// it's clear which bar it belongs to — once there are enough months that a single row would collide.
+// Keeps every month labeled and legible without rotating or dropping labels.
+function StaggeredMonthTick({ x, y, payload, index, visibleTicksCount }) {
+  const stagger = (visibleTicksCount ?? 0) > 8
+  const lower = stagger && index % 2 === 1
+  return (
+    <g>
+      {lower ? <line x1={x} y1={y} x2={x} y2={y + 11} stroke="var(--border)" /> : null}
+      <text x={x} y={y + (lower ? 21 : 10)} textAnchor="middle" fontSize={10} fill="var(--muted)">
+        {payload?.value}
+      </text>
+    </g>
+  )
+}
+
+// Reference-line label for the average line on the trend charts: a single "Avg $X" pill that sits on
+// the line just inside the plot area. Keeping the value inside the pill (rather than in the y-axis tick
+// column) means it can't collide with a real axis tick when the average happens to land near one.
 function AvgReferenceLabel({ viewBox, value }) {
   if (!viewBox) return null
   const labelY = viewBox.y ?? 0
   const innerX = viewBox.x ?? 0
-  const pillW = 30
-  const pillH = 14
+  const text = `Avg ${formatSignedAxisTick(value)}`
+  const pillH = 15
+  // Approximate the rendered text width (no measurement API in SVG here) so the pill hugs the label.
+  const pillW = Math.round(text.length * 5.4 + 12)
   return (
     <g style={{ pointerEvents: 'none' }}>
       <rect
-        x={innerX}
+        x={innerX + 2}
         y={labelY - pillH / 2}
         width={pillW}
         height={pillH}
         rx={3}
         fill="var(--accent2)"
-        opacity={0.9}
+        opacity={0.92}
       />
       <text
-        x={innerX + pillW / 2}
-        y={labelY + 3}
+        x={innerX + 2 + pillW / 2}
+        y={labelY + 3.5}
         fontSize={10}
         fontWeight={600}
         fill="#fff"
         textAnchor="middle"
       >
-        Avg
-      </text>
-      <text
-        x={innerX - 6}
-        y={labelY + 3}
-        fontSize={10}
-        fontWeight={700}
-        fill="var(--accent2)"
-        textAnchor="end"
-      >
-        {formatSignedAxisTick(value)}
+        {text}
       </text>
     </g>
   )
@@ -1016,8 +1020,12 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
     /^\d{4}-\d{2}$/.test(r.month)
   )
 
-  const filteredRows = selectedYear === 'all'
-    ? normalizedRows
+  // 'last12' = the trailing 12 calendar months ending this month (the rolling default); otherwise a
+  // specific calendar year. The multi-year picture lives in the Annual totals chart, so there's no
+  // unbounded "all time" option here to compress the monthly bars.
+  const last12Start = shiftMonth(thisM, -11)
+  const filteredRows = selectedYear === 'last12'
+    ? normalizedRows.filter(r => r.month >= last12Start && r.month <= thisM)
     : normalizedRows.filter(r => r.month.startsWith(selectedYear))
 
   const allMonths = [...new Set(filteredRows.map(r => r.month))].sort()
@@ -1073,12 +1081,31 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
     .map(([year, total]) => ({ year, total }))
   const annualAvg = annualData.reduce((s, r) => s + r.total, 0) / (annualData.length || 1)
 
-  const monthlyTotal = allMonths.map(m => ({
-    month: monthLabel(m),
-    monthKey: m,
-    total: viewRows.filter(r => r.month === m).reduce((s, r) => s + r.total, 0),
-  }))
+  // Trailing-12-month run rate per month, computed over the *full* view series (not the year-filtered
+  // view), so the line for the first on-screen month can reach back into prior, off-screen months. A
+  // 12-month window counts each annual bill once, quarterly four times, etc. — the amortized monthly
+  // burn — so it reads as the spending trend rather than the lumpy month-to-month total.
+  const fullMonthlyMap = {}
+  for (const r of allViewRows) fullMonthlyMap[r.month] = (fullMonthlyMap[r.month] || 0) + r.total
+  const dataStartMonth = allViewRows.reduce((min, r) => (min === null || r.month < min ? r.month : min), null)
+
+  const monthlyTotal = allMonths.map(m => {
+    let runRate = null
+    // Only defined where a full year of preceding data exists, so an incomplete window can't understate it.
+    if (dataStartMonth && shiftMonth(m, -11) >= dataStartMonth) {
+      let sum = 0
+      for (let i = 0; i < 12; i++) sum += fullMonthlyMap[shiftMonth(m, -i)] || 0
+      runRate = sum / 12
+    }
+    return {
+      month: monthLabel(m),
+      monthKey: m,
+      total: viewRows.filter(r => r.month === m).reduce((s, r) => s + r.total, 0),
+      runRate,
+    }
+  })
   const overallAvg = monthlyTotal.reduce((s, r) => s + r.total, 0) / (monthlyTotal.length || 1)
+  const latestRunRate = [...monthlyTotal].reverse().find(r => r.runRate != null)?.runRate ?? null
 
   function handleMonthBarClick(d) {
     if (!d?.monthKey || !onOpenMonth) return
@@ -1113,7 +1140,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
 
   const availableYears = [...new Set(normalizedRows.map(r => r.month.slice(0, 4)))].sort().reverse()
   const yearOptions = [
-    { value: 'all', label: 'All time' },
+    { value: 'last12', label: 'Last 12 months' },
     ...availableYears.map(y => ({ value: y, label: y })),
   ]
 
@@ -1213,18 +1240,28 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
         <Card style={{ position: 'relative', zIndex: 1 }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Total per month</div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
-            Avg: {formatCurrency(overallAvg)}/mo · double-click a bar to open that month · scroll to pan
+            {latestRunRate != null
+              ? <>12-mo run rate: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatCurrency(latestRunRate)}/mo</span></>
+              : <>Avg: {formatCurrency(overallAvg)}/mo</>}
+            {' · double-click a bar to open that month'}
           </div>
-          <div style={{ overflowX: 'auto', overflowY: 'hidden' }}>
-            <div style={{ minWidth: Math.max(360, monthlyTotal.length * 36), height: 180 }}>
+          {/* Fit the panel (no oversized horizontal scroll) so the tooltip's built-in edge-flip happens at
+              the visible panel edge instead of the off-screen far edge of a wider chart. */}
+          <div style={{ width: '100%', height: 180 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={monthlyTotal}>
+                <ComposedChart data={monthlyTotal} margin={{ top: 6, right: 12, bottom: 6, left: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="month" tick={{ fill: 'var(--muted)', fontSize: 10 }}
-                    interval={monthlyTotal.length > 36 ? Math.floor(monthlyTotal.length / 24) : 0} />
+                  <XAxis
+                    dataKey="month"
+                    interval={0}
+                    tickLine={false}
+                    height={monthlyTotal.length > 8 ? 40 : 22}
+                    tick={<StaggeredMonthTick />}
+                  />
                   <YAxis tickFormatter={v => `$${(v/1000).toFixed(0)}k`} tick={{ fill: 'var(--muted)', fontSize: 10 }} />
                   <Tooltip
                     formatter={v => formatCurrency(v)}
+                    allowEscapeViewBox={{ x: false, y: false }}
                     contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
                     labelStyle={CHART_TOOLTIP_LABEL_STYLE}
                     itemStyle={CHART_TOOLTIP_ITEM_STYLE}
@@ -1237,15 +1274,19 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
                     onClick={onOpenMonth ? handleMonthBarClick : undefined}
                     style={onOpenMonth ? { cursor: 'pointer' } : undefined}
                   />
-                  <ReferenceLine
-                    y={overallAvg}
+                  {/* Trailing-12-month run rate — the trend line; flat-ish means steady spending, sloped means drifting. */}
+                  <Line
+                    type="monotone"
+                    dataKey="runRate"
+                    name="12-mo run rate"
                     stroke="var(--accent2)"
-                    strokeDasharray="4 4"
-                    label={<AvgReferenceLabel value={overallAvg} />}
+                    strokeWidth={2}
+                    dot={false}
+                    connectNulls={false}
+                    isAnimationActive={false}
                   />
-                </BarChart>
+                </ComposedChart>
               </ResponsiveContainer>
-            </div>
           </div>
         </Card>
 
@@ -1287,7 +1328,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
       <Card style={{ position: 'relative', zIndex: 1 }}>
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
           Monthly averages{drillGroup ? ` · ${drillGroup.series_name}` : ' by group'}
-          <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>{selectedYear === 'all' ? 'all time' : selectedYear}</span>
+          <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>{selectedYear === 'last12' ? 'last 12 months' : selectedYear}</span>
         </div>
         <div style={{
           display: 'grid', gridTemplateColumns: '1fr 100px 100px 100px',
@@ -1541,7 +1582,7 @@ export default function Dashboard() {
   const [cmpGroup,   setCmpGroup]   = useState(null)
   const [cmpLevel,   setCmpLevel]   = useState('groups')
 
-  const [trendYear,  setTrendYear]        = useState('all')
+  const [trendYear,  setTrendYear]        = useState('last12')
   const [trendGroup,  setTrendGroup]      = useState(null)
   const [trendRows,   setTrendRows]       = useState([])
   const [trendGroups, setTrendGroups]     = useState([])
