@@ -269,14 +269,19 @@ function priorModeOptionsFor(periodA) {
 function computeTrendBuckets(periodDate, options = {}) {
   const earlierCount = options.earlierCount ?? 11
   const laterCount = options.laterCount ?? 3
-  let anchorStart, anchorEnd
+  let anchorStart, bucketMonths
   if (periodDate?.start && periodDate?.end) {
     anchorStart = periodDate.start.slice(0, 7)
-    anchorEnd = periodDate.end.slice(0, 7)
+    // Bucket width tracks the selected period's *duration*, not how many calendar-month labels it
+    // touches. Otherwise a ~30-day range straddling a month boundary (e.g. "Last 30 days") counts as
+    // two months and inflates every bucket — and the displayed average — vs. an equivalent "Last month".
+    const daySpan = Math.round((new Date(periodDate.end) - new Date(periodDate.start)) / 86400000) + 1
+    bucketMonths = Math.max(1, Math.round(daySpan / 30.44))
   } else {
-    anchorStart = anchorEnd = thisM
+    anchorStart = thisM
+    bucketMonths = 1
   }
-  const bucketMonths = monthsBetween(anchorStart, anchorEnd)
+  const anchorEnd = shiftMonth(anchorStart, bucketMonths - 1)
   const buckets = []
   for (let i = earlierCount; i >= 1; i--) {
     const start = shiftMonth(anchorStart, -i * bucketMonths)
@@ -1627,6 +1632,29 @@ export default function Dashboard() {
     setTopCatRows(c)
   }, [accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, dashboardView, filters.date])
 
+  // In-place loaders for the Compare and Trends aggregates, shared by their mode effects and the
+  // transaction-change refresh so an edit updates them without resetting the user's drill.
+  const loadCompareTotals = useCallback(async () => {
+    if (!periodA || !periodB) return
+    const [a, b] = await Promise.all([
+      fetchPeriodGroupTotals(periodA, accountId, tagIds, ownerIds, summaryFilters),
+      fetchPeriodGroupTotals(periodB, accountId, tagIds, ownerIds, summaryFilters),
+    ])
+    setCmpGroupsA(a)
+    setCmpGroupsB(b)
+  }, [periodA, periodB, accountId, tagIds, ownerIds, summaryFilters])
+
+  const loadTrendSeries = useCallback(async () => {
+    const rows = await api.getMonthlyByGroup(60, accountId || undefined, trendGroup?.series_id || undefined, tagIds, ownerIds, summaryFilters)
+    setTrendRows(rows)
+  }, [accountId, trendGroup, tagIds, ownerIds, summaryFilters])
+
+  const loadTrendGroups = useCallback(async () => {
+    const wantIncome = dashboardView === 'income'
+    const g = await api.getGroupTotals(thisM, accountId || undefined, undefined, undefined, ownerIds, undefined, tagIds, summaryFilters)
+    setTrendGroups(g.filter(r => (wantIncome ? r.category_type === 'income' : r.category_type !== 'income')))
+  }, [accountId, ownerIds, tagIds, summaryFilters, dashboardView])
+
   useEffect(() => {
     if (mode !== 'single') return
     setLoading(true)
@@ -1638,15 +1666,28 @@ export default function Dashboard() {
   // and the open group's category totals in place — otherwise a moved transaction lingers in the list.
   useEffect(() => {
     function onTxnChange() {
-      if (mode === 'single') loadSingleTotals()
-      if (selectedGroup?.group_id) {
-        api.getCategoryTotalsInGroup(null, selectedGroup.group_id, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters)
-          .then(setCatRows)
+      if (mode === 'single') {
+        loadSingleTotals()
+        if (selectedGroup?.group_id) {
+          api.getCategoryTotalsInGroup(null, selectedGroup.group_id, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters)
+            .then(setCatRows)
+        }
+      } else if (mode === 'compare') {
+        loadCompareTotals()
+        if (cmpGroup?.group_id) {
+          Promise.all([
+            fetchPeriodCatTotals(periodA, cmpGroup.group_id, accountId, tagIds, ownerIds, summaryFilters),
+            fetchPeriodCatTotals(periodB, cmpGroup.group_id, accountId, tagIds, ownerIds, summaryFilters),
+          ]).then(([a, b]) => { setCmpCatsA(a); setCmpCatsB(b) })
+        }
+      } else if (mode === 'trends') {
+        loadTrendSeries()
+        loadTrendGroups()
       }
     }
     window.addEventListener('fintrack:transactions-changed', onTxnChange)
     return () => window.removeEventListener('fintrack:transactions-changed', onTxnChange)
-  }, [mode, loadSingleTotals, selectedGroup, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters])
+  }, [mode, loadSingleTotals, loadCompareTotals, loadTrendSeries, loadTrendGroups, selectedGroup, cmpGroup, periodA, periodB, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters])
 
   useEffect(() => {
     api.getCategories().then(setCategories)
@@ -1656,35 +1697,21 @@ export default function Dashboard() {
     if (mode !== 'compare' || !periodA || !periodB) return
     setLoading(true)
     setCmpLevel('groups'); setCmpGroup(null)
-    Promise.all([
-      fetchPeriodGroupTotals(periodA, accountId, tagIds, ownerIds, summaryFilters),
-      fetchPeriodGroupTotals(periodB, accountId, tagIds, ownerIds, summaryFilters),
-    ]).then(([a, b]) => {
-      setCmpGroupsA(a)
-      setCmpGroupsB(b)
-      setLoading(false)
-    })
-  }, [periodA, periodB, accountId, mode, tagIds, ownerIds, summaryFilters])
+    loadCompareTotals().then(() => setLoading(false))
+  }, [mode, periodA, periodB, loadCompareTotals])
 
   useEffect(() => {
     if (mode !== 'trends') return
     setTrendLoading(true)
-    api.getMonthlyByGroup(60, accountId || undefined, trendGroup?.series_id || undefined, tagIds, ownerIds, summaryFilters)
-      .then(rows => {
-        setTrendRows(rows)
-        setTrendLoading(false)
-      })
-  }, [mode, accountId, trendGroup, tagIds, ownerIds, summaryFilters])
+    loadTrendSeries().then(() => setTrendLoading(false))
+  }, [mode, loadTrendSeries])
 
   useEffect(() => {
     if (mode !== 'trends') return
     // The drill dropdown lists only the side of the ledger the user is currently viewing —
-    // expense groups in spending mode, income groups in income mode.
-    const wantIncome = dashboardView === 'income'
-    api.getGroupTotals(thisM, accountId || undefined, undefined, undefined, ownerIds, undefined, tagIds, summaryFilters).then(g => {
-      setTrendGroups(g.filter(r => (wantIncome ? r.category_type === 'income' : r.category_type !== 'income')))
-    })
-  }, [mode, accountId, tagIds, ownerIds, summaryFilters, dashboardView])
+    // expense groups in spending mode, income groups in income mode (handled inside loadTrendGroups).
+    loadTrendGroups()
+  }, [mode, loadTrendGroups])
 
   // Clear an active drill when the user toggles between spending and income — a drilled
   // expense group has no meaning in income view (and vice versa), so jump back to "all groups".
@@ -2491,6 +2518,8 @@ export default function Dashboard() {
           view={entry.view}
           accountId={accountId || undefined}
           tagIds={tagIds}
+          ownerIds={ownerIds}
+          filters={summaryFilters}
           categories={categories}
           forceFloating={detailTxns.length + detailMonths.length + detailTagSignatures.length > 1}
           stackIndex={detailTxns.length + index}

@@ -27,6 +27,8 @@ export default function MonthDetail({
   view,
   accountId,
   tagIds,
+  ownerIds,
+  filters = {},
   categories = [],
   onClose,
   forceFloating = false,
@@ -48,6 +50,8 @@ export default function MonthDetail({
       month,
       ...(accountId ? { account_id: accountId } : {}),
       ...(tagIds ? { tag_ids: tagIds } : {}),
+      ...(ownerIds ? { owner_ids: ownerIds } : {}),
+      ...filters,
       ...(view ? { view } : {}),
       limit: 1000,
     }).then(resp => {
@@ -60,7 +64,7 @@ export default function MonthDetail({
       setLoading(false)
     })
     return () => { cancelled = true }
-  }, [month, view, accountId, tagIds])
+  }, [month, view, accountId, tagIds, ownerIds, filters])
 
   const viewLabel = view === 'income' ? 'Income' : 'Spending'
   const total = transactions.reduce((s, t) => {
