@@ -881,8 +881,10 @@ def resolve_suspect_duplicate(txn_id: str, body: SuspectResolveBody):
             raise HTTPException(status_code=404, detail="Transaction not found")
         if reason == "not_suspect":
             raise HTTPException(status_code=400, detail="Transaction is not flagged as a suspect duplicate")
+        if reason == "matched_missing":
+            raise HTTPException(status_code=400, detail="The matched existing transaction no longer exists")
         if reason == "invalid_action":
-            raise HTTPException(status_code=400, detail="action must be 'keep' or 'trash'")
+            raise HTTPException(status_code=400, detail="action must be 'keep', 'reject', or 'replace'")
         raise HTTPException(status_code=400, detail="Unable to resolve suspect")
     return result
 

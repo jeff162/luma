@@ -195,6 +195,22 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         with (FIXTURE_DIR / fixture_name).open("r", encoding="utf-8", newline="") as handle:
             return list(csv.DictReader(handle))
 
+    def _imported_dedupe_states(self, batch_id: str) -> dict[str, dict]:
+        """Dedupe state of every row this batch inserted, keyed by account_id (one row per
+        account in the fixtures below)."""
+        with self._use_db_path():
+            with get_db() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT account_id, suspect_duplicate_of, suspect_duplicate_reason,
+                           suspect_resolved_at, trashed_at, rejection_reason, dedupe_resolved_by
+                    FROM   txn
+                    WHERE  import_batch_id = ?
+                    """,
+                    (batch_id,),
+                ).fetchall()
+        return {row["account_id"]: dict(row) for row in rows}
+
     async def test_coverage_window_and_terminal_day_reconciliation(self):
         rewards_id = self._insert_account("Travel Rewards", account_type="credit", mask="1234")
 
@@ -313,6 +329,62 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
                 }
             ],
         )
+
+    async def test_import_into_merged_group_auto_confirms_in_group_overlap_only(self):
+        # Pre-existing merge / import-order independence. A legacy umbrella "Credit Card" account
+        # is already merged under "Rewards Card"; "Cashback Card" is a separate, unmerged card.
+        # The umbrella holds two transactions that physically belong to the two different real
+        # cards. Importing the statement file (mapped to the real cards) must:
+        #   - auto-confirm the Rewards Card row as an in-group duplicate — the merge already
+        #     declared Credit Card == Rewards Card, so it settles like an import-then-merge
+        #     (auto_merge, restorable on a later detach), NOT as an open cross-account review item;
+        #   - leave the Cashback Card row as an active cross-account suspect, since it was never
+        #     merged with the umbrella and its match is a genuine cross-account coincidence/dupe.
+        rewards_id = self._insert_account("Rewards Card", account_type="credit", mask="1111")
+        credit_card_id = self._insert_account(
+            "Credit Card", account_type="credit", parent_account_id=rewards_id,
+        )
+        cashback_id = self._insert_account("Cashback Card", account_type="credit", mask="2222")
+
+        # Stored positive (money-out): the `single_signed` import convention flips the CSV's
+        # negative charge to a positive debit, so these pre-existing rows — themselves imported
+        # under the same convention — must match that sign for the (date, amount, payee) sweep.
+        cc_rewards_txn = self._insert_existing_transaction(
+            account_id=credit_card_id, date="2023-12-14", amount=3.65, merchant_name="PARKS DEPT",
+        )
+        cc_cashback_txn = self._insert_existing_transaction(
+            account_id=credit_card_id, date="2023-10-30", amount=68.00, merchant_name="OUTDOOR CO",
+        )
+
+        config = self._account_mapping_config(
+            headers={
+                "date": "Date",
+                "description": "Description",
+                "account": "Account",
+                "amount": "Amount",
+                "date_format": "%Y-%m-%d",
+            },
+            account_map={"Rewards Card": rewards_id, "Cashback Card": cashback_id},
+        )
+        result = await self._run_import_fixture("duplicate_merged_group_overlap.csv", config)
+        # Neither receiving account had prior same-account rows and no alias/compare target was
+        # declared, so nothing hard-rejects at import time; both rows insert and dedupe is decided
+        # by the post-insert sweep + in-group promotion.
+        self.assertEqual(result["imported"], 2)
+        self.assertEqual(result["deduped"], 0)
+
+        states = self._imported_dedupe_states(result["batch_id"])
+        rewards_state = states[rewards_id]
+        self.assertEqual(rewards_state["rejection_reason"], "duplicate_confirmed")
+        self.assertEqual(rewards_state["dedupe_resolved_by"], "auto_merge")
+        self.assertIsNotNone(rewards_state["trashed_at"])
+        self.assertEqual(rewards_state["suspect_duplicate_of"], cc_rewards_txn)
+
+        cashback_state = states[cashback_id]
+        self.assertEqual(cashback_state["suspect_duplicate_of"], cc_cashback_txn)
+        self.assertEqual(cashback_state["suspect_duplicate_reason"], "cross_account")
+        self.assertIsNone(cashback_state["trashed_at"])
+        self.assertIsNone(cashback_state["rejection_reason"])
 
     async def test_duplicate_rows_within_same_csv_are_allowed(self):
         rewards_id = self._insert_account("Travel Rewards", account_type="credit", mask="1234")

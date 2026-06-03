@@ -40,6 +40,7 @@ from backend.services.duplicate_detection import (
     evaluate_duplicate,
     list_unified_batch_duplicates,
     mark_import_suspects,
+    promote_in_group_suspects_to_confirmed,
 )
 from backend.services.transaction_tags import VISIBLE_TXN_TAG_SQL, sync_rule_tags_for_transaction
 
@@ -3732,6 +3733,22 @@ async def run_import(
             # don't re-surface — see `mark_import_suspects` in duplicate_detection.py.
             mark_import_suspects(conn, batch_id)
 
+            # Honor any pre-existing merge. If the receiving account was already merged with the
+            # account holding a matched row, the user has already declared them the same physical
+            # account, so the just-flagged cross-account suspect between them is really an in-group
+            # duplicate — promote it to confirmed (auto_merge) exactly as the merge would have. This
+            # makes import order-independent: merge-then-import settles identically to import-then-
+            # merge. Cross-account matches against accounts NOT in the receiving group stay as
+            # soft-flags for review. Scoped to the accounts this batch touched.
+            batch_account_ids = [
+                str(r["account_id"]) for r in conn.execute(
+                    "SELECT DISTINCT account_id FROM txn WHERE import_batch_id = ? AND account_id IS NOT NULL",
+                    (batch_id,),
+                ).fetchall()
+            ]
+            if batch_account_ids:
+                promote_in_group_suspects_to_confirmed(conn, batch_account_ids)
+
         account_skipped = sum(skip_counts.values())
 
     trailing_non_transaction_message = None
@@ -3837,6 +3854,37 @@ def get_batch_duplicates_unified(batch_id: str):
             "total_count": len(entries),
             "rule_breakdown": rule_breakdown,
         }
+
+
+# Rows this batch imported that were later removed as confirmed duplicates — via the duplicate
+# report's Reject/Replace or an account merge. The file-scoped ledger drawer surfaces these as an
+# audit trail ("removed → kept on <account>") instead of dropping them silently: a Replace done
+# from another file's report trashes THIS file's matching row, which would otherwise just vanish
+# from the file view. The surviving row is resolved through `suspect_duplicate_of`.
+@router.get("/batches/{batch_id}/deduped-rows")
+def get_batch_deduped_rows(batch_id: str):
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                t.id, t.date, t.amount,
+                COALESCE(NULLIF(t.display_name,''), NULLIF(t.merchant_name,''), NULLIF(t.raw_name,'')) AS merchant,
+                t.dedupe_resolved_by AS resolved_by,
+                s.id                 AS surviving_id,
+                sa.name              AS surviving_account_name,
+                COALESCE(NULLIF(sap.display_name,''), sap.name) AS surviving_account_merged_into
+            FROM   txn t
+            LEFT JOIN txn     s   ON s.id = t.suspect_duplicate_of
+            LEFT JOIN account sa  ON sa.id = s.account_id
+            LEFT JOIN account sap ON sap.id = sa.parent_account_id
+            WHERE  t.import_batch_id = ?
+              AND  t.trashed_at IS NOT NULL
+              AND  t.rejection_reason = 'duplicate_confirmed'
+            ORDER  BY t.date DESC, t.id
+            """,
+            (batch_id,),
+        ).fetchall()
+    return {"batch_id": batch_id, "rows": [dict(r) for r in rows], "count": len(rows)}
 
 
 @router.post("/batches/{batch_id}/duplicates/import")

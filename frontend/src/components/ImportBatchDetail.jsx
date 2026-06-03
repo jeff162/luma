@@ -22,9 +22,10 @@
  * Transactions page does.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
+import { formatMoneyMagnitude } from '../lib/moneyDisplay.js'
 import { Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
@@ -32,6 +33,19 @@ import { DetailPanelShell, useDetailPanelChrome, usePagedTransactions } from './
 
 const IMPORT_BATCH_DETAIL_TABLE_STORAGE_KEY_PREFIX = 'fintrack.import-batch-detail.transactions.columns'
 const IMPORT_BATCH_DETAIL_TABLE_PREF_KEY = 'ui.importBatchDetail.transactions.columns'
+
+// This drawer is a file-scoped ledger, so the Account column must read as the account the file
+// actually populated — its as-imported label (`source_account_raw_name` = account.name). The
+// shared transaction table otherwise shows the effective `account_name`, which resolves a merged
+// child to its parent's display name and would hide the file's real account. When the source
+// account has since been merged under a parent, we keep the file label and annotate the mapping
+// (e.g. "Credit Card → Rewards Card") so the merge stays visible without rewriting history.
+function withSourceAccountLabel(txn) {
+  const source = txn?.source_account_raw_name
+  if (!source) return txn
+  if (source === txn.account_name) return txn
+  return { ...txn, account_name: `${source} → ${txn.account_name}` }
+}
 
 export default function ImportBatchDetail({
   batch,
@@ -67,7 +81,10 @@ export default function ImportBatchDetail({
       ...(debouncedSearch ? { search: debouncedSearch } : {}),
       limit,
       offset,
-    })
+    }).then(result => ({
+      ...result,
+      transactions: (result?.transactions || []).map(withSourceAccountLabel),
+    }))
   ), [batch.id, dateStart, dateEnd, debouncedSearch])
   const {
     rows,
@@ -100,6 +117,25 @@ export default function ImportBatchDetail({
     })
     return () => { cancelled = true }
   }, [batch.id, dateStart, dateEnd, debouncedSearch])
+
+  // Rows this file imported that were later removed as confirmed duplicates (via the duplicate
+  // report's Discard new / Replace existing, or an account merge). They are trashed, so they
+  // never come back from getTransactions — we surface them here as an audit trail so a Replace
+  // done from another file's report doesn't make this file's matching row vanish without a trace.
+  const [dedupedRows, setDedupedRows] = useState([])
+  const [dedupedOpen, setDedupedOpen] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    api.getBatchDedupedRows(batch.id)
+      .then(result => { if (!cancelled) setDedupedRows(result?.rows || []) })
+      .catch(() => { if (!cancelled) setDedupedRows([]) })
+    return () => { cancelled = true }
+  }, [batch.id])
+  const visibleDeduped = useMemo(() => {
+    const term = debouncedSearch.toLowerCase()
+    if (!term) return dedupedRows
+    return dedupedRows.filter(r => (r.merchant || '').toLowerCase().includes(term))
+  }, [dedupedRows, debouncedSearch])
 
   async function handleCategorySave(txnId, categoryId, categoryObj) {
     await txnMutations.setCategory(txnId, categoryId)
@@ -167,6 +203,40 @@ export default function ImportBatchDetail({
             }}
           />
         </div>
+        {visibleDeduped.length > 0 ? (
+          <div style={{ flex: '0 0 auto', border: '1px solid color-mix(in srgb, #f59e0b 30%, var(--border))', borderRadius: 8, background: 'color-mix(in srgb, #f59e0b 6%, var(--surface2))', overflow: 'hidden' }}>
+            <button
+              type="button"
+              onClick={() => setDedupedOpen(open => !open)}
+              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', fontSize: 12.5, textAlign: 'left' }}
+            >
+              <span style={{ color: '#f59e0b' }}>{dedupedOpen ? '▾' : '▸'}</span>
+              <span style={{ fontWeight: 600 }}>Removed as duplicates ({visibleDeduped.length})</span>
+              <span style={{ color: 'var(--muted)', fontWeight: 400 }}>— the matching copy is kept on another account</span>
+            </button>
+            {dedupedOpen ? (
+              <div style={{ maxHeight: 180, overflow: 'auto', borderTop: '1px solid color-mix(in srgb, #f59e0b 24%, var(--border))' }}>
+                {visibleDeduped.map(r => {
+                  const survivor = r.surviving_account_name
+                    ? (r.surviving_account_merged_into && r.surviving_account_merged_into !== r.surviving_account_name
+                      ? `${r.surviving_account_name} → ${r.surviving_account_merged_into}`
+                      : r.surviving_account_name)
+                    : 'another account'
+                  return (
+                    <div key={r.id} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '4px 12px', fontSize: 12, borderTop: '1px solid color-mix(in srgb, var(--border) 50%, transparent)' }}>
+                      <span style={{ color: 'var(--muted)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{r.date}</span>
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'line-through', textDecorationColor: 'color-mix(in srgb, var(--muted) 55%, transparent)' }}>{r.merchant || '—'}</span>
+                      <span style={{ fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatMoneyMagnitude(Math.abs(r.amount || 0))}</span>
+                      <span style={{ color: 'var(--muted)', flexShrink: 0 }}>
+                        {r.resolved_by === 'auto_merge' ? '→ merged into ' : '→ kept on '}{survivor}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {loading && rows.length === 0 ? (
           <Spinner />
         ) : (

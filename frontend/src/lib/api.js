@@ -321,6 +321,7 @@ export const api = {
   getBatchEdited:   (id)    => request(`/import-export/batches/${id}/edited`),
   getBatchDuplicates: (id)  => request(`/import-export/batches/${id}/duplicates`),
   getBatchDuplicatesUnified: (id) => request(`/import-export/batches/${id}/duplicates-unified`),
+  getBatchDedupedRows: (id) => request(`/import-export/batches/${id}/deduped-rows`),
   getBatchCategoryMappings: (id) => request(`/import-export/batches/${id}/category-mappings`),
   getBatchRuleSuggestions: (id, ownerIds = []) => {
     const q = new URLSearchParams(csvParam('owner_ids', ownerIds))

@@ -78,6 +78,14 @@ A key input to that dial: the user does not review most of the code directly and
 
 - When a bug appears in one copy of a repeated interaction, treat that as a signal to check whether the behavior should be shared more centrally.
 
+## Naming And Brand Hygiene
+
+There are two different bars here, one stricter than the other:
+
+- **UI copy, comments, docstrings:** keep specific real product/company/bank names out — use generic wording ("most banks", "a debit/credit type column") rather than naming "Chase", "Mint", "Fidelity" as flavor. The one exception is a real integration the code actually talks to, where the name *is* the technical fact (e.g. Plaid) — naming Plaid is correct.
+
+- **Test data / fixtures:** large, well-established, generic-type vendors are fine and can make fixtures readable (Amazon, Starbucks, Netflix, etc.). What to avoid is **PII** and **very niche or personal-specific vendors** — a specific local business, a government office tied to a real place, or a product name that mirrors the user's own accounts. Genericize those personal-specific parts ("Rewards Card" / "Cashback Card" for cards, "Credit Card" / "Legacy Card" for an umbrella account) and describe the scenario's *shape* generically in comments ("a legacy umbrella account that physically maps to two real cards") rather than naming the real products involved.
+
 ## Error Handling Preferences
 
 - When refusing an action is the right behavior, prefer a clear in-app explanation over clever automatic renaming or silent repair.

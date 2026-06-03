@@ -52,6 +52,12 @@ const UNIFIED_DUPLICATES_PANEL_PREF_KEY = 'ui.unifiedDuplicates.panel'
 
 const DEFAULT_SORT_STATE = { key: 'kind', dir: 'asc' }
 
+// The Resolve buttons (per-row, and the bulk-action bar) are deliberately compact: each row
+// offers up to three of them and the bulk bar lines up five, so the shared Button's default
+// sizing makes them too heavy. Padding/font-size here override Button's base (its `variant`
+// only sets colors, so these survive the merge).
+const COMPACT_ACTION_BTN_STYLE = { padding: '3px 8px', fontSize: 11.5, borderRadius: 6 }
+
 // The two "needs attention" kinds get their own quick-filter pills so the user can isolate them and
 // bulk-select (filter → header select-all). The resolved/plain-rejected kinds get none — they need no
 // action. Mirrors the Kind-cell label precedence below (soft flag → Review; a coverage hard-reject
@@ -161,7 +167,7 @@ export default function UnifiedDuplicatesDialog({
   const entryId = (entry) => `${entry.kind}:${entry.incoming?.txn_id || entry.incoming?.row_number || ''}`
 
   function actionsFor(entry) {
-    if (entry.kind === 'soft_flag') return { keep: true, reject: true }
+    if (entry.kind === 'soft_flag') return { keep: true, reject: true, replace: true }
     if (entry.kind === 'hard_reject' && entry.incoming?.txn_id) return { restore: true }
     if (entry.kind === 'hard_reject' && entry.incoming?.row_number) return { import_anyway: true }
     return {}
@@ -226,13 +232,14 @@ export default function UnifiedDuplicatesDialog({
   const visibleIds = useMemo(() => new Set(visibleEntries.map(entryId)), [visibleEntries])
 
   const selectionSummary = useMemo(() => {
-    const summary = { total: 0, keep: 0, reject: 0, restore: 0, import_anyway: 0 }
+    const summary = { total: 0, keep: 0, reject: 0, replace: 0, restore: 0, import_anyway: 0 }
     for (const entry of visibleEntries) {
       if (!selectedIds.has(entryId(entry))) continue
       summary.total += 1
       const a = actionsFor(entry)
       if (a.keep) summary.keep += 1
       if (a.reject) summary.reject += 1
+      if (a.replace) summary.replace += 1
       if (a.restore) summary.restore += 1
       if (a.import_anyway) summary.import_anyway += 1
     }
@@ -281,6 +288,7 @@ export default function UnifiedDuplicatesDialog({
         if (!a[action]) continue
         if (action === 'keep')          tasks.push(api.resolveSuspectDuplicate(entry.incoming.txn_id, 'keep'))
         else if (action === 'reject')   tasks.push(api.resolveSuspectDuplicate(entry.incoming.txn_id, 'reject'))
+        else if (action === 'replace')  tasks.push(api.resolveSuspectDuplicate(entry.incoming.txn_id, 'replace'))
         else if (action === 'restore')  tasks.push(api.restoreRejectedDuplicate(entry.incoming.txn_id))
         else if (action === 'import_anyway') tasks.push(api.importBatchDuplicates(batchId, { row_numbers: [entry.incoming.row_number] }))
       }
@@ -300,6 +308,7 @@ export default function UnifiedDuplicatesDialog({
     try {
       if (action === 'keep')              await api.resolveSuspectDuplicate(entry.incoming.txn_id, 'keep')
       else if (action === 'reject')       await api.resolveSuspectDuplicate(entry.incoming.txn_id, 'reject')
+      else if (action === 'replace')      await api.resolveSuspectDuplicate(entry.incoming.txn_id, 'replace')
       else if (action === 'restore')      await api.restoreRejectedDuplicate(entry.incoming.txn_id)
       else if (action === 'import_anyway') await api.importBatchDuplicates(batchId, { row_numbers: [entry.incoming.row_number] })
       if (typeof onReload === 'function') await onReload()
@@ -376,6 +385,13 @@ export default function UnifiedDuplicatesDialog({
   function partyBlock(side, sourceInfo = null) {
     if (!side) return <span style={{ color: 'var(--muted)' }}>—</span>
     const acct = side.account_name || ''
+    // `account_merged_into` is the parent's effective name when this row's source account was
+    // later merged under another account. We show the as-imported label as the truth of the
+    // file and annotate the mapping (e.g. "Credit Card → Rewards Card") so the merge is
+    // visible without hiding what the file actually said.
+    const mergedInto = side.account_merged_into && side.account_merged_into !== acct
+      ? side.account_merged_into
+      : null
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 1, lineHeight: 1.3 }}>
         <div>
@@ -385,7 +401,16 @@ export default function UnifiedDuplicatesDialog({
           {' · '}
           <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{formatAmount(side.amount)}</span>
         </div>
-        {acct ? <div style={{ color: 'var(--muted)', fontSize: 11 }}>{acct}</div> : null}
+        {acct ? (
+          <div style={{ color: 'var(--muted)', fontSize: 11 }}>
+            {acct}
+            {mergedInto ? (
+              <span title={`Merged into ${mergedInto}`} style={{ color: 'var(--muted)' }}>
+                {' → '}{mergedInto}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
         {sourceInfo ? sourceFileLink(sourceInfo) : null}
       </div>
     )
@@ -461,10 +486,11 @@ export default function UnifiedDuplicatesDialog({
         importedAt: matched.source_imported_at,
       } : null
       return partyBlock({
-        date:         matched.date,
-        merchant:     matched.merchant || matched.merchant_name,
-        amount:       matched.amount,
-        account_name: matched.account_name,
+        date:                matched.date,
+        merchant:            matched.merchant || matched.merchant_name,
+        amount:              matched.amount,
+        account_name:        matched.account_name,
+        account_merged_into: matched.account_merged_into,
       }, sourceInfo)
     }
     return <div style={{ color: 'var(--muted)', fontSize: 11 }}>{reasonText || '—'}</div>
@@ -597,25 +623,40 @@ export default function UnifiedDuplicatesDialog({
           <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', background: 'color-mix(in srgb, var(--accent) 6%, var(--surface2))' }}>
             <span style={{ fontSize: 12, fontWeight: 600 }}>{selectionSummary.total} selected</span>
             <Button
-              size="sm"
+              style={COMPACT_ACTION_BTN_STYLE}
               variant="ghost"
               disabled={pendingBulk || selectionSummary.keep === 0}
               onClick={() => runBulk('keep')}
-              title="For each selected soft-flag, record the two accounts as distinct and cascade-clear every other flagged row between the same account pair. Future imports skip the pair."
+              title="These are different transactions: keep the new row too, mark the two accounts as distinct, and cascade-clear every other flagged row between the same account pair. Future imports skip the pair."
             >
-              Keep ({selectionSummary.keep})
+              Keep both ({selectionSummary.keep})
             </Button>
-            <Button size="sm" variant="ghost" disabled={pendingBulk || selectionSummary.reject === 0} onClick={() => runBulk('reject')}>
-              Reject ({selectionSummary.reject})
+            <Button
+              style={COMPACT_ACTION_BTN_STYLE}
+              variant="ghost"
+              disabled={pendingBulk || selectionSummary.reject === 0}
+              onClick={() => runBulk('reject')}
+              title="The new file's row is a duplicate: discard it and keep the existing transaction."
+            >
+              Discard new ({selectionSummary.reject})
             </Button>
-            <Button size="sm" variant="ghost" disabled={pendingBulk || selectionSummary.import_anyway === 0} onClick={() => runBulk('import_anyway')}>
+            <Button
+              style={COMPACT_ACTION_BTN_STYLE}
+              variant="ghost"
+              disabled={pendingBulk || selectionSummary.replace === 0}
+              onClick={() => runBulk('replace')}
+              title="The new file's row is the correct record (e.g. correct account): keep it and remove the existing duplicate. Categorization follows whichever file was set to use its imported categories."
+            >
+              Replace existing ({selectionSummary.replace})
+            </Button>
+            <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk || selectionSummary.import_anyway === 0} onClick={() => runBulk('import_anyway')}>
               Import anyway ({selectionSummary.import_anyway})
             </Button>
-            <Button size="sm" variant="ghost" disabled={pendingBulk || selectionSummary.restore === 0} onClick={() => runBulk('restore')}>
+            <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk || selectionSummary.restore === 0} onClick={() => runBulk('restore')}>
               Restore ({selectionSummary.restore})
             </Button>
             <span style={{ flex: 1 }} />
-            <Button size="sm" variant="ghost" disabled={pendingBulk} onClick={() => setSelectedIds(new Set())}>Clear selection</Button>
+            <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk} onClick={() => setSelectedIds(new Set())}>Clear selection</Button>
           </div>
         ) : null}
 
@@ -649,7 +690,7 @@ export default function UnifiedDuplicatesDialog({
                   {sortableHeader('Rule', 'rule')}
                   {sortableHeader('Incoming', 'date')}
                   <th style={{ padding: '8px' }}>Matched existing</th>
-                  <th style={{ padding: '8px 16px 8px 8px', width: 180 }}>Actions</th>
+                  <th style={{ padding: '8px 16px 8px 8px', width: 210 }}>Resolve</th>
                 </tr>
               </thead>
               <tbody>
@@ -682,10 +723,11 @@ export default function UnifiedDuplicatesDialog({
                       <td style={{ padding: '6px 8px' }}>{matchedBlock(entry.matched, entry.reason_text)}</td>
                       <td style={{ padding: '6px 16px 6px 8px' }}>
                         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                          {a.keep ? <Button variant="ghost" size="sm" disabled={pendingBulk} onClick={() => runSingle(entry, 'keep')} title="Marks the two accounts as distinct. Clears every other flagged row between this same account pair, and stops future imports from re-flagging the pair.">Keep</Button> : null}
-                          {a.reject ? <Button variant="ghost" size="sm" disabled={pendingBulk} onClick={() => runSingle(entry, 'reject')}>Reject</Button> : null}
-                          {a.restore ? <Button variant="ghost" size="sm" disabled={pendingBulk} onClick={() => runSingle(entry, 'restore')}>Restore</Button> : null}
-                          {a.import_anyway ? <Button variant="ghost" size="sm" disabled={pendingBulk} onClick={() => runSingle(entry, 'import_anyway')}>Import anyway</Button> : null}
+                          {a.keep ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'keep')} title="These are different transactions: keep the new row too and mark the two accounts as distinct. Clears every other flagged row between this account pair and stops future imports from re-flagging it.">Keep both</Button> : null}
+                          {a.reject ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'reject')} title="The new file's row is a duplicate: discard it and keep the existing transaction.">Discard new</Button> : null}
+                          {a.replace ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'replace')} title="The new file's row is the correct record (e.g. correct account): keep it and remove the existing duplicate. Categorization follows whichever file was set to use its imported categories.">Replace existing</Button> : null}
+                          {a.restore ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'restore')}>Restore</Button> : null}
+                          {a.import_anyway ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'import_anyway')}>Import anyway</Button> : null}
                         </div>
                       </td>
                     </tr>

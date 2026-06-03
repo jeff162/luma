@@ -135,6 +135,38 @@ class SuspectDuplicateTests(unittest.TestCase):
                 ).fetchone()
                 return dict(row) if row else None
 
+    def _insert_category(self, name: str) -> str:
+        cat_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO category (id, parent_id, name, category_type, sort_order) VALUES (?, NULL, ?, 'expense', 0)",
+                    (cat_id, name),
+                )
+        return cat_id
+
+    def _set_txn_category(self, txn_id: str, category_id: str | None) -> None:
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE txn SET category_id = ? WHERE id = ?", (category_id, txn_id))
+
+    def _set_batch_uses_categories(self, batch_id: str, value: bool) -> None:
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE import_batch SET use_imported_categories = ? WHERE id = ?",
+                    (1 if value else 0, batch_id),
+                )
+
+    def _txn_category(self, txn_id: str) -> dict | None:
+        with self._use_db_path():
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT category_id, category_overridden, category_source FROM txn WHERE id = ?",
+                    (txn_id,),
+                ).fetchone()
+                return dict(row) if row else None
+
     # ---- import-time detection ------------------------------------------
 
     def test_import_flags_cross_account_match(self):
@@ -526,6 +558,94 @@ class SuspectDuplicateTests(unittest.TestCase):
         link = self._suspect_link(new_id)
         self.assertIsNone(link["trashed_at"])
         self.assertIsNone(link["rejection_reason"])
+
+    def test_replace_keeps_incoming_row_and_removes_existing(self):
+        # 'replace' is the inverse survivor of 'reject': the incoming (new-file) row stays in the
+        # ledger (it carries the account the user trusts) and the EXISTING matched row is removed
+        # as a confirmed duplicate, its audit pointer flipped to the incoming row so its own
+        # batch's report can still surface and Restore it. No account_pair_distinct is written.
+        existing_acct = self._insert_account("Legacy Card")
+        incoming_acct = self._insert_account("Cashback Card")
+        existing_batch = self._insert_batch(filename="legacy_export.csv")
+        incoming_batch = self._insert_batch(filename="card_statement.csv")
+        existing_id = self._insert_txn(
+            account_id=existing_acct, date="2023-10-30", amount=68.00, merchant_name="OUTDOOR CO", batch_id=existing_batch,
+        )
+        incoming_id = self._insert_txn(
+            account_id=incoming_acct, date="2023-10-30", amount=68.00, merchant_name="Outdoor Co", batch_id=incoming_batch,
+        )
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET suspect_duplicate_of = ?, suspect_duplicate_reason = 'cross_account' WHERE id = ?",
+                    (existing_id, incoming_id),
+                )
+                result = resolve_suspect(conn, incoming_id, action="replace")
+        self.assertEqual(result, {"resolved": True, "action": "replace"})
+        # Incoming survives with its suspect flag cleared.
+        inc = self._suspect_link(incoming_id)
+        self.assertIsNone(inc["trashed_at"])
+        self.assertIsNone(inc["suspect_duplicate_of"])
+        self.assertIsNone(inc["rejection_reason"])
+        # Existing removed as a confirmed duplicate, pointing at the incoming row that replaced it.
+        ex = self._suspect_link(existing_id)
+        self.assertIsNotNone(ex["trashed_at"])
+        self.assertEqual(ex["rejection_reason"], "duplicate_confirmed")
+        self.assertEqual(ex["dedupe_resolved_by"], "user")
+        self.assertEqual(ex["suspect_duplicate_of"], incoming_id)
+        # No "accounts are distinct" assertion is recorded (replace means "same transaction").
+        with self._use_db_path():
+            with get_db() as conn:
+                pairs = conn.execute("SELECT COUNT(*) AS n FROM account_pair_distinct").fetchone()
+        self.assertEqual(pairs["n"], 0)
+
+    def test_replace_category_follows_use_imported_categories_flag(self):
+        # The surviving (incoming) row keeps its OWN category only when the incoming file is the
+        # sole file flagged to use imported categories; otherwise it adopts the existing row's
+        # category (existing-only, and the both/neither tie) as a manual override. A NULL existing
+        # category is never copied — we don't downgrade a categorized row to uncategorized.
+        existing_cat = self._insert_category("Recreation")
+        incoming_cat = self._insert_category("Shopping")
+
+        def run(*, incoming_uses, existing_uses, existing_cat_id=existing_cat):
+            ea = self._insert_account(f"ex-{uuid.uuid4()}")
+            ia = self._insert_account(f"in-{uuid.uuid4()}")
+            eb = self._insert_batch()
+            ib = self._insert_batch()
+            self._set_batch_uses_categories(eb, existing_uses)
+            self._set_batch_uses_categories(ib, incoming_uses)
+            eid = self._insert_txn(account_id=ea, date="2023-10-30", amount=68.0, merchant_name="X", batch_id=eb)
+            iid = self._insert_txn(account_id=ia, date="2023-10-30", amount=68.0, merchant_name="X", batch_id=ib)
+            self._set_txn_category(eid, existing_cat_id)
+            self._set_txn_category(iid, incoming_cat)
+            with self._use_db_path():
+                with get_db() as conn:
+                    conn.execute(
+                        "UPDATE txn SET suspect_duplicate_of = ?, suspect_duplicate_reason = 'cross_account' WHERE id = ?",
+                        (eid, iid),
+                    )
+                    resolve_suspect(conn, iid, action="replace")
+            return self._txn_category(iid)
+
+        # Incoming is the sole categorization file → keep its own category, no override.
+        c = run(incoming_uses=True, existing_uses=False)
+        self.assertEqual(c["category_id"], incoming_cat)
+
+        # Existing is the sole categorization file → adopt its category as a manual override.
+        c = run(incoming_uses=False, existing_uses=True)
+        self.assertEqual(c["category_id"], existing_cat)
+        self.assertEqual(c["category_overridden"], 1)
+        self.assertEqual(c["category_source"], "manual")
+
+        # Both checked → tie → existing wins.
+        self.assertEqual(run(incoming_uses=True, existing_uses=True)["category_id"], existing_cat)
+        # Neither checked → tie → existing wins.
+        self.assertEqual(run(incoming_uses=False, existing_uses=False)["category_id"], existing_cat)
+        # Adopt-existing case but existing has no category → never downgrade: keep incoming's.
+        self.assertEqual(
+            run(incoming_uses=False, existing_uses=True, existing_cat_id=None)["category_id"],
+            incoming_cat,
+        )
 
     def test_attach_promotes_in_group_suspects_to_confirmed(self):
         # A soft-flag existed between two accounts before they were merged into a single linked
@@ -1187,11 +1307,11 @@ class SuspectDuplicateTests(unittest.TestCase):
         self.assertIsNone(other_link["trashed_at"])
         self.assertIsNone(other_link["rejection_reason"])
 
-    def test_promote_does_not_transitively_clear_when_sibling_targets_different_group(self):
-        # The transitive-clear should ONLY fire when the sibling's suspect points into the
-        # same merged group as the promoted row's target. A sibling whose suspect targets an
-        # unrelated account stays flagged — same-batch trust says nothing about the unrelated
-        # pair.
+    def test_promote_does_not_transitively_clear_when_sibling_targets_different_canonical(self):
+        # The transitive-clear should ONLY fire when the sibling's suspect points at the *same
+        # canonical row* the promoted row was confirmed against. A sibling whose suspect targets
+        # a different row (here on an entirely unrelated account) stays flagged — same-batch
+        # trust says nothing about that unrelated pair.
         existing_account = self._insert_account("Existing")
         unrelated_account = self._insert_account("Unrelated")
         card_a = self._insert_account("Card A")
@@ -1213,12 +1333,54 @@ class SuspectDuplicateTests(unittest.TestCase):
                 )
                 conn.execute("UPDATE account SET parent_account_id = ? WHERE id = ?", (existing_account, card_a))
                 promote_in_group_suspects_to_confirmed(conn, [card_a, existing_account])
-        # promoted_row is auto-promoted, but sibling_row's suspect (pointing at unrelated)
-        # stays flagged because its target isn't in the merged group.
+        # promoted_row is auto-promoted, but sibling_row's suspect (pointing at a different
+        # canonical) stays flagged.
         self.assertIsNotNone(self._suspect_link(promoted_row)["trashed_at"])
         sibling_link = self._suspect_link(sibling_row)
         self.assertEqual(sibling_link["suspect_duplicate_of"], canonical_b)
         self.assertIsNone(sibling_link["suspect_resolved_at"])
+
+    def test_promote_does_not_transitively_clear_sibling_targeting_different_row_in_merged_group(self):
+        # Real-world regression: a legacy umbrella account "Credit Card" carries transactions that
+        # physically belong to two different real cards. A statement import lands rows for card R
+        # AND card C in one batch, each flagged cross-account against the corresponding
+        # (DIFFERENT) Credit Card transaction. The user merges Credit Card into card R.
+        #
+        # The card-R row is correctly promoted. The card-C row's suspect points at a DIFFERENT
+        # Credit Card transaction that now merely shares the merged group — it is a real, still-
+        # open cross-account suspect and must NOT be transitively cleared. The buggy "same merged
+        # group" check cleared it (silently, with no confirmed row to restore on a later detach);
+        # the correct "same canonical row" check leaves it flagged.
+        credit_card     = self._insert_account("Credit Card")    # legacy umbrella, gets merged
+        card_r          = self._insert_account("Rewards Card")   # merge target
+        card_c          = self._insert_account("Cashback Card")  # untouched by the merge
+        batch           = self._insert_batch(filename="card_statement.csv")
+        # Two distinct Credit Card transactions (different merchant/amount).
+        cc_r_txn = self._insert_txn(account_id=credit_card, date="2023-12-14", amount=-3.65,  merchant_name="PARKS DEPT")
+        cc_c_txn = self._insert_txn(account_id=credit_card, date="2023-10-30", amount=-68.00, merchant_name="OUTDOOR CO")
+        card_r_row = self._insert_txn(account_id=card_r, date="2023-12-14", amount=-3.65,  merchant_name="Parks Dept", batch_id=batch)
+        card_c_row = self._insert_txn(account_id=card_c, date="2023-10-30", amount=-68.00, merchant_name="Outdoor Co", batch_id=batch)
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET suspect_duplicate_of = ?, suspect_duplicate_reason = 'cross_account' WHERE id = ?",
+                    (cc_r_txn, card_r_row),
+                )
+                conn.execute(
+                    "UPDATE txn SET suspect_duplicate_of = ?, suspect_duplicate_reason = 'cross_account' WHERE id = ?",
+                    (cc_c_txn, card_c_row),
+                )
+                conn.execute("UPDATE account SET parent_account_id = ? WHERE id = ?", (card_r, credit_card))
+                promote_in_group_suspects_to_confirmed(conn, [credit_card, card_r])
+        # Card-R row promoted (the Credit Card row it matched is now in its group).
+        self.assertEqual(self._suspect_link(card_r_row)["dedupe_resolved_by"], "auto_merge")
+        # Card-C row must stay an active suspect — it targets a *different* Credit Card
+        # transaction, so the merge with card R says nothing about it.
+        card_c_link = self._suspect_link(card_c_row)
+        self.assertEqual(card_c_link["suspect_duplicate_of"], cc_c_txn,
+                         "Card-C suspect was wrongly cleared by an over-broad transitivity rule")
+        self.assertIsNone(card_c_link["suspect_resolved_at"])
+        self.assertIsNone(card_c_link["trashed_at"])
 
     def test_attach_then_detach_endpoint_round_trip_restores_promoted_rows(self):
         # End-to-end coverage of the router wiring: the service functions
@@ -1351,6 +1513,45 @@ class SuspectDuplicateTests(unittest.TestCase):
         # suspect_b pointed at unrelated — left alone.
         self.assertIsNotNone(self._suspect_link(suspect_b)["trashed_at"])
         self.assertEqual(self._suspect_link(suspect_b)["dedupe_resolved_by"], "auto_merge")
+
+    def test_detach_restores_promotion_when_canonical_is_on_detaching_account(self):
+        # Mirror orientation (the real-world "merge a legacy umbrella source account into a real
+        # card" case): the suspect-holding row — the one promotion trashes — sits on the account
+        # that STAYS in the group, and the canonical it points at sits on the account being
+        # DETACHED. Concretely: a legacy "Credit Card" account is imported first (canonical), then
+        # a newer statement imported second carries the suspect pointer at the legacy row. The
+        # user attaches Credit Card under the real card (promotes), then detaches it.
+        #
+        # The pre-fix restore only matched auto_merge rows whose account_id == the detached
+        # account, so it never found the trashed statement row (account_id == the account that
+        # stayed) and left it confirmed forever — detach silently failed to reverse the merge.
+        legacy_cc = self._insert_account("Credit Card")   # umbrella source, gets attached/detached
+        real_card = self._insert_account("Rewards Card")  # merge target, stays
+        canonical_id = self._insert_txn(account_id=legacy_cc, date="2025-11-26", amount=-13.38, merchant_name="X")
+        suspect_id   = self._insert_txn(account_id=real_card, date="2025-11-26", amount=-13.38, merchant_name="X")
+        with self._use_db_path():
+            with get_db() as conn:
+                # The real-card row is the import-time suspect, pointing at the existing legacy row.
+                conn.execute(
+                    "UPDATE txn SET suspect_duplicate_of = ?, suspect_duplicate_reason = 'cross_account' WHERE id = ?",
+                    (canonical_id, suspect_id),
+                )
+        with self._use_db_path():
+            attach_account(legacy_cc, AccountAttachRequest(parent_account_id=real_card))
+        promoted_link = self._suspect_link(suspect_id)
+        self.assertEqual(promoted_link["dedupe_resolved_by"], "auto_merge",
+                         "the real-card suspect should be auto-promoted by the merge")
+        # Detaching the Credit Card must reverse that promotion even though the trashed row lives
+        # on the account that stayed (the real card), not on the detaching account.
+        with self._use_db_path():
+            response = detach_account(legacy_cc)
+        self.assertEqual(response.get("restored_count"), 1,
+                         "detach must reverse a promotion whose trashed row is on the remaining-group side")
+        restored_link = self._suspect_link(suspect_id)
+        self.assertIsNone(restored_link["trashed_at"])
+        self.assertIsNone(restored_link["rejection_reason"])
+        self.assertIsNone(restored_link["dedupe_resolved_by"])
+        self.assertEqual(restored_link["suspect_duplicate_of"], canonical_id)
 
 
     def test_credit_card_reissue_end_to_end_conservation(self):

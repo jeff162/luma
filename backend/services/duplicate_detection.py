@@ -25,15 +25,22 @@ Triggers:
     cross-account soft-flag case. Skips pairs the user has previously declared distinct via
     `account_pair_distinct`; that table is what keeps the report non-noisy after the user has
     reviewed each pair once.
-  * Account merge (`promote_in_group_suspects_to_confirmed`) — when two accounts merge into
-    one linked group, any pre-existing cross-account soft-flag between them gets promoted to
-    `rejection_reason='duplicate_confirmed'` (tagged `dedupe_resolved_by='auto_merge'`). Also
+  * Account merge AND import-into-an-already-merged-group (`promote_in_group_suspects_to_confirmed`)
+    — when two accounts merge into one linked group, OR a batch imports rows whose just-flagged
+    cross-account match lands on an account already merged with the receiving account, any such
+    soft-flag between same-effective-root accounts gets promoted to
+    `rejection_reason='duplicate_confirmed'` (tagged `dedupe_resolved_by='auto_merge'`). The
+    import-finalize call (right after `mark_import_suspects`) is what makes import order-independent
+    with merge order. Also
     performs a same-batch transitivity clear: a sibling row in the same CSV as a promoted row
-    whose own suspect points into the same merged group has its suspect flag cleared, because
-    same-CSV-different-account asserts distinct, and the merge identifies one of them with the
-    canonical.
-  * Account detach (`restore_auto_merged_after_detach`) — reverses auto_merge promotions for
-    rows on the detaching account that pointed into the remaining group. Rows the user
+    whose own suspect points at the *same canonical row* has its suspect flag cleared, because
+    same-CSV-different-account asserts distinct, and the merge identifies the promoted row with
+    that canonical (a sibling pointing at a *different* row in the merged group stays flagged).
+  * Account detach (`restore_auto_merged_after_detach`) — reverses auto_merge promotions whose
+    account pair straddles the detach boundary (one endpoint on the detaching account, the other
+    in the remaining group), in either orientation: the trashed suspect row may sit on the
+    detaching account OR on the account that stays (when the imported file holding the suspect was
+    on the staying account and the row it duplicated was on the detaching account). Rows the user
     explicitly Rejected (dedupe_resolved_by='user') are left alone.
 
 The cross-account soft-flag SQL joins on `(date, ROUND(amount, 2), normalized payee)`, indexed
@@ -435,10 +442,20 @@ def restore_auto_merged_after_detach(conn: sqlite3.Connection,
     cleared, suspect_duplicate_of preserved as the audit pointer. It re-appears as an active
     suspect in the duplicate-detection dialog so the user can Keep, Reject, or leave alone.
 
+    Symmetry matters here. Promotion graduates a soft-flag based on the *pair* — it trashes the
+    suspect-holding row (`t1`, the one carrying `suspect_duplicate_of`) whenever either endpoint
+    of the pair lands in the merged group. So the trashed `auto_merge` row can sit on *either*
+    side of the detached↔remaining split: it might be on the detaching account pointing at a
+    canonical in the remaining group, OR on a remaining-group account pointing at a canonical on
+    the detaching account (this is exactly the case where the imported file that holds the
+    suspect was on the account that stays, and the merge target it duplicated was the account
+    being pulled out). Reversing only the first orientation strands the second permanently, so we
+    undo both. In both orientations one endpoint is the detaching account and the other is in the
+    remaining group — that constraint is what keeps the reversal scoped to the promotions this
+    particular detach is splitting, leaving promotions wholly inside the remaining group alone.
+
     `remaining_group_account_ids` is the set of accounts still in the (formerly merged) group
-    after the detach — only rows pointing into that set get restored. Restoring rows pointing
-    to accounts outside the remaining group would be wrong because those weren't part of the
-    merge that promoted them in the first place.
+    after the detach. Only pairs that straddle the detach boundary are reversed.
 
     Returns the count of rows restored.
     """
@@ -453,14 +470,20 @@ def restore_auto_merged_after_detach(conn: sqlite3.Connection,
                rejection_reason = NULL,
                suspect_resolved_at = NULL,
                dedupe_resolved_by = NULL
-        WHERE  account_id = ?
-          AND  dedupe_resolved_by = 'auto_merge'
+        WHERE  dedupe_resolved_by = 'auto_merge'
           AND  rejection_reason = 'duplicate_confirmed'
-          AND  suspect_duplicate_of IN (
-                 SELECT id FROM txn WHERE account_id IN ({placeholders})
+          AND  (
+                 -- trashed row on the detaching account, its canonical in the remaining group
+                 (account_id = ?
+                  AND suspect_duplicate_of IN (
+                        SELECT id FROM txn WHERE account_id IN ({placeholders})))
+                 -- mirror: trashed row on a remaining-group account, its canonical on the detaching account
+              OR (account_id IN ({placeholders})
+                  AND suspect_duplicate_of IN (
+                        SELECT id FROM txn WHERE account_id = ?))
                )
         """,
-        [detached_account_id, *remaining_ids],
+        [detached_account_id, *remaining_ids, *remaining_ids, detached_account_id],
     )
     return cursor.rowcount or 0
 
@@ -806,8 +829,8 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             t1.date                     AS new_date,
             t1.amount                   AS new_amount,
             COALESCE(NULLIF(t1.display_name, ''), NULLIF(t1.merchant_name, ''), NULLIF(t1.raw_name, '')) AS new_merchant,
-            a1.display_name             AS new_account_display_name,
             a1.name                     AS new_account_name,
+            COALESCE(NULLIF(a1p.display_name, ''), a1p.name) AS new_account_merged_into,
             t1.suspect_duplicate_reason AS reason_key,
             t1.suspect_resolved_at      AS resolved_at,
             t1.rejection_reason         AS rejection_reason,
@@ -815,13 +838,15 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             t2.date                     AS existing_date,
             t2.amount                   AS existing_amount,
             COALESCE(NULLIF(t2.display_name, ''), NULLIF(t2.merchant_name, ''), NULLIF(t2.raw_name, '')) AS existing_merchant,
-            a2.display_name             AS existing_account_display_name,
             a2.name                     AS existing_account_name,
+            COALESCE(NULLIF(a2p.display_name, ''), a2p.name) AS existing_account_merged_into,
             t2.import_batch_id          AS existing_batch_id
         FROM   txn t1
         JOIN   txn t2                ON t2.id = t1.suspect_duplicate_of
         LEFT JOIN account a1         ON a1.id = t1.account_id
         LEFT JOIN account a2         ON a2.id = t2.account_id
+        LEFT JOIN account a1p        ON a1p.id = a1.parent_account_id
+        LEFT JOIN account a2p        ON a2p.id = a2.parent_account_id
         WHERE  t1.suspect_duplicate_of IS NOT NULL
           AND  t1.import_batch_id = ?
           AND  (
@@ -836,19 +861,26 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
         base_rule_key, confidence = _classify_soft_flag_reason(row["reason_key"])
         rule_key = f"{base_rule_key}_confirmed" if is_confirmed else base_rule_key
         rule_label, rule_description = rule_label_for(rule_key)
+        # Account labels here are the as-imported account names (`account.name`), NOT the merged
+        # effective `display_name`. This report exists to explain what each *file* contained, so a
+        # source account later merged under a parent must still read as its own file label (e.g. a
+        # "Credit Card" account merged under a parent still shows "Credit Card", with the parent
+        # surfaced separately as `account_merged_into` so the UI can annotate the mapping).
         incoming = {
             "txn_id": row["new_id"],
             "date": row["new_date"],
             "amount": row["new_amount"],
             "merchant": row["new_merchant"],
-            "account_name": row["new_account_display_name"] or row["new_account_name"],
+            "account_name": row["new_account_name"],
+            "account_merged_into": row["new_account_merged_into"],
         }
         matched = enrich_with_source({
             "id": row["existing_id"],
             "date": row["existing_date"],
             "amount": row["existing_amount"],
             "merchant": row["existing_merchant"],
-            "account_name": row["existing_account_display_name"] or row["existing_account_name"],
+            "account_name": row["existing_account_name"],
+            "account_merged_into": row["existing_account_merged_into"],
             "import_batch_id": row["existing_batch_id"],
         }, row["existing_batch_id"])
         if is_confirmed:
@@ -896,6 +928,18 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
         import-time hard-rejects. The `suspect_duplicate_of` pointer is intentionally kept as
         an audit trail of *which* existing row the user accepted as the canonical copy.
         ('trash' is preserved as an alias of 'reject' for back-compat with the existing API.)
+      - 'replace': the inverse survivor of 'reject'. The incoming (new-file) row is the correct
+        record — it carries the account the user trusts — so it SURVIVES, and the existing matched
+        row is removed as a confirmed duplicate (restorable from its own batch's report). Used to
+        fix an account when one source labeled a transaction under the wrong account (e.g. a legacy
+        umbrella "Credit Card" account vs. the real card from a newer statement). Categorization on the surviving row
+        follows each file's "use imported categories" choice: keep the incoming row's own category
+        ONLY when the incoming file is the sole one with that flag set; otherwise adopt the existing
+        row's category (covers existing-only and the both/neither tie). The adopted category is
+        written as a manual override so rule reruns don't undo it, and a NULL existing category is
+        never copied (we don't downgrade a categorized row to uncategorized). Unlike 'keep',
+        'replace' does NOT assert the two accounts are distinct and does not cascade — it is a
+        per-row "these are the same transaction" decision.
     """
     row = conn.execute(
         "SELECT id, suspect_duplicate_of, trashed_at FROM txn WHERE id = ?",
@@ -905,6 +949,65 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
         return {"resolved": False, "reason": "not_found"}
     if not row["suspect_duplicate_of"]:
         return {"resolved": False, "reason": "not_suspect"}
+    if action == "replace":
+        existing = conn.execute(
+            "SELECT id, category_id, import_batch_id FROM txn WHERE id = ?",
+            (row["suspect_duplicate_of"],),
+        ).fetchone()
+        if not existing:
+            return {"resolved": False, "reason": "matched_missing"}
+        incoming = conn.execute(
+            "SELECT id, import_batch_id FROM txn WHERE id = ?", (txn_id,),
+        ).fetchone()
+
+        def _batch_uses_imported_categories(batch_id) -> bool:
+            if not batch_id:
+                return False
+            r = conn.execute(
+                "SELECT use_imported_categories FROM import_batch WHERE id = ?", (batch_id,),
+            ).fetchone()
+            return bool(r["use_imported_categories"]) if r else False
+
+        incoming_uses = _batch_uses_imported_categories(incoming["import_batch_id"])
+        existing_uses = _batch_uses_imported_categories(existing["import_batch_id"])
+        # Adopt the existing row's categorization onto the surviving incoming row in every case
+        # except where the incoming file is the SOLE file flagged to use its imported categories.
+        keep_incoming_category = incoming_uses and not existing_uses
+        if not keep_incoming_category and existing["category_id"] is not None:
+            conn.execute(
+                """
+                UPDATE txn
+                SET    category_id = ?, category_overridden = 1, category_source = 'manual'
+                WHERE  id = ?
+                """,
+                (existing["category_id"], txn_id),
+            )
+        # Remove the existing row as a confirmed duplicate, pointing its audit at the incoming row
+        # that replaced it (so its own batch's report can show + Restore it), then clear the
+        # surviving incoming row's suspect flag so it stays as an active, distinct transaction.
+        conn.execute(
+            """
+            UPDATE txn
+            SET    trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                   suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                   rejection_reason = 'duplicate_confirmed',
+                   dedupe_resolved_by = 'user',
+                   suspect_duplicate_of = ?
+            WHERE  id = ?
+            """,
+            (txn_id, existing["id"]),
+        )
+        conn.execute(
+            """
+            UPDATE txn
+            SET    suspect_duplicate_of = NULL,
+                   suspect_duplicate_reason = NULL,
+                   suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE  id = ?
+            """,
+            (txn_id,),
+        )
+        return {"resolved": True, "action": "replace"}
     if action in ("reject", "trash"):
         # `dedupe_resolved_by='user'` records that this resolution is the user's explicit decision,
         # not an automatic side effect. The marker is what protects this row from being auto-
@@ -1038,58 +1141,54 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
     )
     # Same-batch transitive clear: a single CSV asserts (via account-column) that rows on
     # different accounts in that file are distinct transactions. If a promoted row Y (now
-    # identified with its canonical target via the merge) had a same-batch sibling Z on a
-    # different account, and Z's own suspect points at a row in the same merged group as Y's
-    # target, then Z's suspect is necessarily a false positive: Z ≠ Y (CSV assertion) and
-    # Y ≡ canonical (merge), so Z ≠ canonical. Clear Z's suspect flag.
+    # identified with its canonical target X via the merge) had a same-batch sibling Z on a
+    # different account, and Z's own suspect points at the *same* canonical X, then Z's suspect
+    # is necessarily a false positive: Z ≠ Y (CSV assertion) and Y ≡ X (merge), so Z ≠ X. Clear
+    # Z's suspect flag. (Must be the same X, not merely a row in the same merged group — see the
+    # helper docstring.)
     _clear_same_batch_siblings_after_promotion(conn, ids)
     return len(ids)
 
 
 def _clear_same_batch_siblings_after_promotion(conn: sqlite3.Connection, promoted_ids: list[str]) -> int:
-    """Helper for promote_in_group_suspects_to_confirmed. Finds rows that share an
-    import_batch_id with one of the freshly-promoted rows but live on a different account in
-    that batch, and whose own suspect points into the same merged group as the promoted row's
-    target. Clears those suspect flags.
+    """Helper for promote_in_group_suspects_to_confirmed. Clears a freshly-promoted row's
+    same-batch siblings that are guaranteed false positives.
+
+    The transitivity argument is exact: a sibling Z is a guaranteed false positive ONLY when it
+    points at the *same canonical row X* that a promoted row Y was confirmed against. The CSV
+    asserts Z != Y (Z and Y are on different accounts in the same file), and the merge identifies
+    Y ≡ X, so Z != X — Z's flag against X is spurious and is cleared.
+
+    The match must be on the *exact* canonical row, not merely its merged group/effective root.
+    A sibling pointing at a *different* row that happens to live on an account now in the same
+    merged group proves nothing: that other row is a different transaction Z may genuinely
+    duplicate. (Concretely: merging a legacy umbrella "Credit Card" account into one real card R
+    promotes R's rows, but a same-batch row on a *different* card C whose suspect points at a
+    *different* Credit-Card transaction must stay flagged — it is a real cross-account suspect of
+    a row that simply shares the merged account, not of any row on card R.)
     """
     if not promoted_ids:
         return 0
     placeholders = _placeholders(promoted_ids)
-    cleared_ids: list[str] = []
-    for row in conn.execute(
+    cleared = conn.execute(
         f"""
-        SELECT t.id          AS promoted_id,
-               t.import_batch_id,
-               t.account_id  AS promoted_account_id,
-               COALESCE(ta.parent_account_id, ta.id) AS target_root
-        FROM   txn t
-        JOIN   txn target ON target.id = t.suspect_duplicate_of
-        JOIN   account ta ON ta.id = target.account_id
-        WHERE  t.id IN ({placeholders})
-          AND  t.import_batch_id IS NOT NULL
+        SELECT DISTINCT z.id
+        FROM   txn z
+        JOIN   txn y
+          ON   y.import_batch_id = z.import_batch_id
+          AND  y.account_id != z.account_id
+          AND  y.suspect_duplicate_of = z.suspect_duplicate_of
+        WHERE  y.id IN ({placeholders})
+          AND  z.suspect_duplicate_of IS NOT NULL
+          AND  z.suspect_resolved_at IS NULL
+          AND  z.rejection_reason IS NULL
+          AND  z.trashed_at IS NULL
         """,
         promoted_ids,
-    ).fetchall():
-        siblings = conn.execute(
-            """
-            SELECT z.id
-            FROM   txn z
-            JOIN   txn z_target ON z_target.id = z.suspect_duplicate_of
-            JOIN   account z_target_acc ON z_target_acc.id = z_target.account_id
-            WHERE  z.import_batch_id = ?
-              AND  z.account_id != ?
-              AND  z.suspect_duplicate_of IS NOT NULL
-              AND  z.suspect_resolved_at IS NULL
-              AND  z.rejection_reason IS NULL
-              AND  z.trashed_at IS NULL
-              AND  COALESCE(z_target_acc.parent_account_id, z_target_acc.id) = ?
-            """,
-            (row["import_batch_id"], row["promoted_account_id"], row["target_root"]),
-        ).fetchall()
-        cleared_ids.extend(str(s["id"]) for s in siblings)
+    ).fetchall()
+    cleared_ids = [str(r["id"]) for r in cleared]
     if not cleared_ids:
         return 0
-    unique_cleared = list({i for i in cleared_ids})
     conn.executemany(
         """
         UPDATE txn
@@ -1098,9 +1197,9 @@ def _clear_same_batch_siblings_after_promotion(conn: sqlite3.Connection, promote
                suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE  id = ?
         """,
-        [(i,) for i in unique_cleared],
+        [(i,) for i in cleared_ids],
     )
-    return len(unique_cleared)
+    return len(cleared_ids)
 
 
 def restore_rejected_duplicate(conn: sqlite3.Connection, txn_id: str) -> dict:

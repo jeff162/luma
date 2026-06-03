@@ -23,7 +23,7 @@ import TransientTextInput from './TransientTextInput.jsx'
 
 const AMOUNT_CONVENTIONS = [
   { value: 'single_signed', label: 'Single column — negative = debit' },
-  { value: 'single_unsigned', label: 'Single column — always positive + direction column' },
+  { value: 'single_unsigned', label: 'Single column + a debit/credit type column' },
   { value: 'two_column', label: 'Two columns — separate debit / credit' },
 ]
 
@@ -403,13 +403,13 @@ function ProfileForm({
           <label htmlFor={`${fid}-name`} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
             Data source name *
           </label>
-          <input id={`${fid}-name`} value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Chase Checking" style={inputStyle} />
+          <input id={`${fid}-name`} value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Main Checking" style={inputStyle} />
         </div>
         <div>
           <label htmlFor={`${fid}-pattern`} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
             Filename pattern (auto-detect)
           </label>
-          <input id={`${fid}-pattern`} value={filePattern} onChange={e => setFilePattern(e.target.value)} placeholder="e.g. Chase" style={inputStyle} />
+          <input id={`${fid}-pattern`} value={filePattern} onChange={e => setFilePattern(e.target.value)} placeholder="e.g. statement" style={inputStyle} />
         </div>
         <div>
           <label htmlFor={`${fid}-header`} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>

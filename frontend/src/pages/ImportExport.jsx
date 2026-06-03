@@ -49,8 +49,8 @@ import {
 } from '../lib/appConfig.js'
 
 const AMOUNT_CONVENTIONS = [
-  { value: 'single_signed', label: 'Single column — negative = debit (Chase, most banks)' },
-  { value: 'single_unsigned', label: 'Single column — always positive, direction column' },
+  { value: 'single_signed', label: 'Single column — negative = debit (most banks)' },
+  { value: 'single_unsigned', label: 'Single column + a debit/credit type column' },
   { value: 'two_column', label: 'Two columns — separate debit and credit' },
 ]
 const DATE_FORMATS = [
@@ -5582,10 +5582,11 @@ function ImportTab() {
                 amtConv === 'single_unsigned'
                   ? buildMappingFieldConfig({
                     key: 'direction',
-                    label: 'Direction column',
+                    label: 'Debit/credit type column',
                     candidateHeaders: columnAnalysis.directionCandidates,
                     value: colDir,
                     setValue: setColDir,
+                    hint: 'The column that says debit/credit (or deposit/withdrawal), e.g. a "Transaction Type" column.',
                   })
                   : null,
                 buildMappingFieldConfig({
