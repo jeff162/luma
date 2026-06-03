@@ -92,7 +92,7 @@ def get_db(db_path: str | None = None):
 # Migrations are additive startup upgrades for existing databases only; fresh installs
 # are created directly at `CURRENT_VERSION` and should not replay the migration chain.
 
-CURRENT_VERSION = 24
+CURRENT_VERSION = 25
 
 MIGRATIONS = {}
 
@@ -718,6 +718,21 @@ def m23_account_pair_distinct(conn):
     )
 
 
+@migration(25)
+def m25_import_batch_duplicate_reviewed_at(conn):
+    """Acknowledgment marker for advisory import-time rejections.
+
+    A coverage-window hard-reject that can't point at a specific matching row surfaces in the
+    duplicate report as "Rejected · review" — already rejected (never imported), but flagged
+    because the system couldn't fully explain the match. `reviewed_at` lets the user mark such a
+    row as deliberately reviewed, clearing it from the "needs attention" count without changing
+    the rejection. NULL = not yet acknowledged.
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(import_batch_duplicate)").fetchall()}
+    if "reviewed_at" not in columns:
+        conn.execute("ALTER TABLE import_batch_duplicate ADD COLUMN reviewed_at TEXT")
+
+
 @migration(24)
 def m24_dedupe_resolved_by(conn):
     """Provenance marker on dedupe resolutions so detach can safely auto-restore promoted rows
@@ -1036,6 +1051,7 @@ def init_db(db_path: str | None = None):
                 values_json               TEXT,
                 matched_transaction_json  TEXT,
                 txn_payload_json          TEXT,
+                reviewed_at               TEXT,
                 PRIMARY KEY (batch_id, row_number)
             );
             CREATE INDEX IF NOT EXISTS idx_import_batch_duplicate_batch ON import_batch_duplicate(batch_id);

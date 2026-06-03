@@ -329,6 +329,20 @@ class BatchDuplicateImportRequest(BaseModel):
     import_all: bool = False
 
 
+class BatchDuplicateReviewRequest(BaseModel):
+    # Mark advisory hard-reject rows (coverage "review" items) as reviewed/acknowledged, or clear
+    # that acknowledgment (reviewed=False). Identified by their CSV row_number within the batch.
+    row_numbers: list[int]
+    reviewed: bool = True
+
+
+class BatchCreateProfileRequest(BaseModel):
+    name: str
+    # Derived from the file name by the caller (the frontend's `inferFilenamePattern`, same helper the
+    # "Save as data source" flow uses) so the new source auto-matches future files the same way.
+    filename_pattern: Optional[str] = None
+
+
 class BackupRecipientCreate(BaseModel):
     label: str
     public_key: str
@@ -3349,6 +3363,11 @@ async def run_import(
             "category_assignments": category_assignments_cfg,
             "account_map":         account_map_cfg,
             "skip_accounts":       list(skip_set),
+            # Persist the header fingerprint (same "|".join(headers) form the preview/profiles use)
+            # so a data source later created from this batch can auto-match future files by column
+            # structure, matching the "Save as data source" flow. Older batches imported before this
+            # was stored simply won't have it (the raw header isn't otherwise recoverable).
+            "header_fingerprint":  "|".join(headers),
             "date_format":         date_format,
             "amount_convention":   amount_convention,
             "skip_rows":           skip_rows,
@@ -3880,6 +3899,29 @@ def get_batch_deduped_rows(batch_id: str):
             (batch_id,),
         ).fetchall()
     return {"batch_id": batch_id, "rows": [dict(r) for r in rows], "count": len(rows)}
+
+
+@router.post("/batches/{batch_id}/duplicates/mark-reviewed")
+def mark_batch_duplicates_reviewed(batch_id: str, body: BatchDuplicateReviewRequest):
+    """Acknowledge (or un-acknowledge) advisory hard-reject rows. Sets/clears `reviewed_at` on the
+    given `import_batch_duplicate` rows so they leave (or rejoin) the duplicate report's
+    needs-attention count. Does not change the rejection itself — the rows stay un-imported."""
+    row_numbers = [int(n) for n in (body.row_numbers or [])]
+    if not row_numbers:
+        return {"updated": 0}
+    placeholders = ",".join("?" * len(row_numbers))
+    reviewed_value = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')" if body.reviewed else "NULL"
+    with get_db() as conn:
+        cursor = conn.execute(
+            f"""
+            UPDATE import_batch_duplicate
+            SET    reviewed_at = {reviewed_value}
+            WHERE  batch_id = ?
+              AND  row_number IN ({placeholders})
+            """,
+            [batch_id, *row_numbers],
+        )
+    return {"updated": cursor.rowcount or 0, "reviewed": body.reviewed}
 
 
 @router.post("/batches/{batch_id}/duplicates/import")
@@ -4962,6 +5004,54 @@ def set_batch_profile(batch_id: str, body: dict):
             snapshot[UNKNOWN_SOURCE_FALLBACK_KEY] = False
             save_batch_snapshot(conn, batch_id, snapshot)
     return {"ok": True}
+
+
+@router.post("/batches/{batch_id}/create-profile")
+def create_profile_from_batch(batch_id: str, body: BatchCreateProfileRequest):
+    """Create a saved data source from a previously-imported (profileless) batch and link the batch
+    to it — the historical-file counterpart to "Create data source" on the active import card. The
+    mapping is taken from the batch's own `config_snapshot` (where the live `/batches` payload has
+    stripped it), so the new source reuses exactly the column/account/date/amount setup the file was
+    imported with. Only valid for profileless batches."""
+    with get_db() as conn:
+        batch = conn.execute(
+            "SELECT id, profile_id, filename, file_content_hash, config_snapshot, use_imported_categories "
+            "FROM import_batch WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+        if batch["profile_id"]:
+            raise HTTPException(status_code=400, detail="Batch is already linked to a data source")
+        normalized_name = _assert_profile_name_available(conn, body.name)
+        snapshot = safe_json_dict(batch["config_snapshot"])
+        # The snapshot's column_map already carries any imported-category settings from the import,
+        # so it is reused as-is rather than re-derived.
+        column_map = snapshot.get("column_map") if isinstance(snapshot.get("column_map"), dict) else {}
+        pid = str(uuid.uuid4())
+        conn.execute("""
+            INSERT INTO csv_import_profile
+              (id, name, filename_pattern, header_fingerprint, template_filename,
+               template_file_hash, column_map,
+               account_id, date_format, amount_convention, skip_rows,
+               apply_categorization, use_imported_categories, notes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            pid, normalized_name, (body.filename_pattern or None), snapshot.get("header_fingerprint"),
+            batch["filename"], batch["file_content_hash"],
+            json.dumps(column_map), snapshot.get("account_id"),
+            snapshot.get("date_format") or "%m/%d/%Y",
+            snapshot.get("amount_convention") or "single_signed",
+            int(snapshot.get("skip_rows") or 0),
+            1 if snapshot.get("apply_categorization", True) else 0,
+            1 if batch["use_imported_categories"] else 0,
+            None,
+        ))
+        conn.execute("UPDATE import_batch SET profile_id = ? WHERE id = ?", (pid, batch_id))
+        if snapshot.get(UNKNOWN_SOURCE_FALLBACK_KEY):
+            snapshot[UNKNOWN_SOURCE_FALLBACK_KEY] = False
+            save_batch_snapshot(conn, batch_id, snapshot)
+    return {"id": pid}
 
 
 @router.patch("/batches/{batch_id}/imported-category-usage")

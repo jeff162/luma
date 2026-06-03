@@ -139,6 +139,23 @@ def _adjacent_date_offsets(parsed_date: str) -> list[tuple[str, int]]:
     ]
 
 
+def _far_date_offsets(parsed_date: str) -> list[tuple[str, int]]:
+    """±2-day candidate offsets, used ONLY as a fallback when the exact/±1 lookup finds nothing.
+    A foreign transaction posts on its local calendar day (a day ahead of US), so the usual
+    pending/posted ±1 disagreement becomes ±2 — e.g. a Sydney charge dated the 9th by one source
+    and the 11th by the other. These are display-only candidates (they cannot change the already-
+    made reject verdict) and are tagged with `day_offset` ±2 so the report can label them as a
+    timezone-shifted match rather than 'no specific match'."""
+    try:
+        d = datetime.strptime(parsed_date, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return []
+    return [
+        ((d - timedelta(days=2)).isoformat(), -2),
+        ((d + timedelta(days=2)).isoformat(), 2),
+    ]
+
+
 def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_account_id: str,
                                           parsed_date: str, amount: float,
                                           duplicate_amount_key, include_scope: bool) -> list[dict]:
@@ -150,7 +167,9 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
     the lookup to the day before/after (same amount) cannot change a decision — it only lets the
     report point at the specific prior transaction when the two sources disagree on the posting day by
     one. Near-date hits carry a `day_offset` so the UI can label them. Exact-date matches still rank
-    first. When even ±1 finds nothing, the row stays 'no specific match' for manual review.
+    first. When exact/±1 finds nothing we widen once more to ±2 (still display-only) to catch a
+    timezone-shifted foreign twin; those candidates are tagged `day_offset` ±2. Only when even ±2
+    finds nothing does the row stay 'no specific match' for manual review.
 
     The lookup re-uses the per-account amount index that text-strategy already populates, so the
     cost is dict lookups, not extra queries. For in-scope coverage we also fold in candidates from
@@ -177,17 +196,24 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
             row["day_offset"] = day_offset  # candidate's date is this many days off the incoming row's
         out.append(row)
 
-    for day, day_offset in _adjacent_date_offsets(parsed_date):
-        key = duplicate_amount_key(day, amount)
-        for candidate in context.existing_rows_by_account_amount.get(receiving_account_id, {}).get(key, []):
-            _append(candidate, day_offset)
-        if include_scope:
-            # Linked-group rows too. We don't have compare_target_id at this point in the signature,
-            # so we iterate the whole effective-account map looking up by amount-key — cheap because
-            # the second-level dict is keyed by amount-key.
-            for scope_map in context.existing_rows_by_effective_account_amount.values():
-                for candidate in scope_map.get(key, []):
-                    _append(candidate, day_offset)
+    def _probe(offsets) -> None:
+        for day, day_offset in offsets:
+            key = duplicate_amount_key(day, amount)
+            for candidate in context.existing_rows_by_account_amount.get(receiving_account_id, {}).get(key, []):
+                _append(candidate, day_offset)
+            if include_scope:
+                # Linked-group rows too. We don't have compare_target_id at this point in the
+                # signature, so we iterate the whole effective-account map looking up by amount-key
+                # — cheap because the second-level dict is keyed by amount-key.
+                for scope_map in context.existing_rows_by_effective_account_amount.values():
+                    for candidate in scope_map.get(key, []):
+                        _append(candidate, day_offset)
+
+    _probe(_adjacent_date_offsets(parsed_date))
+    # Only reach to ±2 when exact/±1 produced nothing, so a real exact/±1 match is never diluted
+    # by a coincidental ±2 neighbor — the ±2 band is purely the timezone-shift fallback.
+    if not out:
+        _probe(_far_date_offsets(parsed_date))
     return out
 
 
@@ -747,7 +773,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
     # Hard rejects (never made it into the ledger).
     for row in conn.execute(
         """
-        SELECT row_number, reason, values_json, matched_transaction_json, txn_payload_json
+        SELECT row_number, reason, values_json, matched_transaction_json, txn_payload_json, reviewed_at
         FROM   import_batch_duplicate
         WHERE  batch_id = ?
         ORDER  BY row_number
@@ -798,6 +824,21 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             elif enriched_matched.get("import_batch_id"):
                 enriched_matched = enrich_with_source(enriched_matched, enriched_matched.get("import_batch_id"))
 
+        # Advisory-review sub-state, only meaningful for coverage-window rejects (the rule that can
+        # fire without a specific matching row). `reviewed_at` set → the user has acknowledged it,
+        # so it leaves the review bucket regardless. Otherwise: a coverage reject whose only
+        # candidates are the ±2 timezone fallback is `matched_2d`; one with no candidate at all is
+        # `no_match` (the genuinely-needs-a-look case); a coverage reject that DID match at exact/±1
+        # is a settled rejection with no sub-state.
+        reviewed = bool(row["reviewed_at"])
+        review_substate = None
+        if isinstance(enriched_matched, dict) and "covered" in enriched_matched and not reviewed:
+            candidates = enriched_matched.get("candidates") or []
+            if not candidates:
+                review_substate = "no_match"
+            elif min(abs(c.get("day_offset", 0)) for c in candidates) >= 2:
+                review_substate = "matched_2d"
+
         entries.append({
             "kind": "hard_reject",
             "rule_key": rule_key,
@@ -805,6 +846,8 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             "rule_description": rule_description,
             "confidence": confidence,
             "reason_text": row["reason"] or "",
+            "reviewed": reviewed,
+            "review_substate": review_substate,
             "incoming": {
                 "row_number": row["row_number"],
                 "date": txn_payload.get("date"),

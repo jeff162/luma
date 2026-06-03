@@ -60,12 +60,12 @@ export default function ImportBatchDetail({
   const dateStart = dateFilter?.dateStart || null
   const dateEnd   = dateFilter?.dateEnd   || null
 
-  const [searchInput, setSearchInput] = useState('')
-  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [filterInput, setFilterInput] = useState('')
+  const [debouncedFilter, setDebouncedFilter] = useState('')
   useEffect(() => {
-    const handle = setTimeout(() => setDebouncedSearch(searchInput.trim()), 250)
+    const handle = setTimeout(() => setDebouncedFilter(filterInput.trim()), 250)
     return () => clearTimeout(handle)
-  }, [searchInput])
+  }, [filterInput])
   const { pos, dragging, panelRef, onDragStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
   const [totalCount, setTotalCount] = useState(0)
   const [countLoading, setCountLoading] = useState(true)
@@ -78,21 +78,21 @@ export default function ImportBatchDetail({
       import_batch_id: batch.id,
       ...(dateStart ? { date_start: dateStart } : {}),
       ...(dateEnd   ? { date_end:   dateEnd   } : {}),
-      ...(debouncedSearch ? { search: debouncedSearch } : {}),
+      ...(debouncedFilter ? { quick_filter: debouncedFilter } : {}),
       limit,
       offset,
     }).then(result => ({
       ...result,
       transactions: (result?.transactions || []).map(withSourceAccountLabel),
     }))
-  ), [batch.id, dateStart, dateEnd, debouncedSearch])
+  ), [batch.id, dateStart, dateEnd, debouncedFilter])
   const {
     rows,
     setRows,
     loading,
     listRef,
   } = usePagedTransactions({
-    activeKey: `${batch.id}|${dateStart || ''}|${dateEnd || ''}|${debouncedSearch}`,
+    activeKey: `${batch.id}|${dateStart || ''}|${dateEnd || ''}|${debouncedFilter}`,
     loadPage,
   })
 
@@ -103,7 +103,7 @@ export default function ImportBatchDetail({
       import_batch_id: batch.id,
       ...(dateStart ? { date_start: dateStart } : {}),
       ...(dateEnd   ? { date_end:   dateEnd   } : {}),
-      ...(debouncedSearch ? { search: debouncedSearch } : {}),
+      ...(debouncedFilter ? { quick_filter: debouncedFilter } : {}),
       limit: 1,
       offset: 0,
     }).then(result => {
@@ -116,7 +116,7 @@ export default function ImportBatchDetail({
       setCountLoading(false)
     })
     return () => { cancelled = true }
-  }, [batch.id, dateStart, dateEnd, debouncedSearch])
+  }, [batch.id, dateStart, dateEnd, debouncedFilter])
 
   // Rows this file imported that were later removed as confirmed duplicates (via the duplicate
   // report's Discard new / Replace existing, or an account merge). They are trashed, so they
@@ -132,10 +132,13 @@ export default function ImportBatchDetail({
     return () => { cancelled = true }
   }, [batch.id])
   const visibleDeduped = useMemo(() => {
-    const term = debouncedSearch.toLowerCase()
+    // Best-effort merchant-substring filter on the small removed-rows audit list; the main table's
+    // quick filter is backend-resolved (date/amount/etc.) and this list isn't, so a non-name query
+    // (e.g. a date) simply hides it.
+    const term = debouncedFilter.toLowerCase()
     if (!term) return dedupedRows
     return dedupedRows.filter(r => (r.merchant || '').toLowerCase().includes(term))
-  }, [dedupedRows, debouncedSearch])
+  }, [dedupedRows, debouncedFilter])
 
   async function handleCategorySave(txnId, categoryId, categoryObj) {
     await txnMutations.setCategory(txnId, categoryId)
@@ -182,26 +185,28 @@ export default function ImportBatchDetail({
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5, flex: '1 1 280px' }}>
-            Imported transactions from this file. Category changes made here update the underlying transactions directly.
-          </div>
           <input
             type="search"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search merchant / payee…"
-            aria-label="Search merchant or payee"
+            value={filterInput}
+            onChange={(e) => setFilterInput(e.target.value)}
+            placeholder="Search merchant, amount, or date (2023, 03/2023, 03/15/2023)…"
+            aria-label="Search transactions by merchant, amount, or date"
+            title="Matches merchant, category, account, amount, or date. Date jumps support a year (2023), month (03/2023), or day (03/15/2023). Prefix to restrict, e.g. amount:68 or date:03/2023."
             style={{
-              flex: '0 1 240px',
-              padding: '6px 10px',
+              flex: '0 1 360px',
+              minWidth: 240,
+              padding: '8px 12px',
               fontSize: 13,
-              borderRadius: 6,
-              border: '1px solid var(--border)',
+              borderRadius: 8,
+              border: '1px solid var(--accent)',
               background: 'var(--surface2)',
               color: 'var(--text)',
               outline: 'none',
             }}
           />
+          <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, flex: '1 1 220px' }}>
+            Imported transactions from this file. Category changes made here update the underlying transactions directly.
+          </div>
         </div>
         {visibleDeduped.length > 0 ? (
           <div style={{ flex: '0 0 auto', border: '1px solid color-mix(in srgb, #f59e0b 30%, var(--border))', borderRadius: 8, background: 'color-mix(in srgb, #f59e0b 6%, var(--surface2))', overflow: 'hidden' }}>

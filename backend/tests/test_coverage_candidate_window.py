@@ -7,9 +7,12 @@ Coverage-window candidate display widening.
 When a row is hard-rejected because its date falls in a covered range, the report tries to point at
 the *specific* prior transaction. Two sources for the same transaction often disagree on the posting
 day by one (timezone/settlement), which used to leave the row showing "no specific match" (→ the
-Rejected · review state). The lookup now also checks the day before/after on the same amount and tags
-the hit with `day_offset`. This is display-only — the hard-reject verdict is unchanged — so these
-tests exercise the candidate lookup directly with an injected amount-key, no import needed.
+Rejected · review state). The lookup checks the day before/after on the same amount and tags the hit
+with `day_offset`; when exact/±1 finds nothing it widens once more to ±2 (a foreign transaction
+posts a local calendar day ahead, turning the ±1 settlement drift into ±2). The ±2 reach is a
+fallback only — it never fires when a closer match already exists. This is all display-only (the
+hard-reject verdict is unchanged), so these tests exercise the candidate lookup directly with an
+injected amount-key, no import needed.
 """
 
 from __future__ import annotations
@@ -61,11 +64,30 @@ class CoverageCandidateWindowTests(unittest.TestCase):
         self.assertEqual([c["id"] for c in out], ["t1"], "a ±1-day same-amount row must now be found")
         self.assertEqual(out[0]["day_offset"], 1, "candidate's date is one day later than the incoming row")
 
-    def test_two_days_off_stays_no_specific_match(self):
+    def test_two_days_off_is_matched_via_fallback(self):
+        # Timezone-shifted foreign twin: nothing at exact/±1, but a same-amount row sits at ±2.
         cand = {"id": "t1", "date": "2026-01-12", "merchant_name": "X", "amount": 12.34, "account_id": "acct"}
         ctx = self._context({amount_key("2026-01-12", 12.34): [cand]})
         out = self._lookup(ctx, "2026-01-10")
-        self.assertEqual(out, [], "beyond ±1 the row keeps 'no specific match' (stays in review)")
+        self.assertEqual([c["id"] for c in out], ["t1"], "the ±2 fallback must find the timezone twin")
+        self.assertEqual(out[0]["day_offset"], 2, "candidate's date is two days later than the incoming row")
+
+    def test_two_day_fallback_does_not_fire_when_a_closer_match_exists(self):
+        # A ±1 match is present, so the ±2 reach must not run and dilute it with a coincidental neighbor.
+        near = {"id": "near", "date": "2026-01-11", "merchant_name": "X", "amount": 12.34, "account_id": "acct"}
+        far = {"id": "far", "date": "2026-01-12", "merchant_name": "X", "amount": 12.34, "account_id": "acct"}
+        ctx = self._context({
+            amount_key("2026-01-11", 12.34): [near],
+            amount_key("2026-01-12", 12.34): [far],
+        })
+        out = self._lookup(ctx, "2026-01-10")
+        self.assertEqual([c["id"] for c in out], ["near"], "only the ±1 match; ±2 fallback stays dormant")
+
+    def test_three_days_off_stays_no_specific_match(self):
+        cand = {"id": "t1", "date": "2026-01-13", "merchant_name": "X", "amount": 12.34, "account_id": "acct"}
+        ctx = self._context({amount_key("2026-01-13", 12.34): [cand]})
+        out = self._lookup(ctx, "2026-01-10")
+        self.assertEqual(out, [], "beyond ±2 the row keeps 'no specific match' (stays in review)")
 
     def test_exact_date_ranks_before_near_date(self):
         exact = {"id": "exact", "date": "2026-01-10", "merchant_name": "X", "amount": 12.34, "account_id": "acct"}

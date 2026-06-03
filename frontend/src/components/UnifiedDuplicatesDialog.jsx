@@ -64,16 +64,19 @@ const COMPACT_ACTION_BTN_STYLE = { padding: '3px 8px', fontSize: 11.5, borderRad
 // with no specific match and not yet resolved → Rejected · review). Returns null for the rest.
 const REVIEW_KIND_PILLS = [
   { key: 'review', label: 'Review' },
-  { key: 'rejected_review', label: 'Rejected · review' },
+  { key: 'matched_2d', label: 'Matched ±2 days' },
+  { key: 'no_match', label: 'No specific match' },
 ]
 
+// Soft flags need a Keep/Discard/Replace decision. Advisory coverage rejects (already rejected,
+// never imported) carry a backend `review_substate`: 'matched_2d' (a same-amount twin was found
+// only at the ±2 timezone fallback) or 'no_match' (no twin anywhere). The backend clears the
+// substate once the row is acknowledged (`reviewed`), so a reviewed row returns null here and
+// drops out of the needs-attention pills.
 function reviewKindOf(entry) {
   if (entry.kind === 'soft_flag') return 'review'
-  if (entry.kind === 'hard_reject' && !entry.incoming?.txn_id
-      && entry.matched && entry.matched.covered
-      && (!entry.matched.candidates || entry.matched.candidates.length === 0)) {
-    return 'rejected_review'
-  }
+  if (entry.review_substate === 'matched_2d') return 'matched_2d'
+  if (entry.review_substate === 'no_match') return 'no_match'
   return null
 }
 
@@ -169,7 +172,15 @@ export default function UnifiedDuplicatesDialog({
   function actionsFor(entry) {
     if (entry.kind === 'soft_flag') return { keep: true, reject: true, replace: true }
     if (entry.kind === 'hard_reject' && entry.incoming?.txn_id) return { restore: true }
-    if (entry.kind === 'hard_reject' && entry.incoming?.row_number) return { import_anyway: true }
+    if (entry.kind === 'hard_reject' && entry.incoming?.row_number != null) {
+      // Advisory coverage rejects: already rejected, but offer both "Import anyway" (if it's
+      // actually a distinct row missing from the other file) and "Mark reviewed" (acknowledge the
+      // rejection, clearing it from the needs-attention pills). A reviewed one can be un-reviewed.
+      const actions = { import_anyway: true }
+      if (entry.review_substate) actions.mark_reviewed = true
+      else if (entry.reviewed && entry.matched?.covered) actions.unreview = true
+      return actions
+    }
     return {}
   }
 
@@ -179,14 +190,14 @@ export default function UnifiedDuplicatesDialog({
   // hard-reject with a specific match). Keep these four ranks in sync with the Kind-cell
   // labels in the row template further down.
   function kindRank(entry) {
-    if (entry.kind === 'soft_flag') return 0  // Review
+    if (entry.kind === 'soft_flag') return 0  // Review (undecided)
+    if (entry.review_substate) return 1       // Rejected · review (matched ±2 days / no specific match)
     if (entry.incoming?.txn_id) return 2      // Resolved (confirmed soft-flag)
-    if (entry.matched?.covered && !entry.matched.candidates?.length) return 1  // Rejected · review
-    return 3                                  // Rejected
+    return 3                                  // Rejected (settled, incl. acknowledged)
   }
 
   const reviewKindBreakdown = useMemo(() => {
-    const counts = { review: 0, rejected_review: 0 }
+    const counts = { review: 0, matched_2d: 0, no_match: 0 }
     for (const e of entries) {
       const k = reviewKindOf(e)
       if (k) counts[k] += 1
@@ -232,7 +243,7 @@ export default function UnifiedDuplicatesDialog({
   const visibleIds = useMemo(() => new Set(visibleEntries.map(entryId)), [visibleEntries])
 
   const selectionSummary = useMemo(() => {
-    const summary = { total: 0, keep: 0, reject: 0, replace: 0, restore: 0, import_anyway: 0 }
+    const summary = { total: 0, keep: 0, reject: 0, replace: 0, restore: 0, import_anyway: 0, mark_reviewed: 0, unreview: 0 }
     for (const entry of visibleEntries) {
       if (!selectedIds.has(entryId(entry))) continue
       summary.total += 1
@@ -242,6 +253,8 @@ export default function UnifiedDuplicatesDialog({
       if (a.replace) summary.replace += 1
       if (a.restore) summary.restore += 1
       if (a.import_anyway) summary.import_anyway += 1
+      if (a.mark_reviewed) summary.mark_reviewed += 1
+      if (a.unreview) summary.unreview += 1
     }
     return summary
   }, [visibleEntries, selectedIds])
@@ -281,18 +294,22 @@ export default function UnifiedDuplicatesDialog({
     setActionError('')
     setPendingBulk(true)
     try {
-      const tasks = []
-      for (const entry of visibleEntries) {
-        if (!selectedIds.has(entryId(entry))) continue
-        const a = actionsFor(entry)
-        if (!a[action]) continue
-        if (action === 'keep')          tasks.push(api.resolveSuspectDuplicate(entry.incoming.txn_id, 'keep'))
-        else if (action === 'reject')   tasks.push(api.resolveSuspectDuplicate(entry.incoming.txn_id, 'reject'))
-        else if (action === 'replace')  tasks.push(api.resolveSuspectDuplicate(entry.incoming.txn_id, 'replace'))
-        else if (action === 'restore')  tasks.push(api.restoreRejectedDuplicate(entry.incoming.txn_id))
-        else if (action === 'import_anyway') tasks.push(api.importBatchDuplicates(batchId, { row_numbers: [entry.incoming.row_number] }))
+      const selected = visibleEntries.filter(e => selectedIds.has(entryId(e)) && actionsFor(e)[action])
+      if (action === 'mark_reviewed' || action === 'unreview') {
+        // Acknowledgment is one row-number-set call rather than N requests.
+        const rows = selected.map(e => e.incoming.row_number).filter(n => n != null)
+        if (rows.length) await api.markBatchDuplicatesReviewed(batchId, rows, action === 'mark_reviewed')
+      } else {
+        const tasks = selected.map(entry => {
+          if (action === 'keep')          return api.resolveSuspectDuplicate(entry.incoming.txn_id, 'keep')
+          if (action === 'reject')        return api.resolveSuspectDuplicate(entry.incoming.txn_id, 'reject')
+          if (action === 'replace')       return api.resolveSuspectDuplicate(entry.incoming.txn_id, 'replace')
+          if (action === 'restore')       return api.restoreRejectedDuplicate(entry.incoming.txn_id)
+          if (action === 'import_anyway') return api.importBatchDuplicates(batchId, { row_numbers: [entry.incoming.row_number] })
+          return null
+        }).filter(Boolean)
+        await Promise.all(tasks)
       }
-      await Promise.all(tasks)
       setSelectedIds(new Set())
       if (typeof onReload === 'function') await onReload()
     } catch (err) {
@@ -311,6 +328,8 @@ export default function UnifiedDuplicatesDialog({
       else if (action === 'replace')      await api.resolveSuspectDuplicate(entry.incoming.txn_id, 'replace')
       else if (action === 'restore')      await api.restoreRejectedDuplicate(entry.incoming.txn_id)
       else if (action === 'import_anyway') await api.importBatchDuplicates(batchId, { row_numbers: [entry.incoming.row_number] })
+      else if (action === 'mark_reviewed') await api.markBatchDuplicatesReviewed(batchId, [entry.incoming.row_number], true)
+      else if (action === 'unreview')      await api.markBatchDuplicatesReviewed(batchId, [entry.incoming.row_number], false)
       if (typeof onReload === 'function') await onReload()
     } catch (err) {
       setActionError(err?.message || 'Action failed')
@@ -548,7 +567,7 @@ export default function UnifiedDuplicatesDialog({
       isTopmost={isTopmost}
     >
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, margin: '-20px -24px', overflow: 'hidden' }}>
-        {(ruleBreakdown.length > 0 || reviewKindBreakdown.review || reviewKindBreakdown.rejected_review) ? (
+        {(ruleBreakdown.length > 0 || reviewKindBreakdown.review || reviewKindBreakdown.matched_2d || reviewKindBreakdown.no_match) ? (
           <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 6, alignItems: 'baseline', background: 'color-mix(in srgb, var(--surface2) 50%, transparent)' }}>
             <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>Show:</span>
             <button
@@ -589,7 +608,7 @@ export default function UnifiedDuplicatesDialog({
                 </button>
               )
             })}
-            {(reviewKindBreakdown.review || reviewKindBreakdown.rejected_review) ? (
+            {(reviewKindBreakdown.review || reviewKindBreakdown.matched_2d || reviewKindBreakdown.no_match) ? (
               <span style={{ width: 1, alignSelf: 'stretch', margin: '0 2px', background: 'var(--border)' }} />
             ) : null}
             {REVIEW_KIND_PILLS.map(k => {
@@ -649,12 +668,26 @@ export default function UnifiedDuplicatesDialog({
             >
               Replace existing ({selectionSummary.replace})
             </Button>
+            <Button
+              style={COMPACT_ACTION_BTN_STYLE}
+              variant="ghost"
+              disabled={pendingBulk || selectionSummary.mark_reviewed === 0}
+              onClick={() => runBulk('mark_reviewed')}
+              title="Acknowledge these already-rejected rows as reviewed — clears them from the needs-attention list without importing them."
+            >
+              Mark reviewed ({selectionSummary.mark_reviewed})
+            </Button>
             <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk || selectionSummary.import_anyway === 0} onClick={() => runBulk('import_anyway')}>
               Import anyway ({selectionSummary.import_anyway})
             </Button>
             <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk || selectionSummary.restore === 0} onClick={() => runBulk('restore')}>
               Restore ({selectionSummary.restore})
             </Button>
+            {selectionSummary.unreview > 0 ? (
+              <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk} onClick={() => runBulk('unreview')}>
+                Un-review ({selectionSummary.unreview})
+              </Button>
+            ) : null}
             <span style={{ flex: 1 }} />
             <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk} onClick={() => setSelectedIds(new Set())}>Clear selection</Button>
           </div>
@@ -698,12 +731,11 @@ export default function UnifiedDuplicatesDialog({
                   const id = entryId(entry)
                   const isSoft = entry.kind === 'soft_flag'
                   const isConfirmedSoftFlag = entry.kind === 'hard_reject' && !!entry.incoming?.txn_id
-                  const isNoMatchCoverage = entry.kind === 'hard_reject'
-                    && entry.matched && entry.matched.covered
-                    && (!entry.matched.candidates || entry.matched.candidates.length === 0)
+                  const isAdvisoryReview = !!entry.review_substate  // unreviewed coverage advisory
+                  const isAcknowledged = entry.kind === 'hard_reject' && entry.reviewed && !!entry.matched?.covered
                   const stripe = isSoft ? '#f59e0b'
                                : isConfirmedSoftFlag ? 'color-mix(in srgb, #f59e0b 60%, var(--border))'
-                               : isNoMatchCoverage ? 'color-mix(in srgb, #f59e0b 30%, var(--border))'
+                               : isAdvisoryReview ? 'color-mix(in srgb, #f59e0b 30%, var(--border))'
                                : 'var(--border)'
                   const a = actionsFor(entry)
                   return (
@@ -715,8 +747,8 @@ export default function UnifiedDuplicatesDialog({
                           onChange={() => toggleEntry(entry)}
                         />
                       </td>
-                      <td style={{ padding: '6px 8px', color: isSoft ? '#f59e0b' : isNoMatchCoverage ? '#f59e0b' : 'var(--muted)', fontWeight: (isSoft || isNoMatchCoverage) ? 600 : 400, whiteSpace: 'nowrap' }}>
-                        {isSoft ? 'Review' : isConfirmedSoftFlag ? 'Resolved' : isNoMatchCoverage ? 'Rejected · review' : 'Rejected'}
+                      <td style={{ padding: '6px 8px', color: (isSoft || isAdvisoryReview) ? '#f59e0b' : 'var(--muted)', fontWeight: (isSoft || isAdvisoryReview) ? 600 : 400, whiteSpace: 'nowrap' }}>
+                        {isSoft ? 'Review' : isConfirmedSoftFlag ? 'Resolved' : isAdvisoryReview ? 'Rejected · review' : isAcknowledged ? 'Reviewed' : 'Rejected'}
                       </td>
                       <td style={{ padding: '6px 8px' }}>{ruleBadge(entry)}</td>
                       <td style={{ padding: '6px 8px' }}>{partyBlock(entry.incoming)}</td>
@@ -727,7 +759,9 @@ export default function UnifiedDuplicatesDialog({
                           {a.reject ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'reject')} title="The new file's row is a duplicate: discard it and keep the existing transaction.">Discard new</Button> : null}
                           {a.replace ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'replace')} title="The new file's row is the correct record (e.g. correct account): keep it and remove the existing duplicate. Categorization follows whichever file was set to use its imported categories.">Replace existing</Button> : null}
                           {a.restore ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'restore')}>Restore</Button> : null}
+                          {a.mark_reviewed ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'mark_reviewed')} title="Already rejected — acknowledge it as reviewed so it leaves the needs-attention list. Does not import it.">Mark reviewed</Button> : null}
                           {a.import_anyway ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'import_anyway')}>Import anyway</Button> : null}
+                          {a.unreview ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'unreview')} title="Move this back to the needs-review list.">Un-review</Button> : null}
                         </div>
                       </td>
                     </tr>

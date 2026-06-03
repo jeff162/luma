@@ -376,6 +376,8 @@ export const api = {
     request(`/import-export/batches/${id}/category-workspace-draft`),
   setBatchProfile: (id, profileId) =>
     request(`/import-export/batches/${id}/profile`, { method: 'PATCH', body: JSON.stringify({ profile_id: profileId }) }),
+  createProfileFromBatch: (id, name, filenamePattern = null) =>
+    request(`/import-export/batches/${id}/create-profile`, { method: 'POST', body: JSON.stringify({ name, filename_pattern: filenamePattern }) }),
   updateBatchImportedCategoryUsage: (id, payload) =>
     request(`/import-export/batches/${id}/imported-category-usage`, {
       method: 'PATCH',
@@ -389,6 +391,8 @@ export const api = {
     request(`/import-export/profiles/${profileId}/compatible-batches`),
   importBatchDuplicates: (id, payload) =>
     request(`/import-export/batches/${id}/duplicates/import`, { method: 'POST', body: JSON.stringify(payload) }),
+  markBatchDuplicatesReviewed: (id, rowNumbers, reviewed = true) =>
+    request(`/import-export/batches/${id}/duplicates/mark-reviewed`, { method: 'POST', body: JSON.stringify({ row_numbers: rowNumbers, reviewed }) }),
   undoBatch:        (id, force = false) =>
     request(`/import-export/batches/${id}${force ? '?force=true' : ''}`, { method: 'DELETE' }),
   getImportProfiles:    ()      => request('/import-export/profiles'),

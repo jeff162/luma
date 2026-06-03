@@ -2280,6 +2280,9 @@ function ImportTab() {
   const [showProfileMismatchChooser, setShowProfileMismatchChooser] = useState(false)
   const [pendingMappingSourceSwitch, setPendingMappingSourceSwitch] = useState(null)
   const [noticeDialog, setNoticeDialog] = useState(null)
+  // Per-batch "+ New data source from this file" inline name entry (unknown-source cards).
+  const [assignNewSourceBatchId, setAssignNewSourceBatchId] = useState('')
+  const [assignNewSourceName, setAssignNewSourceName] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [dateFormatLocked, setDateFormatLocked] = useState(false)
   const duplicateViewerRequestRef = useRef(0)
@@ -2592,6 +2595,22 @@ function ImportTab() {
     if (!colAccount || !preview?.column_value_counts) return {}
     return preview.column_value_counts[colAccount] || {}
   }, [colAccount, preview])
+
+  // Distinct new accounts the user has chosen to create in THIS import (deduped by name). Offered
+  // as targets in every other label's picker so several file labels can collapse onto one new
+  // account. There is no label-to-label reference — each label independently declares the name —
+  // so re-pointing one label never dangles another; the importer merges same-named new accounts.
+  const inFlightNewAccounts = useMemo(() => {
+    const byName = new Map()
+    for (const entry of Object.values(accountMap || {})) {
+      if (!entry?.createNew || entry?.skip) continue
+      const name = String(entry.newName || '').trim()
+      if (name && !byName.has(name.toLowerCase())) {
+        byName.set(name.toLowerCase(), { name, type: entry.newType || '' })
+      }
+    }
+    return [...byName.values()]
+  }, [accountMap])
 
   const previousImportAccounts = useMemo(
     () => (preview?.previous_batch_accounts || []).filter(a => !a.was_skipped),
@@ -3261,6 +3280,35 @@ function ImportTab() {
       })
     } finally {
       setAttachingCompatibleBatches(false)
+    }
+  }
+
+  // Move a profileless (unknown-source) imported file under an existing data source. Pure
+  // re-grouping — it does not re-import or re-map; the batch keeps its own imported data.
+  async function assignUnknownBatchToProfile(batchId, profileId) {
+    if (!profileId) return
+    try {
+      await api.setBatchProfile(batchId, profileId)
+      setBatches(await api.listBatches())
+    } catch (error) {
+      setNoticeDialog({ title: 'Could not assign to data source', description: error?.message || 'Please try again.' })
+    }
+  }
+
+  // "+ New data source from this file": create a saved data source from the batch's own import
+  // mapping (server-side, where the snapshot lives) and link the file to it.
+  async function createDataSourceFromUnknownBatch(batch, rawName) {
+    const name = (rawName || '').trim()
+    if (!name || !batch) return
+    try {
+      await api.createProfileFromBatch(batch.id, name, inferFilenamePattern(batch.filename || '') || null)
+      setAssignNewSourceBatchId('')
+      setAssignNewSourceName('')
+      const [nextProfiles, nextBatches] = await Promise.all([api.getImportProfiles(), api.listBatches()])
+      setProfiles(nextProfiles)
+      setBatches(nextBatches)
+    } catch (error) {
+      setNoticeDialog({ title: 'Could not create data source', description: error?.message || 'Please try again.' })
     }
   }
 
@@ -5781,12 +5829,32 @@ function ImportTab() {
                           <select
                             name={`account-map-target-${csvVal}`}
                             value={m.accountId}
-                            onChange={e => update({
-                              accountId: e.target.value,
-                              createNew: false,
-                              groupWithAccountId: '',
-                              duplicateCompareTargetAccountId: '',
-                            })}
+                            onChange={e => {
+                              const v = e.target.value
+                              // "__new__:<name>" = share a new account another label is creating in
+                              // this import. We don't reference that label — we independently declare
+                              // the same name, which the importer merges by name (so changing the
+                              // other label later can't dangle this one).
+                              if (v.startsWith('__new__:')) {
+                                const name = v.slice('__new__:'.length)
+                                const sibling = inFlightNewAccounts.find(n => n.name === name)
+                                update({
+                                  accountId: '',
+                                  createNew: true,
+                                  newName: name,
+                                  newType: sibling?.type || guessNewAccountTypeFromName(csvVal),
+                                  groupWithAccountId: '',
+                                  duplicateCompareTargetAccountId: '',
+                                })
+                              } else {
+                                update({
+                                  accountId: v,
+                                  createNew: false,
+                                  groupWithAccountId: '',
+                                  duplicateCompareTargetAccountId: '',
+                                })
+                              }
+                            }}
                             style={{
                               width: 170, maxWidth: '100%', background: 'var(--surface2)', color: 'var(--text)',
                               border: '1px solid var(--border)', borderRadius: 6,
@@ -5794,9 +5862,18 @@ function ImportTab() {
                             }}
                           >
                             <option value="">— Select —</option>
-                            {accounts.map(a => (
-                              <option key={a.id} value={a.id}>{a.name}{a.mask ? ` ···${a.mask}` : ''}</option>
-                            ))}
+                            {inFlightNewAccounts.length > 0 ? (
+                              <optgroup label="New in this import">
+                                {inFlightNewAccounts.map(n => (
+                                  <option key={`__new__:${n.name}`} value={`__new__:${n.name}`}>+ {n.name} (new)</option>
+                                ))}
+                              </optgroup>
+                            ) : null}
+                            <optgroup label="Existing accounts">
+                              {accounts.map(a => (
+                                <option key={a.id} value={a.id}>{a.name}{a.mask ? ` ···${a.mask}` : ''}</option>
+                              ))}
+                            </optgroup>
                           </select>
                           {m.accountId ? (
                             <button
@@ -6677,6 +6754,51 @@ function ImportTab() {
                                         />
                                       </label>
                                       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap', alignItems: 'center', flexShrink: 0 }}>
+                                        {isUnknown ? (
+                                          assignNewSourceBatchId === b.id ? (
+                                            <TransientTextInput
+                                              value={assignNewSourceName}
+                                              onChange={setAssignNewSourceName}
+                                              onCommit={() => createDataSourceFromUnknownBatch(b, assignNewSourceName)}
+                                              onCancel={() => { setAssignNewSourceBatchId(''); setAssignNewSourceName('') }}
+                                              restoreOnEscape
+                                              onBlurCommit={false}
+                                              placeholder="New data source name"
+                                              style={{
+                                                width: 180, maxWidth: '100%', background: 'var(--surface2)', color: 'var(--text)',
+                                                border: '1px solid var(--accent)', borderRadius: 6, padding: '3px 8px', fontSize: 12, outline: 'none',
+                                              }}
+                                            />
+                                          ) : (
+                                            <select
+                                              value=""
+                                              title="Move this imported file under a data source"
+                                              onChange={event => {
+                                                const value = event.target.value
+                                                if (value === '__new__') {
+                                                  setAssignNewSourceName(getSuggestedDataSourceName({ previewLike: { filename: b.filename } }))
+                                                  setAssignNewSourceBatchId(b.id)
+                                                } else if (value) {
+                                                  assignUnknownBatchToProfile(b.id, value)
+                                                }
+                                              }}
+                                              style={{
+                                                background: 'var(--surface2)', color: 'var(--text)', border: '1px solid var(--border)',
+                                                borderRadius: 6, padding: '3px 8px', fontSize: 12, cursor: 'pointer', maxWidth: 200,
+                                              }}
+                                            >
+                                              <option value="">Assign to data source…</option>
+                                              {profiles.length > 0 ? (
+                                                <optgroup label="Existing data sources">
+                                                  {profiles.map(p => (
+                                                    <option key={p.id} value={p.id}>{p.name}</option>
+                                                  ))}
+                                                </optgroup>
+                                              ) : null}
+                                              <option value="__new__">+ New data source from this file…</option>
+                                            </select>
+                                          )
+                                        ) : null}
                                         <button onClick={() => handleUndoClick(b)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}>Undo</button>
                                       </div>
                                     </div>

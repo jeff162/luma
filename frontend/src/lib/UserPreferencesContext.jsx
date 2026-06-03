@@ -91,6 +91,12 @@ export function UserPreferencesProvider({ children, initialPreferences = null })
     }
   }, [initialPreferences])
 
+  // Writes to the backend on EVERY call (optimistic local update + immediate `api.saveUserPreference`),
+  // intentionally un-debounced so a discrete change — a toggle, a selection, a column drop — persists
+  // right away and survives an immediate navigation/unmount. For a *continuous gesture* (dragging a
+  // splitter, a slider) do NOT call this per frame — use `useDeferredPreference` (below), which holds
+  // a live value during the gesture and persists once on its end. A blanket debounce here would
+  // instead risk dropping the common single-write case (a toggle/selection) on unmount.
   const setPreference = useCallback((key, nextValueOrUpdater, defaultValue) => {
     const currentPreferences = preferencesRef.current
     const hadPreviousValue = Object.prototype.hasOwnProperty.call(currentPreferences, key)
@@ -191,4 +197,22 @@ export function useUserPreference(key, defaultValue) {
     [key, setPreference, defaultValue],
   )
   return [value, setValue]
+}
+
+// Commit-on-end variant for *continuous* controls (dragging a splitter, a slider). `setPreference`
+// persists on every call (see its comment), so driving it per frame would spam the backend. This
+// holds a local `live` value during the gesture and persists exactly once via `commit()`. The
+// consumer wires its own pointer/keyboard events — the cursor→value math is interaction-specific —
+// and calls `setLive(next)` on each change, then `commit()` when the gesture ends. `value` is the
+// live value mid-gesture and the persisted value otherwise; `dragging` is true while a gesture is in
+// progress; `reset()` restores and persists the default. Clamp/format in the consumer before setLive.
+export function useDeferredPreference(key, defaultValue) {
+  const [persisted, setPersisted] = useUserPreference(key, defaultValue)
+  const [live, setLive] = useState(null)
+  const commit = useCallback(
+    () => setLive(current => { if (current != null) setPersisted(current); return null }),
+    [setPersisted],
+  )
+  const reset = useCallback(() => { setLive(null); setPersisted(defaultValue) }, [setPersisted, defaultValue])
+  return { value: live != null ? live : persisted, dragging: live != null, setLive, commit, reset }
 }

@@ -25,7 +25,19 @@ from pathlib import Path
 from fastapi import UploadFile
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
-from backend.routers.import_export import get_batch_duplicates, make_hash, run_import, undo_batch
+from fastapi import HTTPException
+
+from backend.routers.import_export import (
+    BatchCreateProfileRequest,
+    BatchDuplicateReviewRequest,
+    create_profile_from_batch,
+    get_batch_duplicates,
+    make_hash,
+    mark_batch_duplicates_reviewed,
+    run_import,
+    undo_batch,
+)
+from backend.services.duplicate_detection import list_unified_batch_duplicates
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "import_duplicates"
@@ -719,6 +731,126 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second_result["imported"], 6)
         self.assertEqual(second_result["deduped"], 0)
         self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_prior_base_ledger.csv"))
+
+    async def test_two_file_labels_creating_same_named_new_account_merge(self):
+        # Contract the import account-mapping UI relies on: two distinct CSV account labels both
+        # mapped to "create new account" with the SAME name collapse into ONE account (the first
+        # creates it, the second reuses it by name). This is what lets several file labels target a
+        # single in-flight new account without any label-to-label reference.
+        config = {
+            "filename": "two_labels_one_new_account.csv",
+            "profile_id": None, "account_id": None, "single_account_new": None,
+            "account_map": {}, "skip_accounts": [],
+            "new_accounts": [
+                {"csv_value": "CARD A", "name": "Shared Card", "type": "credit"},
+                {"csv_value": "CARD B", "name": "Shared Card", "type": "credit"},
+            ],
+            "column_map": {"date": "Date", "description": "Description", "account": "Account", "amount": "Amount"},
+            "date_format": "%Y-%m-%d", "amount_convention": "single_signed", "skip_rows": 0,
+            "apply_categorization": False, "use_imported_categories": False,
+        }
+        result = await self._run_import_fixture("two_labels_one_new_account.csv", config)
+        self.assertEqual(result["imported"], 2)
+        with self._use_db_path():
+            with get_db() as conn:
+                named = conn.execute("SELECT COUNT(*) AS n FROM account WHERE name = 'Shared Card'").fetchone()["n"]
+                accounts_with_txns = conn.execute(
+                    "SELECT COUNT(DISTINCT account_id) AS n FROM txn WHERE trashed_at IS NULL"
+                ).fetchone()["n"]
+        self.assertEqual(named, 1, "the two same-named new-account entries must collapse to one account")
+        self.assertEqual(accounts_with_txns, 1, "both rows land on the single shared account")
+
+    async def test_create_data_source_from_profileless_batch(self):
+        # The unknown-source "+ New data source from this file" path: a profileless batch becomes a
+        # saved data source built from its own import mapping, and the file links to it.
+        rewards = self._insert_account("Rewards Card", account_type="credit", mask="1234")
+        config = self._account_mapping_config(
+            headers={"date": "Date", "description": "Description", "account": "Account",
+                     "amount": "Amount", "category": "Category", "date_format": "%m/%d/%Y"},
+            account_map={"Travel Rewards": rewards},
+        )
+        result = await self._run_import_fixture("duplicate_prior_base.csv", config)
+        batch_id = result["batch_id"]
+
+        with self._use_db_path():
+            created = create_profile_from_batch(
+                batch_id, BatchCreateProfileRequest(name="My Bank", filename_pattern="duplicate_prior_base"))
+        pid = created["id"]
+        with self._use_db_path():
+            with get_db() as conn:
+                profile = conn.execute(
+                    "SELECT name, filename_pattern, date_format, amount_convention, template_filename, header_fingerprint FROM csv_import_profile WHERE id = ?", (pid,)
+                ).fetchone()
+                linked = conn.execute("SELECT profile_id FROM import_batch WHERE id = ?", (batch_id,)).fetchone()
+        self.assertEqual(profile["name"], "My Bank")
+        self.assertEqual(linked["profile_id"], pid, "the file must move under the new data source")
+        # The mapping is carried from the file's own import config; the filename pattern from the caller.
+        self.assertEqual(profile["date_format"], "%m/%d/%Y")
+        self.assertEqual(profile["amount_convention"], config["amount_convention"])
+        self.assertEqual(profile["filename_pattern"], "duplicate_prior_base")
+        self.assertEqual(profile["template_filename"], "duplicate_prior_base.csv")
+        # Header fingerprint is now persisted at import time and carried through, so the source
+        # auto-matches future files by column structure too (parity with "Save as data source").
+        self.assertTrue(profile["header_fingerprint"], "header fingerprint should be carried from the batch")
+
+        # Already linked → cannot create another from it.
+        with self._use_db_path():
+            with self.assertRaises(HTTPException) as ctx:
+                create_profile_from_batch(batch_id, BatchCreateProfileRequest(name="Another"))
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    # ---- advisory-review classification + acknowledgment -----------------
+
+    def _insert_coverage_reject(self, *, batch_id: str, filename: str, row_number: int, candidates: list[dict]):
+        """Insert an import_batch_duplicate row shaped like a coverage-window hard-reject. `candidates`
+        carry `day_offset` like the real candidate lookup, so we can drive the substate logic."""
+        import json
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("INSERT OR IGNORE INTO import_batch (id, filename, status) VALUES (?, ?, 'completed')",
+                             (batch_id, filename))
+                conn.execute(
+                    """
+                    INSERT INTO import_batch_duplicate
+                      (batch_id, row_number, reason, values_json, matched_transaction_json, txn_payload_json)
+                    VALUES (?, ?, ?, '{}', ?, ?)
+                    """,
+                    (batch_id, row_number,
+                     "Falls within the fully covered date range from an earlier import in this account scope",
+                     json.dumps({"covered": {"start_date": "2023-01-01", "end_date": "2023-12-31"},
+                                 "candidates": candidates, "candidate_count": len(candidates)}),
+                     json.dumps({"date": "2023-08-11", "amount": 20.22, "merchant_name": "TOLL CO"})),
+                )
+
+    def _entry_for_row(self, batch_id: str, row_number: int):
+        with self._use_db_path():
+            with get_db() as conn:
+                entries = list_unified_batch_duplicates(conn, batch_id)
+        return next(e for e in entries if e["incoming"].get("row_number") == row_number)
+
+    def test_coverage_reject_substate_classification(self):
+        batch = "batch-substate"
+        # row 1: a twin found only at ±2 days → "matched ±2 days"; row 2: no candidate → "no specific match".
+        self._insert_coverage_reject(batch_id=batch, filename="f.csv", row_number=1,
+                                     candidates=[{"id": "x", "date": "2023-08-09", "amount": 20.22, "day_offset": -2}])
+        self._insert_coverage_reject(batch_id=batch, filename="f.csv", row_number=2, candidates=[])
+        self.assertEqual(self._entry_for_row(batch, 1)["review_substate"], "matched_2d")
+        self.assertEqual(self._entry_for_row(batch, 2)["review_substate"], "no_match")
+
+    def test_mark_reviewed_clears_substate(self):
+        batch = "batch-ack"
+        self._insert_coverage_reject(batch_id=batch, filename="f.csv", row_number=1, candidates=[])
+        self.assertEqual(self._entry_for_row(batch, 1)["review_substate"], "no_match")
+        self.assertFalse(self._entry_for_row(batch, 1)["reviewed"])
+        with self._use_db_path():
+            mark_batch_duplicates_reviewed(batch, BatchDuplicateReviewRequest(row_numbers=[1], reviewed=True))
+        acked = self._entry_for_row(batch, 1)
+        self.assertTrue(acked["reviewed"])
+        self.assertIsNone(acked["review_substate"])  # leaves the needs-attention pills
+        # Un-review puts it back.
+        with self._use_db_path():
+            mark_batch_duplicates_reviewed(batch, BatchDuplicateReviewRequest(row_numbers=[1], reviewed=False))
+        self.assertEqual(self._entry_for_row(batch, 1)["review_substate"], "no_match")
 
 
 if __name__ == "__main__":

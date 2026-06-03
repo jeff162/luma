@@ -367,6 +367,10 @@ def _build_quick_filter_clause(value: str):
         if year_month:
             or_clauses.append("t.date LIKE ?")
             params.append(f"{year_month}%")
+        year = _parse_quick_filter_year(search_text)
+        if year:
+            or_clauses.append("t.date LIKE ?")
+            params.append(f"{year}-%")
 
     if want("amount"):
         amount_value = _parse_quick_filter_amount(search_text)
@@ -425,6 +429,13 @@ def _parse_quick_filter_year_month(value: str) -> Optional[str]:
         except ValueError:
             continue
     return None
+
+
+def _parse_quick_filter_year(value: str) -> Optional[str]:
+    # A bare 4-digit year (1900–2099) jumps to that year — handy for scrolling far back. It still
+    # ORs with the amount match, so "2023" also finds $2023.00; the date-year clause is additive.
+    text = (value or "").strip()
+    return text if re.fullmatch(r"(?:19|20)\d{2}", text) else None
 
 
 def _parse_quick_filter_amount(value: str) -> Optional[Decimal]:
@@ -1234,7 +1245,10 @@ def monthly_trend(
 
 @router.get("/summary/monthly-by-group")
 def monthly_by_group(
-    months:      int           = Query(24, le=60),
+    # The Trends view fetches its full visible history through this one window. The bound stays generous
+    # rather than unbounded (20 years) so the multi-year trend/annual charts can reach every year in the
+    # data without turning into an open-ended all-history scan.
+    months:      int           = Query(24, le=240),
     account_id:  Optional[str] = Query(None),
     account_ids: Optional[str] = Query(None),
     tag_ids:     Optional[str] = Query(None),

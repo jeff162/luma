@@ -27,7 +27,7 @@ import { TagGlyph } from '../components/TagUi.jsx'
 import { format, subMonths } from 'date-fns'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
-import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { useUserPreference, useDeferredPreference } from '../lib/UserPreferencesContext.jsx'
 
 const DASHBOARD_CATEGORY_TXN_TABLE_STORAGE_KEY_PREFIX = 'fintrack.dashboard.category-transactions.columns'
 const DASHBOARD_CATEGORY_TXN_TABLE_PREF_KEY = 'ui.dashboard.categoryTransactions.columns'
@@ -36,6 +36,13 @@ const DASHBOARD_GROUP_TXN_TABLE_PREF_KEY = 'ui.dashboard.groupTransactions.colum
 const DASHBOARD_SPENDING_VIEW_BY_PREF_KEY = 'ui.dashboard.spendingViewBy'
 const DASHBOARD_VIEW_PREF_KEY = 'ui.dashboard.view'
 const DASHBOARD_TAG_REPORTS_PREF_KEY = 'ui.dashboard.tagReports'
+// Left-panel ("Total per month") width fraction of the Trends month/annual split; the user drags the
+// divider to rebalance and it persists. Defaults to giving the monthly chart a little more room than
+// the annual one (its month labels are tighter than 4-digit years). Clamped to [MIN, MAX].
+const DASHBOARD_TRENDS_SPLIT_PREF_KEY = 'ui.dashboard.trendsSplit'
+const TRENDS_SPLIT_DEFAULT = 0.56
+const TRENDS_SPLIT_MIN = 0.3
+const TRENDS_SPLIT_MAX = 0.75
 
 const SPENDING_VIEW_BY_GROUP = 'group'
 const SPENDING_VIEW_BY_CATEGORY = 'category'
@@ -314,6 +321,48 @@ function lastDayOfMonthISO(ym) {
   return `${ym}-${String(last).padStart(2, '0')}`
 }
 
+// All-time lower bound for the trend fetch when no date chip is set: passing an explicit (ancient)
+// start makes the backend skip its rolling "last N months" window and return every month of data, so
+// the trend matches the all-time totals shown above it rather than an empty current-month window.
+const ALL_TIME_START = '1900-01-01'
+
+// Below this many months of data, month/quarter/year bucketing is pointless (a year or so reads fine
+// as monthly bars), so the grain selector stays hidden.
+const TREND_GRAIN_SELECTOR_MIN_MONTHS = 18
+
+// Inclusive count of calendar months the trend rows actually span (min..max). Drives whether the
+// month/quarter/year grain selector is worth showing — it isn't for ~a year or less of data.
+function monthSpanOfRows(rows) {
+  const months = (rows || []).map(r => r.month).filter(Boolean)
+  if (!months.length) return 0
+  const min = months.reduce((a, b) => (a < b ? a : b))
+  const max = months.reduce((a, b) => (a > b ? a : b))
+  return monthsBetween(min, max)
+}
+
+// Continuous calendar-grain bucket list spanning the data the trend rows cover (min..max), gaps
+// included so the x-axis stays uniform. Used for the no-date "all time" trend, where there's no
+// selected period to size buckets against. `grain` is 'month' | 'quarter' | 'year'; quarter/year
+// buckets snap to calendar boundaries so labels collapse cleanly (e.g. a Jan–Dec bucket reads "2016").
+function calendarBucketsFromRows(rows, grain = 'month') {
+  const months = (rows || []).map(r => r.month).filter(Boolean)
+  if (!months.length) return [{ start: thisM, end: thisM, isSelected: false }]
+  const min = months.reduce((a, b) => (a < b ? a : b))
+  const max = months.reduce((a, b) => (a > b ? a : b))
+  const size = grain === 'year' ? 12 : grain === 'quarter' ? 3 : 1
+  // Snap the first bucket to its calendar boundary so quarters start at Jan/Apr/Jul/Oct and years at
+  // January, regardless of which month the data happens to begin in.
+  const [minY, minM] = min.split('-').map(Number)
+  const startM = grain === 'year' ? 1 : minM - ((minM - 1) % size)
+  let cursor = `${minY}-${String(startM).padStart(2, '0')}`
+  const buckets = []
+  while (cursor <= max) {
+    buckets.push({ start: cursor, end: shiftMonth(cursor, size - 1), isSelected: false })
+    cursor = shiftMonth(cursor, size)
+  }
+  return buckets
+}
+
 // Folds a flat array of `{ month, total }` rows (the existing monthly-trend response shape) into
 // the supplied bucket list so the same backend endpoint serves any bucket size.
 function aggregateMonthlyIntoBuckets(monthlyRows, buckets) {
@@ -461,18 +510,22 @@ function StaggeredMonthTick({ x, y, payload, index, visibleTicksCount }) {
 // Reference-line label for the average line on the trend charts: a single "Avg $X" pill that sits on
 // the line just inside the plot area. Keeping the value inside the pill (rather than in the y-axis tick
 // column) means it can't collide with a real axis tick when the average happens to land near one.
-function AvgReferenceLabel({ viewBox, value }) {
+function AvgReferenceLabel({ viewBox, value, align = 'left' }) {
   if (!viewBox) return null
   const labelY = viewBox.y ?? 0
   const innerX = viewBox.x ?? 0
+  const innerW = viewBox.width ?? 0
   const text = `Avg ${formatSignedAxisTick(value)}`
   const pillH = 15
   // Approximate the rendered text width (no measurement API in SVG here) so the pill hugs the label.
   const pillW = Math.round(text.length * 5.4 + 12)
+  // `align='right'` hugs the right edge of the plot area — used by the horizontally-scrolling annual
+  // chart so the pill (and the right-side axis) stay visible in its default right-pinned view.
+  const pillX = align === 'right' ? (innerX + innerW - pillW - 2) : (innerX + 2)
   return (
     <g style={{ pointerEvents: 'none' }}>
       <rect
-        x={innerX + 2}
+        x={pillX}
         y={labelY - pillH / 2}
         width={pillW}
         height={pillH}
@@ -481,7 +534,7 @@ function AvgReferenceLabel({ viewBox, value }) {
         opacity={0.92}
       />
       <text
-        x={innerX + 2 + pillW / 2}
+        x={pillX + pillW / 2}
         y={labelY + 3.5}
         fontSize={10}
         fontWeight={600}
@@ -491,6 +544,65 @@ function AvgReferenceLabel({ viewBox, value }) {
         {text}
       </text>
     </g>
+  )
+}
+
+// Annual totals can span many years. Each bar keeps a fixed width and the row scrolls horizontally
+// (with the app's styled scrollbar) once the bars exceed the card — so the card width is the natural
+// cap rather than squashing every year in. Start the scroll at the right edge so the most recent
+// years are in view and older ones are a scroll to the left; re-pin to the right whenever the data
+// changes (e.g. switching spending/income or drilling a group).
+function AnnualTotalsChart({ data, avg, selectedYear, onSelectYear }) {
+  const scrollRef = useRef(null)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) el.scrollLeft = el.scrollWidth
+  }, [data])
+  // Clicking a year's bar focuses the monthly charts on that year (drives the year picker). The active
+  // year's bar is highlighted so it's clear which one the charts above are showing.
+  const selectable = typeof onSelectYear === 'function'
+  return (
+    <div ref={scrollRef} style={{ overflowX: 'auto', overflowY: 'hidden' }}>
+      <div style={{ minWidth: Math.max(260, data.length * 46), height: 180 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+            <XAxis dataKey="year" tick={{ fill: 'var(--muted)', fontSize: 11 }} interval={0} />
+            {/* Axis on the RIGHT so the $ scale stays visible in the default right-pinned (recent-years)
+                view; with a left axis it scrolls off-screen until the user drags back to the start. */}
+            <YAxis orientation="right" tickFormatter={v => `$${(v/1000).toFixed(0)}k`} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
+            <Tooltip
+              formatter={v => formatCurrency(v)}
+              contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
+              labelStyle={CHART_TOOLTIP_LABEL_STYLE}
+              itemStyle={CHART_TOOLTIP_ITEM_STYLE}
+            />
+            <Bar
+              dataKey="total"
+              radius={[3,3,0,0]}
+              name="Total"
+              onClick={selectable ? (d => d?.year && onSelectYear(d.year)) : undefined}
+              style={selectable ? { cursor: 'pointer' } : undefined}
+            >
+              {data.map(d => (
+                <Cell
+                  key={d.year}
+                  fill={String(d.year) === String(selectedYear) ? 'var(--accent2)' : 'var(--accent)'}
+                />
+              ))}
+            </Bar>
+            {data.length > 1 && (
+              <ReferenceLine
+                y={avg}
+                stroke="var(--accent2)"
+                strokeDasharray="4 4"
+                label={<AvgReferenceLabel value={avg} align="right" />}
+              />
+            )}
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
   )
 }
 
@@ -1003,6 +1115,40 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
   // descending to match the natural "biggest-first" reading users expect from a spending list.
   const [sortKey, setSortKey] = useState('total')
   const [sortDir, setSortDir] = useState('desc')
+
+  // Draggable divider between "Total per month" (left) and "Annual totals" (right): a persisted
+  // left-panel width fraction. The continuous drag goes through useDeferredPreference so it only
+  // persists once on mouse-up (setPreference writes on every call); we wire the cursor→fraction math
+  // and the window listeners here.
+  const clampSplit = useCallback(
+    frac => Math.min(TRENDS_SPLIT_MAX, Math.max(TRENDS_SPLIT_MIN, Number(Number(frac).toFixed(4)))),
+    [],
+  )
+  const { value: splitValue, dragging: draggingSplit, setLive: setSplitLive, commit: commitSplit, reset: resetSplit } =
+    useDeferredPreference(DASHBOARD_TRENDS_SPLIT_PREF_KEY, TRENDS_SPLIT_DEFAULT)
+  const splitRowRef = useRef(null)
+  useEffect(() => {
+    if (!draggingSplit) return undefined
+    const onMove = event => {
+      const el = splitRowRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      if (rect.width <= 0) return
+      setSplitLive(clampSplit((event.clientX - rect.left) / rect.width))
+    }
+    const onUp = () => commitSplit()
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    const priorUserSelect = document.body.style.userSelect
+    document.body.style.userSelect = 'none'  // suppress text selection while dragging
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.userSelect = priorUserSelect
+    }
+  }, [draggingSplit, setSplitLive, commitSplit, clampSplit])
+  const leftFr = clampSplit(Number(splitValue) || TRENDS_SPLIT_DEFAULT)
+
   function applySort(key) {
     if (key === sortKey) {
       setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
@@ -1024,9 +1170,16 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
   // specific calendar year. The multi-year picture lives in the Annual totals chart, so there's no
   // unbounded "all time" option here to compress the monthly bars.
   const last12Start = shiftMonth(thisM, -11)
-  const filteredRows = selectedYear === 'last12'
+  // Resolve the effective window: an explicit dropdown pick (`selectedYear`) always wins; with no pick
+  // (`null` = auto) default to last-12-months when that window actually has data, otherwise fall back
+  // to the most recent year present so stale/imported data doesn't render a blank trend.
+  const dataYears = [...new Set(normalizedRows.map(r => r.month.slice(0, 4)))].sort()
+  const last12HasData = normalizedRows.some(r => r.month >= last12Start && r.month <= thisM)
+  const effectiveYear = selectedYear
+    ?? (last12HasData || dataYears.length === 0 ? 'last12' : dataYears[dataYears.length - 1])
+  const filteredRows = effectiveYear === 'last12'
     ? normalizedRows.filter(r => r.month >= last12Start && r.month <= thisM)
-    : normalizedRows.filter(r => r.month.startsWith(selectedYear))
+    : normalizedRows.filter(r => r.month.startsWith(effectiveYear))
 
   const allMonths = [...new Set(filteredRows.map(r => r.month))].sort()
 
@@ -1153,7 +1306,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <select
-          value={selectedYear}
+          value={effectiveYear}
           onChange={e => onYearChange(e.target.value)}
           style={{
             background: 'var(--surface2)', color: 'var(--text)',
@@ -1236,8 +1389,8 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
         )}
       </Card>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, position: 'relative', zIndex: 1 }}>
-        <Card style={{ position: 'relative', zIndex: 1 }}>
+      <div ref={splitRowRef} style={{ display: 'grid', gridTemplateColumns: `${leftFr}fr 16px ${1 - leftFr}fr`, position: 'relative', zIndex: 1, minWidth: 0 }}>
+        <Card style={{ position: 'relative', zIndex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Total per month</div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
             {latestRunRate != null
@@ -1290,37 +1443,28 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
           </div>
         </Card>
 
-        <Card style={{ position: 'relative', zIndex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>{viewIsIncome ? 'Annual income totals' : 'Annual totals'}</div>
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          title="Drag to resize · double-click to reset"
+          onMouseDown={event => { event.preventDefault(); setSplitLive(leftFr) }}
+          onDoubleClick={resetSplit}
+          style={{ cursor: 'col-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', alignSelf: 'stretch' }}
+        >
+          <div style={{
+            width: 4, height: 44, borderRadius: 3,
+            background: draggingSplit ? 'var(--accent)' : 'var(--border)',
+            transition: 'background 0.15s',
+          }} />
+        </div>
+
+        <Card style={{ position: 'relative', zIndex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>{viewIsIncome ? 'Annual income totals' : 'Annual totals'}</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>Click a year to focus the charts above on it</div>
           {annualData.length === 0 ? (
             <EmptyState message="Not enough data" />
           ) : (
-            <div style={{ overflowX: 'auto', overflowY: 'hidden' }}>
-              <div style={{ minWidth: Math.max(280, annualData.length * 56), height: 180 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={annualData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                    <XAxis dataKey="year" tick={{ fill: 'var(--muted)', fontSize: 12 }} interval={0} />
-                    <YAxis tickFormatter={v => `$${(v/1000).toFixed(0)}k`} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
-                    <Tooltip
-                      formatter={v => formatCurrency(v)}
-                      contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
-                      labelStyle={CHART_TOOLTIP_LABEL_STYLE}
-                      itemStyle={CHART_TOOLTIP_ITEM_STYLE}
-                    />
-                    <Bar dataKey="total" fill="var(--accent)" radius={[3,3,0,0]} name="Total" />
-                    {annualData.length > 1 && (
-                      <ReferenceLine
-                        y={annualAvg}
-                        stroke="var(--accent2)"
-                        strokeDasharray="4 4"
-                        label={<AvgReferenceLabel value={annualAvg} />}
-                      />
-                    )}
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
+            <AnnualTotalsChart data={annualData} avg={annualAvg} selectedYear={effectiveYear} onSelectYear={onYearChange} />
           )}
         </Card>
       </div>
@@ -1328,7 +1472,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
       <Card style={{ position: 'relative', zIndex: 1 }}>
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
           Monthly averages{drillGroup ? ` · ${drillGroup.series_name}` : ' by group'}
-          <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>{selectedYear === 'last12' ? 'last 12 months' : selectedYear}</span>
+          <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>{effectiveYear === 'last12' ? 'last 12 months' : effectiveYear}</span>
         </div>
         <div style={{
           display: 'grid', gridTemplateColumns: '1fr 100px 100px 100px',
@@ -1422,9 +1566,8 @@ export default function Dashboard() {
     setOtherDrillDepth(0)
   }, [spendingViewBy, dashboardView])
 
-  // The Trends tab always queries a fixed 60-month window and ignores the shared date chip, so
-  // mute the date button while the user is here. Restore on unmount so other pages see the chip
-  // as live again.
+  // The Trends tab queries its own full-history window (not the shared date chip), so mute the date
+  // button while the user is here. Restore on unmount so other pages see the chip as live again.
   useEffect(() => {
     setDateApplies(mode !== 'trends')
     return () => setDateApplies(true)
@@ -1434,6 +1577,11 @@ export default function Dashboard() {
   // dependency expression can read these without a temporal dead zone.
   const dateStart = filters.date?.start || null
   const dateEnd   = filters.date?.end   || null
+  // The period shown on the single-view totals cards. With no date chip the dashboard aggregates over
+  // all data, so it reads "All time" rather than implying the current month.
+  const singlePeriodLabel = filters.date
+    ? (filters.date.preset || `${filters.date.start} → ${filters.date.end}`)
+    : 'All time'
   const accountSelections = filters.selections.filter(s => s.type === 'account')
   const accountId = accountSelections.length === 1 ? accountSelections[0].id : undefined
   const tagSelections = filters.selections.filter(s => s.type === 'tag')
@@ -1540,7 +1688,12 @@ export default function Dashboard() {
   const [detailMonths, setDetailMonths] = useState([])
   const [categories, setCategories]     = useState([])
   const [rulePrompt, setRulePrompt]     = useState(null)
-  const [trend, setTrend]         = useState([])
+  // The single-view trend is derived (memo below) from the raw monthly rows so the user can re-bucket
+  // (month/quarter/year) without re-fetching. `trendWindowBuckets` is the period-sized ±window used
+  // when a date chip is set; null means the no-chip "all time" case, where the grain selector applies.
+  const [singleTrendRows, setSingleTrendRows]           = useState([])
+  const [singleTrendWindowBuckets, setSingleTrendWindowBuckets] = useState(null)
+  const [trendGrain, setTrendGrain]         = useState('month')
   const [level, setLevel]         = useState('groups')
   const [selectedGroup, setSelectedGroup] = useState(null)
   const [selectedCat,   setSelectedCat]   = useState(null)
@@ -1582,7 +1735,10 @@ export default function Dashboard() {
   const [cmpGroup,   setCmpGroup]   = useState(null)
   const [cmpLevel,   setCmpLevel]   = useState('groups')
 
-  const [trendYear,  setTrendYear]        = useState('last12')
+  // null = "auto": let TrendsPanel resolve the default from the data (trailing 12 months if those
+  // months have data, else the most recent year present) so a stale/imported dataset doesn't land on
+  // an empty trailing window. An explicit pick from the dropdown overrides it.
+  const [trendYear,  setTrendYear]        = useState(null)
   const [trendGroup,  setTrendGroup]      = useState(null)
   const [trendRows,   setTrendRows]       = useState([])
   const [trendGroups, setTrendGroups]     = useState([])
@@ -1659,9 +1815,14 @@ export default function Dashboard() {
   // date slice; the bottom-half trend uses it only for bucket size, always showing a run of buckets.
   const loadSingleTotals = useCallback(async () => {
     const isIncomeView = dashboardView === 'income'
-    const { buckets } = computeTrendBuckets(filters.date)
-    const trendStart = `${buckets[0].start}-01`
-    const trendEnd = lastDayOfMonthISO(buckets[buckets.length - 1].end)
+    // With a date chip set, the trend is a fixed window of period-sized buckets centered on the
+    // selection. With no chip the dashboard totals cover all data, so fetch the full monthly history
+    // (ancient start → backend skips its rolling window) and bucket it month-by-month across the data's
+    // span — otherwise the trend sits on an empty current-month window while the totals show all time.
+    const hasDate = !!filters.date
+    const windowBuckets = hasDate ? computeTrendBuckets(filters.date).buckets : null
+    const trendStart = hasDate ? `${windowBuckets[0].start}-01` : ALL_TIME_START
+    const trendEnd = hasDate ? lastDayOfMonthISO(windowBuckets[windowBuckets.length - 1].end) : undefined
     const [g, tr, c] = await Promise.all([
       api.getGroupTotals(null, accountId || undefined, dateStart, dateEnd, ownerIds, undefined, tagIds, summaryFilters),
       api.getMonthlyTrend(120, undefined, accountId || undefined, trendStart, trendEnd, tagIds, dashboardView, ownerIds, summaryFilters),
@@ -1669,9 +1830,22 @@ export default function Dashboard() {
     ])
     setGroupRows(g.filter(r => r.category_type !== 'income'))
     setIncomeRows(g.filter(r => r.category_type === 'income'))
-    setTrend(trimEmptyTrendBuckets(aggregateMonthlyIntoBuckets(tr, buckets)))
+    // Store the raw monthly rows (+ the period window, if any) and let the memo below fold them into
+    // buckets — so changing the grain re-buckets client-side without another round of fetches.
+    setSingleTrendRows(tr)
+    setSingleTrendWindowBuckets(windowBuckets)
     setTopCatRows(c)
   }, [accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, dashboardView, filters.date])
+
+  // Grain selector applies only to the no-chip "all time" trend (a date chip already sizes its own
+  // buckets), and only once there's enough history that month/quarter/year is a real choice.
+  const trendSpanMonths = singleTrendWindowBuckets ? 0 : monthSpanOfRows(singleTrendRows)
+  const showTrendGrainSelector = !singleTrendWindowBuckets && trendSpanMonths > TREND_GRAIN_SELECTOR_MIN_MONTHS
+  const trend = useMemo(() => {
+    const buckets = singleTrendWindowBuckets
+      ?? calendarBucketsFromRows(singleTrendRows, showTrendGrainSelector ? trendGrain : 'month')
+    return trimEmptyTrendBuckets(aggregateMonthlyIntoBuckets(singleTrendRows, buckets))
+  }, [singleTrendRows, singleTrendWindowBuckets, trendGrain, showTrendGrainSelector])
 
   // In-place loaders for the Compare and Trends aggregates, shared by their mode effects and the
   // transaction-change refresh so an edit updates them without resetting the user's drill.
@@ -1686,7 +1860,9 @@ export default function Dashboard() {
   }, [periodA, periodB, accountId, tagIds, ownerIds, summaryFilters])
 
   const loadTrendSeries = useCallback(async () => {
-    const rows = await api.getMonthlyByGroup(60, accountId || undefined, trendGroup?.series_id || undefined, tagIds, ownerIds, summaryFilters)
+    // Fetch the full visible history (20-year bound) so the year picker and Annual totals can reach
+    // every year in the data; the per-window monthly charts then slice this down via the year picker.
+    const rows = await api.getMonthlyByGroup(240, accountId || undefined, trendGroup?.series_id || undefined, tagIds, ownerIds, summaryFilters)
     setTrendRows(rows)
   }, [accountId, trendGroup, tagIds, ownerIds, summaryFilters])
 
@@ -2022,7 +2198,10 @@ export default function Dashboard() {
       </PageHeader>
       </div>
 
-      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+      {/* Small top padding so a focusable control sitting at the very top of this scroll area (e.g. the
+          Trends year picker) isn't clipped at the overflow edge — its focus outline needs room above the
+          border box. */}
+      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 32px 32px' }}>
 
       {mode === 'compare' && (
         <div style={{ display: 'flex', gap: 20, marginBottom: 24, flexWrap: 'wrap' }}>
@@ -2050,14 +2229,14 @@ export default function Dashboard() {
               <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
                 <Card style={{ padding: '14px 24px' }}>
                   <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>
-                    Total spending · {filters.date ? (filters.date.preset || `${filters.date.start} → ${filters.date.end}`) : monthLabel(thisM)}
+                    Total spending · {singlePeriodLabel}
                   </div>
                   <div style={{ fontSize: 28, fontWeight: 700 }}>{formatCurrency(totalSpend)}</div>
                 </Card>
                 {totalIncome > 0 && (
                   <Card style={{ padding: '14px 24px' }}>
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>
-                      Total income · {filters.date ? (filters.date.preset || `${filters.date.start} → ${filters.date.end}`) : monthLabel(thisM)}
+                      Total income · {singlePeriodLabel}
                     </div>
                     <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--success, #22c55e)' }}>{formatCurrency(totalIncome)}</div>
                   </Card>
@@ -2350,6 +2529,8 @@ export default function Dashboard() {
                   : 0
                 const trendBarWidth = 60
                 const trendChartMinWidth = Math.max(420, trend.length * trendBarWidth)
+                const effectiveGrain = showTrendGrainSelector ? trendGrain : 'month'
+                const grainWord = effectiveGrain === 'year' ? 'Yearly' : effectiveGrain === 'quarter' ? 'Quarterly' : 'Monthly'
                 function handleTrendBarClick(d) {
                   if (!d) return
                   if (d.singleMonth) {
@@ -2364,9 +2545,29 @@ export default function Dashboard() {
                 }
                 return (
                   <Card>
-                    <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Trend</div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600 }}>Trend</div>
+                      {showTrendGrainSelector && (
+                        <select
+                          value={trendGrain}
+                          onChange={e => setTrendGrain(e.target.value)}
+                          aria-label="Trend bucket size"
+                          style={{
+                            background: 'var(--surface2)', color: 'var(--text)',
+                            border: '1px solid var(--border)', borderRadius: 8,
+                            padding: '4px 8px', fontSize: 12, cursor: 'pointer',
+                          }}
+                        >
+                          <option value="month">Monthly</option>
+                          <option value="quarter">Quarterly</option>
+                          <option value="year">Yearly</option>
+                        </select>
+                      )}
+                    </div>
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
-                      Buckets sized to the selected period · scroll horizontally to pan
+                      {filters.date
+                        ? 'Buckets sized to the selected period · scroll horizontally to pan'
+                        : `${grainWord} totals across all data · scroll horizontally to pan`}
                     </div>
                     <div style={{ overflowX: 'auto', overflowY: 'hidden' }}>
                       <div style={{ minWidth: trendChartMinWidth, height: 224 }}>
