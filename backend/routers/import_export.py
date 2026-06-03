@@ -2490,11 +2490,14 @@ def _load_backup_payload_from_upload(
 
 @router.get("/profiles")
 def list_profiles():
+    # A data source is user-owned configuration; its visibility must NOT be coupled to the trash
+    # state of any account it happens to map. A mapped account can be trashed as a side effect of
+    # an account merge (the child is trashed and folds into its parent) or ordinary cleanup, and a
+    # stale mapping entry is harmless — the import flow re-resolves accounts at import time. Hiding
+    # the profile instead turned it into a ghost: invisible here, yet still blocking its own name
+    # in `_assert_profile_name_available` (which scans all rows), so it could be neither edited,
+    # deleted, nor recreated. List every profile and let the user manage it.
     with get_db() as conn:
-        trashed_account_ids = {
-            row["id"]
-            for row in conn.execute("SELECT id FROM account WHERE trashed_at IS NOT NULL").fetchall()
-        }
         rows = conn.execute("""
             SELECT p.*, COALESCE(a.display_name, a.name) AS account_name
             FROM   csv_import_profile p
@@ -2506,14 +2509,6 @@ def list_profiles():
         d = dict(r)
         d["column_map"] = safe_json_dict(d["column_map"])
         d = _annotate_imported_category_settings(d, _get_imported_category_settings(d))
-        referenced_account_ids = set()
-        if d.get("account_id"):
-            referenced_account_ids.add(d["account_id"])
-        account_assignments = d["column_map"].get("account_assignments")
-        if isinstance(account_assignments, dict):
-            referenced_account_ids.update(account_id for account_id in account_assignments.values() if account_id)
-        if referenced_account_ids & trashed_account_ids:
-            continue
         result.append(d)
     return result
 
