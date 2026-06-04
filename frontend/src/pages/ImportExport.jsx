@@ -30,6 +30,7 @@ import {
   ImportedCategoryUsageInline,
   ActionCountBadge,
 } from '../components/importExport/importPresentational.jsx'
+import { ImportErrorBoundary } from '../components/importExport/ImportErrorBoundary.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
@@ -1452,36 +1453,6 @@ function RawFilePreview({
 //   Open list:             plain "AccountName" and plain "HeaderName" (no prefix)
 
 // Keep the import UI recoverable if a preview or mapping render crashes.
-class ImportErrorBoundary extends React.Component {
-  constructor(props) { super(props); this.state = { error: null } }
-  static getDerivedStateFromError(e) { return { error: e } }
-  render() {
-    if (this.state.error) {
-      return (
-        <div style={{
-          padding: '20px 24px', background: 'color-mix(in srgb, var(--danger) 10%, var(--surface2))',
-          border: '1px solid var(--danger)', borderRadius: 10, margin: '16px 0',
-        }}>
-          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8, color: 'var(--danger)' }}>
-            Something went wrong in the import form
-          </div>
-          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12, fontFamily: 'monospace' }}>
-            {this.state.error?.message}
-          </div>
-          <button
-            onClick={() => this.setState({ error: null })}
-            style={{
-              background: 'var(--surface)', border: '1px solid var(--border)',
-              borderRadius: 6, padding: '5px 14px', fontSize: 13, cursor: 'pointer',
-            }}
-          >Try again</button>
-        </div>
-      )
-    }
-    return this.props.children
-  }
-}
-
 function ImportTab() {
   const navigate = useNavigate()
   const { dbInstanceId, preferenceSubjectId } = useAppSession()
