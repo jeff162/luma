@@ -981,7 +981,6 @@ export default function ImportProfilesManager({
                               setNameDraft('')
                             }}
                             restoreOnEscape
-                            onBlurCommit={false}
                             placeholder="Data source name"
                             style={{
                               width: 240,

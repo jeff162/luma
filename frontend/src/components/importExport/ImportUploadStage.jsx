@@ -65,7 +65,6 @@ export function ImportUploadStage({
                         setSourceNameDraft('')
                       }}
                       restoreOnEscape
-                      onBlurCommit={false}
                       placeholder="Data source name"
                       style={{
                         width: 220,

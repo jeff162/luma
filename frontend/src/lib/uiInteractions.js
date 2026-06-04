@@ -253,7 +253,14 @@ export function useTransientTextEdit(value, {
 
   async function commitEdit() {
     const normalized = normalize ? normalize(draft) : draft
-    if ((!normalized && !allowEmpty) || normalized === value) return false
+    if ((!normalized && !allowEmpty) || normalized === value) {
+      // Nothing to persist, but the edit session is still over — exit edit mode and
+      // revert the draft rather than leaving the editor stranded open. This is what
+      // lets commit-on-blur close when the value is unchanged; only a thrown onCommit
+      // (handled below) should keep the editor open for a retry.
+      cancelEdit()
+      return false
+    }
     setEditing(false)
     try {
       await onCommit?.(normalized)

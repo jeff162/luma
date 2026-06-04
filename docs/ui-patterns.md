@@ -185,6 +185,27 @@ For account rows, owner rows, and similar editable lists:
 
 Inline row creation should usually happen inside the existing list, not in a detached panel above it.
 
+### Inline edit commit behavior
+
+Inline editors share two intents that must stay distinguishable so the same gesture means the
+same thing everywhere:
+
+- **Renaming an existing, already-saved value in place** (a merchant, account, owner, category,
+  data-source name or description, etc.) commits on blur. Enter commits, Escape reverts to the
+  pre-edit value, and clicking away saves. This is the least-surprising default and is what
+  users expect when they click a value to change it. The shared primitives
+  (`useTransientTextEdit` + `TransientTextInput`) provide this as the default; an editor opts in
+  simply by not overriding `onBlurCommit`.
+
+- **Naming a brand-new thing or a multi-field form** (create / add / save-as boxes, login and
+  setup forms) uses an explicit submit and does **not** commit on blur (`onBlurCommit={false}`).
+  Click-away must not silently create a half-specified entity or fire a partial form, and these
+  surfaces carry their own Add / Save / Cancel affordances.
+
+The one deliberate exception is the payee rename in the transaction detail panel
+(`TransactionDetail.jsx`), which keeps explicit Save/Cancel buttons; commit-on-blur there would
+make Cancel dead, so it stays button-driven even though it edits the same field as the row.
+
 ## Transaction rows
 
 Transaction tables should share the same row-level metadata treatment.

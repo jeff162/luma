@@ -182,7 +182,6 @@ export function ImportHistorySection({
                                     setSourceNameDraft('')
                                   }}
                                   restoreOnEscape
-                                  onBlurCommit={false}
                                   placeholder="Data source name"
                                   style={{
                                     width: 220,
@@ -236,7 +235,6 @@ export function ImportHistorySection({
                                     setSourceDescriptionDraft('')
                                   }}
                                   restoreOnEscape
-                                  onBlurCommit={false}
                                   placeholder="Description"
                                   style={{
                                     width: 190,
