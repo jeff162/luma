@@ -46,55 +46,31 @@ import {
   IMPORT_CATEGORY_USAGE_MODE_PER_SOURCE,
   normalizeImportCategoryUsageMode,
 } from '../lib/appConfig.js'
+import {
+  AMOUNT_CONVENTIONS,
+  DATE_FORMATS,
+  EXPORT_COLUMNS,
+  DEFAULT_EXPORT_COLS,
+  IMPORT_CONFIG_MAX_WIDTH,
+  MANUAL_DATA_SOURCE_VALUE,
+  LAST_IMPORT_DATA_SOURCE_PREF_KEY,
+  EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY,
+  DATA_SOURCE_MANAGER_POS_PREF_KEY,
+  SYSTEM_CATEGORY_WORKSPACE_DRAFT_PREF_KEY,
+  DUPLICATE_ROWS_COLUMNS_PREF_KEY,
+  UNASSIGNED_CATEGORY_SYSTEM_KEY,
+  IMPORTED_CATEGORY_SCOPE_ALL,
+  IMPORTED_CATEGORY_SCOPE_FILTERED,
+  IMPORTED_CATEGORY_SETTINGS_KEY,
+  FIXED_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX,
+  NEW_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX,
+  IMPORTED_CATEGORY_USAGE_SENTENCE,
+  IMPORTED_CATEGORY_FILTER_PILL_LABEL,
+  IMPORTED_CATEGORY_FILTER_DIALOG_TITLE,
+  IMPORTED_CATEGORY_FILTER_DIALOG_DESCRIPTION,
+  IMPORTED_CATEGORY_SCOPE_ALL_LABEL,
+} from '../lib/importExport/constants.js'
 
-const AMOUNT_CONVENTIONS = [
-  { value: 'single_signed', label: 'Single column — negative = debit (most banks)' },
-  { value: 'single_unsigned', label: 'Single column + a debit/credit type column' },
-  { value: 'two_column', label: 'Two columns — separate debit and credit' },
-]
-const DATE_FORMATS = [
-  { value: '%m/%d/%Y', label: 'MM/DD/YYYY  (e.g. 01/31/2024)' },
-  { value: '%Y-%m-%d', label: 'YYYY-MM-DD  (e.g. 2024-01-31)' },
-  { value: '%Y/%m/%d', label: 'YYYY/MM/DD  (e.g. 2024/01/31)' },
-  { value: '%d/%m/%Y', label: 'DD/MM/YYYY  (e.g. 31/01/2024)' },
-  { value: '%m-%d-%Y', label: 'MM-DD-YYYY  (e.g. 01-31-2024)' },
-  { value: '%d-%m-%Y', label: 'DD-MM-YYYY  (e.g. 31-01-2024)' },
-  { value: '%b %d, %Y', label: 'Mon DD, YYYY  (e.g. Jan 31, 2024)' },
-  { value: '%b-%d-%Y', label: 'MMM-DD-YYYY  (e.g. Mar-23-2026)' },
-]
-const EXPORT_COLUMNS = [
-  { key: 'date', label: 'Date' },
-  { key: 'merchant_name', label: 'Merchant' },
-  { key: 'raw_name', label: 'Raw description' },
-  { key: 'amount', label: 'Amount' },
-  { key: 'account', label: 'Account' },
-  { key: 'category', label: 'Category' },
-  { key: 'group', label: 'Group' },
-  { key: 'owner', label: 'Owner' },
-  { key: 'notes', label: 'Notes' },
-  { key: 'is_pending', label: 'Pending' },
-  { key: 'overridden', label: 'Manually categorized' },
-  { key: 'import_batch', label: 'Import batch ID' },
-]
-const DEFAULT_EXPORT_COLS = ['date', 'merchant_name', 'amount', 'account', 'category']
-const IMPORT_CONFIG_MAX_WIDTH = 'min(900px, 100%)'
-const MANUAL_DATA_SOURCE_VALUE = '__skip_for_now__'
-const LAST_IMPORT_DATA_SOURCE_PREF_KEY = 'import.lastDataSourceId'
-const EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY = 'import.expandedDataSourceRows'
-const DATA_SOURCE_MANAGER_POS_PREF_KEY = 'import.dataSourceManagerPos'
-const SYSTEM_CATEGORY_WORKSPACE_DRAFT_PREF_KEY = 'import.systemCategoryWorkspaceDraft'
-const DUPLICATE_ROWS_COLUMNS_PREF_KEY = 'ui.import.duplicateRows.columns'
-const UNASSIGNED_CATEGORY_SYSTEM_KEY = 'unassigned'
-const IMPORTED_CATEGORY_SCOPE_ALL = 'all'
-const IMPORTED_CATEGORY_SCOPE_FILTERED = 'filtered'
-const IMPORTED_CATEGORY_SETTINGS_KEY = 'imported_category_settings'
-const FIXED_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX = 'account:'
-const NEW_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX = 'new-account:'
-const IMPORTED_CATEGORY_USAGE_SENTENCE = 'Import the transactions with their existing categories and use them to propose categorization rules.'
-const IMPORTED_CATEGORY_FILTER_PILL_LABEL = 'Filter by owner/account'
-const IMPORTED_CATEGORY_FILTER_DIALOG_TITLE = 'Identify accounts with meaningful categorization information'
-const IMPORTED_CATEGORY_FILTER_DIALOG_DESCRIPTION = 'Use when only some of the accounts in the imported data have meaningful category assignments.'
-const IMPORTED_CATEGORY_SCOPE_ALL_LABEL = 'Include all categorized transactions from this data set'
 const ImportBatchDetail = lazy(() => import('../components/ImportBatchDetail.jsx'))
 
 function getBlankImportedCategorySettings() {

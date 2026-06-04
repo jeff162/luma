@@ -1,0 +1,56 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Shared constants for the Import / Export page and its extracted helpers and
+// sub-components. These are the cross-cutting display options, preference keys,
+// and imported-category vocabulary that must read identically across the page
+// body, the pure helpers in this folder, and the presentational components.
+
+export const AMOUNT_CONVENTIONS = [
+  { value: 'single_signed', label: 'Single column — negative = debit (most banks)' },
+  { value: 'single_unsigned', label: 'Single column + a debit/credit type column' },
+  { value: 'two_column', label: 'Two columns — separate debit and credit' },
+]
+export const DATE_FORMATS = [
+  { value: '%m/%d/%Y', label: 'MM/DD/YYYY  (e.g. 01/31/2024)' },
+  { value: '%Y-%m-%d', label: 'YYYY-MM-DD  (e.g. 2024-01-31)' },
+  { value: '%Y/%m/%d', label: 'YYYY/MM/DD  (e.g. 2024/01/31)' },
+  { value: '%d/%m/%Y', label: 'DD/MM/YYYY  (e.g. 31/01/2024)' },
+  { value: '%m-%d-%Y', label: 'MM-DD-YYYY  (e.g. 01-31-2024)' },
+  { value: '%d-%m-%Y', label: 'DD-MM-YYYY  (e.g. 31-01-2024)' },
+  { value: '%b %d, %Y', label: 'Mon DD, YYYY  (e.g. Jan 31, 2024)' },
+  { value: '%b-%d-%Y', label: 'MMM-DD-YYYY  (e.g. Mar-23-2026)' },
+]
+export const EXPORT_COLUMNS = [
+  { key: 'date', label: 'Date' },
+  { key: 'merchant_name', label: 'Merchant' },
+  { key: 'raw_name', label: 'Raw description' },
+  { key: 'amount', label: 'Amount' },
+  { key: 'account', label: 'Account' },
+  { key: 'category', label: 'Category' },
+  { key: 'group', label: 'Group' },
+  { key: 'owner', label: 'Owner' },
+  { key: 'notes', label: 'Notes' },
+  { key: 'is_pending', label: 'Pending' },
+  { key: 'overridden', label: 'Manually categorized' },
+  { key: 'import_batch', label: 'Import batch ID' },
+]
+export const DEFAULT_EXPORT_COLS = ['date', 'merchant_name', 'amount', 'account', 'category']
+export const IMPORT_CONFIG_MAX_WIDTH = 'min(900px, 100%)'
+export const MANUAL_DATA_SOURCE_VALUE = '__skip_for_now__'
+export const LAST_IMPORT_DATA_SOURCE_PREF_KEY = 'import.lastDataSourceId'
+export const EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY = 'import.expandedDataSourceRows'
+export const DATA_SOURCE_MANAGER_POS_PREF_KEY = 'import.dataSourceManagerPos'
+export const SYSTEM_CATEGORY_WORKSPACE_DRAFT_PREF_KEY = 'import.systemCategoryWorkspaceDraft'
+export const DUPLICATE_ROWS_COLUMNS_PREF_KEY = 'ui.import.duplicateRows.columns'
+export const UNASSIGNED_CATEGORY_SYSTEM_KEY = 'unassigned'
+export const IMPORTED_CATEGORY_SCOPE_ALL = 'all'
+export const IMPORTED_CATEGORY_SCOPE_FILTERED = 'filtered'
+export const IMPORTED_CATEGORY_SETTINGS_KEY = 'imported_category_settings'
+export const FIXED_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX = 'account:'
+export const NEW_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX = 'new-account:'
+export const IMPORTED_CATEGORY_USAGE_SENTENCE = 'Import the transactions with their existing categories and use them to propose categorization rules.'
+export const IMPORTED_CATEGORY_FILTER_PILL_LABEL = 'Filter by owner/account'
+export const IMPORTED_CATEGORY_FILTER_DIALOG_TITLE = 'Identify accounts with meaningful categorization information'
+export const IMPORTED_CATEGORY_FILTER_DIALOG_DESCRIPTION = 'Use when only some of the accounts in the imported data have meaningful category assignments.'
+export const IMPORTED_CATEGORY_SCOPE_ALL_LABEL = 'Include all categorized transactions from this data set'
