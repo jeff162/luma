@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/* eslint-disable react-refresh/only-export-components -- App component + refreshTaskBadge/notifyAccountsChanged broadcast helpers live together as the app-level shell */
+/* eslint-disable react-refresh/only-export-components -- App component + notifyAccountsChanged broadcast helper live together as the app-level shell */
 
 import { useState, useEffect, useRef, Component, lazy, Suspense, useMemo } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate } from 'react-router-dom'
@@ -1153,10 +1153,6 @@ function LocalPreferenceProfileScreen({
   )
 }
 
-export function refreshTaskBadge() {
-  window.dispatchEvent(new CustomEvent('fintrack:refresh-tasks'))
-}
-
 // Notify listeners that account mappings have changed (merge/detach/rename/delete/owner-change/
 // forget-distinct-pair). Currently consumed by the unified duplicate-detection report so it
 // auto-refreshes its entries when the user edits accounts based on what the report shows.
@@ -1379,12 +1375,19 @@ export default function App() {
     }
 
     fetchTasks()
-    window.addEventListener('fintrack:refresh-tasks', fetchTasks)
-    return () => window.removeEventListener('fintrack:refresh-tasks', fetchTasks)
-    // activeLocalProfile gated by the !authEnabled guard above — without it in deps the effect
+    window.addEventListener('fintrack:data-mutated', fetchTasks)
+    return () => window.removeEventListener('fintrack:data-mutated', fetchTasks)
+    // Two refresh triggers, by design:
+    //   * `fintrack:data-mutated` — same-session immediacy: any successful mutation anywhere emits
+    //     this from the api layer (see `signalDataMutated` in api.js), so the badge updates without
+    //     the user navigating, and no call site has to remember to refresh it.
+    //   * `location.pathname` in the deps — navigation backstop: re-fetch on every route change to
+    //     pick up changes this session didn't make (another tab, a background sync). With the api
+    //     emit covering local mutations, this is no longer compensating for a missed broadcast.
+    // activeLocalProfile is gated by the !authEnabled guard above — without it in deps the effect
     // never re-runs after the local profile loads on cold start, so the nav badge stays at 0
     // even when /tasks itself is showing pending items.
-  }, [authEnabled, currentUser, runtimeConfig, activeLocalProfile])
+  }, [authEnabled, currentUser, runtimeConfig, activeLocalProfile, location.pathname])
 
   useEffect(() => {
     if (!startupRouteApplied) return

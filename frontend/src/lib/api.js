@@ -14,6 +14,27 @@ export function setLocalPreferenceProfileId(profileId) {
   localPreferenceProfileId = profileId || ''
 }
 
+// Single app-wide "something was persisted" signal. Every successful mutation pings it: all non-GET
+// requests through `request()` below, plus the multipart upload helpers (import/run, restore) that
+// can't use the JSON path. Derived views that show server-computed counts — the nav Tasks badge and
+// the Tasks page — listen for `fintrack:data-mutated` and refetch.
+//
+// Trailing-debounced so a burst of writes (bulk categorize, an import inserting many rows, a bulk
+// duplicate-resolve) coalesces into one refetch instead of N. The point is that *mutating is the
+// invalidation*: no individual call site has to remember to refresh a derived view, so none can
+// forget to (the failure mode that left the badge stale). It fires for mutations that can't affect
+// those counts too (e.g. saving a UI preference); that refetch is cheap and idempotent, and paying
+// it is the price of never maintaining a list of "which endpoints affect which view."
+let dataMutatedTimer = null
+function signalDataMutated() {
+  if (typeof window === 'undefined') return
+  if (dataMutatedTimer) clearTimeout(dataMutatedTimer)
+  dataMutatedTimer = setTimeout(() => {
+    dataMutatedTimer = null
+    window.dispatchEvent(new CustomEvent('fintrack:data-mutated'))
+  }, 250)
+}
+
 async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
     headers: {
@@ -30,6 +51,8 @@ async function request(path, options = {}) {
     error.status = res.status
     throw error
   }
+  const method = (options.method || 'GET').toUpperCase()
+  if (method !== 'GET' && method !== 'HEAD') signalDataMutated()
   return res.json()
 }
 
@@ -314,6 +337,7 @@ export const api = {
         error.status = res.status
         throw error
       }
+      signalDataMutated()
       return res.json()
     })
   },
@@ -436,6 +460,7 @@ export const api = {
       error.status = res.status
       throw error
     }
+    signalDataMutated()
     return res.json()
   },
   restoreCredentialsFile: async (file) => {
@@ -448,6 +473,7 @@ export const api = {
       error.status = res.status
       throw error
     }
+    signalDataMutated()
     return res.json()
   },
 }

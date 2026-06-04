@@ -33,7 +33,6 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
-import { refreshTaskBadge } from '../App.jsx'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { Button, Spinner, EmptyState } from './ui.jsx'
 import {
@@ -312,9 +311,6 @@ export default function UnifiedDuplicatesDialog({
         await Promise.all(tasks)
       }
       setSelectedIds(new Set())
-      // Resolving suspects (or import-anyway / restore) changes the /tasks counts the nav badge
-      // reads; broadcast so the badge re-fetches. onReload only refreshes this batch's report.
-      refreshTaskBadge()
       if (typeof onReload === 'function') await onReload()
     } catch (err) {
       setActionError(err?.message || 'Bulk action failed')
@@ -334,8 +330,6 @@ export default function UnifiedDuplicatesDialog({
       else if (action === 'import_anyway') await api.importBatchDuplicates(batchId, { row_numbers: [entry.incoming.row_number] })
       else if (action === 'mark_reviewed') await api.markBatchDuplicatesReviewed(batchId, [entry.incoming.row_number], true)
       else if (action === 'unreview')      await api.markBatchDuplicatesReviewed(batchId, [entry.incoming.row_number], false)
-      // Keep the nav task badge in sync — onReload only refreshes this batch's report (see runBulk).
-      refreshTaskBadge()
       if (typeof onReload === 'function') await onReload()
     } catch (err) {
       setActionError(err?.message || 'Action failed')

@@ -4,7 +4,6 @@
 import React, { useCallback, useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { refreshTaskBadge } from '../App.jsx'
 import { FilterProvider, useFilters } from '../lib/FilterContext.jsx'
 import FilterBar from '../components/FilterBar.jsx'
 import {
@@ -4011,7 +4010,6 @@ function ImportTab() {
       })
       setImportResult(result)
       if (result.trailing_non_transaction_suspected || result.invalid_rows_suspected) setShowRaw(true)
-      refreshTaskBadge()
       const refreshedAccounts = await api.getAccounts({ include_children: true })
       setAccounts(refreshedAccounts)
       let nextImportCategoryDraft = importCategoryDraft
@@ -4338,7 +4336,6 @@ function ImportTab() {
     }
 
     api.listBatches().then(setBatches)
-    refreshTaskBadge()
   }
 
   async function confirmUndo(force) {

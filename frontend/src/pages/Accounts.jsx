@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
-import { refreshTaskBadge, notifyAccountsChanged } from '../App.jsx'
+import { notifyAccountsChanged } from '../App.jsx'
 import { Card, Button, Spinner, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog } from '../components/ui.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import PillTableHeader from '../components/PillTableHeader.jsx'
@@ -1836,7 +1836,6 @@ export default function Accounts() {
       await api.createAccount(data)
       setShowCreateAccount(false)
       await reloadAccounts()
-      refreshTaskBadge()
     } finally {
       setCreatingAccount(false)
     }
@@ -1878,7 +1877,6 @@ export default function Accounts() {
     if (patch.name !== undefined || patch.type !== undefined || patch.owner_id !== undefined) {
       setSortIndicatorActive(false)
     }
-    refreshTaskBadge()
     notifyAccountsChanged()
   }
 
@@ -1895,7 +1893,6 @@ export default function Accounts() {
     setAccounts(prev => prev.filter(a => a.id !== accountId))
     await api.deleteAccount(accountId)
     reloadAccounts().catch(() => { })
-    refreshTaskBadge()
     notifyAccountsChanged()
   }
 
@@ -1916,14 +1913,12 @@ export default function Accounts() {
     if (!owner?.id) return
     await api.deleteOwner(owner.id)
     loadData()
-    refreshTaskBadge()
   }
 
   async function createOwner(name) {
     const owner = await api.createOwner({ name })
     if (!owner?.id) throw new Error('Owner response did not include an id.')
     setOwners(prev => [...prev, owner])
-    refreshTaskBadge()
     return owner
   }
 
@@ -1937,7 +1932,6 @@ export default function Accounts() {
         : account
     )))
     setSortIndicatorActive(false)
-    refreshTaskBadge()
     notifyAccountsChanged()
   }
 
@@ -1973,7 +1967,6 @@ export default function Accounts() {
     try {
       await api.attachAccount(source.id, target.id)
       await reloadAccounts()
-      refreshTaskBadge()
       notifyAccountsChanged()
     } catch (error) {
       setNoticeDialog({
@@ -1992,7 +1985,6 @@ export default function Accounts() {
     try {
       await api.detachAccount(account.id)
       await reloadAccounts()
-      refreshTaskBadge()
       notifyAccountsChanged()
     } catch (error) {
       setNoticeDialog({
@@ -2013,7 +2005,6 @@ export default function Accounts() {
     try {
       await api.trashAccount(account.id)
       await reloadAccounts()
-      refreshTaskBadge()
       notifyAccountsChanged()
     } catch (error) {
       setNoticeDialog({

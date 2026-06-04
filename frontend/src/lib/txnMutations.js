@@ -4,30 +4,34 @@
 /*
  * Transaction mutation layer.
  *
- * Every write that can change a transaction's categorization or trashed state — and therefore the
- * derived counts the app shows (today the Tasks "uncategorized" badge; more views over time) —
- * goes through here instead of calling the matching `api.*` method directly. Centralizing the
- * write means callers express intent ("set this category") and stay ignorant of what is now
- * stale; `notifyTransactionsChanged` below is the single place that decides what to invalidate.
+ * Every write that can change a transaction's categorization or trashed state goes through here
+ * instead of calling the matching `api.*` method directly. Centralizing the write means callers
+ * express intent ("set this category") and stay ignorant of what is now stale;
+ * `notifyTransactionsChanged` below is the single place that decides which transaction-derived
+ * views to invalidate (today the dashboard's group/category totals; more over time).
  *
  * Callers still own their own optimistic UI updates (reconciling their local row list). This layer
  * only handles the cross-cutting invalidation that an individual page can't see. The dispatch used
  * to live at each call site and was repeatedly forgotten — categorizing from the dashboard, an
- * account panel, or a detail drawer all left the Tasks badge stale — which is the whole reason it
+ * account panel, or a detail drawer all left derived views stale — which is the whole reason it
  * moved down here. An eslint `no-restricted-properties` rule forbids calling the wrapped `api`
  * methods directly outside this module so the notification can't be skipped again.
+ *
+ * The nav Tasks badge is NOT refreshed here: every successful mutation emits `fintrack:data-mutated`
+ * from the api layer (see `signalDataMutated` in api.js), which the badge and Tasks page listen for.
+ * That already covers transaction writes, so this seam only fans out the transaction-specific
+ * `fintrack:transactions-changed` event for views the global signal doesn't serve.
  */
 
 import { api } from './api.js'
-import { refreshTaskBadge } from '../App.jsx'
 
-// The single invalidation seam. As more derived views gain event subscriptions (dashboard totals,
-// the Categories page's uncategorized counts, reports), add their refreshes here — callers never
-// need to know which views a given mutation affects.
+// The single invalidation seam for transaction-derived views. As more such views gain event
+// subscriptions (dashboard totals, the Categories page's uncategorized counts, reports), add their
+// refreshes here — callers never need to know which views a given mutation affects.
 function notifyTransactionsChanged() {
-  refreshTaskBadge()
   // Broadcast so derived views (e.g. the dashboard's group/category totals) can refresh in place
-  // without each call site having to know which aggregates a given edit invalidated.
+  // without each call site having to know which aggregates a given edit invalidated. (The nav Tasks
+  // badge refreshes separately via the api layer's `fintrack:data-mutated` signal.)
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('fintrack:transactions-changed'))
   }
