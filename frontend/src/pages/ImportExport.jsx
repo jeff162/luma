@@ -42,9 +42,7 @@ import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
 import {
   APP_NAME,
   IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY,
-  IMPORT_CATEGORY_USAGE_MODE_ALL,
   IMPORT_CATEGORY_USAGE_MODE_PER_SOURCE,
-  normalizeImportCategoryUsageMode,
 } from '../lib/appConfig.js'
 import {
   AMOUNT_CONVENTIONS,
@@ -62,24 +60,23 @@ import {
   IMPORTED_CATEGORY_SCOPE_ALL,
   IMPORTED_CATEGORY_SCOPE_FILTERED,
   IMPORTED_CATEGORY_SETTINGS_KEY,
-  FIXED_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX,
-  NEW_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX,
   IMPORTED_CATEGORY_USAGE_SENTENCE,
   IMPORTED_CATEGORY_FILTER_PILL_LABEL,
   IMPORTED_CATEGORY_FILTER_DIALOG_TITLE,
   IMPORTED_CATEGORY_FILTER_DIALOG_DESCRIPTION,
-  IMPORTED_CATEGORY_SCOPE_ALL_LABEL,
 } from '../lib/importExport/constants.js'
+import {
+  getBlankImportedCategorySettings,
+  getDefaultImportedCategoryUsageEnabled,
+  dedupeStringList,
+  normalizeImportedCategorySettings,
+  extractImportedCategorySettings,
+  getFixedAccountCategoryScopeToken,
+  getNewAccountCategoryScopeToken,
+  summarizeImportedCategorySettings,
+} from '../lib/importExport/importedCategorySettings.js'
 
 const ImportBatchDetail = lazy(() => import('../components/ImportBatchDetail.jsx'))
-
-function getBlankImportedCategorySettings() {
-  return {
-    scope_mode: IMPORTED_CATEGORY_SCOPE_ALL,
-    owner_ids: [],
-    unassigned_account_tokens: [],
-  }
-}
 
 function normalizeDuplicateRowsColumnConfig(savedColumns, defaultColumns) {
   if (!Array.isArray(defaultColumns) || defaultColumns.length === 0) return []
@@ -109,77 +106,6 @@ function normalizeDuplicateRowsColumnConfig(savedColumns, defaultColumns) {
   }
 
   return merged
-}
-
-function getDefaultImportedCategoryUsageEnabled(categoryUsageMode) {
-  return normalizeImportCategoryUsageMode(categoryUsageMode) === IMPORT_CATEGORY_USAGE_MODE_ALL
-}
-
-function dedupeStringList(values) {
-  const seen = new Set()
-  const result = []
-  for (const value of values || []) {
-    const nextValue = String(value || '').trim()
-    if (!nextValue || seen.has(nextValue)) continue
-    seen.add(nextValue)
-    result.push(nextValue)
-  }
-  return result
-}
-
-function normalizeImportedCategorySettings(value) {
-  const raw = value && typeof value === 'object' ? value : {}
-  return {
-    scope_mode: raw.scope_mode === IMPORTED_CATEGORY_SCOPE_FILTERED ? IMPORTED_CATEGORY_SCOPE_FILTERED : IMPORTED_CATEGORY_SCOPE_ALL,
-    owner_ids: dedupeStringList(raw.owner_ids),
-    unassigned_account_tokens: dedupeStringList(raw.unassigned_account_tokens),
-  }
-}
-
-function extractImportedCategorySettings(source) {
-  if (!source || typeof source !== 'object') return getBlankImportedCategorySettings()
-  if (source[IMPORTED_CATEGORY_SETTINGS_KEY]) {
-    return normalizeImportedCategorySettings(source[IMPORTED_CATEGORY_SETTINGS_KEY])
-  }
-  if (source.column_map?.[IMPORTED_CATEGORY_SETTINGS_KEY]) {
-    return normalizeImportedCategorySettings(source.column_map[IMPORTED_CATEGORY_SETTINGS_KEY])
-  }
-  return normalizeImportedCategorySettings({
-    scope_mode: source.imported_category_scope_mode,
-    owner_ids: source.imported_category_owner_ids,
-    unassigned_account_tokens: source.imported_category_unassigned_account_tokens,
-  })
-}
-
-function getFixedAccountCategoryScopeToken(accountId) {
-  const normalized = String(accountId || '').trim()
-  return normalized ? `${FIXED_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX}${normalized}` : ''
-}
-
-function getNewAccountCategoryScopeToken(name) {
-  const normalized = String(name || '').trim().replace(/\s+/g, ' ').toLowerCase()
-  return normalized ? `${NEW_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX}${normalized}` : ''
-}
-
-function summarizeImportedCategorySettings(settings, choices, options = {}) {
-  const { hideAllScopeLabel = false } = options
-  const normalized = normalizeImportedCategorySettings(settings)
-  if (normalized.scope_mode !== IMPORTED_CATEGORY_SCOPE_FILTERED) {
-    return hideAllScopeLabel ? '' : IMPORTED_CATEGORY_SCOPE_ALL_LABEL
-  }
-  const includedKeys = new Set()
-  for (const ownerId of normalized.owner_ids) {
-    includedKeys.add(`owner:${ownerId}`)
-  }
-  for (const token of normalized.unassigned_account_tokens) {
-    includedKeys.add(`account:${token}`)
-  }
-  const labels = (choices || [])
-    .filter(choice => !includedKeys.has(choice.key))
-    .map(choice => choice.label)
-  const choiceByKey = new Map((choices || []).map(choice => [choice.key, choice]))
-  if (labels.length > 0) return `Excluding: ${labels.join(', ')}`
-  return choiceByKey.size > 0 ? '' : 'No owners or unassigned accounts selected yet'
 }
 
 function getBlankImportSnapshot() {
