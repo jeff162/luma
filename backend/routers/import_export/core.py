@@ -2,11 +2,28 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Import/export is a long-lived workflow, not a single upload endpoint.
+The cohesive core of the import/export package.
 
-This router preserves the mapping context that produced each batch so preview,
-import, undo, category review, rule suggestion review, and backup/restore can
-all reopen or replay the same decisions without drifting from the original run.
+Import/export is a long-lived workflow, not a single upload endpoint. The defining requirement is
+that the mapping/dedupe/category decisions made on one import stay reconstructable later: the run
+endpoint persists a `config_snapshot` per batch so import, undo, the duplicate report, category
+review, and rule-suggestion review can all reopen or replay the original run without drifting from
+it. Those stages share that snapshot and a web of helpers, so they are kept together here on purpose
+(see `docs/architecture.md` — "the module is large … intentional") rather than scattered for the
+sake of smaller files. The cleanly-separable concerns that do NOT share that web — saved-profile
+CRUD, backup/restore, the read-only preview — live in the sibling modules (`profiles`, `backup`,
+`preview`), which import from this module; `core` never imports them, so the package stays a DAG.
+
+This file also owns the shared low-level primitives the workflow (and those siblings) reuse:
+content/file hashing, amount/date/pending and header parsing, effective-account resolution (grouped
+child accounts resolve through their parent), and the imported-category settings codec. The parse
+primitives in particular stay here because `run_import` is their primary caller.
+
+Rough reading order: request models → normalization/settings helpers → dedupe candidate helpers
+(these feed `evaluate_duplicate` from `services/duplicate_detection.py` during a run) → import-row
+insertion + batch-duplicate persistence → category-workspace and rule-suggestion-review state →
+profile signature/column-map helpers → import-source/category primitives → the endpoints (`/run`,
+the duplicate-report family, `/batches…`, category-mappings, the rule-suggestion family, undo).
 """
 
 import csv
