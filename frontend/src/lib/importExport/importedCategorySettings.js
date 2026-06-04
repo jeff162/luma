@@ -85,6 +85,9 @@ export function summarizeImportedCategorySettings(settings, choices, options = {
   if (normalized.scope_mode !== IMPORTED_CATEGORY_SCOPE_FILTERED) {
     return hideAllScopeLabel ? '' : IMPORTED_CATEGORY_SCOPE_ALL_LABEL
   }
+  // In FILTERED mode the stored owner_ids / account tokens are the chosen
+  // *inclusions*; the readable summary lists the complement instead — every
+  // choice that is not included, rendered as "Excluding: …".
   const includedKeys = new Set()
   for (const ownerId of normalized.owner_ids) {
     includedKeys.add(`owner:${ownerId}`)

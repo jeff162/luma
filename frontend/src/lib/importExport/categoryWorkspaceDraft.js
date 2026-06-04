@@ -14,6 +14,9 @@ import { cloneCategoryImportSnapshot, findNodeById } from '../categoryImportStat
 
 export function clonePersistedCategoryWorkspaceDraft(draft) {
   if (!draft?.snapshot) return null
+  // A `mappings` field marks a draft saved under the retired flat
+  // category-mapping shape (pre-tree). It can't be migrated cleanly, so drop it
+  // rather than load a half-valid workspace.
   if (draft?.snapshot?.mappings) return null
   return {
     snapshot: cloneCategoryImportSnapshot(draft.snapshot),
