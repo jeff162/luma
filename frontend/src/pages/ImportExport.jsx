@@ -27,7 +27,13 @@ import ImportProfilesManager from '../components/ImportProfilesManager.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
-import { cloneCategoryImportSnapshot, createCategoryImportDraftState, findNodeById } from '../lib/categoryImportState.js'
+import { cloneCategoryImportSnapshot, createCategoryImportDraftState } from '../lib/categoryImportState.js'
+import {
+  clonePersistedCategoryWorkspaceDraft,
+  summarizeCategoryWorkspaceDraft,
+  sanitizeCategoryWorkspaceDraftToSourceValues,
+  normalizeImportCategoryValue,
+} from '../lib/importExport/categoryWorkspaceDraft.js'
 import {
   analyzeImportColumns,
   formatLikelyMatchLabel,
@@ -1643,94 +1649,6 @@ function getSuggestedDataSourceName({ draftRecord = null, previewLike = null } =
 function formatImportBatchTimestamp(value) {
   const normalized = String(value || '').trim()
   return normalized ? normalized.slice(0, 16).replace('T', ' ') : ''
-}
-
-function clonePersistedCategoryWorkspaceDraft(draft) {
-  if (!draft?.snapshot) return null
-  if (draft?.snapshot?.mappings) return null
-  return {
-    snapshot: cloneCategoryImportSnapshot(draft.snapshot),
-    undoStack: (draft.undoStack || []).map(cloneCategoryImportSnapshot),
-    redoStack: (draft.redoStack || []).map(cloneCategoryImportSnapshot),
-    selectionAnchor: draft.selectionAnchor || null,
-    activeSection: draft.activeSection === 'income' ? 'income' : 'expense',
-  }
-}
-
-function collectCategoryWorkspaceSourceValues(draft) {
-  const snapshot = draft?.snapshot
-  if (!snapshot) return []
-  const seen = new Set()
-  const ordered = []
-  const addValue = value => {
-    const normalized = String(value || '').trim()
-    if (!normalized || seen.has(normalized)) return
-    seen.add(normalized)
-    ordered.push(normalized)
-  }
-    ; (snapshot.sourceOrder || []).forEach(addValue)
-    ; (snapshot.setAsideOrder || []).forEach(addValue)
-  for (const sectionType of ['income', 'expense']) {
-    for (const group of snapshot.tree?.[sectionType] || []) {
-      for (const child of group.children || []) {
-        addValue(child?.sourceValue || child?.name)
-      }
-    }
-  }
-  return ordered
-}
-
-function summarizeCategoryWorkspaceDraft(draft) {
-  const sourceValues = collectCategoryWorkspaceSourceValues(draft)
-  return {
-    sourceValues,
-    totalCount: sourceValues.length,
-    remainingCount: draft?.snapshot?.sourceOrder?.length || 0,
-  }
-}
-
-function sanitizeCategoryWorkspaceSnapshotToSourceValues(snapshot, sourceValues = []) {
-  if (!snapshot) return null
-  const validValues = new Set(
-    (sourceValues || [])
-      .map(value => String(value || '').trim())
-      .filter(Boolean),
-  )
-  const shouldKeep = value => validValues.has(String(value || '').trim())
-  const nextSnapshot = cloneCategoryImportSnapshot(snapshot)
-  nextSnapshot.sourceOrder = (nextSnapshot.sourceOrder || []).filter(shouldKeep)
-  nextSnapshot.setAsideOrder = (nextSnapshot.setAsideOrder || []).filter(shouldKeep)
-  nextSnapshot.selectedSourceIds = (nextSnapshot.selectedSourceIds || []).filter(shouldKeep)
-
-  for (const sectionType of ['income', 'expense']) {
-    nextSnapshot.tree[sectionType] = (nextSnapshot.tree?.[sectionType] || []).map(group => ({
-      ...group,
-      children: (group.children || []).filter(child => shouldKeep(child?.sourceValue || child?.name)),
-    }))
-  }
-
-  if (nextSnapshot.selectedNodeId && !findNodeById(nextSnapshot.tree, nextSnapshot.selectedNodeId)) {
-    nextSnapshot.selectedNodeId = null
-  }
-  return nextSnapshot
-}
-
-function sanitizeCategoryWorkspaceDraftToSourceValues(draft, sourceValues = []) {
-  if (!draft?.snapshot) return null
-  const nextDraft = {
-    ...draft,
-    snapshot: sanitizeCategoryWorkspaceSnapshotToSourceValues(draft.snapshot, sourceValues),
-    undoStack: (draft.undoStack || []).map(entry => sanitizeCategoryWorkspaceSnapshotToSourceValues(entry, sourceValues)).filter(Boolean),
-    redoStack: (draft.redoStack || []).map(entry => sanitizeCategoryWorkspaceSnapshotToSourceValues(entry, sourceValues)).filter(Boolean),
-    selectionAnchor: draft.selectionAnchor || null,
-    activeSection: draft.activeSection === 'income' ? 'income' : 'expense',
-    leftPanelWidth: draft.leftPanelWidth ?? null,
-  }
-  return summarizeCategoryWorkspaceDraft(nextDraft).totalCount > 0 ? nextDraft : null
-}
-
-function normalizeImportCategoryValue(value) {
-  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
 function profileHeaderClearlyMismatches(profile, previewLike) {
