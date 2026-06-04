@@ -1,0 +1,242 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Pure helpers for import-draft persistence and the snapshot/profile-body shapes
+// it round-trips through. Two layers coexist (see ui-patterns.md "Import mapping
+// persistence"):
+//   - a saved import profile is the source of truth for reusable mapping state;
+//   - a browser-local draft is the fallback that lets a no-profile manual import
+//     resume later, and it is header-compatible rather than file-specific so the
+//     work only carries forward when the next file still looks like the same
+//     provider shape. The local draft must never override a matched profile.
+// This module owns the blank snapshot/mapping shapes, the localStorage draft
+// load/save/clear primitives keyed by instance+subject, the conversion between a
+// draft snapshot and a saved-profile body, and the file-compatibility checks.
+
+import {
+  IMPORTED_CATEGORY_SETTINGS_KEY,
+  IMPORTED_CATEGORY_SCOPE_ALL,
+} from './constants.js'
+import {
+  getBlankImportedCategorySettings,
+  normalizeImportedCategorySettings,
+  extractImportedCategorySettings,
+} from './importedCategorySettings.js'
+import { clonePersistedCategoryWorkspaceDraft } from './categoryWorkspaceDraft.js'
+import { inferFilenamePattern } from '../importColumnInference.js'
+
+export function getBlankImportSnapshot() {
+  return {
+    column_map: {},
+    category_assignments: {},
+    account_map: {},
+    skip_accounts: [],
+    account_new: {},
+    account_duplicate_compare: {},
+    account_id: null,
+    single_account_new: null,
+    date_format: '%m/%d/%Y',
+    amount_convention: 'single_signed',
+    skip_rows: 0,
+    apply_categorization: true,
+    use_imported_categories: false,
+    [IMPORTED_CATEGORY_SETTINGS_KEY]: getBlankImportedCategorySettings(),
+    category_workspace_draft: null,
+  }
+}
+
+export function getBlankMappingSuggestions() {
+  return {
+    date: '',
+    amount: '',
+    debit: '',
+    credit: '',
+    direction: '',
+    description: '',
+    category: '',
+    notes: '',
+    pending: '',
+    account: '',
+  }
+}
+
+export function stableSerialize(value) {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+export function deriveImportSourceHints(previewLike) {
+  const filename = previewLike?.filename || ''
+  const filenamePattern = inferFilenamePattern(filename).trim().toLowerCase()
+  return {
+    headerFingerprint: previewLike?.header_fingerprint || '',
+    filenamePattern,
+  }
+}
+
+export function buildEmptyDataSourceBody(name) {
+  return {
+    name: name.trim(),
+    filename_pattern: null,
+    header_fingerprint: null,
+    template_filename: null,
+    template_file_hash: null,
+    column_map: {},
+    account_id: null,
+    date_format: '%m/%d/%Y',
+    amount_convention: 'single_signed',
+    skip_rows: 0,
+    apply_categorization: true,
+    use_imported_categories: false,
+    imported_category_scope_mode: IMPORTED_CATEGORY_SCOPE_ALL,
+    imported_category_owner_ids: [],
+    imported_category_unassigned_account_tokens: [],
+  }
+}
+
+export function getImportDraftStorageKey(instanceId, subjectId) {
+  return instanceId && subjectId ? `fintrack.importDraft.v2.${instanceId}.${subjectId}` : null
+}
+
+export function loadSavedImportDraftRecord(instanceId, subjectId) {
+  const storageKey = getImportDraftStorageKey(instanceId, subjectId)
+  if (!storageKey) return null
+  try {
+    const raw = window.localStorage.getItem(storageKey)
+    if (!raw) return null
+    const saved = JSON.parse(raw)
+    if (!saved?.snapshot) return null
+    return saved
+  } catch {
+    return null
+  }
+}
+
+export function loadSavedImportDraft(previewLike, instanceId, subjectId) {
+  const saved = loadSavedImportDraftRecord(instanceId, subjectId)
+  if (!saved) return null
+  const { headerFingerprint } = deriveImportSourceHints(previewLike)
+  if (saved.headerFingerprint && headerFingerprint && saved.headerFingerprint !== headerFingerprint) return null
+  return saved.snapshot
+}
+
+export function saveImportDraft(previewLike, snapshot, instanceId, subjectId) {
+  const storageKey = getImportDraftStorageKey(instanceId, subjectId)
+  if (!storageKey) return
+  try {
+    const { headerFingerprint, filenamePattern } = deriveImportSourceHints(previewLike)
+    const record = {
+      headerFingerprint,
+      filenamePattern,
+      templateFilename: previewLike?.filename || '',
+      templateFileHash: previewLike?.file_content_hash || '',
+      snapshot,
+    }
+    window.localStorage.setItem(storageKey, JSON.stringify(record))
+    return record
+  } catch { }
+}
+
+export function saveImportDraftRecord(record, instanceId, subjectId) {
+  const storageKey = getImportDraftStorageKey(instanceId, subjectId)
+  if (!storageKey) return null
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(record))
+    return record
+  } catch { }
+}
+
+export function clearSavedImportDraft(instanceId, subjectId) {
+  const storageKey = getImportDraftStorageKey(instanceId, subjectId)
+  if (!storageKey) return
+  try {
+    window.localStorage.removeItem(storageKey)
+  } catch { }
+}
+
+export function buildProfileBodyFromSnapshot(name, draftRecord) {
+  const snapshot = draftRecord?.snapshot
+  if (!snapshot) return null
+  const columnMap = { ...(snapshot.column_map || {}) }
+  if (snapshot.category_workspace_draft) {
+    columnMap.category_workspace_draft = clonePersistedCategoryWorkspaceDraft(snapshot.category_workspace_draft)
+  }
+  if (snapshot.single_account_new?.name?.trim()) {
+    columnMap.single_account_new = {
+      name: snapshot.single_account_new.name.trim(),
+      type: snapshot.single_account_new.type || 'depository',
+    }
+  }
+  if (snapshot.account_map && Object.keys(snapshot.account_map).length > 0) {
+    columnMap.account_assignments = { ...snapshot.account_map }
+  }
+  if (snapshot.skip_accounts?.length > 0) {
+    columnMap.account_skips = [...snapshot.skip_accounts]
+  }
+  if (snapshot.account_new && Object.keys(snapshot.account_new).length > 0) {
+    columnMap.account_new = { ...snapshot.account_new }
+  }
+  columnMap[IMPORTED_CATEGORY_SETTINGS_KEY] = normalizeImportedCategorySettings(
+    extractImportedCategorySettings(snapshot)
+  )
+  const importedCategorySettings = normalizeImportedCategorySettings(extractImportedCategorySettings(snapshot))
+  return {
+    name: name.trim(),
+    filename_pattern: draftRecord?.filenamePattern || null,
+    header_fingerprint: draftRecord?.headerFingerprint || null,
+    template_filename: draftRecord?.templateFilename || null,
+    template_file_hash: draftRecord?.templateFileHash || null,
+    column_map: columnMap,
+    account_id: snapshot.account_id || null,
+    date_format: snapshot.date_format || '%m/%d/%Y',
+    amount_convention: snapshot.amount_convention || 'single_signed',
+    skip_rows: snapshot.skip_rows || 0,
+    apply_categorization: snapshot.apply_categorization !== false,
+    use_imported_categories: !!snapshot.use_imported_categories,
+    imported_category_scope_mode: importedCategorySettings.scope_mode,
+    imported_category_owner_ids: importedCategorySettings.owner_ids,
+    imported_category_unassigned_account_tokens: importedCategorySettings.unassigned_account_tokens,
+  }
+}
+
+export function buildDraftRecordFromPreview(previewLike, snapshot) {
+  if (!previewLike || !snapshot) return null
+  const { headerFingerprint, filenamePattern } = deriveImportSourceHints(previewLike)
+  return {
+    headerFingerprint,
+    filenamePattern,
+    templateFilename: previewLike?.filename || '',
+    templateFileHash: previewLike?.file_content_hash || '',
+    snapshot,
+  }
+}
+
+export function doesDraftMatchPreview(draftRecord, previewLike) {
+  if (!draftRecord || !previewLike) return false
+  const draftFileHash = String(draftRecord.templateFileHash || '').trim()
+  const previewFileHash = String(previewLike.file_content_hash || '').trim()
+  if (draftFileHash && previewFileHash) return draftFileHash === previewFileHash
+  const draftHeader = String(draftRecord.headerFingerprint || '').trim()
+  const previewHeader = String(previewLike.header_fingerprint || '').trim()
+  return !!draftHeader && !!previewHeader && draftHeader === previewHeader
+}
+
+export function getSuggestedDataSourceName({ draftRecord = null, previewLike = null } = {}) {
+  const savedPattern = String(draftRecord?.filenamePattern || '').trim()
+  if (savedPattern) return savedPattern
+  return inferFilenamePattern(draftRecord?.templateFilename || previewLike?.filename || '').trim()
+}
+
+export function formatImportBatchTimestamp(value) {
+  const normalized = String(value || '').trim()
+  return normalized ? normalized.slice(0, 16).replace('T', ' ') : ''
+}
+
+export function profileHeaderClearlyMismatches(profile, previewLike) {
+  const profileHeader = String(profile?.header_fingerprint || '').trim()
+  const previewHeader = String(previewLike?.header_fingerprint || '').trim()
+  return !!profileHeader && !!previewHeader && profileHeader !== previewHeader
+}

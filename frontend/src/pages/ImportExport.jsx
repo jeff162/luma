@@ -35,6 +35,23 @@ import {
   normalizeImportCategoryValue,
 } from '../lib/importExport/categoryWorkspaceDraft.js'
 import {
+  getBlankImportSnapshot,
+  getBlankMappingSuggestions,
+  stableSerialize,
+  buildEmptyDataSourceBody,
+  loadSavedImportDraftRecord,
+  loadSavedImportDraft,
+  saveImportDraft,
+  saveImportDraftRecord,
+  clearSavedImportDraft,
+  buildProfileBodyFromSnapshot,
+  buildDraftRecordFromPreview,
+  doesDraftMatchPreview,
+  getSuggestedDataSourceName,
+  formatImportBatchTimestamp,
+  profileHeaderClearlyMismatches,
+} from '../lib/importExport/importDraft.js'
+import {
   analyzeImportColumns,
   formatLikelyMatchLabel,
   inferFilenamePattern,
@@ -119,49 +136,6 @@ function normalizeDuplicateRowsColumnConfig(savedColumns, defaultColumns) {
   }
 
   return merged
-}
-
-function getBlankImportSnapshot() {
-  return {
-    column_map: {},
-    category_assignments: {},
-    account_map: {},
-    skip_accounts: [],
-    account_new: {},
-    account_duplicate_compare: {},
-    account_id: null,
-    single_account_new: null,
-    date_format: '%m/%d/%Y',
-    amount_convention: 'single_signed',
-    skip_rows: 0,
-    apply_categorization: true,
-    use_imported_categories: false,
-    [IMPORTED_CATEGORY_SETTINGS_KEY]: getBlankImportedCategorySettings(),
-    category_workspace_draft: null,
-  }
-}
-
-function getBlankMappingSuggestions() {
-  return {
-    date: '',
-    amount: '',
-    debit: '',
-    credit: '',
-    direction: '',
-    description: '',
-    category: '',
-    notes: '',
-    pending: '',
-    account: '',
-  }
-}
-
-function stableSerialize(value) {
-  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(',')}}`
-  }
-  return JSON.stringify(value)
 }
 
 function clampFloatingPanelPosition(pos, size, viewport = { width: window.innerWidth, height: window.innerHeight }) {
@@ -1473,188 +1447,6 @@ function PossibleAccountMatchChooserDialog({
       </FloatingPanel>
     </OverlayBackdrop>
   )
-}
-
-function deriveImportSourceHints(previewLike) {
-  const filename = previewLike?.filename || ''
-  const filenamePattern = inferFilenamePattern(filename).trim().toLowerCase()
-  return {
-    headerFingerprint: previewLike?.header_fingerprint || '',
-    filenamePattern,
-  }
-}
-
-function buildEmptyDataSourceBody(name) {
-  return {
-    name: name.trim(),
-    filename_pattern: null,
-    header_fingerprint: null,
-    template_filename: null,
-    template_file_hash: null,
-    column_map: {},
-    account_id: null,
-    date_format: '%m/%d/%Y',
-    amount_convention: 'single_signed',
-    skip_rows: 0,
-    apply_categorization: true,
-    use_imported_categories: false,
-    imported_category_scope_mode: IMPORTED_CATEGORY_SCOPE_ALL,
-    imported_category_owner_ids: [],
-    imported_category_unassigned_account_tokens: [],
-  }
-}
-
-// Import persistence model:
-// - If a matching profile exists, the profile is the source of truth for reusable
-//   import state (column mapping, account mapping, category mapping workspace,
-//   set-aside list, collapsed bucket state, etc.).
-// - Local draft storage is only the "last manual import draft" fallback for the
-//   no-profile case. It should never override a matched profile.
-// - The local draft is header-compatible rather than file-specific, so manual
-//   mapping work can carry forward only when the next file still looks like the
-//   same provider shape.
-function getImportDraftStorageKey(instanceId, subjectId) {
-  return instanceId && subjectId ? `fintrack.importDraft.v2.${instanceId}.${subjectId}` : null
-}
-
-function loadSavedImportDraftRecord(instanceId, subjectId) {
-  const storageKey = getImportDraftStorageKey(instanceId, subjectId)
-  if (!storageKey) return null
-  try {
-    const raw = window.localStorage.getItem(storageKey)
-    if (!raw) return null
-    const saved = JSON.parse(raw)
-    if (!saved?.snapshot) return null
-    return saved
-  } catch {
-    return null
-  }
-}
-
-function loadSavedImportDraft(previewLike, instanceId, subjectId) {
-  const saved = loadSavedImportDraftRecord(instanceId, subjectId)
-  if (!saved) return null
-  const { headerFingerprint } = deriveImportSourceHints(previewLike)
-  if (saved.headerFingerprint && headerFingerprint && saved.headerFingerprint !== headerFingerprint) return null
-  return saved.snapshot
-}
-
-function saveImportDraft(previewLike, snapshot, instanceId, subjectId) {
-  const storageKey = getImportDraftStorageKey(instanceId, subjectId)
-  if (!storageKey) return
-  try {
-    const { headerFingerprint, filenamePattern } = deriveImportSourceHints(previewLike)
-    const record = {
-      headerFingerprint,
-      filenamePattern,
-      templateFilename: previewLike?.filename || '',
-      templateFileHash: previewLike?.file_content_hash || '',
-      snapshot,
-    }
-    window.localStorage.setItem(storageKey, JSON.stringify(record))
-    return record
-  } catch { }
-}
-
-function saveImportDraftRecord(record, instanceId, subjectId) {
-  const storageKey = getImportDraftStorageKey(instanceId, subjectId)
-  if (!storageKey) return null
-  try {
-    window.localStorage.setItem(storageKey, JSON.stringify(record))
-    return record
-  } catch { }
-}
-
-function clearSavedImportDraft(instanceId, subjectId) {
-  const storageKey = getImportDraftStorageKey(instanceId, subjectId)
-  if (!storageKey) return
-  try {
-    window.localStorage.removeItem(storageKey)
-  } catch { }
-}
-
-function buildProfileBodyFromSnapshot(name, draftRecord) {
-  const snapshot = draftRecord?.snapshot
-  if (!snapshot) return null
-  const columnMap = { ...(snapshot.column_map || {}) }
-  if (snapshot.category_workspace_draft) {
-    columnMap.category_workspace_draft = clonePersistedCategoryWorkspaceDraft(snapshot.category_workspace_draft)
-  }
-  if (snapshot.single_account_new?.name?.trim()) {
-    columnMap.single_account_new = {
-      name: snapshot.single_account_new.name.trim(),
-      type: snapshot.single_account_new.type || 'depository',
-    }
-  }
-  if (snapshot.account_map && Object.keys(snapshot.account_map).length > 0) {
-    columnMap.account_assignments = { ...snapshot.account_map }
-  }
-  if (snapshot.skip_accounts?.length > 0) {
-    columnMap.account_skips = [...snapshot.skip_accounts]
-  }
-  if (snapshot.account_new && Object.keys(snapshot.account_new).length > 0) {
-    columnMap.account_new = { ...snapshot.account_new }
-  }
-  columnMap[IMPORTED_CATEGORY_SETTINGS_KEY] = normalizeImportedCategorySettings(
-    extractImportedCategorySettings(snapshot)
-  )
-  const importedCategorySettings = normalizeImportedCategorySettings(extractImportedCategorySettings(snapshot))
-  return {
-    name: name.trim(),
-    filename_pattern: draftRecord?.filenamePattern || null,
-    header_fingerprint: draftRecord?.headerFingerprint || null,
-    template_filename: draftRecord?.templateFilename || null,
-    template_file_hash: draftRecord?.templateFileHash || null,
-    column_map: columnMap,
-    account_id: snapshot.account_id || null,
-    date_format: snapshot.date_format || '%m/%d/%Y',
-    amount_convention: snapshot.amount_convention || 'single_signed',
-    skip_rows: snapshot.skip_rows || 0,
-    apply_categorization: snapshot.apply_categorization !== false,
-    use_imported_categories: !!snapshot.use_imported_categories,
-    imported_category_scope_mode: importedCategorySettings.scope_mode,
-    imported_category_owner_ids: importedCategorySettings.owner_ids,
-    imported_category_unassigned_account_tokens: importedCategorySettings.unassigned_account_tokens,
-  }
-}
-
-function buildDraftRecordFromPreview(previewLike, snapshot) {
-  if (!previewLike || !snapshot) return null
-  const { headerFingerprint, filenamePattern } = deriveImportSourceHints(previewLike)
-  return {
-    headerFingerprint,
-    filenamePattern,
-    templateFilename: previewLike?.filename || '',
-    templateFileHash: previewLike?.file_content_hash || '',
-    snapshot,
-  }
-}
-
-function doesDraftMatchPreview(draftRecord, previewLike) {
-  if (!draftRecord || !previewLike) return false
-  const draftFileHash = String(draftRecord.templateFileHash || '').trim()
-  const previewFileHash = String(previewLike.file_content_hash || '').trim()
-  if (draftFileHash && previewFileHash) return draftFileHash === previewFileHash
-  const draftHeader = String(draftRecord.headerFingerprint || '').trim()
-  const previewHeader = String(previewLike.header_fingerprint || '').trim()
-  return !!draftHeader && !!previewHeader && draftHeader === previewHeader
-}
-
-function getSuggestedDataSourceName({ draftRecord = null, previewLike = null } = {}) {
-  const savedPattern = String(draftRecord?.filenamePattern || '').trim()
-  if (savedPattern) return savedPattern
-  return inferFilenamePattern(draftRecord?.templateFilename || previewLike?.filename || '').trim()
-}
-
-function formatImportBatchTimestamp(value) {
-  const normalized = String(value || '').trim()
-  return normalized ? normalized.slice(0, 16).replace('T', ' ') : ''
-}
-
-function profileHeaderClearlyMismatches(profile, previewLike) {
-  const profileHeader = String(profile?.header_fingerprint || '').trim()
-  const previewHeader = String(previewLike?.header_fingerprint || '').trim()
-  return !!profileHeader && !!previewHeader && profileHeader !== previewHeader
 }
 
 function RawFilePreview({
