@@ -132,7 +132,7 @@ This is a deliberate tradeoff toward local responsiveness. FinTrack is optimized
 
 ### Import / export
 
-- **Backend:** `backend/routers/import\_export.py`
+- **Backend:** `backend/routers/import\_export/` (a package; `__init__.py` assembles one combined router and preserves the original `backend.routers.import_export` import surface)
 
 - **Handles:** CSV preview/import, saved import profiles, support undo import operations, CSV export, data backup/restore, and credentials backup/restore
 
@@ -162,9 +162,9 @@ This is a deliberate tradeoff toward local responsiveness. FinTrack is optimized
 
 - **Delete fallback:** deleting a saved data source moves its files back into the unknown-source bucket while preserving each batch's own imported-category usage state
 
-- **Note:** the module is large because the import/export workflow is concentrated in a single feature area
+- **Module layout:** the package keeps a deliberately large, cohesive `core` alongside three thin leaf modules. `core.py` holds the run-import flow, the dedupe context, and batch history/undo/duplicate-report/category/rule-suggestion logic — plus the shared primitives (hashing, amount/date/header parsing, effective-account resolution, imported-category settings) the rest of the package reuses. The leaves carry only cleanly-separable concerns: `profiles.py` (saved data-source / import-profile CRUD), `backup.py` (data + credentials backup/restore and CSV export), and `preview.py` (the read-only CSV preview endpoint). Dependencies flow one way — leaves import from `core`, never the reverse — so the split has no import cycles and `__init__.py` is the only place that wires the combined router and re-exports the public surface.
 
-That concentration is intentional. Import behavior is one of the places where many small decisions have to stay consistent across preview, saved profiles, history, undo, duplicate handling, category application, and rule learning, so keeping the workflow logic close together reduces drift between those stages.
+That core concentration is intentional. Import behavior is one of the places where many small decisions have to stay consistent across preview, saved profiles, history, undo, duplicate handling, category application, and rule learning, so the workflow logic that has to agree across those stages stays together in `core` rather than being scattered for the sake of smaller files. The leaf modules were split out precisely because they do *not* share that web of decisions — profile CRUD, the backup/encryption envelope, and preview each depend on `core` through a few named helpers but carry no logic the core needs back — so extracting them relieves navigation and merge-conflict pressure without splitting the parts that must move together.
 
 ### Detail panels
 
