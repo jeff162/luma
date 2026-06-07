@@ -9,6 +9,7 @@ import { AppConfirmDialog, Spinner, Badge } from './ui.jsx'
 import { getTxnMerchantLabel } from './TransactionRow.jsx'
 import CategoryDisplay from './CategoryDisplay.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
+import NoteEditor from './NoteEditor.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
@@ -37,7 +38,7 @@ const TRANSACTION_DETAIL_TABLE_PREF_KEY = 'ui.transactionDetail.transactions.col
  * locally editable, but it can also branch straight into rule creation when a manual recategorization looks
  * like the start of a repeatable pattern.
  */
-export default function TransactionDetail({ txn, categories, onClose, onTrashed, onCategorized, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true }) {
+export default function TransactionDetail({ txn, categories, onClose, onTrashed, onCategorized, onNotesSaved, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true }) {
   const { filters } = useFilters()
   const dateStart = filters.date?.start || null
   const dateEnd   = filters.date?.end   || null
@@ -51,8 +52,6 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
   const [detailTxn, setDetailTxn] = useState(txn)
   const [availableTags, setAvailableTags] = useState([])
   const [tagsLoading, setTagsLoading] = useState(true)
-  const [notesDraft, setNotesDraft] = useState(txn.notes || '')
-  const [notesSaving, setNotesSaving] = useState(false)
   const [trashConfirmOpen, setTrashConfirmOpen] = useState(false)
   const [originExpanded, setOriginExpanded] = useState(false)
 
@@ -77,7 +76,6 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
   }, [categories])
   useEffect(() => {
     setDetailTxn(txn)
-    setNotesDraft(txn.notes || '')
   }, [txn])
   const loadMonthPage = useCallback((month, offset, limit) => (
     api.getTransactions({
@@ -187,16 +185,13 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailTxn.display_name, detailTxn.merchant_name, detailTxn.raw_name, editingName])
 
-  async function handleSaveNotes() {
-    setNotesSaving(true)
-    const nextNotes = notesDraft.trim() || null
-    try {
-      await api.updateNotes(detailTxn.id, nextNotes)
-      patchDetailTxn({ notes: nextNotes })
-      setNotesDraft(nextNotes || '')
-    } finally {
-      setNotesSaving(false)
-    }
+  // Persistence for the shared NoteEditor: write through, patch the panel's own copy, and
+  // reconcile the host's row so the saved note shows behind the panel (otherwise the note
+  // persists to the DB but the page keeps reading its stale copy and shows no note marker).
+  async function handleSaveNote(nextNotes) {
+    await api.updateNotes(detailTxn.id, nextNotes)
+    patchDetailTxn({ notes: nextNotes })
+    onNotesSaved?.(detailTxn.id, nextNotes)
   }
 
   async function handleToggleTag(tag, present) {
@@ -372,57 +367,7 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
               <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 Notes
               </div>
-              <textarea
-                value={notesDraft}
-                onChange={event => setNotesDraft(event.target.value)}
-                rows={3}
-                placeholder="Add notes about this transaction…"
-                style={{
-                  width: '100%',
-                  boxSizing: 'border-box',
-                  resize: 'vertical',
-                  background: 'var(--surface)',
-                  color: 'var(--text)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 10,
-                  padding: '8px 10px',
-                  fontSize: 13,
-                  outline: 'none',
-                }}
-              />
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  type="button"
-                  onClick={handleSaveNotes}
-                  disabled={notesSaving}
-                  style={{
-                    background: 'var(--accent)',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: 8,
-                    padding: '6px 12px',
-                    fontSize: 12,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {notesSaving ? 'Saving…' : 'Save note'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setNotesDraft(detailTxn.notes || '')}
-                  style={{
-                    background: 'var(--surface)',
-                    color: 'var(--muted)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 8,
-                    padding: '6px 10px',
-                    fontSize: 12,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Reset
-                </button>
-              </div>
+              <NoteEditor value={detailTxn.notes} onSave={handleSaveNote} />
             </div>
 
             <div style={{ display: 'grid', gap: 6 }}>

@@ -2160,6 +2160,11 @@ export default function Categories() {
                   } : txn
                 ))
               }}
+              onNotesSaved={(txnId, notes) => {
+                setPagedMatchingTxns(prev => prev.map(txn =>
+                  txn.id === txnId ? { ...txn, notes } : txn
+                ))
+              }}
               onTrashed={txnId => {
                 setPagedMatchingTxns(prev => prev.filter(txn => txn.id !== txnId))
                 setMatchingTxnsTotal(prev => Math.max(0, prev - 1))

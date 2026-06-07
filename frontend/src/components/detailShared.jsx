@@ -31,6 +31,7 @@ import { monthLabel } from '../lib/utils.js'
 import { formatSignedAxisTick, formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground } from './ui.jsx'
 import { usePanelStackSlot } from '../contexts/PanelStackContext.jsx'
+import { isEditableTarget } from '../lib/uiInteractions.js'
 
 export const DETAIL_PAGE_SIZE = 100
 // Default panel width fits the full transaction-table column set (date, merchant,
@@ -595,6 +596,27 @@ export function DetailPanelShell({
 }) {
   const stack = usePanelStackSlot()
   const effectiveIsTopmost = stack.isTopmost && isTopmost
+
+  // Escape dismisses the topmost panel, matching the rest of the app's dismissable layers. Gated so
+  // it only fires when nothing more specific owns the Escape: only the topmost panel responds, we
+  // bail when focus is in a text field (the inline editor cancels its own edit instead — this is what
+  // keeps a half-finished note/name edit from nuking the whole panel), and we bail when a modal
+  // dialog is open above the panel (the dialog owns Escape). We deliberately do not require focus to
+  // be inside the panel: opening a panel by clicking leaves focus on the trigger in the page behind,
+  // so a focus-inside rule would make Escape-right-after-open silently do nothing.
+  useEffect(() => {
+    if (!effectiveIsTopmost) return undefined
+    function onKeyDown(event) {
+      if (event.key !== 'Escape') return
+      if (isEditableTarget(document.activeElement)) return
+      if (document.querySelector('[data-modal-overlay]')) return
+      event.preventDefault()
+      onClose?.()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [effectiveIsTopmost, onClose])
+
   const panelSurfaceStyle = getFloatingPanelSurfaceStyle({
     active: !pos || effectiveIsTopmost,
     radius: 12,

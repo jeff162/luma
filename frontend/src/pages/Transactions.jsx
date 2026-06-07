@@ -1168,6 +1168,7 @@ export default function Transactions() {
                 isTopmost={index === totalDetailPanelCount - 1}
                 onClose={() => closeDetailPanel('txn', panel.item.id)}
                 onCategorized={handlePanelCategorized}
+                onNotesSaved={updateNote}
                 onTrashed={txnId => setData(prev => ({
                   ...prev,
                   transactions: prev.transactions.filter(t => t.id !== txnId),

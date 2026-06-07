@@ -10,6 +10,7 @@ import { Button, CategoryMarker, SectionEyebrow, getFormControlStyle } from './u
 import CategoryDisplay from './CategoryDisplay.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from './TransientTextInput.jsx'
+import NoteEditor from './NoteEditor.jsx'
 import AmountDisplay from './AmountDisplay.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
@@ -59,26 +60,13 @@ export function getTxnImportSourceLabel(txn) {
 }
 
 export function NotePopover({ txn, onSave, onClose, positioning = 'absolute' }) {
-  const [draft, setDraft] = useState(txn.notes || '')
   const ref = useRef(null)
-  const textareaRef = useRef(null)
-
-  useEffect(() => {
-    textareaRef.current?.focus()
-    textareaRef.current?.select()
-  }, [])
 
   useDismissibleLayer({
     open: true,
     onClose,
     refs: [ref],
   })
-
-  function commit() {
-    const val = draft.trim() || null
-    onSave(val)
-    onClose()
-  }
 
   const positionStyle = positioning === 'absolute'
     ? { position: 'absolute', zIndex: 500, top: '100%', left: 0, marginTop: 4 }
@@ -98,53 +86,12 @@ export function NotePopover({ txn, onSave, onClose, positioning = 'absolute' }) 
       <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>
         {txn.notes ? 'Edit note' : 'Add note'}
       </div>
-      <textarea
-        ref={textareaRef}
-        value={draft}
-        onChange={e => setDraft(e.target.value)}
-        onKeyDown={e => {
-          if (e.key === 'Escape') { e.stopPropagation(); onClose() }
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit()
-        }}
-        placeholder="Add a note…"
-        rows={3}
-        style={{
-          width: '100%', resize: 'vertical', background: 'var(--surface2)',
-          color: 'var(--text)', border: '1px solid var(--accent)', borderRadius: 6,
-          padding: '6px 8px', fontSize: 13, outline: 'none', boxSizing: 'border-box',
-        }}
+      <NoteEditor
+        value={txn.notes}
+        autoFocus
+        onSave={async next => { await onSave(next); onClose() }}
+        onCancel={onClose}
       />
-      <div style={{ display: 'flex', gap: 6, marginTop: 8, justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button
-            onClick={commit}
-            style={{
-              background: 'var(--accent)', color: '#fff', border: 'none',
-              borderRadius: 6, padding: '5px 12px', fontSize: 12, cursor: 'pointer',
-            }}
-          >Save</button>
-          <button
-            onClick={onClose}
-            style={{
-              background: 'var(--surface2)', color: 'var(--text)',
-              border: '1px solid var(--border)', borderRadius: 6,
-              padding: '5px 10px', fontSize: 12, cursor: 'pointer',
-            }}
-          >Cancel</button>
-        </div>
-        {txn.notes && (
-          <button
-            onClick={() => { onSave(null); onClose() }}
-            style={{
-              background: 'none', border: 'none', color: 'var(--danger)',
-              fontSize: 12, cursor: 'pointer', padding: '5px 4px',
-            }}
-          >Remove</button>
-        )}
-      </div>
-      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
-        ⌘/Ctrl+Enter to save
-      </div>
     </div>
   )
 }

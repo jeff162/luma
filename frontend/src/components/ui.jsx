@@ -188,6 +188,9 @@ export function OverlayBackdrop({
   return (
     <div
       onClick={onClick}
+      // Marks an active modal layer so lower surfaces (e.g. detail panels' Escape-to-close)
+      // can tell a dialog is open above them and let the dialog own the Escape instead.
+      data-modal-overlay=""
       style={{
         position: 'fixed',
         inset: 0,

@@ -8,6 +8,10 @@ import { ESCAPE_BEHAVIOR } from '../lib/uiInteractions.js'
  * Inline editors all funnel through this wrapper so Enter, blur, and Escape mean the same thing everywhere.
  * The restore value is captured when the edit begins, which makes Escape behave like "revert this edit" instead
  * of stepping back through each keystroke.
+ *
+ * `multiline` renders a <textarea> instead of an <input> for free-text fields like notes. Enter then keeps its
+ * native meaning (insert a newline) rather than committing, since a multi-line value can't use Enter-to-commit;
+ * such fields commit through blur or an explicit Save action instead, while Escape-to-revert stays shared.
  */
 const TransientTextInput = forwardRef(function TransientTextInput({
   value,
@@ -19,6 +23,7 @@ const TransientTextInput = forwardRef(function TransientTextInput({
   escapeBehavior = ESCAPE_BEHAVIOR.CANCEL_EDIT,
   onBlurCommit = true,
   autoFocus = true,
+  multiline = false,
   onKeyDown,
   onFocus,
   onBlur,
@@ -27,9 +32,10 @@ const TransientTextInput = forwardRef(function TransientTextInput({
 }, ref) {
   const escapeRestoreValueRef = useRef(value ?? '')
   const hasEscapeRestoreValueRef = useRef(false)
+  const Field = multiline ? 'textarea' : 'input'
 
   return (
-    <input
+    <Field
       {...rest}
       ref={ref}
       autoFocus={autoFocus}
@@ -54,7 +60,7 @@ const TransientTextInput = forwardRef(function TransientTextInput({
         onBlur?.(event)
       }}
       onKeyDown={event => {
-        if (event.key === 'Enter') {
+        if (event.key === 'Enter' && !multiline) {
           event.preventDefault()
           onCommit?.(event)
         }

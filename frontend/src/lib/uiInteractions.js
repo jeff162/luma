@@ -15,7 +15,7 @@ export const ESCAPE_BEHAVIOR = Object.freeze({
   REVERT_DRAFT_AND_RESTORE_FOCUS: 'revertDraftAndRestoreFocus',
 })
 
-function isEditableTarget(target) {
+export function isEditableTarget(target) {
   const tagName = target?.tagName
   return !!(
     target?.isContentEditable ||
