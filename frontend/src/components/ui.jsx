@@ -613,3 +613,35 @@ export function GroupedSelect({ value, onChange, groups, extra = [], style, id, 
     </select>
   )
 }
+
+// Shared inline match highlighter for search surfaces (the category tree, pickers): wraps
+// case-insensitive occurrences of `query` inside `text` so matches stand out. With no query it yields
+// the plain string, leaving non-search rendering untouched.
+export function HighlightedText({ text, query }) {
+  const value = String(text ?? '')
+  const needle = String(query ?? '').trim()
+  if (!needle) return value
+  const lowerValue = value.toLowerCase()
+  const lowerNeedle = needle.toLowerCase()
+  const parts = []
+  let from = 0
+  let key = 0
+  for (;;) {
+    const idx = lowerValue.indexOf(lowerNeedle, from)
+    if (idx === -1) {
+      if (from < value.length) parts.push(value.slice(from))
+      break
+    }
+    if (idx > from) parts.push(value.slice(from, idx))
+    parts.push(
+      <mark
+        key={`hl${key++}`}
+        style={{ background: 'color-mix(in srgb, var(--accent) 30%, transparent)', color: 'inherit', borderRadius: 3, padding: '0 1px' }}
+      >
+        {value.slice(idx, idx + needle.length)}
+      </mark>,
+    )
+    from = idx + needle.length
+  }
+  return <>{parts}</>
+}

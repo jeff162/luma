@@ -2751,6 +2751,8 @@ export default function Dashboard() {
           stackIndex={index}
           isTopmost={index === detailTxns.length - 1 && detailMonths.length === 0}
           onClose={() => closeTransactionDetail(txn.id)}
+          dateStart={dateStart || undefined}
+          dateEnd={dateEnd || undefined}
         />
       ))}
       {detailMonths.map((entry, index) => (

@@ -10,7 +10,6 @@ import { getTxnMerchantLabel } from './TransactionRow.jsx'
 import CategoryDisplay from './CategoryDisplay.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
 import NoteEditor from './NoteEditor.jsx'
-import { useFilters } from '../lib/FilterContext.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransactionListTable from './TransactionListTable.jsx'
@@ -38,10 +37,9 @@ const TRANSACTION_DETAIL_TABLE_PREF_KEY = 'ui.transactionDetail.transactions.col
  * locally editable, but it can also branch straight into rule creation when a manual recategorization looks
  * like the start of a repeatable pattern.
  */
-export default function TransactionDetail({ txn, categories, onClose, onTrashed, onCategorized, onNotesSaved, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true }) {
-  const { filters } = useFilters()
-  const dateStart = filters.date?.start || null
-  const dateEnd   = filters.date?.end   || null
+export default function TransactionDetail({ txn, categories, onClose, onTrashed, onCategorized, onNotesSaved, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true, dateStart = null, dateEnd = null }) {
+  // Date scope is the caller's call: Dashboard/Transactions pass their global filter; pages without a
+  // filter bar pass nothing, in which case the payee trend defaults to the merchant's full history.
   const { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
   const [trend, setTrend]               = useState([])
   const [displayName, setDisplayName]   = useState(getTxnMerchantLabel(txn))
@@ -110,7 +108,7 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
 
   useEffect(() => {
     setTrendLoading(true)
-    api.getPayeeTrend(payee, dateStart, dateEnd).then(rows => {
+    api.getPayeeTrend(payee, dateStart || undefined, dateEnd || undefined).then(rows => {
       setTrend(rows)
       setTrendLoading(false)
       if (rows.length > 0) {

@@ -43,17 +43,9 @@ export function ImportHistorySection({
   setSourceDescriptionDraft,
   saveSourceDescription,
   manualDraftRecord,
-  showManualDraftSave,
-  setShowManualDraftSave,
-  manualDraftSaveName,
-  setManualDraftSaveName,
-  saveManualDraftAsDataSource,
   openManualDraftSaveEditor,
-  assignNewSourceBatchId,
   setAssignNewSourceBatchId,
-  assignNewSourceName,
   setAssignNewSourceName,
-  createDataSourceFromUnknownBatch,
   assignUnknownBatchToProfile,
   updateBatchImportedCategoryUsage,
   buildBatchImportedCategoryChoices,
@@ -313,53 +305,27 @@ export function ImportHistorySection({
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
                           {isManual && row.manualDraftRecord ? (
-                            showManualDraftSave ? (
-                              <TransientTextInput
-                                value={manualDraftSaveName}
-                                onChange={setManualDraftSaveName}
-                                onCommit={saveManualDraftAsDataSource}
-                                onCancel={() => {
-                                  setShowManualDraftSave(false)
-                                  setManualDraftSaveName('')
-                                }}
-                                restoreOnEscape
-                                onBlurCommit={false}
-                                placeholder="Data source name"
-                                style={{
-                                  width: 180,
-                                  maxWidth: '100%',
-                                  background: 'var(--surface2)',
-                                  color: 'var(--text)',
-                                  border: '1px solid var(--accent)',
-                                  borderRadius: 999,
-                                  padding: '5px 12px',
-                                  fontSize: 12,
-                                  outline: 'none',
-                                }}
-                              />
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  openManualDraftSaveEditor(getSuggestedDataSourceName({
-                                    draftRecord: row.manualDraftRecord || manualDraftRecord,
-                                  }))
-                                }}
-                                style={{
-                                  background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
-                                  color: 'var(--accent2)',
-                                  border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
-                                  borderRadius: 6,
-                                  padding: '4px 10px',
-                                  fontSize: 12,
-                                  fontWeight: 600,
-                                  cursor: 'pointer',
-                                  whiteSpace: 'nowrap',
-                                }}
-                              >
-                                Save as data source
-                              </button>
-                            )
+                            <button
+                              type="button"
+                              onClick={() => {
+                                openManualDraftSaveEditor(getSuggestedDataSourceName({
+                                  draftRecord: row.manualDraftRecord || manualDraftRecord,
+                                }))
+                              }}
+                              style={{
+                                background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
+                                color: 'var(--accent2)',
+                                border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
+                                borderRadius: 6,
+                                padding: '4px 10px',
+                                fontSize: 12,
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              Save as data source
+                            </button>
                           ) : null}
                         </div>
                       </div>
@@ -435,21 +401,6 @@ export function ImportHistorySection({
                                       </label>
                                       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap', alignItems: 'center', flexShrink: 0 }}>
                                         {isUnknown ? (
-                                          assignNewSourceBatchId === b.id ? (
-                                            <TransientTextInput
-                                              value={assignNewSourceName}
-                                              onChange={setAssignNewSourceName}
-                                              onCommit={() => createDataSourceFromUnknownBatch(b, assignNewSourceName)}
-                                              onCancel={() => { setAssignNewSourceBatchId(''); setAssignNewSourceName('') }}
-                                              restoreOnEscape
-                                              onBlurCommit={false}
-                                              placeholder="New data source name"
-                                              style={{
-                                                width: 180, maxWidth: '100%', background: 'var(--surface2)', color: 'var(--text)',
-                                                border: '1px solid var(--accent)', borderRadius: 6, padding: '3px 8px', fontSize: 12, outline: 'none',
-                                              }}
-                                            />
-                                          ) : (
                                             <select
                                               value=""
                                               title="Move this imported file under a data source"
@@ -477,7 +428,6 @@ export function ImportHistorySection({
                                               ) : null}
                                               <option value="__new__">+ New data source from this file…</option>
                                             </select>
-                                          )
                                         ) : null}
                                         <button onClick={() => handleUndoClick(b)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}>Undo</button>
                                       </div>

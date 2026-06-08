@@ -286,7 +286,7 @@ First-run setup should feel like a guided welcome, not a blank admin prompt.
 
 - It is acceptable to use the application name on this screen and related auth/setup entry points, but it should come from the shared build-time app-name setting rather than hardcoded copy.
 
-- When local mode is active and no user profiles exist yet, setup may collect several related defaults at once if they help the user get started: who uses the app, optional account owners, default imported-category behavior, and what setup screen to open next.
+- When local mode is active and no user profiles exist yet, setup may collect several related defaults at once if they help the user get started: who uses the app, optional account owners, and what setup screen to open next.
 
 - First-run setup should not feel like a wall of options. Prefer compact collapsed decision blocks for secondary choices, with the minimum required action remaining clear.
 
@@ -307,6 +307,8 @@ CSV import has a few special rules:
 - Controls for using categories present in the data should support partial filtering by owner and by unassigned-account bucket without changing which rows are imported. The scope changes only how imported categorization is applied and learned from.
 
 - Organizing imported categories out of `Unassigned` should use the dedicated left-column/right-column workspace from Import / Export so users can sort categories into groups in bulk without working through the general category editor.
+
+- The workspace's right-hand group column is a persisted draft, but it must always reflect the *live* top-level groups: groups created (or renamed/removed) on the Categories page after the draft was first seeded have to appear as drop targets. The draft is reconciled against the current category tree on open — new groups are surfaced, deleted groups drop out, and any categories the user had sorted into a now-deleted group return to the inbox rather than vanishing. A draft must never present a frozen, stale set of groups.
 
 - The Import-page actions for organizing imported categories and generating rules should show the remaining actionable count. Categories moved to `Set Aside` in the imported-category workspace should stop counting as still waiting in `Unassigned`.
 
@@ -377,6 +379,8 @@ Account, category, payee, single-month-transactions, and tag-signature detail dr
 - **Persisted geometry.** Dialogs that the user routinely re-opens should remember their last-dragged position and size via `useUserPreference`. The persisted snapshot should include the viewport size at save time (`{pos, size, viewport: {width, height}}`); on restore, scale both position and size proportionally against the current viewport so a dialog saved bottom-right on a 1920×1080 monitor lands bottom-right on a 1280×720 laptop. The chrome's existing `clampPanelPosition` guarantees enough of the panel stays on-screen to grab even if a saved geometry would otherwise place it past the new viewport edge.
 
 - **Auto-refresh on cross-page mutations.** Dialogs that show data that other pages can mutate (the duplicate-detection report's entries are affected by merges/renames on the Accounts page, etc.) should subscribe to a window-level event dispatched by the mutation site (`notifyAccountsChanged` in `App.jsx` is the pattern). Listeners debounce briefly and only refresh when the dialog is open *and* not currently loading. The `minimized` flag must survive these refreshes — minimize keeps the dialog stashed; an out-of-band refresh should never pop it back into view.
+
+- **Date scope is caller-provided, never read from the global filter directly.** Detail panels (CategoryDetail, AccountDetail, the payee TransactionDetail, MonthDetail, TagDetail) take their date scope as props from whoever opens them — they must not call `useFilters()` to reach into the global date filter themselves. Only Dashboard and Transactions show the filter bar (`shouldShowFilterBar` in `App.jsx`), so only they pass the global date down; pages without the bar (Categories, Accounts) pass nothing. A panel that grabbed the global filter on its own would silently scope its data on pages that don't show that filter — a hidden filter that disagrees with un-scoped counts (the symptom that motivated this rule). When no date scope is passed, a panel chooses a sensible unfiltered default: the category trend slides a 36-month window to end at the category's most recent activity (`anchor=latest` on `/summary/monthly-trend`), while account and payee trends fall back to full history. The header label must describe the window actually shown (the trend's month span), not the global filter.
 
 - **Default panel width** is sized to fit the standard transaction table without clipping the Amount column. New detail panels that host a transaction table should not override that down to a narrower value.
 

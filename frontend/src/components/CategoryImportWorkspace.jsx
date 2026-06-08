@@ -21,6 +21,7 @@ import {
 import {
   cloneCategoryImportSnapshot,
   createCategoryImportDraftState,
+  reconcileSnapshotGroupsWithCategories,
 } from '../lib/categoryImportState.js'
 import { ESCAPE_BEHAVIOR, useDismissibleLayer, useEscapeAction } from '../lib/uiInteractions.js'
 
@@ -596,6 +597,14 @@ export default function CategoryImportWorkspace({
   const floatingGroupDraftRef = useRef(null)
   const [rightPanelHeight, setRightPanelHeight] = useState(720)
   const sourceValuesKey = useMemo(() => JSON.stringify(sourceValues || []), [sourceValues])
+  const existingGroupsKey = useMemo(
+    () => JSON.stringify(
+      (existingCategories || [])
+        .filter(category => !category?.parent_id)
+        .map(category => [category.id, String(category.name || '').trim(), category.category_type]),
+    ),
+    [existingCategories],
+  )
 
   useEffect(() => {
     setSnapshot(prev => {
@@ -607,6 +616,17 @@ export default function CategoryImportWorkspace({
     // pointlessly re-run sanitizeSnapshot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceValuesKey])
+
+  useEffect(() => {
+    // The draft's group columns are seeded once; merge in groups created on the Categories page after
+    // seeding (and drop deleted ones) so newly-made groups are usable drop targets. Keyed on the
+    // group id/name/type signature so an unchanged category list does not churn the snapshot.
+    setSnapshot(prev => {
+      const next = reconcileSnapshotGroupsWithCategories(prev, existingCategories)
+      return snapshotsMatch(prev, next) ? prev : next
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existingGroupsKey])
 
   useDismissibleLayer({
     open: !!panelMenu,

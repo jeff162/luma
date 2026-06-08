@@ -487,6 +487,8 @@ export default function UnifiedDuplicatesDialog({
                 filename:   c.source_filename,
                 batchId:    c.source_batch_id,
                 importedAt: c.source_imported_at,
+                dateStart:  c.date || null,
+                dateEnd:    c.date || null,
               }) : null}
             </div>
           ))}
@@ -503,6 +505,10 @@ export default function UnifiedDuplicatesDialog({
         filename:   matched.source_filename,
         batchId:    matched.source_batch_id,
         importedAt: matched.source_imported_at,
+        // Open the ledger focused on the matched row's own date so the user lands on the
+        // transaction in question instead of the whole file.
+        dateStart:  matched.date || null,
+        dateEnd:    matched.date || null,
       } : null
       return partyBlock({
         date:                matched.date,

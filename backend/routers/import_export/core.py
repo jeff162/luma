@@ -1785,12 +1785,17 @@ def _get_next_child_sort_order(conn, parent_id: str) -> int:
 
 
 def _find_category_by_normalized_name(conn, normalized_name: str):
+    # Imported category labels resolve to assignable *leaves* only. A top-level group that happens to
+    # share the label must not capture the imported transactions — that would assign them to a group,
+    # which the data model forbids. With no matching leaf, the caller creates one under Unassigned, even
+    # when a same-named group exists (now allowed: see _find_category_name_conflict in categories.py).
     if not normalized_name:
         return None
     rows = conn.execute(
         """
         SELECT id, parent_id, name, category_type, sort_order, system_key, import_source_batch_id
         FROM   category
+        WHERE  parent_id IS NOT NULL
         ORDER  BY name
         """
     ).fetchall()

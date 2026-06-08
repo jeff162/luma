@@ -141,10 +141,10 @@ Examples:
 
 Important invariant:
 
-- transactions should be assigned to leaf categories, not groups
-- category and group names must be globally unique after trimming/case-folding so pickers, rule suggestions, and import review never have to guess which branch a label means
+- transactions are only ever assigned to **leaf** categories, never to groups. This is enforced at the API (the category-assignment endpoints reject a group id) and, just as importantly, in every place that turns a *name* back into a category — imports resolve a file label to a leaf (creating one under `Unassigned` if none matches, never adopting a same-named group) and seed rules look up leaves only. A group is a reporting rollup, not an assignable bucket.
+- names are unique **within a kind** after trimming/case-folding: no two groups may share a name and no two leaves may share a name (so a given leaf belongs to exactly one branch). A leaf and a group **may** share a name, however — e.g. a `Miscellaneous` leaf alongside a `Miscellaneous` group. That is safe specifically because the two kinds are never interchangeable: the only context that resolves a bare name to an assignable category targets leaves, so the shared name can never make a transaction land on the group.
 
-The underlying concern here is ambiguity. FinTrack tries to keep category assignment, rule generation, and import review understandable and reversible, which is much harder if one visible label can point to more than one branch or if a transaction can be assigned to a reporting bucket that still has unresolved children beneath it.
+The underlying concern is ambiguity in *name → assignable category* resolution. FinTrack keeps category assignment, rule generation, and import review understandable and reversible by guaranteeing a label resolves to exactly one assignable leaf. Cross-kind name sharing does not reintroduce ambiguity because group and leaf are structurally distinct — a group cannot hold transactions — so the relaxation is limited to that one case while leaf↔leaf and group↔group uniqueness still hold. (Historically the rule was global uniqueness across all names; it was narrowed to per-kind once the resolvers were made leaf-aware.)
 
 Groups also carry important reporting behavior:
 
@@ -265,7 +265,7 @@ This separation exists because the reusable default and the actual decision for 
 - those imports promote missing imported category names into real leaf categories under the protected `Unassigned` group instead of keeping a pending review list
 - imported labels that only mean "still uncategorized", such as `Uncategorized`, `Uncategorised`, or `Unassigned`, should not create real categories; those rows stay at `category_id = NULL` so the app has one canonical uncategorized state
 - reporting and category-management surfaces may still split that one `NULL` state into synthetic expense-side and income-side buckets based on transaction sign, but those are presentation buckets rather than stored categories
-- those imports treat any existing category or group name as already claimed, so they do not create a new imported leaf whose label duplicates another branch elsewhere in the tree
+- those imports match an imported label against existing **leaf** categories only: a label that matches an existing leaf reuses it, otherwise a new leaf is created under `Unassigned`. A top-level group that happens to share the label is *not* treated as a match (it is not assignable), so an imported `Miscellaneous` becomes a `Miscellaneous` leaf rather than being folded into a `Miscellaneous` group
 
 - imported categories created from a batch that used categories present in the data keep their source batch id only while that batch is their sole source, so undo can remove them when safe but repeated appearance in another such file makes them independent of the original import
 

@@ -4,7 +4,7 @@
 /* eslint-disable react-refresh/only-export-components -- shared category-tree row component + tree-traversal helpers used by callers */
 
 import { useEffect, useRef, useState } from 'react'
-import { CategoryMarker } from './ui.jsx'
+import { CategoryMarker, HighlightedText } from './ui.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from './TransientTextInput.jsx'
 
@@ -107,6 +107,7 @@ export function EditableName({
   disabled = false,
   allowSelectionWhenDisabled = false,
   textStyle = null,
+  highlightQuery = '',
   autoEditToken = 0,
   autoEditPlaceholder = '',
   onAutoEditConsumed,
@@ -236,7 +237,7 @@ export function EditableName({
       title={disabled ? undefined : isSelected ? 'Click to rename' : 'Click to select'}
       style={{ cursor: disabled ? 'default' : isSelected ? 'text' : 'default', flex: 1, ...(textStyle || {}) }}
     >
-      {value}
+      <HighlightedText text={value} query={highlightQuery} />
     </span>
   )
 }
@@ -335,6 +336,7 @@ export function CategoryTreeRow({
   showDelete = true,
   acceptDrop = true,
   nameStyle = null,
+  highlightQuery = '',
   trailingContent = null,
   autoEditToken = 0,
   autoEditPlaceholder = '',
@@ -508,6 +510,7 @@ export function CategoryTreeRow({
         disabled={bulkMoveMode || renameDisabled}
         allowSelectionWhenDisabled={allowSelectionWhenRenameDisabled && !bulkMoveMode}
         textStyle={nameStyle}
+        highlightQuery={highlightQuery}
         autoEditToken={autoEditToken}
         autoEditPlaceholder={autoEditPlaceholder}
         onAutoEditConsumed={onAutoEditConsumed}

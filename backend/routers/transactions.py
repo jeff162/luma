@@ -693,6 +693,24 @@ def list_transactions(
     }
 
 
+def _reject_group_category_assignment(conn, category_id: Optional[str]) -> None:
+    # Transactions are only ever assigned to leaf categories; a top-level group is a reporting rollup,
+    # not an assignable bucket. This single guard holds across every assignment entry point (manual
+    # override, import re-pin), so a group that shares a leaf's name can never become a txn's category.
+    if not category_id:
+        return
+    row = conn.execute(
+        "SELECT parent_id FROM category WHERE id = ?", (category_id,)
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Category not found")
+    if row["parent_id"] is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Transactions can only be assigned to a category, not a group.",
+        )
+
+
 @router.patch("/{txn_id}/category")
 def override_category(txn_id: str, body: CategoryOverride):
     with get_db() as conn:
@@ -701,6 +719,7 @@ def override_category(txn_id: str, body: CategoryOverride):
         ).fetchone()
         if not txn:
             raise HTTPException(status_code=404, detail="Transaction not found")
+        _reject_group_category_assignment(conn, body.category_id)
 
         conn.execute(
             """
@@ -724,6 +743,7 @@ def set_imported_category(txn_id: str, body: CategoryOverride):
         txn = conn.execute("SELECT id FROM txn WHERE id = ?", (txn_id,)).fetchone()
         if not txn:
             raise HTTPException(status_code=404, detail="Transaction not found")
+        _reject_group_category_assignment(conn, body.category_id)
         cat = conn.execute("SELECT name FROM category WHERE id = ?", (body.category_id,)).fetchone()
         if not cat:
             raise HTTPException(status_code=404, detail="Category not found")
@@ -1128,6 +1148,7 @@ def monthly_trend(
     months:      int            = Query(18, le=120),
     date_start:  Optional[str] = Query(None),
     date_end:    Optional[str] = Query(None),
+    anchor:      Optional[str] = Query(None, description="'latest' slides the rolling window to end at the scope's most recent transaction instead of today"),
     view:        str            = Query("cash_flow", description="spending | income | cash_flow (used only when no category/payee scope)"),
 ):
     if payee:
@@ -1200,7 +1221,13 @@ def monthly_trend(
         clauses.append("t.date <= ?")
         params.append(date_end)
 
-    if not date_start and not date_end and not payee and not account_id and not account_ids:
+    # `anchor='latest'` slides the rolling window to end at the scope's most recent transaction
+    # (resolved below, inside the db session) instead of today, so a category whose activity is all
+    # older than `months` still shows its most recent N months of history rather than nothing.
+    anchor_latest = anchor == "latest" and not date_start and not date_end and not payee
+
+    if (not date_start and not date_end and not payee and not account_id and not account_ids
+            and not anchor_latest):
         # The generic trends view stays bounded by a rolling window so dashboards do not turn into unbounded
         # all-history scans unless the caller explicitly asked for that.
         clauses.append("t.date >= date('now', ? || ' months')")
@@ -1216,6 +1243,19 @@ def monthly_trend(
     where = "WHERE " + " AND ".join(clauses)
 
     with get_db() as conn:
+        if anchor_latest:
+            anchor_row = conn.execute(
+                f"SELECT MAX(t.date) AS m FROM txn t {join_sql} {where}",
+                params,
+            ).fetchone()
+            anchor_date = anchor_row["m"] if anchor_row else None
+            if anchor_date:
+                clauses.append("t.date >= date(?, ? || ' months')")
+                params.extend([anchor_date, f"-{months}"])
+                clauses.append("t.date <= ?")
+                params.append(anchor_date)
+                where = "WHERE " + " AND ".join(clauses)
+
         if category_id:
             sign_factor = -1 if _resolve_category_is_income(conn, category_id) else 1
         elif payee:

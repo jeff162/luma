@@ -118,6 +118,70 @@ export function cloneCategoryImportSnapshot(snapshot) {
   }
 }
 
+export function reconcileSnapshotGroupsWithCategories(snapshot, existingCategories) {
+  // The group columns are seeded once when the draft is created and then frozen; without this a group
+  // the user creates on the Categories page afterward never appears as a drop target. Reconcile the
+  // draft's group tree against the live top-level groups: surface groups added since seeding (empty),
+  // refresh renamed/retyped groups, and drop groups deleted live — returning their organized children
+  // to the inbox so no sorted value is silently lost. Existing groups keep their organized children.
+  if (!snapshot) return snapshot
+  const liveGroups = (existingCategories || [])
+    .filter(category => !category?.parent_id)
+    .map(category => ({
+      id: category.id,
+      name: String(category.name || '').trim(),
+      categoryType: category.category_type === 'income' ? 'income' : 'expense',
+    }))
+    .filter(group => group.id && group.name)
+
+  const next = cloneCategoryImportSnapshot(snapshot)
+  const draftGroupsById = new Map()
+  for (const sectionType of ['income', 'expense']) {
+    for (const group of next.tree?.[sectionType] || []) {
+      draftGroupsById.set(group.id, group)
+    }
+  }
+  const liveIds = new Set(liveGroups.map(group => group.id))
+
+  // Children of groups that no longer exist live go back to the inbox rather than vanishing with the group.
+  const returnedValues = []
+  for (const [id, group] of draftGroupsById) {
+    if (liveIds.has(id)) continue
+    for (const child of group.children || []) {
+      const value = String(child?.sourceValue || child?.name || '').trim()
+      if (value) returnedValues.push(value)
+    }
+  }
+
+  const tree = { income: [], expense: [] }
+  for (const group of liveGroups) {
+    const existing = draftGroupsById.get(group.id)
+    tree[group.categoryType].push({
+      id: group.id,
+      name: group.name,
+      categoryType: group.categoryType,
+      children: existing ? (existing.children || []) : [],
+    })
+  }
+  for (const sectionType of ['income', 'expense']) {
+    tree[sectionType].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+  }
+  next.tree = tree
+
+  if (returnedValues.length) {
+    next.sourceOrder = [...(next.sourceOrder || [])]
+    const present = new Set([...(next.sourceOrder || []), ...(next.setAsideOrder || [])])
+    for (const value of returnedValues) {
+      if (!present.has(value)) {
+        next.sourceOrder.push(value)
+        present.add(value)
+      }
+    }
+  }
+  if (next.selectedNodeId && !findNodeById(next.tree, next.selectedNodeId)) next.selectedNodeId = null
+  return next
+}
+
 function buildInitialSnapshot(sourceValues, existingCategories) {
   const tree = buildSeededGroupTree(existingCategories)
   const collapsedGroups = {}

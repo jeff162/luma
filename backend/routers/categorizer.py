@@ -114,8 +114,10 @@ def seed_default_rules(conn: sqlite3.Connection):
     import uuid
 
     def cat_id(name: str) -> str | None:
+        # Default rules target leaf categories; restrict to leaves so a group that shares a leaf's
+        # name (now permitted) can never be picked as a rule's category.
         row = conn.execute(
-            "SELECT id FROM category WHERE name = ?", (name,)
+            "SELECT id FROM category WHERE name = ? AND parent_id IS NOT NULL", (name,)
         ).fetchone()
         return row["id"] if row else None
 

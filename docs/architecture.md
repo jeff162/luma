@@ -76,7 +76,7 @@ There are shared primitives designed to create a uniform user experience. Unles
 
 The concern behind this is interaction drift. Repeated popovers, inline editors, and dismissal rules are easy to make "almost the same" on each page, which creates both subtle bugs and a less coherent product feel over time.
 
-- **Local-mode onboarding:** when auth is off and no local preference profiles exist yet, `App.jsx` opens a first-run welcome flow that can seed multiple local profiles, optional account owners, default imported-category behavior, and an optional next route such as data-provider setup before the normal shell appears
+- **Local-mode onboarding:** when auth is off and no local preference profiles exist yet, `App.jsx` opens a first-run welcome flow that can seed multiple local profiles, optional account owners, and an optional next route such as data-provider setup before the normal shell appears
 
 Keeping this in `App.jsx` makes it part of bootstrap rather than a repeatable workflow. The main need is to block the ordinary shell until there is enough local-profile state to scope preferences cleanly, not to create a long-lived page in the app’s information architecture.
 

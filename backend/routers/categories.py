@@ -33,7 +33,11 @@ def _clean_category_name(value: str | None) -> str:
     return " ".join(str(value or "").strip().split())
 
 
-def _find_category_name_conflict(conn, name: str | None, exclude_id: str | None = None):
+def _find_category_name_conflict(conn, name: str | None, exclude_id: str | None = None, *, is_group: bool = False):
+    # Names are unique *within a kind*, but a leaf and a group may share a name (e.g. a "Miscellaneous"
+    # category alongside a "Miscellaneous" group). The two are never interchangeable — only leaves are
+    # assignable to transactions — so a cross-kind name match is not a conflict. Resolution paths that
+    # turn a name back into a category (imports, seed rules) must therefore target leaves explicitly.
     normalized_name = _normalize_category_name(name)
     if not normalized_name:
         raise HTTPException(status_code=400, detail="Category names cannot be empty")
@@ -49,15 +53,17 @@ def _find_category_name_conflict(conn, name: str | None, exclude_id: str | None 
         (exclude_id, exclude_id),
     ).fetchall()
     for row in rows:
+        if (row["parent_id"] is None) != is_group:
+            continue
         if _normalize_category_name(row["name"]) != normalized_name:
             continue
         return row
     return None
 
 
-def _ensure_category_name_is_unique(conn, name: str | None, exclude_id: str | None = None) -> str:
+def _ensure_category_name_is_unique(conn, name: str | None, exclude_id: str | None = None, *, is_group: bool = False) -> str:
     cleaned_name = _clean_category_name(name)
-    conflict = _find_category_name_conflict(conn, cleaned_name, exclude_id=exclude_id)
+    conflict = _find_category_name_conflict(conn, cleaned_name, exclude_id=exclude_id, is_group=is_group)
     if not conflict:
         return cleaned_name
 
@@ -66,9 +72,10 @@ def _ensure_category_name_is_unique(conn, name: str | None, exclude_id: str | No
         location = f' under "{parent_name}"'
     else:
         location = ""
+    noun = "group" if is_group else "category"
     raise HTTPException(
         status_code=400,
-        detail=f'A category or group named "{conflict["name"]}" already exists{location}.',
+        detail=f'A {noun} named "{conflict["name"]}" already exists{location}.',
     )
 
 
@@ -360,7 +367,7 @@ def get_category_usage_summary():
 def create_category(body: CategoryCreate):
     cid = str(uuid.uuid4())
     with get_db() as conn:
-        cleaned_name = _ensure_category_name_is_unique(conn, body.name)
+        cleaned_name = _ensure_category_name_is_unique(conn, body.name, is_group=not body.parent_id)
         category_type = body.category_type
         reordered_top_level_ids = None
         if body.parent_id:
@@ -553,7 +560,7 @@ class CategoryUpdate(BaseModel):
 def update_category(category_id: str, body: CategoryUpdate):
     with get_db() as conn:
         cat = conn.execute(
-            "SELECT id, system_key FROM category WHERE id = ?", (category_id,)
+            "SELECT id, system_key, parent_id FROM category WHERE id = ?", (category_id,)
         ).fetchone()
         if not cat:
             raise HTTPException(status_code=404, detail="Not found")
@@ -562,8 +569,12 @@ def update_category(category_id: str, body: CategoryUpdate):
                 raise HTTPException(status_code=400, detail="The Unassigned group cannot be renamed")
             if body.parent_id is not None:
                 raise HTTPException(status_code=400, detail="The Unassigned group cannot be moved")
+        # Kind for the uniqueness check is the row's kind *after* this edit: a rename keeps the
+        # existing kind, while a parent_id change can move a row between leaf and group.
+        resulting_parent_id = body.parent_id if body.parent_id is not None else cat["parent_id"]
+        is_group = not resulting_parent_id
         fields, params = [], []
-        if body.name                is not None: fields.append("name = ?");                 params.append(_ensure_category_name_is_unique(conn, body.name, exclude_id=category_id))
+        if body.name                is not None: fields.append("name = ?");                 params.append(_ensure_category_name_is_unique(conn, body.name, exclude_id=category_id, is_group=is_group))
         if body.parent_id           is not None: fields.append("parent_id = ?");            params.append(body.parent_id)
         if body.category_type       is not None: fields.append("category_type = ?");        params.append(body.category_type)
         if body.sort_order          is not None: fields.append("sort_order = ?");           params.append(body.sort_order)

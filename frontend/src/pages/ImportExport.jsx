@@ -11,6 +11,7 @@ import {
   Spinner,
   AppConfirmDialog,
   AppNoticeDialog,
+  AppTextEntryDialog,
   getFloatingPanelHeaderBackground,
   getFloatingPanelSurfaceStyle,
 } from '../components/ui.jsx'
@@ -36,7 +37,6 @@ import { ExportTab } from '../components/importExport/ExportTab.jsx'
 import { BackupRestoreTab } from '../components/importExport/BackupRestoreTab.jsx'
 import { ImportUploadStage } from '../components/importExport/ImportUploadStage.jsx'
 import { ImportHistorySection } from '../components/importExport/ImportHistorySection.jsx'
-import TransientTextInput from '../components/TransientTextInput.jsx'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 import { cloneCategoryImportSnapshot, createCategoryImportDraftState } from '../lib/categoryImportState.js'
 import {
@@ -169,6 +169,11 @@ function ImportTab() {
   const [manualDraftRecord, setManualDraftRecord] = useState(null)
   const [showManualDraftSave, setShowManualDraftSave] = useState(false)
   const [manualDraftSaveName, setManualDraftSaveName] = useState('')
+  // The "save as data source" prompt opens from two places with different commit intent: the import
+  // config screen saves the *current* mapping and activates it; the history card saves the stored
+  // draft record without activating. Captured when the prompt opens so the single dialog commits right.
+  const [manualDraftSaveActivate, setManualDraftSaveActivate] = useState(false)
+  const [manualDraftSaveUseCurrent, setManualDraftSaveUseCurrent] = useState(false)
   const [savingManualDraftSource, setSavingManualDraftSource] = useState(false)
   const [compatibleBatchPrompt, setCompatibleBatchPrompt] = useState(null)
   const [attachingCompatibleBatches, setAttachingCompatibleBatches] = useState(false)
@@ -1189,10 +1194,17 @@ function ImportTab() {
     return buildDraftRecordFromPreview(previewLike, buildImportSnapshot())
   }
 
-  function openManualDraftSaveEditor(defaultName = '') {
+  function openManualDraftSaveEditor(defaultName = '', { activateAfterSave = false, useCurrentMapping = false } = {}) {
     const normalizedDefaultName = String(defaultName || '').trim()
     setManualDraftSaveName(normalizedDefaultName)
+    setManualDraftSaveActivate(activateAfterSave)
+    setManualDraftSaveUseCurrent(useCurrentMapping)
     setShowManualDraftSave(true)
+  }
+
+  function closeManualDraftSaveEditor() {
+    setShowManualDraftSave(false)
+    setManualDraftSaveName('')
   }
 
   async function maybePromptCompatibleUnknownImports(profileId) {
@@ -2911,6 +2923,51 @@ function ImportTab() {
         />
       ) : null}
 
+      {/* Naming a new data source is a deliberate create action: a focused dialog (Enter to create,
+          Escape to cancel, backdrop inert) replaces the old inline boxes so the user can't leave a
+          half-named source dangling, and only one can be open at a time. */}
+      {showManualDraftSave ? (
+        <AppTextEntryDialog
+          title="Save as data source"
+          description="Save the current import setup as a reusable data source."
+          label="Data source name"
+          value={manualDraftSaveName}
+          onChange={setManualDraftSaveName}
+          placeholder="Data source name"
+          confirmLabel={savingManualDraftSource ? 'Creating…' : 'Create data source'}
+          confirmDisabled={
+            !manualDraftSaveName.trim()
+            || savingManualDraftSource
+            || (manualDraftSaveUseCurrent && !canCreateDataSourceFromCurrentMapping())
+          }
+          onConfirm={() => saveManualDraftAsDataSource({
+            draftRecord: manualDraftSaveUseCurrent ? buildCurrentManualDraftRecord() : manualDraftRecord,
+            activateAfterSave: manualDraftSaveActivate,
+          })}
+          onCancel={closeManualDraftSaveEditor}
+          width="min(460px, 100%)"
+        />
+      ) : null}
+
+      {assignNewSourceBatchId ? (
+        <AppTextEntryDialog
+          title="New data source from this file"
+          description="Create a data source from this imported file and move the file under it."
+          label="Data source name"
+          value={assignNewSourceName}
+          onChange={setAssignNewSourceName}
+          placeholder="New data source name"
+          confirmLabel="Create data source"
+          confirmDisabled={!assignNewSourceName.trim()}
+          onConfirm={() => createDataSourceFromUnknownBatch(
+            batches.find(b => b.id === assignNewSourceBatchId),
+            assignNewSourceName,
+          )}
+          onCancel={() => { setAssignNewSourceBatchId(''); setAssignNewSourceName('') }}
+          width="min(460px, 100%)"
+        />
+      ) : null}
+
       {showSystemCategoryWorkspace ? (
         <CategoryImportWorkspace
           sourceValues={systemCategoryWorkspaceSourceValues}
@@ -3795,70 +3852,22 @@ function ImportTab() {
             </div>
             {!selectedProfile ? (
               <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                {showManualDraftSave ? (
-                  <>
-                    <TransientTextInput
-                      value={manualDraftSaveName}
-                      onChange={setManualDraftSaveName}
-                      onCommit={() => saveManualDraftAsDataSource({
-                        draftRecord: buildCurrentManualDraftRecord(),
-                        activateAfterSave: true,
-                      })}
-                      onCancel={() => {
-                        setShowManualDraftSave(false)
-                        setManualDraftSaveName('')
-                      }}
-                      restoreOnEscape
-                      onBlurCommit={false}
-                      placeholder="Data source name"
-                      style={{
-                        width: 200,
-                        maxWidth: '100%',
-                        background: 'var(--surface2)',
-                        color: 'var(--text)',
-                        border: '1px solid var(--accent)',
-                        borderRadius: 999,
-                        padding: '5px 12px',
-                        fontSize: 12,
-                        outline: 'none',
-                      }}
-                    />
-                    <Button
-                      small
-                      onClick={() => saveManualDraftAsDataSource({
-                        draftRecord: buildCurrentManualDraftRecord(),
-                        activateAfterSave: true,
-                      })}
-                      disabled={!manualDraftSaveName.trim() || !canCreateDataSourceFromCurrentMapping() || savingManualDraftSource}
-                    >
-                      {savingManualDraftSource ? 'Creating…' : 'Create'}
-                    </Button>
-                    <Button
-                      small
-                      variant="ghost"
-                      onClick={() => {
-                        setShowManualDraftSave(false)
-                        setManualDraftSaveName('')
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                  </>
-                ) : (
-                  <span title={!canCreateDataSourceFromCurrentMapping() && !loading ? getCreateDataSourceDisabledReason() : ''}>
-                    <Button
-                      small
-                      variant="ghost"
-                      onClick={() => openManualDraftSaveEditor(getSuggestedDataSourceName({
+                <span title={!canCreateDataSourceFromCurrentMapping() && !loading ? getCreateDataSourceDisabledReason() : ''}>
+                  <Button
+                    small
+                    variant="ghost"
+                    onClick={() => openManualDraftSaveEditor(
+                      getSuggestedDataSourceName({
                         draftRecord: manualDraftRecord || buildCurrentManualDraftRecord(),
                         previewLike: preview,
-                      }))}
-                      disabled={!canCreateDataSourceFromCurrentMapping() || loading}
-                    >
-                      Create data source
-                    </Button>
-                  </span>
-                )}
+                      }),
+                      { activateAfterSave: true, useCurrentMapping: true },
+                    )}
+                    disabled={!canCreateDataSourceFromCurrentMapping() || loading}
+                  >
+                    Create data source
+                  </Button>
+                </span>
               </div>
             ) : null}
           </div>
@@ -4112,17 +4121,9 @@ function ImportTab() {
           setSourceDescriptionDraft={setSourceDescriptionDraft}
           saveSourceDescription={saveSourceDescription}
           manualDraftRecord={manualDraftRecord}
-          showManualDraftSave={showManualDraftSave}
-          setShowManualDraftSave={setShowManualDraftSave}
-          manualDraftSaveName={manualDraftSaveName}
-          setManualDraftSaveName={setManualDraftSaveName}
-          saveManualDraftAsDataSource={saveManualDraftAsDataSource}
           openManualDraftSaveEditor={openManualDraftSaveEditor}
-          assignNewSourceBatchId={assignNewSourceBatchId}
           setAssignNewSourceBatchId={setAssignNewSourceBatchId}
-          assignNewSourceName={assignNewSourceName}
           setAssignNewSourceName={setAssignNewSourceName}
-          createDataSourceFromUnknownBatch={createDataSourceFromUnknownBatch}
           assignUnknownBatchToProfile={assignUnknownBatchToProfile}
           updateBatchImportedCategoryUsage={updateBatchImportedCategoryUsage}
           buildBatchImportedCategoryChoices={buildBatchImportedCategoryChoices}

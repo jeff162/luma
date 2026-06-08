@@ -15,7 +15,6 @@ import {
   normalizeCategoryType,
 } from '../components/CategoryTreePrimitives.jsx'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
-import { useFilters } from '../lib/FilterContext.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
@@ -628,7 +627,6 @@ export default function Categories() {
   const navigate = useNavigate()
   const { dbInstanceId, preferenceSubjectId: userId } = useAppSession()
   const { preferences } = useUserPreferences()
-  const { filters } = useFilters()
   const [tree, setTree] = useState([])
   const [flatCats, setFlatCats] = useState([])
   const [availableTags, setAvailableTags] = useState([])
@@ -650,6 +648,7 @@ export default function Categories() {
   const [inlineForm, setInlineForm] = useState(null)
   const [collapsedSections, setCollapsedSections] = useState({})
   const [collapsedGroups, setCollapsedGroups] = useState({})
+  const [categorySearch, setCategorySearch] = useState('')
   const [matchingTxnColumns, setMatchingTxnColumns] = useState(defaultMatchingTxnColumnConfig)
   const [collapseStateLoaded, setCollapseStateLoaded] = useState(false)
   const [matchingTxnColumnsLoaded, setMatchingTxnColumnsLoaded] = useState(false)
@@ -1525,10 +1524,14 @@ export default function Categories() {
   const selectedCategoryIdsFilter = isMultiCategorySelection
     ? selectedCategories.map(cat => cat.id).join(',')
     : null
+  // The Categories page operates on its own scope and intentionally has no filter bar (see
+  // shouldShowFilterBar in App.jsx), so the matching-transactions list must NOT inherit the global
+  // date filter — doing so silently hid older rows here and disagreed with the all-time delete-impact
+  // count. This list is scoped by category only.
   const matchingTxnsBaseKey = selectedCategoryFilter
-    ? `${selectedCategoryFilter}|${filters.date?.start || ''}|${filters.date?.end || ''}`
+    ? selectedCategoryFilter
     : selectedCategoryIdsFilter
-      ? `${selectedCategoryIdsFilter}|${filters.date?.start || ''}|${filters.date?.end || ''}`
+      ? selectedCategoryIdsFilter
       : null
   const matchingTxnsKey = matchingTxnsBaseKey
     ? `${matchingTxnsBaseKey}|${matchingReloadNonce}`
@@ -1538,12 +1541,10 @@ export default function Categories() {
     api.getTransactions({
       category_id: selectedCategoryFilter,
       category_ids: selectedCategoryIdsFilter || undefined,
-      date_start: filters.date?.start || undefined,
-      date_end: filters.date?.end || undefined,
       limit,
       offset,
     })
-  ), [selectedCategoryFilter, selectedCategoryIdsFilter, filters.date?.start, filters.date?.end])
+  ), [selectedCategoryFilter, selectedCategoryIdsFilter])
 
   const {
     rows: pagedMatchingTxns,
@@ -1605,8 +1606,6 @@ export default function Categories() {
     api.getTransactions({
       category_id: selectedCategoryFilter,
       category_ids: selectedCategoryIdsFilter || undefined,
-      date_start: filters.date?.start || undefined,
-      date_end: filters.date?.end || undefined,
       limit: 1,
       offset: 0,
     }).then(result => {
@@ -1617,13 +1616,41 @@ export default function Categories() {
       setMatchingTxnsTotal(0)
     })
     return () => { cancelled = true }
-  }, [matchingTxnsKey, selectedCategoryFilter, selectedCategoryIdsFilter, filters.date?.start, filters.date?.end])
+  }, [matchingTxnsKey, selectedCategoryFilter, selectedCategoryIdsFilter])
+
+  // Search drives the tree's expand state: while a query is active, a group opens iff its name or one of
+  // its visible children matches, and the rest collapse — matches are highlighted in place. The persisted
+  // collapse state is left untouched so the user's manual layout returns once the search is cleared.
+  const normalizedCategoryQuery = categorySearch.trim().toLowerCase()
+  const categorySearchActive = normalizedCategoryQuery.length > 0
+  const categoryNameMatches = name => String(name || '').toLowerCase().includes(normalizedCategoryQuery)
+  const groupHasSearchMatch = group => categoryNameMatches(group.name)
+    || getVisibleChildrenForGroup(group).some(child => categoryNameMatches(child.name))
+  const sectionHasSearchMatch = sectionType => (groupsBySection[sectionType] || []).some(groupHasSearchMatch)
+  const categoryHighlightQuery = categorySearchActive ? categorySearch.trim() : ''
 
   return (
     <div data-browser-context-passthrough="true" style={{ padding: 32, display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
       <PageHeader title="Categories" />
       <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 20, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <input
+            type="search"
+            value={categorySearch}
+            onChange={event => setCategorySearch(event.target.value)}
+            placeholder="Search categories…"
+            aria-label="Search categories"
+            style={{
+              marginBottom: 10,
+              padding: '9px 12px',
+              border: '1px solid color-mix(in srgb, var(--muted) 50%, var(--border))',
+              borderRadius: 8,
+              background: 'var(--surface2)',
+              color: 'var(--text)',
+              fontSize: 13,
+              outline: 'none',
+            }}
+          />
           <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
             <div
               ref={listRef}
@@ -1635,7 +1662,7 @@ export default function Categories() {
                 overflowY: 'auto',
                 minHeight: 0,
                 height: '100%',
-                border: '1px solid var(--border)',
+                border: '1px solid color-mix(in srgb, var(--muted) 30%, var(--border))',
                 borderRadius: 10,
                 background: 'var(--surface)',
               }}
@@ -1680,7 +1707,9 @@ export default function Categories() {
                 inlineForm?.mode === 'group' &&
                 inlineForm.sectionType === sectionType &&
                 !inlineForm.anchorGroupId
-              const sectionCollapsed = !!collapsedSections[sectionType]
+              const sectionCollapsed = categorySearchActive
+                ? !sectionHasSearchMatch(sectionType)
+                : !!collapsedSections[sectionType]
 
               return (
                 <div
@@ -1742,7 +1771,9 @@ export default function Categories() {
                   ) : null}
 
                   {!sectionCollapsed ? sectionGroups.map(group => {
-                    const groupCollapsed = !!collapsedGroups[group.id]
+                    const groupCollapsed = categorySearchActive
+                      ? !groupHasSearchMatch(group)
+                      : !!collapsedGroups[group.id]
                     const visibleChildren = getVisibleChildrenForGroup(group)
                     const selectableChildren = getBulkMovableChildrenForGroup(group)
                     const showGroupFormBefore =
@@ -1777,6 +1808,7 @@ export default function Categories() {
                         showDelete={!isSystemCategory(group)}
                         acceptDrop={!isSystemCategory(group)}
                         nameStyle={isSystemCategory(group) ? { fontStyle: 'italic' } : null}
+                        highlightQuery={categoryHighlightQuery}
                         bulkMoveMode={bulkMoveMode}
                         bulkChecked={selectableChildren.length > 0 && selectableChildren.every(child => selectedCategoryIdSet.has(child.id))}
                         isCollapsed={groupCollapsed}
@@ -1802,6 +1834,7 @@ export default function Categories() {
                           showDelete={!isSystemCategory(child)}
                           acceptDrop={!isSystemCategory(child)}
                           nameStyle={isSystemCategory(child) ? { fontStyle: 'italic' } : null}
+                          highlightQuery={categoryHighlightQuery}
                           bulkMoveMode={bulkMoveMode}
                           bulkChecked={selectedCategoryIdSet.has(child.id)}
                           bulkSelectable={!isSystemCategory(child)}
@@ -1870,7 +1903,7 @@ export default function Categories() {
               height: '100%',
               display: 'flex',
               flexDirection: 'column',
-              border: '1px solid var(--border)',
+              border: '1px solid color-mix(in srgb, var(--muted) 30%, var(--border))',
               borderRadius: 10,
               background: 'var(--surface)',
               padding: 20,

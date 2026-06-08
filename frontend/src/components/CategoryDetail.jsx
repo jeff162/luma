@@ -7,7 +7,6 @@ import { txnMutations } from '../lib/txnMutations.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { Spinner, Badge, CategoryMarker } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
-import { useFilters } from '../lib/FilterContext.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import {
   DETAIL_LIST_MAX_HEIGHT,
@@ -21,15 +20,12 @@ import {
 const CATEGORY_DETAIL_TABLE_STORAGE_KEY_PREFIX = 'fintrack.category-detail.transactions.columns'
 const CATEGORY_DETAIL_TABLE_PREF_KEY = 'ui.categoryDetail.transactions.columns'
 
-export default function CategoryDetail({ category, categories = [], onClose, forceFloating = false, stackIndex = 0, isTopmost = true }) {
+export default function CategoryDetail({ category, categories = [], onClose, forceFloating = false, stackIndex = 0, isTopmost = true, dateStart = null, dateEnd = null }) {
   /*
    * Like the other detail drawers, this component lets the chart choose the active month and then
    * treats that month's rows as a small editable working set so in-place recategorization does not
    * force the user back through the drill path.
    */
-  const { filters } = useFilters()
-  const dateStart = filters.date?.start || null
-  const dateEnd   = filters.date?.end   || null
   const { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
   const [trend, setTrend]           = useState([])
   const [selectedMonth, setSelectedMonth] = useState(null)
@@ -54,12 +50,16 @@ export default function CategoryDetail({ category, categories = [], onClose, for
 
   useEffect(() => {
     setTrendLoading(true)
-    api.getMonthlyTrend(36, category.id).then(rows => {
+    // The caller owns the date scope: Dashboard/Transactions pass their global filter; pages without a
+    // filter bar (Categories) pass nothing. With no explicit range we anchor the 36-month window to the
+    // category's most recent activity (not today) so an old category still shows its latest 3 years
+    // instead of an empty chart.
+    api.getMonthlyTrend(36, category.id, undefined, dateStart || undefined, dateEnd || undefined, undefined, undefined, undefined, (dateStart || dateEnd) ? {} : { anchor: 'latest' }).then(rows => {
       setTrend(rows)
       setTrendLoading(false)
       if (rows.length > 0) setSelectedMonth(rows[rows.length - 1].month)
     })
-  }, [category.id])
+  }, [category.id, dateStart, dateEnd])
 
   const selectedMonthRow = trend.find(r => r.month === selectedMonth)
   const monthSectionHeight = getDetailMonthSectionHeight(trend)
@@ -95,9 +95,11 @@ export default function CategoryDetail({ category, categories = [], onClose, for
       </div>
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
         Activity history
-        {dateStart || dateEnd
-          ? ` · ${dateStart ? dateStart.slice(0, 7) : ''}${dateStart && dateEnd ? ' – ' : ''}${dateEnd ? dateEnd.slice(0, 7) : ''}`
-          : ' · all time'}
+        {/* Label the actual window shown by the chart (the trend's month span) rather than the global
+            date filter, which this drawer does not apply. */}
+        {trend.length > 0
+          ? ` · ${trend[0].month}${trend[trend.length - 1].month !== trend[0].month ? ` – ${trend[trend.length - 1].month}` : ''}`
+          : (trendLoading ? '' : ' · no activity')}
       </div>
     </>
   )

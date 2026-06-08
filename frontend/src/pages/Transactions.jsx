@@ -1167,6 +1167,8 @@ export default function Transactions() {
                 stackIndex={index}
                 isTopmost={index === totalDetailPanelCount - 1}
                 onClose={() => closeDetailPanel('txn', panel.item.id)}
+                dateStart={filters.date?.start || undefined}
+                dateEnd={filters.date?.end || undefined}
                 onCategorized={handlePanelCategorized}
                 onNotesSaved={updateNote}
                 onTrashed={txnId => setData(prev => ({
@@ -1187,6 +1189,8 @@ export default function Transactions() {
                 stackIndex={index}
                 isTopmost={index === totalDetailPanelCount - 1}
                 onClose={() => closeDetailPanel('category', panel.item.id)}
+                dateStart={filters.date?.start || undefined}
+                dateEnd={filters.date?.end || undefined}
               />
             )
           }
@@ -1200,6 +1204,8 @@ export default function Transactions() {
                 stackIndex={index}
                 isTopmost={index === totalDetailPanelCount - 1}
                 onClose={() => closeDetailPanel('account', panel.item.id)}
+                dateStart={filters.date?.start || undefined}
+                dateEnd={filters.date?.end || undefined}
               />
             )
           }

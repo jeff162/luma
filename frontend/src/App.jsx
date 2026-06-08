@@ -24,11 +24,7 @@ import TransientTextInput from './components/TransientTextInput.jsx'
 import {
   APP_NAME,
   APP_VERSION,
-  IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY,
-  IMPORT_CATEGORY_USAGE_MODE_ALL,
-  IMPORT_CATEGORY_USAGE_MODE_NONE,
   SUPPORTED_DATA_PROVIDERS,
-  normalizeImportCategoryUsageMode,
 } from './lib/appConfig.js'
 
 class AppErrorBoundary extends Component {
@@ -440,7 +436,11 @@ function LocalPreferenceProfileScreen({
   const [welcomeProfileNames, setWelcomeProfileNames] = useState([])
   const [ownerDraft, setOwnerDraft] = useState('')
   const [welcomeOwnerNames, setWelcomeOwnerNames] = useState([])
-  const [welcomeCategoryUsageMode, setWelcomeCategoryUsageMode] = useState(IMPORT_CATEGORY_USAGE_MODE_NONE)
+  // Owners persist in the data DB independently of local profiles, so the welcome flow can run against a
+  // DB that already has owners (e.g. after clearing local users but not the data). Load the reserved
+  // names up front so a clash is caught the moment an owner is added rather than only on Continue.
+  const [reservedOwnerNames, setReservedOwnerNames] = useState(() => new Set(['shared']))
+  const [ownerError, setOwnerError] = useState('')
   const [openDataProvidersNext, setOpenDataProvidersNext] = useState(false)
   const [openWelcomeSection, setOpenWelcomeSection] = useState('users')
   const [showWelcomeHelp, setShowWelcomeHelp] = useState(false)
@@ -451,8 +451,37 @@ function LocalPreferenceProfileScreen({
 
   const hasProfiles = profiles.length > 0
 
+  useEffect(() => {
+    let cancelled = false
+    api.getOwners().then(owners => {
+      if (cancelled) return
+      setReservedOwnerNames(new Set([
+        'shared',
+        ...(owners || []).map(owner => String(owner?.name || '').trim().toLowerCase()).filter(Boolean),
+      ]))
+    }).catch(() => { })
+    return () => { cancelled = true }
+  }, [])
+
   function normalizeName(nextValue) {
     return String(nextValue || '').trim()
+  }
+
+  function addOwnerName() {
+    const normalized = normalizeName(ownerDraft)
+    if (!normalized) return
+    const lower = normalized.toLowerCase()
+    if (reservedOwnerNames.has(lower)) {
+      setOwnerError(`An account owner named "${normalized}" already exists.`)
+      return
+    }
+    if (welcomeOwnerNames.some(item => item.toLowerCase() === lower)) {
+      setOwnerError(`"${normalized}" is already added.`)
+      return
+    }
+    setWelcomeOwnerNames([...welcomeOwnerNames, normalized])
+    setOwnerDraft('')
+    setOwnerError('')
   }
 
   function addUniqueName(list, nextValue, setItems) {
@@ -926,12 +955,11 @@ function LocalPreferenceProfileScreen({
                           value={ownerDraft}
                           onChange={value => {
                             setOwnerDraft(value)
+                            if (ownerError) setOwnerError('')
                             if (error) onClearError?.()
                           }}
                           restoreOnEscape
-                          onCommit={() => {
-                            if (addUniqueName(welcomeOwnerNames, ownerDraft, setWelcomeOwnerNames)) setOwnerDraft('')
-                          }}
+                          onCommit={addOwnerName}
                           onCancel={() => { }}
                           onBlurCommit={false}
                           placeholder="Add an account owner"
@@ -948,9 +976,7 @@ function LocalPreferenceProfileScreen({
                         />
                         <button
                           type="button"
-                          onClick={() => {
-                            if (addUniqueName(welcomeOwnerNames, ownerDraft, setWelcomeOwnerNames)) setOwnerDraft('')
-                          }}
+                          onClick={addOwnerName}
                           disabled={!ownerDraft.trim()}
                           style={{
                             background: !ownerDraft.trim() ? 'var(--surface)' : 'var(--accent)',
@@ -966,6 +992,9 @@ function LocalPreferenceProfileScreen({
                           Add
                         </button>
                       </div>
+                      {ownerError ? (
+                        <div style={{ fontSize: 12, color: 'var(--danger)', lineHeight: 1.4 }}>{ownerError}</div>
+                      ) : null}
                       {welcomeOwnerNames.length > 0 ? (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                           {welcomeOwnerNames.map(ownerName => (
@@ -980,42 +1009,6 @@ function LocalPreferenceProfileScreen({
                           ))}
                         </div>
                       ) : null}
-                    </>
-                  ),
-                })}
-
-                {renderWelcomeSection({
-                  key: 'trust',
-                  title: 'Learn from the imported transactions',
-                  summary: 'Useful if the transactions have already been categorized',
-                  children: (
-                    <>
-                      <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-                        Set the default for whether categories already present in imported data should be used. Each imported data set can still be adjusted later.
-                      </div>
-                      <label style={{
-                        display: 'grid',
-                        gap: 4,
-                        padding: '11px 12px',
-                        borderRadius: 12,
-                        border: `1px solid ${welcomeCategoryUsageMode === IMPORT_CATEGORY_USAGE_MODE_ALL ? 'var(--accent)' : 'var(--border)'}`,
-                        background: welcomeCategoryUsageMode === IMPORT_CATEGORY_USAGE_MODE_ALL
-                          ? 'color-mix(in srgb, var(--accent) 7%, var(--surface2))'
-                          : 'var(--surface)',
-                        cursor: 'pointer',
-                      }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <input
-                            type="checkbox"
-                            checked={welcomeCategoryUsageMode === IMPORT_CATEGORY_USAGE_MODE_ALL}
-                            onChange={event => setWelcomeCategoryUsageMode(event.target.checked ? IMPORT_CATEGORY_USAGE_MODE_ALL : IMPORT_CATEGORY_USAGE_MODE_NONE)}
-                          />
-                          <span style={{ fontSize: 13, fontWeight: 600 }}>Imported transactions have already been categorized</span>
-                        </div>
-                        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, paddingLeft: 24 }}>
-                          Use the categories present in the data to categorize imported transactions and generate potential categorization rules. Leave this off when imported categories are inconsistent or should only be used selectively.
-                        </div>
-                      </label>
                     </>
                   ),
                 })}
@@ -1052,7 +1045,6 @@ function LocalPreferenceProfileScreen({
                   onClick={() => onCompleteWelcome?.({
                     profileNames: welcomeProfileNames,
                     ownerNames: welcomeOwnerNames,
-                    categoryUsageMode: welcomeCategoryUsageMode,
                     openDataProvidersNext,
                   })}
                   disabled={welcomeProfileNames.length === 0 || creating}
@@ -1551,7 +1543,6 @@ export default function App() {
   async function handleCompleteWelcomeSetup(setup) {
     const profileNames = Array.isArray(setup?.profileNames) ? setup.profileNames.map(value => String(value || '').trim()).filter(Boolean) : []
     const ownerNames = Array.isArray(setup?.ownerNames) ? setup.ownerNames.map(value => String(value || '').trim()).filter(Boolean) : []
-    const categoryUsageMode = normalizeImportCategoryUsageMode(setup?.categoryUsageMode)
     const openDataProvidersNext = !!setup?.openDataProvidersNext
     if (profileNames.length === 0) {
       setLocalProfileError('Add at least one user name to continue.')
@@ -1587,7 +1578,6 @@ export default function App() {
       const startupRoute = openDataProvidersNext ? DATA_PROVIDER_STARTUP_ROUTE : '/'
       for (const profile of createdProfiles) {
         setLocalPreferenceProfileId(profile.id)
-        await api.saveUserPreference(IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY, categoryUsageMode)
         await api.saveUserPreference(STARTUP_ROUTE_PREFERENCE_KEY, startupRoute)
       }
       setLocalPreferenceProfileId(originalProfileId)

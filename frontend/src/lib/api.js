@@ -190,6 +190,7 @@ export const api = {
       ...(account_id ? { account_id } : {}),
       ...(date_start ? { date_start } : {}),
       ...(date_end ? { date_end } : {}),
+      ...(opts.anchor ? { anchor: opts.anchor } : {}),
       ...csvParam('tag_ids', tag_ids),
       ...(view ? { view } : {}),
       ...csvParam('owner_ids', owner_ids),

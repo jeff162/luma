@@ -6,7 +6,6 @@ import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { Spinner } from './ui.jsx'
-import { useFilters } from '../lib/FilterContext.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import {
@@ -21,15 +20,12 @@ import {
 const ACCOUNT_DETAIL_TABLE_STORAGE_KEY_PREFIX = 'fintrack.account-detail.transactions.columns'
 const ACCOUNT_DETAIL_TABLE_PREF_KEY = 'ui.accountDetail.transactions.columns'
 
-export default function AccountDetail({ account, categories = [], onClose, forceFloating = false, stackIndex = 0, initialPosition = null, isTopmost = true }) {
+export default function AccountDetail({ account, categories = [], onClose, forceFloating = false, stackIndex = 0, initialPosition = null, isTopmost = true, dateStart = null, dateEnd = null }) {
   /*
    * This panel is mostly a thin account-specific wrapper around the shared detail-sheet chrome:
    * the chart picks the month, and the month list stays locally editable so inline category changes
    * feel immediate without disturbing the selected slice of history.
    */
-  const { filters } = useFilters()
-  const dateStart = filters.date?.start || null
-  const dateEnd   = filters.date?.end   || null
   const { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex, initialPosition })
   const [trend, setTrend]           = useState([])
   const [selectedMonth, setSelectedMonth] = useState(null)
@@ -75,7 +71,9 @@ export default function AccountDetail({ account, categories = [], onClose, force
 
   useEffect(() => {
     setTrendLoading(true)
-    api.getMonthlyTrend(60, undefined, String(account.id), dateStart, dateEnd, undefined, 'spending').then(rows => {
+    // Caller owns the date scope (Dashboard/Transactions pass the global filter; the Accounts page passes
+    // nothing → full account history). Account scope already defaults to full history when unfiltered.
+    api.getMonthlyTrend(60, undefined, String(account.id), dateStart || undefined, dateEnd || undefined, undefined, 'spending').then(rows => {
       setTrend(rows)
       setTrendLoading(false)
       if (rows.length > 0) setSelectedMonth(rows[rows.length - 1].month)
@@ -89,9 +87,10 @@ export default function AccountDetail({ account, categories = [], onClose, force
       <div style={{ fontSize: 17, fontWeight: 600 }}>{displayName}</div>
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
         Account activity history
-        {dateStart || dateEnd
-          ? ` · ${dateStart ? dateStart.slice(0, 7) : ''}${dateStart && dateEnd ? ' – ' : ''}${dateEnd ? dateEnd.slice(0, 7) : ''}`
-          : ' · all time'}
+        {/* Label the actual window the chart shows (its month span), not the global filter. */}
+        {trend.length > 0
+          ? ` · ${trend[0].month}${trend[trend.length - 1].month !== trend[0].month ? ` – ${trend[trend.length - 1].month}` : ''}`
+          : (trendLoading ? '' : ' · no activity')}
       </div>
     </>
   )
