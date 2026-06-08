@@ -24,11 +24,7 @@ A key input to that dial: the user does not review most of the code directly and
 
 - Do not add defensive complexity unless it has a clear payoff. Recovery behavior for unusual or corrupt states can be noted for future consideration without being implemented immediately.
 
--This project is still single-user/development-stage, so we should prefer clean implementations over compatibility work for hypothetical existing users
-
 -schema changes should normally use migrations
-
--if schema history or migration becomes more costly than helpful, resetting the base schema and trimming old migrations is acceptable
 
 ## UI And Interaction Preferences
 
