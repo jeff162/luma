@@ -1249,10 +1249,27 @@ function ImportTab() {
 
   // Move a profileless (unknown-source) imported file under an existing data source. Pure
   // re-grouping — it does not re-import or re-map; the batch keeps its own imported data.
+  // The temporary-draft card always shows the most recent profileless, non-fallback batch; the
+  // browser-local draft snapshot tracks that same batch. Used to know when assigning/saving that
+  // batch away should also drop the now-orphaned local draft.
+  function getTemporaryDraftBatch() {
+    return batches
+      .filter(batch => !batch.profile_id && !batch.unknown_source_fallback)
+      .sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))[0] || null
+  }
+
+  function clearTemporaryDraftIfBatchIsCurrent(batchId) {
+    if (getTemporaryDraftBatch()?.id !== batchId) return
+    clearSavedImportDraft(dbInstanceId, preferenceSubjectId)
+    setManualDraftRecord(null)
+  }
+
   async function assignUnknownBatchToProfile(batchId, profileId) {
     if (!profileId) return
+    const wasTemporaryDraft = getTemporaryDraftBatch()?.id === batchId
     try {
       await api.setBatchProfile(batchId, profileId)
+      if (wasTemporaryDraft) clearTemporaryDraftIfBatchIsCurrent(batchId)
       setBatches(await api.listBatches())
     } catch (error) {
       setNoticeDialog({ title: 'Could not assign to data source', description: error?.message || 'Please try again.' })
@@ -1264,10 +1281,12 @@ function ImportTab() {
   async function createDataSourceFromUnknownBatch(batch, rawName) {
     const name = (rawName || '').trim()
     if (!name || !batch) return
+    const wasTemporaryDraft = getTemporaryDraftBatch()?.id === batch.id
     try {
       await api.createProfileFromBatch(batch.id, name, inferFilenamePattern(batch.filename || '') || null)
       setAssignNewSourceBatchId('')
       setAssignNewSourceName('')
+      if (wasTemporaryDraft) clearTemporaryDraftIfBatchIsCurrent(batch.id)
       const [nextProfiles, nextBatches] = await Promise.all([api.getImportProfiles(), api.listBatches()])
       setProfiles(nextProfiles)
       setBatches(nextBatches)
@@ -2057,9 +2076,7 @@ function ImportTab() {
     try {
       const response = await api.createImportProfile(body)
       const newProfileId = response?.id
-      const currentTemporaryDraftBatch = batches
-        .filter(batch => !batch.profile_id && !batch.unknown_source_fallback)
-        .sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))[0] || null
+      const currentTemporaryDraftBatch = getTemporaryDraftBatch()
       if (newProfileId && currentTemporaryDraftBatch) {
         await api.setBatchProfile(currentTemporaryDraftBatch.id, newProfileId).catch(() => { })
       }

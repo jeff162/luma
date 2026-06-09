@@ -1422,7 +1422,12 @@ export default function Categories() {
     const usageSummary = fullCat ? getUsageSummaryForNode(fullCat) : null
     if (fullCat) {
       setSelected(fullCat)
-      setSelectedCategoryIds(fullCat.parent_id && !isSyntheticUncategorizedCategory(fullCat) ? [fullCat.id] : [])
+      // During a bulk move the checked set IS the payload for "Move here"; right-clicking the
+      // destination group to open this menu must not wipe it (doing so left nothing to move and
+      // collapsed the menu back to the "select categories first" hint).
+      if (!bulkMoveMode) {
+        setSelectedCategoryIds(fullCat.parent_id && !isSyntheticUncategorizedCategory(fullCat) ? [fullCat.id] : [])
+      }
     }
     setContextMenu({
       x: e.clientX,

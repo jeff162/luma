@@ -5,7 +5,7 @@
 // except mapping: the Manage-sources / Group-imported-categories / Generate-rules
 // header actions, and the per-source list with expandable recent-import file
 // rows (inline rename + description, imported-category usage toggle, assigning an
-// unknown file to a data source, per-file detail / rejected-rows / duplicates
+// unsaved file — temporary draft or unknown — to a data source, per-file detail / rejected-rows / duplicates
 // drill-ins, and undo). Purely presentational — all state and callbacks live in
 // ImportTab and arrive as props.
 
@@ -400,7 +400,7 @@ export function ImportHistorySection({
                                         />
                                       </label>
                                       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap', alignItems: 'center', flexShrink: 0 }}>
-                                        {isUnknown ? (
+                                        {isUnsaved ? (
                                             <select
                                               value=""
                                               title="Move this imported file under a data source"
