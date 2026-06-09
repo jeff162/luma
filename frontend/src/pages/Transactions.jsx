@@ -9,7 +9,7 @@ import { formatDate } from '../lib/utils.js'
 import ImportBatchDetail from '../components/ImportBatchDetail.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
-import { AppConfirmDialog, Card, PageHeader, Spinner, EmptyState, Input, OverlayBackdrop, FloatingPanel, FloatingPanelHeader } from '../components/ui.jsx'
+import { AppConfirmDialog, AppNoticeDialog, Card, PageHeader, Spinner, EmptyState, Input, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, SelectAllCheckbox } from '../components/ui.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
@@ -17,6 +17,8 @@ import { MerchantCell, CategoryCell, ContextMenu, useContextMenu, NotePopover, T
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import RuleForm from '../components/RuleForm.jsx'
+import BulkEditPanel from '../components/BulkEditPanel.jsx'
+import { useTransactionSelection, BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
@@ -415,14 +417,68 @@ export default function Transactions() {
   }
 
   function handleColUpdate(newCols) {
-    setCols(newCols)
-    saveColumnConfig(dbInstanceId, userId, newCols)
-    api.saveUserPreference(TXN_COLUMNS_PREF_KEY, newCols).catch(() => { })
+    // The injected bulk-select column is render-only; never persist it into the user's column config.
+    const persistable = newCols.filter(col => col.key !== BULK_SELECT_COLUMN_KEY)
+    setCols(persistable)
+    saveColumnConfig(dbInstanceId, userId, persistable)
+    api.saveUserPreference(TXN_COLUMNS_PREF_KEY, persistable).catch(() => { })
   }
 
   const [uncategorizedOnly, setUncategorizedOnly] = useState(
     () => new URLSearchParams(location.search).get('uncategorized') === '1'
   )
+
+  // Bulk edit state. Selection lives in a shared hook; the filter params below mirror the list fetch
+  // exactly so "select all matching" resolves the same rows server-side.
+  const [bulkMode, setBulkMode] = useState(false)
+  const [showBulkPanel, setShowBulkPanel] = useState(false)
+  const [applyingBulk, setApplyingBulk] = useState(false)
+  const [pendingBulkTrash, setPendingBulkTrash] = useState(false)
+  const [bulkNotice, setBulkNotice] = useState('')
+  const selection = useTransactionSelection()
+
+  const currentFilterParams = useMemo(() => {
+    const sel = filters.selections || []
+    const ofType = (type, key = 'id') => sel.filter(s => s.type === type).map(s => s[key])
+    const accountSel = ofType('account')
+    const groupSel = ofType('group')
+    const categorySel = ofType('category')
+    const tagSel = ofType('tag')
+    const payeeSel = ofType('payee', 'label')
+    const ownerSel = ofType('owner')
+    return {
+      date_start: filters.date?.start || undefined,
+      date_end: filters.date?.end || undefined,
+      account_ids: accountSel.length ? accountSel.join(',') : undefined,
+      group_ids: groupSel.length ? groupSel.join(',') : undefined,
+      category_id: uncategorizedOnly ? '__uncategorized__' : undefined,
+      category_ids: !uncategorizedOnly && categorySel.length ? categorySel.join(',') : undefined,
+      tag_ids: tagSel.length ? tagSel.join(',') : undefined,
+      payees: payeeSel.length ? payeeSel.join('|') : undefined,
+      owner_ids: ownerSel.length ? ownerSel.join(',') : undefined,
+      quick_filter: debouncedQuickFilter || undefined,
+    }
+  }, [filters, uncategorizedOnly, debouncedQuickFilter])
+
+  const bulkSelectedCount = selection.selectedCount(data.total)
+
+  async function runBulkActions(actions) {
+    if (!actions.length) return
+    setApplyingBulk(true)
+    try {
+      const result = await api.bulkUpdateTransactions(selection.toSelectionPayload(currentFilterParams), actions)
+      selection.clear()
+      setShowBulkPanel(false)
+      setBulkMode(false)
+      setBulkNotice(`Updated ${result.updated_count} transaction${result.updated_count === 1 ? '' : 's'}.`)
+      isFirstLoad.current = true
+      await load()
+    } catch (error) {
+      setBulkNotice(error?.message || 'Bulk update failed.')
+    } finally {
+      setApplyingBulk(false)
+    }
+  }
 
   useEffect(() => {
     const saved = preferences?.[TXN_COLUMNS_PREF_KEY]
@@ -717,6 +773,35 @@ export default function Transactions() {
     [cols, showSourceInCategorySlot],
   )
 
+  // In bulk mode prepend a render-only, non-interactive select column whose header is the select-all
+  // checkbox (PillTableHeader renders `col.render()` instead of a sort pill).
+  const allMatchingSelected = selection.allMatching && selection.excludedCount === 0
+  const renderColumns = useMemo(() => {
+    if (!bulkMode) return tableColumns
+    return [
+      {
+        key: BULK_SELECT_COLUMN_KEY,
+        label: '',
+        width: 40,
+        minWidth: 40,
+        align: 'center',
+        cellPadding: 0,
+        sortable: false,
+        draggable: false,
+        resizable: false,
+        render: () => (
+          <SelectAllCheckbox
+            checked={allMatchingSelected}
+            indeterminate={!allMatchingSelected && bulkSelectedCount > 0}
+            onChange={() => { if (bulkSelectedCount > 0) selection.clear(); else selection.selectAllMatching() }}
+            title="Select all matching transactions"
+          />
+        ),
+      },
+      ...tableColumns,
+    ]
+  }, [bulkMode, tableColumns, allMatchingSelected, bulkSelectedCount, selection])
+
   const handleTransactionCopy = useCallback((event) => {
     const root = listScrollRef.current
     const selection = window.getSelection?.()
@@ -752,6 +837,17 @@ export default function Transactions() {
 
   function renderCell(col, txn) {
     switch (col.key) {
+      case BULK_SELECT_COLUMN_KEY:
+        return (
+          <input
+            type="checkbox"
+            checked={selection.isSelected(txn.id)}
+            onChange={() => selection.toggle(txn.id)}
+            onClick={e => e.stopPropagation()}
+            title="Select transaction"
+            style={{ cursor: 'pointer', margin: 0 }}
+          />
+        )
       case 'date':
         return (
           <span style={{ color: 'var(--muted)', fontSize: 13 }}>
@@ -958,11 +1054,73 @@ export default function Transactions() {
             >
               {uncategorizedOnly ? '✕ Uncategorized only' : 'Uncategorized only'}
             </button>
+            <button
+              onClick={() => { setBulkMode(v => !v); selection.clear() }}
+              style={{
+                padding: '4px 11px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
+                border: `1px solid ${bulkMode ? 'var(--accent)' : 'var(--border)'}`,
+                background: bulkMode ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))' : 'var(--surface2)',
+                color: bulkMode ? 'var(--accent2)' : 'var(--muted)',
+                fontWeight: bulkMode ? 500 : 400,
+              }}
+            >
+              {bulkMode ? '✕ Done' : 'Bulk Edit'}
+            </button>
             <span style={{ fontSize: 12, color: 'var(--muted)' }}>
               {data.total} transaction{data.total === 1 ? '' : 's'}
             </span>
           </div>
         </div>
+
+        {bulkMode ? (
+          <div style={{
+            padding: '8px 12px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+            border: '1px solid color-mix(in srgb, var(--accent) 32%, var(--border))',
+            background: 'color-mix(in srgb, var(--accent) 8%, var(--surface2))', borderRadius: 8,
+          }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>
+              {bulkSelectedCount > 0
+                ? `${bulkSelectedCount} selected${selection.allMatching ? ' · all matching the current filter' : ''}`
+                : 'Select transactions to edit, or use the header checkbox to select all.'}
+            </span>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => setShowBulkPanel(true)}
+                disabled={bulkSelectedCount === 0}
+                style={{
+                  padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                  border: 'none', cursor: bulkSelectedCount === 0 ? 'not-allowed' : 'pointer',
+                  background: bulkSelectedCount === 0 ? 'var(--surface)' : 'var(--accent)',
+                  color: bulkSelectedCount === 0 ? 'var(--muted)' : '#fff',
+                }}
+              >
+                Edit…
+              </button>
+              <button
+                onClick={() => setPendingBulkTrash(true)}
+                disabled={bulkSelectedCount === 0}
+                style={{
+                  padding: '5px 12px', borderRadius: 6, fontSize: 12,
+                  border: '1px solid var(--border)', cursor: bulkSelectedCount === 0 ? 'not-allowed' : 'pointer',
+                  background: 'var(--surface)', color: bulkSelectedCount === 0 ? 'var(--muted)' : 'var(--danger)',
+                }}
+              >
+                Move to trash
+              </button>
+              {bulkSelectedCount > 0 ? (
+                <button
+                  onClick={() => selection.clear()}
+                  style={{
+                    padding: '5px 10px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
+                    border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--muted)',
+                  }}
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         {/* Card clips the rounded corners; the inner div is the actual scroll viewport
             so the sticky PillTableHeader inside pins to it. listScrollRef + maybeLoadMore
@@ -976,7 +1134,7 @@ export default function Transactions() {
             style={{ overflowX: 'auto', overflowY: 'auto', flex: 1, minHeight: 0 }}
           >
             <PillGridTable
-              columns={tableColumns}
+              columns={renderColumns}
               onColumnsChange={handleColUpdate}
               sortState={sortState}
               onSort={toggleSort}
@@ -1011,9 +1169,11 @@ export default function Transactions() {
                             key={col.key}
                             style={{
                               minWidth: 0,
-                              ...(col.key === 'amount'
-                                ? {}
-                                : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+                              ...(col.key === BULK_SELECT_COLUMN_KEY
+                                ? { display: 'flex', justifyContent: 'center' }
+                                : col.key === 'amount'
+                                  ? {}
+                                  : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
                             }}
                           >
                             {renderCell(col, txn)}
@@ -1130,6 +1290,38 @@ export default function Transactions() {
             width="min(520px, 100%)"
           />
         )}
+
+        {showBulkPanel && (
+          <BulkEditPanel
+            count={bulkSelectedCount}
+            categories={categories}
+            applying={applyingBulk}
+            onApply={runBulkActions}
+            onCancel={() => setShowBulkPanel(false)}
+          />
+        )}
+
+        {pendingBulkTrash && (
+          <AppConfirmDialog
+            title={`Move ${bulkSelectedCount} transaction${bulkSelectedCount === 1 ? '' : 's'} to trash?`}
+            description="They are removed from all views but recoverable from Settings → Trash."
+            confirmLabel={applyingBulk ? 'Moving…' : 'Move to trash'}
+            confirmVariant="danger"
+            confirmDisabled={applyingBulk}
+            borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+            onConfirm={async () => { setPendingBulkTrash(false); await runBulkActions([{ type: 'trash' }]) }}
+            onCancel={() => setPendingBulkTrash(false)}
+            width="min(520px, 100%)"
+          />
+        )}
+
+        {bulkNotice ? (
+          <AppNoticeDialog
+            title="Bulk edit"
+            description={bulkNotice}
+            onClose={() => setBulkNotice('')}
+          />
+        ) : null}
 
         {tagTarget && (
           <div style={{

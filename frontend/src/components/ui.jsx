@@ -614,6 +614,23 @@ export function GroupedSelect({ value, onChange, groups, extra = [], style, id, 
   )
 }
 
+// Header select-all checkbox for bulk-select tables: checked when the whole set is selected,
+// indeterminate during a partial selection. Shared so every bulk-capable table renders the same control.
+export function SelectAllCheckbox({ checked, indeterminate, onChange, title }) {
+  const ref = useRef(null)
+  useEffect(() => { if (ref.current) ref.current.indeterminate = indeterminate }, [indeterminate])
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+      title={title}
+      style={{ cursor: 'pointer', margin: 0 }}
+    />
+  )
+}
+
 // Shared inline match highlighter for search surfaces (the category tree, pickers): wraps
 // case-insensitive occurrences of `query` inside `text` so matches stand out. With no query it yields
 // the plain string, leaving non-search rendering untouched.

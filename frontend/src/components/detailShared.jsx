@@ -271,6 +271,16 @@ export function useDetailPanelChrome(onClose, options = {}) {
   return { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart }
 }
 
+// Defensive append for paged lists: drop any incoming row whose id is already present so a stray
+// double-fetch can never render duplicate React keys. The in-flight ref guard should prevent that in
+// the first place; this keeps the rendered list correct even if one slips through.
+function mergeUniqueById(prev, next) {
+  if (!next || next.length === 0) return prev
+  const seen = new Set(prev.map(row => row.id))
+  const added = next.filter(row => !seen.has(row.id))
+  return added.length ? [...prev, ...added] : prev
+}
+
 export function usePagedMonthTransactions({ selectedMonth, loadPage }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
@@ -278,6 +288,9 @@ export function usePagedMonthTransactions({ selectedMonth, loadPage }) {
   const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const listRef = useRef(null)
+  // Synchronous re-entry guard — `loadingMore` state flips async, so two scroll events in one tick can
+  // both fetch the same offset and append a page twice (duplicate React keys). See usePagedTransactions.
+  const loadingMoreRef = useRef(false)
 
   useEffect(() => {
     if (!selectedMonth) return
@@ -306,16 +319,17 @@ export function usePagedMonthTransactions({ selectedMonth, loadPage }) {
     if (!selectedMonth || !listRef.current) return
     function onScroll() {
       const el = listRef.current
-      if (!el || loading || loadingMore || !hasMore) return
+      if (!el || loadingMoreRef.current || loading || !hasMore) return
       if (el.scrollHeight - el.scrollTop - el.clientHeight > 240) return
+      loadingMoreRef.current = true
       setLoadingMore(true)
       loadPage(selectedMonth, offset, DETAIL_PAGE_SIZE).then(result => {
         const nextRows = result?.transactions || []
         const total = result?.total || 0
-        setRows(prev => [...prev, ...nextRows])
+        setRows(prev => mergeUniqueById(prev, nextRows))
         setOffset(prev => prev + nextRows.length)
         setHasMore(offset + nextRows.length < total)
-      }).finally(() => setLoadingMore(false))
+      }).finally(() => { loadingMoreRef.current = false; setLoadingMore(false) })
     }
     const el = listRef.current
     el.addEventListener('scroll', onScroll)
@@ -339,6 +353,9 @@ export function usePagedTransactions({ activeKey, loadPage }) {
   const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const listRef = useRef(null)
+  // Synchronous re-entry guard (see comment above): blocks a same-offset double-fetch that would append
+  // a page twice and produce duplicate React keys while scrolling.
+  const loadingMoreRef = useRef(false)
 
   useEffect(() => {
     if (!activeKey) {
@@ -373,16 +390,17 @@ export function usePagedTransactions({ activeKey, loadPage }) {
     if (!activeKey || !listRef.current) return
     function onScroll() {
       const el = listRef.current
-      if (!el || loading || loadingMore || !hasMore) return
+      if (!el || loadingMoreRef.current || loading || !hasMore) return
       if (el.scrollHeight - el.scrollTop - el.clientHeight > 240) return
+      loadingMoreRef.current = true
       setLoadingMore(true)
       loadPage(offset, DETAIL_PAGE_SIZE).then(result => {
         const nextRows = result?.transactions || []
         const total = result?.total || 0
-        setRows(prev => [...prev, ...nextRows])
+        setRows(prev => mergeUniqueById(prev, nextRows))
         setOffset(prev => prev + nextRows.length)
         setHasMore(offset + nextRows.length < total)
-      }).finally(() => setLoadingMore(false))
+      }).finally(() => { loadingMoreRef.current = false; setLoadingMore(false) })
     }
     const el = listRef.current
     el.addEventListener('scroll', onScroll)

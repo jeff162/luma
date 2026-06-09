@@ -258,6 +258,10 @@ export const api = {
   // filtered out of every read until they're explicitly restored or the trash is emptied.
   trashTransaction:    (id)         => request(`/transactions/${id}`,           { method: 'DELETE' }),
   restoreTransaction:  (id)         => request(`/transactions/${id}/restore`,   { method: 'POST'   }),
+  // Bulk edit: `selection` is { mode:'ids', ids } or { mode:'filter', filter, exclude_ids };
+  // `actions` is an ordered list of { type, ...payload }. Returns { updated_count }.
+  bulkUpdateTransactions: (selection, actions) =>
+    request('/transactions/bulk', { method: 'POST', body: JSON.stringify({ selection, actions }) }),
   getTrashedTransactions: ()        => request('/transactions/trash'),
   emptyTransactionTrash: ()         => request('/transactions/trash/empty',     { method: 'POST'   }),
   // Soft-flag duplicate review. Flagging happens in the backend during import (new account,

@@ -252,6 +252,8 @@ export default function CategoryPicker({
   compact = false,
   style,
   onOpenChange,
+  // The dropdown is portaled to <body>; raise this above any modal it's used inside (AppDialog is 1200).
+  panelZIndex = 1100,
 }) {
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(null)
@@ -618,7 +620,7 @@ export default function CategoryPicker({
             top: panelPosition?.top ?? 'auto',
             bottom: panelPosition?.bottom ?? 'auto',
             width: panelPosition?.width ?? (compact ? 280 : 340),
-            zIndex: 1100,
+            zIndex: panelZIndex,
             visibility: panelPosition ? 'visible' : 'hidden',
             background: 'var(--surface)',
             border: '1px solid var(--border)',

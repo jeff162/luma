@@ -218,6 +218,16 @@ Transaction tables should share the same row-level metadata treatment.
 
 - Note editing goes through one shared editor (`components/NoteEditor.jsx`) wherever a transaction note is edited — the row's note popover and the transaction detail panel both render it — so the interaction never diverges by surface: a multi-line field where ⌘/Ctrl+Enter saves (plain Enter inserts a newline), Escape cancels the edit, Save stays dimmed until there is an unsaved change, and a Remove action clears an existing note. Persistence (the API write and reconciling the host's row) stays with the host via the editor's `onSave`; any new surface that edits a note should reuse this editor rather than re-implementing the field and its shortcuts.
 
+### Bulk select and edit
+
+A "Select" toggle puts a transaction table into bulk mode: a leading checkbox column appears with a select-all checkbox in its header, and a bulk action bar offers Edit… (a `BulkEditPanel` modal — category, tag add/remove, notes, merchant, date) and Move to trash. Shared pieces so every table behaves the same: selection state is `lib/useTransactionSelection.js` (explicit ids, or all-matching + an excluded set), the editor is `components/BulkEditPanel.jsx`, and the bulk write is `api.bulkUpdateTransactions`.
+
+- **Select-all means all rows matching the current filter, not just loaded rows.** The header checkbox switches to "all matching"; the action bar says so, and the API resolves the set server-side from the page's current filter (passed via `toSelectionPayload`). Individually unchecking after select-all adds to an exclude set.
+- The select column is injected at render only (never persisted into the user's column config) and is non-sortable/non-draggable/non-resizable; its header checkbox uses the pill header's per-column `render` hook (`PillTableHeader`) rather than a sort pill.
+- Delete is soft-delete to the transaction trash (recoverable from Settings → Trash), confirmed before running — not a separate "hidden" state.
+- **Apply reconciles the loaded rows in place rather than re-fetching the list**, so the user's sort order and scroll position survive a bulk edit. Trashed rows drop; field changes (including recategorization that moves a row out of the current scope) are patched onto the visible rows and *linger* — matching the per-row handlers, a mis-tap stays correctable and the Refresh button prunes rows that no longer match. "All matching" selections may touch unloaded rows too, but those aren't on screen, so only the loaded ones are patched.
+- Wired on the Transactions page and the Categories matching-transactions list. `TransactionListTable` supports it opt-in (`bulkActive` / `bulkSelection` / `bulkTotal` props that inject the leading select column), and the header select-all uses the shared `SelectAllCheckbox` (`ui.jsx`) — so any other `TransactionListTable` surface (detail panels, etc.) can adopt it by passing those props, and the duplicate-detection dialog's hand-rolled select-all can migrate onto this shared pattern too.
+
 If a list introduces the same kind of object the user already manages elsewhere, start from the existing row/chip behavior first. A lighter presentation is fine, but it should still preserve the same core expectations for clicking, editing, Enter/Escape, and removal.
 
 ## Pills and expanding selectors

@@ -64,6 +64,30 @@ class TransactionTagUpdate(BaseModel):
     present: bool
 
 
+# Bulk edit applies one or more field changes to a selection that is either an explicit id list or
+# "everything matching the current filter" (minus a few unchecked ids). Filter mode lets the UI act on
+# rows the user never scrolled into. See bulk_update_transactions.
+class BulkSelection(BaseModel):
+    mode: str                                   # 'ids' | 'filter'
+    ids: Optional[list[str]] = None             # mode == 'ids'
+    filter: Optional[dict] = None               # mode == 'filter': same params as the list endpoint
+    exclude_ids: Optional[list[str]] = None     # mode == 'filter': rows unchecked after select-all
+
+
+class BulkAction(BaseModel):
+    type: str                                   # set_category | add_tags | remove_tags | set_notes | set_merchant | set_date | trash
+    category_id: Optional[str] = None
+    tag_ids: Optional[list[str]] = None
+    notes: Optional[str] = None
+    merchant: Optional[str] = None
+    date: Optional[str] = None
+
+
+class BulkUpdateRequest(BaseModel):
+    selection: BulkSelection
+    actions: list[BulkAction]
+
+
 def _append_uncategorized_filter(clauses, params, *, category_id: Optional[str]) -> bool:
     if category_id == UNCATEGORIZED_CATEGORY_ID:
         clauses.append("t.category_id IS NULL")
@@ -452,38 +476,22 @@ def _parse_quick_filter_amount(value: str) -> Optional[Decimal]:
     return amount.copy_abs().quantize(Decimal("0.01")) if amount >= 0 else amount.quantize(Decimal("0.01"))
 
 
-@router.get("")
-def list_transactions(
-    month:        Optional[str] = Query(None, description="YYYY-MM"),
-    date_start:   Optional[str] = Query(None, description="YYYY-MM-DD"),
-    date_end:     Optional[str] = Query(None, description="YYYY-MM-DD"),
-    import_batch_id: Optional[str] = Query(None),
-    sort_by:      Optional[str] = Query("date", description="date | merchant | category | account | amount"),
-    sort_dir:     Optional[str] = Query("desc", description="asc | desc"),
-    account_id:   Optional[str] = Query(None),
-    account_ids:  Optional[str] = Query(None, description="comma-separated account IDs"),
-    category_id:  Optional[str] = Query(None),
-    group_ids:    Optional[str] = Query(None, description="comma-separated group IDs"),
-    category_ids: Optional[str] = Query(None, description="comma-separated category IDs"),
-    tag_ids:      Optional[str] = Query(None, description="comma-separated tag IDs"),
-    owner_ids:    Optional[str] = Query(None, description="comma-separated owner IDs"),
-    payees:       Optional[str] = Query(None, description="pipe-separated payee names"),
-    direction:    Optional[str] = Query(None, description="debit | credit"),
-    view:         Optional[str] = Query(None, description="spending | income — mirrors monthly-trend's category-type scope filter"),
-    search:       Optional[str] = Query(None),
-    quick_filter: Optional[str] = Query(None),
-    include_trashed: bool       = Query(False, description="Include rows in the trash. Off by default — the trash view sets this explicitly."),
-    limit:        int           = Query(200, le=1000),
-    offset:       int           = Query(0),
+def _build_transaction_filter(
+    *,
+    month=None, date_start=None, date_end=None, import_batch_id=None,
+    account_id=None, account_ids=None, category_id=None, group_ids=None,
+    category_ids=None, tag_ids=None, owner_ids=None, payees=None,
+    direction=None, view=None, search=None, quick_filter=None,
+    include_trashed=False,
 ):
-    # This endpoint is the UI's lossless transaction feed, so filters narrow the raw rows but do not apply the
-    # reporting rules used by summaries such as excluding pending transactions or normalizing amount direction.
-    clauses = []
-    params  = []
+    # Single source of truth for the transaction-list WHERE clause, shared by the list feed and the
+    # bulk endpoint so "select all matching the current filter" resolves the exact set the user sees.
+    # Returns (clauses, params) against the alias set t(xn)/a(ccount)/p(arent account)/c(ategory)/
+    # pc(parent category); any caller must JOIN those aliases identically.
+    clauses: list[str] = []
+    params: list = []
     if not include_trashed:
         clauses.append("t.trashed_at IS NULL")
-    sort_key = sort_by if sort_by in TRANSACTION_SORT_SQL else "date"
-    sort_direction = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
 
     if date_start and date_end:
         clauses.append("t.date BETWEEN ? AND ?")
@@ -618,6 +626,45 @@ def list_transactions(
             clause, clause_params = quick_filter_clause
             clauses.append(clause)
             params.extend(clause_params)
+    return clauses, params
+
+
+@router.get("")
+def list_transactions(
+    month:        Optional[str] = Query(None, description="YYYY-MM"),
+    date_start:   Optional[str] = Query(None, description="YYYY-MM-DD"),
+    date_end:     Optional[str] = Query(None, description="YYYY-MM-DD"),
+    import_batch_id: Optional[str] = Query(None),
+    sort_by:      Optional[str] = Query("date", description="date | merchant | category | account | amount"),
+    sort_dir:     Optional[str] = Query("desc", description="asc | desc"),
+    account_id:   Optional[str] = Query(None),
+    account_ids:  Optional[str] = Query(None, description="comma-separated account IDs"),
+    category_id:  Optional[str] = Query(None),
+    group_ids:    Optional[str] = Query(None, description="comma-separated group IDs"),
+    category_ids: Optional[str] = Query(None, description="comma-separated category IDs"),
+    tag_ids:      Optional[str] = Query(None, description="comma-separated tag IDs"),
+    owner_ids:    Optional[str] = Query(None, description="comma-separated owner IDs"),
+    payees:       Optional[str] = Query(None, description="pipe-separated payee names"),
+    direction:    Optional[str] = Query(None, description="debit | credit"),
+    view:         Optional[str] = Query(None, description="spending | income — mirrors monthly-trend's category-type scope filter"),
+    search:       Optional[str] = Query(None),
+    quick_filter: Optional[str] = Query(None),
+    include_trashed: bool       = Query(False, description="Include rows in the trash. Off by default — the trash view sets this explicitly."),
+    limit:        int           = Query(200, le=1000),
+    offset:       int           = Query(0),
+):
+    # This endpoint is the UI's lossless transaction feed, so filters narrow the raw rows but do not apply the
+    # reporting rules used by summaries such as excluding pending transactions or normalizing amount direction.
+    sort_key = sort_by if sort_by in TRANSACTION_SORT_SQL else "date"
+    sort_direction = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
+
+    clauses, params = _build_transaction_filter(
+        month=month, date_start=date_start, date_end=date_end, import_batch_id=import_batch_id,
+        account_id=account_id, account_ids=account_ids, category_id=category_id, group_ids=group_ids,
+        category_ids=category_ids, tag_ids=tag_ids, owner_ids=owner_ids, payees=payees,
+        direction=direction, view=view, search=search, quick_filter=quick_filter,
+        include_trashed=include_trashed,
+    )
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     order_by_parts = []
@@ -819,6 +866,117 @@ def trash_transaction(txn_id: str):
             (txn_id,),
         )
     return {"ok": True}
+
+
+_BULK_FILTER_KEYS = {
+    "month", "date_start", "date_end", "import_batch_id", "account_id", "account_ids",
+    "category_id", "group_ids", "category_ids", "tag_ids", "owner_ids", "payees",
+    "direction", "view", "search", "quick_filter",
+}
+
+
+def _chunk(seq, size=400):
+    for start in range(0, len(seq), size):
+        yield seq[start:start + size]
+
+
+def _resolve_bulk_target_ids(conn, selection: BulkSelection) -> list[str]:
+    # Always resolves to existing, non-trashed rows so the returned count is the real number changed
+    # and a stale client id can't act on something already gone.
+    if selection.mode == "ids":
+        ids = [str(i) for i in (selection.ids or []) if i]
+        if not ids:
+            return []
+        resolved: list[str] = []
+        for chunk in _chunk(ids):
+            placeholders = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"SELECT id FROM txn WHERE id IN ({placeholders}) AND trashed_at IS NULL",
+                chunk,
+            ).fetchall()
+            resolved.extend(row["id"] for row in rows)
+        return resolved
+
+    if selection.mode == "filter":
+        flt = {k: v for k, v in (selection.filter or {}).items() if k in _BULK_FILTER_KEYS}
+        clauses, params = _build_transaction_filter(**flt)  # include_trashed defaults False
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = conn.execute(
+            f"""
+            SELECT t.id
+            FROM   txn t
+            JOIN   account  a ON a.id = t.account_id
+            LEFT JOIN account  p ON p.id = a.parent_account_id
+            LEFT JOIN category c ON c.id = t.category_id
+            LEFT JOIN category pc ON pc.id = c.parent_id
+            {where}
+            """,
+            params,
+        ).fetchall()
+        exclude = {str(i) for i in (selection.exclude_ids or [])}
+        return [row["id"] for row in rows if row["id"] not in exclude]
+
+    raise HTTPException(status_code=400, detail="selection.mode must be 'ids' or 'filter'")
+
+
+def _apply_bulk_action(conn, ids: list[str], action: BulkAction):
+    kind = action.type
+    if kind == "set_category":
+        # None clears the category (a deliberate manual uncategorize); a real id must be a leaf.
+        _reject_group_category_assignment(conn, action.category_id)
+        for chunk in _chunk(ids):
+            placeholders = ",".join("?" * len(chunk))
+            conn.execute(
+                f"UPDATE txn SET category_id = ?, category_overridden = 1, category_source = 'manual' "
+                f"WHERE id IN ({placeholders})",
+                [action.category_id, *chunk],
+            )
+    elif kind in ("add_tags", "remove_tags"):
+        present = kind == "add_tags"
+        for tag_id in (action.tag_ids or []):
+            for txn_id in ids:
+                set_manual_transaction_tag(conn, txn_id, tag_id, present=present)
+    elif kind == "set_notes":
+        notes = action.notes.strip() if action.notes else None
+        notes = notes or None
+        for chunk in _chunk(ids):
+            placeholders = ",".join("?" * len(chunk))
+            conn.execute(f"UPDATE txn SET notes = ? WHERE id IN ({placeholders})", [notes, *chunk])
+    elif kind == "set_merchant":
+        name = (action.merchant or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="merchant is required for set_merchant")
+        for chunk in _chunk(ids):
+            placeholders = ",".join("?" * len(chunk))
+            conn.execute(f"UPDATE txn SET display_name = ? WHERE id IN ({placeholders})", [name, *chunk])
+    elif kind == "set_date":
+        date = (action.date or "").strip()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+            raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+        for chunk in _chunk(ids):
+            placeholders = ",".join("?" * len(chunk))
+            conn.execute(f"UPDATE txn SET date = ? WHERE id IN ({placeholders})", [date, *chunk])
+    elif kind == "trash":
+        for chunk in _chunk(ids):
+            placeholders = ",".join("?" * len(chunk))
+            conn.execute(
+                f"UPDATE txn SET trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id IN ({placeholders})",
+                chunk,
+            )
+    else:
+        raise HTTPException(status_code=400, detail=f"unknown bulk action: {kind}")
+
+
+@router.post("/bulk")
+def bulk_update_transactions(body: BulkUpdateRequest):
+    # One transaction so a multi-field apply (e.g. set category + add tag) is all-or-nothing.
+    with get_db() as conn:
+        target_ids = _resolve_bulk_target_ids(conn, body.selection)
+        if not target_ids:
+            return {"updated_count": 0}
+        for action in body.actions:
+            _apply_bulk_action(conn, target_ids, action)
+    return {"updated_count": len(target_ids)}
 
 
 @router.post("/{txn_id}/restore")

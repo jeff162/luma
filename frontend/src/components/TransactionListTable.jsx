@@ -19,6 +19,8 @@ import { useMemo, useState } from 'react'
 import { formatDate } from '../lib/utils.js'
 import { CategoryCell, MerchantCell, TransactionAmountCell, getTxnMerchantLabel } from './TransactionRow.jsx'
 import PillGridTable from './PillGridTable.jsx'
+import { SelectAllCheckbox } from './ui.jsx'
+import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
 
 const COLUMN_DEFS = {
   date: { key: 'date', label: 'Date', defaultWidth: 96, minWidth: 82 },
@@ -106,6 +108,12 @@ export default function TransactionListTable({
   // when omitted the table manages its own client-side sort.
   sortState: externalSortState = null,
   onSort: externalOnSort = null,
+  // Opt-in bulk selection: when `bulkActive`, a leading checkbox column appears whose header is the
+  // select-all checkbox. `bulkSelection` is a useTransactionSelection() instance; `bulkTotal` is the
+  // filtered result count used for the select-all/indeterminate state.
+  bulkActive = false,
+  bulkSelection = null,
+  bulkTotal = 0,
 }) {
   const externallyControlled = typeof externalOnSort === 'function'
   const [internalSortState, setInternalSortState] = useState(null)
@@ -138,6 +146,17 @@ export default function TransactionListTable({
 
   function renderCell(columnKey, txn) {
     switch (columnKey) {
+      case BULK_SELECT_COLUMN_KEY:
+        return (
+          <input
+            type="checkbox"
+            checked={!!bulkSelection?.isSelected(txn.id)}
+            onChange={() => bulkSelection?.toggle(txn.id)}
+            onClick={e => e.stopPropagation()}
+            title="Select transaction"
+            style={{ cursor: 'pointer', margin: 0 }}
+          />
+        )
       case 'date':
         return <span style={{ color: 'var(--muted)', fontSize: 12 }}>{formatDate(txn.date)}</span>
       case 'merchant':
@@ -212,7 +231,9 @@ export default function TransactionListTable({
             key={col.key}
             style={{
               minWidth: 0,
-              ...(col.key === 'amount' ? {} : { overflow: 'hidden' }),
+              ...(col.key === BULK_SELECT_COLUMN_KEY
+                ? { display: 'flex', justifyContent: 'center' }
+                : col.key === 'amount' ? {} : { overflow: 'hidden' }),
             }}
           >
             {renderCell(col.key, txn)}
@@ -244,6 +265,30 @@ export default function TransactionListTable({
     }
   })
 
+  if (bulkActive && bulkSelection) {
+    const allSelected = bulkSelection.allMatching && bulkSelection.excludedCount === 0
+    const count = bulkSelection.selectedCount(bulkTotal)
+    pillColumns.unshift({
+      key: BULK_SELECT_COLUMN_KEY,
+      label: '',
+      width: 40,
+      minWidth: 40,
+      align: 'center',
+      cellPadding: 0,
+      sortable: false,
+      draggable: false,
+      resizable: false,
+      render: () => (
+        <SelectAllCheckbox
+          checked={allSelected}
+          indeterminate={!allSelected && count > 0}
+          onChange={() => { if (count > 0) bulkSelection.clear(); else bulkSelection.selectAllMatching() }}
+          title="Select all matching transactions"
+        />
+      ),
+    })
+  }
+
   return (
     // This wrapper is the scroll viewport: vertical scroll feeds the sticky header below,
     // horizontal scroll feeds the wide grid. scrollRef lands here so caller-side infinite
@@ -262,7 +307,9 @@ export default function TransactionListTable({
       }}>
       <PillGridTable
         columns={pillColumns}
-        onColumnsChange={onColumnConfigChange}
+        onColumnsChange={onColumnConfigChange
+          ? cols => onColumnConfigChange(cols.filter(col => col.key !== BULK_SELECT_COLUMN_KEY))
+          : undefined}
         sortState={sortState}
         onSort={onSort}
         headerStyle={{
