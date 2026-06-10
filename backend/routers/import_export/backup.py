@@ -772,15 +772,14 @@ def restore_backup(body: RestoreRequest):
         if r.get("account_id_low") in account_ids and r.get("account_id_high") in account_ids
     ]
 
-    # Categories are a two-level hierarchy; insert groups before leaves so
-    # self-referential parent_id constraints are satisfied during restore.
-    categories.sort(key=lambda row: (0 if not row.get("parent_id") else 1, row.get("sort_order", 0), row.get("name", "")))
-
-    # Accounts are likewise self-referential (merged child accounts carry parent_account_id).
-    # Insert top-level accounts before their children so the FK is satisfied during restore.
-    accounts.sort(key=lambda row: 0 if not row.get("parent_account_id") else 1)
-
     with get_db() as conn:
+        # The restore has many cross-table and self-referential foreign keys (account→parent,
+        # category→import_batch, category→parent, txn→account/category/batch, tag attachments, …),
+        # and getting a single correct insert order is brittle. Instead, run the whole wipe+reload
+        # as one transaction with foreign-key checks DEFERRED to commit: rows can be inserted in any
+        # order, and the fully-populated final state is validated as a whole when get_db() commits.
+        conn.execute("BEGIN")
+        conn.execute("PRAGMA defer_foreign_keys = ON")
         # Wipe in dependency order (children before parents). Tag attachment tables and the tag
         # table go first: the attachments reference tag/txn/category/account/rule, and `tag` itself
         # is not a child of anything else wiped below, so it must be cleared explicitly.
