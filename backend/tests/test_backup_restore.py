@@ -51,6 +51,10 @@ class BackupRestoreTests(unittest.TestCase):
                         """,
                         (acc, f"plaid_{acc}", f"Acct {acc[:4]}", f"Acct {acc[:4]}", SHARED_OWNER_ID),
                     )
+                # Merge a1 under a2: a1 (the earlier rowid) becomes a *child*, so the backup dumps a
+                # child account before its parent — the case that requires parent-before-child
+                # ordering on restore (a self-FK that previously failed).
+                conn.execute("UPDATE account SET parent_account_id = ? WHERE id = ?", (ids["a2"], ids["a1"]))
                 conn.execute("INSERT INTO tag (id, name, color, sort_order) VALUES (?, 'Joint', '#22c55e', 0)", (ids["tag"],))
                 ids["leaf"] = conn.execute("SELECT id FROM category WHERE parent_id IS NOT NULL LIMIT 1").fetchone()["id"]
                 ids["rule"] = conn.execute("SELECT id FROM category_rule LIMIT 1").fetchone()["id"]

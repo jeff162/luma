@@ -30,6 +30,9 @@ export function BackupRestoreTab() {
   const [backupRecipients, setBackupRecipients] = useState([])
   const [credentialBackupStatus, setCredentialBackupStatus] = useState({ has_credentials: false, credential_count: 0 })
   const [restoreFile, setRestoreFile] = useState(null)
+  // Whether this system already holds data — drives the restore confirmation wording (strong
+  // overwrite warning vs. a light "load into a fresh system"). Default to true (cautious) until known.
+  const [targetHasData, setTargetHasData] = useState(true)
   const [credsFile, setCredsFile] = useState(null)
   const [restoreInspection, setRestoreInspection] = useState(null)
   const [inspectError, setInspectError] = useState('')
@@ -66,6 +69,12 @@ export function BackupRestoreTab() {
       setInspectError(e.message || 'Unable to inspect backup file')
     } finally {
       setInspectingRestore(false)
+    }
+    try {
+      const status = await api.getRestoreTargetStatus()
+      setTargetHasData(!!status?.has_data)
+    } catch {
+      setTargetHasData(true)
     }
   }
 
@@ -128,12 +137,19 @@ export function BackupRestoreTab() {
       return
     }
     if (!restoreFile || restoring || inspectingRestore || inspectError || (restoreInspection?.encrypted && !privateKeyFile)) return
-    setPendingConfirm({
+    setPendingConfirm(targetHasData ? {
       type,
       title: 'Replace all data with this backup?',
       message: 'This will replace accounts, categories, rules, import settings, and transactions with the selected backup.',
       confirmLabel: 'Restore data backup',
       variant: 'danger',
+    } : {
+      type,
+      title: 'Load this backup?',
+      message: 'This system has no data yet, so this just loads the backup into it — nothing is replaced.',
+      confirmLabel: 'Load backup',
+      variant: 'warn',
+      note: '',
     })
   }
 
@@ -342,20 +358,24 @@ export function BackupRestoreTab() {
           >
             <div style={{ fontSize: 16, fontWeight: 600 }}>{pendingConfirm.title}</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>{pendingConfirm.message}</div>
-            <div style={{
-              fontSize: 12,
-              color: pendingConfirm.variant === 'danger' ? 'var(--danger)' : '#b45309',
-              background: pendingConfirm.variant === 'danger'
-                ? 'color-mix(in srgb, var(--danger) 10%, var(--surface2))'
-                : 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
-              borderRadius: 8,
-              padding: '8px 10px',
-              textAlign: 'center',
-            }}>
-              {pendingConfirm.variant === 'danger'
-                ? 'This action replaces existing data and cannot be undone.'
-                : `You may need to reconnect accounts if these credentials have changed since the backup was created.`}
-            </div>
+            {pendingConfirm.note === '' ? null : (
+              <div style={{
+                fontSize: 12,
+                color: pendingConfirm.variant === 'danger' ? 'var(--danger)' : '#b45309',
+                background: pendingConfirm.variant === 'danger'
+                  ? 'color-mix(in srgb, var(--danger) 10%, var(--surface2))'
+                  : 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
+                borderRadius: 8,
+                padding: '8px 10px',
+                textAlign: 'center',
+              }}>
+                {pendingConfirm.note
+                  ? pendingConfirm.note
+                  : pendingConfirm.variant === 'danger'
+                    ? 'This action replaces existing data and cannot be undone.'
+                    : 'You may need to reconnect accounts if these credentials have changed since the backup was created.'}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
               <Button variant="ghost" onClick={() => setPendingConfirm(null)}>
                 Cancel

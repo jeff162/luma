@@ -633,6 +633,24 @@ def export_credentials(request: Request, encrypted: bool = Query(False)):
     )
 
 
+def _target_has_data(conn) -> bool:
+    """Whether the current data DB holds user data — accounts or transactions. A fresh install has
+    neither (seeded categories/rules don't count). Drives both the restore compatibility guard and
+    the UI's choice of confirmation wording."""
+    return bool(
+        conn.execute("SELECT 1 FROM account LIMIT 1").fetchone()
+        or conn.execute("SELECT 1 FROM txn LIMIT 1").fetchone()
+    )
+
+
+@router.get("/restore/target-status")
+def restore_target_status():
+    """Lets the restore UI tailor its confirmation: a fresh (empty) system gets a light prompt, a
+    system with real data gets the strong "this overwrites everything" warning."""
+    with get_db() as conn:
+        return {"has_data": _target_has_data(conn)}
+
+
 @router.post("/restore")
 def restore_backup(body: RestoreRequest):
     """
@@ -653,10 +671,7 @@ def restore_backup(body: RestoreRequest):
         target_mode = "auth" if auth_required() else "local"
         with get_db() as conn:
             target_instance = get_db_instance_id(conn)
-            has_data = bool(
-                conn.execute("SELECT 1 FROM account LIMIT 1").fetchone()
-                or conn.execute("SELECT 1 FROM txn LIMIT 1").fetchone()
-            )
+            has_data = _target_has_data(conn)
         reasons = []
         if backup_mode and backup_mode != target_mode:
             reasons.append("mode_mismatch")
@@ -760,6 +775,10 @@ def restore_backup(body: RestoreRequest):
     # Categories are a two-level hierarchy; insert groups before leaves so
     # self-referential parent_id constraints are satisfied during restore.
     categories.sort(key=lambda row: (0 if not row.get("parent_id") else 1, row.get("sort_order", 0), row.get("name", "")))
+
+    # Accounts are likewise self-referential (merged child accounts carry parent_account_id).
+    # Insert top-level accounts before their children so the FK is satisfied during restore.
+    accounts.sort(key=lambda row: 0 if not row.get("parent_account_id") else 1)
 
     with get_db() as conn:
         # Wipe in dependency order (children before parents). Tag attachment tables and the tag

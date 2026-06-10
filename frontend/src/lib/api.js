@@ -437,6 +437,7 @@ export const api = {
   },
   getBackupRecipients: () => request('/import-export/backup/recipients'),
   getCredentialsBackupStatus: () => request('/import-export/backup/credentials/status'),
+  getRestoreTargetStatus: () => request('/import-export/restore/target-status'),
   createBackupRecipient: (data) => request('/import-export/backup/recipients', { method: 'POST', body: JSON.stringify(data) }),
   updateBackupRecipient: (id, data) => request(`/import-export/backup/recipients/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteBackupRecipient: (id) => request(`/import-export/backup/recipients/${id}`, { method: 'DELETE' }),
