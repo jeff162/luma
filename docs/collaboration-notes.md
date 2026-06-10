@@ -64,6 +64,16 @@ A key input to that dial: the user does not review most of the code directly and
 
 - If a fix requires a patch to a shared component (new prop, overflow tweak, padding change, style override) to make one page behave, that is a signal the approach is wrong. Stop, re-read the reference implementation, and rework the page-level code instead.
 
+## Testing
+
+- Test by value, not reflexively: cover recurrence-prone bugs, invariants/contracts, tricky conditions, and cross-component interactions — not every one-off fix. But when a test *is* worth writing, its fixture and assertions must actually exercise what it claims. **A fixture smaller than the behavior under test is a false sense of safety, not coverage** — a minimal hand-built dataset only catches the shapes you happened to insert.
+
+- For **round-trip / serialization / backup / migration** tests, completeness is the whole point. Populate every relevant table/field and the awkward shapes that break on real data — self-referential FKs (a merged child account), forward-reference FKs (an imported category pointing at its import batch), nullable-but-set FKs, nested/merged rows — or build the fixture by driving the real creation flows. Assert the full result (counts/rows, or a golden-file snapshot) rather than a single field. `backend/tests/test_import_duplicate_detection.py` (drives real imports + asserts expected-ledger snapshots) is the reference; `backend/tests/test_backup_restore.py` shows the complete-fixture pattern.
+
+- Add a guard that fails on omission wherever one is possible — e.g. derive the table list from `sqlite_master` and assert every data table is represented in the backup payload, so "added a table, forgot to back it up" trips the suite instead of relying on someone remembering.
+
+- Prove a new check actually fires: before trusting a guard or test to pass, confirm it *fails* on the known-bad input (revert the fix and watch it go red), then restore.
+
 ## Code Structure Preferences
 
 - Prefer shared components when multiple screens are intended to behave the same way. This is especially important for selectors, dialogs, mapping controls, and other interaction-heavy UI.

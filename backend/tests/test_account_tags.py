@@ -141,6 +141,21 @@ class AccountTagTests(unittest.TestCase):
 
         self.assertEqual(sorted(self._ledger_ids_for_tag(tag_id)), sorted([parent_txn, child_txn]))
 
+    def test_direct_tag_outranks_account_tag(self):
+        account_id = self._insert_account("Checking")
+        tag_id = self._insert_tag("Joint")
+        txn_id = self._insert_txn(account_id=account_id, merchant="Cafe")
+        self._set_tags(account_id, [tag_id])
+        # The same tag is also pinned directly (manual) on the transaction.
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("INSERT INTO txn_tag (txn_id, tag_id, rule_present, manual_state) VALUES (?, ?, 0, 1)", (txn_id, tag_id))
+
+        # It collapses to a single entry reported as the most specific source — account is the most
+        # general, so 'direct' wins, not 'account'.
+        tags = self._visible_tags(txn_id)
+        self.assertEqual([(t["id"], t["source"]) for t in tags], [(tag_id, "direct")])
+
 
 if __name__ == "__main__":
     unittest.main()

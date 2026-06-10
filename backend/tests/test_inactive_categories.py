@@ -235,6 +235,33 @@ class InactiveCategoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["is_active"], 1)
         self.assertEqual(row["parent_id"], unassigned_id)
 
+    def test_deactivating_group_cascades_to_children(self):
+        account_id = self._insert_account("Checking")
+        group_id, leaf_id = str(uuid.uuid4()), str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO category (id, parent_id, name, category_type, sort_order, exclude_from_totals, is_active) VALUES (?, NULL, 'Travel', 'expense', 0, 0, 1)",
+                    (group_id,),
+                )
+                conn.execute(
+                    "INSERT INTO category (id, parent_id, name, category_type, sort_order, exclude_from_totals, is_active) VALUES (?, ?, 'Flights', 'expense', 0, 0, 1)",
+                    (leaf_id, group_id),
+                )
+        txn_id = self._insert_txn(account_id, leaf_id, source="manual", imported_category=None)
+
+        with self._use_db_path():
+            delete_category(group_id, CategoryDelete(replacement_category_id=None))
+            active_ids = {c["id"] for c in _flatten_tree(list_categories())}
+            inactive_ids = {c["id"] for c in list_inactive_categories()}
+
+        # The whole branch is deactivated together (group + child leaf), and the child's transaction
+        # is uncategorized — deactivation acts on the affected branch, not just the named row.
+        self.assertNotIn(group_id, active_ids)
+        self.assertNotIn(leaf_id, active_ids)
+        self.assertEqual({group_id, leaf_id}, {group_id, leaf_id} & inactive_ids)
+        self.assertIsNone(self._txn(txn_id)["category_id"])
+
     # --- import suppression (prove the guard fires) -----------------------------
 
     async def test_import_recreates_then_suppresses_after_set_aside(self):
