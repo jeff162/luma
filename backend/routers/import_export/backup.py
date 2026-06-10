@@ -12,12 +12,11 @@ otherwise independent of the import-run workflow:
   (everything in the data DB except credentials) that can round-trip the database: owners,
   accounts, categories, rules, merchant renames, import profiles/batches/history, transactions,
   the whole tag system (`tag` + every attachment: `txn_tag`/`category_tag`/`account_tag`/`rule_tag`),
-  and the account-pair distinct assertions. Restore wipes and rebuilds in FK-safe order. The
-  payload is stamped with the source `instance_id` + `access_mode`; restore's compatibility guard
-  uses these to refuse a silent cross-system/cross-mode wipe (409 unless `force`) while still
-  allowing an empty target or a same-instance self-restore. (Payload is version 6; older versions
-  are no longer accepted. User/layout *preferences* live in the separate control DB and are not yet
-  covered — see `docs/data-model.md` → Backups.)
+  the account-pair distinct assertions, and UI/layout preferences (`ui_preference`). Restore wipes
+  and rebuilds in FK-safe order. The payload is stamped with the source `instance_id` +
+  `access_mode`; restore's compatibility guard uses these to refuse a silent cross-system/cross-mode
+  wipe (409 unless `force`) while still allowing an empty target or a same-instance self-restore.
+  (Payload is version 7; older versions are no longer accepted.)
 - **Credentials backup/restore** (`/backup/credentials`, `/restore/credentials`) — the Plaid
   access tokens, kept deliberately separate from the regular backup so an ordinary backup never
   carries secrets (see `docs/data-model.md` → Backups).
@@ -516,7 +515,7 @@ def build_backup_data(conn) -> dict:
         return [dict(r) for r in conn.execute(q).fetchall()]
 
     return {
-            "version":        6,
+            "version":        7,
             "exported_at":    datetime.utcnow().isoformat(),
             # System identity, so restore can tell "my own backup" from "a different system's", and
             # which access mode it came from. Used by the restore compatibility guard.
@@ -549,6 +548,8 @@ def build_backup_data(conn) -> dict:
             "rule_tags":      dump("rule_tag"),
             # User's explicit "these two accounts are distinct" assertions (dedupe review state).
             "account_pair_distinct": dump("account_pair_distinct"),
+            # UI/layout preferences (page layouts, dashboard tag reports, …), keyed by scope_id.
+            "ui_preferences": dump("ui_preference"),
     }
 
 
@@ -639,7 +640,7 @@ def restore_backup(body: RestoreRequest):
     Plaid items / access tokens are NOT touched.
     """
     d = body.data
-    if d.get("version") != 6:
+    if d.get("version") != 7:
         raise HTTPException(status_code=400, detail="Unrecognised or unsupported backup version")
 
     # Compatibility guard: a restore unconditionally wipes the target, so refuse to silently
@@ -686,6 +687,7 @@ def restore_backup(body: RestoreRequest):
     account_tags = [dict(row) for row in d.get("account_tags", [])]
     rule_tags = [dict(row) for row in d.get("rule_tags", [])]
     account_pair_distinct = [dict(row) for row in d.get("account_pair_distinct", [])]
+    ui_preferences = [dict(row) for row in d.get("ui_preferences", [])]
 
     owner_ids = {row.get("id") for row in owners if row.get("id")}
     account_ids = {row.get("id") for row in accounts if row.get("id")}
@@ -768,6 +770,7 @@ def restore_backup(body: RestoreRequest):
         conn.execute("DELETE FROM account_tag")
         conn.execute("DELETE FROM rule_tag")
         conn.execute("DELETE FROM account_pair_distinct")
+        conn.execute("DELETE FROM ui_preference")
         conn.execute("DELETE FROM tag")
         conn.execute("DELETE FROM txn")
         conn.execute("DELETE FROM import_batch_duplicate")
@@ -813,6 +816,9 @@ def restore_backup(body: RestoreRequest):
         insert_rows("import_workflow_state", import_workflow_states)
         insert_rows("txn",          transactions)
         insert_rows("txn_tag",      txn_tags)
+        # No data-DB foreign keys (scope_id is a loose reference to a control-DB user/profile), so
+        # ui_preferences restore verbatim.
+        insert_rows("ui_preference", ui_preferences)
 
     return {
         "ok": True,
@@ -835,6 +841,7 @@ def restore_backup(body: RestoreRequest):
             "account_tags": len(account_tags),
             "rule_tags": len(rule_tags),
             "account_pair_distinct": len(account_pair_distinct),
+            "ui_preferences": len(ui_preferences),
         },
     }
 

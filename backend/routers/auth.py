@@ -29,8 +29,6 @@ from backend.db.control_database import (
     auth_required,
     create_local_preference_profile,
     clear_all_local_preference_profiles,
-    clear_local_preferences,
-    clear_user_preferences,
     delete_local_preference_profile,
     consume_recovery_code,
     create_user,
@@ -39,15 +37,12 @@ from backend.db.control_database import (
     delete_user,
     enable_totp,
     get_local_preference_profile,
-    get_local_preferences,
-    get_user_preferences,
     get_password_policy,
     get_local_mode_user,
     get_security_profile,
     get_user_by_id,
     list_local_preference_profiles,
     list_users,
-    set_local_preference,
     password_policy_label,
     recovery_code_count,
     security_profile_guidance,
@@ -55,11 +50,16 @@ from backend.db.control_database import (
     replace_recovery_codes,
     set_security_profile,
     set_password_policy,
-    set_user_preference,
     update_local_preference_profile,
     update_user,
     update_user_secret_material,
     verify_totp_code,
+)
+from backend.services.preferences import (
+    clear_preferences,
+    get_preferences,
+    relocate_legacy_preferences,
+    set_preference,
 )
 from backend.db.database import get_db, get_db_instance_id
 from backend.services.crypto_service import reencrypt_plaid_items
@@ -275,14 +275,22 @@ def auth_status(request: Request):
     return _auth_status_payload(request)
 
 
+# Preferences are scoped to the authenticated user (auth mode) or the local-preference-profile
+# (local mode). The id of that scope is the `scope_id` used in the data DB's ui_preference table.
+def _resolve_preference_scope(request: Request) -> tuple[str, bool]:
+    if auth_required():
+        return _require_current_user(request)["id"], True
+    return _require_local_preference_profile(request)["id"], False
+
+
 @router.get("/preferences")
 def auth_preferences(request: Request):
-    if auth_required():
-        user = _require_current_user(request)
-        prefs = get_user_preferences(user["id"])
-    else:
-        profile = _require_local_preference_profile(request)
-        prefs = get_local_preferences(profile["id"])
+    scope_id, is_auth = _resolve_preference_scope(request)
+    prefs = get_preferences(scope_id)
+    if not prefs:
+        # Transitional: first read after preferences moved to the data DB relocates this scope's
+        # values out of the control DB. No-op once everything has migrated.
+        prefs = relocate_legacy_preferences(scope_id, is_auth=is_auth)
     parsed = {}
     for key, value in prefs.items():
         try:
@@ -297,23 +305,15 @@ def save_auth_preference(body: UserPreferenceRequest, request: Request):
     key = (body.key or "").strip()
     if not key:
         raise HTTPException(status_code=400, detail="Preference key is required")
-    if auth_required():
-        user = _require_current_user(request)
-        set_user_preference(user["id"], key, json.dumps(body.value))
-    else:
-        profile = _require_local_preference_profile(request)
-        set_local_preference(profile["id"], key, json.dumps(body.value))
+    scope_id, _ = _resolve_preference_scope(request)
+    set_preference(scope_id, key, json.dumps(body.value))
     return {"ok": True}
 
 
 @router.delete("/preferences")
 def clear_auth_preferences(request: Request):
-    if auth_required():
-        user = _require_current_user(request)
-        clear_user_preferences(user["id"])
-    else:
-        profile = _require_local_preference_profile(request)
-        clear_local_preferences(profile["id"])
+    scope_id, _ = _resolve_preference_scope(request)
+    clear_preferences(scope_id)
     return {"ok": True}
 
 

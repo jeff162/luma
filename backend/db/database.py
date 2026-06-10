@@ -92,7 +92,7 @@ def get_db(db_path: str | None = None):
 # Migrations are additive startup upgrades for existing databases only; fresh installs
 # are created directly at `CURRENT_VERSION` and should not replay the migration chain.
 
-CURRENT_VERSION = 27
+CURRENT_VERSION = 28
 
 MIGRATIONS = {}
 
@@ -718,6 +718,30 @@ def m23_account_pair_distinct(conn):
     )
 
 
+@migration(28)
+def m28_ui_preferences(conn):
+    """Non-sensitive UI/layout preferences (page layouts, dashboard tag reports, collapse state,
+    import drafts, etc.) move from the control DB into the data DB, keyed by `scope_id` — the
+    authenticated user id (auth mode) or the local-preference-profile id (local mode). They belong
+    with the data they describe (e.g. tag reports reference tag ids), so a data backup carries them
+    and there is no cross-DB/scope plumbing. The control DB keeps only identity/secrets. Existing
+    values are relocated lazily on first read (see services/preferences.py); the old control-DB
+    pref tables are left in place until that bridge is removed.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ui_preference (
+            scope_id   TEXT NOT NULL,
+            pref_key   TEXT NOT NULL,
+            pref_value TEXT NOT NULL,
+            updated_at TEXT,
+            PRIMARY KEY (scope_id, pref_key)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ui_preference_scope ON ui_preference(scope_id)")
+
+
 @migration(27)
 def m27_account_tags(conn):
     """Tags can be attached to accounts, mirroring category tags. A transaction inherits its
@@ -1029,6 +1053,18 @@ def init_db(db_path: str | None = None):
             );
 
             CREATE INDEX IF NOT EXISTS idx_account_pair_distinct_high ON account_pair_distinct(account_id_high);
+
+            -- Non-sensitive UI/layout preferences, keyed by scope_id (auth user id or local
+            -- preference-profile id). Lives in the data DB so it travels with the data it describes
+            -- and is captured by data backups; the control DB keeps only identity/secrets.
+            CREATE TABLE IF NOT EXISTS ui_preference (
+                scope_id   TEXT NOT NULL,
+                pref_key   TEXT NOT NULL,
+                pref_value TEXT NOT NULL,
+                updated_at TEXT,
+                PRIMARY KEY (scope_id, pref_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ui_preference_scope ON ui_preference(scope_id);
 
             CREATE INDEX IF NOT EXISTS idx_txn_date        ON txn(date);
             CREATE INDEX IF NOT EXISTS idx_txn_account     ON txn(account_id);

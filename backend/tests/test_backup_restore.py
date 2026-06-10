@@ -67,6 +67,9 @@ class BackupRestoreTests(unittest.TestCase):
                 conn.execute("INSERT INTO rule_tag (rule_id, tag_id) VALUES (?, ?)", (ids["rule"], ids["tag"]))
                 low, high = sorted([ids["a1"], ids["a2"]])
                 conn.execute("INSERT INTO account_pair_distinct (account_id_low, account_id_high, asserted_at) VALUES (?, ?, '2026-04-15')", (low, high))
+                conn.execute(
+                    "INSERT INTO ui_preference (scope_id, pref_key, pref_value, updated_at) VALUES ('profile-1', 'ui.dashboard.tagReports', '[{\"id\":\"r1\"}]', '2026-04-15')"
+                )
         return ids
 
     def _export_payload(self) -> dict:
@@ -82,8 +85,8 @@ class BackupRestoreTests(unittest.TestCase):
     def test_export_includes_tag_system_and_pairs(self):
         self._seed()
         payload = self._export_payload()
-        self.assertEqual(payload["version"], 6)
-        for section in ("tags", "txn_tags", "category_tags", "account_tags", "rule_tags", "account_pair_distinct"):
+        self.assertEqual(payload["version"], 7)
+        for section in ("tags", "txn_tags", "category_tags", "account_tags", "rule_tags", "account_pair_distinct", "ui_preferences"):
             self.assertEqual(len(payload[section]), 1, f"export should carry one {section} row")
 
     def test_restore_round_trip_preserves_tag_system_and_pairs(self):
@@ -94,9 +97,10 @@ class BackupRestoreTests(unittest.TestCase):
         with self._use_db_path():
             result = restore_backup(RestoreRequest(data=payload))
 
-        for table in ("tag", "txn_tag", "category_tag", "account_tag", "rule_tag", "account_pair_distinct"):
+        for table in ("tag", "txn_tag", "category_tag", "account_tag", "rule_tag", "account_pair_distinct", "ui_preference"):
             self.assertEqual(self._count(table), 1, f"{table} should be restored")
         self.assertEqual(result["restored_counts"]["tags"], 1)
+        self.assertEqual(result["restored_counts"]["ui_preferences"], 1)
 
     def test_restore_rejects_unsupported_version(self):
         with self._use_db_path():
