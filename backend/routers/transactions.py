@@ -221,10 +221,10 @@ def _append_tag_filter(clauses, params, *, tag_ids: Optional[str]):
     if not ids:
         return
     placeholders = ",".join("?" * len(ids))
-    # A transaction "has" a tag through any of three paths: direct (txn_tag with
-    # rule/manual visibility), inherited from its leaf category, or inherited from
-    # the leaf category's parent group. The filter accepts a match through any
-    # path so tag-based reporting picks up tags applied at the most natural level.
+    # A transaction "has" a tag through any of four paths: direct (txn_tag with rule/manual
+    # visibility), inherited from its leaf category, inherited from the leaf category's parent
+    # group, or inherited from its effective (top-level) account. The filter accepts a match
+    # through any path so tag-based reporting picks up tags applied at the most natural level.
     clauses.append(
         f"""
         (
@@ -242,9 +242,16 @@ def _append_tag_filter(clauses, params, *, tag_ids: Optional[str]):
                 WHERE ct.tag_id IN ({placeholders})
                   AND (ct.category_id = cc.id OR ct.category_id = cc.parent_id)
             )
+            OR EXISTS (
+                SELECT 1
+                FROM account_tag atag
+                WHERE atag.tag_id IN ({placeholders})
+                  AND atag.account_id = {EFFECTIVE_ACCOUNT_ID_SQL}
+            )
         )
         """
     )
+    params.extend(ids)
     params.extend(ids)
     params.extend(ids)
 

@@ -21,10 +21,16 @@ from typing import Iterable
 VISIBLE_TXN_TAG_SQL = "(tt.manual_state = 1 OR (tt.manual_state = 0 AND tt.rule_present = 1))"
 
 # Source precedence when a tag reaches a transaction through more than one path.
-# Direct (rule + manual) beats category-level which beats group-level — so a tag
-# the user explicitly attached to a transaction is reported as 'direct' even if
-# it would also be inherited from the category or its parent group.
-_SOURCE_PRIORITY = {"group": 1, "category": 2, "direct": 3}
+# Direct (rule + manual) beats category-level beats group-level beats account-level — so a tag
+# the user explicitly attached to a transaction is reported as 'direct' even if it would also be
+# inherited from the category, its parent group, or its account. Account is the broadest scope,
+# so it is the most general (lowest) source.
+_SOURCE_PRIORITY = {"account": 0, "group": 1, "category": 2, "direct": 3}
+
+# A transaction's account tags come from its *effective* (top-level) account: a child account
+# resolves to its parent, so a parent's tags propagate to children's transactions while a child's
+# own tags stay dormant while merged.
+_EFFECTIVE_ACCOUNT_ID_SQL = "COALESCE((SELECT parent_account_id FROM account WHERE id = t.account_id), t.account_id)"
 
 
 def get_visible_transaction_tag_map(
@@ -78,10 +84,28 @@ def get_visible_transaction_tag_map(
         txn_ids,
     ).fetchall()
 
+    # Account-level tags, resolved through the effective (top-level) account.
+    account_rows = conn.execute(
+        f"""
+        SELECT
+            t.id  AS txn_id,
+            g.id  AS id,
+            g.name,
+            g.color,
+            g.sort_order,
+            'account' AS source
+        FROM txn t
+        JOIN account_tag at ON at.account_id = {_EFFECTIVE_ACCOUNT_ID_SQL}
+        JOIN tag g ON g.id = at.tag_id
+        WHERE t.id IN ({placeholders})
+        """,
+        txn_ids,
+    ).fetchall()
+
     # Merge per transaction, keyed by tag id so a tag contributed via more than one
     # path collapses into one entry tagged with the highest-priority source.
     merged: dict[str, dict[str, dict]] = {txn_id: {} for txn_id in txn_ids}
-    for row in inherited_rows:
+    for row in list(account_rows) + list(inherited_rows):
         bucket = merged[row["txn_id"]]
         existing = bucket.get(row["id"])
         if existing is None or _SOURCE_PRIORITY[row["source"]] > _SOURCE_PRIORITY[existing["source"]]:

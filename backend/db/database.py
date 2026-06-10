@@ -92,7 +92,7 @@ def get_db(db_path: str | None = None):
 # Migrations are additive startup upgrades for existing databases only; fresh installs
 # are created directly at `CURRENT_VERSION` and should not replay the migration chain.
 
-CURRENT_VERSION = 26
+CURRENT_VERSION = 27
 
 MIGRATIONS = {}
 
@@ -718,6 +718,26 @@ def m23_account_pair_distinct(conn):
     )
 
 
+@migration(27)
+def m27_account_tags(conn):
+    """Tags can be attached to accounts, mirroring category tags. A transaction inherits its
+    account's tags resolved through the *effective* (top-level) account: a top-level account's
+    tags propagate to its own and its child accounts' transactions, while a child account's own
+    tags are not consulted while it is merged (they go dormant, and reactivate on detach). See
+    docs/data-model.md (Tags) for the effective-account resolution and merge behavior.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS account_tag (
+            account_id TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+            tag_id     TEXT NOT NULL REFERENCES tag(id) ON DELETE CASCADE,
+            PRIMARY KEY (account_id, tag_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_account_tag_tag ON account_tag(tag_id)")
+
+
 @migration(26)
 def m26_category_is_active(conn):
     """First-class inactive categories.
@@ -987,6 +1007,15 @@ def init_db(db_path: str | None = None):
                 PRIMARY KEY (category_id, tag_id)
             );
 
+            -- Account-level tag attachments. Transactions inherit their account's tags resolved
+            -- through the effective (top-level) account: a top-level account's tags propagate to
+            -- its own and its children's transactions; a child's own tags stay dormant while merged.
+            CREATE TABLE IF NOT EXISTS account_tag (
+                account_id TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+                tag_id     TEXT NOT NULL REFERENCES tag(id) ON DELETE CASCADE,
+                PRIMARY KEY (account_id, tag_id)
+            );
+
             -- Records account pairs the user has explicitly declared distinct via Keep on a
             -- soft-flag suspect. The cross-account suspect check filters out pairs present
             -- here. Pair is stored sorted (low, high) so each pair has a single row regardless
@@ -1016,6 +1045,7 @@ def init_db(db_path: str | None = None):
             CREATE INDEX IF NOT EXISTS idx_account_owner   ON account(owner_id);
             CREATE INDEX IF NOT EXISTS idx_txn_tag_tag     ON txn_tag(tag_id);
             CREATE INDEX IF NOT EXISTS idx_category_tag_tag ON category_tag(tag_id);
+            CREATE INDEX IF NOT EXISTS idx_account_tag_tag ON account_tag(tag_id);
 
             CREATE TABLE IF NOT EXISTS csv_import_profile (
                 id                   TEXT PRIMARY KEY,

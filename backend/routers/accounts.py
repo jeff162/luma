@@ -57,6 +57,10 @@ class AccountAttachRequest(BaseModel):
     parent_account_id: str
 
 
+class AccountTagsUpdate(BaseModel):
+    tag_ids: list[str]
+
+
 def _normalize_match_value(value: Optional[str]) -> str:
     return (value or "").strip().lower()
 
@@ -66,6 +70,21 @@ def _serialize_account(row) -> dict:
     d = dict(row)
     d["is_shared"] = d.get("owner_id") == SHARED_OWNER_ID
     return d
+
+
+def _attach_account_tags(conn, accounts: list[dict]) -> list[dict]:
+    # Each account carries its *own* attached tag ids (what it would contribute as a top-level
+    # account). Whether those tags are effective is resolved per transaction through the effective
+    # (top-level) account — a child's own tags stay dormant — so the frontend derives effective tags
+    # from parent_account_id rather than this list claiming to be effective.
+    if not accounts:
+        return accounts
+    tag_map: dict[str, list[str]] = {}
+    for row in conn.execute("SELECT account_id, tag_id FROM account_tag").fetchall():
+        tag_map.setdefault(row["account_id"], []).append(row["tag_id"])
+    for account in accounts:
+        account["tag_ids"] = tag_map.get(account["id"], [])
+    return accounts
 
 
 def _get_account_row(conn, account_id: str):
@@ -367,7 +386,8 @@ def resolve_default_owner_id(conn, owner_id: Optional[str]) -> Optional[str]:
 def list_accounts(include_children: bool = False, include_trashed: bool = False):
     with get_db() as conn:
         rows = _list_account_rows(conn, include_children=include_children, include_trashed=include_trashed)
-    return [_serialize_account(r) for r in rows]
+        accounts = _attach_account_tags(conn, [_serialize_account(r) for r in rows])
+    return accounts
 
 
 @router.get("/trash")
@@ -457,6 +477,50 @@ def update_account(account_id: str, body: AccountUpdate):
             conn.execute(
                 "UPDATE txn SET owner_id = ? WHERE account_id = ?",
                 (owner_val, account_id),
+            )
+    return {"ok": True}
+
+
+# Account tag attachments. Mirrors the category tag endpoints: tags applied to an account
+# propagate to its transactions, resolved through the effective (top-level) account (see
+# services/transaction_tags.py and _append_tag_filter). The list shape mirrors the transaction
+# tag pill UI so the same component can render it.
+@router.get("/{account_id}/tags")
+def list_account_tags(account_id: str):
+    with get_db() as conn:
+        acc = conn.execute("SELECT id FROM account WHERE id = ?", (account_id,)).fetchone()
+        if not acc:
+            raise HTTPException(status_code=404, detail="Account not found")
+        rows = conn.execute(
+            """
+            SELECT g.id, g.name, g.color
+            FROM account_tag at
+            JOIN tag g ON g.id = at.tag_id
+            WHERE at.account_id = ?
+            ORDER BY g.sort_order, LOWER(g.name), g.name, g.id
+            """,
+            (account_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@router.put("/{account_id}/tags")
+def set_account_tags(account_id: str, body: AccountTagsUpdate):
+    cleaned = [str(tag_id).strip() for tag_id in body.tag_ids if tag_id and str(tag_id).strip()]
+    with get_db() as conn:
+        acc = conn.execute("SELECT id FROM account WHERE id = ?", (account_id,)).fetchone()
+        if not acc:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if cleaned:
+            placeholders = ",".join("?" * len(cleaned))
+            valid_ids = {row["id"] for row in conn.execute(f"SELECT id FROM tag WHERE id IN ({placeholders})", cleaned).fetchall()}
+        else:
+            valid_ids = set()
+        conn.execute("DELETE FROM account_tag WHERE account_id = ?", (account_id,))
+        for tag_id in valid_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO account_tag (account_id, tag_id) VALUES (?, ?)",
+                (account_id, tag_id),
             )
     return {"ok": True}
 

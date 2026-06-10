@@ -2394,8 +2394,10 @@ export default function Dashboard() {
                               : viewIsCategory ? 'Categories' : 'Groups'}
                           </div>
                           <div style={{
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                            // CSS multi-column (not grid) so rows fill down the first column and then
+                            // the next, instead of left→right across each row. column-width keeps it
+                            // responsive: the browser fits as many ~260px columns as the card allows.
+                            columnWidth: 260,
                             columnGap: 20,
                           }}>
                             {listRows.map(r => {
@@ -2405,6 +2407,7 @@ export default function Dashboard() {
                                   display: 'flex', alignItems: 'center', gap: 8,
                                   padding: '5px 0', borderBottom: '1px solid var(--border)', cursor: 'pointer',
                                   minWidth: 0,
+                                  breakInside: 'avoid',
                                   fontStyle: isOther ? 'italic' : 'normal',
                                 }}>
                                   <span style={{ width: 10, height: 10, borderRadius: '50%', background: r[rowColor], flexShrink: 0 }} />

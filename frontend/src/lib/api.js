@@ -234,6 +234,9 @@ export const api = {
   getCategories: () => request('/categories/flat'),
   getCategoryUsageSummary: () => request('/categories/usage-summary'),
   createCategory: (data) => request('/categories', { method: 'POST', body: JSON.stringify(data) }),
+  getAccountTags: (id) => request(`/accounts/${id}/tags`),
+  setAccountTags: (id, tag_ids) =>
+    request(`/accounts/${id}/tags`, { method: 'PUT', body: JSON.stringify({ tag_ids }) }),
   getInactiveCategories: () => request('/categories/inactive'),
   getCategoryDeletePreview: (id) => request(`/categories/${id}/delete-preview`),
   deleteCategory: (id, data = {}) => request(`/categories/${id}`, { method: 'DELETE', body: JSON.stringify(data) }),

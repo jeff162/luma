@@ -7,6 +7,7 @@ import { notifyAccountsChanged } from '../App.jsx'
 import { Card, Button, Spinner, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog } from '../components/ui.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import PillTableHeader from '../components/PillTableHeader.jsx'
+import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import { useDismissibleLayer, useDismissiblePopup, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
@@ -21,7 +22,7 @@ const ACCOUNTS_COLLAPSED_PREF_KEY = 'ui.accounts.collapsedGroups'
 const ACCOUNTS_COLLAPSED_STORAGE_KEY_PREFIX = 'fintrack.accounts.collapsedGroups'
 const ACCOUNTS_SORT_PREF_KEY = 'ui.accounts.sort'
 const ACCOUNTS_SORT_STORAGE_KEY_PREFIX = 'fintrack.accounts.sort'
-const ACCOUNT_ROW_COLUMNS = '22px minmax(0, 1.5fr) minmax(118px, 0.46fr) minmax(138px, 0.56fr) 28px'
+const ACCOUNT_ROW_COLUMNS = '22px minmax(0, 1.2fr) minmax(112px, 0.4fr) minmax(116px, 0.42fr) minmax(0, 0.95fr) 28px'
 const ACCOUNT_ROW_CHILD_INDENT = 28
 const ACCOUNT_ROW_GAP = 10
 const ACCOUNT_ROW_PADDING = '3px 10px'
@@ -549,6 +550,8 @@ function DraftAccountRow({ owners, onCreate, onCancel, creating }) {
             />
           </div>
 
+          <div />
+
           <button
             type="button"
             onClick={onCancel}
@@ -930,6 +933,74 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onErro
   )
 }
 
+// Tags cell for one account row. Top-level accounts show and edit their own tags; child accounts
+// show the parent's tags as muted/inherited (read-only) — a child's own tags are dormant while
+// merged (resolved through the effective account on the backend), so they aren't editable here.
+function AccountTagsCell({
+  account, isChild, parentAccount, allTags, editMode,
+  pickerOpen, onOpenPicker, onClosePicker, onSetTags, onTagCreated,
+}) {
+  const tagsById = new Map((allTags || []).map(tag => [tag.id, tag]))
+  const ownTagIds = Array.isArray(account.tag_ids) ? account.tag_ids : []
+  const inheritedTagIds = isChild && Array.isArray(parentAccount?.tag_ids) ? parentAccount.tag_ids : []
+  const displayTagIds = isChild ? inheritedTagIds : ownTagIds
+  const pills = displayTagIds.map(id => tagsById.get(id)).filter(Boolean)
+  const editable = !isChild
+  const showControls = editable && editMode
+
+  function toggleTag(tag, nextChecked) {
+    const next = new Set(ownTagIds)
+    if (nextChecked) next.add(tag.id)
+    else next.delete(tag.id)
+    onSetTags(account.id, Array.from(next))
+  }
+
+  return (
+    <div style={{ position: 'relative', minWidth: 0, display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+      {pills.map(tag => (
+        <span
+          key={tag.id}
+          title={isChild ? `${tag.name} (inherited from ${parentAccount?.display_name || parentAccount?.name || 'parent account'})` : tag.name}
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
+            background: tag.color || 'var(--muted)', color: '#fff',
+            fontSize: 9, fontWeight: 700, lineHeight: 1, cursor: 'default', userSelect: 'none',
+            border: isChild ? '1.5px solid color-mix(in srgb, #0f172a 28%, transparent)' : 'none',
+            opacity: isChild ? 0.75 : 1,
+          }}
+        >
+          {((tag.name || '').trim().charAt(0) || '?').toUpperCase()}
+        </span>
+      ))}
+      {showControls ? (
+        <button
+          type="button"
+          onClick={() => onOpenPicker(account.id)}
+          title="Add or remove tags"
+          style={{
+            width: 18, height: 18, borderRadius: '50%', border: '1px dashed var(--border)', background: 'var(--surface)',
+            color: 'var(--muted)', cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: 0, flexShrink: 0,
+          }}
+        >
+          +
+        </button>
+      ) : null}
+      {editable && pickerOpen ? (
+        <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 300 }}>
+          <TagPickerWithCreate
+            allTags={allTags}
+            selectedTagIds={new Set(ownTagIds)}
+            onToggleTag={toggleTag}
+            onTagCreated={onTagCreated}
+            onClose={onClosePicker}
+          />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function AccountRow({
   account,
   parentAccount = null,
@@ -954,6 +1025,14 @@ function AccountRow({
   dropActive = false,
   onDragStart,
   onDragEnd,
+  allTags = [],
+  tagsEditMode = false,
+  tagPickerAccountId = null,
+  onOpenTagPicker = () => {},
+  onCloseTagPicker = () => {},
+  onSetAccountTags = () => {},
+  onAccountTagCreated = () => {},
+  onAccountContextMenu = () => {},
 }) {
   const [, setSavingName] = useState(false)
   const [creatingOwner, setCreatingOwner] = useState(false)
@@ -1133,14 +1212,16 @@ function AccountRow({
           pointerEvents: 'none',
         }} />
       )}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: ACCOUNT_ROW_COLUMNS,
-        gap: ACCOUNT_ROW_GAP,
-        alignItems: 'center',
-        padding: ACCOUNT_ROW_PADDING,
-        paddingLeft: isChild ? `${10 + ACCOUNT_ROW_CHILD_INDENT}px` : undefined,
-      }}>
+      <div
+        onContextMenu={isChild ? undefined : (event => onAccountContextMenu(account.id, event))}
+        style={{
+          display: 'grid',
+          gridTemplateColumns: ACCOUNT_ROW_COLUMNS,
+          gap: ACCOUNT_ROW_GAP,
+          alignItems: 'center',
+          padding: ACCOUNT_ROW_PADDING,
+          paddingLeft: isChild ? `${10 + ACCOUNT_ROW_CHILD_INDENT}px` : undefined,
+        }}>
         <button
           type="button"
           draggable={canDrag}
@@ -1300,6 +1381,7 @@ function AccountRow({
               }}
               onContextMenu={account.owner_id && !isSharedOwner(owners.find(o => o.id === account.owner_id)) ? (e => {
                 e.preventDefault()
+                e.stopPropagation()
                 setOwnerMenu({ x: e.clientX, y: e.clientY })
               }) : null}
               disabled={ownerEditDisabled}
@@ -1459,6 +1541,19 @@ function AccountRow({
           ) : null}
         </div>
 
+        <AccountTagsCell
+          account={account}
+          isChild={isChild}
+          parentAccount={parentAccount}
+          allTags={allTags}
+          editMode={tagsEditMode}
+          pickerOpen={tagPickerAccountId === account.id}
+          onOpenPicker={onOpenTagPicker}
+          onClosePicker={onCloseTagPicker}
+          onSetTags={onSetAccountTags}
+          onTagCreated={onAccountTagCreated}
+        />
+
         <button
           type="button"
           onClick={() => {
@@ -1526,6 +1621,9 @@ export default function Accounts() {
    */
   const [accounts, setAccounts] = useState([])
   const [owners, setOwners] = useState([])
+  const [availableTags, setAvailableTags] = useState([])
+  const [tagsEditMode, setTagsEditMode] = useState(false)
+  const [tagPickerAccountId, setTagPickerAccountId] = useState(null)
   const [categories, setCategories] = useState([])
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
@@ -1600,11 +1698,12 @@ export default function Accounts() {
 
   const loadData = () => {
     setLoading(true)
-    Promise.all([api.getAccounts({ include_children: true }), api.getOwners(), api.getCategories()])
-      .then(([a, o, c]) => {
+    Promise.all([api.getAccounts({ include_children: true }), api.getOwners(), api.getCategories(), api.getTags()])
+      .then(([a, o, c, t]) => {
         setAccounts(prev => reconcileAccountOrder(prev, a))
         setOwners(o)
         setCategories(c)
+        setAvailableTags(Array.isArray(t) ? t : [])
       })
       .finally(() => setLoading(false))
   }
@@ -1613,6 +1712,40 @@ export default function Accounts() {
     const rows = await api.getAccounts({ include_children: true })
     setAccounts(prev => reconcileAccountOrder(prev, rows))
     return rows
+  }
+
+  async function handleSetAccountTags(accountId, nextTagIds) {
+    setAccounts(prev => prev.map(account => (
+      account.id === accountId ? { ...account, tag_ids: nextTagIds } : account
+    )))
+    try {
+      await api.setAccountTags(accountId, nextTagIds)
+    } catch (error) {
+      setNoticeDialog({ title: 'Could not update account tags', description: error?.message || 'Please try again.' })
+      reloadAccounts().catch(() => { })
+    }
+  }
+
+  function handleAccountTagCreated(created) {
+    if (!created?.id) return
+    setAvailableTags(prev => (prev.some(tag => tag.id === created.id) ? prev : [...prev, created]))
+  }
+
+  const accountTagProps = {
+    allTags: availableTags,
+    tagsEditMode,
+    tagPickerAccountId,
+    onOpenTagPicker: setTagPickerAccountId,
+    onCloseTagPicker: () => setTagPickerAccountId(null),
+    onSetAccountTags: handleSetAccountTags,
+    onAccountTagCreated: handleAccountTagCreated,
+    // Right-click a top-level row opens the shared list context menu carrying this account id, so
+    // "Edit tags…" sits alongside Collapse/Expand all instead of fighting the existing menu.
+    onAccountContextMenu: (accountId, event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      setListContextMenu({ x: event.clientX, y: event.clientY, accountId })
+    },
   }
 
   useEffect(() => { loadData() }, [])
@@ -1968,6 +2101,14 @@ export default function Accounts() {
       await api.attachAccount(source.id, target.id)
       await reloadAccounts()
       notifyAccountsChanged()
+      if (Array.isArray(source.tag_ids) && source.tag_ids.length > 0) {
+        const sourceName = source.display_name || source.name
+        const targetName = target.display_name || target.name
+        setNoticeDialog({
+          title: 'Tags set aside on merge',
+          description: `"${sourceName}" is now merged under "${targetName}", so its own tags no longer apply — "${targetName}"'s tags govern these transactions. Ungroup "${sourceName}" to bring its tags back.`,
+        })
+      }
     } catch (error) {
       setNoticeDialog({
         title: 'Could not regroup accounts',
@@ -2481,6 +2622,31 @@ export default function Accounts() {
                               draggable: false,
                               title: 'Click to sort accounts by owner',
                             },
+                            {
+                              key: 'tags',
+                              sortable: false,
+                              resizable: false,
+                              draggable: false,
+                              cellPadding: 0,
+                              contentPadding: '0 9px',
+                              render: () => (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+                                  <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', letterSpacing: 0.3, textTransform: 'uppercase' }}>Tags</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => { setTagsEditMode(v => !v); setTagPickerAccountId(null) }}
+                                    title={tagsEditMode ? 'Finish editing account tags' : 'Edit account tags (or right-click a row)'}
+                                    style={{
+                                      background: tagsEditMode ? 'color-mix(in srgb, var(--accent) 16%, var(--surface))' : 'none',
+                                      border: '1px solid var(--border)', borderRadius: 999, padding: '1px 8px',
+                                      fontSize: 11, color: tagsEditMode ? 'var(--accent2)' : 'var(--muted)', cursor: 'pointer',
+                                    }}
+                                  >
+                                    {tagsEditMode ? 'Done' : 'Edit tags'}
+                                  </button>
+                                </div>
+                              ),
+                            },
                             { key: 'actions', kind: 'spacer', cellPadding: 0 },
                           ]}
                           gridTemplateColumns={ACCOUNT_ROW_COLUMNS}
@@ -2551,18 +2717,31 @@ export default function Accounts() {
                             }}
                             onMouseLeave={() => setListContextMenu(null)}
                           >
-                            <button type="button" onClick={() => {
-                              setCollapsedGroups(new Set(orderedRootAccounts.filter(r => (childAccountsByParent.get(r.id) || []).length > 0).map(r => r.id)))
-                              setListContextMenu(null)
-                            }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
-                              Collapse all
-                            </button>
-                            <button type="button" onClick={() => {
-                              setCollapsedGroups(new Set())
-                              setListContextMenu(null)
-                            }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
-                              Expand all
-                            </button>
+                            {listContextMenu.accountId ? (
+                              <button type="button" onClick={() => {
+                                setTagPickerAccountId(listContextMenu.accountId)
+                                setListContextMenu(null)
+                              }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
+                                Edit tags…
+                              </button>
+                            ) : null}
+                            {orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0) ? (
+                              <>
+                                {listContextMenu.accountId ? <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} /> : null}
+                                <button type="button" onClick={() => {
+                                  setCollapsedGroups(new Set(orderedRootAccounts.filter(r => (childAccountsByParent.get(r.id) || []).length > 0).map(r => r.id)))
+                                  setListContextMenu(null)
+                                }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
+                                  Collapse all
+                                </button>
+                                <button type="button" onClick={() => {
+                                  setCollapsedGroups(new Set())
+                                  setListContextMenu(null)
+                                }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
+                                  Expand all
+                                </button>
+                              </>
+                            ) : null}
                           </div>
                         )}
                         {displayRootAccounts.map(root => {
@@ -2604,6 +2783,7 @@ export default function Accounts() {
                                 dropActive={groupMergeActive}
                                 onDragStart={handleAccountDragStart}
                                 onDragEnd={handleAccountDragEnd}
+                                {...accountTagProps}
                               />
                               {!isCollapsed && children.map((child, childIdx) => (
                                 <AccountRow
@@ -2633,6 +2813,7 @@ export default function Accounts() {
                                   dropActive={groupMergeActive}
                                   onDragStart={handleAccountDragStart}
                                   onDragEnd={handleAccountDragEnd}
+                                  {...accountTagProps}
                                 />
                               ))}
                             </div>

@@ -221,7 +221,7 @@ Important behavior:
 
 The goal is to make rule behavior explainable without requiring users to hand-maintain a priority table. Specificity and owner scope stand in for manual ordering because they usually match what a user means when two rules overlap. The one-rule-per-matcher invariant keeps that ordering meaningful: duplicate matchers would make "which rule wins" order-dependent, and editing one copy would leave the other firing.
 
-Tags are separate from the category tree and are meant for cross-cutting labels such as `Essential Expenses`, `Alice`, `Reimbursable`, etc. A transaction's **effective tags** are the additive union of four sources, listed by precedence when reporting the source for a tag the transaction picked up through more than one path:
+Tags are separate from the category tree and are meant for cross-cutting labels such as `Essential Expenses`, `Alice`, `Reimbursable`, etc. A transaction's **effective tags** are the additive union of these sources, listed by precedence (most specific first) when reporting the source for a tag the transaction picked up through more than one path:
 
 - **direct (txn_tag):** added on a transaction by a matching rule (`rule_present`) and/or a manual edit (`manual_state = 1`); manual `manual_state = -1` blocks a rule-applied direct tag for that one transaction without changing the rule
 
@@ -229,7 +229,9 @@ Tags are separate from the category tree and are meant for cross-cutting labels 
 
 - **group-level (category_tag):** any tag attached to the leaf category's parent group propagates to every transaction in any leaf under it
 
-Inherited tags (category- or group-level) are not currently overridable on a single transaction; if a transaction needs to opt out, retag at the level the inheritance comes from. A future block-inherited mechanism (parallel to the existing `manual_state` for direct tags) can be added when an actual case calls for it.
+- **account-level (account_tag):** any tag attached to the transaction's **effective (top-level) account** propagates to every transaction in that account. The effective account is `COALESCE(parent_account_id, account_id)`, so a top-level account's tags reach its own *and its child accounts'* transactions, while a child account's own tags stay **dormant** while it is merged (resolution never consults the child's row) and reactivate automatically when it is detached. Merging a tagged account under a parent therefore quietly sets its tags aside rather than deleting or promoting them — the parent's tags govern, and the child's return on detach. Account is the broadest scope, so it is the most general (lowest-precedence) source
+
+Inherited tags (account-, category-, or group-level) are not currently overridable on a single transaction; if a transaction needs to opt out, retag at the level the inheritance comes from. A future block-inherited mechanism (parallel to the existing `manual_state` for direct tags) can be added when an actual case calls for it.
 
 Tag-aware filtering and aggregation matches a transaction if its effective tags include the requested tag, regardless of which source contributed it. Rules can still add tags directly:
 
