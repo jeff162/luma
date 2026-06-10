@@ -454,16 +454,22 @@ export const api = {
     }
     return res.json()
   },
-  restoreBackupFile: async (file, privateKeyFile = null, privateKeyPassphrase = '') => {
+  restoreBackupFile: async (file, privateKeyFile = null, privateKeyPassphrase = '', force = false) => {
     const fd = new FormData()
     fd.append('file', file)
     if (privateKeyFile) fd.append('private_key_file', privateKeyFile)
     if (privateKeyPassphrase) fd.append('private_key_passphrase', privateKeyPassphrase)
+    if (force) fd.append('force', 'true')
     const res = await fetch('/api/import-export/restore-file', { method: 'POST', body: fd })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }))
-      const error = new Error(err.detail || 'Request failed')
+      // The compatibility guard returns a structured detail object (409). Keep it intact so the
+      // caller can show the right confirmation and retry with force, instead of stringifying it.
+      const detail = err.detail
+      const message = typeof detail === 'string' ? detail : (detail?.code || 'Request failed')
+      const error = new Error(message)
       error.status = res.status
+      error.detail = detail
       throw error
     }
     signalDataMutated()

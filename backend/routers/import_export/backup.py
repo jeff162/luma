@@ -9,7 +9,15 @@ otherwise independent of the import-run workflow:
 
 - **CSV export** (`/transactions.csv`) — a filtered, flattened dump of the ledger for spreadsheets.
 - **Regular backup/restore** (`/backup`, `/restore`, `/restore-file`) — a full app-data archive
-  (everything except credentials) that can round-trip the database.
+  (everything in the data DB except credentials) that can round-trip the database: owners,
+  accounts, categories, rules, merchant renames, import profiles/batches/history, transactions,
+  the whole tag system (`tag` + every attachment: `txn_tag`/`category_tag`/`account_tag`/`rule_tag`),
+  and the account-pair distinct assertions. Restore wipes and rebuilds in FK-safe order. The
+  payload is stamped with the source `instance_id` + `access_mode`; restore's compatibility guard
+  uses these to refuse a silent cross-system/cross-mode wipe (409 unless `force`) while still
+  allowing an empty target or a same-instance self-restore. (Payload is version 6; older versions
+  are no longer accepted. User/layout *preferences* live in the separate control DB and are not yet
+  covered — see `docs/data-model.md` → Backups.)
 - **Credentials backup/restore** (`/backup/credentials`, `/restore/credentials`) — the Plaid
   access tokens, kept deliberately separate from the regular backup so an ordinary backup never
   carries secrets (see `docs/data-model.md` → Backups).
@@ -39,7 +47,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from backend.db.database import get_db
+from backend.db.database import get_db, get_db_instance_id
+from backend.db.control_database import auth_required
 from backend.services import crypto_service
 from backend.services.transaction_tags import VISIBLE_TXN_TAG_SQL
 
@@ -75,6 +84,9 @@ class BackupRecipientUpdate(BaseModel):
 
 class RestoreRequest(BaseModel):
     data:             dict
+    # Override the compatibility guard (restoring a different system's backup over existing data,
+    # or a different access mode). The UI sets this only after an explicit user confirmation.
+    force:            bool = False
 
 
 class CredentialsRestoreRequest(BaseModel):
@@ -496,16 +508,20 @@ def export_transactions_csv(
         headers={"Content-Disposition": 'attachment; filename="fintrack_export.csv"'},
     )
 
-@router.get("/backup")
-def export_backup(encrypted: bool = Query(False)):
-    with get_db() as conn:
-        def dump(table, query=None):
-            q = query or f"SELECT * FROM {table} ORDER BY rowid"
-            return [dict(r) for r in conn.execute(q).fetchall()]
+def build_backup_data(conn) -> dict:
+    """The full app-data backup payload (everything restore rebuilds). Extracted from the export
+    endpoint so it can be exercised directly without unwrapping a StreamingResponse."""
+    def dump(table, query=None):
+        q = query or f"SELECT * FROM {table} ORDER BY rowid"
+        return [dict(r) for r in conn.execute(q).fetchall()]
 
-        payload = {
-            "version":        5,
+    return {
+            "version":        6,
             "exported_at":    datetime.utcnow().isoformat(),
+            # System identity, so restore can tell "my own backup" from "a different system's", and
+            # which access mode it came from. Used by the restore compatibility guard.
+            "instance_id":    get_db_instance_id(conn),
+            "access_mode":    "auth" if auth_required() else "local",
             "owners":         dump("owner"),
             "accounts":       dump("account",
                                    "SELECT id, plaid_account_id, plaid_item_id, name, display_name, "
@@ -524,7 +540,22 @@ def export_backup(encrypted: bool = Query(False)):
                                    "is_pending, category_overridden, category_source, imported_category, notes, content_hash, "
                                    "import_evidence_json, "
                                    "import_batch_id FROM txn ORDER BY date DESC"),
-        }
+            # Tag system: the tag definitions plus every attachment surface (transaction, category/
+            # group, account, rule). Without these a restore silently dropped all tagging.
+            "tags":           dump("tag"),
+            "txn_tags":       dump("txn_tag"),
+            "category_tags":  dump("category_tag"),
+            "account_tags":   dump("account_tag"),
+            "rule_tags":      dump("rule_tag"),
+            # User's explicit "these two accounts are distinct" assertions (dedupe review state).
+            "account_pair_distinct": dump("account_pair_distinct"),
+    }
+
+
+@router.get("/backup")
+def export_backup(encrypted: bool = Query(False)):
+    with get_db() as conn:
+        payload = build_backup_data(conn)
         recipients = []
         if encrypted:
             recipients = [dict(r) for r in conn.execute("""
@@ -608,8 +639,35 @@ def restore_backup(body: RestoreRequest):
     Plaid items / access tokens are NOT touched.
     """
     d = body.data
-    if d.get("version") not in (1, 2, 3, 4, 5):
-        raise HTTPException(status_code=400, detail="Unrecognised backup version")
+    if d.get("version") != 6:
+        raise HTTPException(status_code=400, detail="Unrecognised or unsupported backup version")
+
+    # Compatibility guard: a restore unconditionally wipes the target, so refuse to silently
+    # replace a *different* system's existing data, or load across access modes, unless the user
+    # has explicitly confirmed (force). Allowed without confirmation: an empty target (fresh
+    # install) or restoring this system's own backup (matching instance_id) in the same mode.
+    if not body.force:
+        backup_mode = d.get("access_mode")
+        backup_instance = d.get("instance_id")
+        target_mode = "auth" if auth_required() else "local"
+        with get_db() as conn:
+            target_instance = get_db_instance_id(conn)
+            has_data = bool(
+                conn.execute("SELECT 1 FROM account LIMIT 1").fetchone()
+                or conn.execute("SELECT 1 FROM txn LIMIT 1").fetchone()
+            )
+        reasons = []
+        if backup_mode and backup_mode != target_mode:
+            reasons.append("mode_mismatch")
+        if has_data and backup_instance != target_instance:
+            reasons.append("different_system")
+        if reasons:
+            raise HTTPException(status_code=409, detail={
+                "code": "restore_incompatible",
+                "reasons": sorted(set(reasons)),
+                "backup_mode": backup_mode,
+                "target_mode": target_mode,
+            })
 
     owners = [dict(row) for row in d.get("owners", [])]
     accounts = [dict(row) for row in d.get("accounts", [])]
@@ -622,6 +680,12 @@ def restore_backup(body: RestoreRequest):
     import_batch_duplicates = [dict(row) for row in d.get("import_batch_duplicates", [])]
     import_workflow_states = [dict(row) for row in d.get("import_workflow_states", [])]
     transactions = [dict(row) for row in d.get("transactions", [])]
+    tags = [dict(row) for row in d.get("tags", [])]
+    txn_tags = [dict(row) for row in d.get("txn_tags", [])]
+    category_tags = [dict(row) for row in d.get("category_tags", [])]
+    account_tags = [dict(row) for row in d.get("account_tags", [])]
+    rule_tags = [dict(row) for row in d.get("rule_tags", [])]
+    account_pair_distinct = [dict(row) for row in d.get("account_pair_distinct", [])]
 
     owner_ids = {row.get("id") for row in owners if row.get("id")}
     account_ids = {row.get("id") for row in accounts if row.get("id")}
@@ -676,12 +740,35 @@ def restore_backup(body: RestoreRequest):
         if row.get("batch_id") in import_batch_ids
     ]
 
+    # Tag attachments are dropped if either side no longer survives the restore. `rule_ids` and
+    # `txn_ids` are taken *after* the category_rule/transaction filtering above so a tag never
+    # points at a rule or transaction that didn't make it in.
+    tag_ids = {row.get("id") for row in tags if row.get("id")}
+    rule_ids = {row.get("id") for row in category_rules if row.get("id")}
+    txn_ids = {row.get("id") for row in transactions if row.get("id")}
+    txn_tags = [r for r in txn_tags if r.get("txn_id") in txn_ids and r.get("tag_id") in tag_ids]
+    category_tags = [r for r in category_tags if r.get("category_id") in category_ids and r.get("tag_id") in tag_ids]
+    account_tags = [r for r in account_tags if r.get("account_id") in account_ids and r.get("tag_id") in tag_ids]
+    rule_tags = [r for r in rule_tags if r.get("rule_id") in rule_ids and r.get("tag_id") in tag_ids]
+    account_pair_distinct = [
+        r for r in account_pair_distinct
+        if r.get("account_id_low") in account_ids and r.get("account_id_high") in account_ids
+    ]
+
     # Categories are a two-level hierarchy; insert groups before leaves so
     # self-referential parent_id constraints are satisfied during restore.
     categories.sort(key=lambda row: (0 if not row.get("parent_id") else 1, row.get("sort_order", 0), row.get("name", "")))
 
     with get_db() as conn:
-        # Wipe in dependency order (children before parents)
+        # Wipe in dependency order (children before parents). Tag attachment tables and the tag
+        # table go first: the attachments reference tag/txn/category/account/rule, and `tag` itself
+        # is not a child of anything else wiped below, so it must be cleared explicitly.
+        conn.execute("DELETE FROM txn_tag")
+        conn.execute("DELETE FROM category_tag")
+        conn.execute("DELETE FROM account_tag")
+        conn.execute("DELETE FROM rule_tag")
+        conn.execute("DELETE FROM account_pair_distinct")
+        conn.execute("DELETE FROM tag")
         conn.execute("DELETE FROM txn")
         conn.execute("DELETE FROM import_batch_duplicate")
         conn.execute("DELETE FROM import_batch_account")
@@ -711,6 +798,13 @@ def restore_backup(body: RestoreRequest):
         insert_rows("account",          accounts)
         insert_rows("category",         categories)
         insert_rows("category_rule",    category_rules)
+        # Tag definitions before any attachment (all reference tag.id); attachments after their
+        # other parent (category/account/rule) is in place.
+        insert_rows("tag",              tags)
+        insert_rows("category_tag",     category_tags)
+        insert_rows("account_tag",      account_tags)
+        insert_rows("rule_tag",         rule_tags)
+        insert_rows("account_pair_distinct", account_pair_distinct)
         insert_rows("merchant_rename",  merchant_renames)
         insert_rows("csv_import_profile", csv_profiles)
         insert_rows("import_batch", import_batches)
@@ -718,6 +812,7 @@ def restore_backup(body: RestoreRequest):
         insert_rows("import_batch_duplicate", import_batch_duplicates)
         insert_rows("import_workflow_state", import_workflow_states)
         insert_rows("txn",          transactions)
+        insert_rows("txn_tag",      txn_tags)
 
     return {
         "ok": True,
@@ -734,6 +829,12 @@ def restore_backup(body: RestoreRequest):
             "import_batch_duplicates": len(import_batch_duplicates),
             "import_workflow_states": len(import_workflow_states),
             "transactions": len(transactions),
+            "tags": len(tags),
+            "txn_tags": len(txn_tags),
+            "category_tags": len(category_tags),
+            "account_tags": len(account_tags),
+            "rule_tags": len(rule_tags),
+            "account_pair_distinct": len(account_pair_distinct),
         },
     }
 
@@ -771,6 +872,7 @@ async def restore_backup_file(
     file: UploadFile = File(...),
     private_key_file: UploadFile | None = File(None),
     private_key_passphrase: str | None = Form(None),
+    force: bool = Form(False),
 ):
     content = await file.read()
     private_key_bytes = await private_key_file.read() if private_key_file else None
@@ -781,7 +883,7 @@ async def restore_backup_file(
         private_key_bytes=private_key_bytes,
         private_key_passphrase=private_key_passphrase,
     )
-    return restore_backup(RestoreRequest(data=payload))
+    return restore_backup(RestoreRequest(data=payload, force=force))
 
 
 @router.post("/restore/credentials-file")

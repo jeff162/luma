@@ -312,6 +312,12 @@ Backup/restore deals with two different classes of data:
 
 Those are intentionally separated so normal backups can stay safer and simpler.
 
+The regular backup (payload **version 6**) covers the full **data-DB** state so a restore reproduces the working app, not just the ledger: owners, accounts, categories/groups, rules, merchant renames, import profiles/batches/history, transactions, the entire **tag system** (`tag` plus every attachment — `txn_tag`, `category_tag`, `account_tag`, `rule_tag`), and the `account_pair_distinct` assertions. Restore is destructive — it wipes and rebuilds in foreign-key-safe order (tag definitions before any attachment; attachments after their other parent), and drops any attachment whose endpoints didn't survive the restore. Older payload versions are no longer accepted.
+
+The payload is also **stamped** with the source data DB's `instance_id` (from `db_meta`) and its `access_mode` (`local`/`auth`). Restore uses this as a **compatibility guard** so it can't silently replace the wrong system: it proceeds freely when the target is empty (no accounts/transactions — a fresh install) or when restoring this system's *own* backup (matching `instance_id`) in the same mode, but returns `409 {code: "restore_incompatible", reasons: […]}` when the target already has data and the backup came from a *different* `instance_id`, or when the access modes differ. The UI turns that 409 into an explicit "restore over a different system?" confirmation and retries with a `force` flag; `force` is the only way past the guard, so an accidental cross-system or cross-mode wipe always requires a deliberate second confirmation.
+
+**Not yet covered:** user/layout **preferences** live in the *control* database (per authenticated user or per local-preference-profile), not the data DB, so they are outside this archive. Bringing them in needs the export/restore requests to carry the user/profile scope (the current download-link export and raw-`fetch` restore don't), so it's tracked as a distinct follow-up.
+
 ## Schema evolution
 
 The SQLite schema is versioned and migrated automatically on startup.

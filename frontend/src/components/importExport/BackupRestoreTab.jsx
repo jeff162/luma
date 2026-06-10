@@ -13,6 +13,19 @@ import { Button, Card } from '../ui.jsx'
 import { SectionTitle } from './importPresentational.jsx'
 import { APP_NAME } from '../../lib/appConfig.js'
 
+// Human-readable explanation for the restore compatibility guard's 409 detail.
+function describeRestoreIncompatibility(detail) {
+  const reasons = Array.isArray(detail?.reasons) ? detail.reasons : []
+  const parts = []
+  if (reasons.includes('different_system')) {
+    parts.push('This backup was made on a different system, and this one already has data — restoring will erase everything currently here and replace it with the backup.')
+  }
+  if (reasons.includes('mode_mismatch')) {
+    parts.push(`The backup was created in "${detail?.backup_mode || 'a different'}" access mode, but this system is running in "${detail?.target_mode || 'another'}" mode.`)
+  }
+  return parts.join(' ') || 'This backup may not be compatible with the current system.'
+}
+
 export function BackupRestoreTab() {
   const [backupRecipients, setBackupRecipients] = useState([])
   const [credentialBackupStatus, setCredentialBackupStatus] = useState({ has_credentials: false, credential_count: 0 })
@@ -56,7 +69,7 @@ export function BackupRestoreTab() {
     }
   }
 
-  async function performRestore(file, type) {
+  async function performRestore(file, type, force = false) {
     setPendingConfirm(null)
     if (type === 'credentials') {
       setRestoring(true)
@@ -70,7 +83,7 @@ export function BackupRestoreTab() {
     }
     setRestoring(true)
     try {
-      const result = await api.restoreBackupFile(file, privateKeyFile, privateKeyPassphrase)
+      const result = await api.restoreBackupFile(file, privateKeyFile, privateKeyPassphrase, force)
       const counts = result.restored_counts || {}
       const pieces = [
         `${counts.owners ?? 0} owner${counts.owners === 1 ? '' : 's'}`,
@@ -81,7 +94,24 @@ export function BackupRestoreTab() {
       setRestoreMsg(null)
       setRestoreSuccess(`Restore completed. Loaded ${pieces.join(', ')}.`)
     }
-    catch (e) { setRestoreMsg(`❌ ${e.message}`) }
+    catch (e) {
+      // The backend's compatibility guard (409) means this backup looks like it came from a
+      // different system or access mode and the target already has data. Surface a second,
+      // explicit confirmation rather than an error, and retry with force if the user accepts.
+      if (e.status === 409 && e.detail?.code === 'restore_incompatible') {
+        setRestoring(false)
+        setPendingConfirm({
+          type,
+          title: 'Restore over a different system?',
+          message: describeRestoreIncompatibility(e.detail),
+          confirmLabel: 'Restore anyway',
+          variant: 'danger',
+          force: true,
+        })
+        return
+      }
+      setRestoreMsg(`❌ ${e.message}`)
+    }
     setRestoring(false)
   }
 
@@ -332,7 +362,7 @@ export function BackupRestoreTab() {
               </Button>
               <Button
                 variant={pendingConfirm.variant === 'danger' ? 'danger' : 'primary'}
-                onClick={() => performRestore(pendingConfirm.type === 'credentials' ? credsFile : restoreFile, pendingConfirm.type)}
+                onClick={() => performRestore(pendingConfirm.type === 'credentials' ? credsFile : restoreFile, pendingConfirm.type, pendingConfirm.force)}
               >
                 {pendingConfirm.confirmLabel}
               </Button>
