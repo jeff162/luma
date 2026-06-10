@@ -234,8 +234,10 @@ export const api = {
   getCategories: () => request('/categories/flat'),
   getCategoryUsageSummary: () => request('/categories/usage-summary'),
   createCategory: (data) => request('/categories', { method: 'POST', body: JSON.stringify(data) }),
+  getInactiveCategories: () => request('/categories/inactive'),
   getCategoryDeletePreview: (id) => request(`/categories/${id}/delete-preview`),
   deleteCategory: (id, data = {}) => request(`/categories/${id}`, { method: 'DELETE', body: JSON.stringify(data) }),
+  reactivateCategory: (id) => request(`/categories/${id}/reactivate`, { method: 'POST' }),
   updateCategory: (id, data) =>
     request(`/categories/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   getCategoryTags: (id) => request(`/categories/${id}/tags`),
@@ -399,10 +401,6 @@ export const api = {
     }),
   applyBatchCategoryMappings: (id, assignments) =>
     request(`/import-export/batches/${id}/category-mappings`, { method: 'POST', body: JSON.stringify({ assignments }) }),
-  saveBatchCategoryWorkspaceDraft: (id, draft) =>
-    request(`/import-export/batches/${id}/category-workspace-draft`, { method: 'PATCH', body: JSON.stringify({ draft }) }),
-  getBatchCategoryWorkspaceDraft: (id) =>
-    request(`/import-export/batches/${id}/category-workspace-draft`),
   setBatchProfile: (id, profileId) =>
     request(`/import-export/batches/${id}/profile`, { method: 'PATCH', body: JSON.stringify({ profile_id: profileId }) }),
   createProfileFromBatch: (id, name, filenamePattern = null) =>

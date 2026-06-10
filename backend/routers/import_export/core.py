@@ -237,10 +237,6 @@ def _row_uses_imported_categories(is_enabled: bool, settings: dict, owner_id: Op
     return False
 
 
-class BatchCategoryWorkspaceDraftRequest(BaseModel):
-    draft: Optional[dict] = None
-
-
 class BatchImportedCategoryUsageUpdateRequest(BaseModel):
     use_imported_categories: bool
     imported_category_scope_mode: Optional[str] = None
@@ -715,133 +711,6 @@ def _load_batch_duplicate_details(conn, batch_row) -> tuple[list[str], list[dict
     if isinstance(legacy_rows, list):
         return headers, legacy_rows
     return headers, []
-
-def summarize_category_workspace_draft(draft: Optional[dict]) -> Optional[dict]:
-    """
-    Return {total_count, remaining_count} for a category workspace draft,
-    mirroring the summarizeCategoryWorkspaceDraft logic in the frontend.
-    Returns None if there is no draft or it contains no source values.
-    total_count  — all source values ever seen (pending + set-aside + placed in tree).
-    remaining_count — items still in the pending (sourceOrder) bucket.
-    """
-    if not isinstance(draft, dict):
-        return None
-    snapshot = draft.get("snapshot")
-    if not isinstance(snapshot, dict):
-        return None
-
-    seen: set = set()
-
-    def add(value):
-        normalized = str(value or "").strip()
-        if normalized:
-            seen.add(normalized)
-
-    for v in snapshot.get("sourceOrder") or []:
-        add(v)
-    for v in snapshot.get("setAsideOrder") or []:
-        add(v)
-    tree = snapshot.get("tree") or {}
-    for section in ("income", "expense"):
-        for group in tree.get(section) or []:
-            for child in group.get("children") or []:
-                add(child.get("sourceValue") or child.get("name"))
-
-    total_count = len(seen)
-    if total_count == 0:
-        return None
-
-    remaining_count = len(snapshot.get("sourceOrder") or [])
-    return {"total_count": total_count, "remaining_count": remaining_count}
-
-
-def _load_live_category_workspace_seed(conn) -> tuple[dict, set[str]]:
-    groups = conn.execute(
-        """
-        SELECT id, name, category_type
-        FROM   category
-        WHERE  parent_id IS NULL
-        ORDER  BY name
-        """
-    ).fetchall()
-    live_leaf_rows = conn.execute(
-        """
-        SELECT name
-        FROM   category
-        WHERE  parent_id IS NOT NULL
-        """
-    ).fetchall()
-
-    tree = {"income": [], "expense": []}
-    collapsed_groups = {}
-    for group in groups:
-        section = "income" if group["category_type"] == "income" else "expense"
-        tree[section].append({
-            "id": group["id"],
-            "name": str(group["name"] or "").strip(),
-            "categoryType": section,
-            "children": [],
-        })
-        collapsed_groups[group["id"]] = True
-
-    existing_leaf_names = {
-        normalize_import_category(row["name"])
-        for row in live_leaf_rows
-        if str(row["name"] or "").strip()
-    }
-    return {"tree": tree, "collapsed_groups": collapsed_groups}, existing_leaf_names
-
-
-def build_category_workspace_draft(conn, source_values: list[str]) -> Optional[dict]:
-    seed, existing_leaf_names = _load_live_category_workspace_seed(conn)
-    seen_values: set[str] = set()
-    pending_values: list[str] = []
-
-    for value in source_values or []:
-        raw_value = str(value or "").strip()
-        normalized = normalize_import_category(raw_value)
-        if not normalized or normalized in seen_values or normalized in existing_leaf_names:
-            continue
-        seen_values.add(normalized)
-        pending_values.append(raw_value)
-
-    if not pending_values:
-        return None
-
-    pending_values.sort(key=lambda value: value.lower())
-    return {
-        "snapshot": {
-            "tree": seed["tree"],
-            "sourceOrder": pending_values,
-            "setAsideOrder": [],
-            "selectedSourceIds": [],
-            "selectedNodeId": None,
-            "collapsedGroups": seed["collapsed_groups"],
-        },
-        "undoStack": [],
-        "redoStack": [],
-        "selectionAnchor": None,
-        "activeSection": "expense",
-    }
-
-
-def build_batch_category_workspace_draft(conn, batch_id: str) -> Optional[dict]:
-    rows = conn.execute(
-        """
-        SELECT imported_category, COUNT(*) AS row_count
-        FROM   txn
-        WHERE  import_batch_id = ?
-          AND  imported_category IS NOT NULL
-          AND  TRIM(imported_category) <> ''
-        GROUP  BY imported_category
-        ORDER  BY COUNT(*) DESC, imported_category
-        """,
-        (batch_id,),
-    ).fetchall()
-    return build_category_workspace_draft(
-        conn,
-        [row["imported_category"] for row in rows],
-    )
 
 
 def get_rule_suggestion_review_state(snapshot: dict) -> dict:
@@ -1793,7 +1662,7 @@ def _find_category_by_normalized_name(conn, normalized_name: str):
         return None
     rows = conn.execute(
         """
-        SELECT id, parent_id, name, category_type, sort_order, system_key, import_source_batch_id
+        SELECT id, parent_id, name, category_type, sort_order, system_key, import_source_batch_id, is_active
         FROM   category
         WHERE  parent_id IS NOT NULL
         ORDER  BY name
@@ -1816,6 +1685,11 @@ def _ensure_imported_batch_category(conn, batch_id: str, raw_name: str):
         return None
     existing = _find_category_by_normalized_name(conn, normalized_name)
     if existing:
+        if not existing["is_active"]:
+            # Set-aside / deleted label: the row imports uncategorized (caller leaves
+            # category_id / category_source NULL, keeps imported_category). Never resurrect
+            # the inactive leaf or create a fresh one for the same label.
+            return None
         if existing["import_source_batch_id"]:
             conn.execute(
                 "UPDATE category SET import_source_batch_id = NULL WHERE id = ?",
@@ -3296,6 +3170,9 @@ def list_batches():
             d = dict(b)
             d.pop("config_snapshot", None)
             snapshot = safe_json_dict(b["config_snapshot"])
+            # Surfaced so the client can tell whether a profileless batch's file shape actually
+            # matches a data source before auto-attaching it (Save as data source guard).
+            d["header_fingerprint"] = snapshot.get("header_fingerprint") or None
             review_state = get_rule_suggestion_review_state(snapshot)
             summary = review_state.get("summary")
             if not isinstance(summary, dict):
@@ -3322,15 +3199,6 @@ def list_batches():
                 }
             d["unknown_source_fallback"] = bool(snapshot.get(UNKNOWN_SOURCE_FALLBACK_KEY))
             d["single_account_new"] = safe_json_dict(snapshot.get("single_account_new"))
-
-            # Legacy category workspace drafts may still be present on some
-            # profileless batches. Surface a lightweight summary without
-            # fetching the full snapshot so older data remains inspectable.
-            d["category_workspace_summary"] = (
-                summarize_category_workspace_draft(snapshot.get("category_workspace_draft"))
-                if not d.get("profile_id")
-                else None
-            )
 
             accs = conn.execute("""
                 SELECT iba.csv_value, iba.account_id, iba.row_count, iba.was_skipped,
@@ -4167,53 +4035,6 @@ def update_batch_imported_category_usage(batch_id: str, body: BatchImportedCateg
         },
         snapshot[IMPORTED_CATEGORY_SETTINGS_KEY],
     )
-
-
-@router.get("/batches/{batch_id}/category-workspace-draft")
-def get_batch_category_workspace_draft(batch_id: str):
-    with get_db() as conn:
-        batch = conn.execute(
-            "SELECT id, profile_id, config_snapshot FROM import_batch WHERE id = ?",
-            (batch_id,),
-        ).fetchone()
-        if not batch:
-            raise HTTPException(status_code=404, detail="Batch not found")
-        snapshot = safe_json_dict(batch["config_snapshot"])
-        draft = snapshot.get("category_workspace_draft")
-        summary = summarize_category_workspace_draft(draft)
-    return {"draft": draft, "summary": summary}
-
-
-@router.patch("/batches/{batch_id}/category-workspace-draft")
-def save_batch_category_workspace_draft(batch_id: str, body: BatchCategoryWorkspaceDraftRequest):
-    """
-    Persist a category workspace draft into a batch's config_snapshot.
-    Used for profileless imports where there is no data source profile to
-    store the draft in. The draft is stored under the same
-    'category_workspace_draft' key used by profile column_map, so the
-    frontend category workspace machinery works identically in both cases.
-    Only valid for profileless batches (profile_id IS NULL); batches linked
-    to a profile store their draft in the profile instead.
-    """
-    with get_db() as conn:
-        batch = conn.execute(
-            "SELECT id, profile_id, config_snapshot FROM import_batch WHERE id = ?",
-            (batch_id,),
-        ).fetchone()
-        if not batch:
-            raise HTTPException(status_code=404, detail="Batch not found")
-        if batch["profile_id"]:
-            raise HTTPException(
-                status_code=400,
-                detail="Category workspace draft is stored on the profile for profile-linked batches",
-            )
-        snapshot = safe_json_dict(batch["config_snapshot"])
-        if body.draft is None:
-            snapshot.pop("category_workspace_draft", None)
-        else:
-            snapshot["category_workspace_draft"] = body.draft
-        save_batch_snapshot(conn, batch_id, snapshot)
-    return {"ok": True}
 
 
 @router.delete("/batches/{batch_id}")

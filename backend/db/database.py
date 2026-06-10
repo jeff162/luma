@@ -92,7 +92,7 @@ def get_db(db_path: str | None = None):
 # Migrations are additive startup upgrades for existing databases only; fresh installs
 # are created directly at `CURRENT_VERSION` and should not replay the migration chain.
 
-CURRENT_VERSION = 25
+CURRENT_VERSION = 26
 
 MIGRATIONS = {}
 
@@ -718,6 +718,24 @@ def m23_account_pair_distinct(conn):
     )
 
 
+@migration(26)
+def m26_category_is_active(conn):
+    """First-class inactive categories.
+
+    A category can be deactivated (soft) by Set aside or Delete instead of being hard-deleted.
+    Inactive categories drop out of the active income/expense trees and surface in a separate
+    flat "Inactive" recovery list; imports never recreate or reassign an inactive label (a
+    matching label imports uncategorized, raw `imported_category` retained). `is_active = 0`
+    means deactivated; deactivation NULLs the category's transactions, so an inactive category
+    is referentially empty and an active-only default read path is safe. Existing rows backfill
+    to active.
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(category)").fetchall()}
+    if "is_active" not in columns:
+        conn.execute("ALTER TABLE category ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_category_active ON category(is_active)")
+
+
 @migration(25)
 def m25_import_batch_duplicate_reviewed_at(conn):
     """Acknowledgment marker for advisory import-time rejections.
@@ -861,8 +879,10 @@ def init_db(db_path: str | None = None):
                 sort_order          INTEGER NOT NULL DEFAULT 0,
                 exclude_from_totals INTEGER NOT NULL DEFAULT 0,
                 system_key          TEXT,
-                import_source_batch_id TEXT REFERENCES import_batch(id) ON DELETE SET NULL
+                import_source_batch_id TEXT REFERENCES import_batch(id) ON DELETE SET NULL,
+                is_active           INTEGER NOT NULL DEFAULT 1
             );
+            CREATE INDEX IF NOT EXISTS idx_category_active ON category(is_active);
 
             -- keyword is matched as a case-insensitive substring of merchant_name or raw_name.
             -- Higher priority wins when multiple rules match.

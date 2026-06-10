@@ -31,7 +31,6 @@ from .core import (
     _annotate_imported_category_settings,
     _get_imported_category_settings,
     _store_imported_category_settings,
-    build_batch_category_workspace_draft,
     save_batch_snapshot,
 )
 
@@ -341,7 +340,6 @@ def delete_profile(profile_id: str):
         for batch in batches:
             snapshot = safe_json_dict(batch["config_snapshot"])
             snapshot[UNKNOWN_SOURCE_FALLBACK_KEY] = True
-            snapshot["category_workspace_draft"] = build_batch_category_workspace_draft(conn, batch["id"])
             save_batch_snapshot(conn, batch["id"], snapshot)
         conn.execute("DELETE FROM csv_import_profile WHERE id = ?", (profile_id,))
     return {"ok": True}

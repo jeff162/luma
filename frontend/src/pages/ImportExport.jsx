@@ -38,9 +38,7 @@ import { BackupRestoreTab } from '../components/importExport/BackupRestoreTab.js
 import { ImportUploadStage } from '../components/importExport/ImportUploadStage.jsx'
 import { ImportHistorySection } from '../components/importExport/ImportHistorySection.jsx'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
-import { cloneCategoryImportSnapshot, createCategoryImportDraftState } from '../lib/categoryImportState.js'
 import {
-  clonePersistedCategoryWorkspaceDraft,
   summarizeCategoryWorkspaceDraft,
   sanitizeCategoryWorkspaceDraftToSourceValues,
   normalizeImportCategoryValue,
@@ -53,7 +51,6 @@ import {
   loadSavedImportDraftRecord,
   loadSavedImportDraft,
   saveImportDraft,
-  saveImportDraftRecord,
   clearSavedImportDraft,
   buildProfileBodyFromSnapshot,
   buildDraftRecordFromPreview,
@@ -212,16 +209,7 @@ function ImportTab() {
   const [accountMap, setAccountMap] = useState({})
   const [pendingAccountMatchChooser, setPendingAccountMatchChooser] = useState(null)
   const [categoryAssignments, setCategoryAssignments] = useState({})
-  const [showCategoryWorkspace, setShowCategoryWorkspace] = useState(false)
-  const [sourceWorkspaceProfileId, setSourceWorkspaceProfileId] = useState('')
-  const [sourceWorkspaceBatchId, setSourceWorkspaceBatchId] = useState('')
-  const [sourceWorkspaceDraft, setSourceWorkspaceDraft] = useState(null)
   const [showSystemCategoryWorkspace, setShowSystemCategoryWorkspace] = useState(false)
-  // Snapshot the source values when the workspace opens and keep them stable.
-  // Recomputing them from the live draft would churn the array identity and
-  // retrigger CategoryImportWorkspace sanitization on every draft update.
-  const [sourceWorkspaceSourceValues, setSourceWorkspaceSourceValues] = useState([])
-  const [importCategoryDraft, setImportCategoryDraft] = useState(null)
   const [importResult, setImportResult] = useState(null)
   const [showRaw, setShowRaw] = useState(false)
   const [rejectedRowsViewer, setRejectedRowsViewer] = useState(null)
@@ -273,19 +261,11 @@ function ImportTab() {
     () => profiles.find(p => p.id === selectedUploadSource) || null,
     [profiles, selectedUploadSource]
   )
-  const activeSourceWorkspaceProfile = useMemo(
-    () => profiles.find(profile => profile.id === sourceWorkspaceProfileId) || null,
-    [profiles, sourceWorkspaceProfileId],
-  )
   const uploadUsesManualDraft = selectedUploadSource === MANUAL_DATA_SOURCE_VALUE
   const uploadChoiceReady = !!selectedUploadSource
   const showingInitialSourceChooser = !uploadChoiceReady
   const isFirstRunSourceChoice = showingInitialSourceChooser && profiles.length === 0
   const uploadSelectionLabel = activeUploadProfile?.name || (uploadUsesManualDraft ? 'Temporary draft' : '')
-  const activeSourceWorkspaceSummary = useMemo(
-    () => summarizeCategoryWorkspaceDraft(sourceWorkspaceDraft || clonePersistedCategoryWorkspaceDraft(activeSourceWorkspaceProfile?.column_map?.category_workspace_draft)),
-    [activeSourceWorkspaceProfile, sourceWorkspaceDraft],
-  )
   const unassignedGroup = useMemo(
     () => categories.find(category => !category.parent_id && category.system_key === UNASSIGNED_CATEGORY_SYSTEM_KEY) || null,
     [categories],
@@ -692,14 +672,12 @@ function ImportTab() {
 
   const dataSourceRows = useMemo(() => {
     const savedSourceRows = profiles.map(profile => {
-      const draft = clonePersistedCategoryWorkspaceDraft(profile.column_map?.category_workspace_draft)
       const profileBatches = batches.filter(batch => batch.profile_id === profile.id).sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
       const latestBatch = profileBatches[0] || null
       return {
         key: `profile:${profile.id}`,
         kind: 'profile',
         profile,
-        draft,
         hasImportedCategories: profileBatches.some(batch => batch.has_imported_categories),
         batches: profileBatches,
         latestBatch,
@@ -719,7 +697,6 @@ function ImportTab() {
         key: 'manual-draft',
         kind: 'manual',
         profile: null,
-        draft: clonePersistedCategoryWorkspaceDraft(manualDraftRecord?.snapshot?.category_workspace_draft),
         hasImportedCategories: !!latestManualBatch?.has_imported_categories,
         batches: [latestManualBatch],
         latestBatch: latestManualBatch,
@@ -738,7 +715,6 @@ function ImportTab() {
         key: 'unknown-source',
         kind: 'unknown',
         profile: null,
-        draft: null,
         hasImportedCategories: unknownSourceBatches.some(batch => batch.has_imported_categories),
         batches: unknownSourceBatches,
         latestBatch: unknownSourceBatches[0],
@@ -844,8 +820,6 @@ function ImportTab() {
   }
 
   function handleCategoryColumnChange(nextValue) {
-    setShowCategoryWorkspace(false)
-    setImportCategoryDraft(null)
     if (nextValue) clearMappingSuggestion('category')
     setColCategory(nextValue)
   }
@@ -1058,7 +1032,7 @@ function ImportTab() {
     dbInstanceId, preferenceSubjectId,
     preview, hasImportWorkToSave, selectedProfile, accountId, dateFormat, amtConv, skipRows, applyCat, useImportedCategories, importedCategorySettings,
     colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount,
-    singleAccountNew, accountMap, categoryAssignments, importCategoryDraft,
+    singleAccountNew, accountMap, categoryAssignments,
   ])
 
   useEffect(() => {
@@ -1138,7 +1112,6 @@ function ImportTab() {
     // every column state var explicitly in the deps below so a column-mapping
     // change still invalidates the snapshot.
     const cm = getColumnMap()
-    const categoryWorkspaceDraft = clonePersistedCategoryWorkspaceDraft(importCategoryDraft)
     const accountImportState = buildAccountImportStateSnapshot(accountMap)
     if (!colAccount && singleAccountNew.enabled && singleAccountNew.name.trim()) {
       const snapshot = {
@@ -1159,7 +1132,6 @@ function ImportTab() {
         imported_category_unassigned_account_tokens: normalizeImportedCategorySettings(importedCategorySettings).unassigned_account_tokens,
         ...accountImportState,
       }
-      if (categoryWorkspaceDraft) snapshot.category_workspace_draft = categoryWorkspaceDraft
       return snapshot
     }
     const normalizedImportedCategorySettings = normalizeImportedCategorySettings(importedCategorySettings)
@@ -1176,7 +1148,6 @@ function ImportTab() {
       imported_category_unassigned_account_tokens: normalizedImportedCategorySettings.unassigned_account_tokens,
       ...accountImportState,
     }
-    if (categoryWorkspaceDraft) snapshot.category_workspace_draft = categoryWorkspaceDraft
     return snapshot
     // getColumnMap is a hoisted function declaration (further down in this file) that
     // reads exactly the col* state vars listed below, so the effective dependency set
@@ -1184,7 +1155,7 @@ function ImportTab() {
     // above this point (or useCallback'ing it, which would TDZ here).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    importCategoryDraft, accountMap, accountId, dateFormat, amtConv, skipRows,
+    accountMap, accountId, dateFormat, amtConv, skipRows,
     applyCat, useImportedCategories, importedCategorySettings, singleAccountNew,
     colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount,
   ])
@@ -1370,7 +1341,6 @@ function ImportTab() {
 
   function resetToManualImportMapping() {
     setSelectedProfile('')
-    setShowCategoryWorkspace(false)
     applySnapshot(getBlankImportSnapshot())
     setMappingSuggestions(getBlankMappingSuggestions())
     setDateFormatLocked(false)
@@ -1380,7 +1350,6 @@ function ImportTab() {
     const inferredMapping = inferUnambiguousImportMappingFromPreview(previewLike, 0)
     const inferredCharacteristics = inferImportFileCharacteristicsFromPreview(previewLike, 0)
     setSelectedProfile(profileId || '')
-    setShowCategoryWorkspace(false)
     setShowMappingSourceChooser(false)
     setAccountId('')
     setDateFormat(inferredCharacteristics.dateFormat || '%m/%d/%Y')
@@ -1403,7 +1372,6 @@ function ImportTab() {
     applyInferredMappingSuggestions(inferredMapping)
     setAccountMap({})
     setCategoryAssignments({})
-    setImportCategoryDraft(null)
     setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
   }
 
@@ -1437,8 +1405,6 @@ function ImportTab() {
     setMappingSuggestions(getBlankMappingSuggestions())
     setAccountMap({})
     setCategoryAssignments({})
-    setImportCategoryDraft(null)
-    setShowCategoryWorkspace(false)
     setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
   }
 
@@ -1484,7 +1450,6 @@ function ImportTab() {
       },
     }))
     setCategoryAssignments(cm.category_assignments || {})
-    setImportCategoryDraft(clonePersistedCategoryWorkspaceDraft(cm.category_workspace_draft))
     setSingleAccountNew(cm.single_account_new && !existingSingleAccount
       ? { enabled: true, name: cm.single_account_new.name || '', type: cm.single_account_new.type || 'depository' }
       : { enabled: false, name: '', type: 'depository' })
@@ -1550,7 +1515,6 @@ function ImportTab() {
   function applySnapshot(snap, previewLike = preview) {
     if (!snap) return
     const cm = snap.column_map || {}
-    const restoredCategoryDraft = clonePersistedCategoryWorkspaceDraft(snap.category_workspace_draft)
     const existingSingleAccount = snap.single_account_new?.name
       ? findExactAccountNameMatch(accounts, snap.single_account_new.name)
       : null
@@ -1581,7 +1545,6 @@ function ImportTab() {
       },
     }))
     setCategoryAssignments((snap.category_assignments || cm.category_assignments || {}))
-    setImportCategoryDraft(restoredCategoryDraft)
     setAccountId(existingSingleAccount ? existingSingleAccount.id : (existingAssignedAccount?.id || ''))
     setSingleAccountNew(snap.single_account_new && !existingSingleAccount
       ? { enabled: true, name: snap.single_account_new.name || '', type: snap.single_account_new.type || 'depository' }
@@ -1996,19 +1959,6 @@ function ImportTab() {
       if (result.trailing_non_transaction_suspected || result.invalid_rows_suspected) setShowRaw(true)
       const refreshedAccounts = await api.getAccounts({ include_children: true })
       setAccounts(refreshedAccounts)
-      let nextImportCategoryDraft = importCategoryDraft
-      if (!nextImportCategoryDraft && colCategory && sourceCategoryValues.length > 0) {
-        nextImportCategoryDraft = createCategoryImportDraftState(sourceCategoryValues, categories)
-        setImportCategoryDraft(nextImportCategoryDraft)
-      }
-      // Profileless imports still keep their draft snapshot locally so a later
-      // manual data source save can preserve the user's mapping work.
-      if (!selectedProfile && result.batch_id) {
-        const categoryWorkspaceDraft = clonePersistedCategoryWorkspaceDraft(nextImportCategoryDraft)
-        if (categoryWorkspaceDraft) {
-          api.saveBatchCategoryWorkspaceDraft(result.batch_id, categoryWorkspaceDraft).catch(() => { })
-        }
-      }
       // Force the target row open so the completed file card is visible immediately,
       // even if this source was collapsed in the user's saved history view.
       // For temporary draft imports, also expand unknown-source if a prior batch
@@ -2021,7 +1971,7 @@ function ImportTab() {
       })
       api.listBatches().then(setBatches)
       if (selectedProfile) {
-        await autoSaveProfile(refreshedAccounts, nextImportCategoryDraft).catch(() => { })
+        await autoSaveProfile(refreshedAccounts).catch(() => { })
       }
       setStage(result.trailing_non_transaction_suspected ? 'review-data' : 'done')
     } catch (e) {
@@ -2076,8 +2026,14 @@ function ImportTab() {
     try {
       const response = await api.createImportProfile(body)
       const newProfileId = response?.id
+      // Only adopt the most-recent profileless batch into the new source when its file shape
+      // actually matches. Saving a *fresh* mapping as a source (before that file is imported)
+      // leaves the current file with no batch yet, so getTemporaryDraftBatch() would otherwise
+      // return an unrelated earlier import and wrongly file it under this source.
+      const newProfileFingerprint = String(body.header_fingerprint || '').trim()
       const currentTemporaryDraftBatch = getTemporaryDraftBatch()
-      if (newProfileId && currentTemporaryDraftBatch) {
+      const batchFingerprint = String(currentTemporaryDraftBatch?.header_fingerprint || '').trim()
+      if (newProfileId && currentTemporaryDraftBatch && newProfileFingerprint && batchFingerprint === newProfileFingerprint) {
         await api.setBatchProfile(currentTemporaryDraftBatch.id, newProfileId).catch(() => { })
       }
       const updatedProfiles = await api.getImportProfiles()
@@ -2158,7 +2114,7 @@ function ImportTab() {
 
   // Silently update the active profile after a successful import so account
   // mappings (including new accounts and skips) are never lost
-  async function autoSaveProfile(refreshedAccounts, draftOverride = null) {
+  async function autoSaveProfile(refreshedAccounts) {
     if (!selectedProfile) return
     const p = profiles.find(x => x.id === selectedProfile)
     if (!p) return
@@ -2177,9 +2133,6 @@ function ImportTab() {
     }
     const existingProfileMap = { ...(p.column_map || {}) }
     const cm = { ...existingProfileMap, ...getColumnMap() }
-    const categoryWorkspaceDraft = clonePersistedCategoryWorkspaceDraft(draftOverride || importCategoryDraft)
-    if (categoryWorkspaceDraft) cm.category_workspace_draft = categoryWorkspaceDraft
-    else delete cm.category_workspace_draft
     if (!colAccount && singleAccountNew.enabled && singleAccountNew.name.trim()) {
       cm.single_account_new = {
         name: singleAccountNew.name.trim(),
@@ -2260,8 +2213,6 @@ function ImportTab() {
     setColPending(null)
     setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
     setCategoryAssignments({})
-    setShowCategoryWorkspace(false)
-    setImportCategoryDraft(null)
     setImportedCategorySettings(getBlankImportedCategorySettings())
     setShowRaw(false); setShowAdvanced(false)
     resetImportMappingState()
@@ -2308,7 +2259,6 @@ function ImportTab() {
         const profile = profiles.find(p => p.id === batch.profile_id)
         if (profile) {
           const nextColumnMap = { ...(profile.column_map || {}) }
-          delete nextColumnMap.category_workspace_draft
           delete nextColumnMap.rule_suggestion_review
           api.updateImportProfile(batch.profile_id, { column_map: nextColumnMap })
             .then(() => api.getImportProfiles().then(setProfiles))
@@ -2394,6 +2344,15 @@ function ImportTab() {
             }
           }
         }
+      }
+
+      // The Set Aside list is committed here too, alongside the group placements: each set-aside
+      // label deactivates its live category (no replacement → its transactions become uncategorized),
+      // so it leaves the pool and lands in the Categories "Inactive" list, recoverable from there,
+      // and future imports of that label come in uncategorized instead of recreating it.
+      for (const sourceValue of draft?.snapshot?.setAsideOrder || []) {
+        const liveCategory = sourceCategoryMap.get(normalizeImportCategoryValue(sourceValue))
+        if (liveCategory) await api.deleteCategory(liveCategory.id)
       }
 
       const refreshedCategories = await api.getCategories()
@@ -2547,10 +2506,6 @@ function ImportTab() {
     }
   }
 
-  function getCategoryWorkspaceSnapshot(draft) {
-    return draft?.snapshot || draft
-  }
-
   function advancePastDataReview() {
     setShowRaw(false)
     setStage('done')
@@ -2575,191 +2530,6 @@ function ImportTab() {
         title: 'Could not cancel that import',
         description: error?.message || 'Please try again.',
       })
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  function buildPostApplyCategoryWorkspaceDraft(draft, snapshot) {
-    const committedSnapshot = cloneCategoryImportSnapshot(snapshot)
-    for (const sectionType of ['income', 'expense']) {
-      committedSnapshot.tree[sectionType] = (committedSnapshot.tree[sectionType] || []).map(group => ({
-        ...group,
-        children: (group.children || []).map(child => (
-          child?.sourceValue
-            ? { ...child, imported: true }
-            : child
-        )),
-      }))
-    }
-    committedSnapshot.selectedSourceIds = []
-    committedSnapshot.selectedNodeId = null
-    return {
-      ...(draft || {}),
-      snapshot: committedSnapshot,
-      undoStack: [],
-      redoStack: [],
-      selectionAnchor: null,
-      selectedBucketCategoryIds: [],
-      bucketSelectionAnchor: null,
-    }
-  }
-
-  async function persistProfileCategoryWorkspaceDraft(profileId, draft) {
-    const profile = profiles.find(item => item.id === profileId)
-    if (!profile) return false
-    const persistedDraft = clonePersistedCategoryWorkspaceDraft(draft)
-    const nextColumnMap = { ...(profile.column_map || {}) }
-    if (persistedDraft) nextColumnMap.category_workspace_draft = persistedDraft
-    else delete nextColumnMap.category_workspace_draft
-
-    setProfiles(prev => prev.map(item => (
-      item.id === profileId
-        ? { ...item, column_map: nextColumnMap }
-        : item
-    )))
-
-    try {
-      await api.updateImportProfile(profileId, { column_map: nextColumnMap })
-      return true
-    } catch (error) {
-      api.getImportProfiles().then(setProfiles)
-      setNoticeDialog({
-        title: 'Could not save the data source category mappings',
-        description: error?.message || 'Please try again.',
-      })
-      return false
-    }
-  }
-
-  function persistManualDraftCategoryWorkspaceDraft(draft) {
-    if (!manualDraftRecord) return false
-    const persistedDraft = clonePersistedCategoryWorkspaceDraft(draft)
-    const nextRecord = {
-      ...manualDraftRecord,
-      snapshot: {
-        ...manualDraftRecord.snapshot,
-        category_workspace_draft: persistedDraft,
-      },
-    }
-    const saved = saveImportDraftRecord(nextRecord, dbInstanceId, preferenceSubjectId)
-    setManualDraftRecord(saved || nextRecord)
-    return true
-  }
-
-  function closeSourceCategoryWorkspace() {
-    const profileId = sourceWorkspaceProfileId
-    const batchId = sourceWorkspaceBatchId
-    const draft = sourceWorkspaceDraft
-    setShowCategoryWorkspace(false)
-    setSourceWorkspaceProfileId('')
-    setSourceWorkspaceBatchId('')
-    setSourceWorkspaceSourceValues([])
-    setSourceWorkspaceDraft(null)
-    if (batchId && draft) {
-      const persistedDraft = clonePersistedCategoryWorkspaceDraft(draft)
-      api.saveBatchCategoryWorkspaceDraft(batchId, persistedDraft).catch(() => { })
-    } else if (profileId && draft) {
-      if (profileId === MANUAL_DATA_SOURCE_VALUE) persistManualDraftCategoryWorkspaceDraft(draft)
-      else persistProfileCategoryWorkspaceDraft(profileId, draft)
-    }
-  }
-
-  async function commitCategoryWorkspaceDraftToLiveCategories(draft) {
-    const snapshot = getCategoryWorkspaceSnapshot(draft)
-    const currentCategories = await api.getCategories()
-    const liveGroups = currentCategories.filter(cat => !cat.parent_id)
-    const liveChildren = currentCategories.filter(cat => !!cat.parent_id)
-    const groupByKey = new Map(
-      liveGroups.map(group => [
-        `${String(group.category_type || 'expense').toLowerCase()}::${group.name.trim().toLowerCase()}`,
-        group,
-      ]),
-    )
-    const childrenByGroupId = new Map()
-    for (const child of liveChildren) {
-      const groupChildren = childrenByGroupId.get(child.parent_id) || []
-      groupChildren.push(child)
-      childrenByGroupId.set(child.parent_id, groupChildren)
-    }
-
-    for (const sectionType of ['income', 'expense']) {
-      for (const draftGroup of snapshot.tree[sectionType] || []) {
-        const groupName = String(draftGroup.name || '').trim()
-        if (!groupName) continue
-        const groupKey = `${sectionType}::${groupName.toLowerCase()}`
-        let liveGroup = groupByKey.get(groupKey)
-        if (!liveGroup) {
-          liveGroup = await api.createCategory({
-            name: groupName,
-            category_type: sectionType,
-          })
-          groupByKey.set(groupKey, liveGroup)
-          childrenByGroupId.set(liveGroup.id, [])
-        }
-
-        const existingChildNames = new Set(
-          (childrenByGroupId.get(liveGroup.id) || []).map(child => child.name.trim().toLowerCase()),
-        )
-
-        for (const draftChild of draftGroup.children || []) {
-          const childName = String(draftChild.name || draftChild.sourceValue || '').trim()
-          if (!childName || existingChildNames.has(childName.toLowerCase())) continue
-          const createdChild = await api.createCategory({
-            name: childName,
-            parent_id: liveGroup.id,
-          })
-          existingChildNames.add(childName.toLowerCase())
-          childrenByGroupId.set(liveGroup.id, [...(childrenByGroupId.get(liveGroup.id) || []), createdChild])
-        }
-      }
-    }
-
-    const refreshedCategories = await api.getCategories()
-    return {
-      refreshedCategories,
-      nextDraft: buildPostApplyCategoryWorkspaceDraft(draft, snapshot),
-    }
-  }
-
-  async function applyCategoryWorkspaceDraft(draft) {
-    setLoading(true)
-    try {
-      const { refreshedCategories, nextDraft } = await commitCategoryWorkspaceDraftToLiveCategories(draft)
-      setCategories(refreshedCategories)
-      setImportCategoryDraft(nextDraft)
-      if (selectedProfile) {
-        await persistProfileCategoryWorkspaceDraft(selectedProfile, nextDraft)
-      } else {
-        persistManualDraftCategoryWorkspaceDraft(nextDraft)
-      }
-      setShowCategoryWorkspace(false)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function applySourceCategoryWorkspaceDraft(draft) {
-    if (!sourceWorkspaceProfileId && !sourceWorkspaceBatchId) return
-    setLoading(true)
-    try {
-      const { refreshedCategories, nextDraft } = await commitCategoryWorkspaceDraftToLiveCategories(draft)
-      setCategories(refreshedCategories)
-      setSourceWorkspaceDraft(nextDraft)
-      if (sourceWorkspaceBatchId) {
-        const persistedDraft = clonePersistedCategoryWorkspaceDraft(nextDraft)
-        await api.saveBatchCategoryWorkspaceDraft(sourceWorkspaceBatchId, persistedDraft).catch(() => { })
-        api.listBatches().then(setBatches)
-      } else if (sourceWorkspaceProfileId === MANUAL_DATA_SOURCE_VALUE) {
-        persistManualDraftCategoryWorkspaceDraft(nextDraft)
-      } else {
-        await persistProfileCategoryWorkspaceDraft(sourceWorkspaceProfileId, nextDraft)
-      }
-      setShowCategoryWorkspace(false)
-      setSourceWorkspaceProfileId('')
-      setSourceWorkspaceBatchId('')
-      setSourceWorkspaceSourceValues([])
-      setSourceWorkspaceDraft(null)
     } finally {
       setLoading(false)
     }
@@ -3007,37 +2777,6 @@ function ImportTab() {
           applyPendingLabel="Applying…"
           remainingItemLabelSingular="unassigned category"
           remainingItemLabelPlural="unassigned categories"
-        />
-      ) : null}
-
-      {showCategoryWorkspace && (preview || sourceWorkspaceProfileId || sourceWorkspaceBatchId) ? (
-        <CategoryImportWorkspace
-          sourceValues={sourceWorkspaceProfileId
-            ? activeSourceWorkspaceSummary.sourceValues
-            : sourceWorkspaceBatchId
-              ? sourceWorkspaceSourceValues
-              : sourceCategoryValues}
-          sourceMeta={sourceWorkspaceProfileId
-            ? {
-              total_count: activeSourceWorkspaceSummary.totalCount,
-              displayed_count: activeSourceWorkspaceSummary.totalCount,
-              truncated: false,
-              limit: activeSourceWorkspaceSummary.totalCount,
-            }
-            : sourceWorkspaceBatchId
-              ? {
-                total_count: sourceWorkspaceSourceValues.length,
-                displayed_count: sourceWorkspaceSourceValues.length,
-                truncated: false,
-                limit: sourceWorkspaceSourceValues.length,
-              }
-              : sourceCategoryMeta}
-          existingCategories={categories}
-          initialDraftState={sourceWorkspaceProfileId || sourceWorkspaceBatchId ? sourceWorkspaceDraft : importCategoryDraft}
-          onDraftStateChange={sourceWorkspaceProfileId || sourceWorkspaceBatchId ? setSourceWorkspaceDraft : setImportCategoryDraft}
-          onApply={sourceWorkspaceProfileId || sourceWorkspaceBatchId ? applySourceCategoryWorkspaceDraft : applyCategoryWorkspaceDraft}
-          onClose={sourceWorkspaceProfileId || sourceWorkspaceBatchId ? closeSourceCategoryWorkspace : () => setShowCategoryWorkspace(false)}
-          onCategoriesChanged={setCategories}
         />
       ) : null}
 

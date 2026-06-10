@@ -219,6 +219,11 @@ function DeleteCategoryDialog({ category, preview, categories, replacementId, on
               </div>
             </div>
           </label>
+
+          <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+            The category isn&apos;t erased — it moves to <strong>Inactive</strong>, where you can recover it later.
+            While inactive, future imports that use this label come in uncategorized instead of recreating it.
+          </div>
         </div>
 
         <DialogActions>
@@ -631,6 +636,7 @@ export default function Categories() {
   const { preferences } = useUserPreferences()
   const [tree, setTree] = useState([])
   const [flatCats, setFlatCats] = useState([])
+  const [inactiveCategories, setInactiveCategories] = useState([])
   const [availableTags, setAvailableTags] = useState([])
   const [tagPickerOpenForId, setTagPickerOpenForId] = useState(null)
   const [categoryUsage, setCategoryUsage] = useState({})
@@ -711,10 +717,11 @@ export default function Categories() {
   }, [dbInstanceId, preferences, userId])
 
   const loadCategories = useCallback(async (selectedId = selectedRef.current?.id) => {
-    const [nextTree, nextFlat, nextUsage, uncategorizedExpenseResult, uncategorizedIncomeResult] = await Promise.all([
+    const [nextTree, nextFlat, nextUsage, nextInactive, uncategorizedExpenseResult, uncategorizedIncomeResult] = await Promise.all([
       api.getCategoryTree(),
       api.getCategories(),
       api.getCategoryUsageSummary(),
+      api.getInactiveCategories(),
       api.getTransactions({
         category_id: SYNTHETIC_UNCATEGORIZED_EXPENSE_CATEGORY_ID,
         limit: 1,
@@ -730,6 +737,7 @@ export default function Categories() {
     const nextUncategorizedIncomeTxnCount = Number(uncategorizedIncomeResult?.total || 0)
     setTree(nextTree)
     setFlatCats(nextFlat)
+    setInactiveCategories(Array.isArray(nextInactive) ? nextInactive : [])
     setCategoryUsage(nextUsage || {})
     setUncategorizedExpenseTxnCount(nextUncategorizedExpenseTxnCount)
     setUncategorizedIncomeTxnCount(nextUncategorizedIncomeTxnCount)
@@ -1233,6 +1241,11 @@ export default function Categories() {
     setDeleteDialog(null)
     setDeleteReplacementId('')
     setDeleteMode('replace')
+  }
+
+  async function handleReactivate(id) {
+    await api.reactivateCategory(id)
+    await loadCategories()
   }
 
   function selectCategory(cat) {
@@ -2002,6 +2015,59 @@ export default function Categories() {
                 </div>
               )
             })}
+            {!loading && inactiveCategories.length > 0 ? (
+              <div style={{ borderTop: '1px solid var(--border)' }}>
+                <div
+                  style={{
+                    padding: '5px 11px 4px',
+                    background: 'color-mix(in srgb, var(--surface2) 70%, transparent)',
+                    borderBottom: '1px solid var(--border)',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>Inactive</span>
+                    <span style={{ fontSize: 11, color: 'var(--muted)' }}>{inactiveCategories.length}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>
+                    Set aside or deleted. Imports of these labels stay uncategorized until you recover them.
+                  </div>
+                </div>
+                {inactiveCategories.map(cat => (
+                  <div
+                    key={cat.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      padding: '4px 11px',
+                      borderBottom: '1px solid var(--border)',
+                    }}
+                  >
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--muted)', minWidth: 0 }}>
+                      <CategoryMarker kind="category" />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cat.name}</span>
+                    </span>
+                    <button
+                      onClick={() => handleReactivate(cat.id)}
+                      title={`Recover ${cat.name}`}
+                      style={{
+                        background: 'var(--surface)',
+                        border: '1px solid var(--border)',
+                        color: 'var(--text)',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                        padding: '2px 10px',
+                        borderRadius: 6,
+                        flexShrink: 0,
+                      }}
+                    >
+                      Recover
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             </div>
             <ScrollFade top={listScrollState.top} bottom={listScrollState.bottom} />
           </div>

@@ -142,12 +142,27 @@ export function reconcileSnapshotGroupsWithCategories(snapshot, existingCategori
     }
   }
   const liveIds = new Set(liveGroups.map(group => group.id))
+  const liveGroupKeys = new Set(liveGroups.map(group => `${group.categoryType}::${group.name.toLowerCase()}`))
 
-  // Children of groups that no longer exist live go back to the inbox rather than vanishing with the group.
+  // A non-live draft group is one of three things:
+  //   - `pending`, no live group of the same name yet — the user created it in this workspace and
+  //     hasn't Applied. Keep it, empty or not, so reloading mid-build doesn't discard the scaffold.
+  //   - `pending`, but a live group now shares its name — it was Applied; the live group supersedes
+  //     the leftover draft copy, so drop the copy (avoids a duplicate) and return any children.
+  //   - not pending — it mirrored a live group deleted on the Categories page; drop it and return
+  //     its children to the inbox so no sorted value vanishes with the group.
+  const pendingGroups = { income: [], expense: [] }
   const returnedValues = []
   for (const [id, group] of draftGroupsById) {
     if (liveIds.has(id)) continue
-    for (const child of group.children || []) {
+    const sectionType = group.categoryType === 'income' ? 'income' : 'expense'
+    const children = (group.children || []).filter(child => String(child?.sourceValue || child?.name || '').trim())
+    const groupKey = `${sectionType}::${String(group.name || '').trim().toLowerCase()}`
+    if (group.pending && !liveGroupKeys.has(groupKey)) {
+      pendingGroups[sectionType].push({ ...group, children })
+      continue
+    }
+    for (const child of children) {
       const value = String(child?.sourceValue || child?.name || '').trim()
       if (value) returnedValues.push(value)
     }
@@ -164,6 +179,7 @@ export function reconcileSnapshotGroupsWithCategories(snapshot, existingCategori
     })
   }
   for (const sectionType of ['income', 'expense']) {
+    for (const group of pendingGroups[sectionType]) tree[sectionType].push(group)
     tree[sectionType].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
   }
   next.tree = tree

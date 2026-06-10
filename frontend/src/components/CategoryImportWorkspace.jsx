@@ -754,7 +754,7 @@ export default function CategoryImportWorkspace({
   function addGroup(sectionType) {
     const id = createTempId('group')
     applySnapshotChange(next => {
-      next.tree[sectionType].push({ id, name: '', categoryType: sectionType, children: [] })
+      next.tree[sectionType].push({ id, name: '', categoryType: sectionType, children: [], pending: true })
       next.collapsedGroups = { ...(next.collapsedGroups || {}), [id]: true }
       next.selectedNodeId = id
       sortSection(next.tree, sectionType)
@@ -781,7 +781,7 @@ export default function CategoryImportWorkspace({
     if (!floatingGroupDraft?.name.trim()) return
     const { id, sectionType, name } = floatingGroupDraft
     applySnapshotChange(next => {
-      next.tree[sectionType].push({ id, name: name.trim(), categoryType: sectionType, children: [] })
+      next.tree[sectionType].push({ id, name: name.trim(), categoryType: sectionType, children: [], pending: true })
       next.collapsedGroups = { ...(next.collapsedGroups || {}), [id]: true }
       next.selectedNodeId = id
       sortSection(next.tree, sectionType)
@@ -1328,6 +1328,9 @@ export default function CategoryImportWorkspace({
   const processedItemLabel = processedCount === 1 ? remainingItemLabelSingular : remainingItemLabelPlural
   const hasWorkToApply = useMemo(() => {
     // Applying should be a no-op if the draft only mirrors categories that already exist live.
+    // Set-aside items are committed on Apply too (they deactivate their live category), so a
+    // draft that only parks labels in Set Aside is still work to apply.
+    if ((snapshot.setAsideOrder || []).length > 0) return true
     const liveGroupsByKey = new Map(
       (existingCategories || [])
         .filter(category => !category?.parent_id)
@@ -1356,7 +1359,7 @@ export default function CategoryImportWorkspace({
         })
       })
     ))
-  }, [existingCategories, snapshot.tree])
+  }, [existingCategories, snapshot.tree, snapshot.setAsideOrder])
   const sourceSelectionInSetAside = snapshot.selectedSourceIds.length > 0 && snapshot.selectedSourceIds.every(value => (snapshot.setAsideOrder || []).includes(value))
   const setAsideCollapsed = !!snapshot.collapsedGroups?.__setAside
   const activeGroupMenuGroup = groupMenu ? groups.find(group => group.id === groupMenu.groupId) || null : null

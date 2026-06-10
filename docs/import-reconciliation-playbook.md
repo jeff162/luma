@@ -85,8 +85,18 @@ column, or separate debit/credit columns.
 On that file's card: **Assign to data source** (pick an existing one) or **+ New data source from
 this file** (creates a data source from that file's own import mapping and links it). The temporary
 draft card additionally keeps **Save as data source**, which builds the new source from the draft
-snapshot so any in-progress imported-category grouping carries over. Several file labels can also
-collapse onto one account during import by giving them the same target.
+snapshot (column/account mapping). Several file labels can also collapse onto one account during
+import by giving them the same target.
+
+### An import keeps creating a category I don't want
+
+Open **Group Imported Categories** from Import / Export, **Set aside** the label (alongside any
+grouping you're doing), and hit **Apply** — or just Delete it on the Categories page. Either one
+*deactivates* the category instead of erasing it: its existing transactions become uncategorized, the
+label drops out of the organize pool, and future imports of that label come in uncategorized rather
+than recreating it. The category isn't gone — it moves to the **Inactive** list at the bottom of the
+Categories page, where **Recover** brings it back (under `Unassigned`) so later imports of that label
+can adopt it again.
 
 ### "Where did a removed duplicate go?"
 

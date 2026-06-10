@@ -316,11 +316,13 @@ CSV import has a few special rules:
 
 - Controls for using categories present in the data should support partial filtering by owner and by unassigned-account bucket without changing which rows are imported. The scope changes only how imported categorization is applied and learned from.
 
-- Organizing imported categories out of `Unassigned` should use the dedicated left-column/right-column workspace from Import / Export so users can sort categories into groups in bulk without working through the general category editor.
+- Organizing imported categories out of `Unassigned` should use the dedicated left-column/right-column workspace from Import / Export so users can sort categories into groups in bulk without working through the general category editor. There is a **single** organize surface — the system-level "Group Imported Categories" workspace, seeded from the live `Unassigned` leaves — not a per-source or per-batch variant. The left column is the pool of unassigned categories; the right column is the group layout.
 
-- The workspace's right-hand group column is a persisted draft, but it must always reflect the *live* top-level groups: groups created (or renamed/removed) on the Categories page after the draft was first seeded have to appear as drop targets. The draft is reconciled against the current category tree on open — new groups are surfaced, deleted groups drop out, and any categories the user had sorted into a now-deleted group return to the inbox rather than vanishing. A draft must never present a frozen, stale set of groups.
+- The workspace's right-hand group column is a draft, but it must always reflect the *live* top-level groups: groups created (or renamed/removed) on the Categories page after the draft was first seeded have to appear as drop targets. The draft is reconciled against the current category tree on open — new groups are surfaced, deleted groups drop out, and any categories the user had sorted into a now-deleted group return to the inbox rather than vanishing. A draft must never present a frozen, stale set of groups.
 
-- The Import-page actions for organizing imported categories and generating rules should show the remaining actionable count. Categories moved to `Set Aside` in the imported-category workspace should stop counting as still waiting in `Unassigned`.
+- **Set aside** and group placement are both draft edits, committed together on **Apply** — set-aside is treated as just another bucket, not a separate immediate action, so the two paths feel consistent and the workspace's undo/redo covers both. Parking a label in the Set Aside list (drag, or the "set aside" button) is reversible in-session until Apply. On Apply, each set-aside label *deactivates* its live category (no replacement → its transactions become uncategorized), so it leaves the pool and appears in the Categories page "Inactive" list, recoverable from there; imports of that label then come in uncategorized until it is recovered. (Before this round, "Set Aside" was draft-only with no backend effect and could not stop a label from reappearing on the next import — Apply is what now makes it durable.)
+
+- The Import-page actions for organizing imported categories and generating rules should show the remaining actionable count. Once a set-aside is committed on Apply, the deactivated category leaves `Unassigned` entirely, so it stops counting as still waiting.
 
 - Mapping screens should allow partial completion when that is a valid workflow.
 
@@ -343,8 +345,6 @@ When a profile matches, it should carry reusable import workspace state, includ
 - account mapping and skips
 
 - category mappings
-
-- category mapping workspace state such as `Set Aside`
 
 - collapsed/open bucket state
 

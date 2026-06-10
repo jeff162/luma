@@ -247,6 +247,9 @@ def list_categories():
                 sort_order,
                 exclude_from_totals
             FROM category
+            -- Inactive (set-aside / deleted) categories are referentially empty and live
+            -- only in the separate /categories/inactive recovery list, never the active tree.
+            WHERE is_active = 1
             -- The category editor and reporting UI both treat top-level income groups as
             -- a distinct section, so the API bakes that ordering in instead of leaving it
             -- to each client to reconstruct.
@@ -293,6 +296,7 @@ def list_categories_flat():
                 sort_order,
                 exclude_from_totals
             FROM category
+            WHERE is_active = 1
             ORDER BY
                 CASE
                     WHEN parent_id IS NULL AND COALESCE(category_type, 'expense') = 'income' THEN 0
@@ -308,6 +312,31 @@ def list_categories_flat():
     for row in tag_rows:
         tag_map.setdefault(row["category_id"], []).append(row["tag_id"])
     return [{**dict(r), "tag_ids": tag_map.get(r["id"], [])} for r in rows]
+
+
+@router.get("/inactive")
+def list_inactive_categories():
+    # The recovery list is flat (no group nesting): set-aside and deleted categories are
+    # referentially empty leaves/branches the user may want to reactivate. Reactivation
+    # re-parents under Unassigned, so the original tree position is not meaningful here.
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                parent_id,
+                name,
+                system_key,
+                COALESCE(category_type, CASE WHEN parent_id IS NULL THEN 'expense' END) AS category_type,
+                sort_order,
+                exclude_from_totals,
+                is_active
+            FROM category
+            WHERE is_active = 0
+            ORDER BY LOWER(name), name, id
+            """
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 @router.get("/usage-summary")
@@ -534,15 +563,44 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
                     (json.dumps(payload), row["id"]),
                 )
 
-        # Preserve the visible tree shape after a group delete even though historical
-        # references to the deleted branch have already been rewritten above.
+        # Soft deactivate instead of hard delete: the whole branch is set aside together so
+        # imports of these labels never recreate or reassign them. The category rows survive
+        # (recoverable via /reactivate) but drop out of the active tree; their transactions
+        # were just NULLed or reassigned above, so the branch is referentially empty.
         conn.execute(
-            """UPDATE category SET parent_id = (
-                SELECT parent_id FROM category WHERE id = ?
-            ) WHERE parent_id = ?""",
-            (category_id, category_id),
+            f"UPDATE category SET is_active = 0 WHERE id IN ({placeholders})",
+            affected_ids,
         )
-        conn.execute("DELETE FROM category WHERE id = ?", (category_id,))
+        # A rule must target an active category. Drop any rule pointing into the deactivated
+        # branch so a stale rule can't re-categorize new transactions into an inactive label.
+        conn.execute(
+            f"DELETE FROM category_rule WHERE category_id IN ({placeholders})",
+            affected_ids,
+        )
+    return {"ok": True}
+
+
+@router.post("/{category_id}/reactivate")
+def reactivate_category(category_id: str):
+    with get_db() as conn:
+        cat = conn.execute(
+            "SELECT id, is_active FROM category WHERE id = ?", (category_id,)
+        ).fetchone()
+        if not cat:
+            raise HTTPException(status_code=404, detail="Not found")
+        if cat["is_active"]:
+            return {"ok": True}
+        # Reactivated categories land under Unassigned as plain leaves: their original tree
+        # position is not preserved, and deactivation already NULLed their old transactions
+        # (reactivate does not retro-recategorize them — only future assignments apply).
+        unassigned = conn.execute(
+            "SELECT id FROM category WHERE system_key = ?",
+            (UNASSIGNED_CATEGORY_SYSTEM_KEY,),
+        ).fetchone()
+        conn.execute(
+            "UPDATE category SET is_active = 1, parent_id = ?, category_type = 'expense' WHERE id = ?",
+            (unassigned["id"] if unassigned else None, category_id),
+        )
     return {"ok": True}
 
 

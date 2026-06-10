@@ -70,17 +70,22 @@ def categorize_transaction(
     # Ordering is the user-visible precedence model: account/owner-scoped rules and
     # tighter keywords win before broader fallbacks, so previews match future imports.
     rules = conn.execute(
-        """SELECT id, category_id, keyword, amount_min, amount_max, debit_credit, owner_id, account_id, clean_name
-           FROM   category_rule
+        """SELECT cr.id, cr.category_id, cr.keyword, cr.amount_min, cr.amount_max,
+                  cr.debit_credit, cr.owner_id, cr.account_id, cr.clean_name
+           FROM   category_rule cr
+           LEFT   JOIN category c ON c.id = cr.category_id
+           -- Deactivating a category prunes its rules, but stay defensive: a rule must never
+           -- categorize into an inactive category. Tag-only rules (category_id NULL) still apply.
+           WHERE  cr.category_id IS NULL OR c.is_active = 1
            ORDER  BY
-               CASE WHEN owner_id IS NOT NULL THEN 1 ELSE 0 END DESC,
-               CASE WHEN account_id IS NOT NULL THEN 1 ELSE 0 END DESC,
-               LENGTH(keyword) DESC,
-               (CASE WHEN amount_min IS NOT NULL THEN 1 ELSE 0 END +
-                CASE WHEN amount_max IS NOT NULL THEN 1 ELSE 0 END +
-                CASE WHEN COALESCE(debit_credit, 'both') <> 'both' THEN 1 ELSE 0 END +
-                CASE WHEN owner_id   IS NOT NULL THEN 1 ELSE 0 END +
-                CASE WHEN account_id IS NOT NULL THEN 1 ELSE 0 END) DESC"""
+               CASE WHEN cr.owner_id IS NOT NULL THEN 1 ELSE 0 END DESC,
+               CASE WHEN cr.account_id IS NOT NULL THEN 1 ELSE 0 END DESC,
+               LENGTH(cr.keyword) DESC,
+               (CASE WHEN cr.amount_min IS NOT NULL THEN 1 ELSE 0 END +
+                CASE WHEN cr.amount_max IS NOT NULL THEN 1 ELSE 0 END +
+                CASE WHEN COALESCE(cr.debit_credit, 'both') <> 'both' THEN 1 ELSE 0 END +
+                CASE WHEN cr.owner_id   IS NOT NULL THEN 1 ELSE 0 END +
+                CASE WHEN cr.account_id IS NOT NULL THEN 1 ELSE 0 END) DESC"""
     ).fetchall()
 
     matched_rule_ids = []

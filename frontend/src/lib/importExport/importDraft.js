@@ -22,7 +22,6 @@ import {
   normalizeImportedCategorySettings,
   extractImportedCategorySettings,
 } from './importedCategorySettings.js'
-import { clonePersistedCategoryWorkspaceDraft } from './categoryWorkspaceDraft.js'
 import { inferFilenamePattern } from '../importColumnInference.js'
 
 export function getBlankImportSnapshot() {
@@ -41,7 +40,6 @@ export function getBlankImportSnapshot() {
     apply_categorization: true,
     use_imported_categories: false,
     [IMPORTED_CATEGORY_SETTINGS_KEY]: getBlankImportedCategorySettings(),
-    category_workspace_draft: null,
   }
 }
 
@@ -161,9 +159,6 @@ export function buildProfileBodyFromSnapshot(name, draftRecord) {
   const snapshot = draftRecord?.snapshot
   if (!snapshot) return null
   const columnMap = { ...(snapshot.column_map || {}) }
-  if (snapshot.category_workspace_draft) {
-    columnMap.category_workspace_draft = clonePersistedCategoryWorkspaceDraft(snapshot.category_workspace_draft)
-  }
   if (snapshot.single_account_new?.name?.trim()) {
     columnMap.single_account_new = {
       name: snapshot.single_account_new.name.trim(),

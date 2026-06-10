@@ -47,6 +47,12 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    // Vitest unit tests run in Node against the pure helpers in src/lib (decision logic with no
+    // DOM). Component/interaction coverage stays in the Playwright suite (npm run ui:test).
+    test: {
+      environment: 'node',
+      include: ['src/**/*.test.{js,jsx}'],
+    },
     define: {
       __APP_VERSION__: JSON.stringify(env.VITE_APP_VERSION || packageJson.version || '0.2.0'),
     },
