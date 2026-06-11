@@ -90,13 +90,18 @@ import by giving them the same target.
 
 ### An import keeps creating a category I don't want
 
-Open **Group Imported Categories** from Import / Export, **Set aside** the label (alongside any
-grouping you're doing), and hit **Apply** — or just Delete it on the Categories page. Either one
-*deactivates* the category instead of erasing it: its existing transactions become uncategorized, the
-label drops out of the organize pool, and future imports of that label come in uncategorized rather
-than recreating it. The category isn't gone — it moves to the **Inactive** list at the bottom of the
-Categories page, where **Recover** brings it back (under `Unassigned`) so later imports of that label
-can adopt it again.
+**Delete** it — from the **Delete…** action in **Group Imported Categories** (Import / Export) or the
+Categories page. Delete doesn't erase the row: its existing transactions clear (or, via the Categories
+page dialog, reassign to another category) while keeping their raw imported label, and **future
+imports of that label come in uncategorized** instead of recreating it. The category moves to the
+**Inactive** list at the bottom of the Categories page, where **Recover** restores it as a permanent
+system category — back in the group it was deleted from, or `Unassigned` if that group is gone. A
+recovered (or any user-created) category does **not** reappear in the Group Imported Categories
+workspace; that workspace is only a landing spot for pending *imported* labels.
+
+Note the difference from **Set aside**: setting a label aside only *parks* it out of the
+"needs sorting" pool — the category stays active and imports keep categorizing to it. Use Set aside
+for "I've triaged this, leave it in Unassigned"; use Delete for "stop bringing this in as a category."
 
 ### "Where did a removed duplicate go?"
 

@@ -245,10 +245,13 @@ def list_categories():
                 system_key,
                 COALESCE(category_type, CASE WHEN parent_id IS NULL THEN 'expense' END) AS category_type,
                 sort_order,
-                exclude_from_totals
+                exclude_from_totals,
+                set_aside,
+                import_pending
             FROM category
-            -- Inactive (set-aside / deleted) categories are referentially empty and live
-            -- only in the separate /categories/inactive recovery list, never the active tree.
+            -- Deleted (inactive) categories are referentially empty and live only in the
+            -- separate /categories/inactive recovery list, never the active tree. Set-aside
+            -- categories stay active (set_aside = 1) so transactions and imports keep using them.
             WHERE is_active = 1
             -- The category editor and reporting UI both treat top-level income groups as
             -- a distinct section, so the API bakes that ordering in instead of leaving it
@@ -294,7 +297,9 @@ def list_categories_flat():
                 system_key,
                 COALESCE(category_type, CASE WHEN parent_id IS NULL THEN 'expense' END) AS category_type,
                 sort_order,
-                exclude_from_totals
+                exclude_from_totals,
+                set_aside,
+                import_pending
             FROM category
             WHERE is_active = 1
             ORDER BY
@@ -563,12 +568,14 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
                     (json.dumps(payload), row["id"]),
                 )
 
-        # Soft deactivate instead of hard delete: the whole branch is set aside together so
-        # imports of these labels never recreate or reassign them. The category rows survive
-        # (recoverable via /reactivate) but drop out of the active tree; their transactions
-        # were just NULLed or reassigned above, so the branch is referentially empty.
+        # Soft deactivate instead of hard delete: the category rows survive (recoverable via
+        # /reactivate) but drop out of the active tree; their transactions were just NULLed or
+        # reassigned above, so the branch is referentially empty. Deleting also *promotes* the
+        # branch out of the import workspace (import_pending = 0): a deleted label has left the
+        # Group Imported Categories landing spot, so recovering it later restores it as a permanent
+        # system category rather than dropping it back into the workspace pool.
         conn.execute(
-            f"UPDATE category SET is_active = 0 WHERE id IN ({placeholders})",
+            f"UPDATE category SET is_active = 0, import_pending = 0 WHERE id IN ({placeholders})",
             affected_ids,
         )
         # A rule must target an active category. Drop any rule pointing into the deactivated
@@ -584,23 +591,73 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
 def reactivate_category(category_id: str):
     with get_db() as conn:
         cat = conn.execute(
-            "SELECT id, is_active FROM category WHERE id = ?", (category_id,)
+            "SELECT id, is_active, parent_id FROM category WHERE id = ?", (category_id,)
         ).fetchone()
         if not cat:
             raise HTTPException(status_code=404, detail="Not found")
         if cat["is_active"]:
             return {"ok": True}
-        # Reactivated categories land under Unassigned as plain leaves: their original tree
-        # position is not preserved, and deactivation already NULLed their old transactions
-        # (reactivate does not retro-recategorize them — only future assignments apply).
-        unassigned = conn.execute(
-            "SELECT id FROM category WHERE system_key = ?",
-            (UNASSIGNED_CATEGORY_SYSTEM_KEY,),
-        ).fetchone()
+        # Restore to the group the category was deleted from, when that group still exists as an
+        # active top-level group; otherwise fall back to Unassigned. The row keeps the parent_id it
+        # had at deletion, which is what lets recovery return a categorized category to its group and
+        # an Unassigned one to Unassigned. import_pending stays 0 — a recovered category is a
+        # permanent system category and must not reappear in the import workspace. (Reactivate does
+        # not retro-recategorize the transactions deletion cleared — only future assignments apply.)
+        target_parent_id = None
+        target_type = "expense"
+        if cat["parent_id"]:
+            parent = conn.execute(
+                "SELECT id, is_active, parent_id, category_type, system_key FROM category WHERE id = ?",
+                (cat["parent_id"],),
+            ).fetchone()
+            if parent and parent["is_active"] and parent["parent_id"] is None:
+                target_parent_id = parent["id"]
+                if parent["system_key"] != UNASSIGNED_CATEGORY_SYSTEM_KEY:
+                    target_type = parent["category_type"] or "expense"
+        if not target_parent_id:
+            unassigned = conn.execute(
+                "SELECT id FROM category WHERE system_key = ?",
+                (UNASSIGNED_CATEGORY_SYSTEM_KEY,),
+            ).fetchone()
+            target_parent_id = unassigned["id"] if unassigned else None
         conn.execute(
-            "UPDATE category SET is_active = 1, parent_id = ?, category_type = 'expense' WHERE id = ?",
-            (unassigned["id"] if unassigned else None, category_id),
+            "UPDATE category SET is_active = 1, set_aside = 0, import_pending = 0, parent_id = ?, category_type = ? WHERE id = ?",
+            (target_parent_id, target_type, category_id),
         )
+    return {"ok": True}
+
+
+@router.post("/{category_id}/set-aside")
+def set_category_aside(category_id: str):
+    """Park an imported-category leaf out of the "needs sorting" pool without deleting it.
+
+    Set-aside is deliberately NOT a deletion: the category stays active, its existing transactions
+    keep it, and future imports of that label still categorize to it. It only stops the label from
+    counting as "still waiting" in the imported-category workspace. Only Delete (deactivate)
+    removes a category and suppresses its label from future imports.
+    """
+    with get_db() as conn:
+        cat = conn.execute(
+            "SELECT id, is_active FROM category WHERE id = ?", (category_id,)
+        ).fetchone()
+        if not cat:
+            raise HTTPException(status_code=404, detail="Not found")
+        if not cat["is_active"]:
+            raise HTTPException(status_code=400, detail="Cannot set aside a deleted category")
+        conn.execute("UPDATE category SET set_aside = 1 WHERE id = ?", (category_id,))
+    return {"ok": True}
+
+
+@router.post("/{category_id}/restore-to-pool")
+def restore_category_to_pool(category_id: str):
+    """Move a set-aside category back into the active "needs sorting" pool."""
+    with get_db() as conn:
+        cat = conn.execute(
+            "SELECT id FROM category WHERE id = ?", (category_id,)
+        ).fetchone()
+        if not cat:
+            raise HTTPException(status_code=404, detail="Not found")
+        conn.execute("UPDATE category SET set_aside = 0 WHERE id = ?", (category_id,))
     return {"ok": True}
 
 
@@ -634,6 +691,13 @@ def update_category(category_id: str, body: CategoryUpdate):
         fields, params = [], []
         if body.name                is not None: fields.append("name = ?");                 params.append(_ensure_category_name_is_unique(conn, body.name, exclude_id=category_id, is_group=is_group))
         if body.parent_id           is not None: fields.append("parent_id = ?");            params.append(body.parent_id)
+        # Moving a category into a real (non-Unassigned) group organizes it — it has left the
+        # import workspace for good, so clear the pending flag. Moving into Unassigned does not
+        # re-add it to the workspace (a category never returns once it has left).
+        if body.parent_id:
+            new_parent = conn.execute("SELECT system_key FROM category WHERE id = ?", (body.parent_id,)).fetchone()
+            if new_parent and new_parent["system_key"] != UNASSIGNED_CATEGORY_SYSTEM_KEY:
+                fields.append("import_pending = 0")
         if body.category_type       is not None: fields.append("category_type = ?");        params.append(body.category_type)
         if body.sort_order          is not None: fields.append("sort_order = ?");           params.append(body.sort_order)
         if body.exclude_from_totals is not None: fields.append("exclude_from_totals = ?");  params.append(body.exclude_from_totals)

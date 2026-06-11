@@ -225,6 +225,7 @@ function ImportTab() {
   const [showProfileMismatchChooser, setShowProfileMismatchChooser] = useState(false)
   const [pendingMappingSourceSwitch, setPendingMappingSourceSwitch] = useState(null)
   const [noticeDialog, setNoticeDialog] = useState(null)
+  const [pendingWorkspaceDelete, setPendingWorkspaceDelete] = useState(null)
   // Per-batch "+ New data source from this file" inline name entry (unknown-source cards).
   const [assignNewSourceBatchId, setAssignNewSourceBatchId] = useState('')
   const [assignNewSourceName, setAssignNewSourceName] = useState('')
@@ -286,9 +287,17 @@ function ImportTab() {
     )),
     [categories, unassignedGroup],
   )
-  const liveUnassignedCategorySourceValues = useMemo(
-    () => unassignedCategories.map(category => category.name).filter(Boolean),
+  // The Group Imported Categories workspace is a landing spot for *pending imported* labels only:
+  // an Unassigned leaf with import_pending = 1. User-created categories (import_pending = 0) and
+  // deleted-then-recovered categories never appear here — they are permanent system categories that
+  // live on the Categories page, even when they sit under Unassigned.
+  const workspaceUnassignedCategories = useMemo(
+    () => unassignedCategories.filter(category => category.import_pending),
     [unassignedCategories],
+  )
+  const liveUnassignedCategorySourceValues = useMemo(
+    () => workspaceUnassignedCategories.map(category => category.name).filter(Boolean),
+    [workspaceUnassignedCategories],
   )
   const effectiveSystemCategoryWorkspaceDraft = useMemo(
     () => sanitizeCategoryWorkspaceDraftToSourceValues(systemCategoryWorkspaceDraft, liveUnassignedCategorySourceValues),
@@ -2303,7 +2312,7 @@ function ImportTab() {
     setLoading(true)
     try {
       const sourceCategoryMap = new Map(
-        unassignedCategories.map(category => [
+        workspaceUnassignedCategories.map(category => [
           normalizeImportCategoryValue(category.name),
           category,
         ]),
@@ -2346,13 +2355,22 @@ function ImportTab() {
         }
       }
 
-      // The Set Aside list is committed here too, alongside the group placements: each set-aside
-      // label deactivates its live category (no replacement → its transactions become uncategorized),
-      // so it leaves the pool and lands in the Categories "Inactive" list, recoverable from there,
-      // and future imports of that label come in uncategorized instead of recreating it.
-      for (const sourceValue of draft?.snapshot?.setAsideOrder || []) {
-        const liveCategory = sourceCategoryMap.get(normalizeImportCategoryValue(sourceValue))
-        if (liveCategory) await api.deleteCategory(liveCategory.id)
+      // Parking ("set aside") is NOT a deletion: it moves an imported-category leaf out of the
+      // "needs sorting" pool but leaves it active, so its transactions keep it and future imports of
+      // the label still categorize to it. Apply reconciles the set_aside flag from the parked list:
+      // listed leaves get parked; any leaf currently parked but no longer listed (restored to the
+      // pool, or dragged into a group) is un-parked. Deletion is a separate, explicit action.
+      const setAsideKeys = new Set(
+        (draft?.snapshot?.setAsideOrder || []).map(value => normalizeImportCategoryValue(value)),
+      )
+      for (const key of setAsideKeys) {
+        const liveCategory = sourceCategoryMap.get(key)
+        if (liveCategory && !liveCategory.set_aside) await api.setCategoryAside(liveCategory.id)
+      }
+      for (const liveCategory of workspaceUnassignedCategories) {
+        if (liveCategory.set_aside && !setAsideKeys.has(normalizeImportCategoryValue(liveCategory.name))) {
+          await api.restoreCategoryToPool(liveCategory.id)
+        }
       }
 
       const refreshedCategories = await api.getCategories()
@@ -2372,6 +2390,43 @@ function ImportTab() {
     } catch (error) {
       setNoticeDialog({
         title: 'Could not organize imported categories',
+        description: error?.message || 'Please try again.',
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Delete a category from the imported-category workspace (the Delete… action). Unlike Set aside,
+  // this removes the category via the same delete flow as the Categories page (clears its
+  // transactions). The confirm shows how many transactions reference it so the user can gauge impact.
+  async function requestWorkspaceCategoryDelete(sourceValues) {
+    const keys = new Set((sourceValues || []).map(value => normalizeImportCategoryValue(value)))
+    const targets = workspaceUnassignedCategories.filter(category => keys.has(normalizeImportCategoryValue(category.name)))
+    if (!targets.length) return
+    let txnCount = 0
+    try {
+      const previews = await Promise.all(targets.map(target => api.getCategoryDeletePreview(target.id)))
+      txnCount = previews.reduce((sum, preview) => sum + Number(preview?.txn_count || 0), 0)
+    } catch {
+      txnCount = null
+    }
+    setPendingWorkspaceDelete({ targets, txnCount })
+  }
+
+  async function confirmWorkspaceCategoryDelete() {
+    const targets = pendingWorkspaceDelete?.targets || []
+    setPendingWorkspaceDelete(null)
+    if (!targets.length) return
+    setLoading(true)
+    try {
+      for (const target of targets) {
+        await api.deleteCategory(target.id, { replacement_category_id: null })
+      }
+      setCategories(await api.getCategories())
+    } catch (error) {
+      setNoticeDialog({
+        title: 'Could not delete category',
         description: error?.message || 'Please try again.',
       })
     } finally {
@@ -2699,6 +2754,20 @@ function ImportTab() {
         />
       ) : null}
 
+      {pendingWorkspaceDelete ? (
+        <AppConfirmDialog
+          title={pendingWorkspaceDelete.targets.length === 1 ? `Delete “${pendingWorkspaceDelete.targets[0].name}”?` : `Delete ${pendingWorkspaceDelete.targets.length} categories?`}
+          description={pendingWorkspaceDelete.txnCount
+            ? `${pendingWorkspaceDelete.txnCount} transaction${pendingWorkspaceDelete.txnCount === 1 ? '' : 's'} currently categorized here.`
+            : undefined}
+          confirmLabel="Delete"
+          confirmVariant="danger"
+          onConfirm={confirmWorkspaceCategoryDelete}
+          onCancel={() => setPendingWorkspaceDelete(null)}
+          width="min(440px, 100%)"
+        />
+      ) : null}
+
       {pendingMappingSourceSwitch ? (
         <AppConfirmDialog
           title="Change data source?"
@@ -2758,6 +2827,7 @@ function ImportTab() {
       {showSystemCategoryWorkspace ? (
         <CategoryImportWorkspace
           sourceValues={systemCategoryWorkspaceSourceValues}
+          parkedSourceValues={workspaceUnassignedCategories.filter(category => category.set_aside).map(category => category.name).filter(Boolean)}
           sourceMeta={{
             total_count: totalSystemCategoryWorkspaceCount,
             displayed_count: systemCategoryWorkspaceSourceValues.length,
@@ -2770,6 +2840,7 @@ function ImportTab() {
           onApply={applySystemCategoryWorkspaceDraft}
           onClose={() => setShowSystemCategoryWorkspace(false)}
           onCategoriesChanged={setCategories}
+          onDeleteSources={requestWorkspaceCategoryDelete}
           title="Group Imported Categories"
           description="Organize imported categories into reporting groups."
           sourceHeading="Unassigned Categories"

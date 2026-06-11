@@ -242,7 +242,9 @@ export function EditableName({
   )
 }
 
-export function BulkMoveToast({ move, onUndo, onDismiss }) {
+// Bottom-right undo toast shared by the tree's bulk actions (move, delete). The caller supplies
+// the title/description for the action; the toast owns the 6s auto-dismiss and Undo/Dismiss chrome.
+export function UndoToast({ title, description, onUndo, onDismiss }) {
   const timerRef = useRef(null)
   const intervalRef = useRef(null)
   const startRef = useRef(Date.now())
@@ -279,10 +281,10 @@ export function BulkMoveToast({ move, onUndo, onDismiss }) {
       </div>
       <div style={{ padding: '14px 16px' }}>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
-          Moved {move.count} categor{move.count === 1 ? 'y' : 'ies'}
+          {title}
         </div>
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-          Added to {move.targetGroupName}
+          {description}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button
@@ -326,7 +328,7 @@ export function CategoryTreeRow({
   isChild,
   isSelected,
   draggable = true,
-  bulkMoveMode = false,
+  bulkSelectMode = false,
   bulkChecked = false,
   bulkSelectable = true,
   isCollapsed = false,
@@ -354,7 +356,7 @@ export function CategoryTreeRow({
   const [dragOver, setDragOver] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const showGroupToggleSlot = !isChild
-  const canDrag = draggable && !bulkMoveMode
+  const canDrag = draggable && !bulkSelectMode
 
   function canAcceptDrop() {
     if (!acceptDrop) return false
@@ -399,7 +401,7 @@ export function CategoryTreeRow({
         dragItem = null
       }}
       onClick={e => {
-        if (bulkMoveMode) return
+        if (bulkSelectMode) return
         if (!confirmDelete) onSelect(cat, e)
       }}
       onContextMenu={e => {
@@ -459,7 +461,7 @@ export function CategoryTreeRow({
       ) : (
         <span style={{ width: 19, flexShrink: 0 }} />
       )}
-      {bulkMoveMode ? (
+      {bulkSelectMode ? (
         bulkSelectable ? (
         <button
           onClick={e => {
@@ -507,8 +509,8 @@ export function CategoryTreeRow({
         isSelected={isSelected}
         onSave={name => onRename(cat.id, name)}
         onFirstClick={() => onSelect(cat)}
-        disabled={bulkMoveMode || renameDisabled}
-        allowSelectionWhenDisabled={allowSelectionWhenRenameDisabled && !bulkMoveMode}
+        disabled={bulkSelectMode || renameDisabled}
+        allowSelectionWhenDisabled={allowSelectionWhenRenameDisabled && !bulkSelectMode}
         textStyle={nameStyle}
         highlightQuery={highlightQuery}
         autoEditToken={autoEditToken}
@@ -517,7 +519,7 @@ export function CategoryTreeRow({
         onCancelEdit={onCancelEdit}
       />
       {trailingContent ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>{trailingContent}</span> : null}
-      {bulkMoveMode || !showDelete ? null : !confirmDelete ? (
+      {bulkSelectMode || !showDelete ? null : !confirmDelete ? (
         <button
           onClick={e => {
             e.stopPropagation()

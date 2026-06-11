@@ -92,7 +92,7 @@ def get_db(db_path: str | None = None):
 # Migrations are additive startup upgrades for existing databases only; fresh installs
 # are created directly at `CURRENT_VERSION` and should not replay the migration chain.
 
-CURRENT_VERSION = 28
+CURRENT_VERSION = 30
 
 MIGRATIONS = {}
 
@@ -742,6 +742,52 @@ def m28_ui_preferences(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ui_preference_scope ON ui_preference(scope_id)")
 
 
+@migration(30)
+def m30_category_import_pending(conn):
+    """Distinguish *pending imported* categories (the Group Imported Categories workspace's landing
+    spot) from permanent system categories.
+
+    `import_pending = 1` marks an active Unassigned leaf that arrived via import and has not yet left
+    the workspace. The workspace's pool/set-aside columns show ONLY these. A category leaves the
+    workspace — permanently — when it is organized into a group or deleted (both clear the flag), and
+    it is never re-set on recover, so a deleted-then-recovered category, and any user-created
+    category, never appear in the workspace. User-created categories default to 0 (not imported).
+    Backfill marks existing import-sourced Unassigned leaves as pending so the current workspace
+    contents survive the upgrade.
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(category)").fetchall()}
+    if "import_pending" not in columns:
+        conn.execute("ALTER TABLE category ADD COLUMN import_pending INTEGER NOT NULL DEFAULT 0")
+    unassigned = conn.execute(
+        "SELECT id FROM category WHERE system_key = 'unassigned'"
+    ).fetchone()
+    if unassigned:
+        conn.execute(
+            """
+            UPDATE category SET import_pending = 1
+            WHERE  parent_id = ?
+              AND  is_active = 1
+              AND  import_source_batch_id IS NOT NULL
+            """,
+            (unassigned["id"],),
+        )
+
+
+@migration(29)
+def m29_category_set_aside(conn):
+    """Set-aside is a parked-but-active state, distinct from deletion.
+
+    A category set aside in the imported-category workspace stays ACTIVE: its transactions keep it
+    and new imports of that label still categorize to it. Set-aside only parks the category out of
+    the "still needs sorting" pool (set_aside = 1 on an active Unassigned leaf). Deletion
+    (is_active = 0) remains the only thing that suppresses a label from future imports. Reactivating
+    a deleted category clears set_aside back to 0 so it returns to the pool, not the set-aside list.
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(category)").fetchall()}
+    if "set_aside" not in columns:
+        conn.execute("ALTER TABLE category ADD COLUMN set_aside INTEGER NOT NULL DEFAULT 0")
+
+
 @migration(27)
 def m27_account_tags(conn):
     """Tags can be attached to accounts, mirroring category tags. A transaction inherits its
@@ -924,7 +970,9 @@ def init_db(db_path: str | None = None):
                 exclude_from_totals INTEGER NOT NULL DEFAULT 0,
                 system_key          TEXT,
                 import_source_batch_id TEXT REFERENCES import_batch(id) ON DELETE SET NULL,
-                is_active           INTEGER NOT NULL DEFAULT 1
+                is_active           INTEGER NOT NULL DEFAULT 1,
+                set_aside           INTEGER NOT NULL DEFAULT 0,
+                import_pending      INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_category_active ON category(is_active);
 

@@ -3,6 +3,15 @@
 
 /* eslint-disable react-refresh/only-export-components -- re-exports the draft-state factory so callers can import both component + helper from one place */
 
+// STATUS: not currently mounted anywhere. This "Map Categories" modal (and its `…Legacy`
+// twin) is kept on purpose pending a decision to revive or remove it; the live
+// category-organizing surface is CategoryImportWorkspace ("Group Imported Categories",
+// opened from Import / Export). If you revive this, note the one layout gotcha the
+// horizontal-sizing pass found but deliberately left unfixed here: the body grid uses a
+// bare `1fr` track, which carries a `min-content` floor and can blow its right column
+// past the modal edge (clipped, no scrollbar) at narrow widths — switch it to
+// `minmax(0, 1fr)` like CategoryImportWorkspace already does.
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import {

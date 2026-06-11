@@ -536,6 +536,7 @@ function GroupCard({
 
 export default function CategoryImportWorkspace({
   sourceValues,
+  parkedSourceValues = [],
   sourceMeta,
   existingCategories = [],
   initialDraftState,
@@ -543,6 +544,7 @@ export default function CategoryImportWorkspace({
   onApply,
   onClose,
   onCategoriesChanged,
+  onDeleteSources,
   title = 'Import Categories From File',
   description = 'Organize the categories from the imported data into groups.',
   sourceHeading = 'File Categories',
@@ -567,8 +569,13 @@ export default function CategoryImportWorkspace({
   })
   const hasPersistedLeftPanelWidth = initialDraftState?.leftPanelWidth != null
   const [snapshot, setSnapshot] = useState(() => sanitizeSnapshot((initialDraftState || computedInitialDraftState).snapshot, sourceValues))
-  const [undoStack, setUndoStack] = useState(() => (initialDraftState?.undoStack || []).map(item => sanitizeSnapshot(item, sourceValues)))
-  const [redoStack, setRedoStack] = useState(() => (initialDraftState?.redoStack || []).map(item => sanitizeSnapshot(item, sourceValues)))
+  // Undo/redo are session-scoped: they start empty on every open and are NOT restored from the
+  // persisted draft. Restoring a prior session's history made Undo look active when the user had
+  // done nothing this session — and worse, undoing after a previous Apply would roll the draft back
+  // to a state that no longer matches what was already committed. Empty stacks => the buttons sit
+  // disabled (dimmed) until there's something to undo.
+  const [undoStack, setUndoStack] = useState([])
+  const [redoStack, setRedoStack] = useState([])
   const [selectionAnchor, setSelectionAnchor] = useState(initialDraftState?.selectionAnchor || null)
   const [selectedBucketCategoryIds, setSelectedBucketCategoryIds] = useState(initialDraftState?.selectedBucketCategoryIds || [])
   const [bucketSelectionAnchor, setBucketSelectionAnchor] = useState(initialDraftState?.bucketSelectionAnchor || null)
@@ -725,15 +732,16 @@ export default function CategoryImportWorkspace({
 
   const buildDraftState = useCallback(() => ({
     snapshot: sanitizeSnapshot(snapshot, sourceValues),
-    undoStack: undoStack.map(item => sanitizeSnapshot(item, sourceValues)),
-    redoStack: redoStack.map(item => sanitizeSnapshot(item, sourceValues)),
+    // Undo/redo history is intentionally not persisted (session-scoped — see above).
+    undoStack: [],
+    redoStack: [],
     selectionAnchor,
     selectedBucketCategoryIds,
     bucketSelectionAnchor,
     activeSection,
     leftPanelWidth,
   }), [
-    snapshot, sourceValues, undoStack, redoStack,
+    snapshot, sourceValues,
     selectionAnchor, selectedBucketCategoryIds, bucketSelectionAnchor,
     activeSection, leftPanelWidth,
   ])
@@ -1283,6 +1291,17 @@ export default function CategoryImportWorkspace({
     setSourceMenu(null)
   }
 
+  function deleteSelectedSources() {
+    const selected = [...(snapshot.selectedSourceIds || [])]
+    setSourceMenu(null)
+    if (!selected.length || typeof onDeleteSources !== 'function') return
+    // Deletion is owned by the parent: it confirms first, then runs the real category-delete flow.
+    // Do NOT mutate the draft here — if the user cancels, the item must stay exactly where it is
+    // (a premature removal makes it an untracked source value that the reconciler floats into the
+    // pool). On confirm, the refreshed source-value list drops it from the columns automatically.
+    onDeleteSources(selected)
+  }
+
   function handleDropOnSourcePool() {
     const item = getCategoryTreeDragItem()
     if (!item) return
@@ -1327,10 +1346,14 @@ export default function CategoryImportWorkspace({
   const remainingItemLabel = remainingCount === 1 ? remainingItemLabelSingular : remainingItemLabelPlural
   const processedItemLabel = processedCount === 1 ? remainingItemLabelSingular : remainingItemLabelPlural
   const hasWorkToApply = useMemo(() => {
-    // Applying should be a no-op if the draft only mirrors categories that already exist live.
-    // Set-aside items are committed on Apply too (they deactivate their live category), so a
-    // draft that only parks labels in Set Aside is still work to apply.
-    if ((snapshot.setAsideOrder || []).length > 0) return true
+    // Applying should be a no-op if the draft only mirrors what is already live. Set-aside is
+    // committed on Apply (it sets the live category's set_aside flag), so it is work *only* when the
+    // draft's parked set differs from what is already flagged live (`parkedSourceValues`) —
+    // otherwise reopening a workspace that simply still has parked items would leave Apply lit with
+    // nothing to do.
+    const liveSetAside = new Set((parkedSourceValues || []).map(value => String(value || '').trim().toLowerCase()))
+    const draftSetAside = (snapshot.setAsideOrder || []).map(value => String(value || '').trim().toLowerCase())
+    if (draftSetAside.length !== liveSetAside.size || draftSetAside.some(name => !liveSetAside.has(name))) return true
     const liveGroupsByKey = new Map(
       (existingCategories || [])
         .filter(category => !category?.parent_id)
@@ -1359,7 +1382,7 @@ export default function CategoryImportWorkspace({
         })
       })
     ))
-  }, [existingCategories, snapshot.tree, snapshot.setAsideOrder])
+  }, [existingCategories, snapshot.tree, snapshot.setAsideOrder, parkedSourceValues])
   const sourceSelectionInSetAside = snapshot.selectedSourceIds.length > 0 && snapshot.selectedSourceIds.every(value => (snapshot.setAsideOrder || []).includes(value))
   const setAsideCollapsed = !!snapshot.collapsedGroups?.__setAside
   const activeGroupMenuGroup = groupMenu ? groups.find(group => group.id === groupMenu.groupId) || null : null
@@ -1428,7 +1451,7 @@ export default function CategoryImportWorkspace({
             <div style={{ display: 'grid', gap: 8, minWidth: 'min(320px, 100%)', justifyItems: 'stretch', flex: '0 0 auto' }}>
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: 'color-mix(in srgb, var(--surface2) 60%, var(--surface))', border: '1px solid color-mix(in srgb, var(--border) 82%, transparent)' }}>
-                  <Button variant={hasWorkToApply ? 'primary' : 'ghost'} onClick={async () => { setSaving(true); try { await onApply(buildDraftState()) } finally { setSaving(false) } }} disabled={saving}>
+                  <Button variant="ghost" onClick={async () => { setSaving(true); try { await onApply(buildDraftState()) } finally { setSaving(false) } }} disabled={saving || !hasWorkToApply}>
                     {saving ? applyPendingLabel : applyLabel}
                   </Button>
                   <Button variant="ghost" onClick={onClose}>Close</Button>
@@ -1452,6 +1475,9 @@ export default function CategoryImportWorkspace({
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                   <button onClick={() => { if (!snapshot.selectedSourceIds.length) return; if (sourceSelectionInSetAside) restoreSelectedSources(); else moveSelectedSourcesToSetAside() }} disabled={snapshot.selectedSourceIds.length === 0} style={{ background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))', border: '1px solid var(--border)', borderRadius: 999, padding: '4px 10px', fontSize: 11, color: snapshot.selectedSourceIds.length === 0 ? 'color-mix(in srgb, var(--muted) 62%, transparent)' : 'var(--muted)', cursor: snapshot.selectedSourceIds.length === 0 ? 'default' : 'pointer', opacity: snapshot.selectedSourceIds.length === 0 ? 0.72 : 1 }}>{sourceSelectionInSetAside ? 'restore' : 'set aside'}</button>
                   <button onClick={() => { if (!snapshot.selectedSourceIds.length) return; setSnapshot(prev => ({ ...prev, selectedSourceIds: [] })); setSelectionAnchor(null) }} disabled={snapshot.selectedSourceIds.length === 0} style={{ background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))', border: '1px solid var(--border)', borderRadius: 999, padding: '4px 10px', fontSize: 11, color: snapshot.selectedSourceIds.length === 0 ? 'color-mix(in srgb, var(--muted) 62%, transparent)' : 'var(--muted)', cursor: snapshot.selectedSourceIds.length === 0 ? 'default' : 'pointer', opacity: snapshot.selectedSourceIds.length === 0 ? 0.72 : 1 }}>clear selection</button>
+                  {typeof onDeleteSources === 'function' ? (
+                    <button onClick={deleteSelectedSources} disabled={snapshot.selectedSourceIds.length === 0} style={{ background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))', border: '1px solid var(--border)', borderRadius: 999, padding: '4px 10px', fontSize: 11, color: snapshot.selectedSourceIds.length === 0 ? 'color-mix(in srgb, var(--muted) 62%, transparent)' : 'color-mix(in srgb, var(--danger) 55%, var(--muted))', cursor: snapshot.selectedSourceIds.length === 0 ? 'default' : 'pointer', opacity: snapshot.selectedSourceIds.length === 0 ? 0.72 : 1 }}>delete</button>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -1765,6 +1791,25 @@ export default function CategoryImportWorkspace({
             >
               {sourceMenu.mode === 'restore' ? 'Restore' : 'Set aside'}
             </button>
+            {typeof onDeleteSources === 'function' ? (
+              <button
+                onClick={deleteSelectedSources}
+                style={{
+                  width: '100%',
+                  textAlign: 'left',
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--danger)',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Delete…
+              </button>
+            ) : null}
           </div>
         ) : null}
         {floatingGroupDraft ? (

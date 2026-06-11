@@ -1,12 +1,15 @@
 """
-First-class inactive categories.
+Inactive categories and the distinct "set aside" (parked-but-active) state.
 
-Set-aside and delete both deactivate a category (soft) instead of hard-deleting it:
-the row survives but drops out of the active tree, its transactions are NULLed (or
-reassigned to a replacement), and rules targeting it are pruned. Imports of an inactive
-label come in uncategorized and never recreate the leaf. Reactivation restores it under
-Unassigned. These tests pin that lifecycle, including proving the import-suppression guard
-actually fires on a re-import of a previously set-aside label.
+Delete deactivates a category (soft) instead of hard-deleting it: the row survives but drops out
+of the active tree, its transactions are NULLed (or reassigned to a replacement), rules targeting
+it are pruned, and imports of that label come in uncategorized and never recreate the leaf.
+Reactivation restores it under Unassigned with the set-aside flag cleared.
+
+Set aside is deliberately NOT a deletion: the category stays active (set_aside = 1), keeps its
+transactions, stays in the active tree, and future imports of the label still categorize to it.
+It only parks the label out of the "still needs sorting" pool. These tests pin both lifecycles,
+including proving the delete import-suppression guard fires while set-aside does not suppress.
 """
 
 from __future__ import annotations
@@ -18,20 +21,28 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from fastapi import HTTPException
+
 from backend.db.database import (
     SHARED_OWNER_ID,
     get_db,
     init_db,
     m26_category_is_active,
+    m29_category_set_aside,
+    m30_category_import_pending,
     reset_current_db_path,
     set_current_db_path,
 )
 from backend.routers.categories import (
     CategoryDelete,
+    CategoryUpdate,
     delete_category,
     list_categories,
     list_inactive_categories,
     reactivate_category,
+    restore_category_to_pool,
+    set_category_aside,
+    update_category,
 )
 from backend.routers.import_export import run_import
 
@@ -143,6 +154,34 @@ class InactiveCategoryTests(unittest.IsolatedAsyncioTestCase):
                     (txn_id,),
                 ).fetchone())
 
+    def _category_row(self, category_id: str) -> dict:
+        with self._use_db_path():
+            with get_db() as conn:
+                return dict(conn.execute(
+                    "SELECT is_active, set_aside, import_pending, parent_id FROM category WHERE id = ?",
+                    (category_id,),
+                ).fetchone())
+
+    def _insert_group(self, name: str, category_type: str = "expense") -> str:
+        group_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO category (id, parent_id, name, category_type, sort_order, exclude_from_totals, is_active) VALUES (?, NULL, ?, ?, 0, 0, 1)",
+                    (group_id, name, category_type),
+                )
+        return group_id
+
+    def _insert_leaf_under(self, group_id: str, name: str) -> str:
+        category_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO category (id, parent_id, name, category_type, sort_order, exclude_from_totals, is_active) VALUES (?, ?, ?, 'expense', 0, 0, 1)",
+                    (category_id, group_id, name),
+                )
+        return category_id
+
     def _unassigned_children(self) -> list[dict]:
         with self._use_db_path():
             with get_db() as conn:
@@ -164,10 +203,14 @@ class InactiveCategoryTests(unittest.IsolatedAsyncioTestCase):
             with get_db() as conn:
                 columns = {row["name"] for row in conn.execute("PRAGMA table_info(category)").fetchall()}
                 self.assertIn("is_active", columns)
+                self.assertIn("set_aside", columns)
+                self.assertIn("import_pending", columns)
                 indexes = {row["name"] for row in conn.execute("PRAGMA index_list(category)").fetchall()}
                 self.assertIn("idx_category_active", indexes)
                 inactive = conn.execute("SELECT COUNT(*) AS n FROM category WHERE is_active <> 1").fetchone()["n"]
                 self.assertEqual(inactive, 0)
+                parked = conn.execute("SELECT COUNT(*) AS n FROM category WHERE set_aside <> 0").fetchone()["n"]
+                self.assertEqual(parked, 0)
                 # New rows default to active (the backfill value) without specifying the column.
                 cid = str(uuid.uuid4())
                 conn.execute(
@@ -175,8 +218,12 @@ class InactiveCategoryTests(unittest.IsolatedAsyncioTestCase):
                     (cid, self._unassigned_group_id(conn)),
                 )
                 self.assertEqual(conn.execute("SELECT is_active FROM category WHERE id = ?", (cid,)).fetchone()["is_active"], 1)
-                # Migration is idempotent when the column already exists.
+                self.assertEqual(conn.execute("SELECT set_aside FROM category WHERE id = ?", (cid,)).fetchone()["set_aside"], 0)
+                self.assertEqual(conn.execute("SELECT import_pending FROM category WHERE id = ?", (cid,)).fetchone()["import_pending"], 0)
+                # Migrations are idempotent when the columns already exist.
                 m26_category_is_active(conn)
+                m29_category_set_aside(conn)
+                m30_category_import_pending(conn)
 
     # --- deactivate / reactivate ------------------------------------------------
 
@@ -262,9 +309,170 @@ class InactiveCategoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({group_id, leaf_id}, {group_id, leaf_id} & inactive_ids)
         self.assertIsNone(self._txn(txn_id)["category_id"])
 
-    # --- import suppression (prove the guard fires) -----------------------------
+    def test_reactivate_clears_set_aside_flag(self):
+        leaf_id = self._insert_leaf("Streaming")
+        with self._use_db_path():
+            set_category_aside(leaf_id)
+            delete_category(leaf_id, CategoryDelete(replacement_category_id=None))
+            reactivate_category(leaf_id)
+            with get_db() as conn:
+                row = dict(conn.execute("SELECT is_active, set_aside FROM category WHERE id = ?", (leaf_id,)).fetchone())
+        self.assertEqual(row["is_active"], 1)
+        self.assertEqual(row["set_aside"], 0)
 
-    async def test_import_recreates_then_suppresses_after_set_aside(self):
+    # --- set aside (parked but active) ------------------------------------------
+
+    def test_set_aside_keeps_category_active_and_visible(self):
+        account_id = self._insert_account("Checking")
+        leaf_id = self._insert_leaf("Streaming")
+        txn_id = self._insert_txn(account_id, leaf_id, source="import", imported_category="Streaming")
+
+        with self._use_db_path():
+            set_category_aside(leaf_id)
+            active_ids = {c["id"] for c in _flatten_tree(list_categories())}
+            inactive_ids = {c["id"] for c in list_inactive_categories()}
+            with get_db() as conn:
+                row = dict(conn.execute("SELECT is_active, set_aside FROM category WHERE id = ?", (leaf_id,)).fetchone())
+
+        # Parked, not deleted: still active and flagged, still in the active tree, never in the
+        # inactive recovery list, and its transaction keeps the category.
+        self.assertEqual(row["is_active"], 1)
+        self.assertEqual(row["set_aside"], 1)
+        self.assertIn(leaf_id, active_ids)
+        self.assertNotIn(leaf_id, inactive_ids)
+        self.assertEqual(self._txn(txn_id)["category_id"], leaf_id)
+
+    def test_restore_to_pool_clears_set_aside_flag(self):
+        leaf_id = self._insert_leaf("Streaming")
+        with self._use_db_path():
+            set_category_aside(leaf_id)
+            restore_category_to_pool(leaf_id)
+            with get_db() as conn:
+                row = dict(conn.execute("SELECT set_aside FROM category WHERE id = ?", (leaf_id,)).fetchone())
+        self.assertEqual(row["set_aside"], 0)
+
+    def test_cannot_set_aside_a_deleted_category(self):
+        leaf_id = self._insert_leaf("Streaming")
+        with self._use_db_path():
+            delete_category(leaf_id, CategoryDelete(replacement_category_id=None))
+            with self.assertRaises(HTTPException):
+                set_category_aside(leaf_id)
+
+    async def test_set_aside_does_not_suppress_future_imports(self):
+        account_id = self._insert_account("Checking")
+
+        await self._run_import(
+            "\n".join([
+                "Date,Description,Account,Amount,Category",
+                "2026-01-02,Video Service,Checking,14.99,Subscription",
+            ]),
+            account_map={"Checking": account_id},
+        )
+        leaf_id = self._unassigned_children()[0]["id"]
+
+        # Park the label (active). Unlike Delete, a later import of the same label must still
+        # categorize to this leaf rather than coming in uncategorized.
+        with self._use_db_path():
+            set_category_aside(leaf_id)
+
+        await self._run_import(
+            "\n".join([
+                "Date,Description,Account,Amount,Category",
+                "2026-02-09,Video Service Renewal,Checking,14.99,Subscription",
+            ]),
+            account_map={"Checking": account_id},
+        )
+
+        children_after = self._unassigned_children()
+        self.assertEqual(len(children_after), 1, "no new leaf: the set-aside leaf is reused")
+        self.assertEqual(children_after[0]["id"], leaf_id)
+        self.assertEqual(children_after[0]["is_active"], 1)
+        with self._use_db_path():
+            with get_db() as conn:
+                imported_row = dict(conn.execute(
+                    "SELECT category_id, category_source FROM txn WHERE date = '2026-02-09'"
+                ).fetchone())
+        self.assertEqual(imported_row["category_id"], leaf_id)
+        self.assertEqual(imported_row["category_source"], "import")
+
+    # --- import_pending: the workspace landing spot is for pending imports only ---
+
+    async def test_imported_leaf_is_pending_then_leaves_on_delete_and_recover(self):
+        account_id = self._insert_account("Checking")
+        await self._run_import(
+            "\n".join([
+                "Date,Description,Account,Amount,Category",
+                "2026-01-02,Video,Checking,9.99,Streaming",
+            ]),
+            account_map={"Checking": account_id},
+        )
+        leaf_id = self._unassigned_children()[0]["id"]
+        # Imported → pending (shows in the workspace).
+        self.assertEqual(self._category_row(leaf_id)["import_pending"], 1)
+        # Delete → leaves the workspace (pending cleared) and goes inactive.
+        with self._use_db_path():
+            delete_category(leaf_id, CategoryDelete(replacement_category_id=None))
+        self.assertEqual(self._category_row(leaf_id)["import_pending"], 0)
+        # Recover → active again, still not pending, lands under Unassigned (never re-enters workspace).
+        with self._use_db_path():
+            reactivate_category(leaf_id)
+            unassigned_id = None
+            with get_db() as conn:
+                unassigned_id = self._unassigned_group_id(conn)
+        row = self._category_row(leaf_id)
+        self.assertEqual(row["is_active"], 1)
+        self.assertEqual(row["import_pending"], 0)
+        self.assertEqual(row["parent_id"], unassigned_id)
+
+    def test_user_created_category_never_enters_workspace(self):
+        # A category created directly (not via import) defaults to import_pending = 0 and must stay
+        # out of the workspace through a delete/recover round trip.
+        leaf_id = self._insert_leaf("My Custom Category")
+        self.assertEqual(self._category_row(leaf_id)["import_pending"], 0)
+        with self._use_db_path():
+            delete_category(leaf_id, CategoryDelete(replacement_category_id=None))
+            reactivate_category(leaf_id)
+        self.assertEqual(self._category_row(leaf_id)["import_pending"], 0)
+
+    def test_recover_restores_to_original_group(self):
+        group_id = self._insert_group("Entertainment")
+        leaf_id = self._insert_leaf_under(group_id, "Concerts")
+        with self._use_db_path():
+            delete_category(leaf_id, CategoryDelete(replacement_category_id=None))
+            reactivate_category(leaf_id)
+        self.assertEqual(self._category_row(leaf_id)["parent_id"], group_id)
+
+    def test_recover_falls_back_to_unassigned_when_group_gone(self):
+        group_id = self._insert_group("Entertainment")
+        leaf_id = self._insert_leaf_under(group_id, "Concerts")
+        with self._use_db_path():
+            delete_category(leaf_id, CategoryDelete(replacement_category_id=None))
+            delete_category(group_id, CategoryDelete(replacement_category_id=None))
+            reactivate_category(leaf_id)
+            with get_db() as conn:
+                unassigned_id = self._unassigned_group_id(conn)
+        self.assertEqual(self._category_row(leaf_id)["parent_id"], unassigned_id)
+
+    async def test_organizing_into_group_clears_pending(self):
+        account_id = self._insert_account("Checking")
+        await self._run_import(
+            "\n".join([
+                "Date,Description,Account,Amount,Category",
+                "2026-01-02,Video,Checking,9.99,Streaming",
+            ]),
+            account_map={"Checking": account_id},
+        )
+        leaf_id = self._unassigned_children()[0]["id"]
+        group_id = self._insert_group("Entertainment")
+        with self._use_db_path():
+            update_category(leaf_id, CategoryUpdate(parent_id=group_id))
+        row = self._category_row(leaf_id)
+        self.assertEqual(row["import_pending"], 0, "organizing into a group leaves the workspace")
+        self.assertEqual(row["parent_id"], group_id)
+
+    # --- import suppression after DELETE (prove the guard fires) ----------------
+
+    async def test_import_suppressed_after_delete(self):
         account_id = self._insert_account("Checking")
 
         # First import: the label is new, so a real Unassigned leaf is created and the row adopts it.
@@ -279,7 +487,7 @@ class InactiveCategoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([c["name"] for c in children], ["Subscription"])
         leaf_id = children[0]["id"]
 
-        # Deactivate the leaf, as "Set aside" / Delete does.
+        # Delete the leaf (deactivate) — this, unlike Set aside, suppresses the label.
         with self._use_db_path():
             delete_category(leaf_id, CategoryDelete(replacement_category_id=None))
 

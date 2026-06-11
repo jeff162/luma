@@ -1702,9 +1702,9 @@ def _ensure_imported_batch_category(conn, batch_id: str, raw_name: str):
         """
         INSERT INTO category (
             id, parent_id, name, category_type, sort_order, exclude_from_totals,
-            system_key, import_source_batch_id
+            system_key, import_source_batch_id, import_pending
         )
-        VALUES (?, ?, ?, NULL, ?, 0, NULL, ?)
+        VALUES (?, ?, ?, NULL, ?, 0, NULL, ?, 1)
         """,
         (
             category_id,
@@ -1751,6 +1751,7 @@ def _remove_imported_batch_categories(conn, batch_id: str) -> None:
         WHERE  c.import_source_batch_id = ?
           AND  c.parent_id IS NOT NULL
           AND  p.system_key = ?
+          AND  c.import_pending = 1
         """,
         (batch_id, UNASSIGNED_CATEGORY_SYSTEM_KEY),
     ).fetchall()

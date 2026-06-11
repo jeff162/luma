@@ -10,7 +10,7 @@ import { useTransactionSelection } from '../lib/useTransactionSelection.js'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import CategoryPicker from '../components/CategoryPicker.jsx'
 import {
-  BulkMoveToast,
+  UndoToast,
   CategoryTreeRow,
   GroupEndDropZone,
   SectionEndDropZone,
@@ -36,9 +36,17 @@ const SECTION_META = {
 const SECTION_STORAGE_KEY_PREFIX = 'fintrack.categories.collapsedSections'
 const GROUP_STORAGE_KEY_PREFIX = 'fintrack.categories.collapsedGroups'
 const MATCHING_TXN_COLUMNS_STORAGE_KEY_PREFIX = 'fintrack.categories.matching-txn-columns'
+const LEFT_PANEL_WIDTH_STORAGE_KEY_PREFIX = 'fintrack.categories.left-panel-width'
 const SECTION_PREF_KEY = 'ui.categories.collapsedSections'
 const GROUP_PREF_KEY = 'ui.categories.collapsedGroups'
 const MATCHING_TXN_COLUMNS_PREF_KEY = 'ui.categories.matchingTransactions.columns'
+const LEFT_PANEL_WIDTH_PREF_KEY = 'ui.categories.leftPanelWidth'
+
+// Split between the category tree and the detail panel. The tree is the fixed-ish navigator;
+// the divider lets the user trade width with the detail panel, persisted like other view prefs.
+const DEFAULT_LEFT_PANEL_WIDTH = 280
+const MIN_LEFT_PANEL_WIDTH = 200
+const MIN_RIGHT_PANEL_WIDTH = 360
 const UNASSIGNED_CATEGORY_SYSTEM_KEY = 'unassigned'
 const SYNTHETIC_UNCATEGORIZED_EXPENSE_CATEGORY_ID = '__uncategorized_expense__'
 const SYNTHETIC_UNCATEGORIZED_EXPENSE_CATEGORY_NAME = 'Uncategorized'
@@ -67,6 +75,10 @@ function getSectionStorageKey(instanceId, userId) {
 
 function getMatchingTxnColumnsStorageKey(instanceId, userId) {
   return instanceId && userId ? `${MATCHING_TXN_COLUMNS_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
+}
+
+function getLeftPanelWidthStorageKey(instanceId, userId) {
+  return instanceId && userId ? `${LEFT_PANEL_WIDTH_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
 }
 
 function defaultMatchingTxnColumnConfig() {
@@ -243,7 +255,8 @@ function ContextMenu({
   x,
   y,
   target,
-  bulkMoveMode,
+  bulkSelectMode,
+  selectionCount,
   canMoveHere,
   onAddCategory,
   onAddGroup,
@@ -251,9 +264,10 @@ function ContextMenu({
   onCollapseAll,
   onAlphabetize,
   onAddRule,
-  onStartBulkMove,
+  onStartBulkSelect,
   onMoveHere,
-  onCancelBulkMove,
+  onBulkDelete,
+  onCancelBulkSelect,
   onDelete,
   onClose,
 }) {
@@ -308,51 +322,57 @@ function ContextMenu({
         minWidth: menuW,
       }}
     >
-      {bulkMoveMode ? (
-        canMoveHere ? (
-          <>
-            <button
-              style={itemStyle}
-              onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-              onMouseDown={e => {
-                e.preventDefault()
-                onMoveHere(target)
-              }}
-            >
-              Move here
-            </button>
-            <button
-              style={itemStyle}
-              onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-              onMouseDown={e => {
-                e.preventDefault()
-                onCancelBulkMove()
-              }}
-            >
-              Cancel bulk move
-            </button>
-          </>
-        ) : (
-          <>
+      {bulkSelectMode ? (
+        <>
+          {selectionCount > 0 ? (
+            <>
+              {canMoveHere ? (
+                <button
+                  style={itemStyle}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+                  onMouseDown={e => {
+                    e.preventDefault()
+                    onMoveHere(target)
+                  }}
+                >
+                  Move to here{target.groupName ? ` (${target.groupName})` : ''}
+                </button>
+              ) : (
+                <div style={{ ...itemStyle, color: 'var(--muted)', cursor: 'default', opacity: 0.7 }}>
+                  Move to here — right-click a group
+                </div>
+              )}
+              <button
+                style={itemStyle}
+                onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+                onMouseDown={e => {
+                  e.preventDefault()
+                  onBulkDelete()
+                }}
+              >
+                Bulk delete
+              </button>
+            </>
+          ) : (
             <div style={{ ...itemStyle, color: 'var(--muted)', cursor: 'default', opacity: 0.7 }}>
-              Select categories, then choose a destination group
+              Select categories, then choose an action
             </div>
-            {divider}
-            <button
-              style={itemStyle}
-              onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-              onMouseDown={e => {
-                e.preventDefault()
-                onCancelBulkMove()
-              }}
-            >
-              Cancel bulk move
-            </button>
-          </>
-        )
+          )}
+          {divider}
+          <button
+            style={itemStyle}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
+            onMouseDown={e => {
+              e.preventDefault()
+              onCancelBulkSelect()
+            }}
+          >
+            Cancel
+          </button>
+        </>
       ) : (
         <>
           {target.groupId ? (
@@ -452,10 +472,10 @@ function ContextMenu({
             onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
             onMouseDown={e => {
               e.preventDefault()
-              onStartBulkMove(target)
+              onStartBulkSelect(target)
             }}
           >
-            Bulk move
+            Bulk select
           </button>
         </>
       )}
@@ -627,8 +647,9 @@ function ScrollFade({ top, bottom }) {
 }
 
 /*
- * The tree has two overlapping modes: single-focus selection drives the detail pane, while bulk move temporarily
- * turns categories into an additive selection set. Keeping both selection shapes avoids rebuilding the page around one mode.
+ * The tree has two overlapping modes: single-focus selection drives the detail pane, while bulk select temporarily
+ * turns categories into an additive selection set that the context menu can then move or delete in bulk. Keeping both
+ * selection shapes avoids rebuilding the page around one mode.
  */
 export default function Categories() {
   const navigate = useNavigate()
@@ -667,17 +688,20 @@ export default function Categories() {
   const [matchingTxnColumns, setMatchingTxnColumns] = useState(defaultMatchingTxnColumnConfig)
   const [collapseStateLoaded, setCollapseStateLoaded] = useState(false)
   const [matchingTxnColumnsLoaded, setMatchingTxnColumnsLoaded] = useState(false)
+  const [leftPanelWidth, setLeftPanelWidth] = useState(null)
   const [listScrollState, setListScrollState] = useState({ top: false, bottom: false })
   const [deleteDialog, setDeleteDialog] = useState(null)
   const [deleteMode, setDeleteMode] = useState('replace')
   const [deleteReplacementId, setDeleteReplacementId] = useState('')
   const [deleteSaving, setDeleteSaving] = useState(false)
   const [bulkMoveToast, setBulkMoveToast] = useState(null)
-  const [bulkMoveMode, setBulkMoveMode] = useState(false)
+  const [bulkDeleteToast, setBulkDeleteToast] = useState(null)
+  const [bulkSelectMode, setBulkSelectMode] = useState(false)
 
   const listRef = useRef(null)
   const dragScrollRef = useRef(null)
   const selectedRef = useRef(null)
+  const contentLayoutRef = useRef(null)
 
   const sectionStateReady = CATEGORY_SECTION_TYPES.every(sectionType => Object.prototype.hasOwnProperty.call(collapsedSections, sectionType))
   const groupStateReady = tree.length > 0 && tree.every(group => Object.prototype.hasOwnProperty.call(collapsedGroups, group.id))
@@ -711,6 +735,14 @@ export default function Categories() {
           JSON.parse(window.localStorage.getItem(matchingTxnColumnsStorageKey) || 'null')
         )
         if (savedColumns) setMatchingTxnColumns(savedColumns)
+      }
+      const widthPref = Number(preferences?.[LEFT_PANEL_WIDTH_PREF_KEY])
+      const widthStorageKey = getLeftPanelWidthStorageKey(dbInstanceId, userId)
+      if (Number.isFinite(widthPref) && widthPref > 0) {
+        setLeftPanelWidth(widthPref)
+      } else if (widthStorageKey) {
+        const savedWidth = Number(JSON.parse(window.localStorage.getItem(widthStorageKey) || 'null'))
+        if (Number.isFinite(savedWidth) && savedWidth > 0) setLeftPanelWidth(savedWidth)
       }
       setCollapseStateLoaded(true)
       setMatchingTxnColumnsLoaded(true)
@@ -780,9 +812,9 @@ export default function Categories() {
       setNewName('')
       return
     }
-    if (bulkMoveMode) {
+    if (bulkSelectMode) {
       event.preventDefault()
-      cancelBulkMove()
+      cancelBulkSelect()
       return
     }
     if (selected || selectedCategoryIds.length > 0) {
@@ -791,7 +823,7 @@ export default function Categories() {
       setSelectedCategoryIds([])
     }
   }, {
-    enabled: !!deleteDialog || !!contextMenu || !!inlineForm || bulkMoveMode || !!selected || selectedCategoryIds.length > 0,
+    enabled: !!deleteDialog || !!contextMenu || !!inlineForm || bulkSelectMode || !!selected || selectedCategoryIds.length > 0,
     ignoreEditableTarget: false,
     escapeBehavior: ESCAPE_BEHAVIOR.CLEAR_SELECTION,
   })
@@ -844,7 +876,14 @@ export default function Categories() {
     if (!group) return []
     if (isSyntheticUncategorizedIncomeGroup(group)) return group.children || []
     if (!isProtectedSystemCategory(group)) return group.children || []
-    const visibleChildren = (group.children || []).filter(child => getDirectTxnCount(child, categoryUsage) > 0)
+    // Under the protected Unassigned group, still-pending imported labels (import_pending) are a
+    // filtered fallback bucket: only surface the ones that currently have transactions. But a
+    // recovered/settled *system* category (import_pending = 0) is a real category the user chose to
+    // keep — it shows regardless of transaction count, otherwise recovering an empty one looks like
+    // it vanished.
+    const visibleChildren = (group.children || []).filter(
+      child => !child.import_pending || getDirectTxnCount(child, categoryUsage) > 0,
+    )
     const syntheticChild = getSyntheticUncategorizedChild(group)
     return syntheticChild ? [syntheticChild, ...visibleChildren] : visibleChildren
   }
@@ -861,7 +900,59 @@ export default function Categories() {
   }
 
   function getVisibleSubcategoryCount(group) {
-    return getVisibleChildrenForGroup(group).length
+    if (!group) return 0
+    // `selected` comes from the flat category list and carries no `.children`; resolve the
+    // matching tree node so child counting (incl. protected-group visibility filtering) works.
+    const node = group.children ? group : (tree.find(g => g.id === group.id) || group)
+    return getVisibleChildrenForGroup(node).length
+  }
+
+  // Left/right split resize. Mirrors the divider in CategoryImportWorkspace: the pointer drag
+  // sets the left track width directly, clamped so neither panel collapses below its minimum.
+  function clampLeftPanelWidth(value) {
+    const layoutWidth = contentLayoutRef.current?.getBoundingClientRect?.().width || 0
+    const maxWidth = layoutWidth
+      ? Math.max(MIN_LEFT_PANEL_WIDTH, layoutWidth - MIN_RIGHT_PANEL_WIDTH - 8)
+      : 560
+    return Math.round(Math.min(Math.max(value, MIN_LEFT_PANEL_WIDTH), maxWidth))
+  }
+
+  // Persist only on drag-end (not on every move) so a resize is one preference write, not hundreds.
+  function persistLeftPanelWidth(width) {
+    const storageKey = getLeftPanelWidthStorageKey(dbInstanceId, userId)
+    if (storageKey) {
+      try {
+        window.localStorage.setItem(storageKey, JSON.stringify(width))
+      } catch {
+        // Ignore storage failures in environments that block localStorage.
+      }
+    }
+    api.saveUserPreference(LEFT_PANEL_WIDTH_PREF_KEY, width).catch(() => {})
+  }
+
+  function startResizeDivider(event) {
+    event.preventDefault()
+    const layoutRect = contentLayoutRef.current?.getBoundingClientRect?.()
+    if (!layoutRect) return
+    let nextWidth = leftPanelWidth ?? DEFAULT_LEFT_PANEL_WIDTH
+
+    function handlePointerMove(moveEvent) {
+      nextWidth = clampLeftPanelWidth(moveEvent.clientX - layoutRect.left)
+      setLeftPanelWidth(nextWidth)
+    }
+
+    function stopResize() {
+      window.removeEventListener('mousemove', handlePointerMove)
+      window.removeEventListener('mouseup', stopResize)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      persistLeftPanelWidth(nextWidth)
+    }
+
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', handlePointerMove)
+    window.addEventListener('mouseup', stopResize)
   }
 
   function getSectionGroups(sectionType) {
@@ -1104,6 +1195,7 @@ export default function Categories() {
     await persistChildrenState(targetParentId, targetIds)
 
     const targetGroup = flatCats.find(cat => cat.id === targetParentId)
+    setBulkDeleteToast(null)
     setBulkMoveToast({
       count: orderedChildIds.length,
       targetGroupName: targetGroup?.name || 'group',
@@ -1113,7 +1205,7 @@ export default function Categories() {
 
     await loadCategories(orderedChildIds[0])
     setSelectedCategoryIds(orderedChildIds)
-    setBulkMoveMode(false)
+    setBulkSelectMode(false)
   }
 
   async function handleDropRow(dragged, targetCat, dropPosition = 'after') {
@@ -1251,7 +1343,7 @@ export default function Categories() {
   function selectCategory(cat) {
     const fullCat = getFullCategoryRecord(cat, flatCats)
     if (!fullCat) return
-    if (bulkMoveMode) {
+    if (bulkSelectMode) {
       setSelected(fullCat)
       return
     }
@@ -1272,7 +1364,7 @@ export default function Categories() {
   }
 
   function getDragPayload(cat) {
-    if (bulkMoveMode) return null
+    if (bulkSelectMode) return null
     if (isSystemCategory(cat)) return null
     if (!cat.parent_id) {
       return {
@@ -1351,7 +1443,7 @@ export default function Categories() {
 
   function openGroupFormNear(sectionType, anchorGroupId = null, insertPosition = 'after') {
     setContextMenu(null)
-    setBulkMoveMode(false)
+    setBulkSelectMode(false)
     setSelected(null)
     setSelectedCategoryIds([])
     setNewName('')
@@ -1360,7 +1452,7 @@ export default function Categories() {
 
   function openCategoryForm(group) {
     setContextMenu(null)
-    setBulkMoveMode(false)
+    setBulkSelectMode(false)
     setSelected(null)
     setSelectedCategoryIds([])
     setNewName('')
@@ -1435,10 +1527,10 @@ export default function Categories() {
     const usageSummary = fullCat ? getUsageSummaryForNode(fullCat) : null
     if (fullCat) {
       setSelected(fullCat)
-      // During a bulk move the checked set IS the payload for "Move here"; right-clicking the
-      // destination group to open this menu must not wipe it (doing so left nothing to move and
-      // collapsed the menu back to the "select categories first" hint).
-      if (!bulkMoveMode) {
+      // During bulk select the checked set IS the payload for "Move to here" / "Bulk delete";
+      // right-clicking a target to open this menu must not wipe it (doing so left nothing to act
+      // on and collapsed the menu back to the "select categories first" hint).
+      if (!bulkSelectMode) {
         setSelectedCategoryIds(fullCat.parent_id && !isSyntheticUncategorizedCategory(fullCat) ? [fullCat.id] : [])
       }
     }
@@ -1470,10 +1562,10 @@ export default function Categories() {
     })
   }
 
-  function startBulkMove(target) {
+  function startBulkSelect(target) {
     setContextMenu(null)
     setInlineForm(null)
-    setBulkMoveMode(true)
+    setBulkSelectMode(true)
     if (!selected?.parent_id && target.groupId) {
       const group = flatCats.find(cat => cat.id === target.groupId)
       if (group) setSelected(group)
@@ -1481,14 +1573,14 @@ export default function Categories() {
     setSelectedCategoryIds([])
   }
 
-  function cancelBulkMove() {
+  function cancelBulkSelect() {
     setContextMenu(null)
-    setBulkMoveMode(false)
+    setBulkSelectMode(false)
     setSelectedCategoryIds([])
   }
 
   function toggleBulkChecked(cat) {
-    if (!bulkMoveMode) return
+    if (!bulkSelectMode) return
     if (isSyntheticUncategorizedCategory(cat)) {
       setSelected(cat)
       setSelectedCategoryIds([])
@@ -1521,6 +1613,52 @@ export default function Categories() {
     }
     setContextMenu(null)
     await moveChildrenBatch(selectedCategoryIds, targetParentId)
+  }
+
+  // Bulk delete only deletes selected categories that hold no transactions (the immediate,
+  // replacement-free delete path). Any still carrying transactions are left untouched and
+  // reported, so deletion never silently reassigns or orphans transactions — that decision
+  // stays with the per-category delete dialog.
+  async function bulkDeleteEmptySelected() {
+    setContextMenu(null)
+    const cats = selectedCategoryIds
+      .map(id => flatCats.find(cat => cat.id === id))
+      .filter(Boolean)
+    if (cats.length === 0) return
+    const empty = cats.filter(cat => (getUsageSummaryForNode(cat).txn_count || 0) === 0)
+    const skipped = cats.filter(cat => (getUsageSummaryForNode(cat).txn_count || 0) > 0)
+    for (const cat of empty) {
+      await api.deleteCategory(cat.id)
+    }
+    const deletedIds = empty.map(cat => cat.id)
+    const deletedIdSet = new Set(deletedIds)
+    if (selected && deletedIdSet.has(selected.id)) setSelected(null)
+    setSelectedCategoryIds(prev => prev.filter(id => !deletedIdSet.has(id)))
+    await loadCategories()
+    if (deletedIds.length) {
+      // Undo restores the soft-deactivated categories; any skipped (non-empty) ones are noted in
+      // the toast subtitle and stay selected so the user can handle them individually.
+      setBulkMoveToast(null)
+      setBulkDeleteToast({
+        deletedIds,
+        title: `Deleted ${deletedIds.length} empty categor${deletedIds.length === 1 ? 'y' : 'ies'}`,
+        description: skipped.length
+          ? `${skipped.length} skipped — still ${skipped.length === 1 ? 'has' : 'have'} transactions`
+          : 'Recoverable from the Inactive list',
+      })
+    } else if (skipped.length) {
+      setBulkNotice(`${skipped.length} selected categor${skipped.length === 1 ? 'y' : 'ies'} still ${skipped.length === 1 ? 'has' : 'have'} transactions, so nothing was deleted — delete those individually to choose how to handle their transactions.`)
+    }
+  }
+
+  async function undoBulkDelete() {
+    if (!bulkDeleteToast) return
+    const ids = bulkDeleteToast.deletedIds || []
+    setBulkDeleteToast(null)
+    for (const id of ids) {
+      await api.reactivateCategory(id)
+    }
+    await loadCategories()
   }
 
   const parentCategory = selected?.parent_id
@@ -1756,7 +1894,7 @@ export default function Categories() {
   return (
     <div data-browser-context-passthrough="true" style={{ padding: 32, display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
       <PageHeader title="Categories" />
-      <div style={{ display: 'grid', gridTemplateColumns: '340px minmax(0, 1fr)', gap: 20, flex: 1, minHeight: 0 }}>
+      <div ref={contentLayoutRef} style={{ display: 'grid', gridTemplateColumns: `${leftPanelWidth ?? DEFAULT_LEFT_PANEL_WIDTH}px 8px minmax(0, 1fr)`, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <input
             type="search"
@@ -1793,7 +1931,7 @@ export default function Categories() {
                 background: 'var(--surface)',
               }}
             >
-            {!loading && bulkMoveMode ? (
+            {!loading && bulkSelectMode ? (
               <div style={{
                 position: 'sticky',
                 top: 0,
@@ -1807,10 +1945,10 @@ export default function Categories() {
                 borderBottom: '1px solid var(--border)',
               }}>
                 <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                  Select categories to move, then right-click a group and choose <strong>Move here</strong>.
+                  Select categories, then right-click to choose an action.
                 </div>
                 <button
-                  onClick={cancelBulkMove}
+                  onClick={cancelBulkSelect}
                   style={{
                     background: 'none',
                     border: '1px solid var(--border)',
@@ -1822,7 +1960,7 @@ export default function Categories() {
                     flexShrink: 0,
                   }}
                 >
-                  Done
+                  Cancel
                 </button>
               </div>
             ) : null}
@@ -1935,7 +2073,7 @@ export default function Categories() {
                         acceptDrop={!isSystemCategory(group)}
                         nameStyle={isSystemCategory(group) ? { fontStyle: 'italic' } : null}
                         highlightQuery={categoryHighlightQuery}
-                        bulkMoveMode={bulkMoveMode}
+                        bulkSelectMode={bulkSelectMode}
                         bulkChecked={selectableChildren.length > 0 && selectableChildren.every(child => selectedCategoryIdSet.has(child.id))}
                         isCollapsed={groupCollapsed}
                         canCollapse={visibleChildren.length > 0}
@@ -1961,7 +2099,7 @@ export default function Categories() {
                           acceptDrop={!isSystemCategory(child)}
                           nameStyle={isSystemCategory(child) ? { fontStyle: 'italic' } : null}
                           highlightQuery={categoryHighlightQuery}
-                          bulkMoveMode={bulkMoveMode}
+                          bulkSelectMode={bulkSelectMode}
                           bulkChecked={selectedCategoryIdSet.has(child.id)}
                           bulkSelectable={!isSystemCategory(child)}
                           onSelect={selectCategory}
@@ -2073,6 +2211,16 @@ export default function Categories() {
           </div>
 
         </div>
+
+        <div
+          onMouseDown={startResizeDivider}
+          title="Drag to resize panels"
+          style={{
+            minHeight: 0,
+            cursor: 'col-resize',
+            background: 'transparent',
+          }}
+        />
 
         <div style={{ position: 'relative', minHeight: 0, minWidth: 0 }}>
           <div
@@ -2438,7 +2586,8 @@ export default function Categories() {
           x={contextMenu.x}
           y={contextMenu.y}
           target={contextMenu}
-          bulkMoveMode={bulkMoveMode}
+          bulkSelectMode={bulkSelectMode}
+          selectionCount={selectedCategoryIds.length}
           canMoveHere={!!contextMenu.groupId && selectedCategoryIds.length > 0}
           onAddCategory={target => {
             const group = flatCats.find(cat => cat.id === target.groupId)
@@ -2449,9 +2598,10 @@ export default function Categories() {
           onCollapseAll={collapseAll}
           onAlphabetize={alphabetize}
           onAddRule={openRuleCreator}
-          onStartBulkMove={startBulkMove}
+          onStartBulkSelect={startBulkSelect}
           onMoveHere={moveSelectedCategoriesHere}
-          onCancelBulkMove={cancelBulkMove}
+          onBulkDelete={bulkDeleteEmptySelected}
+          onCancelBulkSelect={cancelBulkSelect}
           onDelete={target => {
             const id = target.categoryId || target.groupId
             if (id) handleDelete(id)
@@ -2462,10 +2612,20 @@ export default function Categories() {
       ) : null}
 
       {bulkMoveToast ? (
-        <BulkMoveToast
-          move={bulkMoveToast}
+        <UndoToast
+          title={`Moved ${bulkMoveToast.count} categor${bulkMoveToast.count === 1 ? 'y' : 'ies'}`}
+          description={`Added to ${bulkMoveToast.targetGroupName}`}
           onUndo={undoBulkMove}
           onDismiss={() => setBulkMoveToast(null)}
+        />
+      ) : null}
+
+      {bulkDeleteToast ? (
+        <UndoToast
+          title={bulkDeleteToast.title}
+          description={bulkDeleteToast.description}
+          onUndo={undoBulkDelete}
+          onDismiss={() => setBulkDeleteToast(null)}
         />
       ) : null}
 
@@ -2494,7 +2654,7 @@ export default function Categories() {
       )}
 
       {bulkNotice ? (
-        <AppNoticeDialog title="Bulk edit" description={bulkNotice} onClose={() => setBulkNotice('')} />
+        <AppNoticeDialog title="Bulk action" description={bulkNotice} onClose={() => setBulkNotice('')} />
       ) : null}
 
       {rulePrompt ? (
