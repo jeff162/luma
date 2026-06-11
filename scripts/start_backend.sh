@@ -149,15 +149,48 @@ if [[ -f "$ENV_PATH" ]]; then
   fi
 fi
 
-if [[ ! -x "$VENV_PYTHON" ]]; then
-  echo "Creating backend virtual environment (first run only)..."
+# A venv is only usable if its python can import pip. A bin/python symlink alone is not enough:
+# on Debian/Ubuntu/Mint, `python3 -m venv` without the python3-venv package produces a broken venv
+# (no pip, no activate, no ensurepip), and a stale/half-built venv from an earlier failed run can
+# linger. Checking pip — not just the symlink — lets us detect and rebuild those automatically.
+venv_is_healthy() {
+  [[ -x "$VENV_PYTHON" ]] && "$VENV_PYTHON" -m pip --version >/dev/null 2>&1
+}
+
+venv_package_hint() {
+  echo "On Debian/Ubuntu/Mint this usually means the venv/ensurepip module is missing. Install it with:"
+  echo "    sudo apt install python3-venv        # or the version-specific package, e.g. python3.12-venv"
+  echo "then re-run this script."
+}
+
+if ! venv_is_healthy; then
+  if [[ -e "$VENV_DIR" ]]; then
+    echo "Backend virtual environment is missing or incomplete (no working pip) — rebuilding it..."
+    rm -rf "$VENV_DIR"
+  else
+    echo "Creating backend virtual environment (first run only)..."
+  fi
   cd "$BACKEND_DIR"
   if command -v python3 >/dev/null 2>&1; then
-    python3 -m venv venv
+    VENV_CREATOR="python3"
   elif command -v python >/dev/null 2>&1; then
-    python -m venv venv
+    VENV_CREATOR="python"
   else
     echo "Python was not found. Install Python 3.12+ and try again."
+    exit 1
+  fi
+  if ! "$VENV_CREATOR" -m venv venv; then
+    echo
+    echo "Could not create the virtual environment."
+    venv_package_hint
+    exit 1
+  fi
+  cd "$ROOT_DIR"
+  # Even when `python3 -m venv` exits 0, a missing ensurepip can leave the venv without pip.
+  if ! venv_is_healthy; then
+    echo
+    echo "The virtual environment was created but pip is not available inside it."
+    venv_package_hint
     exit 1
   fi
   "$VENV_PYTHON" -m pip install --upgrade pip >/dev/null
