@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react'
+import { useState, useEffect, useRef, useCallback, useLayoutEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button, AppConfirmDialog, AppNoticeDialog } from '../components/ui.jsx'
@@ -26,19 +26,18 @@ import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import { TagGlyph } from '../components/TagUi.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { ESCAPE_BEHAVIOR, useDismissibleLayer, useEscapeAction } from '../lib/uiInteractions.js'
-import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
+import { useUserPreferences, useUserPreference } from '../lib/UserPreferencesContext.jsx'
 
 const SECTION_META = {
   income: { label: 'Income' },
   expense: { label: 'Expense' },
 }
 
-const SECTION_STORAGE_KEY_PREFIX = 'fintrack.categories.collapsedSections'
-const GROUP_STORAGE_KEY_PREFIX = 'fintrack.categories.collapsedGroups'
-const MATCHING_TXN_COLUMNS_STORAGE_KEY_PREFIX = 'fintrack.categories.matching-txn-columns'
 const LEFT_PANEL_WIDTH_STORAGE_KEY_PREFIX = 'fintrack.categories.left-panel-width'
 const SECTION_PREF_KEY = 'ui.categories.collapsedSections'
 const GROUP_PREF_KEY = 'ui.categories.collapsedGroups'
+// Stable default so the preference value keeps a constant identity when nothing is stored yet.
+const EMPTY_COLLAPSE_STATE = {}
 const MATCHING_TXN_COLUMNS_PREF_KEY = 'ui.categories.matchingTransactions.columns'
 const LEFT_PANEL_WIDTH_PREF_KEY = 'ui.categories.leftPanelWidth'
 
@@ -69,13 +68,7 @@ const MATCHING_TXN_COLUMN_DEFAULTS = [
   { key: 'amount', width: 108 },
 ]
 
-function getSectionStorageKey(instanceId, userId) {
-  return instanceId && userId ? `${SECTION_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
-}
 
-function getMatchingTxnColumnsStorageKey(instanceId, userId) {
-  return instanceId && userId ? `${MATCHING_TXN_COLUMNS_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
-}
 
 function getLeftPanelWidthStorageKey(instanceId, userId) {
   return instanceId && userId ? `${LEFT_PANEL_WIDTH_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
@@ -90,9 +83,12 @@ function normalizeMatchingTxnColumnConfig(value) {
   const byKey = new Map(value.map(column => [column?.key, column]))
   const hasAllColumns = MATCHING_TXN_COLUMN_DEFAULTS.every(column => byKey.has(column.key))
   if (!hasAllColumns || byKey.size !== MATCHING_TXN_COLUMN_DEFAULTS.length) return null
-  return MATCHING_TXN_COLUMN_DEFAULTS.map(column => ({
+  const defaultWidthByKey = new Map(MATCHING_TXN_COLUMN_DEFAULTS.map(column => [column.key, column.width]))
+  // Preserve the incoming column ORDER (so a user reorder sticks). Validation above guarantees the
+  // exact default key set is present, so each entry only needs its width normalized.
+  return value.map(column => ({
     key: column.key,
-    width: Number(byKey.get(column.key)?.width) || column.width,
+    width: Number(column?.width) || defaultWidthByKey.get(column.key),
   }))
 }
 
@@ -155,9 +151,6 @@ function getDirectTxnCount(cat, categoryUsage) {
   return Number(categoryUsage?.[cat?.id]?.txn_count || 0)
 }
 
-function getGroupStorageKey(instanceId, userId) {
-  return instanceId && userId ? `${GROUP_STORAGE_KEY_PREFIX}.${instanceId}.${userId}` : null
-}
 
 function DeleteCategoryDialog({ category, preview, categories, replacementId, onReplacementChange, mode, onModeChange, onConfirm, onCancel, saving }) {
   const ref = useRef(null)
@@ -682,13 +675,23 @@ export default function Categories() {
   const [newName, setNewName] = useState('')
   const [contextMenu, setContextMenu] = useState(null)
   const [inlineForm, setInlineForm] = useState(null)
-  const [collapsedSections, setCollapsedSections] = useState({})
-  const [collapsedGroups, setCollapsedGroups] = useState({})
+  // Section/group collapse is single-source-of-truth: a SPARSE stored map (only entries the user
+  // changed). The full "effective" map is derived on read with per-kind defaults (sections expanded,
+  // groups collapsed) — the same defaults the old seeding applied, now computed instead of synced,
+  // so there's no local mirror / load / save / readiness dance and no feedback loop.
+  const [storedCollapsedSections, setStoredCollapsedSections] = useUserPreference(SECTION_PREF_KEY, EMPTY_COLLAPSE_STATE)
+  const [storedCollapsedGroups, setStoredCollapsedGroups] = useUserPreference(GROUP_PREF_KEY, EMPTY_COLLAPSE_STATE)
   const [categorySearch, setCategorySearch] = useState('')
-  const [matchingTxnColumns, setMatchingTxnColumns] = useState(defaultMatchingTxnColumnConfig)
-  const [collapseStateLoaded, setCollapseStateLoaded] = useState(false)
-  const [matchingTxnColumnsLoaded, setMatchingTxnColumnsLoaded] = useState(false)
   const [leftPanelWidth, setLeftPanelWidth] = useState(null)
+  // Matching-transactions column layout is single-source-of-truth: the stored preference, normalized
+  // on read against the current columns. There is deliberately no local mirror or load/save effects —
+  // they formed a feedback cycle (persisting updated the context, the load re-normalized into a fresh
+  // array, which retriggered the persist) that made the column divider jitter.
+  const [storedMatchingTxnColumns, setStoredMatchingTxnColumns] = useUserPreference(MATCHING_TXN_COLUMNS_PREF_KEY, null)
+  const matchingTxnColumns = useMemo(
+    () => normalizeMatchingTxnColumnConfig(storedMatchingTxnColumns) || defaultMatchingTxnColumnConfig(),
+    [storedMatchingTxnColumns],
+  )
   const [listScrollState, setListScrollState] = useState({ top: false, bottom: false })
   const [deleteDialog, setDeleteDialog] = useState(null)
   const [deleteMode, setDeleteMode] = useState('replace')
@@ -703,39 +706,26 @@ export default function Categories() {
   const selectedRef = useRef(null)
   const contentLayoutRef = useRef(null)
 
-  const sectionStateReady = CATEGORY_SECTION_TYPES.every(sectionType => Object.prototype.hasOwnProperty.call(collapsedSections, sectionType))
-  const groupStateReady = tree.length > 0 && tree.every(group => Object.prototype.hasOwnProperty.call(collapsedGroups, group.id))
+  // Effective collapse maps: fill every current section/group, applying the defaults. Reads
+  // elsewhere use these full maps exactly as before; toggles write the sparse stored maps above.
+  const collapsedSections = useMemo(() => {
+    const next = {}
+    CATEGORY_SECTION_TYPES.forEach(sectionType => { next[sectionType] = !!storedCollapsedSections[sectionType] })
+    return next
+  }, [storedCollapsedSections])
+  const collapsedGroups = useMemo(() => {
+    const next = {}
+    tree.forEach(group => { next[group.id] = storedCollapsedGroups[group.id] ?? true })
+    return next
+  }, [storedCollapsedGroups, tree])
 
   useEffect(() => {
     selectedRef.current = selected
   }, [selected])
 
 
-  // Tree-collapse state is scoped per db/profile so one user's workspace shape does not leak into another's, with localStorage as fallback only.
+  // Left-panel width is seeded from the saved preference (with localStorage as a legacy fallback).
   useEffect(() => {
-      const sectionPrefs = preferences?.[SECTION_PREF_KEY]
-      const groupPrefs = preferences?.[GROUP_PREF_KEY]
-      const matchingTxnColumnPrefs = normalizeMatchingTxnColumnConfig(preferences?.[MATCHING_TXN_COLUMNS_PREF_KEY])
-      if (sectionPrefs && typeof sectionPrefs === 'object') setCollapsedSections(sectionPrefs)
-      if (groupPrefs && typeof groupPrefs === 'object') setCollapsedGroups(groupPrefs)
-      if (matchingTxnColumnPrefs) setMatchingTxnColumns(matchingTxnColumnPrefs)
-      const sectionStorageKey = getSectionStorageKey(dbInstanceId, userId)
-      const groupStorageKey = getGroupStorageKey(dbInstanceId, userId)
-      const matchingTxnColumnsStorageKey = getMatchingTxnColumnsStorageKey(dbInstanceId, userId)
-      if (!sectionPrefs && sectionStorageKey) {
-        const savedSections = JSON.parse(window.localStorage.getItem(sectionStorageKey) || 'null')
-        if (savedSections && typeof savedSections === 'object') setCollapsedSections(savedSections)
-      }
-      if (!groupPrefs && groupStorageKey) {
-        const savedGroups = JSON.parse(window.localStorage.getItem(groupStorageKey) || 'null')
-        if (savedGroups && typeof savedGroups === 'object') setCollapsedGroups(savedGroups)
-      }
-      if (!matchingTxnColumnPrefs && matchingTxnColumnsStorageKey) {
-        const savedColumns = normalizeMatchingTxnColumnConfig(
-          JSON.parse(window.localStorage.getItem(matchingTxnColumnsStorageKey) || 'null')
-        )
-        if (savedColumns) setMatchingTxnColumns(savedColumns)
-      }
       const widthPref = Number(preferences?.[LEFT_PANEL_WIDTH_PREF_KEY])
       const widthStorageKey = getLeftPanelWidthStorageKey(dbInstanceId, userId)
       if (Number.isFinite(widthPref) && widthPref > 0) {
@@ -744,8 +734,6 @@ export default function Categories() {
         const savedWidth = Number(JSON.parse(window.localStorage.getItem(widthStorageKey) || 'null'))
         if (Number.isFinite(savedWidth) && savedWidth > 0) setLeftPanelWidth(savedWidth)
       }
-      setCollapseStateLoaded(true)
-      setMatchingTxnColumnsLoaded(true)
   }, [dbInstanceId, preferences, userId])
 
   const loadCategories = useCallback(async (selectedId = selectedRef.current?.id) => {
@@ -827,41 +815,6 @@ export default function Categories() {
     ignoreEditableTarget: false,
     escapeBehavior: ESCAPE_BEHAVIOR.CLEAR_SELECTION,
   })
-  useEffect(() => {
-    if (!collapseStateLoaded) return
-    if (!tree.length || !sectionStateReady) return
-    const storageKey = getSectionStorageKey(dbInstanceId, userId)
-    if (!storageKey) return
-    try {
-      window.localStorage.setItem(storageKey, JSON.stringify(collapsedSections))
-    } catch {
-      // Ignore storage failures in environments that block localStorage.
-    }
-    setPreference(SECTION_PREF_KEY, collapsedSections)
-  }, [dbInstanceId, userId, collapsedSections, collapseStateLoaded, tree.length, sectionStateReady, setPreference])
-  useEffect(() => {
-    if (!collapseStateLoaded) return
-    if (!groupStateReady) return
-    const storageKey = getGroupStorageKey(dbInstanceId, userId)
-    if (!storageKey) return
-    try {
-      window.localStorage.setItem(storageKey, JSON.stringify(collapsedGroups))
-    } catch {
-      // Ignore storage failures in environments that block localStorage.
-    }
-    setPreference(GROUP_PREF_KEY, collapsedGroups)
-  }, [dbInstanceId, userId, collapsedGroups, collapseStateLoaded, groupStateReady, setPreference])
-  useEffect(() => {
-    if (!matchingTxnColumnsLoaded) return
-    const storageKey = getMatchingTxnColumnsStorageKey(dbInstanceId, userId)
-    if (!storageKey) return
-    try {
-      window.localStorage.setItem(storageKey, JSON.stringify(matchingTxnColumns))
-    } catch {
-      // Ignore storage failures in environments that block localStorage.
-    }
-    setPreference(MATCHING_TXN_COLUMNS_PREF_KEY, matchingTxnColumns)
-  }, [dbInstanceId, userId, matchingTxnColumns, matchingTxnColumnsLoaded, setPreference])
 
   function getSyntheticUncategorizedChild(group) {
     if (!isProtectedSystemCategory(group)) return null
@@ -1032,37 +985,6 @@ export default function Categories() {
     ))
   })
 
-  useEffect(() => {
-    if (!tree.length || !collapseStateLoaded) return
-    setCollapsedSections(prev => {
-      const next = {}
-      let changed = false
-      CATEGORY_SECTION_TYPES.forEach(sectionType => {
-        if (Object.prototype.hasOwnProperty.call(prev, sectionType)) {
-          next[sectionType] = !!prev[sectionType]
-        } else {
-          next[sectionType] = false
-          changed = true
-        }
-      })
-      if (!changed && CATEGORY_SECTION_TYPES.every(sectionType => prev[sectionType] === next[sectionType])) return prev
-      return next
-    })
-    setCollapsedGroups(prev => {
-      const next = {}
-      let changed = false
-      tree.forEach(group => {
-        if (Object.prototype.hasOwnProperty.call(prev, group.id)) {
-          next[group.id] = !!prev[group.id]
-        } else {
-          next[group.id] = true
-          changed = true
-        }
-      })
-      if (!changed && tree.length === Object.keys(prev).length && tree.every(group => prev[group.id] === next[group.id])) return prev
-      return next
-    })
-  }, [tree, collapseStateLoaded])
   useEffect(() => {
     updateScrollState(listRef, setListScrollState)
   }, [tree, selected, loading, inlineForm, collapsedSections, collapsedGroups])
@@ -1392,34 +1314,39 @@ export default function Categories() {
     }
   }
 
+  // Toggles flip the *effective* value (which carries the default) and write it to the sparse store.
   function toggleSection(sectionType) {
-    setCollapsedSections(prev => ({ ...prev, [sectionType]: !prev[sectionType] }))
+    setStoredCollapsedSections(prev => ({ ...prev, [sectionType]: !collapsedSections[sectionType] }))
   }
 
   function toggleGroup(groupId) {
-    setCollapsedGroups(prev => ({ ...prev, [groupId]: !prev[groupId] }))
+    setStoredCollapsedGroups(prev => ({ ...prev, [groupId]: !collapsedGroups[groupId] }))
   }
 
   function expandAll(target) {
     if (target.groupId) {
-      setCollapsedGroups(prev => ({ ...prev, [target.groupId]: false }))
+      setStoredCollapsedGroups(prev => ({ ...prev, [target.groupId]: false }))
     } else {
-      const nextGroups = { ...collapsedGroups }
-      ;(groupsBySection[target.sectionType] || []).forEach(group => { nextGroups[group.id] = false })
-      setCollapsedGroups(nextGroups)
-      setCollapsedSections(prev => ({ ...prev, [target.sectionType]: false }))
+      setStoredCollapsedGroups(prev => {
+        const next = { ...prev }
+        ;(groupsBySection[target.sectionType] || []).forEach(group => { next[group.id] = false })
+        return next
+      })
+      setStoredCollapsedSections(prev => ({ ...prev, [target.sectionType]: false }))
     }
     setContextMenu(null)
   }
 
   function collapseAll(target) {
     if (target.groupId) {
-      setCollapsedGroups(prev => ({ ...prev, [target.groupId]: true }))
+      setStoredCollapsedGroups(prev => ({ ...prev, [target.groupId]: true }))
     } else {
-      const nextGroups = { ...collapsedGroups }
-      ;(groupsBySection[target.sectionType] || []).forEach(group => { nextGroups[group.id] = true })
-      setCollapsedGroups(nextGroups)
-      setCollapsedSections(prev => ({ ...prev, [target.sectionType]: true }))
+      setStoredCollapsedGroups(prev => {
+        const next = { ...prev }
+        ;(groupsBySection[target.sectionType] || []).forEach(group => { next[group.id] = true })
+        return next
+      })
+      setStoredCollapsedSections(prev => ({ ...prev, [target.sectionType]: true }))
     }
     setContextMenu(null)
   }
@@ -1844,7 +1771,7 @@ export default function Categories() {
 
   function handleMatchingTxnColumnUpdate(nextColumns) {
     const normalized = normalizeMatchingTxnColumnConfig(nextColumns)
-    if (normalized) setMatchingTxnColumns(normalized)
+    if (normalized) setStoredMatchingTxnColumns(normalized)
   }
 
   function openDetailPanel(type, item) {

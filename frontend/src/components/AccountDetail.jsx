@@ -17,7 +17,6 @@ import {
   usePagedMonthTransactions,
 } from './detailShared.jsx'
 
-const ACCOUNT_DETAIL_TABLE_STORAGE_KEY_PREFIX = 'fintrack.account-detail.transactions.columns'
 const ACCOUNT_DETAIL_TABLE_PREF_KEY = 'ui.accountDetail.transactions.columns'
 
 export default function AccountDetail({ account, categories = [], onClose, forceFloating = false, stackIndex = 0, initialPosition = null, isTopmost = true, dateStart = null, dateEnd = null }) {
@@ -45,7 +44,6 @@ export default function AccountDetail({ account, categories = [], onClose, force
   } = usePagedMonthTransactions({ selectedMonth, loadPage: loadMonthPage })
   const [localMonthTxns, setLocalMonthTxns] = useState([])
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
-    storageKeyPrefix: ACCOUNT_DETAIL_TABLE_STORAGE_KEY_PREFIX,
     preferenceKey: ACCOUNT_DETAIL_TABLE_PREF_KEY,
     showAccount: false,
   })

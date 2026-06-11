@@ -19,10 +19,9 @@ import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import RuleForm from '../components/RuleForm.jsx'
 import BulkEditPanel from '../components/BulkEditPanel.jsx'
 import { useTransactionSelection, BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
-import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
-import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
+import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 
 const COLUMN_DEFS = [
   { key: 'date', label: 'Date', defaultWidth: 100, minWidth: 70 },
@@ -33,7 +32,6 @@ const COLUMN_DEFS = [
 ]
 
 const DEFAULT_ORDER = ['date', 'merchant', 'category', 'account', 'amount']
-const TXN_COLUMNS_STORAGE_KEY_PREFIX = 'fintrack:txn-columns'
 const TXN_COLUMNS_PREF_KEY = 'ui.transactions.columns'
 const TXN_SESSION_STATE_STORAGE_KEY = 'fintrack:txn-session-state'
 const DEFAULT_TRANSACTION_SORT = { key: 'date', dir: 'desc' }
@@ -52,9 +50,6 @@ function getTransactionsPageSize(loadedCount = 0) {
   )
 }
 
-function getTxnColumnsStorageKey(instanceId, userId) {
-  return instanceId && userId ? `${TXN_COLUMNS_STORAGE_KEY_PREFIX}:${instanceId}:${userId}` : null
-}
 
 function normalizeTransactionSortState(value) {
   if (!value || typeof value !== 'object') return DEFAULT_TRANSACTION_SORT
@@ -115,35 +110,11 @@ function normalizeColumnConfig(cfg) {
   const byKey = new Map(cfg.map(col => [col.key, col]))
   const allPresent = DEFAULT_ORDER.every(key => byKey.has(key))
   if (!allPresent || byKey.size !== DEFAULT_ORDER.length) return null
-
-  const ordered = cfg.map(col => ({ ...col }))
-  const merchantIndex = ordered.findIndex(col => col.key === 'merchant')
-  const categoryIndex = ordered.findIndex(col => col.key === 'category')
-
-  if (merchantIndex === -1 || categoryIndex === -1) return null
-  if (categoryIndex === merchantIndex + 1) return ordered
-
-  const [categoryCol] = ordered.splice(categoryIndex, 1)
-  const nextMerchantIndex = ordered.findIndex(col => col.key === 'merchant')
-  ordered.splice(nextMerchantIndex + 1, 0, categoryCol)
-  return ordered
+  // Preserve the user's column order as-is — every column (including category) reorders freely.
+  // (Validation above guarantees exactly the expected set of keys.)
+  return cfg.map(col => ({ ...col }))
 }
 
-function loadColumnConfig(instanceId, userId) {
-  const storageKey = getTxnColumnsStorageKey(instanceId, userId)
-  if (!storageKey) return null
-  try {
-    const raw = localStorage.getItem(storageKey)
-    if (!raw) return null
-    return normalizeColumnConfig(JSON.parse(raw))
-  } catch { return null }
-}
-
-function saveColumnConfig(instanceId, userId, cfg) {
-  const storageKey = getTxnColumnsStorageKey(instanceId, userId)
-  if (!storageKey) return
-  try { localStorage.setItem(storageKey, JSON.stringify(cfg)) } catch { }
-}
 
 function getInitialSortDirection(columnKey) {
   return columnKey === 'date' || columnKey === 'amount' ? 'desc' : 'asc'
@@ -355,8 +326,6 @@ function RuleActionModal({ state, onClose, onSaved }) {
 
 export default function Transactions() {
   const initialSessionStateRef = useRef(loadTransactionsSessionState())
-  const { dbInstanceId, preferenceSubjectId: userId } = useAppSession()
-  const { preferences, setPreference } = useUserPreferences()
   const { filters } = useFilters()
   const location = useLocation()
   const [categories, setCategories] = useState([])
@@ -383,7 +352,11 @@ export default function Transactions() {
   const listScrollRef = useRef(null)
   const categoryHeaderMenuRef = useRef(null)
   const latestRequestKeyRef = useRef('')
-  const [cols, setCols] = useState(() => defaultColumnConfig())
+  // Column layout is single-source-of-truth: the stored preference, normalized on read (which also
+  // applies the category-after-merchant layout rule), falling back to defaults. No local mirror /
+  // load effect / localStorage — the setter persists straight through the context.
+  const [storedCols, setStoredCols] = useUserPreference(TXN_COLUMNS_PREF_KEY, null)
+  const cols = useMemo(() => normalizeColumnConfig(storedCols) || defaultColumnConfig(), [storedCols])
   const [sortState, setSortState] = useState(() => initialSessionStateRef.current?.sortState || DEFAULT_TRANSACTION_SORT)
   const [showSourceInCategorySlot, setShowSourceInCategorySlot] = useState(false)
   const totalDetailPanelCount = detailPanels.length + batchDetailPanels.length
@@ -419,9 +392,7 @@ export default function Transactions() {
   function handleColUpdate(newCols) {
     // The injected bulk-select column is render-only; never persist it into the user's column config.
     const persistable = newCols.filter(col => col.key !== BULK_SELECT_COLUMN_KEY)
-    setCols(persistable)
-    saveColumnConfig(dbInstanceId, userId, persistable)
-    setPreference(TXN_COLUMNS_PREF_KEY, persistable)
+    setStoredCols(persistable)
   }
 
   const [uncategorizedOnly, setUncategorizedOnly] = useState(
@@ -480,21 +451,6 @@ export default function Transactions() {
     }
   }
 
-  useEffect(() => {
-    const saved = preferences?.[TXN_COLUMNS_PREF_KEY]
-    const normalizedSaved = normalizeColumnConfig(saved)
-    if (normalizedSaved) {
-      setCols(normalizedSaved)
-      saveColumnConfig(dbInstanceId, userId, normalizedSaved)
-      return
-    }
-    const local = loadColumnConfig(dbInstanceId, userId)
-    if (local) {
-      setCols(local)
-      return
-    }
-    setCols(defaultColumnConfig())
-  }, [dbInstanceId, preferences, userId])
 
   useEffect(() => {
     api.getCategories().then(setCategories)
@@ -1162,6 +1118,11 @@ export default function Transactions() {
                           fontSize: 13,
                           background: editId === txn.id ? 'var(--surface2)' : 'transparent',
                           minWidth: 0,
+                          // Skip style/layout/paint for off-screen rows so a column resize (which
+                          // re-styles the grid template) only touches visible rows, not the whole
+                          // infinitely-scrolled ledger. contain-intrinsic-size reserves scroll space.
+                          contentVisibility: 'auto',
+                          containIntrinsicSize: 'auto 40px',
                         }}
                       >
                         {activeColumns.map(col => (

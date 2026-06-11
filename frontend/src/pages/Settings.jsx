@@ -10,12 +10,13 @@ import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, S
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
-import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
+import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { TagGlyph, TAG_COLOR_PALETTE } from '../components/TagUi.jsx'
 
 const SETTINGS_SECTIONS_PREF_KEY = 'ui.settings.stickySections'
-const SETTINGS_SECTIONS_STORAGE_KEY_PREFIX = 'fintrack.settings.stickySections'
+// Stable default so the preference value keeps a constant identity when nothing is saved yet.
+const EMPTY_SECTION_STATE = {}
 const SETTINGS_CONTENT_WIDTH = 'min(1040px, 100%)'
 function clearBrowserStoredState() {
   if (typeof window === 'undefined') return
@@ -2008,53 +2009,11 @@ export default function Settings() {
     passwordPolicy,
     developerOptionsEnabled,
     dbInstanceId,
-    preferenceSubjectId: userId,
   } = useAppSession()
-  const { preferences, setPreference } = useUserPreferences()
-  const [sectionOpenState, setSectionOpenState] = useState({})
-  const [sectionStateLoaded, setSectionStateLoaded] = useState(false)
+  // Section open/closed state is a single user preference, read and written straight through the
+  // context — no local mirror, no load/save effects, no localStorage, so there is nothing to drift.
+  const [sectionOpenState, setSectionOpenState] = useUserPreference(SETTINGS_SECTIONS_PREF_KEY, EMPTY_SECTION_STATE)
   const settingsScrollRef = useRef(null)
-
-  useEffect(() => {
-    const prefValue = preferences?.[SETTINGS_SECTIONS_PREF_KEY]
-    if (prefValue && typeof prefValue === 'object') {
-      setSectionOpenState(prefValue)
-    } else {
-      const storageKey = dbInstanceId && userId
-        ? `${SETTINGS_SECTIONS_STORAGE_KEY_PREFIX}.${dbInstanceId}.${userId}`
-        : ''
-      if (storageKey) {
-        try {
-          const raw = window.localStorage.getItem(storageKey)
-          const parsed = raw ? JSON.parse(raw) : null
-          if (parsed && typeof parsed === 'object') setSectionOpenState(parsed)
-        } catch {
-          // Ignore storage failures in restricted environments.
-        }
-      }
-    }
-    setSectionStateLoaded(true)
-  }, [dbInstanceId, preferences, userId])
-
-  useEffect(() => {
-    if (!sectionStateLoaded) return
-    const storageKey = dbInstanceId && userId
-      ? `${SETTINGS_SECTIONS_STORAGE_KEY_PREFIX}.${dbInstanceId}.${userId}`
-      : ''
-    if (storageKey) {
-      try {
-        window.localStorage.setItem(storageKey, JSON.stringify(sectionOpenState))
-      } catch {
-        // Ignore storage failures in restricted environments.
-      }
-    }
-    // Persist through the preferences context (not api.saveUserPreference directly) so the
-    // in-memory preferences map stays in sync. Writing straight to the backend left the context
-    // holding the pre-change value, and the load effect above — which prefers the context over
-    // localStorage — would restore that stale value on the next visit (e.g. a collapsed section
-    // re-opening after navigating away and back).
-    setPreference(SETTINGS_SECTIONS_PREF_KEY, sectionOpenState)
-  }, [dbInstanceId, userId, sectionOpenState, sectionStateLoaded, setPreference])
 
   function bindSection(sectionKey, defaultCollapsed = true) {
     const isOpen = sectionOpenState[sectionKey] ?? !defaultCollapsed

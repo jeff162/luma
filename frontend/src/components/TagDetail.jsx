@@ -13,7 +13,6 @@ import {
   useDetailPanelChrome,
 } from './detailShared.jsx'
 
-const TAG_DETAIL_TABLE_STORAGE_KEY_PREFIX = 'fintrack.tag-detail.transactions.columns'
 const TAG_DETAIL_TABLE_PREF_KEY = 'ui.tagDetail.transactions.columns'
 
 /*
@@ -47,7 +46,6 @@ export default function TagDetail({
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(true)
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
-    storageKeyPrefix: TAG_DETAIL_TABLE_STORAGE_KEY_PREFIX,
     preferenceKey: TAG_DETAIL_TABLE_PREF_KEY,
   })
 

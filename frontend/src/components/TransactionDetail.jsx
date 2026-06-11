@@ -29,7 +29,6 @@ const inputStyle = {
   border: '1px solid var(--border)', borderRadius: 6,
   padding: '5px 8px', fontSize: 13, outline: 'none',
 }
-const TRANSACTION_DETAIL_TABLE_STORAGE_KEY_PREFIX = 'fintrack.transaction-detail.transactions.columns'
 const TRANSACTION_DETAIL_TABLE_PREF_KEY = 'ui.transactionDetail.transactions.columns'
 
 /*
@@ -64,7 +63,6 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
     }
   }
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
-    storageKeyPrefix: TRANSACTION_DETAIL_TABLE_STORAGE_KEY_PREFIX,
     preferenceKey: TRANSACTION_DETAIL_TABLE_PREF_KEY,
   })
 

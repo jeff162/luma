@@ -31,7 +31,6 @@ import TransactionListTable from './TransactionListTable.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import { DetailPanelShell, useDetailPanelChrome, usePagedTransactions } from './detailShared.jsx'
 
-const IMPORT_BATCH_DETAIL_TABLE_STORAGE_KEY_PREFIX = 'fintrack.import-batch-detail.transactions.columns'
 const IMPORT_BATCH_DETAIL_TABLE_PREF_KEY = 'ui.importBatchDetail.transactions.columns'
 
 // This drawer is a file-scoped ledger, so the Account column must read as the account the file
@@ -70,7 +69,6 @@ export default function ImportBatchDetail({
   const [totalCount, setTotalCount] = useState(0)
   const [countLoading, setCountLoading] = useState(true)
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
-    storageKeyPrefix: IMPORT_BATCH_DETAIL_TABLE_STORAGE_KEY_PREFIX,
     preferenceKey: IMPORT_BATCH_DETAIL_TABLE_PREF_KEY,
   })
   const loadPage = useCallback((offset, limit) => (

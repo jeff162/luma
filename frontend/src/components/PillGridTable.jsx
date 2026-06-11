@@ -17,6 +17,11 @@
 import { useEffect, useMemo, useRef } from 'react'
 import PillTableHeader from './PillTableHeader.jsx'
 
+// The committed grid template is published as this CSS variable on the table root; the header and
+// body consume it via var(), so a live resize can update widths by mutating the variable on the DOM
+// without re-rendering any React rows. See the resize handler.
+const GRID_TEMPLATE_VAR = 'var(--pgt-grid)'
+
 function buildGridTemplate(columns) {
   // Numeric widths are pixel values (the common case for resizable data tables); string
   // widths are passed through so callers can use `1fr`, `minmax(...)`, percentages, etc.
@@ -64,6 +69,13 @@ export default function PillGridTable({
   const resizeState = useRef(null)
   const dragScrollFrame = useRef(null)
   const dragScrollState = useRef({ direction: 0, container: null })
+  // A column resize is a continuous gesture. The committed widths are published as the `--pgt-grid`
+  // CSS variable on the root; the header and body consume it via `var(--pgt-grid)`. During a drag we
+  // mutate that variable (and the min-width) DIRECTLY on the DOM per frame — no React state, so
+  // nothing re-renders (not this table's body, not the preference consumers the controlled `columns`
+  // flows through); the browser just re-lays-out via CSS. We commit once via onColumnsChange on
+  // mouse-up. `liveResizeRef` holds the latest widths for that commit.
+  const liveResizeRef = useRef(null)
 
   const gridTemplateColumns = useMemo(
     () => buildGridTemplate(columns),
@@ -90,11 +102,21 @@ export default function PillGridTable({
       const nextCurrentWidth = Math.max(currentMinWidth, Math.min(640, currentStartWidth + movement))
       currentColumn.width = nextCurrentWidth
 
-      onColumnsChange(nextColumns)
+      // Live preview via the DOM only — no React state, so nothing re-renders during the drag.
+      liveResizeRef.current = nextColumns
+      if (rootRef.current) {
+        rootRef.current.style.setProperty('--pgt-grid', buildGridTemplate(nextColumns))
+        rootRef.current.style.minWidth = `${nextColumns.reduce((sum, column) => sum + getColumnFixedWidth(column), 0)}px`
+      }
     }
 
     function onUp() {
+      if (!resizeState.current) return
       resizeState.current = null
+      const committed = liveResizeRef.current
+      liveResizeRef.current = null
+      // Persist exactly once, at the end of the gesture; the re-render republishes the var/min-width.
+      if (committed) onColumnsChange(committed)
     }
 
     window.addEventListener('mousemove', onMove)
@@ -110,10 +132,15 @@ export default function PillGridTable({
       if (event.key !== 'Escape') return
 
       if (resizeState.current && typeof onColumnsChange === 'function') {
-        const { startColumns } = resizeState.current
+        // Cancel the in-progress resize: drop the live buffer and revert the DOM var to committed
+        // (no commit happened, so nothing re-renders to republish it).
         resizeState.current = null
+        liveResizeRef.current = null
+        if (rootRef.current) {
+          rootRef.current.style.setProperty('--pgt-grid', gridTemplateColumns)
+          rootRef.current.style.minWidth = `${contentMinWidth}px`
+        }
         stopDragScroll()
-        onColumnsChange(startColumns.map(column => ({ ...column })))
         event.preventDefault()
         return
       }
@@ -127,7 +154,7 @@ export default function PillGridTable({
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onColumnsChange])
+  }, [onColumnsChange, gridTemplateColumns, contentMinWidth])
 
   useEffect(() => () => {
     if (dragScrollFrame.current) window.cancelAnimationFrame(dragScrollFrame.current)
@@ -183,17 +210,21 @@ export default function PillGridTable({
     stopDragScroll()
   }
 
-  function handleHeaderDrop(targetKey) {
+  function handleHeaderDrop(targetKey, dropAfter) {
     const sourceKey = dragColKey.current
     dragColKey.current = null
     stopDragScroll()
     if (!sourceKey || sourceKey === targetKey || typeof onColumnsChange !== 'function') return
-    const nextColumns = [...columns]
-    const sourceIndex = nextColumns.findIndex(column => column.key === sourceKey)
-    const targetIndex = nextColumns.findIndex(column => column.key === targetKey)
+    const sourceIndex = columns.findIndex(column => column.key === sourceKey)
+    const targetIndex = columns.findIndex(column => column.key === targetKey)
     if (sourceIndex === -1 || targetIndex === -1) return
+    const nextColumns = [...columns]
     const [movedColumn] = nextColumns.splice(sourceIndex, 1)
-    nextColumns.splice(targetIndex, 0, movedColumn)
+    // Recompute the target's index after removing the source (removal shifts everything to its
+    // right), then insert on the side the cursor was released on. Doing both makes the drop
+    // land where it's aimed in either direction.
+    const adjustedTargetIndex = nextColumns.findIndex(column => column.key === targetKey)
+    nextColumns.splice(adjustedTargetIndex + (dropAfter ? 1 : 0), 0, movedColumn)
     onColumnsChange(nextColumns)
   }
 
@@ -224,6 +255,7 @@ export default function PillGridTable({
     <div
       style={{
         minWidth: contentMinWidth,
+        '--pgt-grid': gridTemplateColumns,
         ...contentStyle,
       }}
       ref={rootRef}
@@ -233,7 +265,7 @@ export default function PillGridTable({
     >
       <PillTableHeader
         columns={headerColumns}
-        gridTemplateColumns={gridTemplateColumns}
+        gridTemplateColumns={GRID_TEMPLATE_VAR}
         sortState={sortState}
         onSort={onSort}
         onDropColumn={typeof onColumnsChange === 'function' ? handleHeaderDrop : undefined}
@@ -243,7 +275,7 @@ export default function PillGridTable({
         edgeWidth={edgeWidth}
         style={headerStyle}
       />
-      {renderBody?.({ columns, gridTemplateColumns })}
+      {renderBody?.({ columns, gridTemplateColumns: GRID_TEMPLATE_VAR })}
     </div>
   )
 }

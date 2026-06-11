@@ -1836,7 +1836,14 @@ export default function Accounts() {
     }
     setSortIndicatorActive(true)
     setSortLoaded(true)
-  }, [dbInstanceId, preferences, userId])
+    // Seed working state from saved preferences ONCE per identity — not on every `preferences`
+    // change. The save effects below persist via setPreference, which updates the in-memory
+    // preferences; re-running this loader on that echo rebuilt the collapsed-groups Set and the
+    // sort object with fresh identities, which re-fired the saves — an infinite update loop. A
+    // [dbInstanceId, userId] dependency still re-seeds on identity switches (the preferences
+    // provider is keyed by identity, so this page remounts then).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dbInstanceId, userId])
 
   // Accounts-page section collapse state is profile-scoped UI state, so one person's workspace shape restores cleanly without affecting others.
   useEffect(() => {

@@ -13,7 +13,6 @@ import {
   useDetailPanelChrome,
 } from './detailShared.jsx'
 
-const MONTH_DETAIL_TABLE_STORAGE_KEY_PREFIX = 'fintrack.month-detail.transactions.columns'
 const MONTH_DETAIL_TABLE_PREF_KEY = 'ui.monthDetail.transactions.columns'
 
 /*
@@ -39,7 +38,6 @@ export default function MonthDetail({
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(true)
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
-    storageKeyPrefix: MONTH_DETAIL_TABLE_STORAGE_KEY_PREFIX,
     preferenceKey: MONTH_DETAIL_TABLE_PREF_KEY,
   })
 

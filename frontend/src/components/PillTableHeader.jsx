@@ -88,7 +88,15 @@ export default function PillTableHeader({
               if (!onDropColumn) return
               event.preventDefault()
             }}
-            onDrop={() => onDropColumn?.(col.key)}
+            onDrop={event => {
+              if (!onDropColumn) return
+              // Which half of the target cell the cursor is over decides whether the dragged
+              // column lands before or after it, so dropping "in the gap" between two columns
+              // resolves the same way regardless of drag direction.
+              const rect = event.currentTarget.getBoundingClientRect()
+              const dropAfter = event.clientX > rect.left + rect.width / 2
+              onDropColumn(col.key, dropAfter)
+            }}
             style={{
               minWidth: 0,
               padding: col.cellPadding ?? '0 6px',

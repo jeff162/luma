@@ -223,6 +223,10 @@ export default function TransactionListTable({
           alignItems: 'center',
           fontSize: 13,
           borderBottom: '1px solid var(--border)',
+          // Skip style/layout/paint for off-screen rows so a column resize only re-styles the visible
+          // rows, not every loaded row. contain-intrinsic-size reserves scroll space for skipped rows.
+          contentVisibility: 'auto',
+          containIntrinsicSize: 'auto 41px',
           ...getRowStyle?.(txn),
         }}
       >

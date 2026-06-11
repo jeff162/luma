@@ -17,7 +17,6 @@ import {
   usePagedMonthTransactions,
 } from './detailShared.jsx'
 
-const CATEGORY_DETAIL_TABLE_STORAGE_KEY_PREFIX = 'fintrack.category-detail.transactions.columns'
 const CATEGORY_DETAIL_TABLE_PREF_KEY = 'ui.categoryDetail.transactions.columns'
 
 export default function CategoryDetail({ category, categories = [], onClose, forceFloating = false, stackIndex = 0, isTopmost = true, dateStart = null, dateEnd = null }) {
@@ -31,7 +30,6 @@ export default function CategoryDetail({ category, categories = [], onClose, for
   const [selectedMonth, setSelectedMonth] = useState(null)
   const [trendLoading, setTrendLoading] = useState(true)
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
-    storageKeyPrefix: CATEGORY_DETAIL_TABLE_STORAGE_KEY_PREFIX,
     preferenceKey: CATEGORY_DETAIL_TABLE_PREF_KEY,
   })
   const loadMonthPage = useCallback((month, offset, limit) => (

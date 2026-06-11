@@ -29,9 +29,7 @@ import TransactionListTable from '../components/TransactionListTable.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import { useUserPreference, useDeferredPreference } from '../lib/UserPreferencesContext.jsx'
 
-const DASHBOARD_CATEGORY_TXN_TABLE_STORAGE_KEY_PREFIX = 'fintrack.dashboard.category-transactions.columns'
 const DASHBOARD_CATEGORY_TXN_TABLE_PREF_KEY = 'ui.dashboard.categoryTransactions.columns'
-const DASHBOARD_GROUP_TXN_TABLE_STORAGE_KEY_PREFIX = 'fintrack.dashboard.group-transactions.columns'
 const DASHBOARD_GROUP_TXN_TABLE_PREF_KEY = 'ui.dashboard.groupTransactions.columns'
 const DASHBOARD_SPENDING_VIEW_BY_PREF_KEY = 'ui.dashboard.spendingViewBy'
 const DASHBOARD_VIEW_PREF_KEY = 'ui.dashboard.view'
@@ -1748,12 +1746,10 @@ export default function Dashboard() {
   const [drillLoading, setDrillLoading] = useState(false)
   const multiDetailMode = detailTxns.length > 1
   const [categoryTxnColumns, setCategoryTxnColumns] = useTransactionTableLayout({
-    storageKeyPrefix: DASHBOARD_CATEGORY_TXN_TABLE_STORAGE_KEY_PREFIX,
     preferenceKey: DASHBOARD_CATEGORY_TXN_TABLE_PREF_KEY,
     showCategory: false,
   })
   const [groupTxnColumns, setGroupTxnColumns] = useTransactionTableLayout({
-    storageKeyPrefix: DASHBOARD_GROUP_TXN_TABLE_STORAGE_KEY_PREFIX,
     preferenceKey: DASHBOARD_GROUP_TXN_TABLE_PREF_KEY,
   })
 
