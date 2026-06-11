@@ -1266,8 +1266,11 @@ function TransactionTagsSection() {
             <div
               key={tag.id}
               style={{
+                // Label keeps a guaranteed minimum so it can never be squeezed to
+                // nothing; the palette column takes the remaining width and wraps to
+                // additional rows (flexWrap) rather than expanding over the label.
                 display: 'grid',
-                gridTemplateColumns: 'minmax(0, 1fr) auto auto',
+                gridTemplateColumns: 'minmax(140px, max-content) minmax(0, 1fr) auto',
                 gap: 12,
                 alignItems: 'center',
                 padding: '12px 16px',

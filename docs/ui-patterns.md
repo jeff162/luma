@@ -126,6 +126,16 @@ Most pages should follow this structure:
 
 Prefer page-local scrolling for long lists, with header and controls remaining visually stable above the scrolling region.
 
+### Horizontal sizing of data regions
+
+Two different surfaces respond to a narrowing pane in two different, deliberate ways, and the choice follows from what the region *is*:
+
+- **Wide data tables** (the Transactions ledger, the Categories matching-transactions list) have columns with hard min-widths and **scroll horizontally inside their own clamped viewport** once the pane is narrower than that floor. The table chrome around them (titles, filters, action buttons) should wrap or reflow — only the table body scrolls.
+
+- **Entity/management lists** (the Accounts list) use fluid `minmax(0, …fr)` columns that **compress and ellipsize** instead of scrolling. A horizontal scrollbar on a list the user navigates and drags would be worse than letting non-critical columns shrink; the fixed minimums stay small so the row never blows out at realistic widths.
+
+When a flex/grid column *hosts* a horizontally-scrolling data table, that hosting column must clamp its own width or the table's min-width escapes it: use a `minmax(0, 1fr)` track (a bare `1fr` carries a `min-content` floor and will push the table past the viewport, where an ancestor `overflow: hidden` clips it with no scrollbar) and `min-width: 0` on the cell/flex item (whose default `min-width: auto` causes the same blowout). Only once the host is clamped does the table's own `overflow: auto` engage and produce the scrollbar.
+
 ## Tree views
 
 Tree views should use the same visual grammar wherever they appear.

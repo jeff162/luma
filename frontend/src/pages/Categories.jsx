@@ -1756,7 +1756,7 @@ export default function Categories() {
   return (
     <div data-browser-context-passthrough="true" style={{ padding: 32, display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
       <PageHeader title="Categories" />
-      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 20, flex: 1, minHeight: 0 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '340px minmax(0, 1fr)', gap: 20, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <input
             type="search"
@@ -2074,11 +2074,12 @@ export default function Categories() {
 
         </div>
 
-        <div style={{ position: 'relative', minHeight: 0 }}>
+        <div style={{ position: 'relative', minHeight: 0, minWidth: 0 }}>
           <div
             style={{
               overflow: 'hidden',
               minHeight: 0,
+              minWidth: 0,
               height: '100%',
               display: 'flex',
               flexDirection: 'column',
@@ -2159,6 +2160,28 @@ export default function Categories() {
                   border: '1px solid var(--border)',
                 }}
               >
+                {!selected.parent_id ? (
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      fontSize: 12,
+                      color: 'var(--muted)',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                      userSelect: 'none',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!!selected.exclude_from_totals}
+                      onChange={e => handleExcludeChange(selected.id, e.target.checked)}
+                      style={{ accentColor: 'var(--accent)', width: 14, height: 14, cursor: 'pointer' }}
+                    />
+                    Exclude from totals
+                  </label>
+                ) : null}
                 {(() => {
                   // Tag attachment for the selected category. Direct tags get the
                   // standard pill with an x-to-remove; inherited tags from the parent
@@ -2253,40 +2276,17 @@ export default function Categories() {
                     </div>
                   )
                 })()}
-
-                {!selected.parent_id ? (
-                  <label
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      fontSize: 12,
-                      color: 'var(--muted)',
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                      userSelect: 'none',
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={!!selected.exclude_from_totals}
-                      onChange={e => handleExcludeChange(selected.id, e.target.checked)}
-                      style={{ accentColor: 'var(--accent)', width: 14, height: 14, cursor: 'pointer' }}
-                    />
-                    Exclude from totals
-                  </label>
-                ) : null}
               </div>
 
               </>
               )}
 
               <div style={{ marginTop: 22, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
                   <div style={{ fontSize: 14, fontWeight: 600 }}>
                     Matching transactions
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
                     <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                       {matchingTxnsTotal} total{matchingTxnsTotal > pagedMatchingTxns.length ? ` · showing ${pagedMatchingTxns.length}` : ''}
                     </div>
