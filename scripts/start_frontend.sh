@@ -64,6 +64,14 @@ if port_in_use "$FRONTEND_PORT"; then
   exit 1
 fi
 
+if ! command -v npm >/dev/null 2>&1; then
+  echo "npm was not found, but the frontend needs Node.js (which provides npm)."
+  echo "Install Node.js 20+ and re-run this script."
+  echo "  - Debian/Ubuntu/Mint: install via nvm (https://github.com/nvm-sh/nvm) or NodeSource;"
+  echo "    the distro 'apt install nodejs npm' is often too old for current tooling."
+  exit 1
+fi
+
 cd "$FRONTEND_DIR"
 echo "Checking/installing frontend dependencies. This can take a minute on first run..."
 npm install --no-audit --no-fund
