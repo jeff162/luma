@@ -2010,7 +2010,7 @@ export default function Settings() {
     dbInstanceId,
     preferenceSubjectId: userId,
   } = useAppSession()
-  const { preferences } = useUserPreferences()
+  const { preferences, setPreference } = useUserPreferences()
   const [sectionOpenState, setSectionOpenState] = useState({})
   const [sectionStateLoaded, setSectionStateLoaded] = useState(false)
   const settingsScrollRef = useRef(null)
@@ -2048,8 +2048,13 @@ export default function Settings() {
         // Ignore storage failures in restricted environments.
       }
     }
-    api.saveUserPreference(SETTINGS_SECTIONS_PREF_KEY, sectionOpenState).catch(() => { })
-  }, [dbInstanceId, userId, sectionOpenState, sectionStateLoaded])
+    // Persist through the preferences context (not api.saveUserPreference directly) so the
+    // in-memory preferences map stays in sync. Writing straight to the backend left the context
+    // holding the pre-change value, and the load effect above — which prefers the context over
+    // localStorage — would restore that stale value on the next visit (e.g. a collapsed section
+    // re-opening after navigating away and back).
+    setPreference(SETTINGS_SECTIONS_PREF_KEY, sectionOpenState)
+  }, [dbInstanceId, userId, sectionOpenState, sectionStateLoaded, setPreference])
 
   function bindSection(sectionKey, defaultCollapsed = true) {
     const isOpen = sectionOpenState[sectionKey] ?? !defaultCollapsed

@@ -130,9 +130,6 @@ export default function NoteEditor({ value, onSave, onCancel, autoFocus = false 
           </button>
         ) : null}
       </div>
-      <div style={{ fontSize: 11, color: 'var(--muted)' }}>
-        ⌘/Ctrl+Enter to save
-      </div>
     </div>
   )
 }

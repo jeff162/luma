@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useEffect, useMemo, useState } from 'react'
-import { api } from './api.js'
 import { useAppSession } from './AppSessionContext.jsx'
 import { useUserPreferences } from './UserPreferencesContext.jsx'
 
@@ -52,7 +51,7 @@ export function useTransactionTableLayout({
   showAccount = true,
 }) {
   const { dbInstanceId, preferenceSubjectId: userId } = useAppSession()
-  const { preferences } = useUserPreferences()
+  const { preferences, setPreference } = useUserPreferences()
   const defaultColumns = useMemo(
     () => buildTransactionTableDefaultColumnConfig({ showCategory, showAccount }),
     [showAccount, showCategory],
@@ -92,8 +91,8 @@ export function useTransactionTableLayout({
     } catch {
       // Ignore storage failures in environments that block localStorage.
     }
-    api.saveUserPreference(preferenceKey, columns).catch(() => {})
-  }, [columns, dbInstanceId, loaded, preferenceKey, storageKeyPrefix, userId])
+    setPreference(preferenceKey, columns)
+  }, [columns, dbInstanceId, loaded, preferenceKey, storageKeyPrefix, userId, setPreference])
 
   return [columns, setColumns]
 }

@@ -654,7 +654,7 @@ function ScrollFade({ top, bottom }) {
 export default function Categories() {
   const navigate = useNavigate()
   const { dbInstanceId, preferenceSubjectId: userId } = useAppSession()
-  const { preferences } = useUserPreferences()
+  const { preferences, setPreference } = useUserPreferences()
   const [tree, setTree] = useState([])
   const [flatCats, setFlatCats] = useState([])
   const [inactiveCategories, setInactiveCategories] = useState([])
@@ -837,8 +837,8 @@ export default function Categories() {
     } catch {
       // Ignore storage failures in environments that block localStorage.
     }
-    api.saveUserPreference(SECTION_PREF_KEY, collapsedSections).catch(() => {})
-  }, [dbInstanceId, userId, collapsedSections, collapseStateLoaded, tree.length, sectionStateReady])
+    setPreference(SECTION_PREF_KEY, collapsedSections)
+  }, [dbInstanceId, userId, collapsedSections, collapseStateLoaded, tree.length, sectionStateReady, setPreference])
   useEffect(() => {
     if (!collapseStateLoaded) return
     if (!groupStateReady) return
@@ -849,8 +849,8 @@ export default function Categories() {
     } catch {
       // Ignore storage failures in environments that block localStorage.
     }
-    api.saveUserPreference(GROUP_PREF_KEY, collapsedGroups).catch(() => {})
-  }, [dbInstanceId, userId, collapsedGroups, collapseStateLoaded, groupStateReady])
+    setPreference(GROUP_PREF_KEY, collapsedGroups)
+  }, [dbInstanceId, userId, collapsedGroups, collapseStateLoaded, groupStateReady, setPreference])
   useEffect(() => {
     if (!matchingTxnColumnsLoaded) return
     const storageKey = getMatchingTxnColumnsStorageKey(dbInstanceId, userId)
@@ -860,8 +860,8 @@ export default function Categories() {
     } catch {
       // Ignore storage failures in environments that block localStorage.
     }
-    api.saveUserPreference(MATCHING_TXN_COLUMNS_PREF_KEY, matchingTxnColumns).catch(() => {})
-  }, [dbInstanceId, userId, matchingTxnColumns, matchingTxnColumnsLoaded])
+    setPreference(MATCHING_TXN_COLUMNS_PREF_KEY, matchingTxnColumns)
+  }, [dbInstanceId, userId, matchingTxnColumns, matchingTxnColumnsLoaded, setPreference])
 
   function getSyntheticUncategorizedChild(group) {
     if (!isProtectedSystemCategory(group)) return null
@@ -927,7 +927,7 @@ export default function Categories() {
         // Ignore storage failures in environments that block localStorage.
       }
     }
-    api.saveUserPreference(LEFT_PANEL_WIDTH_PREF_KEY, width).catch(() => {})
+    setPreference(LEFT_PANEL_WIDTH_PREF_KEY, width)
   }
 
   function startResizeDivider(event) {

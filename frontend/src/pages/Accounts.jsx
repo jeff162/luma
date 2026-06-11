@@ -1639,7 +1639,7 @@ export default function Accounts() {
   const [listContextMenu, setListContextMenu] = useState(null) // { x, y }
   const [detailAccounts, setDetailAccounts] = useState([])
   const { dbInstanceId, preferenceSubjectId: userId } = useAppSession()
-  const { preferences } = useUserPreferences()
+  const { preferences, setPreference } = useUserPreferences()
   const [sectionExpandedState, setSectionExpandedState] = useState({})
   const [sectionStateLoaded, setSectionStateLoaded] = useState(false)
   const [draggingAccountId, setDraggingAccountId] = useState(null)
@@ -1849,8 +1849,8 @@ export default function Accounts() {
         // Ignore storage failures in restricted environments.
       }
     }
-    api.saveUserPreference(ACCOUNTS_SECTIONS_PREF_KEY, sectionExpandedState).catch(() => { })
-  }, [dbInstanceId, userId, sectionExpandedState, sectionStateLoaded])
+    setPreference(ACCOUNTS_SECTIONS_PREF_KEY, sectionExpandedState)
+  }, [dbInstanceId, userId, sectionExpandedState, sectionStateLoaded, setPreference])
 
   // Collapsed group state is profile-scoped UI state, persisted as an array of collapsed parent IDs.
   useEffect(() => {
@@ -1864,8 +1864,8 @@ export default function Accounts() {
         // Ignore storage failures in restricted environments.
       }
     }
-    api.saveUserPreference(ACCOUNTS_COLLAPSED_PREF_KEY, collapsed).catch(() => { })
-  }, [dbInstanceId, userId, collapsedGroups, collapsedGroupsLoaded])
+    setPreference(ACCOUNTS_COLLAPSED_PREF_KEY, collapsed)
+  }, [dbInstanceId, userId, collapsedGroups, collapsedGroupsLoaded, setPreference])
 
   // Sort preference is profile-scoped UI state, persisted as the active column plus
   // each header's remembered direction so switching columns reuses the last direction
@@ -1881,8 +1881,8 @@ export default function Accounts() {
         // Ignore storage failures in restricted environments.
       }
     }
-    api.saveUserPreference(ACCOUNTS_SORT_PREF_KEY, value).catch(() => { })
-  }, [dbInstanceId, userId, sortDirections, sortKey, sortDir, sortLoaded])
+    setPreference(ACCOUNTS_SORT_PREF_KEY, value)
+  }, [dbInstanceId, userId, sortDirections, sortKey, sortDir, sortLoaded, setPreference])
 
   const applyAccountSort = useCallback((nextSortKey = sortKey, nextSortDir = sortDir) => {
     setAccounts(prev => orderAccountsForDisplay(prev, nextSortKey, nextSortDir))

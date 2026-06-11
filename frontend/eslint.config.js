@@ -15,6 +15,29 @@ import jsdoc from 'eslint-plugin-jsdoc'
 import jsxA11y from 'eslint-plugin-jsx-a11y'
 import globals from 'globals'
 
+// Transaction writes that change derived counts must route through `txnMutations` so the Tasks
+// badge / future invalidations fire automatically — calling these `api.*` methods directly is how
+// the badge kept going stale.
+const txnMutationRestrictions = [
+  { object: 'api', property: 'overrideCategory', message: 'Use txnMutations.setCategory so derived counts (Tasks badge, etc.) get invalidated.' },
+  { object: 'api', property: 'clearOverride', message: 'Use txnMutations.uncategorize so derived counts get invalidated.' },
+  { object: 'api', property: 'applyRule', message: 'Use txnMutations.applyRule so derived counts get invalidated.' },
+  { object: 'api', property: 'trashTransaction', message: 'Use txnMutations.trashTransaction so derived counts get invalidated.' },
+  { object: 'api', property: 'restoreTransaction', message: 'Use txnMutations.restoreTransaction so derived counts get invalidated.' },
+]
+
+// User preferences have a single public pathway: useUserPreference / setPreference from
+// UserPreferencesContext, which keeps the in-memory store, backend, and defaults in sync. Calling
+// the raw `api.*UserPreference*` methods from feature code lets the in-memory store drift from
+// what's persisted (a collapsed section silently re-opening on the next visit, etc.). The only
+// sanctioned direct callers are the context itself and the app shell (App.jsx bootstraps the
+// startup route above the provider; Settings runs the destructive reset) — overridden below.
+const preferencePersistenceRestrictions = [
+  { object: 'api', property: 'getUserPreferences', message: 'Read preferences via useUserPreference / UserPreferencesContext, not api.getUserPreferences directly.' },
+  { object: 'api', property: 'saveUserPreference', message: 'Persist via setPreference / useUserPreference (UserPreferencesContext) so the in-memory store and backend stay in sync.' },
+  { object: 'api', property: 'clearUserPreferences', message: 'Clear preferences through UserPreferencesContext, not api.clearUserPreferences directly.' },
+]
+
 export default [
   {
     ignores: ['dist/**', 'node_modules/**', 'playwright-report/**', 'test-results/**'],
@@ -77,23 +100,20 @@ export default [
       // deep (e.g. the delete-category radio rows) are correctly seen as labelled, not false-flagged.
       'jsx-a11y/label-has-associated-control': ['error', { depth: 4 }],
 
-      // Transaction writes that change derived counts must route through `txnMutations`
-      // (src/lib/txnMutations.js) so the Tasks badge / future invalidations fire automatically.
-      // Calling these `api.*` methods directly is how the badge kept going stale; the wrapper is
-      // the only sanctioned caller (it overrides this rule for itself below).
-      'no-restricted-properties': ['error',
-        { object: 'api', property: 'overrideCategory', message: 'Use txnMutations.setCategory so derived counts (Tasks badge, etc.) get invalidated.' },
-        { object: 'api', property: 'clearOverride', message: 'Use txnMutations.uncategorize so derived counts get invalidated.' },
-        { object: 'api', property: 'applyRule', message: 'Use txnMutations.applyRule so derived counts get invalidated.' },
-        { object: 'api', property: 'trashTransaction', message: 'Use txnMutations.trashTransaction so derived counts get invalidated.' },
-        { object: 'api', property: 'restoreTransaction', message: 'Use txnMutations.restoreTransaction so derived counts get invalidated.' },
-      ],
+      // See the txnMutation / preference restriction lists defined above this config.
+      'no-restricted-properties': ['error', ...txnMutationRestrictions, ...preferencePersistenceRestrictions],
     },
   },
   {
-    // The mutation layer is the one sanctioned place that calls the wrapped api.* writes directly.
+    // The mutation layer is the one sanctioned place that calls the wrapped txn api.* writes directly.
     files: ['src/lib/txnMutations.js'],
-    rules: { 'no-restricted-properties': 'off' },
+    rules: { 'no-restricted-properties': ['error', ...preferencePersistenceRestrictions] },
+  },
+  {
+    // The preferences context owns persistence; the app shell (App.jsx) bootstraps the startup route
+    // above the provider and Settings runs the destructive reset. These keep the txn guardrail.
+    files: ['src/lib/UserPreferencesContext.jsx', 'src/App.jsx', 'src/pages/Settings.jsx'],
+    rules: { 'no-restricted-properties': ['error', ...txnMutationRestrictions] },
   },
   {
     // Build/tool scripts run in Node, not the browser.

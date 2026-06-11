@@ -356,7 +356,7 @@ function RuleActionModal({ state, onClose, onSaved }) {
 export default function Transactions() {
   const initialSessionStateRef = useRef(loadTransactionsSessionState())
   const { dbInstanceId, preferenceSubjectId: userId } = useAppSession()
-  const { preferences } = useUserPreferences()
+  const { preferences, setPreference } = useUserPreferences()
   const { filters } = useFilters()
   const location = useLocation()
   const [categories, setCategories] = useState([])
@@ -421,7 +421,7 @@ export default function Transactions() {
     const persistable = newCols.filter(col => col.key !== BULK_SELECT_COLUMN_KEY)
     setCols(persistable)
     saveColumnConfig(dbInstanceId, userId, persistable)
-    api.saveUserPreference(TXN_COLUMNS_PREF_KEY, persistable).catch(() => { })
+    setPreference(TXN_COLUMNS_PREF_KEY, persistable)
   }
 
   const [uncategorizedOnly, setUncategorizedOnly] = useState(
