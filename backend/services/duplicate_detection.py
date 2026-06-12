@@ -18,6 +18,15 @@ The rule chain is a confidence ladder:
     soft-flag, never hard-reject; surfaces in the unified duplicate report so the user can
     Keep (assert the two accounts are distinct) or Reject (confirm a duplicate).
 
+Check-number discriminator (`are_distinct_checks`): two genuinely different checks can share
+date+amount+description (often just "Check"), so they collide on the content hash AND on the
+terminal-day rule's amount fallback. Wherever a match is keyed on the hash/amount — the exact-hash
+rules and the terminal-day matcher — a match between rows carrying explicit, *different* check
+numbers (folded into the merchant as "Check #<n>" at import) is discarded as a false positive, so
+the row falls through to the lower-confidence rules (review) instead of being silently rejected. It
+is conservative — the number must be present on both sides — so rows predating check capture dedupe
+unchanged, and it only runs once a rule has already found a candidate (no cost on the common path).
+
 Triggers:
   * Import-time per row (`evaluate_duplicate` via `DedupeContext`) — assigns hard-reject /
     soft-flag / passthrough verdicts as each row is inserted.
@@ -53,10 +62,36 @@ every cross-batch pair forever, with the per-pair table acting as the user's acc
 filter of "I've already decided these are different accounts."
 """
 
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Optional
+
+
+_CHECK_NUMBER_RE = re.compile(r"#(\d+)")
+
+
+def explicit_check_number(merchant_name: Optional[str]) -> Optional[str]:
+    """The check number folded into a merchant like 'Check #1042' at import time, or None."""
+    if not merchant_name:
+        return None
+    match = _CHECK_NUMBER_RE.search(str(merchant_name))
+    return match.group(1) if match else None
+
+
+def are_distinct_checks(merchant_a: Optional[str], merchant_b: Optional[str]) -> bool:
+    """True only when both names carry an explicit, DIFFERENT check number.
+
+    Two genuinely different checks can share date+amount+description (often just "Check"), so a
+    content-hash match — or a terminal-day amount match — between them is a false positive. This is
+    the discriminator that rescues that case. Deliberately conservative: a number must be present on
+    BOTH sides, so absence never implies "different" and rows predating check-number capture keep
+    deduping exactly as before. Cheap, and only consulted once a rule has already found a match.
+    """
+    left = explicit_check_number(merchant_a)
+    right = explicit_check_number(merchant_b)
+    return bool(left and right and left != right)
 
 
 # The same normalized-payee expression is used on both sides of the join. The COALESCE chain
@@ -262,8 +297,14 @@ def evaluate_duplicate(
     duplicate_amount_key = h["duplicate_amount_key"]
     find_textual = h["find_textual"]
 
-    # Rule 1: exact content-hash match within the receiving account.
+    incoming_merchant = txn_payload.get("merchant_name")
+
+    # Rule 1: exact content-hash match within the receiving account. Two different checks can share
+    # date+amount+description, so a differing explicit check number means this is NOT the same row —
+    # let it fall through to the lower-confidence rules (which route it to review) instead.
     matched = context.existing_hashes_by_account.get(receiving_account_id, {}).get(content_hash)
+    if matched and are_distinct_checks(incoming_merchant, matched.get("merchant_name")):
+        matched = None
     if matched:
         return DedupeVerdict(hard_reject=True, passthrough=False, matched=matched,
                              reason="Matches an existing transaction")
@@ -272,6 +313,8 @@ def evaluate_duplicate(
     compare_target_id = context.account_duplicate_compare_targets.get(csv_value)
     if compare_target_id:
         matched = context.existing_hashes_by_effective_account.get(compare_target_id, {}).get(content_hash)
+        if matched and are_distinct_checks(incoming_merchant, matched.get("merchant_name")):
+            matched = None
         if matched:
             return DedupeVerdict(hard_reject=True, passthrough=False, matched=matched,
                                  reason="Matches an existing transaction in the linked account group")
@@ -341,11 +384,13 @@ def evaluate_duplicate(
             c.get("csv_value") != csv_value for c in scope_terminal
         )
         if terminal_day_reconciled:
-            matched_term = match_terminal(same_source, content_hash=content_hash, amount=amount)
+            matched_term = match_terminal(
+                same_source, content_hash=content_hash, amount=amount, incoming_merchant=incoming_merchant,
+            )
             if not matched_term:
                 matched_term = match_terminal(
                     [c for c in scope_terminal if c.get("csv_value") != csv_value],
-                    content_hash=content_hash, amount=amount,
+                    content_hash=content_hash, amount=amount, incoming_merchant=incoming_merchant,
                 )
             if matched_term:
                 return DedupeVerdict(

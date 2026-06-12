@@ -712,6 +712,7 @@ def list_transactions(
                 a.name                            AS source_account_raw_name,
                 t.import_batch_id,
                 t.import_evidence_json,
+                t.imported_category,
                 t.category_id,
                 c.name        AS category_name,
                 NULL          AS category_color,

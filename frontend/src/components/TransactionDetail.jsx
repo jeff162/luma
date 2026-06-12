@@ -401,6 +401,12 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
                     ) : (
                       <div><span style={{ color: 'var(--muted)' }}>Source file:</span> — (not from an import)</div>
                     )}
+                    {detailTxn.imported_category ? (
+                      <div>
+                        <span style={{ color: 'var(--muted)' }}>Imported category:</span>{' '}
+                        {detailTxn.imported_category}
+                      </div>
+                    ) : null}
                     {(() => {
                       // import_evidence_json stores a compact subset of the original CSV row —
                       // the account column the source called it, the raw description, and any

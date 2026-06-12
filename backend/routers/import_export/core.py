@@ -48,6 +48,7 @@ from backend.routers.accounts import resolve_default_owner_id
 from backend.services.categorizer import categorize_transaction
 from backend.services.duplicate_detection import (
     DedupeContext,
+    are_distinct_checks,
     evaluate_duplicate,
     list_unified_batch_duplicates,
     mark_import_suspects,
@@ -70,10 +71,17 @@ IMPORTED_CATEGORY_SCOPE_FILTERED = "filtered"
 FIXED_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX = "account:"
 NEW_ACCOUNT_CATEGORY_SCOPE_TOKEN_PREFIX = "new-account:"
 UNCATEGORIZED_IMPORT_CATEGORY_NAMES = {"uncategorized", "uncategorised", "unassigned"}
-MAX_IMPORT_EVIDENCE_TEXT_FIELDS = 3
+MAX_IMPORT_EVIDENCE_TEXT_FIELDS = 6
 EXACT_DUPLICATE_STRATEGY_KEY = "exact_hash"
 COVERAGE_DUPLICATE_STRATEGY_KEY = "coverage_window"
 TEXT_DUPLICATE_STRATEGY_KEY = "cross_source_text"
+# Columns whose header matches one of these keywords (substring, case-insensitive) are captured into
+# import evidence beyond the mapped account/description, so the transaction detail can surface them
+# when a row is too cryptic to recognize. The list is intentionally limited to *descriptive free
+# text* — memos, narratives, counterparty/payee names, payment purpose — i.e. the things that help a
+# user decode "what was this?". It deliberately excludes identifiers and figures (check/balance/
+# transaction type/status/location), which don't aid recognition and would add noise to the text
+# duplicate-matcher that also consumes these fields. See _build_import_evidence.
 IMPORT_EVIDENCE_HEADER_KEYWORDS = (
     "original statement",
     "statement",
@@ -85,6 +93,15 @@ IMPORT_EVIDENCE_HEADER_KEYWORDS = (
     "payee",
     "merchant",
     "description",
+    "note",
+    "narrative",
+    "particulars",
+    "remittance",
+    "comment",
+    "purpose",
+    "counterparty",
+    "beneficiary",
+    "originator",
 )
 GENERIC_DUPLICATE_TEXT_TOKENS = {
     "ach", "atm", "card", "cash", "credit", "debit", "deposit", "money", "payment",
@@ -381,7 +398,10 @@ def _build_import_evidence(row: dict, headers: list[str], col: ColumnMap, csv_va
         )
         if str(header or "").strip()
     }
-    seen_values = {raw_desc.casefold()} if raw_desc else set()
+    # Don't keep a second copy of text we already show: a column whose value equals the description
+    # or the account label (e.g. a file carrying both "Merchant" and an unedited "Original Merchant")
+    # is skipped, and extras dedupe against each other below.
+    seen_values = {value.casefold() for value in (raw_desc, csv_value) if value}
     extra_text_fields: list[dict[str, str]] = []
     for header in headers:
         header_name = str(header or "").strip()
@@ -397,6 +417,31 @@ def _build_import_evidence(row: dict, headers: list[str], col: ColumnMap, csv_va
     if extra_text_fields:
         evidence["extra_text_fields"] = extra_text_fields
     return evidence or None
+
+
+# "check"/"cheque" as a whole word — so "CHECKCARD" debit-card lines are NOT treated as paper checks.
+_CHECK_WORD_RE = re.compile(r"\bche(?:ck|que)\b", re.IGNORECASE)
+
+
+def _extract_check_number(raw_desc: str, row: dict, headers: list[str]) -> Optional[str]:
+    """Return a check number to append to a bare check description (e.g. "Check" -> "Check #1042").
+
+    A lone "CHECK" line is otherwise unrecognizable, yet many files carry the number in a separate
+    column. Rather than store that column, we fold it into the merchant when the row is actually a
+    paper check ("check"/"cheque" as a whole word, excluding "CHECKCARD" debit purchases) and the
+    number isn't already in the description. Returns the digits, or None when unavailable/redundant.
+    """
+    if not raw_desc or not _CHECK_WORD_RE.search(raw_desc):
+        return None
+    for header in headers:
+        header_name = str(header or "").strip()
+        if not header_name or not _CHECK_WORD_RE.search(header_name):
+            continue
+        digits = re.sub(r"\D", "", str(row.get(header_name, "") or ""))
+        if not digits or digits in raw_desc:
+            continue
+        return digits
+    return None
 
 
 def _parse_import_evidence(raw) -> Optional[dict]:
@@ -501,8 +546,16 @@ def _candidate_summary(candidate: Optional[dict]) -> Optional[dict]:
     return summary
 
 
-def _match_terminal_day_candidate(candidate_rows: list[dict], *, content_hash: str, amount: float) -> Optional[dict]:
-    active_rows = [candidate for candidate in candidate_rows if not candidate.get("_consumed")]
+def _match_terminal_day_candidate(candidate_rows: list[dict], *, content_hash: str, amount: float, incoming_merchant: Optional[str] = None) -> Optional[dict]:
+    # The terminal-day rule reconciles a fuzzy boundary day and falls back to amount-only matching,
+    # so two different checks with the same amount would match here regardless of hash. Skip any
+    # candidate whose explicit check number differs from the incoming row's — they are not the same
+    # check — so it is neither matched nor consumed.
+    active_rows = [
+        candidate for candidate in candidate_rows
+        if not candidate.get("_consumed")
+        and not are_distinct_checks(incoming_merchant, candidate.get("merchant_name") or candidate.get("display_name"))
+    ]
     if not active_rows:
         return None
     exact_match = next((candidate for candidate in active_rows if candidate.get("content_hash") == content_hash), None)
@@ -1828,7 +1881,11 @@ def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) ->
             (batch_id,),
         ).fetchall()
         for row in rows:
-            if row["category_source"] == "manual":
+            # Same precedence as import: the file label only fills rows nothing else has claimed.
+            # Skip manual mappings AND rule-categorized rows — enabling imported categories for a
+            # source must not override a category the user's rules already chose, and must not mint
+            # an unused label category for a row a rule has placed. The label is a bootstrap fallback.
+            if row["category_source"] in ("manual", "rule"):
                 continue
             scope_tokens = batch_account_tokens_by_id.get(row["account_id"]) or [
                 _category_scope_token_for_import_row("", row["account_id"], False, snapshot.get("single_account_new"))
@@ -2645,6 +2702,10 @@ async def run_import(
                 continue
 
             raw_desc     = str(row.get(col.description, "")).strip()
+            # Enrich a bare check line with its number for the merchant/display fields only; raw_name
+            # and content_hash stay literal so the raw source text and dedupe are untouched.
+            check_number = _extract_check_number(raw_desc, row, headers)
+            display_desc = f"{raw_desc} #{check_number}" if check_number else raw_desc
             raw_imported_category = normalize_effective_imported_category(row.get(col.category, "")) if col.category else ""
             notes_val    = str(row.get(col.notes, "")).strip() if col.notes else None
             is_pending = parse_pending_flag(row, col)
@@ -2667,48 +2728,59 @@ async def run_import(
             if raw_imported_category:
                 imported_category_counts[raw_imported_category] = imported_category_counts.get(raw_imported_category, 0) + 1
 
+            # Category precedence is intentional: mapping -> rule -> imported file label -> uncategorized.
+            #   1. An explicit per-label mapping from the review screen always wins.
+            #   2. The user's own rules run BEFORE the file's category. If a rule categorizes the row
+            #      we store it under the rule's category and intentionally do NOT create a category
+            #      from the file label — that label category would be empty and unused. FinTrack's
+            #      rules are the source of truth; the file label is only a bootstrap fallback (see
+            #      docs/data-model.md "imported categories"). Tag-only rules still apply their tags
+            #      while leaving the category open for the fallback below.
+            #   3. Only if nothing above claimed the row do we adopt (and lazily create) the file's
+            #      imported category, and only when this source is flagged to use imported categories.
+            # The raw label is always retained on the row as imported_category text regardless.
             cat_id = None
             category_source = None
             category_overridden = 0
+            rule_tag_ids = []
             if raw_imported_category:
                 mapped_category_id = category_assignments_cfg.get(raw_imported_category)
                 if mapped_category_id:
                     cat_id = mapped_category_id
                     category_source = "manual"
                     category_overridden = 1
-                else:
-                    category_scope_token = _category_scope_token_for_import_row(csv_val, acc["id"], use_account_col, single_account_new)
-                    if _row_uses_imported_categories(
-                        use_imported_categories,
-                        imported_category_settings,
-                        acc["owner_id"],
-                        category_scope_token,
-                    ):
-                        imported_category = _ensure_imported_batch_category(conn, batch_id, raw_imported_category)
-                        if imported_category:
-                            cat_id = imported_category["id"]
-                            category_source = "import"
-                            category_overridden = 1
             if apply_cat and not cat_id:
                 result = categorize_transaction(
                     raw_desc, raw_desc, raw_desc, amount, conn,
                     owner_id=acc["owner_id"],
                     account_id=acc["id"],
                 )
-                cat_id = result["category_id"] if isinstance(result, dict) else result
+                rule_cat_id = result["category_id"] if isinstance(result, dict) else result
                 rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
-                if cat_id:
+                if rule_cat_id:
+                    cat_id = rule_cat_id
                     category_source = "rule"
-            else:
-                rule_tag_ids = []
+            if raw_imported_category and not cat_id:
+                category_scope_token = _category_scope_token_for_import_row(csv_val, acc["id"], use_account_col, single_account_new)
+                if _row_uses_imported_categories(
+                    use_imported_categories,
+                    imported_category_settings,
+                    acc["owner_id"],
+                    category_scope_token,
+                ):
+                    imported_category = _ensure_imported_batch_category(conn, batch_id, raw_imported_category)
+                    if imported_category:
+                        cat_id = imported_category["id"]
+                        category_source = "import"
+                        category_overridden = 1
 
             txn_payload = {
                 "account_id": acc["id"],
                 "owner_id": acc["owner_id"],
                 "category_id": cat_id,
                 "amount": amount,
-                "merchant_name": raw_desc,
-                "display_name": raw_desc,
+                "merchant_name": display_desc,
+                "display_name": display_desc,
                 "raw_name": raw_desc,
                 "date": parsed_date,
                 "is_pending": 1 if is_pending else 0,
