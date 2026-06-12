@@ -6,8 +6,8 @@
 import { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { Button, CategoryMarker, SectionEyebrow, getFormControlStyle } from './ui.jsx'
 import CategoryDisplay from './CategoryDisplay.jsx'
+import CategoryPicker from './CategoryPicker.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from './TransientTextInput.jsx'
 import NoteEditor from './NoteEditor.jsx'
@@ -35,16 +35,6 @@ const detailButtonStyle = {
   alignItems: 'center',
   justifyContent: 'center',
   borderRadius: 6,
-}
-
-export function buildGroups(flatCats) {
-  const groups = flatCats.filter(c => !c.parent_id)
-  return groups.map(g => ({
-    value: g.id,
-    label: g.name,
-    options: flatCats.filter(c => c.parent_id === g.id)
-      .map(c => ({ value: c.id, label: c.name })),
-  })).filter(g => g.options.length > 0)
 }
 
 export function getTxnMerchantLabel(txn) {
@@ -687,254 +677,18 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
   )
 }
 
-export function InlineCategorySelect({ txn, categories, onSave, onSaveNew, onAddCategory, onClose, initialQuery = '' }) {
-  const currentCat = categories.find(c => c.id === txn.category_id)
-  const [query, setQuery] = useState(initialQuery || '')
-  const [cursor, setCursor] = useState(0)
-  const [showAll, setShowAll] = useState(false)
-  const [openUp, setOpenUp] = useState(false)
-  const [dropVisible, setDropVisible] = useState(false)
-  const [showNew, setShowNew] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [newParent, setNewParent] = useState('')
-  const [creatingGroup, setCreatingGroup] = useState(false)
-  const [newGroupName, setNewGroupName] = useState('')
-  const [createError, setCreateError] = useState('')
-  const inputRef = useRef(null)
-  const listRef = useRef(null)
-  const wrapRef = useRef(null)
-
-  useEffect(() => {
-    setQuery(initialQuery || '')
-    inputRef.current?.focus()
-  }, [initialQuery])
-
-  useEffect(() => {
-    if (!wrapRef.current || !listRef.current) return
-    const wrap = wrapRef.current.getBoundingClientRect()
-    const list = listRef.current.getBoundingClientRect()
-    const spaceBelow = window.innerHeight - wrap.bottom - 8
-    const spaceAbove = wrap.top - 8
-    if (list.height <= spaceBelow) {
-      setDropVisible(true); setOpenUp(false)
-    } else if (spaceAbove >= list.height) {
-      setDropVisible(true); setOpenUp(true)
-    } else if (spaceBelow >= spaceAbove) {
-      setDropVisible(true); setOpenUp(false)
-    } else {
-      setDropVisible(true); setOpenUp(true)
-    }
-  }, [showAll, query, showNew])
-
-  const leaves = categories.filter(c => !categories.some(x => x.parent_id === c.id))
-  const groups = buildGroups(categories)
-  const topGrps = categories.filter(c => !c.parent_id)
-  const filtered = query.trim() ? leaves.filter(c => c.name.toLowerCase().includes(query.toLowerCase())) : []
-  const options = query.trim() ? filtered : (showAll ? leaves : [])
-  const total = options.length
-
-  useEffect(() => { setCursor(0) }, [query])
-  useEffect(() => {
-    listRef.current?.querySelector(`[data-idx="${cursor}"]`)?.scrollIntoView({ block: 'nearest' })
-  }, [cursor])
-
-  function pick(cat) { onSave(cat.id) }
-
-  function handleKey(e) {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      e.stopPropagation()
-      onClose()
-      return
-    }
-    if (e.key === 'ArrowDown') { e.preventDefault(); setCursor(c => Math.min(c + 1, total - 1)); return }
-    if (e.key === 'ArrowUp') { e.preventDefault(); setCursor(c => Math.max(c - 1, 0)); return }
-    if ((e.key === 'Enter' || e.key === 'Tab') && total > 0) { e.preventDefault(); pick(options[cursor]); return }
-    if ((e.key === 'Enter' || e.key === 'Tab') && !query.trim()) { onClose(); return }
-  }
-
-  function handleBlur() {
-    // Let pointer interactions inside the floating menu win before blur tears the inline editor down.
-    setTimeout(() => { if (!wrapRef.current?.contains(document.activeElement)) onClose() }, 150)
-  }
-
-  async function handleNewSave() {
-    if (!newName.trim()) return
-    setCreateError('')
-    try {
-      const cat = await api.createCategory({ name: newName.trim(), parent_id: newParent || null })
-      onAddCategory?.(cat)
-      onSaveNew?.(cat)
-      onClose?.()
-    } catch (error) {
-      setCreateError(error?.message || 'Could not create that category')
-    }
-  }
-
-  function handleParentChange(val) {
-    if (val === '__new_group__') {
-      setCreatingGroup(true)
-      setNewGroupName('')
-    } else {
-      setNewParent(val)
-    }
-  }
-
-  async function handleNewGroupSave() {
-    if (!newGroupName.trim()) return
-    setCreateError('')
-    try {
-      const grp = await api.createCategory({ name: newGroupName.trim(), parent_id: null })
-      onAddCategory?.(grp)
-      setNewParent(grp.id)
-      setCreatingGroup(false)
-      setNewGroupName('')
-    } catch (error) {
-      setCreateError(error?.message || 'Could not create that group')
-    }
-  }
-
-  const parentName = cat => categories.find(c => c.id === cat.parent_id)?.name
-
-  const dropStyle = {
-    position: 'fixed', zIndex: 1000,
-    background: 'var(--surface)', border: '1px solid var(--border)',
-    borderRadius: 8, minWidth: 240, maxHeight: 280,
-    overflowY: 'auto', boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
-    visibility: dropVisible ? 'visible' : 'hidden',
-    top: openUp ? 'auto' : (wrapRef.current?.getBoundingClientRect().bottom + 4) || 0,
-    bottom: openUp ? (window.innerHeight - (wrapRef.current?.getBoundingClientRect().top - 4)) || 0 : 'auto',
-    left: wrapRef.current?.getBoundingClientRect().left || 0,
-  }
-
-  return (
-    <div ref={wrapRef} style={{ position: 'relative', display: 'inline-block' }}>
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 4,
-        border: '1px solid var(--accent)', borderRadius: 6,
-        background: 'var(--surface2)', padding: '2px 6px',
-      }}>
-        <input
-          ref={inputRef}
-          value={query}
-          onChange={e => { setDropVisible(false); setOpenUp(false); setQuery(e.target.value); setShowAll(false); setShowNew(false) }}
-          onKeyDown={handleKey}
-          onBlur={handleBlur}
-          placeholder={currentCat?.name || 'Type to search…'}
-          style={{ background: 'none', border: 'none', outline: 'none', color: 'var(--text)', fontSize: 13, width: 140 }}
-        />
-        <button
-          onMouseDown={e => { e.preventDefault(); setDropVisible(false); setOpenUp(false); setShowAll(v => !v); setQuery(''); setShowNew(false) }}
-          style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 11, padding: '0 2px', lineHeight: 1 }}
-          title="Browse all categories"
-        >▾</button>
-      </div>
-
-      {(options.length > 0 || showAll || showNew || query.trim().length > 0) && (
-        <div ref={listRef} style={dropStyle}>
-          {showNew ? (
-            <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>New category</div>
-              <TransientTextInput value={newName} onChange={value => { if (createError) setCreateError(''); setNewName(value) }}
-                onCommit={handleNewSave}
-                onCancel={() => { setShowNew(false); setNewName('') }}
-                restoreOnEscape
-                onBlurCommit={false}
-                placeholder="Name"
-                style={{ ...getFormControlStyle({ size: 'sm' }), fontSize: 13 }}
-              />
-              {creatingGroup ? (
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <TransientTextInput
-                    value={newGroupName}
-                    onChange={value => { if (createError) setCreateError(''); setNewGroupName(value) }}
-                    placeholder="New group name"
-                    onCommit={handleNewGroupSave}
-                    onCancel={() => { setCreatingGroup(false); setNewParent(''); setNewGroupName('') }}
-                    restoreOnEscape
-                    onBlurCommit={false}
-                    style={{ flex: 1, ...getFormControlStyle({ size: 'sm', accent: true }), fontSize: 13 }}
-                  />
-                  <Button small onMouseDown={e => { e.preventDefault(); handleNewGroupSave() }} disabled={!newGroupName.trim()}>
-                    Create
-                  </Button>
-                  <Button small variant="ghost" onMouseDown={e => { e.preventDefault(); setCreatingGroup(false); setNewParent('') }}>
-                    ✕
-                  </Button>
-                </div>
-              ) : (
-                <select value={newParent} onChange={e => handleParentChange(e.target.value)}
-                  style={{ ...getFormControlStyle({ size: 'sm', clickable: true }), fontSize: 13 }}>
-                  <option value="">— Top-level group —</option>
-                  {topGrps.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-                  <option value="__new_group__">＋ New group…</option>
-                </select>
-              )}
-              {createError ? (
-                <div style={{ fontSize: 12, color: 'var(--danger)', lineHeight: 1.3 }}>
-                  {createError}
-                </div>
-              ) : null}
-              <div style={{ display: 'flex', gap: 6 }}>
-                <Button small onMouseDown={e => { e.preventDefault(); handleNewSave() }} disabled={!newName.trim()} style={{ flex: 1, justifyContent: 'center' }}>
-                  Add & assign
-                </Button>
-                <Button small variant="ghost" onMouseDown={e => { e.preventDefault(); setShowNew(false) }}>
-                  Back
-                </Button>
-              </div>
-            </div>
-          ) : query.trim() ? (
-            <>
-              {options.length === 0 ? (
-                <div style={{ padding: '10px 12px', fontSize: 13, color: 'var(--muted)' }}>No matches</div>
-              ) : options.map((cat, i) => (
-                <div key={cat.id} data-idx={i}
-                  onMouseDown={e => { e.preventDefault(); pick(cat) }}
-                  onMouseEnter={() => setCursor(i)}
-                  style={{ padding: '7px 12px', cursor: 'pointer', fontSize: 13, background: i === cursor ? 'var(--surface2)' : 'transparent', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <CategoryMarker kind="category" />
-                  <span>{cat.name}</span>
-                  {parentName(cat) && <span style={{ fontSize: 11, color: 'var(--muted)', marginLeft: 'auto' }}>{parentName(cat)}</span>}
-                </div>
-              ))}
-            </>
-          ) : (
-            groups.map(g => (
-              <div key={g.value}>
-                <SectionEyebrow style={{ padding: '6px 12px 4px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <CategoryMarker kind="group" />
-                  <span>{g.label}</span>
-                </SectionEyebrow>
-                {g.options.map(o => {
-                  const globalIdx = leaves.findIndex(l => l.id === o.value)
-                  return (
-                    <div key={o.value} data-idx={globalIdx}
-                      onMouseDown={e => { e.preventDefault(); pick(leaves.find(l => l.id === o.value)) }}
-                      onMouseEnter={() => setCursor(globalIdx)}
-                      style={{ padding: '7px 12px 7px 20px', cursor: 'pointer', fontSize: 13, background: globalIdx === cursor ? 'var(--surface2)' : 'transparent', display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <CategoryMarker kind="category" />
-                      {o.label}
-                    </div>
-                  )
-                })}
-              </div>
-            ))
-          )}
-          {!showNew && (
-            <div onMouseDown={e => { e.preventDefault(); setShowNew(true); setNewName(query) }}
-              style={{ padding: '8px 12px', cursor: 'pointer', fontSize: 13, color: 'var(--accent2)', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>＋</span> New category{query.trim() ? ` "${query}"` : ''}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
 export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePrompt, onOpenDetail }) {
-  const [editId, setEditId] = useState(null)
+  const [editing, setEditing] = useState(false)
+  // A category created from inside the picker is assigned in the same tick it's added, before the parent's
+  // `categories` prop reflects it — capture it here so the save + rule prompt resolve the real object
+  // instead of a stale lookup that would miss it.
+  const createdRef = useRef(null)
+  // The picker reports an open=false during mount before it auto-opens (its initial-state guard fires twice
+  // under StrictMode); only treat a close as a real dismissal once we've seen it genuinely open, or that
+  // spurious report would bounce us straight back out of edit mode.
+  const hasOpenedRef = useRef(false)
+  // Persistence flows through onSave; without it the cell is display-only (e.g. the Rules preview list).
+  const editable = Boolean(onSave)
 
   function fireRulePrompt(catId, catObj) {
     if (!onRulePrompt) return
@@ -962,27 +716,34 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
     })
   }
 
-  function handleSave(catId) {
-    setEditId(null)
-    onSave(txn.id, catId)
-    fireRulePrompt(catId, null)
+  // Picking an existing category and creating-then-assigning a new one both arrive here through the
+  // picker's onChange; createdRef lets the new-category case carry the real object to the save + rule prompt.
+  function handlePick(catId) {
+    if (catId == null) return
+    const created = createdRef.current?.id === catId ? createdRef.current : null
+    createdRef.current = null
+    setEditing(false)
+    onSave(txn.id, catId, created || undefined)
+    fireRulePrompt(catId, created)
   }
 
-  function handleSaveNew(cat) {
-    setEditId(null)
-    onSave(txn.id, cat.id, cat)
-    fireRulePrompt(cat.id, cat)
-  }
-
-  if (editId === txn.id) {
+  if (editing) {
     return (
-      <InlineCategorySelect
-        txn={txn}
+      <CategoryPicker
+        value={txn.category_id ?? null}
         categories={categories}
-        onSave={handleSave}
-        onSaveNew={handleSaveNew}
+        compact
+        showSelectedBadge
+        openToken={1}
+        onChange={handlePick}
         onAddCategory={onAddCategory}
-        onClose={() => setEditId(null)}
+        onCategoryCreated={created => { createdRef.current = created }}
+        onOpenChange={open => {
+          if (open) { hasOpenedRef.current = true; return }
+          if (!hasOpenedRef.current) return
+          createdRef.current = null
+          setEditing(false)
+        }}
       />
     )
   }
@@ -990,9 +751,9 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
       <div
-        onClick={() => setEditId(txn.id)}
-        style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-        title="Click to change category"
+        onClick={editable ? () => { hasOpenedRef.current = false; createdRef.current = null; setEditing(true) } : undefined}
+        style={{ cursor: editable ? 'pointer' : 'default', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+        title={editable ? 'Click to change category' : undefined}
       >
         <CategoryDisplay
           id={txn.category_id}

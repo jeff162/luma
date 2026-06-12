@@ -20,6 +20,11 @@ best practice, not just something that works. When doing it right reveals a need
 a real tradeoff, surface it for a decision rather than silently working around it or silently
 expanding scope.
 
+**Git snapshot is stale.** The harness injects a git status / recent-commits block at session
+start; the user commits between and during sessions, so that block can be out of date by the time
+you read it. Run `git status` / `git log` and report from that — never describe working-tree or
+branch state from the injected snapshot.
+
 **Where things live:**
 
 - `AGENTS.md` — conventions, commenting style, doc-consistency rules

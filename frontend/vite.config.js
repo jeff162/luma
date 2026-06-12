@@ -48,7 +48,12 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     // Vitest unit tests run in Node against the pure helpers in src/lib (decision logic with no
-    // DOM). Component/interaction coverage stays in the Playwright suite (npm run ui:test).
+    // DOM). Convention: each test lives in a `__tests__/` folder beside the code it covers (e.g.
+    // src/lib/__tests__/foo.test.js for src/lib/foo.js) — colocated for proximity/refactor-safety
+    // but kept out of the module's own listing. The glob below stays deliberately broad (any depth)
+    // rather than pinned to `__tests__/` so a misplaced test still RUNS instead of being silently
+    // skipped; placement is kept right by review, not by hiding stragglers. Component/interaction
+    // coverage stays in the Playwright suite under tests/ui/*.spec.js (npm run ui:test).
     test: {
       environment: 'node',
       include: ['src/**/*.test.{js,jsx}'],

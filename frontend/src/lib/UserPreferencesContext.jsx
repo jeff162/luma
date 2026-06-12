@@ -189,12 +189,31 @@ export function useUserPreferences() {
   return context
 }
 
+// Anchor a value to a referentially-stable identity that only changes when its serialized content does.
+// Preferences are JSON-friendly by contract, so structural equality via JSON is sufficient and cheap for
+// the small defaults/values involved.
+function useStablePreferenceValue(value) {
+  const serialized = JSON.stringify(value) ?? 'undefined'
+  const ref = useRef({ serialized, value })
+  if (ref.current.serialized !== serialized) {
+    ref.current = { serialized, value }
+  }
+  return ref.current.value
+}
+
+// Consumers routinely read a preference value into an effect/memo dependency array, so this hook must
+// return a value (and setter) whose identity is stable across renders and changes only when the
+// preference's content changes. The stored preference object already behaves that way — it is rebuilt
+// only on a real write — but a caller's inline default (`useUserPreference(KEY, [])`) is a fresh literal
+// each render, and returning it directly made a consumer that re-syncs from the value in an effect loop
+// forever whenever the preference was unset. Anchoring the default by content stops that at the source.
 export function useUserPreference(key, defaultValue) {
   const { preferences, setPreference } = useUserPreferences()
-  const value = getPreferenceValue(preferences, key, defaultValue)
+  const stableDefault = useStablePreferenceValue(defaultValue)
+  const value = getPreferenceValue(preferences, key, stableDefault)
   const setValue = useCallback(
-    nextValueOrUpdater => setPreference(key, nextValueOrUpdater, defaultValue),
-    [key, setPreference, defaultValue],
+    nextValueOrUpdater => setPreference(key, nextValueOrUpdater, stableDefault),
+    [key, setPreference, stableDefault],
   )
   return [value, setValue]
 }

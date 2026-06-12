@@ -5,7 +5,7 @@
 // distinction is worth pinning: a `pending` draft group is kept, a deleted-live group is dropped.
 
 import { describe, it, expect } from 'vitest'
-import { reconcileSnapshotGroupsWithCategories } from './categoryImportState.js'
+import { reconcileSnapshotGroupsWithCategories } from '../categoryImportState.js'
 
 function makeSnapshot(tree) {
   return {
