@@ -241,6 +241,9 @@ export const api = {
   getCategoryDeletePreview: (id) => request(`/categories/${id}/delete-preview`),
   deleteCategory: (id, data = {}) => request(`/categories/${id}`, { method: 'DELETE', body: JSON.stringify(data) }),
   reactivateCategory: (id) => request(`/categories/${id}/reactivate`, { method: 'POST' }),
+  hardDeleteCategory: (id) => request(`/categories/${id}/forever`, { method: 'DELETE' }),
+  getEmptyCleanupPreview: () => request('/categories/empty-cleanup-preview'),
+  runEmptyCleanup: () => request('/categories/empty-cleanup', { method: 'POST' }),
   setCategoryAside: (id) => request(`/categories/${id}/set-aside`, { method: 'POST' }),
   restoreCategoryToPool: (id) => request(`/categories/${id}/restore-to-pool`, { method: 'POST' }),
   updateCategory: (id, data) =>

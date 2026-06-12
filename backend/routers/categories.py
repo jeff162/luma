@@ -137,6 +137,63 @@ def _get_affected_category_ids(conn, category_id: str) -> list[str]:
         ).fetchall()
     ]
 
+def _compute_empty_cleanup(conn) -> tuple[list[dict], list[dict]]:
+    """Identify the removable "empty" groups and categories for the one-click cleanup.
+
+    An **empty leaf** is an active, non-system category that isn't an import-workspace pending
+    label and is referenced by nothing the user has set up: no transaction (trashed or not) points
+    at it and no categorization rule targets it (a rule target is configured-but-unused, not
+    clutter). An **empty group** is an active, non-system group whose every active child is itself
+    an empty leaf — so nothing survives the sweep — which includes childless groups. The Unassigned
+    group and any other system rows are never touched. Returns (empty_groups, empty_leaves), each a
+    list of {id, name[, parent_id]}.
+    """
+    referenced = {
+        row["category_id"]
+        for row in conn.execute(
+            "SELECT DISTINCT category_id FROM txn WHERE category_id IS NOT NULL"
+        ).fetchall()
+    }
+    referenced |= {
+        row["category_id"]
+        for row in conn.execute(
+            "SELECT DISTINCT category_id FROM category_rule WHERE category_id IS NOT NULL"
+        ).fetchall()
+    }
+    leaf_rows = conn.execute(
+        """
+        SELECT id, name, parent_id
+        FROM   category
+        WHERE  is_active = 1 AND parent_id IS NOT NULL
+          AND  system_key IS NULL AND import_pending = 0
+        ORDER  BY LOWER(name), name, id
+        """
+    ).fetchall()
+    empty_leaves = [dict(r) for r in leaf_rows if r["id"] not in referenced]
+    removed_per_group: dict[str, int] = {}
+    for leaf in empty_leaves:
+        removed_per_group[leaf["parent_id"]] = removed_per_group.get(leaf["parent_id"], 0) + 1
+
+    group_rows = conn.execute(
+        """
+        SELECT id, name
+        FROM   category
+        WHERE  is_active = 1 AND parent_id IS NULL AND system_key IS NULL
+        ORDER  BY LOWER(name), name, id
+        """
+    ).fetchall()
+    empty_groups = []
+    for group in group_rows:
+        active_children = conn.execute(
+            "SELECT COUNT(*) AS n FROM category WHERE parent_id = ? AND is_active = 1",
+            (group["id"],),
+        ).fetchone()["n"]
+        # A group is swept only if none of its active children survive the leaf removal above.
+        if active_children - removed_per_group.get(group["id"], 0) <= 0:
+            empty_groups.append(dict(group))
+    return empty_groups, empty_leaves
+
+
 def _extract_category_assignments(payload: dict) -> dict[str, str]:
     if not isinstance(payload, dict):
         return {}
@@ -584,6 +641,14 @@ def delete_category(category_id: str, body: CategoryDelete | None = None):
             f"DELETE FROM category_rule WHERE category_id IN ({placeholders})",
             affected_ids,
         )
+        # A group is an organizational container, not an import label: there is nothing to recover
+        # and nothing to suppress from future imports, so a deleted group is removed outright rather
+        # than parked in the Inactive list. Its child categories DO go inactive (deactivated above,
+        # recoverable); deleting the group row nulls their parent_id (ON DELETE SET NULL), so
+        # recovery returns them to Unassigned. Only leaf categories ever appear in the Inactive list.
+        if cat["parent_id"] is None:
+            conn.execute("DELETE FROM category_tag WHERE category_id = ?", (category_id,))
+            conn.execute("DELETE FROM category WHERE id = ?", (category_id,))
     return {"ok": True}
 
 
@@ -625,6 +690,81 @@ def reactivate_category(category_id: str):
             (target_parent_id, target_type, category_id),
         )
     return {"ok": True}
+
+
+@router.delete("/{category_id}/forever")
+def hard_delete_category(category_id: str):
+    """Permanently remove an already-deleted (inactive) category and its inactive branch.
+
+    The irreversible counterpart to /reactivate. Only inactive categories qualify: by the
+    soft-delete invariant they are referentially empty — no live transaction or rule points at
+    them (see delete_category) — so the rows can be dropped outright. Each affected row's
+    transactions were already cleared at soft-delete time, but txn.imported_category *text* is
+    left intact, so the only effect is that the label is no longer suppressed: a future import
+    bearing it creates a fresh pending leaf instead of landing uncategorized.
+    """
+    with get_db() as conn:
+        cat = conn.execute(
+            "SELECT id, is_active FROM category WHERE id = ?", (category_id,)
+        ).fetchone()
+        if not cat:
+            raise HTTPException(status_code=404, detail="Not found")
+        if cat["is_active"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Only a deleted (inactive) category can be permanently removed",
+            )
+        affected_ids = _get_affected_category_ids(conn, category_id)
+        placeholders = ",".join("?" for _ in affected_ids)
+        # Defensive: refuse if the branch still contains an active row. An active category can have
+        # live transactions, and txn.category_id is ON DELETE SET NULL, so dropping it would
+        # silently uncategorize them. An all-inactive branch is referentially empty and safe.
+        if conn.execute(
+            f"SELECT 1 FROM category WHERE is_active = 1 AND id IN ({placeholders})",
+            affected_ids,
+        ).fetchone():
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot permanently remove a branch that still contains an active category",
+            )
+        # FK cascades would handle these, but delete explicitly so the result is correct regardless
+        # of foreign-key enforcement on the connection.
+        conn.execute(f"DELETE FROM category_rule WHERE category_id IN ({placeholders})", affected_ids)
+        conn.execute(f"DELETE FROM category_tag WHERE category_id IN ({placeholders})", affected_ids)
+        conn.execute(f"DELETE FROM category WHERE id IN ({placeholders})", affected_ids)
+    return {"ok": True}
+
+
+@router.get("/empty-cleanup-preview")
+def empty_cleanup_preview():
+    """List the empty groups and categories a cleanup sweep would remove (for the confirm dialog)."""
+    with get_db() as conn:
+        groups, leaves = _compute_empty_cleanup(conn)
+    return {
+        "groups": [{"id": g["id"], "name": g["name"]} for g in groups],
+        "categories": [{"id": l["id"], "name": l["name"]} for l in leaves],
+    }
+
+
+@router.post("/empty-cleanup")
+def empty_cleanup():
+    """Remove every empty group and category in one pass.
+
+    Empty categories are removed outright (not parked in Inactive): each is soft-deleted to clear
+    rules and scrub import-snapshot references via the tested delete path, then purged. Groups left
+    childless by that removal (and groups that were already childless) are then deleted. The set is
+    recomputed from the DB rather than trusted from the client; see _compute_empty_cleanup.
+    """
+    with get_db() as conn:
+        groups, leaves = _compute_empty_cleanup(conn)
+    leaf_ids = [leaf["id"] for leaf in leaves]
+    group_ids = [group["id"] for group in groups]
+    for leaf_id in leaf_ids:
+        delete_category(leaf_id, None)
+        hard_delete_category(leaf_id)
+    for group_id in group_ids:
+        delete_category(group_id, None)
+    return {"ok": True, "groups_removed": len(group_ids), "categories_removed": len(leaf_ids)}
 
 
 @router.post("/{category_id}/set-aside")

@@ -37,6 +37,9 @@ from backend.routers.categories import (
     CategoryDelete,
     CategoryUpdate,
     delete_category,
+    empty_cleanup,
+    empty_cleanup_preview,
+    hard_delete_category,
     list_categories,
     list_inactive_categories,
     reactivate_category,
@@ -282,7 +285,7 @@ class InactiveCategoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["is_active"], 1)
         self.assertEqual(row["parent_id"], unassigned_id)
 
-    def test_deactivating_group_cascades_to_children(self):
+    def test_deleting_group_removes_group_and_sends_children_to_inactive(self):
         account_id = self._insert_account("Checking")
         group_id, leaf_id = str(uuid.uuid4()), str(uuid.uuid4())
         with self._use_db_path():
@@ -301,12 +304,20 @@ class InactiveCategoryTests(unittest.IsolatedAsyncioTestCase):
             delete_category(group_id, CategoryDelete(replacement_category_id=None))
             active_ids = {c["id"] for c in _flatten_tree(list_categories())}
             inactive_ids = {c["id"] for c in list_inactive_categories()}
+            with get_db() as conn:
+                group_still_exists = conn.execute(
+                    "SELECT 1 FROM category WHERE id = ?", (group_id,)
+                ).fetchone()
 
-        # The whole branch is deactivated together (group + child leaf), and the child's transaction
-        # is uncategorized — deactivation acts on the affected branch, not just the named row.
+        # A group is a container, not an import label: it is removed outright rather than parked in
+        # the Inactive list. Its child leaf goes inactive (recoverable), its transaction is cleared,
+        # and the leaf's parent_id is nulled (the group is gone) so recovery falls back to Unassigned.
+        self.assertIsNone(group_still_exists, "the group row is deleted, not deactivated")
+        self.assertNotIn(group_id, inactive_ids, "groups never appear in the Inactive list")
         self.assertNotIn(group_id, active_ids)
         self.assertNotIn(leaf_id, active_ids)
-        self.assertEqual({group_id, leaf_id}, {group_id, leaf_id} & inactive_ids)
+        self.assertIn(leaf_id, inactive_ids)
+        self.assertIsNone(self._category_row(leaf_id)["parent_id"])
         self.assertIsNone(self._txn(txn_id)["category_id"])
 
     def test_reactivate_clears_set_aside_flag(self):
@@ -516,6 +527,160 @@ class InactiveCategoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(imported_row["category_id"])
         self.assertIsNone(imported_row["category_source"])
         self.assertEqual(imported_row["imported_category"], "Subscription")
+
+
+    def test_hard_delete_rejects_active_category(self):
+        # The guard that keeps hard delete safe: only an inactive (referentially empty) category may
+        # be purged. An active one could still have live transactions (txn.category_id is SET NULL on
+        # delete), so dropping it would silently uncategorize them.
+        leaf_id = self._insert_leaf("Streaming")
+        with self._use_db_path():
+            with self.assertRaises(HTTPException) as ctx:
+                hard_delete_category(leaf_id)
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(self._category_row(leaf_id)["is_active"], 1, "the category is untouched")
+
+    async def test_hard_delete_removes_inactive_leaf_and_lifts_suppression(self):
+        account_id = self._insert_account("Checking")
+
+        # Import the label so a real leaf exists and a transaction adopts it.
+        await self._run_import(
+            "\n".join([
+                "Date,Description,Account,Amount,Category",
+                "2026-01-02,Video Service,Checking,14.99,Subscription",
+            ]),
+            account_map={"Checking": account_id},
+        )
+        leaf_id = self._unassigned_children()[0]["id"]
+
+        # Soft delete (suppresses the label), then hard delete (purges the row entirely).
+        with self._use_db_path():
+            delete_category(leaf_id, CategoryDelete(replacement_category_id=None))
+            hard_delete_category(leaf_id)
+            with get_db() as conn:
+                self.assertIsNone(
+                    conn.execute("SELECT 1 FROM category WHERE id = ?", (leaf_id,)).fetchone(),
+                    "the row is gone for good",
+                )
+                # The original transaction survives with its imported_category text intact.
+                original = dict(conn.execute(
+                    "SELECT category_id, imported_category FROM txn WHERE date = '2026-01-02'"
+                ).fetchone())
+        self.assertIsNone(original["category_id"])
+        self.assertEqual(original["imported_category"], "Subscription")
+
+        # Suppression is lifted: re-importing the label now creates a fresh leaf (contrast with
+        # test_import_suppressed_after_delete, where the still-present inactive row suppresses it).
+        await self._run_import(
+            "\n".join([
+                "Date,Description,Account,Amount,Category",
+                "2026-02-09,Video Service Renewal,Checking,14.99,Subscription",
+            ]),
+            account_map={"Checking": account_id},
+        )
+        children_after = self._unassigned_children()
+        self.assertEqual([c["name"] for c in children_after], ["Subscription"])
+        self.assertNotEqual(children_after[0]["id"], leaf_id, "a brand-new leaf, not the purged one")
+        self.assertEqual(children_after[0]["is_active"], 1)
+
+    def test_hard_delete_purges_legacy_inactive_group_branch(self):
+        # New deletes remove a group outright, so groups no longer enter the Inactive list. But a
+        # database from before that change can still hold an inactive group with inactive children;
+        # hard delete must purge the whole branch in one shot. Construct that legacy shape directly.
+        group_id, leaf_id = str(uuid.uuid4()), str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO category (id, parent_id, name, category_type, sort_order, exclude_from_totals, is_active) VALUES (?, NULL, 'Travel', 'expense', 0, 0, 0)",
+                    (group_id,),
+                )
+                conn.execute(
+                    "INSERT INTO category (id, parent_id, name, category_type, sort_order, exclude_from_totals, is_active) VALUES (?, ?, 'Flights', 'expense', 0, 0, 0)",
+                    (leaf_id, group_id),
+                )
+            hard_delete_category(group_id)
+            with get_db() as conn:
+                remaining = conn.execute(
+                    "SELECT 1 FROM category WHERE id IN (?, ?)", (group_id, leaf_id)
+                ).fetchall()
+        self.assertEqual(remaining, [], "both the group and its child leaf are gone")
+
+
+    # --- empty-category/group cleanup -------------------------------------------
+
+    def _category_exists(self, category_id: str) -> bool:
+        with self._use_db_path():
+            with get_db() as conn:
+                return conn.execute(
+                    "SELECT 1 FROM category WHERE id = ?", (category_id,)
+                ).fetchone() is not None
+
+    def test_empty_cleanup_removes_empties_and_keeps_used(self):
+        # A fresh DB also seeds default categories (which the sweep treats as empty), so assert on
+        # our own ids rather than global counts.
+        account_id = self._insert_account("Checking")
+        keep_group = self._insert_group("Keepers")
+        used_leaf = self._insert_leaf_under(keep_group, "Groceries")
+        self._insert_txn(account_id, used_leaf, source="manual", imported_category=None)
+        sibling_empty_leaf = self._insert_leaf_under(keep_group, "Snacks")  # 0 txns/rules
+        empty_group = self._insert_group("Voyages")
+        empty_group_leaf = self._insert_leaf_under(empty_group, "Flights")  # 0 txns/rules
+        childless_group = self._insert_group("Sundries")  # no children at all
+
+        with self._use_db_path():
+            empty_cleanup()
+
+        # Used leaf and its group survive; removing the empty sibling does not orphan the group.
+        self.assertTrue(self._category_exists(used_leaf))
+        self.assertTrue(self._category_exists(keep_group))
+        # Everything empty is gone outright (not parked in Inactive).
+        self.assertFalse(self._category_exists(sibling_empty_leaf))
+        self.assertFalse(self._category_exists(empty_group))
+        self.assertFalse(self._category_exists(empty_group_leaf))
+        self.assertFalse(self._category_exists(childless_group))
+        with self._use_db_path():
+            inactive_ids = {c["id"] for c in list_inactive_categories()}
+        self.assertEqual(
+            inactive_ids & {sibling_empty_leaf, empty_group, empty_group_leaf, childless_group},
+            set(),
+            "cleanup removes empties outright, it does not park them in Inactive",
+        )
+
+    def test_empty_cleanup_keeps_rule_targets(self):
+        # A category that is a rule target is configured-but-unused, not clutter: keep it (and its
+        # parent group). The guard fails if a rule-targeted leaf is swept.
+        group_id = self._insert_group("Coffee Shops")
+        leaf_id = self._insert_leaf_under(group_id, "Coffee")
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO category_rule (id, category_id, keyword, priority) VALUES (?, ?, 'starbucks', 100)",
+                    (str(uuid.uuid4()), leaf_id),
+                )
+            preview = empty_cleanup_preview()
+            empty_cleanup()
+        self.assertNotIn(leaf_id, {c["id"] for c in preview["categories"]})
+        self.assertTrue(self._category_exists(leaf_id))
+        self.assertTrue(self._category_exists(group_id))
+
+    def test_empty_cleanup_excludes_pending_labels_and_system_group(self):
+        pending_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                unassigned_id = self._unassigned_group_id(conn)
+                conn.execute(
+                    """
+                    INSERT INTO category (id, parent_id, name, category_type, sort_order, exclude_from_totals, system_key, is_active, import_pending)
+                    VALUES (?, ?, 'Streaming', NULL, 0, 0, NULL, 1, 1)
+                    """,
+                    (pending_id, unassigned_id),
+                )
+            preview = empty_cleanup_preview()
+            empty_cleanup()
+        self.assertNotIn(pending_id, {c["id"] for c in preview["categories"]})
+        self.assertNotIn(unassigned_id, {g["id"] for g in preview["groups"]})
+        self.assertTrue(self._category_exists(pending_id), "an import-workspace pending label is left alone")
+        self.assertTrue(self._category_exists(unassigned_id), "the Unassigned system group is never swept")
 
 
 if __name__ == "__main__":

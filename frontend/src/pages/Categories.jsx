@@ -161,6 +161,7 @@ function DeleteCategoryDialog({ category, preview, categories, replacementId, on
   })
 
   const canConfirm = mode === 'unassigned' || !!replacementId
+  const isGroup = !!category && category.parent_id == null
 
   return (
     <OverlayBackdrop zIndex={900} tint="rgba(15, 23, 42, 0.28)">
@@ -172,16 +173,18 @@ function DeleteCategoryDialog({ category, preview, categories, replacementId, on
       >
         <FloatingPanelHeader style={{ padding: '16px 20px' }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 600 }}>Delete category</div>
+            <div style={{ fontSize: 16, fontWeight: 600 }}>{isGroup ? 'Delete group' : 'Delete category'}</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
-              &quot;{category?.name}&quot; is assigned to {preview?.txn_count} transaction{preview?.txn_count === 1 ? '' : 's'}.
+              {isGroup
+                ? <>&quot;{category?.name}&quot; and its categories are assigned to {preview?.txn_count} transaction{preview?.txn_count === 1 ? '' : 's'}.</>
+                : <>&quot;{category?.name}&quot; is assigned to {preview?.txn_count} transaction{preview?.txn_count === 1 ? '' : 's'}.</>}
             </div>
           </div>
         </FloatingPanelHeader>
 
         <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-            Choose where those transactions should go before deleting this category.
+            Choose where those transactions should go before deleting this {isGroup ? 'group' : 'category'}.
           </div>
 
           <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
@@ -226,8 +229,10 @@ function DeleteCategoryDialog({ category, preview, categories, replacementId, on
           </label>
 
           <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-            The category isn&apos;t erased — it moves to <strong>Inactive</strong>, where you can recover it later.
-            While inactive, future imports that use this label come in uncategorized instead of recreating it.
+            {isGroup
+              ? <>The group is removed. Its categories move to <strong>Inactive</strong>, where you can recover them later.</>
+              : <>The category isn&apos;t erased — it moves to <strong>Inactive</strong>, where you can recover it later.
+                While inactive, future imports that use this label come in uncategorized instead of recreating it.</>}
           </div>
         </div>
 
@@ -236,7 +241,7 @@ function DeleteCategoryDialog({ category, preview, categories, replacementId, on
             Cancel
           </Button>
           <Button onClick={onConfirm} disabled={!canConfirm || saving}>
-            {saving ? 'Deleting…' : 'Delete category'}
+            {saving ? 'Deleting…' : (isGroup ? 'Delete group' : 'Delete category')}
           </Button>
         </DialogActions>
       </FloatingPanel>
@@ -514,12 +519,12 @@ function InlineGroupDraftRow({ onSubmit, onCancel }) {
       isCollapsed={false}
       autoEditToken={1}
       autoEditPlaceholder="Group name"
-      onAutoEditConsumed={() => {}}
+      onAutoEditConsumed={() => { }}
       onCancelEdit={onCancel}
-      onToggleCollapse={() => {}}
-      onSelect={() => {}}
+      onToggleCollapse={() => { }}
+      onSelect={() => { }}
       onRename={(_, name) => onSubmit(name)}
-      onDelete={() => {}}
+      onDelete={() => { }}
       trailingContent={
         <button
           onMouseDown={e => {
@@ -568,11 +573,11 @@ function InlineCategoryDraftRow({ onSubmit, onCancel }) {
       showDelete={false}
       autoEditToken={1}
       autoEditPlaceholder="category name"
-      onAutoEditConsumed={() => {}}
+      onAutoEditConsumed={() => { }}
       onCancelEdit={onCancel}
-      onSelect={() => {}}
+      onSelect={() => { }}
       onRename={(_, name) => onSubmit(name)}
-      onDelete={() => {}}
+      onDelete={() => { }}
       trailingContent={
         <button
           onMouseDown={e => {
@@ -651,6 +656,10 @@ export default function Categories() {
   const [tree, setTree] = useState([])
   const [flatCats, setFlatCats] = useState([])
   const [inactiveCategories, setInactiveCategories] = useState([])
+  const [pendingHardDelete, setPendingHardDelete] = useState(null)
+  const [emptyCleanup, setEmptyCleanup] = useState({ groups: [], categories: [] })
+  const [pendingEmptyCleanup, setPendingEmptyCleanup] = useState(false)
+  const [emptyCleanupSaving, setEmptyCleanupSaving] = useState(false)
   const [availableTags, setAvailableTags] = useState([])
   const [tagPickerOpenForId, setTagPickerOpenForId] = useState(null)
   const [categoryUsage, setCategoryUsage] = useState({})
@@ -726,22 +735,23 @@ export default function Categories() {
 
   // Left-panel width is seeded from the saved preference (with localStorage as a legacy fallback).
   useEffect(() => {
-      const widthPref = Number(preferences?.[LEFT_PANEL_WIDTH_PREF_KEY])
-      const widthStorageKey = getLeftPanelWidthStorageKey(dbInstanceId, userId)
-      if (Number.isFinite(widthPref) && widthPref > 0) {
-        setLeftPanelWidth(widthPref)
-      } else if (widthStorageKey) {
-        const savedWidth = Number(JSON.parse(window.localStorage.getItem(widthStorageKey) || 'null'))
-        if (Number.isFinite(savedWidth) && savedWidth > 0) setLeftPanelWidth(savedWidth)
-      }
+    const widthPref = Number(preferences?.[LEFT_PANEL_WIDTH_PREF_KEY])
+    const widthStorageKey = getLeftPanelWidthStorageKey(dbInstanceId, userId)
+    if (Number.isFinite(widthPref) && widthPref > 0) {
+      setLeftPanelWidth(widthPref)
+    } else if (widthStorageKey) {
+      const savedWidth = Number(JSON.parse(window.localStorage.getItem(widthStorageKey) || 'null'))
+      if (Number.isFinite(savedWidth) && savedWidth > 0) setLeftPanelWidth(savedWidth)
+    }
   }, [dbInstanceId, preferences, userId])
 
   const loadCategories = useCallback(async (selectedId = selectedRef.current?.id) => {
-    const [nextTree, nextFlat, nextUsage, nextInactive, uncategorizedExpenseResult, uncategorizedIncomeResult] = await Promise.all([
+    const [nextTree, nextFlat, nextUsage, nextInactive, nextEmptyCleanup, uncategorizedExpenseResult, uncategorizedIncomeResult] = await Promise.all([
       api.getCategoryTree(),
       api.getCategories(),
       api.getCategoryUsageSummary(),
       api.getInactiveCategories(),
+      api.getEmptyCleanupPreview(),
       api.getTransactions({
         category_id: SYNTHETIC_UNCATEGORIZED_EXPENSE_CATEGORY_ID,
         limit: 1,
@@ -758,6 +768,10 @@ export default function Categories() {
     setTree(nextTree)
     setFlatCats(nextFlat)
     setInactiveCategories(Array.isArray(nextInactive) ? nextInactive : [])
+    setEmptyCleanup({
+      groups: Array.isArray(nextEmptyCleanup?.groups) ? nextEmptyCleanup.groups : [],
+      categories: Array.isArray(nextEmptyCleanup?.categories) ? nextEmptyCleanup.categories : [],
+    })
     setCategoryUsage(nextUsage || {})
     setUncategorizedExpenseTxnCount(nextUncategorizedExpenseTxnCount)
     setUncategorizedIncomeTxnCount(nextUncategorizedIncomeTxnCount)
@@ -781,8 +795,8 @@ export default function Categories() {
     api.getTags().then(rows => setAvailableTags(Array.isArray(rows) ? rows : [])).catch(() => setAvailableTags([]))
   }, [])
   useEscapeAction(event => {
-     // Escape unwinds the most specific transient UI first so keyboard users can
-     // back out one layer at a time instead of losing the whole tree context at once.
+    // Escape unwinds the most specific transient UI first so keyboard users can
+    // back out one layer at a time instead of losing the whole tree context at once.
     if (deleteDialog) {
       if (deleteSaving) return
       event.preventDefault()
@@ -1262,6 +1276,23 @@ export default function Categories() {
     await loadCategories()
   }
 
+  async function handleHardDelete(id) {
+    setPendingHardDelete(null)
+    await api.hardDeleteCategory(id)
+    await loadCategories()
+  }
+
+  async function runEmptyCleanup() {
+    setEmptyCleanupSaving(true)
+    try {
+      await api.runEmptyCleanup()
+      setPendingEmptyCleanup(false)
+      await loadCategories()
+    } finally {
+      setEmptyCleanupSaving(false)
+    }
+  }
+
   function selectCategory(cat) {
     const fullCat = getFullCategoryRecord(cat, flatCats)
     if (!fullCat) return
@@ -1329,7 +1360,7 @@ export default function Categories() {
     } else {
       setStoredCollapsedGroups(prev => {
         const next = { ...prev }
-        ;(groupsBySection[target.sectionType] || []).forEach(group => { next[group.id] = false })
+          ; (groupsBySection[target.sectionType] || []).forEach(group => { next[group.id] = false })
         return next
       })
       setStoredCollapsedSections(prev => ({ ...prev, [target.sectionType]: false }))
@@ -1343,7 +1374,7 @@ export default function Categories() {
     } else {
       setStoredCollapsedGroups(prev => {
         const next = { ...prev }
-        ;(groupsBySection[target.sectionType] || []).forEach(group => { next[group.id] = true })
+          ; (groupsBySection[target.sectionType] || []).forEach(group => { next[group.id] = true })
         return next
       })
       setStoredCollapsedSections(prev => ({ ...prev, [target.sectionType]: true }))
@@ -1383,6 +1414,9 @@ export default function Categories() {
     setSelected(null)
     setSelectedCategoryIds([])
     setNewName('')
+    // The inline add-category form lives inside the group body, which only renders when the group
+    // is expanded — and groups default to collapsed. Expand it so the form is actually visible.
+    setStoredCollapsedGroups(prev => ({ ...prev, [group.id]: false }))
     setInlineForm({
       mode: 'category',
       sectionType: normalizeCategoryType(group.category_type),
@@ -1817,31 +1851,54 @@ export default function Categories() {
     || getVisibleChildrenForGroup(group).some(child => categoryNameMatches(child.name))
   const sectionHasSearchMatch = sectionType => (groupsBySection[sectionType] || []).some(groupHasSearchMatch)
   const categoryHighlightQuery = categorySearchActive ? categorySearch.trim() : ''
+  const emptyCleanupCount = emptyCleanup.groups.length + emptyCleanup.categories.length
 
   return (
     <div data-browser-context-passthrough="true" style={{ padding: 32, display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
       <PageHeader title="Categories" />
       <div ref={contentLayoutRef} style={{ display: 'grid', gridTemplateColumns: `${leftPanelWidth ?? DEFAULT_LEFT_PANEL_WIDTH}px 8px minmax(0, 1fr)`, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <input
-            type="search"
-            name="category-search"
-            value={categorySearch}
-            onChange={event => setCategorySearch(event.target.value)}
-            placeholder="Search categories…"
-            aria-label="Search categories"
-            autoComplete="off"
-            style={{
-              marginBottom: 10,
-              padding: '9px 12px',
-              border: '1px solid color-mix(in srgb, var(--muted) 50%, var(--border))',
-              borderRadius: 8,
-              background: 'var(--surface2)',
-              color: 'var(--text)',
-              fontSize: 13,
-              outline: 'none',
-            }}
-          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <input
+              type="search"
+              name="category-search"
+              value={categorySearch}
+              onChange={event => setCategorySearch(event.target.value)}
+              placeholder="Search categories…"
+              aria-label="Search categories"
+              autoComplete="off"
+              style={{
+                flex: 1,
+                minWidth: 0,
+                padding: '9px 12px',
+                border: '1px solid color-mix(in srgb, var(--muted) 50%, var(--border))',
+                borderRadius: 8,
+                background: 'var(--surface2)',
+                color: 'var(--text)',
+                fontSize: 13,
+                outline: 'none',
+              }}
+            />
+            {emptyCleanupCount > 0 ? (
+              <button
+                onClick={() => setPendingEmptyCleanup(true)}
+                title="Delete empty groups and categories"
+                style={{
+                  flexShrink: 0,
+                  whiteSpace: 'nowrap',
+                  background: 'var(--surface2)',
+                  border: '1px solid color-mix(in srgb, var(--muted) 50%, var(--border))',
+                  color: 'var(--muted)',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  padding: '9px 12px',
+                  borderRadius: 8,
+                }}
+              >
+                Delete empty ({emptyCleanupCount})
+              </button>
+            ) : null}
+          </div>
           <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
             <div
               ref={listRef}
@@ -1858,212 +1915,212 @@ export default function Categories() {
                 background: 'var(--surface)',
               }}
             >
-            {!loading && bulkSelectMode ? (
-              <div style={{
-                position: 'sticky',
-                top: 0,
-                zIndex: 2,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 12,
-                padding: '8px 11px',
-                background: 'color-mix(in srgb, var(--accent) 10%, var(--surface))',
-                borderBottom: '1px solid var(--border)',
-              }}>
-                <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                  Select categories, then right-click to choose an action.
-                </div>
-                <button
-                  onClick={cancelBulkSelect}
-                  style={{
-                    background: 'none',
-                    border: '1px solid var(--border)',
-                    color: 'var(--muted)',
-                    borderRadius: 999,
-                    padding: '4px 10px',
-                    fontSize: 12,
-                    cursor: 'pointer',
-                    flexShrink: 0,
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : null}
-            {loading ? <Spinner /> : ['income', 'expense'].map(sectionType => {
-              const sectionGroups = groupsBySection[sectionType]
-              const sectionMeta = SECTION_META[sectionType]
-              const showSectionForm =
-                inlineForm?.mode === 'group' &&
-                inlineForm.sectionType === sectionType &&
-                !inlineForm.anchorGroupId
-              const sectionCollapsed = categorySearchActive
-                ? !sectionHasSearchMatch(sectionType)
-                : !!collapsedSections[sectionType]
-
-              return (
-                <div
-                  key={sectionType}
-                  onContextMenu={e => {
-                    e.preventDefault()
-                    openContextMenu(e, null, sectionType)
-                  }}
-                  style={{ borderBottom: sectionType === 'income' ? '1px solid var(--border)' : 'none' }}
-                >
-                  <div
+              {!loading && bulkSelectMode ? (
+                <div style={{
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 2,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  padding: '8px 11px',
+                  background: 'color-mix(in srgb, var(--accent) 10%, var(--surface))',
+                  borderBottom: '1px solid var(--border)',
+                }}>
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                    Select categories, then right-click to choose an action.
+                  </div>
+                  <button
+                    onClick={cancelBulkSelect}
                     style={{
-                      padding: '5px 11px 4px',
-                      background: 'color-mix(in srgb, var(--surface2) 70%, transparent)',
-                      borderBottom: '1px solid var(--border)',
-                      display: 'flex',
-                      alignItems: 'flex-start',
-                      gap: 8,
+                      background: 'none',
+                      border: '1px solid var(--border)',
+                      color: 'var(--muted)',
+                      borderRadius: 999,
+                      padding: '4px 10px',
+                      fontSize: 12,
                       cursor: 'pointer',
+                      flexShrink: 0,
                     }}
-                    onClick={() => toggleSection(sectionType)}
                   >
-                    <button
-                      onClick={e => {
-                        e.stopPropagation()
-                        toggleSection(sectionType)
-                      }}
-                      title={sectionCollapsed ? `Expand ${sectionMeta.label}` : `Collapse ${sectionMeta.label}`}
+                    Cancel
+                  </button>
+                </div>
+              ) : null}
+              {loading ? <Spinner /> : ['income', 'expense'].map(sectionType => {
+                const sectionGroups = groupsBySection[sectionType]
+                const sectionMeta = SECTION_META[sectionType]
+                const showSectionForm =
+                  inlineForm?.mode === 'group' &&
+                  inlineForm.sectionType === sectionType &&
+                  !inlineForm.anchorGroupId
+                const sectionCollapsed = categorySearchActive
+                  ? !sectionHasSearchMatch(sectionType)
+                  : !!collapsedSections[sectionType]
+
+                return (
+                  <div
+                    key={sectionType}
+                    onContextMenu={e => {
+                      e.preventDefault()
+                      openContextMenu(e, null, sectionType)
+                    }}
+                    style={{ borderBottom: sectionType === 'income' ? '1px solid var(--border)' : 'none' }}
+                  >
+                    <div
                       style={{
-                        background: 'var(--surface)',
-                        border: '1px solid var(--border)',
-                        color: 'var(--muted)',
+                        padding: '5px 11px 4px',
+                        background: 'color-mix(in srgb, var(--surface2) 70%, transparent)',
+                        borderBottom: '1px solid var(--border)',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 8,
                         cursor: 'pointer',
-                        fontSize: 12,
-                        width: 21,
-                        height: 21,
-                        padding: 0,
-                        marginTop: 1,
-                        flexShrink: 0,
-                        borderRadius: 5,
-                        display: 'grid',
-                        placeItems: 'center',
-                        lineHeight: 1,
                       }}
+                      onClick={() => toggleSection(sectionType)}
                     >
-                      {sectionCollapsed ? '+' : '-'}
-                    </button>
-                    <div>
-                      <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.1 }}>
-                        {sectionMeta.label}
+                      <button
+                        onClick={e => {
+                          e.stopPropagation()
+                          toggleSection(sectionType)
+                        }}
+                        title={sectionCollapsed ? `Expand ${sectionMeta.label}` : `Collapse ${sectionMeta.label}`}
+                        style={{
+                          background: 'var(--surface)',
+                          border: '1px solid var(--border)',
+                          color: 'var(--muted)',
+                          cursor: 'pointer',
+                          fontSize: 12,
+                          width: 21,
+                          height: 21,
+                          padding: 0,
+                          marginTop: 1,
+                          flexShrink: 0,
+                          borderRadius: 5,
+                          display: 'grid',
+                          placeItems: 'center',
+                          lineHeight: 1,
+                        }}
+                      >
+                        {sectionCollapsed ? '+' : '-'}
+                      </button>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.1 }}>
+                          {sectionMeta.label}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  {!sectionCollapsed && sectionGroups.length === 0 && !showSectionForm ? (
-                    <div style={{ padding: '12px', fontSize: 12, color: 'var(--muted)' }}>
-                      No {sectionMeta.label.toLowerCase()} groups yet. Right-click here to add one.
-                    </div>
-                  ) : null}
+                    {!sectionCollapsed && sectionGroups.length === 0 && !showSectionForm ? (
+                      <div style={{ padding: '12px', fontSize: 12, color: 'var(--muted)' }}>
+                        No {sectionMeta.label.toLowerCase()} groups yet. Right-click here to add one.
+                      </div>
+                    ) : null}
 
-                  {!sectionCollapsed ? sectionGroups.map(group => {
-                    const groupCollapsed = categorySearchActive
-                      ? !groupHasSearchMatch(group)
-                      : !!collapsedGroups[group.id]
-                    const visibleChildren = getVisibleChildrenForGroup(group)
-                    const selectableChildren = getBulkMovableChildrenForGroup(group)
-                    const showGroupFormBefore =
-                      inlineForm?.mode === 'group' &&
-                      inlineForm.sectionType === sectionType &&
-                      inlineForm.anchorGroupId === group.id &&
-                      inlineForm.insertPosition === 'before'
-                    const showGroupFormAfter =
-                      inlineForm?.mode === 'group' &&
-                      inlineForm.sectionType === sectionType &&
-                      inlineForm.anchorGroupId === group.id &&
-                      inlineForm.insertPosition !== 'before'
-                    return (
-                    <div key={group.id}>
-                        {showGroupFormBefore ? (
-                          <InlineAddForm
-                            label={`${sectionMeta.label} group name`}
-                            value={newName}
-                            onNameChange={setNewName}
-                            onSubmit={submitInlineForm}
-                            onCancel={() => setInlineForm(null)}
-                            indent="group"
+                    {!sectionCollapsed ? sectionGroups.map(group => {
+                      const groupCollapsed = categorySearchActive
+                        ? !groupHasSearchMatch(group)
+                        : !!collapsedGroups[group.id]
+                      const visibleChildren = getVisibleChildrenForGroup(group)
+                      const selectableChildren = getBulkMovableChildrenForGroup(group)
+                      const showGroupFormBefore =
+                        inlineForm?.mode === 'group' &&
+                        inlineForm.sectionType === sectionType &&
+                        inlineForm.anchorGroupId === group.id &&
+                        inlineForm.insertPosition === 'before'
+                      const showGroupFormAfter =
+                        inlineForm?.mode === 'group' &&
+                        inlineForm.sectionType === sectionType &&
+                        inlineForm.anchorGroupId === group.id &&
+                        inlineForm.insertPosition !== 'before'
+                      return (
+                        <div key={group.id}>
+                          {showGroupFormBefore ? (
+                            <InlineAddForm
+                              label={`${sectionMeta.label} group name`}
+                              value={newName}
+                              onNameChange={setNewName}
+                              onSubmit={submitInlineForm}
+                              onCancel={() => setInlineForm(null)}
+                              indent="group"
+                            />
+                          ) : null}
+                          <CategoryTreeRow
+                            cat={group}
+                            isChild={false}
+                            isSelected={selected?.id === group.id}
+                            draggable={!isSystemCategory(group)}
+                            renameDisabled={isSystemCategory(group)}
+                            allowSelectionWhenRenameDisabled={isSystemCategory(group)}
+                            showDelete={!isSystemCategory(group)}
+                            acceptDrop={!isSystemCategory(group)}
+                            nameStyle={isSystemCategory(group) ? { fontStyle: 'italic' } : null}
+                            highlightQuery={categoryHighlightQuery}
+                            bulkSelectMode={bulkSelectMode}
+                            bulkChecked={selectableChildren.length > 0 && selectableChildren.every(child => selectedCategoryIdSet.has(child.id))}
+                            isCollapsed={groupCollapsed}
+                            canCollapse={visibleChildren.length > 0}
+                            onToggleCollapse={toggleGroup}
+                            onSelect={selectCategory}
+                            onRename={handleRename}
+                            onDelete={handleDelete}
+                            onToggleBulkChecked={toggleBulkChecked}
+                            onDropRow={handleDropRow}
+                            onOpenContextMenu={openContextMenu}
+                            onDragStartRow={getDragPayload}
                           />
-                        ) : null}
-                      <CategoryTreeRow
-                        cat={group}
-                        isChild={false}
-                        isSelected={selected?.id === group.id}
-                        draggable={!isSystemCategory(group)}
-                        renameDisabled={isSystemCategory(group)}
-                        allowSelectionWhenRenameDisabled={isSystemCategory(group)}
-                        showDelete={!isSystemCategory(group)}
-                        acceptDrop={!isSystemCategory(group)}
-                        nameStyle={isSystemCategory(group) ? { fontStyle: 'italic' } : null}
-                        highlightQuery={categoryHighlightQuery}
-                        bulkSelectMode={bulkSelectMode}
-                        bulkChecked={selectableChildren.length > 0 && selectableChildren.every(child => selectedCategoryIdSet.has(child.id))}
-                        isCollapsed={groupCollapsed}
-                        canCollapse={visibleChildren.length > 0}
-                        onToggleCollapse={toggleGroup}
-                        onSelect={selectCategory}
-                        onRename={handleRename}
-                        onDelete={handleDelete}
-                        onToggleBulkChecked={toggleBulkChecked}
-                        onDropRow={handleDropRow}
-                        onOpenContextMenu={openContextMenu}
-                        onDragStartRow={getDragPayload}
-                      />
-                      {!groupCollapsed ? visibleChildren.map(child => (
-                        <CategoryTreeRow
-                          key={child.id}
-                          cat={child}
-                          isChild={true}
-                          isSelected={selected?.id === child.id || selectedCategoryIds.includes(child.id)}
-                          draggable={!isSystemCategory(child)}
-                          renameDisabled={isSystemCategory(child)}
-                          allowSelectionWhenRenameDisabled={isSystemCategory(child)}
-                          showDelete={!isSystemCategory(child)}
-                          acceptDrop={!isSystemCategory(child)}
-                          nameStyle={isSystemCategory(child) ? { fontStyle: 'italic' } : null}
-                          highlightQuery={categoryHighlightQuery}
-                          bulkSelectMode={bulkSelectMode}
-                          bulkChecked={selectedCategoryIdSet.has(child.id)}
-                          bulkSelectable={!isSystemCategory(child)}
-                          onSelect={selectCategory}
-                          onRename={handleRename}
-                          onDelete={handleDelete}
-                          onToggleBulkChecked={toggleBulkChecked}
-                          onDropRow={handleDropRow}
-                          onOpenContextMenu={isSyntheticUncategorizedCategory(child) ? undefined : openContextMenu}
-                          onDragStartRow={getDragPayload}
-                        />
-                      )) : null}
+                          {!groupCollapsed ? visibleChildren.map(child => (
+                            <CategoryTreeRow
+                              key={child.id}
+                              cat={child}
+                              isChild={true}
+                              isSelected={selected?.id === child.id || selectedCategoryIds.includes(child.id)}
+                              draggable={!isSystemCategory(child)}
+                              renameDisabled={isSystemCategory(child)}
+                              allowSelectionWhenRenameDisabled={isSystemCategory(child)}
+                              showDelete={!isSystemCategory(child)}
+                              acceptDrop={!isSystemCategory(child)}
+                              nameStyle={isSystemCategory(child) ? { fontStyle: 'italic' } : null}
+                              highlightQuery={categoryHighlightQuery}
+                              bulkSelectMode={bulkSelectMode}
+                              bulkChecked={selectedCategoryIdSet.has(child.id)}
+                              bulkSelectable={!isSystemCategory(child)}
+                              onSelect={selectCategory}
+                              onRename={handleRename}
+                              onDelete={handleDelete}
+                              onToggleBulkChecked={toggleBulkChecked}
+                              onDropRow={handleDropRow}
+                              onOpenContextMenu={isSyntheticUncategorizedCategory(child) ? undefined : openContextMenu}
+                              onDragStartRow={getDragPayload}
+                            />
+                          )) : null}
 
-                        {!groupCollapsed && inlineForm?.mode === 'category' && inlineForm.parentId === group.id ? (
-                          <InlineAddForm
-                            label={`New category in ${group.name}`}
-                            value={newName}
-                            onNameChange={setNewName}
-                            onSubmit={submitInlineForm}
-                            onCancel={() => setInlineForm(null)}
-                            indent="category"
-                          />
-                        ) : null}
+                          {!groupCollapsed && inlineForm?.mode === 'category' && inlineForm.parentId === group.id ? (
+                            <InlineAddForm
+                              label={`New category in ${group.name}`}
+                              value={newName}
+                              onNameChange={setNewName}
+                              onSubmit={submitInlineForm}
+                              onCancel={() => setInlineForm(null)}
+                              indent="category"
+                            />
+                          ) : null}
 
-                      <GroupEndDropZone group={group} onDropEnd={handleGroupDropEnd} />
-                        {showGroupFormAfter ? (
-                          <InlineAddForm
-                            label={`${sectionMeta.label} group name`}
-                            value={newName}
-                            onNameChange={setNewName}
-                            onSubmit={submitInlineForm}
-                            onCancel={() => setInlineForm(null)}
-                            indent="group"
-                          />
-                        ) : null}
-                    </div>
-                    )
-                  }) : null}
+                          <GroupEndDropZone group={group} onDropEnd={handleGroupDropEnd} />
+                          {showGroupFormAfter ? (
+                            <InlineAddForm
+                              label={`${sectionMeta.label} group name`}
+                              value={newName}
+                              onNameChange={setNewName}
+                              onSubmit={submitInlineForm}
+                              onCancel={() => setInlineForm(null)}
+                              indent="group"
+                            />
+                          ) : null}
+                        </div>
+                      )
+                    }) : null}
 
                     {!sectionCollapsed && showSectionForm ? (
                       <InlineAddForm
@@ -2076,63 +2133,79 @@ export default function Categories() {
                       />
                     ) : null}
 
-                  {!sectionCollapsed ? <SectionEndDropZone sectionMeta={SECTION_META} sectionType={sectionType} onDropEnd={handleSectionDropEnd} /> : null}
-                </div>
-              )
-            })}
-            {!loading && inactiveCategories.length > 0 ? (
-              <div style={{ borderTop: '1px solid var(--border)' }}>
-                <div
-                  style={{
-                    padding: '5px 11px 4px',
-                    background: 'color-mix(in srgb, var(--surface2) 70%, transparent)',
-                    borderBottom: '1px solid var(--border)',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>Inactive</span>
-                    <span style={{ fontSize: 11, color: 'var(--muted)' }}>{inactiveCategories.length}</span>
+                    {!sectionCollapsed ? <SectionEndDropZone sectionMeta={SECTION_META} sectionType={sectionType} onDropEnd={handleSectionDropEnd} /> : null}
                   </div>
-                  <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>
-                    Set aside or deleted. Imports of these labels stay uncategorized until you recover them.
-                  </div>
-                </div>
-                {inactiveCategories.map(cat => (
+                )
+              })}
+              {!loading && inactiveCategories.length > 0 ? (
+                <div style={{ borderTop: '1px solid var(--border)' }}>
                   <div
-                    key={cat.id}
                     style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 8,
-                      padding: '4px 11px',
+                      padding: '5px 11px 4px',
+                      background: 'color-mix(in srgb, var(--surface2) 70%, transparent)',
                       borderBottom: '1px solid var(--border)',
                     }}
                   >
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--muted)', minWidth: 0 }}>
-                      <CategoryMarker kind="category" />
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cat.name}</span>
-                    </span>
-                    <button
-                      onClick={() => handleReactivate(cat.id)}
-                      title={`Recover ${cat.name}`}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>Inactive</span>
+                      <span style={{ fontSize: 11, color: 'var(--muted)' }}>{inactiveCategories.length}</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>
+                      Set aside or deleted. Imports of these labels stay uncategorized until you recover them.
+                    </div>
+                  </div>
+                  {inactiveCategories.map(cat => (
+                    <div
+                      key={cat.id}
                       style={{
-                        background: 'var(--surface)',
-                        border: '1px solid var(--border)',
-                        color: 'var(--text)',
-                        cursor: 'pointer',
-                        fontSize: 12,
-                        padding: '2px 10px',
-                        borderRadius: 6,
-                        flexShrink: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                        padding: '4px 11px',
+                        borderBottom: '1px solid var(--border)',
                       }}
                     >
-                      Recover
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : null}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--muted)', minWidth: 0 }}>
+                        <CategoryMarker kind="category" />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cat.name}</span>
+                      </span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        <button
+                          onClick={() => handleReactivate(cat.id)}
+                          title={`Recover ${cat.name}`}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--muted)',
+                            cursor: 'pointer',
+                            fontSize: 12,
+                            padding: '2px 4px',
+                            borderRadius: 6,
+                          }}
+                        >
+                          Recover
+                        </button>
+                        <button
+                          onClick={() => setPendingHardDelete(cat)}
+                          title={`Permanently delete ${cat.name}`}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--muted)',
+                            cursor: 'pointer',
+                            fontSize: 12,
+                            padding: '2px 4px',
+                            borderRadius: 6,
+                          }}
+                        >
+                          Delete forever
+                        </button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
             <ScrollFade top={listScrollState.top} bottom={listScrollState.bottom} />
           </div>
@@ -2164,293 +2237,293 @@ export default function Categories() {
               padding: 20,
             }}
           >
-          {!selected ? (
-            <EmptyState message="Select a category or group to view details" />
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-              {isMultiCategorySelection ? (
-                <>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                    <CategoryMarker kind="category" size={8} />
-                    <h2 style={{ fontSize: 16, fontWeight: 600 }}>{selectedCategories.length} selected categories</h2>
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
-                    {selectedCategories.map(cat => (
-                      <span
-                        key={cat.id}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 5,
-                          padding: '2px 8px',
-                          borderRadius: 999,
-                          border: '1px solid var(--border)',
-                          background: 'var(--surface2)',
-                          fontSize: 12,
-                        }}
+            {!selected ? (
+              <EmptyState message="Select a category or group to view details" />
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+                {isMultiCategorySelection ? (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                      <CategoryMarker kind="category" size={8} />
+                      <h2 style={{ fontSize: 16, fontWeight: 600 }}>{selectedCategories.length} selected categories</h2>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                      {selectedCategories.map(cat => (
+                        <span
+                          key={cat.id}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            padding: '2px 8px',
+                            borderRadius: 999,
+                            border: '1px solid var(--border)',
+                            background: 'var(--surface2)',
+                            fontSize: 12,
+                          }}
+                        >
+                          <CategoryMarker kind="category" />
+                          {cat.name}
+                        </span>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
+                      {multiSelectionGroups.length === 1
+                        ? `Subcategories of ${multiSelectionGroups[0]?.name || '-'}`
+                        : `${multiSelectionGroups.length} groups represented`}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                      <CategoryMarker kind={selected.parent_id ? 'category' : 'group'} size={selected.parent_id ? 8 : 10} />
+                      <h2 style={{ fontSize: 16, fontWeight: 600, fontStyle: selectedIsSystemCategory ? 'italic' : 'normal' }}>{selected.name}</h2>
+                    </div>
+
+                    {selected.parent_id ? (
+                      <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
+                        Subcategory of {parentCategory?.name || '-'}
+                        {parentCategory?.exclude_from_totals ? ' (excluded from totals)' : ''}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
+                        {SECTION_META[selectedGroupType].label} group - {getVisibleSubcategoryCount(selected)} subcategories
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {!isMultiCategorySelection && !selectedIsSystemCategory && (
+                  <>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 16,
+                        flexWrap: 'wrap',
+                        marginBottom: 20,
+                        padding: '10px 14px',
+                        background: 'var(--surface2)',
+                        borderRadius: 8,
+                        border: '1px solid var(--border)',
+                      }}
+                    >
+                      {!selected.parent_id ? (
+                        <label
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            fontSize: 12,
+                            color: 'var(--muted)',
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                            userSelect: 'none',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!!selected.exclude_from_totals}
+                            onChange={e => handleExcludeChange(selected.id, e.target.checked)}
+                            style={{ accentColor: 'var(--accent)', width: 14, height: 14, cursor: 'pointer' }}
+                          />
+                          Exclude from totals
+                        </label>
+                      ) : null}
+                      {(() => {
+                        // Tag attachment for the selected category. Direct tags get the
+                        // standard pill with an x-to-remove; inherited tags from the parent
+                        // group render in muted italic without an x (the user must remove
+                        // them at the group level for that change to propagate everywhere).
+                        const tagsById = new Map(availableTags.map(t => [t.id, t]))
+                        const directTagIds = Array.isArray(selected.tag_ids) ? selected.tag_ids : []
+                        const parentCat = selected.parent_id ? flatCats.find(c => c.id === selected.parent_id) : null
+                        const inheritedTagIds = parentCat && Array.isArray(parentCat.tag_ids)
+                          ? parentCat.tag_ids.filter(id => !directTagIds.includes(id))
+                          : []
+                        const directTags = directTagIds.map(id => tagsById.get(id)).filter(Boolean)
+                        const inheritedTags = inheritedTagIds.map(id => tagsById.get(id)).filter(Boolean)
+                        const isPickerOpen = tagPickerOpenForId === selected.id
+                        return (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flex: '1 1 240px', position: 'relative' }}>
+                            <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                              Tags
+                              <FeatureExplainer topic="categories-tags" placement="bottom-left" />
+                            </span>
+                            {directTags.map(tag => (
+                              <span
+                                key={tag.id}
+                                style={{
+                                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                                  padding: '3px 6px 3px 8px',
+                                  borderRadius: 999,
+                                  border: `1px solid color-mix(in srgb, ${tag.color} 32%, var(--border))`,
+                                  background: `color-mix(in srgb, ${tag.color} 12%, var(--surface))`,
+                                  color: 'var(--text)',
+                                  fontSize: 12,
+                                  lineHeight: 1.2,
+                                }}
+                              >
+                                <TagGlyph color={tag.color} size={12} />
+                                <span>{tag.name}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleCategoryTag(selected.id, tag, false)}
+                                  title={`Remove ${tag.name}`}
+                                  style={{
+                                    background: 'none', border: 'none', cursor: 'pointer',
+                                    color: 'var(--muted)', fontSize: 14, lineHeight: 1, padding: '0 2px',
+                                  }}
+                                >×</button>
+                              </span>
+                            ))}
+                            {inheritedTags.map(tag => (
+                              <span
+                                key={`inh-${tag.id}`}
+                                title={`Inherited from group — remove at group level`}
+                                style={{
+                                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                                  padding: '3px 8px',
+                                  borderRadius: 999,
+                                  border: '1px dashed color-mix(in srgb, var(--border) 92%, transparent)',
+                                  background: 'color-mix(in srgb, var(--surface2) 92%, var(--surface))',
+                                  color: 'var(--muted)',
+                                  fontSize: 12, fontStyle: 'italic', lineHeight: 1.2,
+                                }}
+                              >
+                                <TagGlyph color={tag.color} size={12} />
+                                <span>{tag.name}</span>
+                              </span>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => setTagPickerOpenForId(isPickerOpen ? null : selected.id)}
+                              style={{
+                                background: 'none',
+                                border: '1px dashed var(--border)',
+                                color: 'var(--accent2)',
+                                borderRadius: 999,
+                                padding: '3px 10px',
+                                fontSize: 12,
+                                cursor: 'pointer',
+                                lineHeight: 1.2,
+                              }}
+                            >
+                              + Tag
+                            </button>
+                            {isPickerOpen && (
+                              <TagPickerWithCreate
+                                allTags={availableTags}
+                                selectedTagIds={new Set(directTagIds)}
+                                onToggleTag={(tag, present) => handleToggleCategoryTag(selected.id, tag, present)}
+                                onTagCreated={handleCategoryTagCreated}
+                                onClose={() => setTagPickerOpenForId(null)}
+                                align="left"
+                              />
+                            )}
+                          </div>
+                        )
+                      })()}
+                    </div>
+
+                  </>
+                )}
+
+                <div style={{ marginTop: 22, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: 14, fontWeight: 600 }}>
+                      Matching transactions
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+                      <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                        {matchingTxnsTotal} total{matchingTxnsTotal > pagedMatchingTxns.length ? ` · showing ${pagedMatchingTxns.length}` : ''}
+                      </div>
+                      {/* Categorized rows are left in place so a mis-tap stays correctable; this re-queries the
+                        server on demand to drop rows that no longer match the selected category. */}
+                      <Button
+                        variant="ghost"
+                        small
+                        onClick={() => setMatchingReloadNonce(n => n + 1)}
+                        disabled={matchingTxnsLoading || !matchingTxnsKey}
+                        title="Re-query the list and drop transactions that no longer match"
                       >
-                        <CategoryMarker kind="category" />
-                        {cat.name}
-                      </span>
-                    ))}
-                  </div>
-                  <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
-                    {multiSelectionGroups.length === 1
-                      ? `Subcategories of ${multiSelectionGroups[0]?.name || '-'}`
-                      : `${multiSelectionGroups.length} groups represented`}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                    <CategoryMarker kind={selected.parent_id ? 'category' : 'group'} size={selected.parent_id ? 8 : 10} />
-                    <h2 style={{ fontSize: 16, fontWeight: 600, fontStyle: selectedIsSystemCategory ? 'italic' : 'normal' }}>{selected.name}</h2>
+                        ↻ Refresh
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        small
+                        onClick={() => { setBulkMode(v => !v); matchingSelection.clear() }}
+                        disabled={!matchingTxnsKey || pagedMatchingTxns.length === 0}
+                        title="Select multiple transactions to edit at once"
+                      >
+                        {bulkMode ? '✕ Done' : 'Bulk Edit'}
+                      </Button>
+                    </div>
                   </div>
 
-                      {selected.parent_id ? (
-                    <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
-                      Subcategory of {parentCategory?.name || '-'}
-                      {parentCategory?.exclude_from_totals ? ' (excluded from totals)' : ''}
+                  {bulkMode ? (
+                    <div style={{
+                      padding: '8px 12px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+                      border: '1px solid color-mix(in srgb, var(--accent) 32%, var(--border))',
+                      background: 'color-mix(in srgb, var(--accent) 8%, var(--surface2))', borderRadius: 8,
+                    }}>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>
+                        {bulkSelectedCount > 0
+                          ? `${bulkSelectedCount} selected${matchingSelection.allMatching ? ' · all matching' : ''}`
+                          : 'Select transactions to edit, or use the header checkbox to select all.'}
+                      </span>
+                      <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                        <Button small onClick={() => setShowBulkPanel(true)} disabled={bulkSelectedCount === 0}>Edit…</Button>
+                        <Button small variant="ghost" onClick={() => setPendingBulkTrash(true)} disabled={bulkSelectedCount === 0}>Move to trash</Button>
+                        {bulkSelectedCount > 0 ? (
+                          <Button small variant="ghost" onClick={() => matchingSelection.clear()}>Clear</Button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {matchingTxnsLoading ? <Spinner /> : pagedMatchingTxns.length === 0 ? (
+                    <div style={{
+                      padding: '14px 16px',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--surface2)',
+                      fontSize: 13,
+                      color: 'var(--muted)',
+                    }}>
+                      No transactions currently match this {selected.parent_id ? 'category' : 'group'}.
                     </div>
                   ) : (
-                    <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
-                      {SECTION_META[selectedGroupType].label} group - {getVisibleSubcategoryCount(selected)} subcategories
-                    </div>
-                  )}
-                </>
-              )}
-
-              {!isMultiCategorySelection && !selectedIsSystemCategory && (
-              <>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 16,
-                  flexWrap: 'wrap',
-                  marginBottom: 20,
-                  padding: '10px 14px',
-                  background: 'var(--surface2)',
-                  borderRadius: 8,
-                  border: '1px solid var(--border)',
-                }}
-              >
-                {!selected.parent_id ? (
-                  <label
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      fontSize: 12,
-                      color: 'var(--muted)',
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                      userSelect: 'none',
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={!!selected.exclude_from_totals}
-                      onChange={e => handleExcludeChange(selected.id, e.target.checked)}
-                      style={{ accentColor: 'var(--accent)', width: 14, height: 14, cursor: 'pointer' }}
+                    <TransactionListTable
+                      rows={pagedMatchingTxns}
+                      categories={flatCats}
+                      bulkActive={bulkMode}
+                      bulkSelection={matchingSelection}
+                      bulkTotal={matchingTxnsTotal}
+                      onCategorySave={saveMatchingTxnCategory}
+                      onCategoryOpenDetail={category => openDetailPanel('category', category)}
+                      onTransactionOpenDetail={detailTxn => openDetailPanel('txn', detailTxn)}
+                      onRulePrompt={prompt => {
+                        // Only suggest a rule when an *unassigned* transaction gets its first category;
+                        // changing an existing assignment should not nag with the toast.
+                        if (!prompt.previousCategoryId) setRulePrompt(prompt)
+                      }}
+                      onAddCategory={addMatchingCategory}
+                      onRowsChange={setPagedMatchingTxns}
+                      scrollRef={matchingTxnsListRef}
+                      fillHeight={true}
+                      columnConfig={matchingTxnColumns}
+                      onColumnConfigChange={handleMatchingTxnColumnUpdate}
                     />
-                    Exclude from totals
-                  </label>
-                ) : null}
-                {(() => {
-                  // Tag attachment for the selected category. Direct tags get the
-                  // standard pill with an x-to-remove; inherited tags from the parent
-                  // group render in muted italic without an x (the user must remove
-                  // them at the group level for that change to propagate everywhere).
-                  const tagsById = new Map(availableTags.map(t => [t.id, t]))
-                  const directTagIds = Array.isArray(selected.tag_ids) ? selected.tag_ids : []
-                  const parentCat = selected.parent_id ? flatCats.find(c => c.id === selected.parent_id) : null
-                  const inheritedTagIds = parentCat && Array.isArray(parentCat.tag_ids)
-                    ? parentCat.tag_ids.filter(id => !directTagIds.includes(id))
-                    : []
-                  const directTags = directTagIds.map(id => tagsById.get(id)).filter(Boolean)
-                  const inheritedTags = inheritedTagIds.map(id => tagsById.get(id)).filter(Boolean)
-                  const isPickerOpen = tagPickerOpenForId === selected.id
-                  return (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flex: '1 1 240px', position: 'relative' }}>
-                      <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                        Tags
-                        <FeatureExplainer topic="categories-tags" placement="bottom-left" />
-                      </span>
-                      {directTags.map(tag => (
-                        <span
-                          key={tag.id}
-                          style={{
-                            display: 'inline-flex', alignItems: 'center', gap: 6,
-                            padding: '3px 6px 3px 8px',
-                            borderRadius: 999,
-                            border: `1px solid color-mix(in srgb, ${tag.color} 32%, var(--border))`,
-                            background: `color-mix(in srgb, ${tag.color} 12%, var(--surface))`,
-                            color: 'var(--text)',
-                            fontSize: 12,
-                            lineHeight: 1.2,
-                          }}
-                        >
-                          <TagGlyph color={tag.color} size={12} />
-                          <span>{tag.name}</span>
-                          <button
-                            type="button"
-                            onClick={() => handleToggleCategoryTag(selected.id, tag, false)}
-                            title={`Remove ${tag.name}`}
-                            style={{
-                              background: 'none', border: 'none', cursor: 'pointer',
-                              color: 'var(--muted)', fontSize: 14, lineHeight: 1, padding: '0 2px',
-                            }}
-                          >×</button>
-                        </span>
-                      ))}
-                      {inheritedTags.map(tag => (
-                        <span
-                          key={`inh-${tag.id}`}
-                          title={`Inherited from group — remove at group level`}
-                          style={{
-                            display: 'inline-flex', alignItems: 'center', gap: 6,
-                            padding: '3px 8px',
-                            borderRadius: 999,
-                            border: '1px dashed color-mix(in srgb, var(--border) 92%, transparent)',
-                            background: 'color-mix(in srgb, var(--surface2) 92%, var(--surface))',
-                            color: 'var(--muted)',
-                            fontSize: 12, fontStyle: 'italic', lineHeight: 1.2,
-                          }}
-                        >
-                          <TagGlyph color={tag.color} size={12} />
-                          <span>{tag.name}</span>
-                        </span>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={() => setTagPickerOpenForId(isPickerOpen ? null : selected.id)}
-                        style={{
-                          background: 'none',
-                          border: '1px dashed var(--border)',
-                          color: 'var(--accent2)',
-                          borderRadius: 999,
-                          padding: '3px 10px',
-                          fontSize: 12,
-                          cursor: 'pointer',
-                          lineHeight: 1.2,
-                        }}
-                      >
-                        + Tag
-                      </button>
-                      {isPickerOpen && (
-                        <TagPickerWithCreate
-                          allTags={availableTags}
-                          selectedTagIds={new Set(directTagIds)}
-                          onToggleTag={(tag, present) => handleToggleCategoryTag(selected.id, tag, present)}
-                          onTagCreated={handleCategoryTagCreated}
-                          onClose={() => setTagPickerOpenForId(null)}
-                          align="left"
-                        />
-                      )}
+                  )}
+                  {matchingTxnsLoadingMore ? (
+                    <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+                      Loading more transactions…
                     </div>
-                  )
-                })()}
-              </div>
-
-              </>
-              )}
-
-              <div style={{ marginTop: 22, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
-                  <div style={{ fontSize: 14, fontWeight: 600 }}>
-                    Matching transactions
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                      {matchingTxnsTotal} total{matchingTxnsTotal > pagedMatchingTxns.length ? ` · showing ${pagedMatchingTxns.length}` : ''}
-                    </div>
-                    {/* Categorized rows are left in place so a mis-tap stays correctable; this re-queries the
-                        server on demand to drop rows that no longer match the selected category. */}
-                    <Button
-                      variant="ghost"
-                      small
-                      onClick={() => setMatchingReloadNonce(n => n + 1)}
-                      disabled={matchingTxnsLoading || !matchingTxnsKey}
-                      title="Re-query the list and drop transactions that no longer match"
-                    >
-                      ↻ Refresh
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      small
-                      onClick={() => { setBulkMode(v => !v); matchingSelection.clear() }}
-                      disabled={!matchingTxnsKey || pagedMatchingTxns.length === 0}
-                      title="Select multiple transactions to edit at once"
-                    >
-                      {bulkMode ? '✕ Done' : 'Bulk Edit'}
-                    </Button>
-                  </div>
+                  ) : null}
                 </div>
-
-                {bulkMode ? (
-                  <div style={{
-                    padding: '8px 12px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-                    border: '1px solid color-mix(in srgb, var(--accent) 32%, var(--border))',
-                    background: 'color-mix(in srgb, var(--accent) 8%, var(--surface2))', borderRadius: 8,
-                  }}>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>
-                      {bulkSelectedCount > 0
-                        ? `${bulkSelectedCount} selected${matchingSelection.allMatching ? ' · all matching' : ''}`
-                        : 'Select transactions to edit, or use the header checkbox to select all.'}
-                    </span>
-                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-                      <Button small onClick={() => setShowBulkPanel(true)} disabled={bulkSelectedCount === 0}>Edit…</Button>
-                      <Button small variant="ghost" onClick={() => setPendingBulkTrash(true)} disabled={bulkSelectedCount === 0}>Move to trash</Button>
-                      {bulkSelectedCount > 0 ? (
-                        <Button small variant="ghost" onClick={() => matchingSelection.clear()}>Clear</Button>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-
-                {matchingTxnsLoading ? <Spinner /> : pagedMatchingTxns.length === 0 ? (
-                  <div style={{
-                    padding: '14px 16px',
-                    border: '1px solid var(--border)',
-                    borderRadius: 8,
-                    background: 'var(--surface2)',
-                    fontSize: 13,
-                    color: 'var(--muted)',
-                  }}>
-                    No transactions currently match this {selected.parent_id ? 'category' : 'group'}.
-                  </div>
-                ) : (
-                  <TransactionListTable
-                    rows={pagedMatchingTxns}
-                    categories={flatCats}
-                    bulkActive={bulkMode}
-                    bulkSelection={matchingSelection}
-                    bulkTotal={matchingTxnsTotal}
-                    onCategorySave={saveMatchingTxnCategory}
-                    onCategoryOpenDetail={category => openDetailPanel('category', category)}
-                    onTransactionOpenDetail={detailTxn => openDetailPanel('txn', detailTxn)}
-                    onRulePrompt={prompt => {
-                      // Only suggest a rule when an *unassigned* transaction gets its first category;
-                      // changing an existing assignment should not nag with the toast.
-                      if (!prompt.previousCategoryId) setRulePrompt(prompt)
-                    }}
-                    onAddCategory={addMatchingCategory}
-                    onRowsChange={setPagedMatchingTxns}
-                    scrollRef={matchingTxnsListRef}
-                    fillHeight={true}
-                    columnConfig={matchingTxnColumns}
-                    onColumnConfigChange={handleMatchingTxnColumnUpdate}
-                  />
-                )}
-                {matchingTxnsLoadingMore ? (
-                  <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
-                    Loading more transactions…
-                  </div>
-                ) : null}
               </div>
-            </div>
-          )}
+            )}
           </div>
         </div>
       </div>
@@ -2578,6 +2651,48 @@ export default function Categories() {
           onCancel={() => setPendingBulkTrash(false)}
           width="min(520px, 100%)"
         />
+      )}
+
+      {pendingHardDelete && (
+        <AppConfirmDialog
+          title={`Permanently delete "${pendingHardDelete.name}"?`}
+          description="The category will be recreated if it is used in a future import."
+          confirmLabel="Delete forever"
+          confirmVariant="danger"
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={() => handleHardDelete(pendingHardDelete.id)}
+          onCancel={() => setPendingHardDelete(null)}
+          width="min(520px, 100%)"
+        />
+      )}
+
+      {pendingEmptyCleanup && (
+        <AppConfirmDialog
+          title="Delete empty groups and categories?"
+          description={`This permanently removes ${emptyCleanupCount} empty item${emptyCleanupCount === 1 ? '' : 's'} — categories not used in transactions or rules, and groups left with no categories.`}
+          confirmLabel={emptyCleanupSaving ? 'Deleting…' : 'Delete empty'}
+          confirmVariant="danger"
+          confirmDisabled={emptyCleanupSaving}
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={runEmptyCleanup}
+          onCancel={() => setPendingEmptyCleanup(false)}
+          width="min(520px, 100%)"
+        >
+          <div style={{ maxHeight: 240, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13 }}>
+            {emptyCleanup.groups.length > 0 ? (
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>Groups ({emptyCleanup.groups.length})</div>
+                <div style={{ color: 'var(--muted)' }}>{emptyCleanup.groups.map(group => group.name).join(', ')}</div>
+              </div>
+            ) : null}
+            {emptyCleanup.categories.length > 0 ? (
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>Categories ({emptyCleanup.categories.length})</div>
+                <div style={{ color: 'var(--muted)' }}>{emptyCleanup.categories.map(category => category.name).join(', ')}</div>
+              </div>
+            ) : null}
+          </div>
+        </AppConfirmDialog>
       )}
 
       {bulkNotice ? (
