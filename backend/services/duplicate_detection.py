@@ -5,18 +5,35 @@
 Duplicate detection for transactions — hard-reject (blocked at import) and soft-flag
 (imported with a suspect pointer for user review).
 
-The rule chain is a confidence ladder:
+The rules sort into confidence tiers, but among the HARD-REJECT rules the chain is evaluated
+coverage-first, then exact-hash — deliberately NOT in confidence order. That ordering changes only
+the *label*, never the verdict: a row can both fall in an already-imported date range and exactly
+match an existing row, and both outcomes are hard-rejects, so which rule "wins" just decides the
+reason shown in the duplicate report. Coverage is the more useful reason — a re-imported range is one
+uniform story, whereas which individual rows happen to be exact content-hash matches is an incidental
+artifact of whether two sources formatted the merchant string identically, and singling those out as
+"exact match" splits a homogeneous re-import into a confusing "why are these special?" subset. Exact-
+hash still hard-rejects on its own for any row OUTSIDE a covered range, so it catches exactly what it
+did before; it just no longer claims the label when coverage already explains the row.
 
-  * High confidence — exact content-hash match (same account or same linked group) → hard-
-    reject. The incoming row never enters the ledger; the rejection is recorded in
-    `import_batch_duplicate` so it can resurface if the rejecting batch is later undone.
-  * Medium confidence — coverage-window or terminal-day rules, plus a fuzzy-text fallback.
-    Fires only when the receiving account already had prior history in the matching scope
-    (or the import explicitly declared it an alias). A brand-new sibling that only inherits
-    its linked-group's coverage doesn't satisfy the precondition and falls through.
-  * Lower confidence — cross-account match by (date, amount, normalized payee). Always
-    soft-flag, never hard-reject; surfaces in the unified duplicate report so the user can
-    Keep (assert the two accounts are distinct) or Reject (confirm a duplicate).
+Hard-reject rules (blocked at import; the row never enters the ledger, and the rejection is recorded
+in `import_batch_duplicate` so it can resurface if the rejecting batch is later undone), in evaluation
+order:
+
+  1-2. Coverage window — same-source (same csv_value, unconditional within the window), then in-scope
+       (same linked group, different csv_value). The in-scope rule fires only when the receiving
+       account already had prior history in the matching scope, or the import explicitly declared it
+       an alias; a brand-new sibling that only inherits its linked-group's coverage doesn't satisfy
+       the precondition and falls through.
+  3-4. Exact content-hash match — same account, then same linked group. Unconditional (no prior-
+       history precondition): same date+amount+payee is the same transaction regardless of which
+       account it lands on. Reached only for rows not already inside a covered range.
+  5.   Terminal-day reconciliation, then
+  6.   a fuzzy-text fallback (medium confidence).
+
+Soft-flag (imported with a suspect pointer for review): the cross-account match by (date, amount,
+normalized payee) comes from the post-batch sweep (`mark_import_suspects`), not the ladder above; the
+user resolves it with Keep (assert the two accounts are distinct) or Reject (confirm a duplicate).
 
 Check-number discriminator (`are_distinct_checks`): two genuinely different checks can share
 date+amount+description (often just "Check"), so they collide on the content hash AND on the
@@ -299,27 +316,15 @@ def evaluate_duplicate(
 
     incoming_merchant = txn_payload.get("merchant_name")
 
-    # Rule 1: exact content-hash match within the receiving account. Two different checks can share
-    # date+amount+description, so a differing explicit check number means this is NOT the same row —
-    # let it fall through to the lower-confidence rules (which route it to review) instead.
-    matched = context.existing_hashes_by_account.get(receiving_account_id, {}).get(content_hash)
-    if matched and are_distinct_checks(incoming_merchant, matched.get("merchant_name")):
-        matched = None
-    if matched:
-        return DedupeVerdict(hard_reject=True, passthrough=False, matched=matched,
-                             reason="Matches an existing transaction")
+    # Coverage rules run before the exact-hash rules below. When a row both falls in an already-
+    # imported date range AND exactly matches an existing row, both verdicts are hard-rejects — the
+    # order only decides which reason the duplicate report shows, and coverage is the more useful
+    # label (see module docstring: a re-imported range is one uniform story; which rows happen to be
+    # exact content-hash matches is an incidental artifact of merchant-string formatting). Exact-hash
+    # still hard-rejects rows OUTSIDE any covered range, so nothing it caught before stops being
+    # caught — it just no longer wins the label when coverage already explains the row.
 
-    # Rule 2: exact content-hash match across the linked-group scope (cross-account).
-    compare_target_id = context.account_duplicate_compare_targets.get(csv_value)
-    if compare_target_id:
-        matched = context.existing_hashes_by_effective_account.get(compare_target_id, {}).get(content_hash)
-        if matched and are_distinct_checks(incoming_merchant, matched.get("merchant_name")):
-            matched = None
-        if matched:
-            return DedupeVerdict(hard_reject=True, passthrough=False, matched=matched,
-                                 reason="Matches an existing transaction in the linked account group")
-
-    # Rule 3: coverage window from a prior import of the same source (csv_value). When the rule
+    # Rule 1: coverage window from a prior import of the same source (csv_value). When the rule
     # fires we ALSO look for actual candidate rows by (receiving_account, date, amount) so the
     # report can show what we think the row matched (or flag "no specific match" if nothing
     # plausible exists). The lookup is free — we already index existing rows by amount-key.
@@ -339,7 +344,7 @@ def evaluate_duplicate(
                 reason="Falls within the fully covered date range from an earlier import for this source account",
             )
 
-    # Rule 4: in-scope coverage window — same linked group, different csv_value. Precondition: the
+    # Rule 2: in-scope coverage window — same linked group, different csv_value. Precondition: the
     # entry must be for the receiving account itself (or for an account the user explicitly
     # aliased this csv to). A brand-new sibling inheriting only its group's coverage does NOT
     # satisfy the precondition; the row falls through to the soft-flag sweep instead.
@@ -366,9 +371,30 @@ def evaluate_duplicate(
                 reason="Falls within the fully covered date range from an earlier import in this account scope",
             )
 
+    # Rule 3: exact content-hash match within the receiving account. Reached only when the row is
+    # NOT inside a covered range above. Two different checks can share date+amount+description, so a
+    # differing explicit check number means this is NOT the same row — let it fall through to the
+    # lower-confidence rules (which route it to review) instead.
+    matched = context.existing_hashes_by_account.get(receiving_account_id, {}).get(content_hash)
+    if matched and are_distinct_checks(incoming_merchant, matched.get("merchant_name")):
+        matched = None
+    if matched:
+        return DedupeVerdict(hard_reject=True, passthrough=False, matched=matched,
+                             reason="Matches an existing transaction")
+
+    # Rule 4: exact content-hash match across the linked-group scope (cross-account).
+    compare_target_id = context.account_duplicate_compare_targets.get(csv_value)
+    if compare_target_id:
+        matched = context.existing_hashes_by_effective_account.get(compare_target_id, {}).get(content_hash)
+        if matched and are_distinct_checks(incoming_merchant, matched.get("merchant_name")):
+            matched = None
+        if matched:
+            return DedupeVerdict(hard_reject=True, passthrough=False, matched=matched,
+                                 reason="Matches an existing transaction in the linked account group")
+
     # Rule 5: terminal-day reconciliation. Same-source candidates are always eligible; cross-account
     # candidates only when the receiving account has prior history or is an explicit alias (same
-    # precondition as Rule 4 — see module docstring).
+    # precondition as Rule 2 — see module docstring).
     terminal_day_reconciled = False
     if context.coverage_strategy_enabled:
         same_source = context.terminal_day_candidates_by_csv_day.get((csv_value, parsed_date), [])
@@ -404,7 +430,7 @@ def evaluate_duplicate(
                     terminal_day_reconciled=True,
                 )
 
-    # Rule 6: fuzzy text match on candidates with the same date+amount. Same precondition as Rule 4
+    # Rule 6: fuzzy text match on candidates with the same date+amount. Same precondition as Rule 2
     # for cross-account expansion; same-account candidates are always considered.
     if context.text_strategy_enabled and not terminal_day_reconciled:
         candidate_rows = list(

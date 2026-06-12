@@ -5,9 +5,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
-import { AppConfirmDialog, Spinner, Badge } from './ui.jsx'
-import { getTxnMerchantLabel } from './TransactionRow.jsx'
-import CategoryDisplay from './CategoryDisplay.jsx'
+import { AppConfirmDialog, Spinner } from './ui.jsx'
+import { CategoryCell, getTxnMerchantLabel } from './TransactionRow.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
 import NoteEditor from './NoteEditor.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
@@ -293,11 +292,16 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
                   Category
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  {detailTxn.category_id ? (
-                    <CategoryDisplay id={detailTxn.category_id} name={detailTxn.category_name} />
-                  ) : (
-                    <Badge label="Uncategorized" toneKey="uncategorized" />
-                  )}
+                  <CategoryCell
+                    txn={detailTxn}
+                    categories={detailCategories}
+                    onSave={handleOverrideCategory}
+                    onAddCategory={handleAddCategory}
+                    onRulePrompt={p => {
+                      setRulePrompt(p)
+                      externalRulePrompt?.(p)
+                    }}
+                  />
                   {detailTxn.category_overridden ? (
                     <span style={{ fontSize: 11, color: 'var(--muted)' }}>manual</span>
                   ) : null}

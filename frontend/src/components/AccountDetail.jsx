@@ -7,6 +7,7 @@ import { txnMutations } from '../lib/txnMutations.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
+import TransactionDetail from './TransactionDetail.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import {
   DETAIL_LIST_MAX_HEIGHT,
@@ -43,6 +44,10 @@ export default function AccountDetail({ account, categories = [], onClose, force
     listRef,
   } = usePagedMonthTransactions({ selectedMonth, loadPage: loadMonthPage })
   const [localMonthTxns, setLocalMonthTxns] = useState([])
+  // The row's merchant ↗ opens the payee detail as a child panel (so it surfaces the per-transaction
+  // origin/source info). It is hosted here rather than by the page, so it stacks via the shared panel
+  // registry and closes with this account panel; edits made inside it reconcile back into the month list.
+  const [payeeDetail, setPayeeDetail] = useState(null)
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
     preferenceKey: ACCOUNT_DETAIL_TABLE_PREF_KEY,
     showAccount: false,
@@ -94,6 +99,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
   )
 
   return (
+    <>
     <DetailPanelShell
       pos={pos}
       size={size}
@@ -132,6 +138,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
                     rows={localMonthTxns}
                     categories={categories}
                     onCategorySave={saveCategory}
+                    onTransactionOpenDetail={setPayeeDetail}
                     onRowsChange={setLocalMonthTxns}
                     showAccount={false}
                     columnConfig={columnConfig}
@@ -157,5 +164,24 @@ export default function AccountDetail({ account, categories = [], onClose, force
             </div>
           )}
     </DetailPanelShell>
+    {payeeDetail && (
+      <TransactionDetail
+        txn={payeeDetail}
+        categories={categories}
+        onClose={() => setPayeeDetail(null)}
+        onCategorized={(txnId, cat) => setLocalMonthTxns(prev => prev.map(t => (
+          t.id === txnId
+            ? { ...t, category_id: cat?.id ?? null, category_name: cat?.name ?? null, category_color: null, category_overridden: 1 }
+            : t
+        )))}
+        onTrashed={txnId => setLocalMonthTxns(prev => prev.filter(t => t.id !== txnId))}
+        onNotesSaved={(txnId, notes) => setLocalMonthTxns(prev => prev.map(t => (t.id === txnId ? { ...t, notes } : t)))}
+        forceFloating
+        stackIndex={stackIndex + 1}
+        dateStart={dateStart}
+        dateEnd={dateEnd}
+      />
+    )}
+    </>
   )
 }

@@ -149,7 +149,17 @@ export function ImportedCategorySettingsDialog({
                         checked={selectedAccountTokens.includes(choice.token)}
                         onChange={() => toggleAccount(choice.token)}
                       />
-                      <span style={{ fontSize: 13 }}>{choice.label}</span>
+                      {/* Show the file's original account label → the account it maps to. Several source
+                          labels can resolve to one account, so the mapped name alone reads as duplicates. */}
+                      <span style={{ fontSize: 13 }}>
+                        {choice.sourceLabel && choice.sourceLabel !== choice.label ? (
+                          <>
+                            {choice.sourceLabel}
+                            <span style={{ color: 'var(--muted)', opacity: 0.7 }}> → </span>
+                            <span style={{ color: 'var(--muted)' }}>{choice.label}</span>
+                          </>
+                        ) : choice.label}
+                      </span>
                       <span style={{ fontSize: 12, color: 'var(--muted)' }}>{choice.rowCount} rows</span>
                     </label>
                   ))}

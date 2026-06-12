@@ -263,7 +263,7 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum("terminal covered day" in reason for reason in reasons), 2)
         self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_coverage_terminal_ledger.csv"))
 
-    async def test_exact_match_duplicate_beats_covered_day(self):
+    async def test_covered_day_beats_exact_match(self):
         rewards_id = self._insert_account("Travel Rewards", account_type="credit", mask="1234")
 
         base_config = self._account_mapping_config(
@@ -297,7 +297,13 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
 
         duplicates = self._get_duplicates(result["batch_id"])
         self.assertEqual(len(duplicates["rows"]), 1)
-        self.assertEqual(duplicates["rows"][0]["reason"], "Matches an existing transaction")
+        # Coverage runs before exact-hash: the row is both an exact match and inside the account's
+        # already-covered range (re-imported under a different source label), both hard-rejects, so
+        # coverage wins the broader, more useful label rather than "exact match".
+        self.assertEqual(
+            duplicates["rows"][0]["reason"],
+            "Falls within the fully covered date range from an earlier import in this account scope",
+        )
         self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_prior_base_ledger.csv"))
 
     async def test_cross_source_text_match_without_coverage_window(self):
@@ -478,8 +484,12 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
 
         duplicates = self._get_duplicates(result_two["batch_id"])
         reasons = [row["reason"] for row in duplicates["rows"]]
-        self.assertEqual(sum(reason == "Matches an existing transaction in the linked account group" for reason in reasons), 1)
-        self.assertEqual(sum("Falls within the fully covered date range from an earlier import in this account scope" in reason for reason in reasons), 1)
+        # Coverage runs before exact-hash, so the row that is both an exact linked-group match and
+        # inside the in-scope covered range is labeled by coverage — two in-scope coverage reasons,
+        # and no standalone linked-group exact-match label. The text-match row is outside coverage,
+        # so it is unaffected. Counts (deduped=3) are unchanged; only the reason mix shifts.
+        self.assertEqual(sum(reason == "Matches an existing transaction in the linked account group" for reason in reasons), 0)
+        self.assertEqual(sum("Falls within the fully covered date range from an earlier import in this account scope" in reason for reason in reasons), 2)
         self.assertEqual(sum("Possible cross-source match by date, amount, and source text in the linked account group" in reason for reason in reasons), 1)
         self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_linked_compare_ledger.csv"))
 

@@ -377,16 +377,24 @@ export function ImportHistorySection({
                                       <label
                                         style={{
                                           display: 'inline-flex',
-                                          alignItems: 'center',
-                                          gap: 6,
+                                          alignItems: 'flex-start',
+                                          gap: 8,
                                           fontSize: 11,
                                           color: b.has_imported_categories ? 'var(--text)' : 'var(--muted)',
                                           cursor: b.has_imported_categories ? 'pointer' : 'not-allowed',
                                           lineHeight: 1.45,
                                           flex: '1 1 420px',
                                           minWidth: 0,
+                                          border: '1px solid var(--border)',
+                                          borderRadius: 8,
+                                          padding: '8px 10px',
+                                          background: 'color-mix(in srgb, var(--surface2) 50%, transparent)',
                                         }}
-                                        title={b.has_imported_categories ? '' : 'This import did not include a category column'}
+                                        title={b.has_imported_categories
+                                          ? ''
+                                          : summary.importedCount > 0
+                                            ? 'This import did not include a category column'
+                                            : 'This import did not load any new transactions'}
                                       >
                                         <input
                                           type="checkbox"
@@ -445,28 +453,34 @@ export function ImportHistorySection({
                                       const count = Number(a.row_count || 0)
                                       const csvLabel = a.csv_value || a.account_name || ''
                                       const mappedLabel = a.account_name || ''
+                                      // Not skipped by the user, but contributed no new rows (every row was a duplicate of
+                                      // an earlier file, or the rows were later removed). It reads as a third state — muted
+                                      // with a minus — so the green check never implies rows loaded when none did.
+                                      const noNewRows = !a.was_skipped && count === 0
+                                      const muted = a.was_skipped || noNewRows
                                       // If the CSV's original account label differs from the account it currently
                                       // resolves to, the user mapped it after the import completed. Surface both
                                       // so the file card matches what the user saw at import time, with the mapped
                                       // destination as a faded suffix.
                                       const showMapping = !a.was_skipped && mappedLabel && csvLabel && mappedLabel !== csvLabel
                                       const truncate = s => (s && s.length > 22 ? s.slice(0, 20) + '…' : s)
-                                      const primary = a.was_skipped ? csvLabel : csvLabel
-                                      const tooltip = showMapping
+                                      const primary = csvLabel
+                                      const baseTooltip = showMapping
                                         ? `${csvLabel} → ${mappedLabel}`
                                         : (a.was_skipped ? csvLabel : (mappedLabel || csvLabel))
+                                      const tooltip = noNewRows ? `${baseTooltip} · no new transactions` : baseTooltip
                                       return (
                                         <span key={i} title={tooltip} style={{
                                           display: 'inline-flex', alignItems: 'center', gap: 4,
                                           fontSize: 11, padding: '2px 7px', borderRadius: 99,
-                                          background: a.was_skipped
+                                          background: muted
                                             ? 'var(--surface2)'
                                             : 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
-                                          color: a.was_skipped ? 'var(--muted)' : 'var(--text)',
+                                          color: muted ? 'var(--muted)' : 'var(--text)',
                                           border: '1px solid var(--border)',
                                         }}>
-                                          <span style={{ color: a.was_skipped ? 'var(--muted)' : 'var(--success)', fontWeight: 600 }}>
-                                            {a.was_skipped ? '✕' : '✓'}
+                                          <span style={{ color: muted ? 'var(--muted)' : 'var(--success)', fontWeight: 600 }}>
+                                            {a.was_skipped ? '✕' : noNewRows ? '−' : '✓'}
                                           </span>
                                           {truncate(primary)}
                                           {showMapping ? (
@@ -486,6 +500,7 @@ export function ImportHistorySection({
                                           source: b,
                                           title: b.filename,
                                         })}
+                                        title="View rejected rows from this file"
                                         style={{
                                           display: 'inline-flex',
                                           alignItems: 'center',
@@ -499,7 +514,8 @@ export function ImportHistorySection({
                                           cursor: 'pointer',
                                         }}
                                       >
-                                        {summary.rejectedCount} rejected
+                                        <span>{summary.rejectedCount} rejected</span>
+                                        <span style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
                                       </button>
                                     ) : null}
                                     {(() => {
@@ -520,11 +536,7 @@ export function ImportHistorySection({
                                             source: b,
                                             title: b.filename,
                                           })}
-                                          title={
-                                            hasSoft
-                                              ? `${hard} rejected at import, ${soft} flagged for review`
-                                              : `${hard} rejected at import`
-                                          }
+                                          title="View duplicate rows from this file"
                                           style={{
                                             display: 'inline-flex',
                                             alignItems: 'center',
@@ -543,8 +555,11 @@ export function ImportHistorySection({
                                             fontWeight: hasSoft ? 600 : 400,
                                           }}
                                         >
-                                          {hasSoft ? '⚠ ' : ''}{total} duplicate{total === 1 ? '' : 's'}
-                                          {hasSoft ? ` (${soft} to review)` : ''}
+                                          <span>
+                                            {hasSoft ? '⚠ ' : ''}{total} duplicate{total === 1 ? '' : 's'}
+                                            {hasSoft ? ` (${soft} to review)` : ''}
+                                          </span>
+                                          <span style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
                                         </button>
                                       )
                                     })()}

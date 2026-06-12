@@ -143,14 +143,11 @@ export function InlineFilterPill({ onClick, disabled = false, title = '' }) {
           ? 'color-mix(in srgb, var(--surface2) 72%, var(--surface))'
           : 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
         color: disabled ? 'var(--muted)' : 'var(--accent2)',
-        fontSize: '0.88em',
+        fontSize: '0.92em',
         fontWeight: 600,
-        lineHeight: '1.15',
+        lineHeight: '1.3',
         cursor: disabled ? 'not-allowed' : 'pointer',
         whiteSpace: 'nowrap',
-        verticalAlign: 'super',
-        position: 'relative',
-        top: '-0.1em',
       }}
     >
       {IMPORTED_CATEGORY_FILTER_PILL_LABEL}
@@ -159,18 +156,17 @@ export function InlineFilterPill({ onClick, disabled = false, title = '' }) {
 }
 
 export function ImportedCategoryUsageInline({ showFilter = false, filterDisabled = false, filterTitle = '', onFilterClick = null }) {
+  // The scope pill sits on its own line beneath the sentence (left-aligned under the text) rather than
+  // trailing it: as a wrapped superscript it drifted far from the checkbox and read as unattached.
   return (
-    <span>
+    <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6, minWidth: 0 }}>
       <span>{IMPORTED_CATEGORY_USAGE_SENTENCE}</span>
       {showFilter ? (
-        <>
-          {' '}
-          <InlineFilterPill
-            onClick={onFilterClick}
-            disabled={filterDisabled}
-            title={filterTitle}
-          />
-        </>
+        <InlineFilterPill
+          onClick={onFilterClick}
+          disabled={filterDisabled}
+          title={filterTitle}
+        />
       ) : null}
     </span>
   )

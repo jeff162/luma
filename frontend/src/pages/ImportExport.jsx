@@ -609,7 +609,7 @@ function ImportTab() {
         rowCount: (existing?.rowCount || 0) + Number(rowCount || 0),
       })
     }
-    const addUnassignedChoice = (token, label, rowCount = 0) => {
+    const addUnassignedChoice = (token, label, rowCount = 0, sourceLabel = '') => {
       const normalizedToken = String(token || '').trim()
       if (!normalizedToken) return
       const existing = unassignedChoices.get(normalizedToken)
@@ -618,6 +618,7 @@ function ImportTab() {
         kind: 'account',
         token: normalizedToken,
         label,
+        sourceLabel: existing?.sourceLabel || sourceLabel,
         rowCount: (existing?.rowCount || 0) + Number(rowCount || 0),
       })
     }
@@ -630,11 +631,11 @@ function ImportTab() {
         if (mapping?.accountId) {
           const account = accounts.find(item => item.id === mapping.accountId)
           if (account?.owner_id) addOwnerChoice(account.owner_id, account.owner_name || account.name, rowCount)
-          else addUnassignedChoice(csvVal, account?.name || csvVal, rowCount)
+          else addUnassignedChoice(csvVal, account?.name || csvVal, rowCount, csvVal)
           continue
         }
         if (mapping?.createNew && String(mapping.newName || '').trim()) {
-          addUnassignedChoice(csvVal, String(mapping.newName || csvVal).trim(), rowCount)
+          addUnassignedChoice(csvVal, String(mapping.newName || csvVal).trim(), rowCount, csvVal)
         }
       }
     } else if (singleAccountNew.enabled && singleAccountNew.name.trim()) {
@@ -2481,7 +2482,7 @@ function ImportTab() {
         rowCount: (existing?.rowCount || 0) + Number(rowCount || 0),
       })
     }
-    const addAccountChoice = (token, label, rowCount = 0) => {
+    const addAccountChoice = (token, label, rowCount = 0, sourceLabel = '') => {
       const normalizedToken = String(token || '').trim()
       if (!normalizedToken) return
       const existing = accountChoices.get(normalizedToken)
@@ -2490,6 +2491,7 @@ function ImportTab() {
         kind: 'account',
         token: normalizedToken,
         label,
+        sourceLabel: existing?.sourceLabel || sourceLabel,
         rowCount: (existing?.rowCount || 0) + Number(rowCount || 0),
       })
     }
@@ -2507,7 +2509,7 @@ function ImportTab() {
         : batch?.single_account_new?.name
           ? getNewAccountCategoryScopeToken(batch.single_account_new.name)
           : getFixedAccountCategoryScopeToken(accountEntry.account_id)
-      addAccountChoice(token, liveAccount?.name || accountEntry?.account_name || accountEntry?.csv_value || 'Unassigned account', rowCount)
+      addAccountChoice(token, liveAccount?.name || accountEntry?.account_name || accountEntry?.csv_value || 'Unassigned account', rowCount, accountEntry?.csv_value || '')
     }
 
     return [
@@ -3650,11 +3652,15 @@ function ImportTab() {
               <label
                 style={{
                   display: 'flex',
-                  alignItems: 'center',
+                  alignItems: 'flex-start',
                   gap: 8,
                   cursor: colCategory ? 'pointer' : 'not-allowed',
                   fontSize: 13,
                   color: colCategory ? 'var(--text)' : 'var(--muted)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  background: 'color-mix(in srgb, var(--surface2) 50%, transparent)',
                 }}
                 title={colCategory ? '' : 'Choose a category column before categories present in the data can be used'}
               >

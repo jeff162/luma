@@ -93,7 +93,8 @@ def delete_owner(owner_id: str):
             # the household collapses back to one person, shared assignments become noise.
             conn.execute("UPDATE account SET owner_id = NULL WHERE owner_id = ?", (shared_owner_id,))
             conn.execute("UPDATE txn SET owner_id = NULL WHERE owner_id = ?", (shared_owner_id,))
-            conn.execute("UPDATE category SET owner_id = NULL WHERE owner_id = ?", (shared_owner_id,))
+            # Categories no longer carry an owner (column dropped in m19_drop_category_owner_id);
+            # owner-style category attribution now lives in tags, so there is nothing to clear here.
             conn.execute("UPDATE category_rule SET owner_id = NULL WHERE owner_id = ?", (shared_owner_id,))
     return {"ok": True}
 

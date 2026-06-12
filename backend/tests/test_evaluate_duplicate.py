@@ -207,9 +207,10 @@ class EvaluateDuplicateRuleTests(unittest.TestCase):
 
     # ---- exact-hash rules ----------------------------------------------
 
-    def test_exact_hash_same_account_dominates_other_rules(self):
-        # The high-confidence exact-hash rule fires first and short-circuits the chain — even
-        # if a coverage window would also have matched. Confirms rule precedence.
+    def test_covered_range_label_wins_over_exact_hash(self):
+        # Coverage runs before the exact-hash rules. When a row is BOTH an exact content-hash match
+        # and inside an already-imported date range, both are hard-rejects, so the order only decides
+        # the reported reason — and the broader covered-range label is the one we surface.
         ctx = _empty_context(
             existing_hashes_by_account={
                 "ACCT-1": {
@@ -243,10 +244,12 @@ class EvaluateDuplicateRuleTests(unittest.TestCase):
         )
 
         self.assertTrue(verdict.hard_reject)
-        self.assertEqual(verdict.reason, "Matches an existing transaction")
-        # Specific-row matched, not coverage shape.
-        self.assertEqual(verdict.matched["id"], "EXISTING")
-        self.assertNotIn("covered", verdict.matched)
+        self.assertEqual(
+            verdict.reason,
+            "Falls within the fully covered date range from an earlier import for this source account",
+        )
+        # Coverage shape (the covered range + any candidates), not the single-row exact-match payload.
+        self.assertIn("covered", verdict.matched)
 
 
 if __name__ == "__main__":  # pragma: no cover
