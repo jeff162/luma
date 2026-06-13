@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useLocation } from 'react-router-dom'
 import { Card, PageHeader, Button, Spinner } from '../components/ui.jsx'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
 import ImportRuleSuggestionReview from '../components/ImportRuleSuggestionReview.jsx'
@@ -61,6 +61,11 @@ function ruleSuggestionRangeCovers(coveringMin, coveringMax, coveredMin, covered
 export default function ImportRuleSuggestions() {
   const { batchId, profileId } = useParams()
   const navigate = useNavigate()
+  // The back affordance follows where the user came from: the Rules page stamps {backTo, backLabel}
+  // when it opens this surface, otherwise it falls back to Import / Export (its canonical home).
+  const location = useLocation()
+  const backTo = location.state?.backTo || '/import-export'
+  const backLabel = location.state?.backLabel || 'Import / Export'
   const isProfileContext = !!profileId
   const isSystemContext = !batchId && !profileId
   const contextKey = isSystemContext
@@ -787,8 +792,8 @@ export default function ImportRuleSuggestions() {
         <>
           <div style={{ padding: '20px 32px 0', flexShrink: 0 }}>
             <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <Link to="/import-export" style={{ fontSize: 13, color: 'var(--accent2)', textDecoration: 'none' }}>
-                ← Back to Import / Export
+              <Link to={backTo} style={{ fontSize: 13, color: 'var(--accent2)', textDecoration: 'none' }}>
+                ← Back to {backLabel}
               </Link>
               {undoStack.length > 0 && (
                 <Button variant="ghost" small onClick={performUndo}>
@@ -824,8 +829,8 @@ export default function ImportRuleSuggestions() {
                   <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14 }}>
                     {emptyStateDescription}
                   </div>
-                  <Button onClick={() => navigate('/import-export')}>
-                    Return to Import / Export
+                  <Button onClick={() => navigate(backTo)}>
+                    Return to {backLabel}
                   </Button>
                 </Card>
               ) : !contextHasImportedCategories ? (

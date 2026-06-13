@@ -27,6 +27,10 @@ import { TagGlyph } from '../components/TagUi.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { ESCAPE_BEHAVIOR, useDismissibleLayer, useEscapeAction } from '../lib/uiInteractions.js'
 import { useUserPreferences, useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorkspaceContext.jsx'
+import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
+import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
+import { SYSTEM_CATEGORY_WORKSPACE_DRAFT_PREF_KEY } from '../lib/importExport/constants.js'
 
 const SECTION_META = {
   income: { label: 'Income' },
@@ -701,6 +705,12 @@ export default function Categories() {
     () => normalizeMatchingTxnColumnConfig(storedMatchingTxnColumns) || defaultMatchingTxnColumnConfig(),
     [storedMatchingTxnColumns],
   )
+
+  // Entry point to the App-level Group Imported Categories workspace. The count is read-only here (the
+  // workspace owns the draft); it drives the header button's badge + dim, live without opening anything.
+  const { open: openImportedCategoryWorkspace } = useImportedCategoryWorkspace()
+  const [systemCategoryWorkspaceDraft] = useUserPreference(SYSTEM_CATEGORY_WORKSPACE_DRAFT_PREF_KEY, null)
+  const importedCategoryWork = getImportedCategoryWorkCounts(flatCats, systemCategoryWorkspaceDraft)
   const [listScrollState, setListScrollState] = useState({ top: false, bottom: false })
   const [deleteDialog, setDeleteDialog] = useState(null)
   const [deleteMode, setDeleteMode] = useState('replace')
@@ -791,6 +801,14 @@ export default function Categories() {
   }, [])
 
   useEffect(() => { loadCategories() }, [loadCategories])
+
+  // The Group Imported Categories workspace is App-level and may apply from its own floating surface;
+  // refresh the tree when it (or any category mutation) fans out a change so groups appear immediately.
+  useEffect(() => {
+    function onCategoriesChanged() { loadCategories() }
+    window.addEventListener('fintrack:categories-changed', onCategoriesChanged)
+    return () => window.removeEventListener('fintrack:categories-changed', onCategoriesChanged)
+  }, [loadCategories])
   useEffect(() => {
     api.getTags().then(rows => setAvailableTags(Array.isArray(rows) ? rows : [])).catch(() => setAvailableTags([]))
   }, [])
@@ -1855,7 +1873,22 @@ export default function Categories() {
 
   return (
     <div data-browser-context-passthrough="true" style={{ padding: 32, display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
-      <PageHeader title="Categories" />
+      <PageHeader title="Categories">
+        <Button
+          small
+          variant="ghost"
+          onClick={openImportedCategoryWorkspace}
+          disabled={importedCategoryWork.total === 0}
+          title={importedCategoryWork.total === 0
+            ? 'No imported categories are waiting to be grouped'
+            : 'Sort imported categories into reporting groups'}
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <span>Group imported categories</span>
+            <ActionCountBadge count={importedCategoryWork.pending} tone="warning" />
+          </span>
+        </Button>
+      </PageHeader>
       <div ref={contentLayoutRef} style={{ display: 'grid', gridTemplateColumns: `${leftPanelWidth ?? DEFAULT_LEFT_PANEL_WIDTH}px 8px minmax(0, 1fr)`, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>

@@ -17,6 +17,11 @@ import {
   UnifiedDuplicatesViewerRenderer,
   MinimizedDuplicatesNavItem,
 } from './contexts/UnifiedDuplicatesViewerContext.jsx'
+import {
+  ImportedCategoryWorkspaceProvider,
+  ImportedCategoryWorkspaceRenderer,
+  MinimizedImportedCategoryWorkspaceNavItem,
+} from './contexts/ImportedCategoryWorkspaceContext.jsx'
 import { PanelStackProvider } from './contexts/PanelStackContext.jsx'
 import { useDismissibleLayer, useTransientTextEdit } from './lib/uiInteractions.js'
 import { AppConfirmDialog } from './components/ui.jsx'
@@ -1750,7 +1755,9 @@ export default function App() {
           <FilterProvider initialDate={pastTwelveMonthsRange()}>
             <PanelStackProvider>
             <UnifiedDuplicatesViewerProvider>
+            <ImportedCategoryWorkspaceProvider>
             <UnifiedDuplicatesViewerRenderer />
+            <ImportedCategoryWorkspaceRenderer />
             <style>{GLOBAL_SCROLLBAR_STYLES}</style>
             {pendingLocalProfileDelete ? (
               <AppConfirmDialog
@@ -1802,6 +1809,7 @@ export default function App() {
                   </NavLink>
                 ))}
                 <MinimizedDuplicatesNavItem />
+                <MinimizedImportedCategoryWorkspaceNavItem />
                 <div style={s.navFooter}>
                   <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
                     {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
@@ -1959,6 +1967,7 @@ export default function App() {
                 </button>
               </div>
             )}
+            </ImportedCategoryWorkspaceProvider>
             </UnifiedDuplicatesViewerProvider>
             </PanelStackProvider>
           </FilterProvider>

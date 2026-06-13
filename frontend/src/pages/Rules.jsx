@@ -10,6 +10,8 @@ import PillGridTable from '../components/PillGridTable.jsx'
 import RuleForm, { amountConditionSummary } from '../components/RuleForm.jsx'
 import { TagBadge } from '../components/TagUi.jsx'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
+import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
+import { countPendingRuleSuggestions, hasRuleSuggestionWork } from '../lib/importExport/ruleSuggestionWork.js'
 
 // Static, non-interactive columns: the rules list isn't sorted/reordered/resized by the user,
 // it just needs the consistent table chrome and a pinned header. Sticky header is wired below
@@ -206,6 +208,9 @@ export default function Rules() {
   const [categories, setCategories] = useState([])
   const [owners,     setOwners]     = useState([])
   const [accounts,   setAccounts]   = useState([])
+  // Recent import batches, fetched only to drive the "Generate rules from imported data" entry button's
+  // pending-suggestion count and dim state — the review itself lives on the Import / Export route.
+  const [batches,    setBatches]    = useState([])
   const [loading,    setLoading]    = useState(true)
   const [search,     setSearch]     = useState('')
   const searchId = useId()
@@ -233,6 +238,10 @@ export default function Rules() {
   useEffect(() => { loadCategories() }, [loadCategories])
   useEffect(() => { api.getOwners().then(setOwners) }, [])
   useEffect(() => { api.getAccounts().then(setAccounts) }, [])
+  useEffect(() => { api.listBatches().then(setBatches).catch(() => setBatches([])) }, [])
+
+  const importedRuleSuggestionCount = countPendingRuleSuggestions(batches)
+  const hasImportedRuleSuggestionWork = hasRuleSuggestionWork(batches)
 
   async function handleAdd(data) {
     const { applyToExisting, ...ruleData } = data
@@ -367,6 +376,32 @@ export default function Rules() {
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
         <PageHeader title="Rules">
           <RecategorizeButton pendingCount={recategorizePendingCount} onRun={runRecategorize} />
+          <Button
+            small
+            variant="ghost"
+            onClick={() => navigate('/import-export/rule-suggestions', { state: { backTo: '/rules', backLabel: 'Rules' } })}
+            disabled={!hasImportedRuleSuggestionWork}
+            title={hasImportedRuleSuggestionWork
+              ? 'Review rules suggested from your imported transactions'
+              : 'Mark a categorized import as clean to generate rule suggestions'}
+            style={hasImportedRuleSuggestionWork
+              ? {
+                background: 'color-mix(in srgb, var(--surface2) 70%, var(--accent) 5%)',
+                border: '1px solid color-mix(in srgb, var(--accent2) 18%, var(--border))',
+                boxShadow: '0 1px 0 rgba(255,255,255,0.03), 0 4px 12px rgba(0,0,0,0.07)',
+              }
+              : {
+                background: 'color-mix(in srgb, var(--surface2) 82%, var(--surface))',
+                color: 'color-mix(in srgb, var(--muted) 88%, var(--text) 12%)',
+                border: '1px solid color-mix(in srgb, var(--border) 92%, transparent)',
+                boxShadow: 'none',
+              }}
+          >
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <span>Generate rules from imported data</span>
+              <ActionCountBadge count={importedRuleSuggestionCount} />
+            </span>
+          </Button>
           <Button small onClick={() => (showAnyEditor ? closeForm() : openCreateForm())} style={addRuleButtonStyle}>
             {showAnyEditor ? 'Cancel' : 'Add rule'}
           </Button>

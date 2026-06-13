@@ -29,8 +29,12 @@ export { createCategoryImportDraftState }
 
 const DEFAULT_LEFT_PANEL_WIDTH = 320
 const MIN_LEFT_PANEL_WIDTH = 280
+// The left pool is just a list of category names — it never needs more than this. The default split
+// caps it here so the right (group) panel gets the rest of a wide window instead of the pool ballooning;
+// the user can still drag past this if they want.
+const MAX_DEFAULT_LEFT_PANEL_WIDTH = 440
 const MIN_RIGHT_PANEL_WIDTH = 360
-const GROUP_COLUMN_WIDTH = 300
+const GROUP_COLUMN_WIDTH = 280
 const GROUP_COLUMN_GAP = 18
 const GROUP_CARD_GAP = 16
 
@@ -543,6 +547,7 @@ export default function CategoryImportWorkspace({
   onDraftStateChange,
   onApply,
   onClose,
+  onMinimize,
   onCategoriesChanged,
   onDeleteSources,
   title = 'Import Categories From File',
@@ -1425,13 +1430,15 @@ export default function CategoryImportWorkspace({
       MIN_RIGHT_PANEL_WIDTH,
       (rightColumnCount * GROUP_COLUMN_WIDTH) + (Math.max(0, rightColumnCount - 1) * GROUP_COLUMN_GAP) + 24,
     )
-    const computedWidth = clampLeftPanelWidth(layoutWidth - 8 - desiredRightWidth)
+    const computedWidth = clampLeftPanelWidth(
+      Math.min(MAX_DEFAULT_LEFT_PANEL_WIDTH, layoutWidth - 8 - desiredRightWidth),
+    )
     setLeftPanelWidth(computedWidth)
   }, [groupColumns.length, hasPersistedLeftPanelWidth, leftPanelWidth, rightPanelHeight])
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(15, 23, 42, 0.44)', padding: 20, display: 'flex', alignItems: 'stretch', justifyContent: 'center' }}>
-      <div style={{ width: 'min(1240px, 100%)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 55%, var(--surface)), var(--surface))', border: '1px solid var(--border)', borderRadius: 18, boxShadow: '0 32px 88px rgba(15, 23, 42, 0.3)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ width: 'min(2040px, 100%)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 55%, var(--surface)), var(--surface))', border: '1px solid var(--border)', borderRadius: 18, boxShadow: '0 32px 88px rgba(15, 23, 42, 0.3)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ padding: '18px 22px 14px', borderBottom: '1px solid var(--border)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 84%, var(--surface)), color-mix(in srgb, var(--surface2) 62%, var(--surface)))' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 18 }}>
             <div>
@@ -1454,6 +1461,7 @@ export default function CategoryImportWorkspace({
                   <Button variant="ghost" onClick={async () => { setSaving(true); try { await onApply(buildDraftState()) } finally { setSaving(false) } }} disabled={saving || !hasWorkToApply}>
                     {saving ? applyPendingLabel : applyLabel}
                   </Button>
+                  {onMinimize ? <Button variant="ghost" onClick={onMinimize}>Minimize</Button> : null}
                   <Button variant="ghost" onClick={onClose}>Close</Button>
                 </div>
               </div>

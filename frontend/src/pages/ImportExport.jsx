@@ -15,7 +15,8 @@ import {
   getFloatingPanelHeaderBackground,
   getFloatingPanelSurfaceStyle,
 } from '../components/ui.jsx'
-import CategoryImportWorkspace from '../components/CategoryImportWorkspace.jsx'
+import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorkspaceContext.jsx'
+import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
 import ImportColumnMappingSection from '../components/ImportColumnMappingSection.jsx'
 import ImportProfilesManager from '../components/ImportProfilesManager.jsx'
 import {
@@ -39,11 +40,6 @@ import { ImportUploadStage } from '../components/importExport/ImportUploadStage.
 import { ImportHistorySection } from '../components/importExport/ImportHistorySection.jsx'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 import {
-  summarizeCategoryWorkspaceDraft,
-  sanitizeCategoryWorkspaceDraftToSourceValues,
-  normalizeImportCategoryValue,
-} from '../lib/importExport/categoryWorkspaceDraft.js'
-import {
   getBlankImportSnapshot,
   getBlankMappingSuggestions,
   stableSerialize,
@@ -62,6 +58,7 @@ import {
   summarizeImportOutcome,
   getUndoTargetForSource,
 } from '../lib/importExport/importOutcome.js'
+import { countPendingRuleSuggestions, hasRuleSuggestionWork } from '../lib/importExport/ruleSuggestionWork.js'
 import {
   analyzeImportColumns,
   formatLikelyMatchLabel,
@@ -86,7 +83,6 @@ import {
   EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY,
   DATA_SOURCE_MANAGER_POS_PREF_KEY,
   SYSTEM_CATEGORY_WORKSPACE_DRAFT_PREF_KEY,
-  UNASSIGNED_CATEGORY_SYSTEM_KEY,
   IMPORTED_CATEGORY_SCOPE_FILTERED,
   IMPORTED_CATEGORY_SETTINGS_KEY,
   IMPORTED_CATEGORY_FILTER_DIALOG_TITLE,
@@ -141,7 +137,9 @@ function ImportTab() {
   const [lastImportDataSourceId, setLastImportDataSourceId] = useUserPreference(LAST_IMPORT_DATA_SOURCE_PREF_KEY, '')
   const [expandedSourceRows, setExpandedSourceRows] = useUserPreference(EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY, {})
   const [savedDataSourceManagerPos, setSavedDataSourceManagerPos] = useUserPreference(DATA_SOURCE_MANAGER_POS_PREF_KEY, null)
-  const [systemCategoryWorkspaceDraft, setSystemCategoryWorkspaceDraft] = useUserPreference(SYSTEM_CATEGORY_WORKSPACE_DRAFT_PREF_KEY, null)
+  // Read-only here: the workspace (App-level) owns writes to this draft; this page only reads it to
+  // compute the file-card button's pending count via getImportedCategoryWorkCounts.
+  const [systemCategoryWorkspaceDraft] = useUserPreference(SYSTEM_CATEGORY_WORKSPACE_DRAFT_PREF_KEY, null)
   const [stage, setStage] = useState('upload')
   const [preview, setPreview] = useState(null)
   const [profiles, setProfiles] = useState([])
@@ -209,7 +207,6 @@ function ImportTab() {
   const [accountMap, setAccountMap] = useState({})
   const [pendingAccountMatchChooser, setPendingAccountMatchChooser] = useState(null)
   const [categoryAssignments, setCategoryAssignments] = useState({})
-  const [showSystemCategoryWorkspace, setShowSystemCategoryWorkspace] = useState(false)
   const [importResult, setImportResult] = useState(null)
   const [showRaw, setShowRaw] = useState(false)
   const [rejectedRowsViewer, setRejectedRowsViewer] = useState(null)
@@ -225,7 +222,6 @@ function ImportTab() {
   const [showProfileMismatchChooser, setShowProfileMismatchChooser] = useState(false)
   const [pendingMappingSourceSwitch, setPendingMappingSourceSwitch] = useState(null)
   const [noticeDialog, setNoticeDialog] = useState(null)
-  const [pendingWorkspaceDelete, setPendingWorkspaceDelete] = useState(null)
   // Per-batch "+ New data source from this file" inline name entry (unknown-source cards).
   const [assignNewSourceBatchId, setAssignNewSourceBatchId] = useState('')
   const [assignNewSourceName, setAssignNewSourceName] = useState('')
@@ -258,6 +254,16 @@ function ImportTab() {
     setManualDraftRecord(loadSavedImportDraftRecord(dbInstanceId, preferenceSubjectId))
   }, [dbInstanceId, preferenceSubjectId])
 
+  // The Group Imported Categories workspace is App-level and can apply from another page; refresh our
+  // own categories copy when it does so the file-card counts and category mapping stay current.
+  useEffect(() => {
+    function onCategoriesChanged() {
+      api.getCategories().then(setCategories).catch(() => {})
+    }
+    window.addEventListener('fintrack:categories-changed', onCategoriesChanged)
+    return () => window.removeEventListener('fintrack:categories-changed', onCategoriesChanged)
+  }, [])
+
   const activeUploadProfile = useMemo(
     () => profiles.find(p => p.id === selectedUploadSource) || null,
     [profiles, selectedUploadSource]
@@ -267,73 +273,14 @@ function ImportTab() {
   const showingInitialSourceChooser = !uploadChoiceReady
   const isFirstRunSourceChoice = showingInitialSourceChooser && profiles.length === 0
   const uploadSelectionLabel = activeUploadProfile?.name || (uploadUsesManualDraft ? 'Temporary draft' : '')
-  const unassignedGroup = useMemo(
-    () => categories.find(category => !category.parent_id && category.system_key === UNASSIGNED_CATEGORY_SYSTEM_KEY) || null,
-    [categories],
-  )
-  const unassignedCategories = useMemo(
-    () => (unassignedGroup
-      ? categories
-        .filter(category => category.parent_id === unassignedGroup.id)
-        .slice()
-        .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }))
-      : []),
-    [categories, unassignedGroup],
-  )
-  const systemCategoryWorkspaceCategories = useMemo(
-    () => categories.filter(category => (
-      category.id !== unassignedGroup?.id &&
-      category.parent_id !== unassignedGroup?.id
-    )),
-    [categories, unassignedGroup],
-  )
-  // The Group Imported Categories workspace is a landing spot for *pending imported* labels only:
-  // an Unassigned leaf with import_pending = 1. User-created categories (import_pending = 0) and
-  // deleted-then-recovered categories never appear here — they are permanent system categories that
-  // live on the Categories page, even when they sit under Unassigned.
-  const workspaceUnassignedCategories = useMemo(
-    () => unassignedCategories.filter(category => category.import_pending),
-    [unassignedCategories],
-  )
-  const liveUnassignedCategorySourceValues = useMemo(
-    () => workspaceUnassignedCategories.map(category => category.name).filter(Boolean),
-    [workspaceUnassignedCategories],
-  )
-  const effectiveSystemCategoryWorkspaceDraft = useMemo(
-    () => sanitizeCategoryWorkspaceDraftToSourceValues(systemCategoryWorkspaceDraft, liveUnassignedCategorySourceValues),
-    [systemCategoryWorkspaceDraft, liveUnassignedCategorySourceValues],
-  )
-  const effectiveSystemCategoryWorkspaceSummary = useMemo(
-    () => summarizeCategoryWorkspaceDraft(effectiveSystemCategoryWorkspaceDraft),
-    [effectiveSystemCategoryWorkspaceDraft],
-  )
-  const trackedSystemCategoryValueKeys = useMemo(
-    () => new Set((effectiveSystemCategoryWorkspaceSummary.sourceValues || []).map(normalizeImportCategoryValue)),
-    [effectiveSystemCategoryWorkspaceSummary],
-  )
-  const untrackedUnassignedCategoryCount = useMemo(
-    () => liveUnassignedCategorySourceValues.filter(
-      value => !trackedSystemCategoryValueKeys.has(normalizeImportCategoryValue(value))
-    ).length,
-    [liveUnassignedCategorySourceValues, trackedSystemCategoryValueKeys],
-  )
-  const pendingSystemCategoryCount = (effectiveSystemCategoryWorkspaceSummary.remainingCount || 0) + untrackedUnassignedCategoryCount
-  const totalSystemCategoryWorkspaceCount = (effectiveSystemCategoryWorkspaceSummary.totalCount || 0) + untrackedUnassignedCategoryCount
-  const systemCategoryWorkspaceSourceValues = useMemo(
-    () => liveUnassignedCategorySourceValues,
-    [liveUnassignedCategorySourceValues],
-  )
-  const hasSystemRuleSuggestionWork = useMemo(
-    () => batches.some(batch => batch.use_imported_categories && batch.has_imported_categories),
-    [batches],
-  )
-  const pendingSystemRuleSuggestionCount = useMemo(
-    () => batches.reduce((total, batch) => {
-      if (!batch.use_imported_categories || !batch.has_imported_categories) return total
-      return total + Number(batch.rule_suggestion_review?.pending_count || 0)
-    }, 0),
-    [batches],
-  )
+  // The Group Imported Categories workspace is App-level now (ImportedCategoryWorkspaceContext); this
+  // page only needs the opener and the count for its file-card button. The count comes from this page's
+  // own categories + the shared draft pref so the badge is live before the workspace is ever opened.
+  const { open: openSystemCategoryWorkspace } = useImportedCategoryWorkspace()
+  const { pending: pendingSystemCategoryCount, total: totalSystemCategoryWorkspaceCount } =
+    getImportedCategoryWorkCounts(categories, systemCategoryWorkspaceDraft)
+  const hasSystemRuleSuggestionWork = useMemo(() => hasRuleSuggestionWork(batches), [batches])
+  const pendingSystemRuleSuggestionCount = useMemo(() => countPendingRuleSuggestions(batches), [batches])
 
   // Also invoked by the App-level duplicate-detection dialog's drill-through arrow — through
   // the viewer-context drill-through registration in the effect below (when ImportExport is
@@ -2298,142 +2245,9 @@ function ImportTab() {
     navigate('/import-export/rule-suggestions')
   }
 
-  function openSystemCategoryWorkspace() {
-    if (totalSystemCategoryWorkspaceCount === 0) {
-      setNoticeDialog({
-        title: 'No imported categories need a group',
-        description: 'All imported categories have already been grouped or set aside.',
-      })
-      return
-    }
-    setShowSystemCategoryWorkspace(true)
-  }
-
-  async function applySystemCategoryWorkspaceDraft(draft) {
-    setLoading(true)
-    try {
-      const sourceCategoryMap = new Map(
-        workspaceUnassignedCategories.map(category => [
-          normalizeImportCategoryValue(category.name),
-          category,
-        ]),
-      )
-      const groupKeyToCategory = new Map(
-        systemCategoryWorkspaceCategories
-          .filter(category => !category.parent_id)
-          .map(category => [
-            `${category.category_type === 'income' ? 'income' : 'expense'}::${String(category.name || '').trim().toLowerCase()}`,
-            category,
-          ]),
-      )
-
-      for (const sectionType of ['income', 'expense']) {
-        for (const draftGroup of draft?.snapshot?.tree?.[sectionType] || []) {
-          const groupName = String(draftGroup.name || '').trim()
-          if (!groupName) continue
-          const groupKey = `${sectionType}::${groupName.toLowerCase()}`
-          let liveGroup = groupKeyToCategory.get(groupKey)
-          if (!liveGroup) {
-            liveGroup = await api.createCategory({
-              name: groupName,
-              category_type: sectionType,
-            })
-            groupKeyToCategory.set(groupKey, liveGroup)
-          }
-
-          for (const draftChild of draftGroup.children || []) {
-            const sourceKey = normalizeImportCategoryValue(draftChild.sourceValue || draftChild.name)
-            const liveCategory = sourceCategoryMap.get(sourceKey)
-            if (!liveCategory) continue
-            const nextName = String(draftChild.name || draftChild.sourceValue || '').trim()
-            const patch = {}
-            if (liveCategory.parent_id !== liveGroup.id) patch.parent_id = liveGroup.id
-            if (nextName && nextName !== liveCategory.name) patch.name = nextName
-            if (Object.keys(patch).length > 0) {
-              await api.updateCategory(liveCategory.id, patch)
-            }
-          }
-        }
-      }
-
-      // Parking ("set aside") is NOT a deletion: it moves an imported-category leaf out of the
-      // "needs sorting" pool but leaves it active, so its transactions keep it and future imports of
-      // the label still categorize to it. Apply reconciles the set_aside flag from the parked list:
-      // listed leaves get parked; any leaf currently parked but no longer listed (restored to the
-      // pool, or dragged into a group) is un-parked. Deletion is a separate, explicit action.
-      const setAsideKeys = new Set(
-        (draft?.snapshot?.setAsideOrder || []).map(value => normalizeImportCategoryValue(value)),
-      )
-      for (const key of setAsideKeys) {
-        const liveCategory = sourceCategoryMap.get(key)
-        if (liveCategory && !liveCategory.set_aside) await api.setCategoryAside(liveCategory.id)
-      }
-      for (const liveCategory of workspaceUnassignedCategories) {
-        if (liveCategory.set_aside && !setAsideKeys.has(normalizeImportCategoryValue(liveCategory.name))) {
-          await api.restoreCategoryToPool(liveCategory.id)
-        }
-      }
-
-      const refreshedCategories = await api.getCategories()
-      const refreshedUnassignedGroup = refreshedCategories.find(category => (
-        !category.parent_id && category.system_key === UNASSIGNED_CATEGORY_SYSTEM_KEY
-      )) || null
-      const refreshedUnassignedSourceValues = refreshedUnassignedGroup
-        ? refreshedCategories
-          .filter(category => category.parent_id === refreshedUnassignedGroup.id)
-          .map(category => category.name)
-          .filter(Boolean)
-        : []
-      const nextSystemDraft = sanitizeCategoryWorkspaceDraftToSourceValues(draft, refreshedUnassignedSourceValues)
-      setCategories(refreshedCategories)
-      setSystemCategoryWorkspaceDraft(nextSystemDraft)
-      setShowSystemCategoryWorkspace(false)
-    } catch (error) {
-      setNoticeDialog({
-        title: 'Could not organize imported categories',
-        description: error?.message || 'Please try again.',
-      })
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // Delete a category from the imported-category workspace (the Delete… action). Unlike Set aside,
-  // this removes the category via the same delete flow as the Categories page (clears its
-  // transactions). The confirm shows how many transactions reference it so the user can gauge impact.
-  async function requestWorkspaceCategoryDelete(sourceValues) {
-    const keys = new Set((sourceValues || []).map(value => normalizeImportCategoryValue(value)))
-    const targets = workspaceUnassignedCategories.filter(category => keys.has(normalizeImportCategoryValue(category.name)))
-    if (!targets.length) return
-    let txnCount = 0
-    try {
-      const previews = await Promise.all(targets.map(target => api.getCategoryDeletePreview(target.id)))
-      txnCount = previews.reduce((sum, preview) => sum + Number(preview?.txn_count || 0), 0)
-    } catch {
-      txnCount = null
-    }
-    setPendingWorkspaceDelete({ targets, txnCount })
-  }
-
-  async function confirmWorkspaceCategoryDelete() {
-    const targets = pendingWorkspaceDelete?.targets || []
-    setPendingWorkspaceDelete(null)
-    if (!targets.length) return
-    setLoading(true)
-    try {
-      for (const target of targets) {
-        await api.deleteCategory(target.id, { replacement_category_id: null })
-      }
-      setCategories(await api.getCategories())
-    } catch (error) {
-      setNoticeDialog({
-        title: 'Could not delete category',
-        description: error?.message || 'Please try again.',
-      })
-    } finally {
-      setLoading(false)
-    }
-  }
+  // The Group Imported Categories workspace's open/apply/delete logic now lives in
+  // ImportedCategoryWorkspaceContext (App-level). This page keeps a categories-changed listener (below)
+  // so its own `categories` copy refreshes after the workspace applies from anywhere.
 
   async function updateBatchImportedCategoryUsage(batchId, nextValue) {
     const existingBatch = batches.find(batch => batch.id === batchId)
@@ -2756,19 +2570,6 @@ function ImportTab() {
         />
       ) : null}
 
-      {pendingWorkspaceDelete ? (
-        <AppConfirmDialog
-          title={pendingWorkspaceDelete.targets.length === 1 ? `Delete “${pendingWorkspaceDelete.targets[0].name}”?` : `Delete ${pendingWorkspaceDelete.targets.length} categories?`}
-          description={pendingWorkspaceDelete.txnCount
-            ? `${pendingWorkspaceDelete.txnCount} transaction${pendingWorkspaceDelete.txnCount === 1 ? '' : 's'} currently categorized here.`
-            : undefined}
-          confirmLabel="Delete"
-          confirmVariant="danger"
-          onConfirm={confirmWorkspaceCategoryDelete}
-          onCancel={() => setPendingWorkspaceDelete(null)}
-          width="min(440px, 100%)"
-        />
-      ) : null}
 
       {pendingMappingSourceSwitch ? (
         <AppConfirmDialog
@@ -2823,33 +2624,6 @@ function ImportTab() {
           )}
           onCancel={() => { setAssignNewSourceBatchId(''); setAssignNewSourceName('') }}
           width="min(460px, 100%)"
-        />
-      ) : null}
-
-      {showSystemCategoryWorkspace ? (
-        <CategoryImportWorkspace
-          sourceValues={systemCategoryWorkspaceSourceValues}
-          parkedSourceValues={workspaceUnassignedCategories.filter(category => category.set_aside).map(category => category.name).filter(Boolean)}
-          sourceMeta={{
-            total_count: totalSystemCategoryWorkspaceCount,
-            displayed_count: systemCategoryWorkspaceSourceValues.length,
-            truncated: false,
-            limit: systemCategoryWorkspaceSourceValues.length,
-          }}
-          existingCategories={systemCategoryWorkspaceCategories}
-          initialDraftState={effectiveSystemCategoryWorkspaceDraft}
-          onDraftStateChange={setSystemCategoryWorkspaceDraft}
-          onApply={applySystemCategoryWorkspaceDraft}
-          onClose={() => setShowSystemCategoryWorkspace(false)}
-          onCategoriesChanged={setCategories}
-          onDeleteSources={requestWorkspaceCategoryDelete}
-          title="Group Imported Categories"
-          description="Organize imported categories into reporting groups."
-          sourceHeading="Unassigned Categories"
-          applyLabel="Apply assignments"
-          applyPendingLabel="Applying…"
-          remainingItemLabelSingular="unassigned category"
-          remainingItemLabelPlural="unassigned categories"
         />
       ) : null}
 
