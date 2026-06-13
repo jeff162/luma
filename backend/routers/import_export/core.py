@@ -45,7 +45,7 @@ from backend.db.database import SHARED_OWNER_ID, get_db
 from backend.db.control_database import auth_required, get_local_preference_profile
 from backend.json_utils import safe_json_dict
 from backend.routers.accounts import resolve_default_owner_id
-from backend.services.categorizer import categorize_transaction
+from backend.services.categorizer import categorize_transaction, load_categorization_rules, load_rule_tags_by_id
 from backend.services.duplicate_detection import (
     DedupeContext,
     are_distinct_checks,
@@ -1438,9 +1438,17 @@ def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_own
         suggestion["review_status"] = (review_statuses.get(suggestion["id"]) or {}).get("status") or "pending"
 
     review_summary = review_state.get("summary")
-    should_persist = not selected_owner_ids
-    if should_persist:
+    should_persist = False
+    if not selected_owner_ids:
+        # Only the unfiltered (canonical) view owns the persisted review state. Reconcile it against the
+        # freshly generated suggestions, but persist ONLY when that actually changes the stored entries.
+        # refresh_rule_suggestion_review otherwise bumps last_generated_at every call, which made this GET
+        # rewrite its row on every page load — and concurrent loads then fought the SQLite write lock.
+        before = json.dumps(review_state.get("suggestions") or {}, sort_keys=True)
+        had_generated_at = bool(review_state.get("generated_at"))
         review_summary = refresh_rule_suggestion_review(review_state, suggestions)
+        after = json.dumps(review_state.get("suggestions") or {}, sort_keys=True)
+        should_persist = (before != after) or not had_generated_at
     elif not isinstance(review_summary, dict):
         review_summary = summarize_rule_suggestion_review(review_state)
 
@@ -1932,6 +1940,8 @@ def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) ->
                 """,
                 (batch_id,),
             ).fetchall()
+            rules = load_categorization_rules(conn)
+            rule_tags_by_id = load_rule_tags_by_id(conn)
             for row in uncategorized_rows:
                 result = categorize_transaction(
                     row["merchant_name"] or row["raw_name"] or "",
@@ -1941,6 +1951,8 @@ def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) ->
                     conn,
                     owner_id=row["owner_id"],
                     account_id=row["account_id"],
+                    rules=rules,
+                    rule_tags_by_id=rule_tags_by_id,
                 )
                 cat_id = result["category_id"] if isinstance(result, dict) else result
                 rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
@@ -2629,6 +2641,9 @@ async def run_import(
                 return True, len(data_rows) - row_index - 1
             return False, 0
 
+        # Rules are stable across an import; load once so the per-row matcher below doesn't re-query them.
+        rules = load_categorization_rules(conn)
+        rule_tags_by_id = load_rule_tags_by_id(conn)
         for i, row in enumerate(data_rows):
             row_num = header_row_index + skip_rows + i + 2
             skip_account_row = False
@@ -2754,6 +2769,8 @@ async def run_import(
                     raw_desc, raw_desc, raw_desc, amount, conn,
                     owner_id=acc["owner_id"],
                     account_id=acc["id"],
+                    rules=rules,
+                    rule_tags_by_id=rule_tags_by_id,
                 )
                 rule_cat_id = result["category_id"] if isinstance(result, dict) else result
                 rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
@@ -3452,6 +3469,8 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
                   AND  category_id IS NULL
                   AND  category_overridden = 0
             """, (batch_id,)).fetchall()
+            rules = load_categorization_rules(conn)
+            rule_tags_by_id = load_rule_tags_by_id(conn)
             for row in uncategorized_rows:
                 result = categorize_transaction(
                     row["merchant_name"] or row["raw_name"] or "",
@@ -3461,6 +3480,8 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
                     conn,
                     owner_id=row["owner_id"],
                     account_id=row["account_id"],
+                    rules=rules,
+                    rule_tags_by_id=rule_tags_by_id,
                 )
                 cat_id = result["category_id"] if isinstance(result, dict) else result
                 rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []

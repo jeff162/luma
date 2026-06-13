@@ -10,7 +10,11 @@ transaction text, owner, account, and amount window.
 
 import sqlite3
 
-from backend.services.transaction_tags import sync_rule_tags_for_transaction, would_sync_rule_tags_change
+from backend.services.transaction_tags import (
+    load_rule_tag_sync_rows,
+    sync_rule_tags_for_transaction,
+    would_sync_rule_tags_change,
+)
 
 
 def _amount_matches(amount: float, amount_min, amount_max) -> bool:
@@ -52,24 +56,16 @@ def _resolve_effective_account_id(
     return row["effective_account_id"] if row else account_id
 
 
-def categorize_transaction(
-    merchant_name: str | None,
-    raw_name: str | None,
-    display_name: str | None,
-    amount: float,
-    conn: sqlite3.Connection,
-    owner_id: str | None = None,
-    account_id: str | None = None,
-    effective_account_id: str | None = None,
-) -> dict | None:
-    text = " ".join(filter(None, [display_name, merchant_name, raw_name])).lower()
-    if not text:
-        return None
-    resolved_effective_account_id = _resolve_effective_account_id(conn, account_id, effective_account_id)
+def load_categorization_rules(conn: sqlite3.Connection) -> list:
+    """Load the ordered rule set ONCE so a per-transaction matcher can reuse it across a whole pass.
 
-    # Ordering is the user-visible precedence model: account/owner-scoped rules and
-    # tighter keywords win before broader fallbacks, so previews match future imports.
-    rules = conn.execute(
+    The ORDER BY *is* the precedence contract (account/owner-scoped rules and longer keywords win), so any
+    caller that preloads rules must use exactly this query. Hoisting this out of the per-row loop is the
+    whole performance fix: re-querying it per row is cheap in isolation but, multiplied by thousands of
+    rows and several concurrent requests, collapses SQLite/GIL/IO super-linearly (≈60s for 4 concurrent
+    recategorize-preview calls vs ≈1s when the rules are loaded once).
+    """
+    return conn.execute(
         """SELECT cr.id, cr.category_id, cr.keyword, cr.amount_min, cr.amount_max,
                   cr.debit_credit, cr.owner_id, cr.account_id, cr.clean_name
            FROM   category_rule cr
@@ -87,6 +83,38 @@ def categorize_transaction(
                 CASE WHEN cr.owner_id   IS NOT NULL THEN 1 ELSE 0 END +
                 CASE WHEN cr.account_id IS NOT NULL THEN 1 ELSE 0 END) DESC"""
     ).fetchall()
+
+
+def load_rule_tags_by_id(conn: sqlite3.Connection) -> dict:
+    """Map rule_id -> [tag_id], preloaded once so batch callers don't re-query rule_tag per matched row."""
+    mapping: dict = {}
+    for row in conn.execute("SELECT rule_id, tag_id FROM rule_tag").fetchall():
+        mapping.setdefault(row["rule_id"], []).append(row["tag_id"])
+    return mapping
+
+
+def categorize_transaction(
+    merchant_name: str | None,
+    raw_name: str | None,
+    display_name: str | None,
+    amount: float,
+    conn: sqlite3.Connection,
+    owner_id: str | None = None,
+    account_id: str | None = None,
+    effective_account_id: str | None = None,
+    rules: list | None = None,
+    rule_tags_by_id: dict | None = None,
+) -> dict | None:
+    text = " ".join(filter(None, [display_name, merchant_name, raw_name])).lower()
+    if not text:
+        return None
+    resolved_effective_account_id = _resolve_effective_account_id(conn, account_id, effective_account_id)
+
+    # Callers that categorize many rows in a loop (recategorize, preview, import, sync) pass `rules` /
+    # `rule_tags_by_id` in so they are loaded once; a lone single-row caller can omit them and we load
+    # on demand. Either way the matching/ordering below is identical — see load_categorization_rules.
+    if rules is None:
+        rules = load_categorization_rules(conn)
 
     matched_rule_ids = []
     winning_category_id = None
@@ -110,19 +138,25 @@ def categorize_transaction(
     if not matched_rule_ids:
         return None
 
-    placeholders = ",".join("?" for _ in matched_rule_ids)
-    tag_rows = conn.execute(
-        f"""
-        SELECT DISTINCT tag_id
-        FROM rule_tag
-        WHERE rule_id IN ({placeholders})
-        """,
-        matched_rule_ids,
-    ).fetchall()
+    if rule_tags_by_id is not None:
+        tag_ids = []
+        seen = set()
+        for rule_id in matched_rule_ids:
+            for tag_id in rule_tags_by_id.get(rule_id, ()):
+                if tag_id not in seen:
+                    seen.add(tag_id)
+                    tag_ids.append(tag_id)
+    else:
+        placeholders = ",".join("?" for _ in matched_rule_ids)
+        tag_rows = conn.execute(
+            f"SELECT DISTINCT tag_id FROM rule_tag WHERE rule_id IN ({placeholders})",
+            matched_rule_ids,
+        ).fetchall()
+        tag_ids = [row["tag_id"] for row in tag_rows]
     return {
         "category_id": winning_category_id,
         "clean_name": winning_clean_name,
-        "tag_ids": [row["tag_id"] for row in tag_rows],
+        "tag_ids": tag_ids,
         "matched_rule_ids": matched_rule_ids,
     }
 
@@ -147,6 +181,9 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
            WHERE  category_overridden = 0"""
     ).fetchall()
 
+    rules = load_categorization_rules(conn)
+    rule_tags_by_id = load_rule_tags_by_id(conn)
+    tag_rows_by_txn = load_rule_tag_sync_rows(conn)
     updated = 0
     for txn in txns:
         result = categorize_transaction(
@@ -154,6 +191,8 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
             owner_id=txn["owner_id"],
             account_id=txn["account_id"],
             effective_account_id=txn["effective_account_id"],
+            rules=rules,
+            rule_tags_by_id=rule_tags_by_id,
         )
         cat_id = result["category_id"] if isinstance(result, dict) else result
         matched_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
@@ -162,7 +201,7 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
         ) or txn["merchant_name"] or txn["raw_name"]
         category_changed = cat_id != txn["category_id"]
         display_name_changed = display_name != (txn["display_name"] or txn["merchant_name"] or txn["raw_name"])
-        tags_changed = would_sync_rule_tags_change(conn, txn["id"], matched_tag_ids)
+        tags_changed = would_sync_rule_tags_change(conn, txn["id"], matched_tag_ids, existing_rows=tag_rows_by_txn.get(txn["id"], {}))
         if category_changed or display_name_changed:
             conn.execute(
                 "UPDATE txn SET category_id = ?, display_name = ?, category_source = ? WHERE id = ?",
@@ -196,6 +235,9 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
            WHERE  category_overridden = 0"""
     ).fetchall()
 
+    rules = load_categorization_rules(conn)
+    rule_tags_by_id = load_rule_tags_by_id(conn)
+    tag_rows_by_txn = load_rule_tag_sync_rows(conn)
     pending = 0
     for txn in txns:
         result = categorize_transaction(
@@ -203,6 +245,8 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
             owner_id=txn["owner_id"],
             account_id=txn["account_id"],
             effective_account_id=txn["effective_account_id"],
+            rules=rules,
+            rule_tags_by_id=rule_tags_by_id,
         )
         cat_id = result["category_id"] if isinstance(result, dict) else result
         matched_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
@@ -213,7 +257,7 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
         if (
             cat_id != txn["category_id"]
             or display_name_changed
-            or would_sync_rule_tags_change(conn, txn["id"], matched_tag_ids)
+            or would_sync_rule_tags_change(conn, txn["id"], matched_tag_ids, existing_rows=tag_rows_by_txn.get(txn["id"], {}))
         ):
             pending += 1
 

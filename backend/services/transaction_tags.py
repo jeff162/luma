@@ -171,16 +171,31 @@ def _predict_rule_tag_sync_change(
     return any(tag_id not in rows for tag_id in next_rule_tag_ids)
 
 
+def load_rule_tag_sync_rows(conn: sqlite3.Connection) -> dict:
+    """Preload {txn_id: {tag_id: row}} from txn_tag so a batch preview/recategorize can hand each
+    transaction's existing direct-tag rows to would_sync_rule_tags_change instead of querying per row.
+    Each transaction's rows are read at most once before that transaction is (re)written, so a write to
+    one row never staling another's preloaded entry."""
+    rows_by_txn: dict = {}
+    for row in conn.execute(
+        "SELECT txn_id, tag_id, rule_present, manual_state FROM txn_tag"
+    ).fetchall():
+        rows_by_txn.setdefault(row["txn_id"], {})[row["tag_id"]] = row
+    return rows_by_txn
+
+
 def would_sync_rule_tags_change(
     conn: sqlite3.Connection,
     txn_id: str,
     tag_ids: Iterable[str],
     *,
     clear_manual_blocks: bool = False,
+    existing_rows: dict | None = None,
 ) -> bool:
-    rows = {row["tag_id"]: row for row in _get_txn_tag_rows(conn, txn_id)}
+    if existing_rows is None:
+        existing_rows = {row["tag_id"]: row for row in _get_txn_tag_rows(conn, txn_id)}
     next_rule_tag_ids = {str(tag_id) for tag_id in tag_ids if tag_id}
-    return _predict_rule_tag_sync_change(rows, next_rule_tag_ids, clear_manual_blocks=clear_manual_blocks)
+    return _predict_rule_tag_sync_change(existing_rows, next_rule_tag_ids, clear_manual_blocks=clear_manual_blocks)
 
 
 def sync_rule_tags_for_transaction(

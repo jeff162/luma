@@ -16,7 +16,13 @@ from fastapi import APIRouter, Request
 from backend.app_logging import log_warning
 from backend.db.database import get_db
 from backend.services import crypto_service, plaid_service
-from backend.services.categorizer import categorize_transaction, preview_recategorize_count, recategorize_all
+from backend.services.categorizer import (
+    categorize_transaction,
+    load_categorization_rules,
+    load_rule_tags_by_id,
+    preview_recategorize_count,
+    recategorize_all,
+)
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
 
 router = APIRouter()
@@ -39,6 +45,9 @@ def run_sync(days: int = 30, request: Request = None):
         )
         items = conn.execute("SELECT item_id, access_token, access_token_enc FROM plaid_item").fetchall()
 
+        # Rules are stable across a sync; load once for the per-transaction matcher in the loops below.
+        rules = load_categorization_rules(conn)
+        rule_tags_by_id = load_rule_tags_by_id(conn)
         for item in items:
             try:
                 access_token = crypto_service.decrypt_plaid_access_token(
@@ -84,6 +93,8 @@ def run_sync(days: int = 30, request: Request = None):
                     t["merchant_name"], t["raw_name"], t["merchant_name"], t["amount"], conn,
                     owner_id=acc["owner_id"],
                     account_id=acc["id"],
+                    rules=rules,
+                    rule_tags_by_id=rule_tags_by_id,
                 )
                 cat_id       = result["category_id"] if isinstance(result, dict) else result
                 rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []

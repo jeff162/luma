@@ -1706,7 +1706,7 @@ export default function Categories() {
 
   // Reconcile the loaded matching-list rows in place after a bulk apply instead of re-fetching the
   // whole list — a reload resets to page 1 and throws away the user's sort order and scroll position.
-  // Mirrors the per-row handlers: recategorized rows linger (a mis-tap stays correctable; the Refresh
+  // Mirrors the per-row handlers: re-categorized rows linger (a mis-tap stays correctable; the Refresh
   // button prunes rows that no longer match), trashed rows drop. "all matching" selections may touch
   // unloaded rows too, but those aren't on screen, so only the loaded ones need patching.
   function patchMatchingTxnsForBulk(actions, affectedIds) {
