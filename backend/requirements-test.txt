@@ -1,0 +1,4 @@
+# Test-only deps. Mirrors [project.optional-dependencies].test in pyproject.toml, just as
+# requirements.txt mirrors [project.dependencies]. Install: pip install -r requirements-test.txt
+pytest==9.0.3
+httpx==0.28.1

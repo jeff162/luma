@@ -36,7 +36,6 @@ import os
 import uuid
 import zipfile
 from base64 import urlsafe_b64decode, urlsafe_b64encode
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
@@ -48,6 +47,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from backend.db.database import get_db, get_db_instance_id
 from backend.db.control_database import auth_required
+from backend.time_utils import utcnow_iso
 from backend.services import crypto_service
 from backend.services.transaction_tags import VISIBLE_TXN_TAG_SQL
 
@@ -516,7 +516,7 @@ def build_backup_data(conn) -> dict:
 
     return {
             "version":        7,
-            "exported_at":    datetime.utcnow().isoformat(),
+            "exported_at":    utcnow_iso(),
             # System identity, so restore can tell "my own backup" from "a different system's", and
             # which access mode it came from. Used by the restore compatibility guard.
             "instance_id":    get_db_instance_id(conn),
@@ -611,7 +611,7 @@ def export_credentials(request: Request, encrypted: bool = Query(False)):
         exported_items.append(item)
     payload = {
         "version":     1,
-        "exported_at": datetime.utcnow().isoformat(),
+        "exported_at": utcnow_iso(),
         "warning":     "This file contains sensitive Plaid access tokens. Store securely.",
         "plaid_items": exported_items,
     }
@@ -840,7 +840,7 @@ def restore_backup(body: RestoreRequest):
 
     return {
         "ok": True,
-        "restored_at": datetime.utcnow().isoformat(),
+        "restored_at": utcnow_iso(),
         "restored_counts": {
             "owners": len(owners),
             "accounts": len(accounts),

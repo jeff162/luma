@@ -44,6 +44,7 @@ from pydantic import BaseModel
 from backend.db.database import SHARED_OWNER_ID, get_db
 from backend.db.control_database import auth_required, get_local_preference_profile
 from backend.json_utils import safe_json_dict
+from backend.time_utils import utcnow_iso
 from backend.routers.accounts import resolve_default_owner_id
 from backend.services.categorizer import categorize_transaction, load_categorization_rules, load_rule_tags_by_id
 from backend.services.duplicate_detection import (
@@ -893,7 +894,7 @@ def _discard_covered_rule_suggestions(review_state: dict, suggestion_id: str, so
     statuses = dict(review_state.get("statuses") or {})
     suggestions = dict(review_state.get("suggestions") or {})
     changed_ids: list[str] = []
-    now = datetime.utcnow().isoformat()
+    now = utcnow_iso()
     source_row_ids = {str(value) for value in (source_entry.get("source_row_ids") or []) if str(value).strip()}
 
     for other_suggestion_id, entry in suggestions.items():
@@ -951,7 +952,7 @@ def refresh_rule_suggestion_review(review_state: dict, suggestions: list[dict]) 
             next_entries[suggestion_id] = entry if isinstance(entry, dict) else {}
 
     review_state["suggestions"] = next_entries
-    now = datetime.utcnow().isoformat()
+    now = utcnow_iso()
     if not review_state.get("generated_at"):
         review_state["generated_at"] = now
     review_state["last_generated_at"] = now
@@ -3587,7 +3588,7 @@ def update_batch_rule_suggestion_review(batch_id: str, body: BatchRuleSuggestion
         else:
             next_status = {
                 "status": status,
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": utcnow_iso(),
             }
             if body.rule_id:
                 next_status["rule_id"] = body.rule_id
@@ -3676,7 +3677,7 @@ def update_profile_rule_suggestion_review(profile_id: str, body: BatchRuleSugges
         else:
             next_status = {
                 "status": status,
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": utcnow_iso(),
             }
             if body.rule_id:
                 next_status["rule_id"] = body.rule_id
@@ -3776,7 +3777,7 @@ def update_system_rule_suggestion_review(body: BatchRuleSuggestionReviewUpdateRe
         else:
             next_status = {
                 "status": status,
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": utcnow_iso(),
             }
             if body.rule_id:
                 next_status["rule_id"] = body.rule_id

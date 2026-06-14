@@ -35,6 +35,10 @@ if [ -n "$BACKEND_FILES" ]; then
   echo "Checking backend comments..."
   node scripts/run_backend_comment_check.js $BACKEND_FILES
   if [ $? -ne 0 ]; then STATUS=1; fi
+
+  echo "Checking backend timestamps..."
+  node scripts/check-backend-timestamps.js $BACKEND_FILES
+  if [ $? -ne 0 ]; then STATUS=1; fi
 fi
 
 if [ $STATUS -ne 0 ]; then

@@ -14,6 +14,16 @@ dependencies = [
     "cryptography==43.0.1",
 ]
 
+# Test-only deps, kept out of `dependencies` (and requirements.txt) so a runtime install stays lean.
+# The backend runs from source rather than as an installed package, so install via the mirror file:
+# `pip install -r requirements-test.txt`. pytest runs the suite; httpx backs FastAPI's TestClient
+# (see backend/tests/_api_client.py).
+[project.optional-dependencies]
+test = [
+    "pytest==9.0.3",
+    "httpx==0.28.1",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

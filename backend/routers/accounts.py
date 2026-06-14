@@ -21,7 +21,6 @@ Attach / detach also coordinates with dedupe state — see
 
 import json
 import uuid
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -29,6 +28,7 @@ from pydantic import BaseModel
 
 from backend.db.database import SHARED_OWNER_NAME, SHARED_OWNER_ID, get_db
 from backend.json_utils import safe_json_dict
+from backend.time_utils import utcnow_iso
 from backend.services.duplicate_detection import (
     clear_account_pair_distinct_for_merge,
     forget_account_pair_distinct,
@@ -648,7 +648,7 @@ def trash_account(account_id: str):
             raise HTTPException(status_code=400, detail="Only merged child accounts can be sent to trash")
         conn.execute(
             "UPDATE account SET trashed_at = ? WHERE id = ?",
-            (datetime.utcnow().isoformat(), account_id),
+            (utcnow_iso(), account_id),
         )
     return {"ok": True}
 

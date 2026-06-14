@@ -116,4 +116,58 @@ itself.
 
 ---
 
+## Migration / fresh-schema parity
+
+**Context.** There are two ways a tenant DB's schema comes into existence, and
+they don't share code. A **fresh** install runs `init_db`'s `CREATE TABLE`
+script and is stamped straight to `CURRENT_VERSION` — the migration chain is
+deliberately skipped (`db/database.py`, `is_fresh_db` branch: "Fresh databases
+are stamped current immediately"). An **existing** file instead replays
+`MIGRATIONS[1..N]` via `run_migrations`. So every schema object exists in two
+places that must be kept in lockstep by hand: the canonical `CREATE TABLE`
+block *and* the migration that introduced (or altered) it.
+
+**Why it's worth a test.** Nothing currently asserts the two paths converge, so
+they can silently drift: add a column to the `init_db` CREATE block and forget
+the migration (or vice versa), and brand-new DBs and upgraded DBs end up with
+different schemas — a bug only users with old files hit. This session's
+`owner_id`-on-`category` crash was exactly this class: a migration dropped a
+column the delete path still referenced. A parity guard turns "someone
+remembers to edit both" into a failing test.
+
+### Backend unit test — build now, no browser
+
+**Shape.** Build the schema both ways into two temp DBs and diff the resulting
+structure:
+
+- [ ] **Fresh:** `init_db(fresh_path)` → reads at `CURRENT_VERSION`.
+- [ ] **Migrated:** start from the true pre-migration baseline and run
+      `run_migrations` up to `CURRENT_VERSION`, then compare.
+- [ ] **Compare** the normalized schema of every user table: column names +
+      types + NOT NULL + defaults (`PRAGMA table_info`), foreign keys
+      (`PRAGMA foreign_key_list`), and indexes (`PRAGMA index_list` /
+      `index_info`). Assert the two are identical table-by-table; a mismatch
+      names the drifted object.
+- [ ] **Coverage guard:** derive the table list from `sqlite_master` on both
+      DBs and assert the *sets* match first, so "new table added to only one
+      path" trips before the per-table column diff.
+
+**The catch to resolve first (why this was deferred).** The migration chain may
+not build a DB from absolute zero — historically migrations were *additive
+deltas* on top of an original baseline schema, not a from-scratch sequence. If
+migration v1 doesn't create the original base tables, replaying from an empty
+DB won't reproduce the full schema, and the naive "empty → migrate" comparison
+will spuriously fail. Before writing assertions, determine what the real v0
+baseline is (the schema as it stood when the migration system was introduced)
+and seed that, *then* migrate. If it turns out migrations genuinely can rebuild
+from empty, the test is simpler — but confirm that rather than assuming it.
+
+**Notes.** Mirror the temp-DB harness in `backend/tests/`. Compare schema
+*structure* only — ignore `db_meta` version rows and any seeded data
+(categories/rules), which differ legitimately. `sqlite_master.sql` text is too
+brittle to diff directly (whitespace, `IF NOT EXISTS`, column order); normalize
+via the `PRAGMA`s instead.
+
+---
+
 ## (add future test gaps below)
