@@ -55,3 +55,6 @@ desktop.ini
 *.log
 logs/
 
+
+# Playwright E2E throwaway backend stack (temp DBs)
+backend/.e2e-tmp/

@@ -62,6 +62,7 @@ from backend.services.preferences import (
     set_preference,
 )
 from backend.db.database import get_db, get_db_instance_id
+from backend.db.demo_data import load_demo_data
 from backend.services.crypto_service import reencrypt_plaid_items
 
 
@@ -331,6 +332,19 @@ def create_local_profile(body: LocalPreferenceProfileCreateRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"profile": profile}
+
+
+@router.post("/demo-data")
+def load_demo_data_endpoint():
+    """Populate an empty local tenant with the explorable demo dataset, ensuring a preference profile
+    exists so the app leaves onboarding. No-op if the tenant already has data; local-mode only (so it
+    can never run against a real authenticated account)."""
+    _require_local_mode()
+    profiles = list_local_preference_profiles()
+    if not profiles:
+        profiles = [create_local_preference_profile("Demo")]
+    with get_db() as conn:
+        return load_demo_data(conn, scope_id=profiles[0]["id"])
 
 
 @router.patch("/local-preference-profiles/{profile_id}")

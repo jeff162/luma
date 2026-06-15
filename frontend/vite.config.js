@@ -41,7 +41,14 @@ export default defineConfig(({ mode }) => {
   const rootEnv = fs.existsSync(rootEnvPath)
     ? parseSimpleEnvFile(fs.readFileSync(rootEnvPath, 'utf8'))
     : {}
-  const env = { ...frontendEnv, ...rootEnv }
+  // Explicitly-exported process env wins over the .env files (conventional precedence, and what lets
+  // the Playwright E2E harness pin its own isolated ports/proxy without editing the developer's .env).
+  // Normal `npm run dev` sets none of these, so its behavior is unchanged.
+  const processEnvOverrides = {}
+  for (const key of ['FRONTEND_PORT', 'BACKEND_PORT', 'VITE_API_PROXY_TARGET']) {
+    if (process.env[key]) processEnvOverrides[key] = process.env[key]
+  }
+  const env = { ...frontendEnv, ...rootEnv, ...processEnvOverrides }
   const frontendPort = Number(env.FRONTEND_PORT || 5173)
   const apiProxyTarget = env.VITE_API_PROXY_TARGET || `http://localhost:${env.BACKEND_PORT || 8000}`
 

@@ -95,6 +95,22 @@ async function expectSharedMappingSuggestions(scope) {
   await expect(scope.getByText('Accept Account')).toBeVisible()
 }
 
+async function clearAllImportProfiles(request) {
+  const response = await request.get('/api/import-export/profiles')
+  if (!response.ok()) return
+  const profiles = await response.json()
+  for (const profile of Array.isArray(profiles) ? profiles : []) {
+    await deleteImportProfile(request, profile.id)
+  }
+}
+
+// All specs share one backend/DB per run, so a data source left by a sibling spec makes the import
+// page auto-load a saved source and re-render — detaching the transient "Skip" control mid-interaction.
+// Start every spec from a clean slate of saved sources.
+test.beforeEach(async ({ request }) => {
+  await clearAllImportProfiles(request)
+})
+
 test('shared mapping suggestions stay aligned between import flow and data source editor', async ({ page }) => {
   await page.goto('/import-export')
 
@@ -112,14 +128,10 @@ test('shared mapping suggestions stay aligned between import flow and data sourc
     .filter({ has: page.getByRole('button', { name: 'Close' }) })
     .first()
 
+  // beforeEach clears all saved sources, so the manager always opens on its empty state.
   const createFirst = managerPanel.getByRole('button', { name: '+ Create first data source' })
-  if (await createFirst.isVisible()) {
-    await createFirst.click()
-  } else {
-    const newSourceButton = managerPanel.locator('div').filter({ hasText: /^\+ New data source$/ })
-    await expect(newSourceButton).toBeVisible()
-    await newSourceButton.dispatchEvent('click')
-  }
+  await expect(createFirst).toBeVisible()
+  await createFirst.click()
 
   await page.locator('input[type="file"][accept=".csv,text/csv"]').last().setInputFiles(sampleCsvFile())
 
@@ -140,7 +152,8 @@ test('mismatched saved data source can switch to temporary draft without losing 
 
     await expect(page.getByText('Mismatch detected')).toBeVisible()
     await page.getByRole('button', { name: 'Change data source' }).click()
-    await page.getByRole('button', { name: 'Temporary draft' }).click()
+    // The picker's "use a temporary draft" choice is the "Skip" control.
+    await page.getByRole('button', { name: 'Skip' }).click()
 
     await expect(page.getByRole('button', { name: 'temporary draft' })).toBeVisible()
     await expect(page.getByText('Accept Date')).toBeVisible()
@@ -226,10 +239,13 @@ test('creating a new mapped account keeps import disabled until the user chooses
     has: page.locator('option').filter({ hasText: 'Checking' }),
   }).last()
 
-  await expect(importButton).toBeDisabled()
+  // The shared Button disables via no-onClick + dimming + cursor:not-allowed (it doesn't set the HTML
+  // disabled attribute), so assert that gated state rather than toBeDisabled().
+  await expect(importButton).toHaveCSS('cursor', 'not-allowed')
   await expect(typeSelect).toHaveValue('')
-  await expect(page.getByText('Choose an account type for "Alias Wallet (...7777)".')).toBeVisible()
+  // The disabled reason is surfaced as the import button's tooltip (title), not inline text.
+  await expect(page.getByTitle('Choose an account type for "Alias Wallet (...7777)".').first()).toBeVisible()
 
   await typeSelect.selectOption('depository')
-  await expect(importButton).toBeEnabled()
+  await expect(importButton).toHaveCSS('cursor', 'pointer')
 })

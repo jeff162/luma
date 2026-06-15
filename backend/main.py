@@ -9,13 +9,19 @@ main guarantee is that each API request runs against the correct tenant database
 for the authenticated user or local-mode session before any router code executes.
 """
 
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env", override=True)
+# Allow the dotenv path to be redirected: the Playwright E2E harness points FINTRACK_ENV_FILE at an
+# isolated env file so its throwaway DB paths take effect. override=True still keeps the chosen .env
+# authoritative over a stale shell environment — unchanged for the default repo .env.
+load_dotenv(
+    dotenv_path=os.getenv("FINTRACK_ENV_FILE") or (Path(__file__).resolve().parent.parent / ".env"),
+    override=True,
+)
 
-import os
 from contextlib import asynccontextmanager
 
 from backend.app_logging import log_warning

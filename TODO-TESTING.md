@@ -6,35 +6,39 @@ entry should stand on its own. Two tiers:
 - **Python / HTTP** — buildable now, no browser. Unit tests (direct function
   calls) and FastAPI `TestClient` integration tests (real request/response,
   in-process).
-- **End-to-end UI** — drives the real app in a browser via the chrome-devtools
-  MCP. Blocked until the MCP can reach an actual browser (see Prerequisites).
+- **End-to-end UI** — drives the real app in a real browser via Playwright
+  (`npm run ui:test`), against an isolated, auto-seeded throwaway stack.
+  Buildable now (see Harness).
 
 When a test here is built, delete the entry (or move a note to the relevant
 test file's docstring).
 
 ---
 
-## Prerequisites
+## Harness
 
-### End-to-end UI tests need a browser inside WSL
+### End-to-end UI runs on Playwright against an isolated stack
 
-**Context.** The chrome-devtools MCP server does not ship a browser — it
-launches or attaches to one. This repo runs in a WSL distro with no
-Chrome/Chromium installed, so the MCP tools are present but inert: there's
-nothing for them to drive. This is why every "verified in-app" claim so far is
-actually only "unit-tested + lint + build."
+**Available now.** `npm run ui:test` (config: `frontend/playwright.config.js`)
+boots its own throwaway backend + frontend on dedicated ports (5199 / 8099,
+clear of the dev 5174 / 8001) and tears them down after. Playwright ships its
+own browsers, so no system Chrome is needed.
 
-**What unlocks it.**
+- **Isolation.** `scripts/run-e2e-backend.sh` points the backend at a wiped temp
+  dir via `FINTRACK_ENV_FILE` (data, control, and tenant DBs all throwaway), so
+  E2E never touches the real `fintrack-data.db` / `fintrack-control.db`.
+- **Seeding.** `frontend/tests/globalSetup.js` creates one local preference
+  profile so specs land past the "Getting Started" onboarding gate. A richer
+  demo dataset (owners/accounts/transactions) is a planned follow-up that will
+  double as this seed.
+- **Per-spec cleanliness.** Specs share one DB per run, so clear shared state in
+  a `beforeEach` (see `import-mapping-controls.spec.js`, which clears saved data
+  sources) — otherwise a sibling spec's residue bleeds in.
+- **Escape hatch.** Set `PLAYWRIGHT_BASE_URL` to run against an already-running
+  stack instead of the managed one (skips the webServer + seed).
 
-- Install a Linux Chromium/Chrome *inside* the WSL distro. **Headless** is
-  enough for the MCP — no display/X server (so WSLg headful setup is not
-  required).
-- Point the MCP at it: depending on the server config, either set an
-  `executablePath` to the binary or give it a remote-debugging URL. (Attaching
-  to a Windows-side Chrome over a `--remote-debugging-port` across the
-  WSL↔Windows boundary is the flakier alternative — prefer a browser in WSL.)
-- Sanity check: launch the app, `navigate_page` to it, and confirm a single
-  `take_snapshot` returns the accessibility tree before writing real flows.
+The chrome-devtools MCP is a *separate* tool that still has no browser in this
+WSL distro, but E2E does not use it — Playwright is the path.
 
 ---
 
@@ -81,12 +85,12 @@ exercises that contract in-process (no uvicorn, no browser).
 **Notes.** Mirror the temp-DB + `set_current_db_path` harness already used in
 `backend/tests/`. Watch the seeded default rules — use fixture keywords.
 
-### End-to-end UI flows — build when the MCP browser works
+### End-to-end UI flows — buildable now (Playwright)
 
 **Why.** The four interactive surfaces wire the statuses into dialogs/banners
 that no unit or HTTP test exercises. These confirm the handlers fire, the
-dialogs render, and the right API calls go out (`list_network_requests`) with
-no console errors (`list_console_messages`).
+dialogs render, the right API calls go out (assert via `page.waitForResponse`),
+and no console errors occur (attach a `page.on('console')` listener).
 
 **To build (one flow each).**
 
@@ -111,8 +115,9 @@ no console errors (`list_console_messages`).
 
 **Setup each flow needs.** A seeded rule to collide with, and — for the Import
 flow — an import batch with categorized transactions so suggestions generate.
-Decide whether to seed via API calls before driving the UI or through the UI
-itself.
+Seed via API calls before driving the UI (the `globalSetup` / `beforeEach`
+pattern already in use), or through the UI itself. The forthcoming demo dataset
+may cover much of this baseline.
 
 ---
 

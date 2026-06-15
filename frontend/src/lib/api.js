@@ -89,6 +89,7 @@ export const api = {
     request(`/auth/local-preference-profiles/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
   deleteLocalPreferenceProfile: (id) =>
     request(`/auth/local-preference-profiles/${id}`, { method: 'DELETE' }),
+  loadDemoData: () => request('/auth/demo-data', { method: 'POST' }),
   getRuntimeConfigDefaults: () => request('/auth/runtime-config/defaults'),
   saveRuntimeConfig: (data) =>
     request('/auth/runtime-config', { method: 'POST', body: JSON.stringify(data) }),
