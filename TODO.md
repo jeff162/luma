@@ -401,6 +401,42 @@ restored" for confirmation).
   through `mark_import_suspects`/the cross-account sweep, the same as the
   manual "Import duplicates" path already does.
 
+### Duplicate-resolution history (review what you did, and undo it)
+
+**Context.** There is no chronological, reviewable record of the dedupe
+decisions a user made (Keep / Discard / Replace / Import-anyway / Restore).
+The *raw material* is already persisted, though: every action soft-deletes
+(`trashed_at` + `rejection_reason`, even Replace), and each row records how/when
+it was resolved (`suspect_resolved_at`, `dedupe_resolved_by`). So no decision is
+lossy and recovery is already possible per-row from the duplicate report — what's
+missing is a *view* of the decisions over time and a one-click *batch* undo.
+
+**Why deferred (and split).** This is convenience/transparency, not safety —
+data loss is already prevented by the soft-delete + per-row Restore/Import-anyway.
+So it doesn't clear the "no complexity without a clear payoff" bar yet. Do it in
+two steps:
+
+- **v1 — flat history view (nearly free; worth doing later).** Read-only list of
+  resolved rows derived from the existing fields — query by `suspect_resolved_at`,
+  group by (batch, action, time-window), show action + affected rows. **No new
+  table**, and per-row undo already exists (the report's Restore/Import-anyway).
+  Delivers most of the transparency value.
+- **v2 — action log + grouped/tree view + one-click batch-undo (heavier; only if
+  v1 proves used).** A real `dedupe_action` log written at resolve-time
+  (action, timestamp, batch, affected txn ids), a tree view (action → affected
+  nodes), and undo of a whole action/group.
+
+**Design notes when picked up.**
+
+- Grouping is nearly free at log-time: the review dialog already applies bulk
+  selections *as* bulk ("Keep both (N)…"), so a log row written then captures the
+  grouping. Only the uncommon one-at-a-time path needs a time-window fallback —
+  don't build a fragile post-hoc "these N individual actions were really a bulk"
+  heuristic.
+- Undo reuses existing inverses (`restore_rejected_duplicate`, remove the
+  `account_pair_distinct` pair + re-flag, un-trash the replaced row) — it's
+  replaying a soft-delete inverse, not new recovery logic.
+
 ---
 
 ## Frontend data freshness

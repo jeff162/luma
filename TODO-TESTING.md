@@ -115,9 +115,31 @@ and no console errors occur (attach a `page.on('console')` listener).
 
 **Setup each flow needs.** A seeded rule to collide with, and — for the Import
 flow — an import batch with categorized transactions so suggestions generate.
-Seed via API calls before driving the UI (the `globalSetup` / `beforeEach`
-pattern already in use), or through the UI itself. The forthcoming demo dataset
-may cover much of this baseline.
+The demo dataset (loaded by `globalSetup`, see `backend/db/demo_data.py`) now
+provides this baseline — owners, accounts, per-account import batches, rules,
+tags, and ~80 transactions — so these specs can build on it; use the
+`beforeEach`-clear pattern for any rule mutations so parallel specs don't collide.
+
+**Tier-1 status (done — for reference).** The other high-value flows the demo
+unblocked are built: tag inheritance, inline categorize, dashboard render, and
+the cross-account duplicate review (`transactions` / `categorize` / `dashboard` /
+`duplicates` specs). The five rule-collision flows above are what remains.
+
+### Frontend component tests (jsdom) — buildable now
+
+**Why.** Only two shared interactive components have jsdom coverage
+(`CategoryPicker`, `TransientTextInput`); the rest are low-observability,
+heavily reused, and refactor-fragile. Same harness as the existing component
+tests (`// @vitest-environment jsdom` + `@testing-library/react`).
+
+**To build (highest value first).**
+
+- [ ] **TagPickerWithCreate** — the direct analog of CategoryPicker
+      (search / create / select); near-copy of that test.
+- [ ] **TransactionRow / TransactionListTable** — the core row: inline edits,
+      embedded category/tag pickers, selection. Used by many pages.
+- [ ] **UnifiedDuplicatesDialog** — the dedupe-review modal (the reference
+      modal per `docs/collaboration-notes.md`).
 
 ---
 
