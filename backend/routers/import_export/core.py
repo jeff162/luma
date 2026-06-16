@@ -42,7 +42,7 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Req
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from backend.db.database import SHARED_OWNER_ID, get_db
+from backend.db.database import SHARED_OWNER_ID, get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.db.demo_data import is_demo_data_loaded
 from backend.db.control_database import auth_required, get_local_preference_profile
 from backend.json_utils import safe_json_dict
@@ -67,6 +67,7 @@ RULE_SUGGESTION_REVIEW_STATUSES = {"accepted", "skipped", "discarded"}
 IMPORT_SUMMARY_KEY = "import_summary"
 UNKNOWN_SOURCE_FALLBACK_KEY = "unknown_source_fallback"
 SYSTEM_RULE_SUGGESTION_REVIEW_STATE_KEY = "system_rule_suggestion_review"
+SYSTEM_CATEGORY_WORKSPACE_DRAFT_KEY = "system_category_workspace_draft"
 UNASSIGNED_CATEGORY_SYSTEM_KEY = "unassigned"
 IMPORTED_CATEGORY_SETTINGS_KEY = "imported_category_settings"
 IMPORTED_CATEGORY_SCOPE_ALL = "all"
@@ -1663,23 +1664,36 @@ def normalize_effective_imported_category(value: str) -> str:
     return " ".join((value or "").strip().split())
 
 
-def _get_import_workflow_state(conn, key: str) -> dict:
-    row = conn.execute(
-        "SELECT payload_json FROM import_workflow_state WHERE key = ?",
-        (key,),
-    ).fetchone()
-    return safe_json_dict(row["payload_json"]) if row else {}
+# Thin import-module aliases over the shared tenant-state KV accessors (the canonical pair lives in
+# db.database, since this store is shared app-wide state — demo marker, workspace draft, tag-report
+# catalog — not an import-only concern). Kept as names the import flows already call.
+_get_import_workflow_state = get_tenant_workflow_state
+_save_import_workflow_state = set_tenant_workflow_state
 
 
-def _save_import_workflow_state(conn, key: str, payload: dict) -> None:
-    conn.execute(
-        """
-        INSERT INTO import_workflow_state (key, payload_json)
-        VALUES (?, ?)
-        ON CONFLICT(key) DO UPDATE SET payload_json = excluded.payload_json
-        """,
-        (key, json.dumps(payload or {})),
-    )
+# The "Group Imported Categories" workspace draft is shared tenant-wide state, not a per-user
+# preference: it stages how the one shared category tree is being organized, so every user/profile
+# must see the same in-progress draft. It therefore lives in `import_workflow_state` (shared, in the
+# data DB, carried by backups) rather than the scoped `ui_preference` store. The payload is the
+# opaque frontend draft snapshot; the backend only persists and returns it.
+class CategoryWorkspaceDraftBody(BaseModel):
+    draft: Optional[dict] = None
+
+
+@router.get("/category-workspace-draft")
+def get_category_workspace_draft():
+    with get_db() as conn:
+        state = _get_import_workflow_state(conn, SYSTEM_CATEGORY_WORKSPACE_DRAFT_KEY)
+    draft = state.get("draft")
+    return {"draft": draft if isinstance(draft, dict) else None}
+
+
+@router.put("/category-workspace-draft")
+def save_category_workspace_draft(body: CategoryWorkspaceDraftBody):
+    draft = body.draft if isinstance(body.draft, dict) else None
+    with get_db() as conn:
+        _save_import_workflow_state(conn, SYSTEM_CATEGORY_WORKSPACE_DRAFT_KEY, {"draft": draft})
+    return {"ok": True}
 
 
 def _get_system_rule_suggestion_review_state(conn) -> dict:

@@ -187,7 +187,6 @@ export function BackupRestoreTab() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', opacity: hasStoredCredentials ? 1 : 0.58 }}>
             <a
               href={hasStoredCredentials ? api.exportCredentials(false) : undefined}
-              download={hasStoredCredentials ? 'fintrack_credentials.zip' : undefined}
               onClick={event => {
                 if (!hasStoredCredentials) event.preventDefault()
               }}
@@ -196,7 +195,6 @@ export function BackupRestoreTab() {
             </a>
             <a
               href={hasStoredCredentials && enabledRecipients.length > 0 ? api.exportCredentials(true) : undefined}
-              download={hasStoredCredentials && enabledRecipients.length > 0 ? 'fintrack_credentials.encrypted.zip' : undefined}
               onClick={event => {
                 if (!hasStoredCredentials || enabledRecipients.length === 0) event.preventDefault()
               }}

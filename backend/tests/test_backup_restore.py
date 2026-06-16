@@ -20,7 +20,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from backend.db.control_database import auth_required
-from backend.db.database import SHARED_OWNER_ID, _seed_default_categories, get_db, init_db, reset_current_db_path, set_current_db_path
+from backend.db.database import SHARED_OWNER_ID, _seed_default_categories, get_db, get_db_instance_id, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export.backup import RestoreRequest, build_backup_data, restore_backup
 from backend.services.categorizer import seed_default_rules
 
@@ -203,6 +203,21 @@ class BackupRestoreTests(unittest.TestCase):
         payload["instance_id"] = "some-other-system"
         with self._use_db_path():
             result = restore_backup(RestoreRequest(data=payload, force=True))
+        self.assertTrue(result["ok"])
+
+    def test_restore_adopts_backup_instance_id(self):
+        # A full restore replaces the data, so afterward the DB *is* the backup's system and takes on
+        # its instance_id. This is what stops a re-restore of the same backup (now over the data it
+        # itself produced) from reading as "a different system" — the fresh-DB-then-restore-again case.
+        self._seed_complete()
+        payload = self._export_payload()
+        payload["instance_id"] = "backup-origin-system"
+        with self._use_db_path():
+            restore_backup(RestoreRequest(data=payload, force=True))  # force: target had its own data
+            with get_db() as conn:
+                self.assertEqual(get_db_instance_id(conn), "backup-origin-system")
+            # The same backup now restores again WITHOUT force: it is recognized as this system's own.
+            result = restore_backup(RestoreRequest(data=payload))
         self.assertTrue(result["ok"])
 
 

@@ -15,12 +15,11 @@
 // it becomes visible. The in-progress grouping draft is persisted (useUserPreference), so minimize /
 // navigate never loses it.
 
-import { createContext, lazy, Suspense, useCallback, useContext, useMemo, useState } from 'react'
+import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
-import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { AppConfirmDialog, AppNoticeDialog } from '../components/ui.jsx'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
-import { SYSTEM_CATEGORY_WORKSPACE_DRAFT_PREF_KEY, UNASSIGNED_CATEGORY_SYSTEM_KEY } from '../lib/importExport/constants.js'
+import { UNASSIGNED_CATEGORY_SYSTEM_KEY } from '../lib/importExport/constants.js'
 import {
   normalizeImportCategoryValue,
   sanitizeCategoryWorkspaceDraftToSourceValues,
@@ -52,7 +51,28 @@ export function useImportedCategoryWorkspace() {
 export function ImportedCategoryWorkspaceProvider({ children }) {
   const [panel, setPanel] = useState({ open: false, minimized: false })
   const [categories, setCategories] = useState([])
-  const [draft, setDraft] = useUserPreference(SYSTEM_CATEGORY_WORKSPACE_DRAFT_PREF_KEY, null)
+  // The workspace draft is shared tenant-wide state (one shared category tree being organized), not a
+  // per-user preference, so it loads from the backend (import_workflow_state) rather than ui_preference.
+  // A ref tracks the current value so setDraft can support functional updaters and write through without
+  // a side effect inside the state updater.
+  const [draft, setDraftState] = useState(null)
+  const draftRef = useRef(null)
+  const applyDraftValue = useCallback((value) => {
+    draftRef.current = value ?? null
+    setDraftState(value ?? null)
+  }, [])
+  useEffect(() => {
+    let cancelled = false
+    api.getCategoryWorkspaceDraft()
+      .then(res => { if (!cancelled) applyDraftValue(res?.draft ?? null) })
+      .catch(() => { /* keep null on failure; the workspace re-seeds from the live category flags */ })
+    return () => { cancelled = true }
+  }, [applyDraftValue])
+  const setDraft = useCallback((nextOrUpdater) => {
+    const next = (typeof nextOrUpdater === 'function' ? nextOrUpdater(draftRef.current) : nextOrUpdater) ?? null
+    applyDraftValue(next)
+    api.saveCategoryWorkspaceDraft(next).catch(() => { /* optimistic; ignore transient save errors */ })
+  }, [applyDraftValue])
   const [pendingDelete, setPendingDelete] = useState(null)
   const [notice, setNotice] = useState(null)
 
@@ -74,6 +94,12 @@ export function ImportedCategoryWorkspaceProvider({ children }) {
   )
   const sourceValues = useMemo(
     () => workspaceUnassignedCategories.map(c => c.name).filter(Boolean),
+    [workspaceUnassignedCategories],
+  )
+  // Leaves already parked live (set_aside = 1). The durable truth for which categories sit in the
+  // Set Aside list, so the workspace seeds them there even with no persisted draft for this profile.
+  const parkedSourceValues = useMemo(
+    () => workspaceUnassignedCategories.filter(c => c.set_aside).map(c => c.name).filter(Boolean),
     [workspaceUnassignedCategories],
   )
   const existingCategories = useMemo(
@@ -228,8 +254,10 @@ export function ImportedCategoryWorkspaceProvider({ children }) {
     pendingCount: counts.pending,
     totalCount: counts.total,
     sourceValues,
+    parkedSourceValues,
     workspaceUnassignedCategories,
     existingCategories,
+    draft,
     effectiveDraft,
     setDraft,
     applyDraft,
@@ -242,7 +270,7 @@ export function ImportedCategoryWorkspaceProvider({ children }) {
     setNotice,
   }), [
     panel.open, panel.minimized, open, close, minimize, restore, counts.pending, counts.total,
-    sourceValues, workspaceUnassignedCategories, existingCategories, effectiveDraft, setDraft,
+    sourceValues, parkedSourceValues, workspaceUnassignedCategories, existingCategories, draft, effectiveDraft, setDraft,
     applyDraft, requestDelete, confirmDelete, pendingDelete, handleCategoriesChanged, notice,
   ])
 
@@ -263,7 +291,7 @@ export function ImportedCategoryWorkspaceRenderer() {
         <Suspense fallback={null}>
           <CategoryImportWorkspace
             sourceValues={ctx.sourceValues}
-            parkedSourceValues={ctx.workspaceUnassignedCategories.filter(c => c.set_aside).map(c => c.name).filter(Boolean)}
+            parkedSourceValues={ctx.parkedSourceValues}
             sourceMeta={{
               total_count: ctx.totalCount,
               displayed_count: ctx.sourceValues.length,

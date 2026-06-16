@@ -92,7 +92,7 @@ def get_db(db_path: str | None = None):
 # Migrations are additive startup upgrades for existing databases only; fresh installs
 # are created directly at `CURRENT_VERSION` and should not replay the migration chain.
 
-CURRENT_VERSION = 30
+CURRENT_VERSION = 32
 
 MIGRATIONS = {}
 
@@ -144,6 +144,34 @@ def get_db_instance_id(conn) -> str:
         (instance_id,),
     )
     return instance_id
+
+
+def get_tenant_workflow_state(conn, key: str) -> dict:
+    """Read a shared (tenant-wide, not per-user) state blob from `import_workflow_state`. This is the
+    one place app-wide *data state* lives that is neither a transaction-graph row nor a per-user
+    preference — e.g. the demo marker, the category-workspace draft, and the dashboard tag-report
+    catalog. Returns {} when absent or unparseable."""
+    row = conn.execute(
+        "SELECT payload_json FROM import_workflow_state WHERE key = ?", (key,)
+    ).fetchone()
+    if not row:
+        return {}
+    try:
+        value = json.loads(row["payload_json"])
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def set_tenant_workflow_state(conn, key: str, payload: dict) -> None:
+    conn.execute(
+        """
+        INSERT INTO import_workflow_state (key, payload_json)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET payload_json = excluded.payload_json
+        """,
+        (key, json.dumps(payload or {})),
+    )
 
 
 def run_migrations(conn):
@@ -740,6 +768,93 @@ def m28_ui_preferences(conn):
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ui_preference_scope ON ui_preference(scope_id)")
+
+
+@migration(32)
+def m32_share_dashboard_tag_reports(conn):
+    """Dashboard tag reports are a shared *catalog* of saved report definitions over the shared tag
+    set, not per-user chrome — every user should see the same saved reports. The catalog moves from
+    the scoped `ui_preference` store to shared `import_workflow_state`
+    (key `system_dashboard_tag_reports`). Which report a user currently has open
+    (`ui.dashboard.spendingViewBy`) stays a per-user preference, so the *selection* is personal while
+    the *catalog* is shared.
+
+    Unlike the transient workspace draft, saved reports are real artifacts, so existing per-scope lists
+    are UNIONED into the shared catalog (deduped by report id) rather than dropped — no user loses a
+    report they built.
+    """
+    TAG_REPORTS_PREF_KEY = "ui.dashboard.tagReports"
+    SHARED_KEY = "system_dashboard_tag_reports"
+    has_ui_pref = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ui_preference'"
+    ).fetchone()
+    if not has_ui_pref:
+        return
+    rows = conn.execute(
+        "SELECT pref_value FROM ui_preference WHERE pref_key = ? ORDER BY scope_id",
+        (TAG_REPORTS_PREF_KEY,),
+    ).fetchall()
+    merged = []
+    seen_ids = set()
+    for row in rows:
+        try:
+            reports = json.loads(row["pref_value"])
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(reports, list):
+            continue
+        for report in reports:
+            if not isinstance(report, dict):
+                continue
+            rid = report.get("id")
+            if rid and rid in seen_ids:
+                continue
+            if rid:
+                seen_ids.add(rid)
+            merged.append(report)
+    if merged:
+        set_tenant_workflow_state(conn, SHARED_KEY, {"reports": merged})
+    conn.execute("DELETE FROM ui_preference WHERE pref_key = ?", (TAG_REPORTS_PREF_KEY,))
+
+
+@migration(31)
+def m31_share_category_workspace_draft(conn):
+    """The "Group Imported Categories" workspace draft is shared data-organization state, not a
+    per-user preference: it stages how the single shared category tree is being arranged, so every
+    user/profile must see one draft. It moves from the scoped `ui_preference` store to the shared
+    `import_workflow_state` (still data-DB, still carried by backups) under the
+    `system_category_workspace_draft` key.
+
+    A lone per-scope draft migrates forward unchanged. If several scopes each hold one (the
+    multi-profile case) they cannot be merged coherently, so they are dropped — the durable category
+    state (group membership + `set_aside`) reconstructs the workspace on next open. Either way the
+    scoped rows are removed so the retired key can't shadow the shared one.
+    """
+    DRAFT_PREF_KEY = "import.systemCategoryWorkspaceDraft"
+    SHARED_KEY = "system_category_workspace_draft"
+    has_ui_pref = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ui_preference'"
+    ).fetchone()
+    if not has_ui_pref:
+        return
+    rows = conn.execute(
+        "SELECT pref_value FROM ui_preference WHERE pref_key = ?", (DRAFT_PREF_KEY,)
+    ).fetchall()
+    if len(rows) == 1:
+        try:
+            draft = json.loads(rows[0]["pref_value"])
+        except (TypeError, ValueError):
+            draft = None
+        if isinstance(draft, dict):
+            conn.execute(
+                """
+                INSERT INTO import_workflow_state (key, payload_json)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET payload_json = excluded.payload_json
+                """,
+                (SHARED_KEY, json.dumps({"draft": draft})),
+            )
+    conn.execute("DELETE FROM ui_preference WHERE pref_key = ?", (DRAFT_PREF_KEY,))
 
 
 @migration(30)

@@ -336,6 +336,10 @@ export const api = {
   createTag:   (data) => request('/tags', { method: 'POST', body: JSON.stringify(data) }),
   updateTag:   (id, data) => request(`/tags/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteTag:   (id) => request(`/tags/${id}`, { method: 'DELETE' }),
+  // Shared (tenant-wide) dashboard tag-report catalog. Not a per-user preference — every user sees
+  // the same saved reports; only the current selection (spendingViewBy) stays per-user.
+  getDashboardTagReports:  ()        => request('/tags/dashboard-reports'),
+  saveDashboardTagReports: (reports) => request('/tags/dashboard-reports', { method: 'PUT', body: JSON.stringify({ reports }) }),
   getOwnerSummary: (params = {}) => {
     const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))
     return request(`/owners/summary?${q}`)
@@ -369,6 +373,10 @@ export const api = {
       return res.json()
     })
   },
+  // Shared (tenant-wide) "Group Imported Categories" workspace draft. Not a per-user preference — it
+  // stages the one shared category tree, so it lives in import_workflow_state, not ui_preference.
+  getCategoryWorkspaceDraft:  ()      => request('/import-export/category-workspace-draft'),
+  saveCategoryWorkspaceDraft: (draft) => request('/import-export/category-workspace-draft', { method: 'PUT', body: JSON.stringify({ draft }) }),
   listBatches:      ()      => request('/import-export/batches'),
   getBatchEdited:   (id)    => request(`/import-export/batches/${id}/edited`),
   getBatchDuplicates: (id)  => request(`/import-export/batches/${id}/duplicates`),

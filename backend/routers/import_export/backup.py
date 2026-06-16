@@ -36,6 +36,7 @@ import os
 import uuid
 import zipfile
 from base64 import urlsafe_b64decode, urlsafe_b64encode
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
@@ -53,6 +54,18 @@ from backend.services import crypto_service
 from backend.services.transaction_tags import VISIBLE_TXN_TAG_SQL
 
 router = APIRouter()
+
+
+def _dated_backup_filename(stem: str, suffix: str) -> str:
+    """Suggested download name stamped with the *local* date — this is a local-first app, so the
+    server clock is the user's clock. Yields names like `fintrack_backup-2026-06-16.zip` that sort
+    chronologically and disambiguate multiple backups without manual renaming.
+
+    Intentionally LOCAL date (`date.today()`), not `utcnow_iso()`: this is a user-facing filename, not
+    a stored UTC timestamp, so the naive-UTC convention the timestamp guard enforces does not apply —
+    a UTC date would read as "tomorrow" for an evening backup west of UTC, which is exactly the
+    surprise we want to avoid in a download name the user recognizes by date."""
+    return f"{stem}-{date.today().isoformat()}{suffix}"
 
 
 EXPORT_COLUMNS = {
@@ -574,10 +587,10 @@ def export_backup(encrypted: bool = Query(False)):
             _zip_json_bytes("fintrack_backup.json", payload),
             recipients,
         )
-        filename = "fintrack_backup.encrypted.zip"
+        filename = _dated_backup_filename("fintrack_backup", ".encrypted.zip")
     else:
         content = _zip_json_bytes("fintrack_backup.json", payload)
-        filename = "fintrack_backup.zip"
+        filename = _dated_backup_filename("fintrack_backup", ".zip")
     return StreamingResponse(
         iter([content]),
         media_type="application/zip",
@@ -623,10 +636,10 @@ def export_credentials(request: Request, encrypted: bool = Query(False)):
             _zip_json_bytes("fintrack_credentials.json", payload),
             recipients,
         )
-        filename = "fintrack_credentials.encrypted.zip"
+        filename = _dated_backup_filename("fintrack_credentials", ".encrypted.zip")
     else:
         content = _zip_json_bytes("fintrack_credentials.json", payload)
-        filename = "fintrack_credentials.zip"
+        filename = _dated_backup_filename("fintrack_credentials", ".zip")
     return StreamingResponse(
         iter([content]),
         media_type="application/zip",
@@ -854,6 +867,20 @@ def restore_backup(body: RestoreRequest):
         # No data-DB foreign keys (scope_id is a loose reference to a control-DB user/profile), so
         # ui_preferences restore verbatim.
         insert_rows("ui_preference", ui_preferences)
+
+        # A restore is a full replacement: afterward the data *is* exactly the backup's system, so the
+        # DB adopts the backup's identity (`instance_id`) rather than keeping the target's stale one.
+        # Otherwise re-restoring the same backup would read as "a different system" even though the
+        # content is identical — the case that bites when a backup is restored into a fresh DB and then
+        # restored again. The pre-restore compatibility guard above is unaffected: it still compares the
+        # *incoming* backup against the *pre-restore* data to require confirmation before overwriting a
+        # different live system; this only sets the identity the DB carries once that data is gone.
+        backup_instance_id = d.get("instance_id")
+        if backup_instance_id:
+            conn.execute(
+                "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('instance_id', ?)",
+                (str(backup_instance_id),),
+            )
 
     return {
         "ok": True,

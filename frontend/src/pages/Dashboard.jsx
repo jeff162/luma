@@ -33,7 +33,6 @@ const DASHBOARD_CATEGORY_TXN_TABLE_PREF_KEY = 'ui.dashboard.categoryTransactions
 const DASHBOARD_GROUP_TXN_TABLE_PREF_KEY = 'ui.dashboard.groupTransactions.columns'
 const DASHBOARD_SPENDING_VIEW_BY_PREF_KEY = 'ui.dashboard.spendingViewBy'
 const DASHBOARD_VIEW_PREF_KEY = 'ui.dashboard.view'
-const DASHBOARD_TAG_REPORTS_PREF_KEY = 'ui.dashboard.tagReports'
 // Left-panel ("Total per month") width fraction of the Trends month/annual split; the user drags the
 // divider to rebalance and it persists. Defaults to giving the monthly chart a little more room than
 // the annual one (its month labels are tighter than 4-digit years). Clamped to [MIN, MAX].
@@ -54,10 +53,11 @@ const SPENDING_VIEW_BY_BUILTIN_OPTIONS = [
 
 // Saved tag-report shape:
 // { id, name, tagIds: string[], dismissedMissingWarning?: boolean }
-// Stored as a list under DASHBOARD_TAG_REPORTS_PREF_KEY in the per-user
-// preference store. The picker exposes each saved report as a value of
-// `${TAG_REPORT_PREFIX}${id}`, alongside the two built-in `group` and
-// `category` options and a `+ Tag report` action that opens the builder.
+// The catalog is SHARED tenant state (backend `GET`/`PUT /tags/dashboard-reports`, stored in
+// import_workflow_state), so every user/profile sees the same saved reports; only the current
+// selection (`spendingViewBy`) is per-user. The picker exposes each saved report as a value of
+// `${TAG_REPORT_PREFIX}${id}`, alongside the two built-in `group` and `category` options and a
+// `+ Tag report` action that opens the builder.
 function makeTagReportId() {
   return `tr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
@@ -1537,7 +1537,30 @@ export default function Dashboard() {
   const [catRows, setCatRows]     = useState([])
   const [topCatRows, setTopCatRows] = useState([])
   const [spendingViewBy, setSpendingViewBy] = useUserPreference(DASHBOARD_SPENDING_VIEW_BY_PREF_KEY, SPENDING_VIEW_BY_GROUP)
-  const [tagReports, setTagReports] = useUserPreference(DASHBOARD_TAG_REPORTS_PREF_KEY, [])
+  // The saved tag-report catalog is SHARED tenant data (every user sees the same reports), not a
+  // per-user preference, so it loads from the backend rather than ui_preference. A ref backs setter
+  // updates so functional updaters work and writes go through without a side effect inside setState.
+  // `setTagReports` returns the save promise (some callers chain `.then` to set the selection after).
+  const [tagReports, setTagReportsState] = useState([])
+  const tagReportsRef = useRef([])
+  useEffect(() => {
+    let cancelled = false
+    api.getDashboardTagReports()
+      .then(res => {
+        if (cancelled) return
+        const list = Array.isArray(res?.reports) ? res.reports : []
+        tagReportsRef.current = list
+        setTagReportsState(list)
+      })
+      .catch(() => { /* keep empty on failure */ })
+    return () => { cancelled = true }
+  }, [])
+  const setTagReports = useCallback((nextOrUpdater) => {
+    const next = (typeof nextOrUpdater === 'function' ? nextOrUpdater(tagReportsRef.current) : nextOrUpdater) || []
+    tagReportsRef.current = next
+    setTagReportsState(next)
+    return api.saveDashboardTagReports(next).catch(() => { /* optimistic; ignore transient save errors */ })
+  }, [])
   // Transient (display-without-save) tag report lives only in session state, so it
   // disappears when the user switches to anything else and never persists.
   const [transientTagReport, setTransientTagReport] = useState(null)

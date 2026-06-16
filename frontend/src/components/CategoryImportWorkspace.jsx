@@ -127,7 +127,7 @@ function sortSection(tree, sectionType) {
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
 }
 
-function sanitizeSnapshot(snapshot, sourceValues) {
+function sanitizeSnapshot(snapshot, sourceValues, parkedSourceValues = []) {
   // Drafts can outlive truncated previews or later source changes, so strip stale claims and return orphaned values to the inbox.
   const next = cloneCategoryImportSnapshot(snapshot)
   const validSourceValues = new Set((sourceValues || []).filter(Boolean))
@@ -160,9 +160,14 @@ function sanitizeSnapshot(snapshot, sourceValues) {
 
   next.sourceOrder = (next.sourceOrder || []).filter(value => remainingSet.has(value))
   next.setAsideOrder = (next.setAsideOrder || []).filter(value => remainingSet.has(value))
+  // An orphaned value the draft never placed inherits its live placement: a category that is parked
+  // live (set_aside = 1) returns to the Set Aside list, everything else to the inbox. This keeps the
+  // durable DB flag — not just the draft — the source of truth for parked state (see buildInitialSnapshot).
+  const liveParked = new Set((parkedSourceValues || []).map(value => String(value || '').trim()).filter(Boolean))
   for (const value of remaining) {
     if (!next.sourceOrder.includes(value) && !next.setAsideOrder.includes(value)) {
-      next.sourceOrder.push(value)
+      if (liveParked.has(value)) next.setAsideOrder.push(value)
+      else next.sourceOrder.push(value)
     }
   }
   next.sourceOrder.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
@@ -564,16 +569,16 @@ export default function CategoryImportWorkspace({
    * Set Aside, or returned to the inbox before anything is written on Apply.
    */
   const computedInitialDraftState = useMemo(
-    () => createCategoryImportDraftState(sourceValues, existingCategories),
-    [existingCategories, sourceValues],
+    () => createCategoryImportDraftState(sourceValues, existingCategories, parkedSourceValues),
+    [existingCategories, sourceValues, parkedSourceValues],
   )
   const [showPreviouslyImportedBadge] = useState(() => {
-    const initialSnapshot = sanitizeSnapshot((initialDraftState || computedInitialDraftState).snapshot, sourceValues)
+    const initialSnapshot = sanitizeSnapshot((initialDraftState || computedInitialDraftState).snapshot, sourceValues, parkedSourceValues)
     // Only show previously imported categories as muted context while unresolved source values remain to be sorted.
     return initialSnapshot.sourceOrder.length > 0
   })
   const hasPersistedLeftPanelWidth = initialDraftState?.leftPanelWidth != null
-  const [snapshot, setSnapshot] = useState(() => sanitizeSnapshot((initialDraftState || computedInitialDraftState).snapshot, sourceValues))
+  const [snapshot, setSnapshot] = useState(() => sanitizeSnapshot((initialDraftState || computedInitialDraftState).snapshot, sourceValues, parkedSourceValues))
   // Undo/redo are session-scoped: they start empty on every open and are NOT restored from the
   // persisted draft. Restoring a prior session's history made Undo look active when the user had
   // done nothing this session — and worse, undoing after a previous Apply would roll the draft back
@@ -620,7 +625,7 @@ export default function CategoryImportWorkspace({
 
   useEffect(() => {
     setSnapshot(prev => {
-      const next = sanitizeSnapshot(prev, sourceValues)
+      const next = sanitizeSnapshot(prev, sourceValues, parkedSourceValues)
       return snapshotsMatch(prev, next) ? prev : next
     })
     // Keyed on the stringified sourceValuesKey rather than sourceValues itself so a

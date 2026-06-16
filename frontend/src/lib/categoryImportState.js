@@ -198,7 +198,7 @@ export function reconcileSnapshotGroupsWithCategories(snapshot, existingCategori
   return next
 }
 
-function buildInitialSnapshot(sourceValues, existingCategories) {
+function buildInitialSnapshot(sourceValues, existingCategories, parkedSourceValues = []) {
   const tree = buildSeededGroupTree(existingCategories)
   const collapsedGroups = {}
   for (const sectionType of ['income', 'expense']) {
@@ -208,22 +208,29 @@ function buildInitialSnapshot(sourceValues, existingCategories) {
     }
   }
 
+  // The live `set_aside` flag is the durable source of truth for parked state — it survives restores
+  // and is what import/reporting honor. A value that is already parked live seeds straight into the
+  // Set Aside list, not the "needs sorting" pool. Without this, opening the workspace with no persisted
+  // draft (e.g. after a backup/restore, or under a different local profile) would drop every set-aside
+  // category back into the pool even though the DB still says parked. The draft only layers un-applied
+  // changes on top of this baseline.
+  const parkedSet = new Set((parkedSourceValues || []).map(value => String(value || '').trim()).filter(Boolean))
+  const pending = filterPendingSourceValues(sourceValues, existingCategories).filter(Boolean)
+  const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })
+
   return {
     tree,
-    sourceOrder: filterPendingSourceValues(sourceValues, existingCategories)
-      .filter(Boolean)
-      .slice()
-      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
-    setAsideOrder: [],
+    sourceOrder: pending.filter(value => !parkedSet.has(value)).slice().sort(byName),
+    setAsideOrder: pending.filter(value => parkedSet.has(value)).slice().sort(byName),
     selectedSourceIds: [],
     selectedNodeId: null,
     collapsedGroups,
   }
 }
 
-export function createCategoryImportDraftState(sourceValues, existingCategories = []) {
+export function createCategoryImportDraftState(sourceValues, existingCategories = [], parkedSourceValues = []) {
   return {
-    snapshot: buildInitialSnapshot(sourceValues, existingCategories),
+    snapshot: buildInitialSnapshot(sourceValues, existingCategories, parkedSourceValues),
     undoStack: [],
     redoStack: [],
     selectionAnchor: null,

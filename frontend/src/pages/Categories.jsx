@@ -30,7 +30,6 @@ import { useUserPreferences, useUserPreference } from '../lib/UserPreferencesCon
 import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorkspaceContext.jsx'
 import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
-import { SYSTEM_CATEGORY_WORKSPACE_DRAFT_PREF_KEY } from '../lib/importExport/constants.js'
 
 const SECTION_META = {
   income: { label: 'Income' },
@@ -710,8 +709,7 @@ export default function Categories() {
 
   // Entry point to the App-level Group Imported Categories workspace. The count is read-only here (the
   // workspace owns the draft); it drives the header button's badge + dim, live without opening anything.
-  const { open: openImportedCategoryWorkspace } = useImportedCategoryWorkspace()
-  const [systemCategoryWorkspaceDraft] = useUserPreference(SYSTEM_CATEGORY_WORKSPACE_DRAFT_PREF_KEY, null)
+  const { open: openImportedCategoryWorkspace, draft: systemCategoryWorkspaceDraft } = useImportedCategoryWorkspace()
   const importedCategoryWork = getImportedCategoryWorkCounts(flatCats, systemCategoryWorkspaceDraft)
   const [listScrollState, setListScrollState] = useState({ top: false, bottom: false })
   const [deleteDialog, setDeleteDialog] = useState(null)

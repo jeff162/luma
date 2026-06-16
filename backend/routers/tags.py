@@ -12,13 +12,21 @@ from __future__ import annotations
 
 import re
 import uuid
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.db.database import get_db
+from backend.db.database import get_db, get_tenant_workflow_state, set_tenant_workflow_state
 
 router = APIRouter()
+
+# Saved dashboard tag reports are a SHARED catalog of report definitions over the shared tag set, not
+# a per-user preference: every user/profile sees the same saved reports. The catalog therefore lives
+# in shared tenant state (import_workflow_state), carried by backups, rather than the scoped
+# ui_preference store. Which report a user currently has open stays a per-user preference on the
+# frontend (`ui.dashboard.spendingViewBy`) — shared catalog, personal selection.
+DASHBOARD_TAG_REPORTS_STATE_KEY = "system_dashboard_tag_reports"
 
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
@@ -57,6 +65,28 @@ class TagCreate(BaseModel):
 class TagUpdate(BaseModel):
     name: str | None = None
     color: str | None = None
+
+
+class DashboardTagReportsBody(BaseModel):
+    # The opaque frontend report list: each entry is { id, name, tagIds[], dismissedMissingWarning? }.
+    # The backend persists it verbatim — report shape and tag-id resolution stay a frontend concern.
+    reports: Optional[list] = None
+
+
+@router.get("/dashboard-reports")
+def get_dashboard_tag_reports():
+    with get_db() as conn:
+        state = get_tenant_workflow_state(conn, DASHBOARD_TAG_REPORTS_STATE_KEY)
+    reports = state.get("reports")
+    return {"reports": reports if isinstance(reports, list) else []}
+
+
+@router.put("/dashboard-reports")
+def save_dashboard_tag_reports(body: DashboardTagReportsBody):
+    reports = body.reports if isinstance(body.reports, list) else []
+    with get_db() as conn:
+        set_tenant_workflow_state(conn, DASHBOARD_TAG_REPORTS_STATE_KEY, {"reports": reports})
+    return {"ok": True}
 
 
 @router.get("")

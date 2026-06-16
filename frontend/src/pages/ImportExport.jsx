@@ -83,7 +83,6 @@ import {
   LAST_IMPORT_DATA_SOURCE_PREF_KEY,
   EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY,
   DATA_SOURCE_MANAGER_POS_PREF_KEY,
-  SYSTEM_CATEGORY_WORKSPACE_DRAFT_PREF_KEY,
   IMPORTED_CATEGORY_SCOPE_FILTERED,
   IMPORTED_CATEGORY_SETTINGS_KEY,
   IMPORTED_CATEGORY_FILTER_DIALOG_TITLE,
@@ -138,9 +137,6 @@ function ImportTab() {
   const [lastImportDataSourceId, setLastImportDataSourceId] = useUserPreference(LAST_IMPORT_DATA_SOURCE_PREF_KEY, '')
   const [expandedSourceRows, setExpandedSourceRows] = useUserPreference(EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY, {})
   const [savedDataSourceManagerPos, setSavedDataSourceManagerPos] = useUserPreference(DATA_SOURCE_MANAGER_POS_PREF_KEY, null)
-  // Read-only here: the workspace (App-level) owns writes to this draft; this page only reads it to
-  // compute the file-card button's pending count via getImportedCategoryWorkCounts.
-  const [systemCategoryWorkspaceDraft] = useUserPreference(SYSTEM_CATEGORY_WORKSPACE_DRAFT_PREF_KEY, null)
   const [stage, setStage] = useState('upload')
   const [preview, setPreview] = useState(null)
   const [profiles, setProfiles] = useState([])
@@ -309,8 +305,9 @@ function ImportTab() {
   const uploadSelectionLabel = activeUploadProfile?.name || (uploadUsesManualDraft ? 'Temporary draft' : '')
   // The Group Imported Categories workspace is App-level now (ImportedCategoryWorkspaceContext); this
   // page only needs the opener and the count for its file-card button. The count comes from this page's
-  // own categories + the shared draft pref so the badge is live before the workspace is ever opened.
-  const { open: openSystemCategoryWorkspace } = useImportedCategoryWorkspace()
+  // own categories + the shared draft (owned by the App-level workspace context, backed by shared
+  // tenant state) so the badge is live before the workspace is ever opened.
+  const { open: openSystemCategoryWorkspace, draft: systemCategoryWorkspaceDraft } = useImportedCategoryWorkspace()
   const { pending: pendingSystemCategoryCount, total: totalSystemCategoryWorkspaceCount } =
     getImportedCategoryWorkCounts(categories, systemCategoryWorkspaceDraft)
   const hasSystemRuleSuggestionWork = useMemo(() => hasRuleSuggestionWork(batches), [batches])

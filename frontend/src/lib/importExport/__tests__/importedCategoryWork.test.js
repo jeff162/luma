@@ -15,10 +15,12 @@ import { UNASSIGNED_CATEGORY_SYSTEM_KEY } from '../constants.js'
 const UNASSIGNED = { id: 'u', parent_id: null, system_key: UNASSIGNED_CATEGORY_SYSTEM_KEY, name: 'Unassigned' }
 
 // Build a category list: pending imported labels live as import_pending leaves under Unassigned.
-function cats(pendingNames, extra = []) {
+// Names in `parked` carry set_aside = 1 (parked live, still pending).
+function cats(pendingNames, extra = [], parked = []) {
+  const parkedSet = new Set(parked)
   return [
     UNASSIGNED,
-    ...pendingNames.map((name, i) => ({ id: `p${i}`, parent_id: 'u', name, import_pending: 1 })),
+    ...pendingNames.map((name, i) => ({ id: `p${i}`, parent_id: 'u', name, import_pending: 1, set_aside: parkedSet.has(name) ? 1 : 0 })),
     ...extra,
   ]
 }
@@ -86,5 +88,32 @@ describe('getImportedCategoryWorkCounts', () => {
     const draft = createCategoryImportDraftState(['X', 'Y'], [])
     const counts = getImportedCategoryWorkCounts(cats(['X', 'Y']), draft)
     expect(counts).toEqual({ pending: 2, total: 2 }) // fresh inbox: nothing grouped yet
+  })
+
+  // Regression: a category parked live (set_aside = 1) is handled, even with no persisted draft for
+  // this profile — the durable DB flag is the source of truth, not the draft. This is the case a
+  // backup/restore (or a different local profile) hits: the draft is scoped to the old profile and
+  // absent, but the set_aside flag survived in the data tables, so the parked work must not resurface.
+  it('does not count live-parked (set_aside) labels as pending when there is no draft', () => {
+    // A, B parked live; C still unsorted → only C is outstanding, all three count toward total.
+    expect(getImportedCategoryWorkCounts(cats(['A', 'B', 'C'], [], ['A', 'B']), null)).toEqual({ pending: 1, total: 3 })
+  })
+
+  it('reports zero pending when every pending label is parked live and there is no draft', () => {
+    expect(getImportedCategoryWorkCounts(cats(['A', 'B'], [], ['A', 'B']), null)).toEqual({ pending: 0, total: 2 })
+  })
+})
+
+describe('createCategoryImportDraftState parked seeding', () => {
+  it('seeds live-parked source values into the Set Aside list, not the inbox', () => {
+    const draft = createCategoryImportDraftState(['A', 'B', 'C'], [], ['A', 'B'])
+    expect(draft.snapshot.setAsideOrder).toEqual(['A', 'B'])
+    expect(draft.snapshot.sourceOrder).toEqual(['C'])
+  })
+
+  it('seeds everything into the inbox when nothing is parked (unchanged default)', () => {
+    const draft = createCategoryImportDraftState(['A', 'B'], [], [])
+    expect(draft.snapshot.setAsideOrder).toEqual([])
+    expect(draft.snapshot.sourceOrder).toEqual(['A', 'B'])
   })
 })
