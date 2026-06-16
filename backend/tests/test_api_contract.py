@@ -36,12 +36,14 @@ class ApiContractTests(unittest.TestCase):
             self.assertIn("transactions", r.json())
 
     def test_seeded_data_is_served_from_the_temp_db(self):
-        # init_db seeds the default category tree (incl. the protected Unassigned group) and rules; if
-        # this returned the real DB or an empty one, the harness/routing would be wrong.
+        # init_db seeds the category group skeleton (incl. the protected Unassigned group); starter
+        # leaves and rules are opt-in, so they aren't present on a fresh temp DB. The served skeleton
+        # still proves wiring — if this returned the real DB or an empty one, routing would be wrong.
         with api_client() as (client, _):
             categories = client.get("/api/categories/flat").json()
             self.assertTrue(any(c.get("system_key") == "unassigned" for c in categories))
-            self.assertGreater(len(client.get("/api/rules").json()), 0)
+            top_level_groups = [c for c in categories if not c.get("parent_id")]
+            self.assertGreater(len(top_level_groups), 1)
 
     def test_owner_create_round_trips_through_the_full_stack(self):
         # Exercises request-body parsing + a write + read-back + serialization end to end.

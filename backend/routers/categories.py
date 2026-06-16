@@ -13,7 +13,8 @@ from collections import Counter
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from backend.db.database import get_db
+from backend.db.database import get_db, _seed_default_categories
+from backend.services.categorizer import DEFAULT_RULE_SEEDS, seed_default_rules
 from backend.json_utils import safe_json_dict
 
 router = APIRouter()
@@ -690,6 +691,44 @@ def reactivate_category(category_id: str):
             (target_parent_id, target_type, category_id),
         )
     return {"ok": True}
+
+
+# Starter set: the built-in categories and rules are opt-in (init only seeds the group skeleton). These
+# two endpoints back both the onboarding "Add starter categories / rules" steps and the permanent
+# Categories/Rules-page entry points. The catalog is shown for selection; generate-starter applies the
+# chosen subset. Both are idempotent, so a user can add to the set later without duplicating anything.
+@router.get("/starter-rules")
+def list_starter_rules():
+    return {
+        "rules": [
+            {"keyword": keyword, "category_name": category_name, "priority": priority}
+            for keyword, category_name, priority, _amt_min, _amt_max in DEFAULT_RULE_SEEDS
+        ]
+    }
+
+
+class GenerateStarterSet(BaseModel):
+    # Leaves are seeded when requested OR whenever rules are requested (a rule needs its target leaf to
+    # exist), so a selected starter rule can never be silently dropped for want of its category.
+    include_leaves: bool = True
+    rule_keywords: Optional[list[str]] = None
+
+
+@router.post("/generate-starter")
+def generate_starter_set(body: GenerateStarterSet):
+    need_leaves = body.include_leaves or body.rule_keywords is not None
+    with get_db() as conn:
+        before_leaves = conn.execute(
+            "SELECT COUNT(*) FROM category WHERE parent_id IS NOT NULL AND is_active = 1"
+        ).fetchone()[0]
+        _seed_default_categories(conn, include_leaves=need_leaves)
+        rules_added = 0
+        if body.rule_keywords is not None:
+            rules_added = seed_default_rules(conn, keywords=body.rule_keywords)
+        after_leaves = conn.execute(
+            "SELECT COUNT(*) FROM category WHERE parent_id IS NOT NULL AND is_active = 1"
+        ).fetchone()[0]
+    return {"categories_added": after_leaves - before_leaves, "rules_added": rules_added}
 
 
 @router.delete("/{category_id}/forever")

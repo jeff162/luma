@@ -13,6 +13,7 @@ import TransientTextInput from './TransientTextInput.jsx'
 import NoteEditor from './NoteEditor.jsx'
 import AmountDisplay from './AmountDisplay.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
+import { Tooltip } from './ui.jsx'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 
 /*
@@ -301,11 +302,13 @@ export function MerchantCell({ txn, onOpenDetail, onRename }) {
         {name}
       </span>
       {onOpenDetail && (
-        <button
-          onClick={e => { e.stopPropagation(); onOpenDetail(txn) }}
-          title="Open merchant spending report"
-          style={{ ...detailButtonStyle, flexShrink: 0 }}
-        >↗</button>
+        <Tooltip content="Open merchant spending report">
+          <button
+            onClick={e => { e.stopPropagation(); onOpenDetail(txn) }}
+            aria-label="Open merchant spending report"
+            style={{ ...detailButtonStyle, flexShrink: 0 }}
+          >↗</button>
+        </Tooltip>
       )}
     </div>
   )
@@ -364,51 +367,6 @@ const iconButtonStyle = {
   flexShrink: 0,
 }
 
-function HoverTooltip({ children, content, maxWidth = 280, align = 'left' }) {
-  // Hover-only popover. The wrapping span is the hover hit target; pointer events on the floating
-  // panel are disabled so it can't itself trigger a hover loop on the parent.
-  const [open, setOpen] = useState(false)
-  if (!content) return children
-  return (
-    <span
-      style={{ position: 'relative', display: 'inline-flex' }}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-    >
-      {children}
-      {open ? (
-        <div
-          style={{
-            position: 'absolute',
-            top: '100%',
-            left: align === 'left' ? 0 : 'auto',
-            right: align === 'right' ? 0 : 'auto',
-            marginTop: 6,
-            zIndex: 200,
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 8,
-            padding: '6px 10px',
-            fontSize: 12,
-            color: 'var(--text)',
-            // width: max-content keeps the tooltip from inheriting the 16px chip width
-            // as its shrink-to-fit available-width budget, which was wrapping every char.
-            width: 'max-content',
-            maxWidth,
-            whiteSpace: 'normal',
-            wordBreak: 'break-word',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
-            pointerEvents: 'none',
-            textAlign: 'left',
-          }}
-        >
-          {content}
-        </div>
-      ) : null}
-    </span>
-  )
-}
-
 function getTagLetter(tag) {
   const trimmed = (tag?.name || '').trim()
   return (trimmed.charAt(0) || '?').toUpperCase()
@@ -419,7 +377,7 @@ function TagLetterChip({ tag, inherited, onClick }) {
     ? `${tag.name} (inherited from ${tag.source})`
     : tag.name
   return (
-    <HoverTooltip content={tooltip} maxWidth={MAX_TAG_TOOLTIP_WIDTH}>
+    <Tooltip content={tooltip} maxWidth={MAX_TAG_TOOLTIP_WIDTH}>
       <button
         type="button"
         onClick={event => {
@@ -450,7 +408,7 @@ function TagLetterChip({ tag, inherited, onClick }) {
       >
         {getTagLetter(tag)}
       </button>
-    </HoverTooltip>
+    </Tooltip>
   )
 }
 
@@ -478,7 +436,7 @@ function TagStackChip({ tags, onClick }) {
     </div>
   )
   return (
-    <HoverTooltip content={tooltip} maxWidth={MAX_TAG_TOOLTIP_WIDTH}>
+    <Tooltip content={tooltip} maxWidth={MAX_TAG_TOOLTIP_WIDTH}>
       <button
         type="button"
         onClick={event => {
@@ -523,7 +481,7 @@ function TagStackChip({ tags, onClick }) {
           {tags.length}
         </span>
       </button>
-    </HoverTooltip>
+    </Tooltip>
   )
 }
 
@@ -572,7 +530,7 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, width: '100%', minWidth: 0 }}>
       <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
         {txn.suspect_duplicate_of ? (
-          <HoverTooltip
+          <Tooltip
             content={<span>Possible duplicate of another transaction. Click to review.</span>}
             maxWidth={MAX_TAG_TOOLTIP_WIDTH}
           >
@@ -603,10 +561,10 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
             >
               ⚠
             </button>
-          </HoverTooltip>
+          </Tooltip>
         ) : null}
         {hasNote ? (
-          <HoverTooltip
+          <Tooltip
             content={<span style={{ whiteSpace: 'pre-wrap' }}>{txn.notes}</span>}
             maxWidth={MAX_NOTE_TOOLTIP_WIDTH}
           >
@@ -621,7 +579,7 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
             >
               <NoteGlyph size={13} />
             </button>
-          </HoverTooltip>
+          </Tooltip>
         ) : null}
         {useStack ? (
           <TagStackChip tags={visibleTags} onClick={() => setShowTags(true)} />
@@ -660,18 +618,19 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
         style={{ display: 'flex', justifyContent: 'flex-end' }}
       />
       {onOpenDetail ? (
-        <button
-          type="button"
-          onClick={event => {
-            event.stopPropagation()
-            onOpenDetail(txn)
-          }}
-          title="Edit transaction…"
-          aria-label="Edit transaction"
-          style={{ ...iconButtonStyle, color: 'var(--muted)', marginLeft: 2 }}
-        >
-          <PencilGlyph size={13} />
-        </button>
+        <Tooltip content="Edit transaction…">
+          <button
+            type="button"
+            onClick={event => {
+              event.stopPropagation()
+              onOpenDetail(txn)
+            }}
+            aria-label="Edit transaction"
+            style={{ ...iconButtonStyle, color: 'var(--muted)', marginLeft: 2 }}
+          >
+            <PencilGlyph size={13} />
+          </button>
+        </Tooltip>
       ) : null}
     </div>
   )
@@ -761,11 +720,13 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
         />
       </div>
       {onOpenDetail && txn.category_name && (
-        <button
-          onClick={e => { e.stopPropagation(); onOpenDetail() }}
-          title="View category spending history"
-          style={detailButtonStyle}
-        >↗</button>
+        <Tooltip content="View category spending history">
+          <button
+            onClick={e => { e.stopPropagation(); onOpenDetail() }}
+            aria-label="View category spending history"
+            style={detailButtonStyle}
+          >↗</button>
+        </Tooltip>
       )}
     </div>
   )

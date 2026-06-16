@@ -6,6 +6,17 @@ import { Card, PageHeader } from '../components/ui.jsx'
 import { HELP_TOPICS, HELP_TOPICS_BY_ID } from '../help/content.jsx'
 import { labelForPath } from '../help/navigation.js'
 
+// Topic bodies are authored as raw <p>/<ol>/<h4>; normalize the browser-default margins/indent so the
+// spacing reads consistently inside the card instead of the chunky default block margins.
+const HELP_BODY_CSS = `
+  .help-body p { margin: 0 0 12px; }
+  .help-body > :last-child { margin-bottom: 0; }
+  .help-body ol, .help-body ul { margin: 0 0 12px; padding-left: 22px; display: grid; gap: 8px; }
+  .help-body li { margin: 0; padding-left: 4px; }
+  .help-body h4 { margin: 18px 0 8px; font-size: 14px; }
+  .help-body strong { color: var(--text); }
+`
+
 /*
  * Standalone Help page. Without a `:topic` URL param it renders an index of every
  * registered explainer so the user can browse end-to-end. With one, it renders the
@@ -26,7 +37,9 @@ export default function Help() {
   if (entry) {
     const Body = entry.body
     return (
-      <div style={{ padding: '32px', maxWidth: 760, margin: '0 auto' }}>
+      <div style={{ height: '100%', overflowY: 'auto' }}>
+        <style>{HELP_BODY_CSS}</style>
+        <div style={{ padding: '32px', maxWidth: 760, margin: '0 auto' }}>
         <PageHeader title={entry.title} />
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           {fromLabel ? (
@@ -50,14 +63,16 @@ export default function Help() {
           ) : null}
         </div>
         <Card style={{ padding: '20px 24px', lineHeight: 1.6, fontSize: 14 }}>
-          <Body />
+          <div className="help-body"><Body /></div>
         </Card>
+        </div>
       </div>
     )
   }
 
   return (
-    <div style={{ padding: '32px', maxWidth: 760, margin: '0 auto' }}>
+    <div style={{ height: '100%', overflowY: 'auto' }}>
+      <div style={{ padding: '32px', maxWidth: 760, margin: '0 auto' }}>
       <PageHeader title="Help" />
       <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, marginBottom: 18 }}>
         Short explainers for how features in FinTrack are designed to be used. Each topic also
@@ -77,6 +92,7 @@ export default function Help() {
             </Card>
           </Link>
         ))}
+      </div>
       </div>
     </div>
   )

@@ -7,6 +7,7 @@ import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState, AppDialog } from '../components/ui.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
+import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
 import RuleForm, { amountConditionSummary } from '../components/RuleForm.jsx'
 import { TagBadge } from '../components/TagUi.jsx'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
@@ -215,6 +216,7 @@ export default function Rules() {
   const [search,     setSearch]     = useState('')
   const searchId = useId()
   const [showAdd,    setShowAdd]    = useState(false)
+  const [showStarterRules, setShowStarterRules] = useState(false)
   const [editingRuleId, setEditingRuleId] = useState(null)
   // A pending rule save that collided with an existing same-matcher rule, awaiting the user's choice
   // (merge into it / open it / cancel). Shape: { status, existingRuleId, ruleData, applyToExisting }.
@@ -402,6 +404,18 @@ export default function Rules() {
               <ActionCountBadge count={importedRuleSuggestionCount} />
             </span>
           </Button>
+          {/* Empty-state-only, like the Categories starter offer: a head start shown only while there
+              are no rules yet. Once any rule exists it's gone (add more via "Add rule"). */}
+          {!loading && rules.length === 0 ? (
+            <Button
+              small
+              variant="ghost"
+              onClick={() => setShowStarterRules(true)}
+              title="Add a curated set of common keyword → category rules"
+            >
+              Starter rules
+            </Button>
+          ) : null}
           <Button small onClick={() => (showAnyEditor ? closeForm() : openCreateForm())} style={addRuleButtonStyle}>
             {showAnyEditor ? 'Cancel' : 'Add rule'}
           </Button>
@@ -532,6 +546,16 @@ export default function Rules() {
               ) : null}
             </>
           )}
+        />
+      ) : null}
+
+      {showStarterRules ? (
+        <StarterRulesDialog
+          onClose={() => setShowStarterRules(false)}
+          onAdded={() => {
+            loadRules()
+            loadRecategorizePreview()
+          }}
         />
       ) : null}
     </div>

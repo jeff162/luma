@@ -86,10 +86,27 @@ class DemoDataTests(unittest.TestCase):
             self.assertEqual(len({r["account_id"] for r in legs}), 2)
             self.assertEqual(round(sum(r["amount"] for r in legs), 2), 0.0)
 
-            # Per-account import batches give the rows provenance.
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM import_batch").fetchone()[0], 4)
+            # Two import files (one per data source), produced through the real import pipeline — so every
+            # row has provenance, both files land under a saved data source, and the cards get coverage.
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM import_batch").fetchone()[0], 2)
             self.assertEqual(
                 conn.execute("SELECT COUNT(*) FROM txn WHERE import_batch_id IS NULL").fetchone()[0], 0
+            )
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM csv_import_profile").fetchone()[0], 2)
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(DISTINCT account_id) FROM import_batch_account WHERE account_id IS NOT NULL"
+                ).fetchone()[0],
+                4,
+            )
+            # Several novel (non-starter) expense categories land in Unassigned so the "Group imported
+            # categories" workspace has real items to organize, not just one.
+            unassigned = conn.execute("SELECT id FROM category WHERE system_key = 'unassigned'").fetchone()["id"]
+            self.assertGreaterEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM category WHERE parent_id = ? AND import_pending = 1", (unassigned,)
+                ).fetchone()[0],
+                4,
             )
 
             # The cross-account duplicate pair shares a content_hash...

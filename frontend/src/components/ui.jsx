@@ -3,7 +3,8 @@
 
 /* eslint-disable react-refresh/only-export-components -- shared UI kit: primitive components live alongside style helpers used to compose them */
 
-import { forwardRef, useEffect, useId, useRef } from 'react'
+import { forwardRef, useEffect, useId, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
 
 /*
@@ -11,6 +12,70 @@ import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
  * floating panels and overlays, shared form controls, and compact action rows. Feature components build on this
  * file so stacked windows, dialogs, and routine editing surfaces stay visually aligned instead of drifting apart.
  */
+
+/*
+ * Shared hover/focus tooltip — the one passive hint surface for the app. Themed (so it matches in dark
+ * and light, unlike a native `title`), rendered through a portal with fixed positioning so it escapes
+ * ancestor `overflow` clipping (e.g. scrolling tables). `content` may be a string or rich JSX; `tone`
+ * shifts the border for warning/validation hints. Trigger wrapper is inline-flex so it doesn't disturb
+ * layout. This is the primitive native `title=` and page-local tooltips should migrate onto.
+ */
+export function Tooltip({ children, content, maxWidth = 280, align = 'left', tone = 'neutral' }) {
+  const triggerRef = useRef(null)
+  const [pos, setPos] = useState(null)
+  if (!content) return children
+  function show() {
+    const rect = triggerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setPos(align === 'right'
+      ? { top: rect.bottom + 6, right: window.innerWidth - rect.right }
+      : { top: rect.bottom + 6, left: rect.left })
+  }
+  const hide = () => setPos(null)
+  const borderColor = tone === 'warning'
+    ? 'color-mix(in srgb, var(--danger) 55%, var(--border))'
+    : 'color-mix(in srgb, var(--text) 24%, var(--border))'
+  return (
+    <span
+      ref={triggerRef}
+      style={{ position: 'relative', display: 'inline-flex' }}
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onFocus={show}
+      onBlur={hide}
+    >
+      {children}
+      {pos ? createPortal(
+        <div
+          role="tooltip"
+          style={{
+            position: 'fixed',
+            top: pos.top,
+            ...(pos.left != null ? { left: pos.left } : { right: pos.right }),
+            zIndex: 4000,
+            background: 'var(--surface)',
+            border: `1px solid ${borderColor}`,
+            borderRadius: 8,
+            padding: '6px 10px',
+            fontSize: 12,
+            color: 'var(--text)',
+            // max-content keeps the tooltip from inheriting a tiny trigger's width as its wrap budget.
+            width: 'max-content',
+            maxWidth,
+            whiteSpace: 'normal',
+            wordBreak: 'break-word',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+            pointerEvents: 'none',
+            textAlign: 'left',
+          }}
+        >
+          {content}
+        </div>,
+        document.body,
+      ) : null}
+    </span>
+  )
+}
 
 export function CategoryMarker({ kind = 'category', size, style }) {
   const markerSize = size ?? (kind === 'group' ? 9 : 7)

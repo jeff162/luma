@@ -23,12 +23,20 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
+from backend.db.database import (
+    SHARED_OWNER_ID,
+    _seed_default_categories,
+    get_db,
+    init_db,
+    reset_current_db_path,
+    set_current_db_path,
+)
 from backend.services.categorizer import (
     categorize_transaction,
     load_categorization_rules,
     load_rule_tags_by_id,
     preview_recategorize_count,
+    seed_default_rules,
 )
 from backend.tests._query_count import count_matching, trace_queries
 
@@ -52,7 +60,12 @@ class CategorizerPerfContractTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tempdir.name) / "cat.db"
-        init_db(str(self.db_path))  # seeds the default category_rule set
+        init_db(str(self.db_path))
+        # Starter leaves + rules are opt-in now (init only seeds the group skeleton); this perf
+        # contract needs a realistic populated rule set, so seed it explicitly.
+        with self._use_db_path(), get_db() as conn:
+            _seed_default_categories(conn, include_leaves=True)
+            seed_default_rules(conn)
         self.account = self._insert_account()
         for i in range(TXN_COUNT):
             self._insert_txn(self.account, MERCHANTS[i % len(MERCHANTS)], -(10 + i), f"2026-03-{(i % 27) + 1:02d}")

@@ -2190,6 +2190,7 @@ export default function Dashboard() {
               </button>
             ))}
           </div>
+          <FeatureExplainer topic="how-fintrack-works" placement="bottom-left" />
         </div>
       </PageHeader>
       </div>

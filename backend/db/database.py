@@ -1219,13 +1219,17 @@ def init_db(db_path: str | None = None):
             run_migrations(conn)
         ensure_shared_owner(conn)
 
-        rule_count = conn.execute("SELECT COUNT(*) FROM category_rule").fetchone()[0]
-        if rule_count == 0:
-            from backend.services.categorizer import seed_default_rules
-            seed_default_rules(conn)
 
-
-def _seed_default_categories(conn: sqlite3.Connection):
+def _seed_default_categories(conn: sqlite3.Connection, *, include_leaves: bool = False):
+    # Seeding model: the top-level reporting groups (plus the system Unassigned group) are seeded for
+    # every tenant so the import "Group Imported Categories" workspace always has visible buckets to
+    # drop imported labels into — even for a user who brings their own categories and never wants ours.
+    # The starter *leaf* categories are an explicit opt-in (include_leaves=True), used by the onboarding
+    # "Add starter categories" action, its Categories-page equivalent, and the demo dataset. Keeping
+    # leaves opt-in means a bring-your-own user's tree stays free of categories they didn't choose, and
+    # — since the built-in rules target these leaves by name — no data-mutating starter rules can exist
+    # for them either. The legacy leaf renames below are idempotent migrations that must still run for
+    # existing databases that already have the leaves, so they sit before the include_leaves guard.
     import uuid
     category_columns = {
         row["name"]
@@ -1350,11 +1354,17 @@ def _seed_default_categories(conn: sqlite3.Connection):
         (utilities, utilities),
     )
 
+    if not include_leaves:
+        return
+
     upsert_cat("Fitness Classes", health)
     upsert_cat("Gym Membership", health)
 
     upsert_cat("Doctor", medical)
-    upsert_cat("Medical", medical)
+    # Canonical name is "Medical Services" (the legacy rename above disambiguates a leaf that collided
+    # with the "Medical" group); seeding "Medical" here would re-create that collision and, on re-seed,
+    # the rename would fork it back into two leaves.
+    upsert_cat("Medical Services", medical)
     upsert_cat("Dental", medical)
     upsert_cat("Pharmacy", medical)
     upsert_cat("Vision", medical)

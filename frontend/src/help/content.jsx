@@ -26,6 +26,81 @@ import HelpLink from './HelpLink.jsx'
 
 export const HELP_TOPICS = [
   {
+    id: 'how-fintrack-works',
+    title: 'How FinTrack works',
+    surfaces: ['Getting started', 'Dashboard'],
+    summary: 'FinTrack is for two things: reports (mostly the dashboard) and searching your transaction history. Everything else — accounts, owners, categories, tags, rules — exists to make those two better.',
+    body: () => (
+      <>
+        <p>
+          Two jobs sit at the center of FinTrack: <strong>reports</strong> (mostly through the
+          dashboard) and <strong>searching</strong> your transaction history. Every other feature —
+          accounts, owners, categories, tags, and rules — exists to make those two better, and you
+          can pick each one up only when it earns its place in <em>your</em> reports. Nothing has to
+          be set up before you start.
+        </p>
+        <p>It usually comes together in this order, though the order is up to you:</p>
+        <ol>
+          <li>
+            <strong>Bring data in.</strong> Import a CSV file or connect a data source. When the same
+            activity arrives from more than one source, the duplicate-detection report surfaces the
+            judgment calls so you can build one clean ledger.
+          </li>
+          <li>
+            <strong>Accounts and owners.</strong> Transactions usually arrive tagged with an account;
+            an account can matter on its own (a card you use for one purpose) or as a way to attribute
+            a transaction to an <em>owner</em> for reports and rules. It is often worth bringing in your
+            individual spending sources &mdash; credit cards, P2P / payment accounts &mdash; since they
+            carry the richest per-merchant detail. If you also import the bank account that pays them
+            off, mark the money-movement group (credit-card payments, account transfers){' '}
+            <HelpLink to="/help/exclude-from-totals">excluded from totals</HelpLink> so the same spending
+            isn&rsquo;t counted twice and the ledger stays straight.
+          </li>
+          <li>
+            <strong>Categories and groups.</strong> Assign transactions to categories, and categories
+            to groups, purely to drive reports and to select related transactions. They have no other
+            job. You can start from a common set or build your own.
+          </li>
+          <li>
+            <strong>Tags.</strong> Cross-cutting labels that cut across owner, account, and category —
+            think <em>Essential Expenses</em> or <em>Kids</em> — and apply to income and expenses
+            alike. See <HelpLink to="/help/tags">how tags work</HelpLink>.
+          </li>
+          <li>
+            <strong>Rules.</strong> How categories and tags get applied to new transactions as they
+            arrive (and how merchant names get normalized). More on this below.
+          </li>
+          <li>
+            <strong>The dashboard.</strong> Your reports live here, and it doubles as a way to check
+            your data — drill into the largest groups, see the transactions behind them, and fix
+            anything miscategorized.
+          </li>
+        </ol>
+        <h4>How rules come into being</h4>
+        <p>
+          You rarely write rules from scratch. When you categorize a transaction, FinTrack offers to
+          turn that action into a rule — give it conditions and actions, apply it to matching
+          transactions, and save it. From then on it runs automatically against newly imported data
+          (you can turn off rule application, and there is a <em>run categorization</em> button to
+          trigger a pass on demand).
+        </p>
+        <p>
+          If you are arriving from another tool where you already curated categories, tell FinTrack
+          the import&apos;s data is clean and it will keep those categories; the <strong>Generate
+          rules</strong> action then studies those curated transactions and proposes rules that would
+          reproduce the same categorization on future, uncategorized data — which you review before
+          anything takes effect.
+        </p>
+        <p>
+          And if you are starting fresh with no curated data, you can add a small <strong>starter
+          set</strong> of common categories and rules. Rules touch your data, so the starter rules are
+          shown as a list you approve before adding — and, like everything here, they can be changed or
+          removed later.
+        </p>
+      </>
+    ),
+  },
+  {
     id: 'tags',
     title: 'How tags work',
     surfaces: ['Tag manager (Settings)'],
@@ -123,6 +198,37 @@ export const HELP_TOPICS = [
         </p>
         <p>
           See also: <HelpLink to="/help/tags">How tags work</HelpLink>
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'exclude-from-totals',
+    title: 'Excluding a group from totals',
+    surfaces: ['Categories (group settings)'],
+    summary: 'Mark a category group "Exclude from totals" to keep money movement — credit-card payments, transfers between your own accounts — out of dashboard charts and totals so it is not double-counted.',
+    body: () => (
+      <>
+        <p>
+          <strong>Exclude from totals</strong> removes a category group &mdash; and every category under
+          it &mdash; from the dashboard&rsquo;s charts and totals. It is a reporting switch, not a delete:
+          the transactions still exist and stay searchable, they just don&rsquo;t count toward your
+          spending or income figures.
+        </p>
+        <p>
+          The classic case is <strong>money movement that isn&rsquo;t really spending or income</strong>.
+          It is often useful to bring in <em>both</em> a credit card and the bank account that pays it off
+          &mdash; the card has the detailed, per-merchant transactions, while the bank shows the lump-sum
+          payment. If both counted, every purchase would be tallied twice: once as the card charge and
+          again as the bank payment. Assigning those <strong>credit-card payments</strong> (and transfers
+          between your own accounts) to a category in an excluded group keeps the detail from the card
+          while the payment itself drops out of the totals.
+        </p>
+        <p>
+          The built-in <strong>Transfers</strong> group ships with this turned on, so a quick start is to
+          categorize credit-card payments and account-to-account transfers there. But the switch works on
+          any group, so you can build your own scheme &mdash; e.g. a <em>Reimbursable</em> or
+          <em>Investments</em> group you want kept out of the headline numbers.
         </p>
       </>
     ),

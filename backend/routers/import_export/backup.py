@@ -46,6 +46,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from backend.db.database import get_db, get_db_instance_id
+from backend.db.demo_data import is_demo_data_loaded
 from backend.db.control_database import auth_required
 from backend.time_utils import utcnow_iso
 from backend.services import crypto_service
@@ -652,6 +653,33 @@ def restore_target_status():
 
 
 @router.post("/restore")
+def _wipe_user_data_tables(conn):
+    """Delete every user-data row in child→parent order. The single source of truth for the destructive
+    wipe, shared by restore and the demo-data clear. The caller owns the transaction and must have
+    foreign-key checks deferred (PRAGMA defer_foreign_keys = ON), since the order here is dependency-safe
+    but not validated row-by-row. Tag attachment tables and `tag` go first: the attachments reference
+    tag/txn/category/account/rule, and `tag` is not a child of anything else wiped below. This clears
+    `import_workflow_state` too, so any demo-data marker is removed as part of the wipe."""
+    conn.execute("DELETE FROM txn_tag")
+    conn.execute("DELETE FROM category_tag")
+    conn.execute("DELETE FROM account_tag")
+    conn.execute("DELETE FROM rule_tag")
+    conn.execute("DELETE FROM account_pair_distinct")
+    conn.execute("DELETE FROM ui_preference")
+    conn.execute("DELETE FROM tag")
+    conn.execute("DELETE FROM txn")
+    conn.execute("DELETE FROM import_batch_duplicate")
+    conn.execute("DELETE FROM import_batch_account")
+    conn.execute("DELETE FROM import_batch")
+    conn.execute("DELETE FROM import_workflow_state")
+    conn.execute("DELETE FROM category_rule")
+    conn.execute("DELETE FROM merchant_rename")
+    conn.execute("DELETE FROM csv_import_profile")
+    conn.execute("DELETE FROM category")
+    conn.execute("DELETE FROM account")
+    conn.execute("DELETE FROM owner")
+
+
 def restore_backup(body: RestoreRequest):
     """
     Destructive restore. Wipes all non-credential data and replaces with backup.
@@ -660,6 +688,15 @@ def restore_backup(body: RestoreRequest):
     d = body.data
     if d.get("version") != 7:
         raise HTTPException(status_code=400, detail="Unrecognised or unsupported backup version")
+
+    # Demo data must be cleared first: a restore would replace it but leave the demo marker stale, and
+    # mixing real data into a demo tenant breaks the "clear is always safe" contract. Refuse outright.
+    with get_db() as conn:
+        if is_demo_data_loaded(conn):
+            raise HTTPException(status_code=409, detail={
+                "code": "demo_data_loaded",
+                "message": "Clear the demo data before restoring a backup.",
+            })
 
     # Compatibility guard: a restore unconditionally wipes the target, so refuse to silently
     # replace a *different* system's existing data, or load across access modes, unless the user
@@ -780,27 +817,7 @@ def restore_backup(body: RestoreRequest):
         # order, and the fully-populated final state is validated as a whole when get_db() commits.
         conn.execute("BEGIN")
         conn.execute("PRAGMA defer_foreign_keys = ON")
-        # Wipe in dependency order (children before parents). Tag attachment tables and the tag
-        # table go first: the attachments reference tag/txn/category/account/rule, and `tag` itself
-        # is not a child of anything else wiped below, so it must be cleared explicitly.
-        conn.execute("DELETE FROM txn_tag")
-        conn.execute("DELETE FROM category_tag")
-        conn.execute("DELETE FROM account_tag")
-        conn.execute("DELETE FROM rule_tag")
-        conn.execute("DELETE FROM account_pair_distinct")
-        conn.execute("DELETE FROM ui_preference")
-        conn.execute("DELETE FROM tag")
-        conn.execute("DELETE FROM txn")
-        conn.execute("DELETE FROM import_batch_duplicate")
-        conn.execute("DELETE FROM import_batch_account")
-        conn.execute("DELETE FROM import_batch")
-        conn.execute("DELETE FROM import_workflow_state")
-        conn.execute("DELETE FROM category_rule")
-        conn.execute("DELETE FROM merchant_rename")
-        conn.execute("DELETE FROM csv_import_profile")
-        conn.execute("DELETE FROM category")
-        conn.execute("DELETE FROM account")
-        conn.execute("DELETE FROM owner")
+        _wipe_user_data_tables(conn)
 
         def insert_rows(table, rows, exclude=()):
             if not rows:

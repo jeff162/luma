@@ -61,8 +61,9 @@ from backend.services.preferences import (
     relocate_legacy_preferences,
     set_preference,
 )
-from backend.db.database import get_db, get_db_instance_id
-from backend.db.demo_data import load_demo_data
+from backend.db.database import get_db, get_db_instance_id, ensure_shared_owner, _seed_default_categories
+from backend.db.demo_data import load_demo_data, is_demo_data_loaded, is_demo_loadable
+from backend.routers.import_export.backup import _wipe_user_data_tables
 from backend.services.crypto_service import reencrypt_plaid_items
 
 
@@ -345,6 +346,39 @@ def load_demo_data_endpoint():
         profiles = [create_local_preference_profile("Demo")]
     with get_db() as conn:
         return load_demo_data(conn, scope_id=profiles[0]["id"])
+
+
+@router.get("/demo-data")
+def demo_data_status():
+    """Demo-data state for this tenant. `loaded` drives the banner + the import/connect block; `loadable`
+    (empty tenant) drives the "Load demo data" offer on the Import/Export page so the demo is reachable
+    after a skip or a clear, not only from first-run onboarding. Local-mode only."""
+    _require_local_mode()
+    with get_db() as conn:
+        return {"loaded": is_demo_data_loaded(conn), "loadable": is_demo_loadable(conn)}
+
+
+@router.post("/demo-data/clear")
+def clear_demo_data_endpoint():
+    """Erase the demo dataset and return the tenant to a clean first-run state. REFUSES (409) unless the
+    demo marker is set, so it can never wipe real data — which never carries the marker, and which can
+    never coexist with demo data because imports/connections are blocked while it is loaded. Scoped to
+    the tenant data DB; local profiles and credentials are untouched. Local-mode only."""
+    _require_local_mode()
+    with get_db() as conn:
+        if not is_demo_data_loaded(conn):
+            raise HTTPException(status_code=409, detail={
+                "code": "no_demo_data",
+                "message": "No demo data is loaded, so there is nothing to clear.",
+            })
+        # Mirror restore's wipe: one transaction, FK checks deferred to commit. The wipe clears
+        # import_workflow_state (so the demo marker goes with it); reseed the first-run skeleton.
+        conn.execute("BEGIN")
+        conn.execute("PRAGMA defer_foreign_keys = ON")
+        _wipe_user_data_tables(conn)
+        _seed_default_categories(conn)
+        ensure_shared_owner(conn)
+    return {"ok": True}
 
 
 @router.patch("/local-preference-profiles/{profile_id}")

@@ -17,7 +17,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
+from backend.db.database import SHARED_OWNER_ID, _seed_default_categories, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.rules import _apply_rule_to_existing, create_rule, RuleCreate
 from backend.routers.transactions import list_transactions, spending_by_group
 from backend.services.categorizer import preview_recategorize_count, recategorize_all
@@ -177,6 +177,8 @@ class TransactionTagsTests(unittest.TestCase):
         groceries_id = None
         with self._use_db_path():
             with get_db() as conn:
+                # Starter leaves are opt-in now; this case needs the seeded 'Groceries'/'Food & Drink'.
+                _seed_default_categories(conn, include_leaves=True)
                 groceries = conn.execute(
                     """
                     SELECT c.id, p.id AS group_id

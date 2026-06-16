@@ -19,6 +19,7 @@ import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorksp
 import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
 import ImportColumnMappingSection from '../components/ImportColumnMappingSection.jsx'
 import ImportProfilesManager from '../components/ImportProfilesManager.jsx'
+import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
 import {
   DataSourcePill,
   ImportedCategoryUsageInline,
@@ -208,6 +209,39 @@ function ImportTab() {
   const [pendingAccountMatchChooser, setPendingAccountMatchChooser] = useState(null)
   const [categoryAssignments, setCategoryAssignments] = useState({})
   const [importResult, setImportResult] = useState(null)
+  // Post-import categorization nudge: shown on the done screen when an import brought no categories and
+  // the user hasn't started categorizing yet (no leaf categories). It self-suppresses once they engage.
+  const [showStarterRules, setShowStarterRules] = useState(false)
+  const [starterPromptDismissed, setStarterPromptDismissed] = useState(false)
+  const [addingStarterCats, setAddingStarterCats] = useState(false)
+  // While demo data is loaded the backend blocks imports + restore; reflect that in the UI by disabling
+  // those controls (with an explanatory tooltip) rather than letting the user try and hit a 409.
+  // `demoLoadable` (empty tenant) surfaces the "Load demo data" offer here so it's reachable after a
+  // skip or a clear, not only from first-run onboarding.
+  const [demoLoaded, setDemoLoaded] = useState(false)
+  const [demoLoadable, setDemoLoadable] = useState(false)
+  const [loadingDemo, setLoadingDemo] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    api.getDemoDataStatus().then(r => {
+      if (cancelled) return
+      setDemoLoaded(!!r?.loaded)
+      setDemoLoadable(!!r?.loadable)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  async function loadDemoFromImport() {
+    setLoadingDemo(true)
+    try {
+      await api.loadDemoData()
+      // Reload into a populated app (dashboard + demo banner); every page re-bootstraps with the data.
+      window.location.assign('/')
+    } catch (err) {
+      setLoadingDemo(false)
+      setNoticeDialog({ title: 'Could not load demo data', description: err?.message || 'Please try again.' })
+    }
+  }
   const [showRaw, setShowRaw] = useState(false)
   const [rejectedRowsViewer, setRejectedRowsViewer] = useState(null)
   const [duplicateRowsViewer, setDuplicateRowsViewer] = useState(null)
@@ -280,6 +314,10 @@ function ImportTab() {
   const { pending: pendingSystemCategoryCount, total: totalSystemCategoryWorkspaceCount } =
     getImportedCategoryWorkCounts(categories, systemCategoryWorkspaceDraft)
   const hasSystemRuleSuggestionWork = useMemo(() => hasRuleSuggestionWork(batches), [batches])
+  // A leaf category means the user has already started categorizing (starter set, imported categories,
+  // or their own), so the post-import starter nudge stops appearing.
+  const hasAnyLeafCategory = useMemo(() => categories.some(category => category.parent_id), [categories])
+  useEffect(() => { setStarterPromptDismissed(false) }, [importResult?.batch_id])
   const pendingSystemRuleSuggestionCount = useMemo(() => countPendingRuleSuggestions(batches), [batches])
 
   // Also invoked by the App-level duplicate-detection dialog's drill-through arrow — through
@@ -365,17 +403,20 @@ function ImportTab() {
 
   useEffect(() => {
     if (!uploadSourcesReady || startupUploadSourceApplied) return
-    if (!lastImportDataSourceId) {
-      setStartupUploadSourceApplied(true)
-      return
-    }
-    if (profiles.some(profile => profile.id === lastImportDataSourceId)) {
+    if (lastImportDataSourceId && profiles.some(profile => profile.id === lastImportDataSourceId)) {
       setSelectedUploadSource(lastImportDataSourceId)
     } else {
-      setLastImportDataSourceId('').catch(() => { })
+      if (lastImportDataSourceId) {
+        setLastImportDataSourceId('').catch(() => { })
+      }
+      // Arriving straight from the welcome "Import a CSV file" choice: skip the data-source chooser and
+      // land on the file-drop step (a temporary draft the user can save as a data source later).
+      if (location.state?.startFileImport) {
+        setSelectedUploadSource(MANUAL_DATA_SOURCE_VALUE)
+      }
     }
     setStartupUploadSourceApplied(true)
-  }, [uploadSourcesReady, startupUploadSourceApplied, lastImportDataSourceId, profiles, setLastImportDataSourceId])
+  }, [uploadSourcesReady, startupUploadSourceApplied, lastImportDataSourceId, profiles, setLastImportDataSourceId, location.state])
 
   useEffect(() => {
     if (!selectedUploadSource || selectedUploadSource === MANUAL_DATA_SOURCE_VALUE) return
@@ -2685,8 +2726,32 @@ function ImportTab() {
         />
       ) : null}
 
+      {stage === 'upload' && demoLoadable ? (
+        <Card style={{
+          marginBottom: 16,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          flexWrap: 'wrap',
+          border: '1px solid color-mix(in srgb, var(--accent) 26%, var(--border))',
+          background: 'color-mix(in srgb, var(--accent) 6%, var(--surface))',
+        }}>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>New here? Explore with demo data</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+              Load a sample dataset to see reports, categories, rules, and the duplicate-review workflow.
+              You can clear it anytime from the banner that appears.
+            </div>
+          </div>
+          <Button onClick={loadDemoFromImport} disabled={loadingDemo}>
+            {loadingDemo ? 'Loading…' : 'Load demo data'}
+          </Button>
+        </Card>
+      ) : null}
+
       {stage === 'upload' && (
         <ImportUploadStage
+          demoLoaded={demoLoaded}
           uploadChoiceReady={uploadChoiceReady}
           uploadUsesManualDraft={uploadUsesManualDraft}
           uploadSelectionLabel={uploadSelectionLabel}
@@ -3558,6 +3623,25 @@ function ImportTab() {
 
       {stage === 'done' && importResult && (
         <Card>
+          <div style={{ fontSize: 18, marginBottom: 12 }}>✅ Import complete</div>
+          {importResult.has_imported_categories ? (
+            <div style={{
+              marginBottom: 16,
+              padding: '12px 14px',
+              borderRadius: 12,
+              background: 'color-mix(in srgb, var(--accent) 7%, var(--surface2))',
+              border: '1px solid color-mix(in srgb, var(--accent) 24%, var(--border))',
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+                Categorized rows were imported with this file.
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.55 }}>
+                {useImportedCategories && colCategory
+                  ? 'Because categories present in the data were used for this file, missing categories were added under Unassigned, the imported transactions kept those categories, and the file now contributes to system-wide rule suggestions.'
+                  : 'This file appears to already carry its own categories. If that data is clean and curated, turn on “categories present in the data” on its card under Recent imports — that keeps those categories on the imported transactions and uses them to suggest rules. If only some accounts or owners are curated, you can scope it to just those.'}
+              </div>
+            </div>
+          ) : null}
           {(() => {
             const summary = summarizeImportOutcome(importResult)
             const parts = []
@@ -3604,9 +3688,14 @@ function ImportTab() {
             }
 
             return (
-              <>
-                <div style={{ fontSize: 18, marginBottom: 8 }}>✅ Import complete</div>
-                <div style={{ fontSize: 14, color: 'var(--muted)', marginBottom: 4 }}>
+              <div style={{
+                marginBottom: 16,
+                padding: '10px 14px',
+                borderRadius: 12,
+                border: '1px solid color-mix(in srgb, var(--border) 88%, white 4%)',
+                background: 'color-mix(in srgb, var(--surface2) 26%, transparent)',
+              }}>
+                <div style={{ fontSize: 14, color: 'var(--text)', fontWeight: 600, marginBottom: 4 }}>
                   {summary.importedCount} transactions imported.
                 </div>
                 {summary.totalRows > 0 ? (
@@ -3647,24 +3736,50 @@ function ImportTab() {
                     .
                   </div>
                 ) : null}
-              </>
+              </div>
             )
           })()}
-          {importResult.has_imported_categories ? (
+          {!importResult.has_imported_categories && !hasAnyLeafCategory && !starterPromptDismissed ? (
             <div style={{
               marginBottom: 16,
               padding: '12px 14px',
               borderRadius: 12,
-              background: 'color-mix(in srgb, var(--accent) 7%, var(--surface2))',
-              border: '1px solid color-mix(in srgb, var(--accent) 24%, var(--border))',
+              background: 'color-mix(in srgb, var(--accent2) 7%, var(--surface2))',
+              border: '1px solid color-mix(in srgb, var(--accent2) 24%, var(--border))',
             }}>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
-                Categorized rows were imported with this file.
+                Want to sort these into categories?
               </div>
-              <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.55 }}>
-                {useImportedCategories && colCategory
-                  ? 'Because categories present in the data were used for this file, missing categories were added under Unassigned, the imported transactions kept those categories, and the file now contributes to system-wide rule suggestions.'
-                  : 'Enable categories present in the data from Recent imports if the imported categories should be applied to transactions and used to help suggest rules.'}
+              <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.55, marginBottom: 10 }}>
+                Categories group transactions so the dashboard can report on them — groceries, utilities,
+                dining, and so on. This file didn&apos;t bring its own, so you can start from a common set
+                now, or skip it and build your own as you go. Nothing here is permanent.
+              </div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                <Button
+                  small
+                  disabled={addingStarterCats}
+                  onClick={async () => {
+                    setAddingStarterCats(true)
+                    try {
+                      await api.generateStarterSet({ include_leaves: true })
+                      await api.getCategories().then(setCategories).catch(() => {})
+                      setStarterPromptDismissed(true)
+                    } catch {
+                      // Leave the prompt up so the user can retry.
+                    } finally {
+                      setAddingStarterCats(false)
+                    }
+                  }}
+                >
+                  {addingStarterCats ? 'Adding…' : 'Add starter categories'}
+                </Button>
+                <Button small variant="ghost" onClick={() => setShowStarterRules(true)}>
+                  Add starter rules…
+                </Button>
+                <Button small variant="ghost" onClick={() => setStarterPromptDismissed(true)}>
+                  Not now
+                </Button>
               </div>
             </div>
           ) : null}
@@ -3702,6 +3817,16 @@ function ImportTab() {
           </div>
         </Card>
       )}
+
+      {showStarterRules ? (
+        <StarterRulesDialog
+          onClose={() => setShowStarterRules(false)}
+          onAdded={() => {
+            api.getCategories().then(setCategories).catch(() => {})
+            setStarterPromptDismissed(true)
+          }}
+        />
+      ) : null}
 
       {stage !== 'mapping' && (
         <ImportHistorySection

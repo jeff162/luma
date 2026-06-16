@@ -23,7 +23,7 @@ import {
   MinimizedImportedCategoryWorkspaceNavItem,
 } from './contexts/ImportedCategoryWorkspaceContext.jsx'
 import { PanelStackProvider } from './contexts/PanelStackContext.jsx'
-import { useDismissibleLayer, useTransientTextEdit } from './lib/uiInteractions.js'
+import { useDismissibleLayer } from './lib/uiInteractions.js'
 import { AppConfirmDialog } from './components/ui.jsx'
 import TransientTextInput from './components/TransientTextInput.jsx'
 import {
@@ -142,7 +142,7 @@ const ROUTE_PREFETCHERS = [
 // pickTopTaskSeverity() can pick the worst pending task. Extending: add the new
 // severity here AND in TASK_SEVERITY_ORDER, then ensure the backend uses the same key.
 const TASK_BADGE_COLORS = {
-  info:    'var(--accent)',
+  info: 'var(--accent)',
   warning: '#f59e0b',
 }
 const TASK_SEVERITY_ORDER = ['info', 'warning']
@@ -252,6 +252,9 @@ function shouldShowFilterBar(pathname) {
 
 function DataProviderInfoButton({ label = 'data providers' }) {
   const [open, setOpen] = useState(false)
+  // Open the popover upward when there isn't room below; otherwise it overflows the bottom of the page,
+  // forces a scroll, and the scroll shifts the hover target out from under the cursor (the flicker).
+  const [dropUp, setDropUp] = useState(false)
   const containerRef = useRef(null)
 
   useDismissibleLayer({
@@ -259,6 +262,15 @@ function DataProviderInfoButton({ label = 'data providers' }) {
     onClose: () => setOpen(false),
     refs: [containerRef],
   })
+
+  function openMenu() {
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (rect) {
+      const spaceBelow = window.innerHeight - rect.bottom
+      setDropUp(spaceBelow < 220 && rect.top > spaceBelow)
+    }
+    setOpen(true)
+  }
 
   return (
     <span
@@ -268,9 +280,9 @@ function DataProviderInfoButton({ label = 'data providers' }) {
     >
       <button
         type="button"
-        onMouseEnter={() => setOpen(true)}
-        onFocus={() => setOpen(true)}
-        onClick={() => setOpen(current => !current)}
+        onMouseEnter={openMenu}
+        onFocus={openMenu}
+        onClick={() => (open ? setOpen(false) : openMenu())}
         aria-expanded={open}
         style={{
           background: 'none',
@@ -292,7 +304,7 @@ function DataProviderInfoButton({ label = 'data providers' }) {
           style={{
             position: 'absolute',
             left: 0,
-            top: 'calc(100% + 8px)',
+            ...(dropUp ? { bottom: 'calc(100% + 8px)' } : { top: 'calc(100% + 8px)' }),
             zIndex: 20,
             width: 220,
             padding: '10px 12px',
@@ -332,87 +344,6 @@ function RouteLoadingFallback() {
   )
 }
 
-function WelcomeNameChip({ value, onRename, onRemove }) {
-  const {
-    editing,
-    draft,
-    setDraft,
-    beginEdit,
-    cancelEdit,
-    commitEdit,
-  } = useTransientTextEdit(value, {
-    onCommit: onRename,
-  })
-
-  return (
-    <div
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 8,
-        minWidth: 0,
-      }}
-    >
-      {editing ? (
-        <TransientTextInput
-          value={draft}
-          onChange={setDraft}
-          onCommit={commitEdit}
-          onCancel={cancelEdit}
-          restoreOnEscape
-          style={{
-            background: 'var(--surface)',
-            color: 'var(--text)',
-            border: '1px solid var(--accent)',
-            borderRadius: 999,
-            padding: '8px 30px 8px 12px',
-            fontSize: 13,
-            fontWeight: 600,
-            minWidth: 120,
-            outline: 'none',
-          }}
-        />
-      ) : (
-        <button
-          type="button"
-          onClick={() => beginEdit(value)}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '8px 12px',
-            borderRadius: 999,
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            color: 'var(--text)',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'text',
-          }}
-        >
-          <span>{value}</span>
-        </button>
-      )}
-      <button
-        type="button"
-        onClick={onRemove}
-        style={{
-          background: 'none',
-          border: 'none',
-          color: 'var(--muted)',
-          cursor: 'pointer',
-          padding: 0,
-          fontSize: 13,
-          lineHeight: 1,
-        }}
-        aria-label={`Remove ${value}`}
-      >
-        x
-      </button>
-    </div>
-  )
-}
-
 /*
  * Local mode uses one surface for two related jobs:
  * - first run expands into a welcome flow that seeds preference profiles, optional account owners,
@@ -438,16 +369,6 @@ function LocalPreferenceProfileScreen({
   onCancel,
 }) {
   const [name, setName] = useState('')
-  const [welcomeProfileNames, setWelcomeProfileNames] = useState([])
-  const [ownerDraft, setOwnerDraft] = useState('')
-  const [welcomeOwnerNames, setWelcomeOwnerNames] = useState([])
-  // Owners persist in the data DB independently of local profiles, so the welcome flow can run against a
-  // DB that already has owners (e.g. after clearing local users but not the data). Load the reserved
-  // names up front so a clash is caught the moment an owner is added rather than only on Continue.
-  const [reservedOwnerNames, setReservedOwnerNames] = useState(() => new Set(['shared']))
-  const [ownerError, setOwnerError] = useState('')
-  const [openDataProvidersNext, setOpenDataProvidersNext] = useState(false)
-  const [openWelcomeSection, setOpenWelcomeSection] = useState('users')
   const [showWelcomeHelp, setShowWelcomeHelp] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [editingName, setEditingName] = useState('')
@@ -455,60 +376,7 @@ function LocalPreferenceProfileScreen({
   const menuRef = useRef(null)
 
   const hasProfiles = profiles.length > 0
-
-  useEffect(() => {
-    let cancelled = false
-    api.getOwners().then(owners => {
-      if (cancelled) return
-      setReservedOwnerNames(new Set([
-        'shared',
-        ...(owners || []).map(owner => String(owner?.name || '').trim().toLowerCase()).filter(Boolean),
-      ]))
-    }).catch(() => { })
-    return () => { cancelled = true }
-  }, [])
-
-  function normalizeName(nextValue) {
-    return String(nextValue || '').trim()
-  }
-
-  function addOwnerName() {
-    const normalized = normalizeName(ownerDraft)
-    if (!normalized) return
-    const lower = normalized.toLowerCase()
-    if (reservedOwnerNames.has(lower)) {
-      setOwnerError(`An account owner named "${normalized}" already exists.`)
-      return
-    }
-    if (welcomeOwnerNames.some(item => item.toLowerCase() === lower)) {
-      setOwnerError(`"${normalized}" is already added.`)
-      return
-    }
-    setWelcomeOwnerNames([...welcomeOwnerNames, normalized])
-    setOwnerDraft('')
-    setOwnerError('')
-  }
-
-  function addUniqueName(list, nextValue, setItems) {
-    const normalized = normalizeName(nextValue)
-    if (!normalized) return false
-    if (list.some(item => item.toLowerCase() === normalized.toLowerCase())) return false
-    setItems([...list, normalized])
-    return true
-  }
-
-  function renameUniqueName(list, currentValue, nextValue, setItems) {
-    const normalized = String(nextValue || '').trim()
-    if (!normalized) return false
-    if (normalized.toLowerCase() !== String(currentValue || '').trim().toLowerCase()
-      && list.some(item => item.toLowerCase() === normalized.toLowerCase())) {
-      return false
-    }
-    setItems(list.map(item => (
-      item === currentValue ? normalized : item
-    )))
-    return true
-  }
+  const trimmedName = name.trim()
 
   useDismissibleLayer({
     open: !!menu,
@@ -516,86 +384,41 @@ function LocalPreferenceProfileScreen({
     refs: [menuRef],
   })
 
-  function renderWelcomeSection({ key, title, summary, required = false, children }) {
-    const isOpen = openWelcomeSection === key
-    return (
-      <div
-        style={{
-          padding: 14,
-          background: isOpen
-            ? 'color-mix(in srgb, var(--surface2) 42%, transparent)'
-            : 'color-mix(in srgb, var(--surface2) 28%, transparent)',
-          border: `1px solid ${isOpen
-            ? 'color-mix(in srgb, var(--accent) 34%, var(--border))'
-            : 'color-mix(in srgb, var(--border) 88%, white 4%)'}`,
-          borderRadius: 16,
-          display: 'grid',
-          gap: isOpen ? 12 : 0,
-        }}
-      >
-        <button
-          type="button"
-          onClick={() => setOpenWelcomeSection(current => (current === key ? null : key))}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-            width: '100%',
-            background: 'none',
-            border: 'none',
-            padding: 0,
-            color: 'inherit',
-            cursor: 'pointer',
-            textAlign: 'left',
-          }}
-        >
-          <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{title}</span>
-              {required ? (
-                <span style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  padding: '2px 8px',
-                  borderRadius: 999,
-                  background: 'color-mix(in srgb, var(--accent) 12%, transparent)',
-                  color: 'var(--accent2)',
-                  fontSize: 11,
-                  fontWeight: 700,
-                  letterSpacing: '0.04em',
-                  textTransform: 'uppercase',
-                }}>
-                  Required
-                </span>
-              ) : null}
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.45 }}>
-              {summary}
-            </div>
-          </div>
-          <div
-            aria-hidden="true"
-            style={{
-              flex: '0 0 auto',
-              width: 28,
-              height: 28,
-              borderRadius: 999,
-              border: '1px solid color-mix(in srgb, var(--border) 88%, white 4%)',
-              display: 'grid',
-              placeItems: 'center',
-              color: 'var(--muted)',
-              fontSize: 14,
-              background: 'var(--surface)',
-            }}
-          >
-            {isOpen ? '−' : '+'}
-          </div>
-        </button>
-        {isOpen ? children : null}
-      </div>
-    )
+  // First-run data-entry choices. Each card creates the user and sends them once to that surface; the
+  // catch-all completion contract is { name, destination, loadDemo } (see handleCompleteWelcomeSetup).
+  function completeWelcome(choice) {
+    if (!trimmedName || creating) return
+    onCompleteWelcome?.({ name: trimmedName, ...choice })
   }
+
+  const dataEntryChoices = [
+    {
+      key: 'import',
+      title: 'Import a CSV file',
+      summary: 'Load transactions from a bank, card, or spreadsheet export. The fastest way to start with your own data.',
+      destination: '/import-export',
+      navState: { startFileImport: true },
+    },
+    {
+      key: 'connect',
+      title: 'Connect a data source',
+      summary: 'Link an account through a data provider so transactions import automatically.',
+      destination: DATA_PROVIDER_STARTUP_ROUTE,
+    },
+    {
+      key: 'demo',
+      title: 'Load demo data',
+      summary: 'Explore a sample dataset to see how reports, categories, and rules fit together.',
+      destination: '/',
+      loadDemo: true,
+    },
+    {
+      key: 'skip',
+      title: 'Skip for now',
+      summary: 'Start with an empty app and bring in data whenever you are ready.',
+      destination: '/',
+    },
+  ]
 
   return (
     <div style={{
@@ -638,7 +461,7 @@ function LocalPreferenceProfileScreen({
             <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.55, maxWidth: 470, paddingLeft: 10 }}>
               {hasProfiles
                 ? 'Tracks layout and view preferences.'
-                : `Create the first user and optionally provide some additional information up front which can be useful later.`}
+                : `Add a user name and bring in your first transactions to get started.`}
             </div>
           </div>
         </div>
@@ -812,19 +635,23 @@ function LocalPreferenceProfileScreen({
             ) : null}
           </div>
         ) : (
-          <div style={{ display: 'grid', gap: 14 }}>
+          <div style={{ display: 'grid', gap: 16 }}>
             <div style={{
               display: 'flex',
-              alignItems: 'center',
+              alignItems: 'flex-start',
               justifyContent: 'space-between',
               gap: 12,
               flexWrap: 'wrap',
             }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}></div>
+              <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.55, flex: 1, minWidth: 220 }}>
+                {APP_NAME} turns your transactions into reports and a searchable history. Add a name, then
+                bring in some data — that is what drives everything else.
+              </div>
               <button
                 type="button"
                 onClick={() => setShowWelcomeHelp(current => !current)}
                 style={{
+                  flex: '0 0 auto',
                   background: showWelcomeHelp
                     ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))'
                     : 'var(--surface)',
@@ -837,7 +664,7 @@ function LocalPreferenceProfileScreen({
                   cursor: 'pointer',
                 }}
               >
-                {showWelcomeHelp ? 'Back to setup' : 'More information'}
+                {showWelcomeHelp ? 'Hide overview' : 'What is this?'}
               </button>
             </div>
 
@@ -848,225 +675,94 @@ function LocalPreferenceProfileScreen({
                 border: '1px solid color-mix(in srgb, var(--border) 88%, white 4%)',
                 borderRadius: 16,
                 display: 'grid',
-                gap: 14,
+                gap: 12,
               }}>
-                <div style={{ display: 'grid', gap: 6 }}>
-                  <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>Getting Started</div>
-                  <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-                    You only need one user name to begin, everything else can be skipped and added later.
-                  </div>
+                <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+                  The two things {APP_NAME} is for are <strong style={{ color: 'var(--text)' }}>reports</strong> (mostly
+                  through the dashboard) and <strong style={{ color: 'var(--text)' }}>searching</strong> your transaction
+                  history. Everything else — accounts, owners, categories, tags, and rules — exists to make those
+                  better, and you can pick them up as you need them.
                 </div>
-                <div style={{ display: 'grid', gap: 10 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>If you are starting from scratch</div>
-                  <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-                    Keep it simple: add your user name, skip the optional sections for now, and proceed to the import page to load your first set of transactions or to the accounts page to link accounts through{' '}
-                    <DataProviderInfoButton />.
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gap: 10 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>If you are already tracking finances elsewhere</div>
-                  <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-                    Add the names of the various account owners and indicate that the transactions you are importing have already been categorized so the system should both preserve the existing categories when importing the transactions and propose rules based on the mappings. You may have multiple data sources, if some have been curated and some have not, you can make this distinction later at the data source level. This is simply the default.
-                  </div>
-                </div>
-                <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
-                  Other than user name the fields on the welcome page are there as they can be a useful place to get started but it is perfectly fine to ignore them and their meaning will become clear as you start to work with your data.
+                <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+                  It all starts with data. Import a CSV or connect a data source below and the rest of the app fills
+                  in around it. None of the choices here are permanent — almost anything can be changed later.
                 </div>
               </div>
-            ) : (
-              <>
-                {renderWelcomeSection({
-                  key: 'users',
-                  title: 'Users',
-                  summary: welcomeProfileNames.length > 0
-                    ? `${welcomeProfileNames.length} added`
-                    : `Tracks page layout and preferences.`,
-                  required: true,
-                  children: (
-                    <>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <TransientTextInput
-                          value={name}
-                          onChange={value => {
-                            setName(value)
-                            if (error) onClearError?.()
-                          }}
-                          restoreOnEscape
-                          onCommit={() => {
-                            if (addUniqueName(welcomeProfileNames, name, setWelcomeProfileNames)) setName('')
-                          }}
-                          onCancel={() => { }}
-                          onBlurCommit={false}
-                          placeholder="Add a user name"
-                          style={{
-                            flex: 1,
-                            background: 'var(--surface)',
-                            color: 'var(--text)',
-                            border: '1px solid var(--border)',
-                            borderRadius: 12,
-                            padding: '12px 14px',
-                            fontSize: 13,
-                            outline: 'none',
-                          }}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (addUniqueName(welcomeProfileNames, name, setWelcomeProfileNames)) setName('')
-                          }}
-                          disabled={!name.trim()}
-                          style={{
-                            background: !name.trim() ? 'var(--surface)' : 'var(--accent)',
-                            color: !name.trim() ? 'var(--muted)' : '#fff',
-                            border: !name.trim() ? '1px solid var(--border)' : 'none',
-                            borderRadius: 10,
-                            padding: '10px 14px',
-                            fontSize: 13,
-                            fontWeight: 600,
-                            cursor: !name.trim() ? 'not-allowed' : 'pointer',
-                          }}
-                        >
-                          Add
-                        </button>
-                      </div>
-                      {welcomeProfileNames.length > 0 ? (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                          {welcomeProfileNames.map(profileName => (
-                            <WelcomeNameChip
-                              key={profileName}
-                              value={profileName}
-                              onRename={nextValue => {
-                                renameUniqueName(welcomeProfileNames, profileName, nextValue, setWelcomeProfileNames)
-                              }}
-                              onRemove={() => setWelcomeProfileNames(prev => prev.filter(item => item !== profileName))}
-                            />
-                          ))}
-                        </div>
-                      ) : null}
-                    </>
-                  ),
-                })}
+            ) : null}
 
-                {renderWelcomeSection({
-                  key: 'owners',
-                  title: 'Account owners',
-                  summary: welcomeOwnerNames.length > 0
-                    ? `${welcomeOwnerNames.length} added`
-                    : 'of accounts in the transaction data. Managed on the accounts page.',
-                  children: (
-                    <>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <TransientTextInput
-                          value={ownerDraft}
-                          onChange={value => {
-                            setOwnerDraft(value)
-                            if (ownerError) setOwnerError('')
-                            if (error) onClearError?.()
-                          }}
-                          restoreOnEscape
-                          onCommit={addOwnerName}
-                          onCancel={() => { }}
-                          onBlurCommit={false}
-                          placeholder="Add an account owner"
-                          style={{
-                            flex: 1,
-                            background: 'var(--surface)',
-                            color: 'var(--text)',
-                            border: '1px solid var(--border)',
-                            borderRadius: 12,
-                            padding: '12px 14px',
-                            fontSize: 13,
-                            outline: 'none',
-                          }}
-                        />
-                        <button
-                          type="button"
-                          onClick={addOwnerName}
-                          disabled={!ownerDraft.trim()}
-                          style={{
-                            background: !ownerDraft.trim() ? 'var(--surface)' : 'var(--accent)',
-                            color: !ownerDraft.trim() ? 'var(--muted)' : '#fff',
-                            border: !ownerDraft.trim() ? '1px solid var(--border)' : 'none',
-                            borderRadius: 10,
-                            padding: '10px 14px',
-                            fontSize: 13,
-                            fontWeight: 600,
-                            cursor: !ownerDraft.trim() ? 'not-allowed' : 'pointer',
-                          }}
-                        >
-                          Add
-                        </button>
-                      </div>
-                      {ownerError ? (
-                        <div style={{ fontSize: 12, color: 'var(--danger)', lineHeight: 1.4 }}>{ownerError}</div>
-                      ) : null}
-                      {welcomeOwnerNames.length > 0 ? (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                          {welcomeOwnerNames.map(ownerName => (
-                            <WelcomeNameChip
-                              key={ownerName}
-                              value={ownerName}
-                              onRename={nextValue => {
-                                renameUniqueName(welcomeOwnerNames, ownerName, nextValue, setWelcomeOwnerNames)
-                              }}
-                              onRemove={() => setWelcomeOwnerNames(prev => prev.filter(item => item !== ownerName))}
-                            />
-                          ))}
-                        </div>
-                      ) : null}
-                    </>
-                  ),
-                })}
+            <div style={{
+              padding: 15,
+              background: 'color-mix(in srgb, var(--surface2) 36%, transparent)',
+              border: '1px solid color-mix(in srgb, var(--border) 88%, white 4%)',
+              borderRadius: 16,
+              display: 'grid',
+              gap: 8,
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>Your name</div>
+              <TransientTextInput
+                value={name}
+                onChange={value => {
+                  setName(value)
+                  if (error) onClearError?.()
+                }}
+                restoreOnEscape
+                onCommit={() => { }}
+                onCancel={() => { }}
+                onBlurCommit={false}
+                placeholder="user name"
+                style={{
+                  background: 'var(--surface)',
+                  color: 'var(--text)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 12,
+                  padding: '12px 14px',
+                  fontSize: 13,
+                  outline: 'none',
+                }}
+              />
+            </div>
 
-                {renderWelcomeSection({
-                  key: 'providers',
-                  title: 'Data providers',
-                  summary: openDataProvidersNext
-                    ? 'Open Data Providers after setup'
-                    : 'Link accounts for direct import.',
-                  children: (
-                    <>
-                      <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-                        Connections with <DataProviderInfoButton /> are managed on the accounts page.
-                      </div>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
-                        <input
-                          type="checkbox"
-                          checked={openDataProvidersNext}
-                          onChange={event => setOpenDataProvidersNext(event.target.checked)}
-                        />
-                        Open Data Providers after setup
-                      </label>
-                    </>
-                  ),
-                })}
-              </>
-            )}
-
-            {!showWelcomeHelp ? (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <button
-                  type="button"
-                  onClick={() => onCompleteWelcome?.({
-                    profileNames: welcomeProfileNames,
-                    ownerNames: welcomeOwnerNames,
-                    openDataProvidersNext,
-                  })}
-                  disabled={welcomeProfileNames.length === 0 || creating}
-                  style={{
-                    background: welcomeProfileNames.length === 0 || creating ? 'var(--surface)' : 'var(--accent)',
-                    color: welcomeProfileNames.length === 0 || creating ? 'var(--muted)' : '#fff',
-                    border: welcomeProfileNames.length === 0 || creating ? '1px solid var(--border)' : 'none',
-                    borderRadius: 10,
-                    padding: '10px 18px',
-                    fontSize: 13,
-                    fontWeight: 600,
-                    cursor: welcomeProfileNames.length === 0 || creating ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  {creating ? 'Setting up…' : 'Continue'}
-                </button>
+            <div style={{ display: 'grid', gap: 4 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>Bring in some data</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.45 }}>
+                {trimmedName ? 'Pick how you want to start.' : 'Add your name above, then pick how you want to start.'}
               </div>
+            </div>
+
+            <div style={{ display: 'grid', gap: 10 }}>
+              {dataEntryChoices.map(choice => {
+                const ready = !!trimmedName && !creating
+                return (
+                  <button
+                    key={choice.key}
+                    type="button"
+                    disabled={!ready}
+                    onClick={() => completeWelcome({ destination: choice.destination, loadDemo: choice.loadDemo, navState: choice.navState })}
+                    style={{
+                      textAlign: 'left',
+                      display: 'grid',
+                      gap: 4,
+                      padding: 14,
+                      borderRadius: 16,
+                      background: ready ? 'var(--surface)' : 'color-mix(in srgb, var(--surface2) 28%, transparent)',
+                      border: `1px solid ${ready ? 'color-mix(in srgb, var(--accent) 22%, var(--border))' : 'color-mix(in srgb, var(--border) 88%, white 4%)'}`,
+                      cursor: ready ? 'pointer' : 'not-allowed',
+                      opacity: ready ? 1 : 0.6,
+                    }}
+                  >
+                    <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{choice.title}</div>
+                    <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.45 }}>{choice.summary}</div>
+                  </button>
+                )
+              })}
+            </div>
+
+            <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.45 }}>
+              Connecting a data source links accounts through <DataProviderInfoButton />.
+            </div>
+
+            {creating ? (
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>Setting up…</div>
             ) : null}
             {error ? (
               <div
@@ -1188,6 +884,12 @@ export default function App() {
   const [creatingLocalProfile, setCreatingLocalProfile] = useState(false)
   const [pendingLocalProfileDelete, setPendingLocalProfileDelete] = useState(null)
   const [localProfileError, setLocalProfileError] = useState('')
+  // Demo-data mode: a global app strip + the guard that blocks new imports/connections while the
+  // explorable demo set is loaded (see the demo-data marker in the backend).
+  const [demoLoaded, setDemoLoaded] = useState(false)
+  const [pendingDemoClear, setPendingDemoClear] = useState(false)
+  const [clearingDemo, setClearingDemo] = useState(false)
+  const [demoClearError, setDemoClearError] = useState('')
   const [navProfileMenu, setNavProfileMenu] = useState(null)
   const [navProfileEditing, setNavProfileEditing] = useState(false)
   const [navProfileDraft, setNavProfileDraft] = useState('')
@@ -1545,12 +1247,15 @@ export default function App() {
     }
   }
 
+  // First-run completion. The welcome flow creates one local profile and then sends the user once to the
+  // data-entry surface they chose (import, data providers, demo dashboard, or an empty app). The persisted
+  // startup route is left at its default so later launches don't keep reopening that one-time destination.
   async function handleCompleteWelcomeSetup(setup) {
-    const profileNames = Array.isArray(setup?.profileNames) ? setup.profileNames.map(value => String(value || '').trim()).filter(Boolean) : []
-    const ownerNames = Array.isArray(setup?.ownerNames) ? setup.ownerNames.map(value => String(value || '').trim()).filter(Boolean) : []
-    const openDataProvidersNext = !!setup?.openDataProvidersNext
-    if (profileNames.length === 0) {
-      setLocalProfileError('Add at least one user name to continue.')
+    const name = String(setup?.name || '').trim()
+    const destination = String(setup?.destination || '/')
+    const loadDemo = !!setup?.loadDemo
+    if (!name) {
+      setLocalProfileError('Add a user name to continue.')
       return
     }
 
@@ -1559,42 +1264,27 @@ export default function App() {
     const originalProfileId = activeLocalProfile?.id || ''
 
     try {
-      const existingOwners = await api.getOwners().catch(() => [])
-      const existingOwnerNames = new Set((existingOwners || []).map(owner => String(owner?.name || '').trim().toLowerCase()).filter(Boolean))
-      const reservedOwnerNames = new Set(['shared', ...existingOwnerNames])
-      const conflictingOwner = ownerNames.find(ownerName => reservedOwnerNames.has(ownerName.toLowerCase()))
-      if (conflictingOwner) {
-        throw new Error(`An account owner named "${conflictingOwner}" already exists.`)
-      }
-
-      const createdProfiles = []
-      for (const profileName of profileNames) {
-        const resp = await api.createLocalPreferenceProfile(profileName)
-        if (resp?.profile) createdProfiles.push(resp.profile)
-      }
-      if (createdProfiles.length === 0) {
+      const resp = await api.createLocalPreferenceProfile(name)
+      const profile = resp?.profile
+      if (!profile) {
         throw new Error('Could not create the first user profile.')
       }
 
-      for (const ownerName of ownerNames) {
-        await api.createOwner({ name: ownerName })
+      setLocalProfiles(prev => (
+        prev.some(item => item.id === profile.id)
+          ? prev
+          : [...prev, profile].sort((a, b) => a.name.localeCompare(b.name))
+      ))
+
+      // Demo data is scoped to the active preference profile, so make the new profile active first.
+      setLocalPreferenceProfileId(profile.id)
+      if (loadDemo) {
+        await api.loadDemoData()
+        setDemoLoaded(true)
       }
 
-      const startupRoute = openDataProvidersNext ? DATA_PROVIDER_STARTUP_ROUTE : '/'
-      for (const profile of createdProfiles) {
-        setLocalPreferenceProfileId(profile.id)
-        await api.saveUserPreference(STARTUP_ROUTE_PREFERENCE_KEY, startupRoute)
-      }
-      setLocalPreferenceProfileId(originalProfileId)
-
-      setLocalProfiles(prev => {
-        const next = [...prev]
-        for (const profile of createdProfiles) {
-          if (!next.some(item => item.id === profile.id)) next.push(profile)
-        }
-        return next.sort((a, b) => a.name.localeCompare(b.name))
-      })
-      activateLocalProfile(createdProfiles[0], { forceStartupRoute: true })
+      activateLocalProfile(profile)
+      navigate(destination, { replace: true, state: setup?.navState || undefined })
     } catch (err) {
       setLocalPreferenceProfileId(originalProfileId)
       setLocalProfileError(
@@ -1620,6 +1310,30 @@ export default function App() {
 
   async function handleDeleteLocalProfile(profile) {
     setPendingLocalProfileDelete(profile)
+  }
+
+  // Demo-data status follows the active tenant/profile; it drives the global demo strip and is the
+  // signal that imports/connections are paused. Errors (e.g. auth mode, where the endpoint 400s) just
+  // mean "no demo".
+  useEffect(() => {
+    let cancelled = false
+    api.getDemoDataStatus()
+      .then(result => { if (!cancelled) setDemoLoaded(!!result?.loaded) })
+      .catch(() => { if (!cancelled) setDemoLoaded(false) })
+    return () => { cancelled = true }
+  }, [dbInstanceId, activeLocalProfile?.id])
+
+  async function confirmClearDemoData() {
+    setClearingDemo(true)
+    setDemoClearError('')
+    try {
+      await api.clearDemoData()
+      // Hard reload to a clean slate: every page drops its cached (now-deleted) data and re-bootstraps.
+      window.location.assign('/')
+    } catch (err) {
+      setClearingDemo(false)
+      setDemoClearError(err?.message || 'Could not clear the demo data. Please try again.')
+    }
   }
 
   async function confirmDeleteLocalProfile() {
@@ -1754,221 +1468,273 @@ export default function App() {
         >
           <FilterProvider initialDate={pastTwelveMonthsRange()}>
             <PanelStackProvider>
-            <UnifiedDuplicatesViewerProvider>
-            <ImportedCategoryWorkspaceProvider>
-            <UnifiedDuplicatesViewerRenderer />
-            <ImportedCategoryWorkspaceRenderer />
-            <style>{GLOBAL_SCROLLBAR_STYLES}</style>
-            {pendingLocalProfileDelete ? (
-              <AppConfirmDialog
-                title="Delete user profile?"
-                description={`Delete user profile "${pendingLocalProfileDelete.name}"?`}
-                confirmLabel="Delete"
-                confirmVariant="danger"
-                borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
-                onConfirm={confirmDeleteLocalProfile}
-                onCancel={() => setPendingLocalProfileDelete(null)}
-                width="min(480px, 100%)"
-              />
-            ) : null}
-            <div style={s.shell}>
-              <nav style={{ ...s.nav, width: navPaneWidth }}>
-                <div style={s.logo}>
-                  <div>{APP_NAME}</div>
-                  {developerOptionsEnabled ? (
-                    <div style={{
-                      marginTop: 3,
-                      fontSize: 11,
-                      fontWeight: 600,
-                      color: 'var(--muted)',
-                      letterSpacing: '0.04em',
-                    }}>
-                      v{APP_VERSION}
-                    </div>
+              <UnifiedDuplicatesViewerProvider>
+                <ImportedCategoryWorkspaceProvider>
+                  <UnifiedDuplicatesViewerRenderer />
+                  <ImportedCategoryWorkspaceRenderer />
+                  <style>{GLOBAL_SCROLLBAR_STYLES}</style>
+                  {pendingLocalProfileDelete ? (
+                    <AppConfirmDialog
+                      title="Delete user profile?"
+                      description={`Delete user profile "${pendingLocalProfileDelete.name}"?`}
+                      confirmLabel="Delete"
+                      confirmVariant="danger"
+                      borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+                      onConfirm={confirmDeleteLocalProfile}
+                      onCancel={() => setPendingLocalProfileDelete(null)}
+                      width="min(480px, 100%)"
+                    />
                   ) : null}
-                </div>
-                {NAV_LINKS.map(([to, label]) => (
-                  <NavLink
-                    key={to}
-                    to={to}
-                    end={to === '/'}
-                    style={({ isActive }) => (isActive ? activeStyle : s.link)}
-                  >
-                    <span>{label}</span>
-                    {to === '/tasks' && taskCount > 0 && (
-                      <span style={{
-                        background: TASK_BADGE_COLORS[topTaskSeverity] || TASK_BADGE_COLORS.info,
-                        color: '#fff',
-                        fontSize: 11, fontWeight: 700,
-                        padding: '1px 7px', borderRadius: 99,
-                        lineHeight: '18px', minWidth: 20, textAlign: 'center',
-                      }}>
-                        {taskCount}
-                      </span>
-                    )}
-                  </NavLink>
-                ))}
-                <MinimizedDuplicatesNavItem />
-                <MinimizedImportedCategoryWorkspaceNavItem />
-                <div style={s.navFooter}>
-                  <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-                    {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
-                    {authEnabled ? (
-                      <span style={{ fontWeight: 600, color: 'var(--text)' }}>
-                        {currentUser?.display_name || currentUser?.username}
-                      </span>
-                    ) : (
-                      navProfileEditing && activeLocalProfile ? (
-                        <TransientTextInput
-                          value={navProfileDraft}
-                          onChange={setNavProfileDraft}
-                          onCommit={commitNavProfileRename}
-                          onCancel={() => {
-                            setNavProfileEditing(false)
-                            setNavProfileDraft(activeLocalProfile.name)
-                          }}
-                          restoreOnEscape
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            background: 'var(--surface2)',
-                            color: 'var(--text)',
-                            border: '1px solid var(--accent)',
-                            borderRadius: 999,
-                            padding: '4px 10px',
-                            fontSize: 12,
+                  {pendingDemoClear ? (
+                    <AppConfirmDialog
+                      title="Clear demo data?"
+                      description={demoClearError
+                        ? demoClearError
+                        : 'This removes the demo dataset and returns the app to a clean slate so you can bring in your own data. This cannot be undone.'}
+                      confirmLabel={clearingDemo ? 'Clearing…' : 'Clear demo data'}
+                      confirmVariant="danger"
+                      confirmDisabled={clearingDemo}
+                      cancelDisabled={clearingDemo}
+                      borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+                      onConfirm={confirmClearDemoData}
+                      onCancel={() => { setPendingDemoClear(false); setDemoClearError('') }}
+                      width="min(480px, 100%)"
+                    />
+                  ) : null}
+                  <div style={s.shell}>
+                    <nav style={{ ...s.nav, width: navPaneWidth }}>
+                      <div style={s.logo}>
+                        <div>{APP_NAME}</div>
+                        {developerOptionsEnabled ? (
+                          <div style={{
+                            marginTop: 3,
+                            fontSize: 11,
                             fontWeight: 600,
-                            verticalAlign: 'middle',
-                            minWidth: 110,
-                            outline: 'none',
-                          }}
-                        />
-                      ) : (
-                        <button
-                          onClick={handleSwitchLocalProfile}
-                          onContextMenu={e => {
-                            e.preventDefault()
-                            if (!activeLocalProfile) return
-                            setNavProfileMenu({
-                              x: e.clientX,
-                              y: e.clientY,
-                            })
-                          }}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            background: 'var(--surface2)',
-                            color: 'var(--text)',
-                            border: '1px solid var(--border)',
-                            borderRadius: 999,
-                            padding: '4px 10px',
-                            fontSize: 12,
-                            fontWeight: 600,
-                            cursor: 'pointer',
-                            verticalAlign: 'middle',
-                          }}
-                          title="Switch user profile"
+                            color: 'var(--muted)',
+                            letterSpacing: '0.04em',
+                          }}>
+                            v{APP_VERSION}
+                          </div>
+                        ) : null}
+                      </div>
+                      {NAV_LINKS.map(([to, label]) => (
+                        <NavLink
+                          key={to}
+                          to={to}
+                          end={to === '/'}
+                          style={({ isActive }) => (isActive ? activeStyle : s.link)}
                         >
-                          {activeLocalProfile?.name || 'Choose profile'}
-                        </button>
-                      )
-                    )}
+                          <span>{label}</span>
+                          {to === '/tasks' && taskCount > 0 && (
+                            <span style={{
+                              background: TASK_BADGE_COLORS[topTaskSeverity] || TASK_BADGE_COLORS.info,
+                              color: '#fff',
+                              fontSize: 11, fontWeight: 700,
+                              padding: '1px 7px', borderRadius: 99,
+                              lineHeight: '18px', minWidth: 20, textAlign: 'center',
+                            }}>
+                              {taskCount}
+                            </span>
+                          )}
+                        </NavLink>
+                      ))}
+                      <MinimizedDuplicatesNavItem />
+                      <MinimizedImportedCategoryWorkspaceNavItem />
+                      <div style={s.navFooter}>
+                        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+                          {authEnabled ? 'Signed in as' : 'Using profile'}{' '}
+                          {authEnabled ? (
+                            <span style={{ fontWeight: 600, color: 'var(--text)' }}>
+                              {currentUser?.display_name || currentUser?.username}
+                            </span>
+                          ) : (
+                            navProfileEditing && activeLocalProfile ? (
+                              <TransientTextInput
+                                value={navProfileDraft}
+                                onChange={setNavProfileDraft}
+                                onCommit={commitNavProfileRename}
+                                onCancel={() => {
+                                  setNavProfileEditing(false)
+                                  setNavProfileDraft(activeLocalProfile.name)
+                                }}
+                                restoreOnEscape
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  background: 'var(--surface2)',
+                                  color: 'var(--text)',
+                                  border: '1px solid var(--accent)',
+                                  borderRadius: 999,
+                                  padding: '4px 10px',
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                  verticalAlign: 'middle',
+                                  minWidth: 110,
+                                  outline: 'none',
+                                }}
+                              />
+                            ) : (
+                              <button
+                                onClick={handleSwitchLocalProfile}
+                                onContextMenu={e => {
+                                  e.preventDefault()
+                                  if (!activeLocalProfile) return
+                                  setNavProfileMenu({
+                                    x: e.clientX,
+                                    y: e.clientY,
+                                  })
+                                }}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                  background: 'var(--surface2)',
+                                  color: 'var(--text)',
+                                  border: '1px solid var(--border)',
+                                  borderRadius: 999,
+                                  padding: '4px 10px',
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  verticalAlign: 'middle',
+                                }}
+                                title="Switch user profile"
+                              >
+                                {activeLocalProfile?.name || 'Choose profile'}
+                              </button>
+                            )
+                          )}
+                        </div>
+                        {authEnabled && (
+                          <button
+                            onClick={handleLogout}
+                            style={{
+                              width: '100%',
+                              background: 'none',
+                              border: '1px solid var(--border)',
+                              color: 'var(--text)',
+                              borderRadius: 8,
+                              padding: '8px 10px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Sign out
+                          </button>
+                        )}
+                      </div>
+                      <div
+                        className={`nav-resize-handle${navResizing ? ' is-resizing' : ''}`}
+                        onMouseDown={startNavPaneResize}
+                        onDoubleClick={resetNavPaneWidth}
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label="Resize navigation pane"
+                        title="Drag to resize · double-click to reset"
+                      />
+                    </nav>
+                    <div style={s.main}>
+                      {demoLoaded ? (
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 12,
+                          flexWrap: 'wrap',
+                          padding: '7px 16px',
+                          fontSize: 12.5,
+                          background: 'color-mix(in srgb, var(--danger) 12%, var(--surface))',
+                          borderBottom: '1px solid color-mix(in srgb, var(--danger) 30%, var(--border))',
+                        }}>
+                          <span style={{ fontWeight: 700, color: 'color-mix(in srgb, var(--danger) 72%, var(--text))', letterSpacing: '0.02em' }}>
+                            Demo data
+                          </span>
+                          <span style={{ color: 'var(--muted)' }}>
+                            Exploring the sample dataset — imports and connections are disabled.
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => { setDemoClearError(''); setPendingDemoClear(true) }}
+                            style={{
+                              marginLeft: 'auto',
+                              background: 'color-mix(in srgb, var(--danger) 14%, var(--surface))',
+                              color: 'color-mix(in srgb, var(--danger) 82%, var(--text))',
+                              border: '1px solid color-mix(in srgb, var(--danger) 40%, var(--border))',
+                              borderRadius: 8,
+                              padding: '5px 12px',
+                              fontSize: 12,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Clear demo data
+                          </button>
+                        </div>
+                      ) : null}
+                      {shouldShowFilterBar(location.pathname) ? <FilterBar /> : null}
+                      <div style={s.content}>
+                        {/* Route-level lazy loading keeps the shell responsive and avoids forcing every large screen into
+                    the initial bundle before the user ever visits it. */}
+                        <Suspense fallback={<RouteLoadingFallback />}>
+                          <Routes>
+                            <Route path="/" element={<Dashboard />} />
+                            <Route path="/transactions" element={<Transactions />} />
+                            <Route path="/categories" element={<Categories />} />
+                            <Route path="/rules" element={<Rules />} />
+                            <Route path="/accounts" element={<Accounts />} />
+                            <Route path="/import-export/rule-suggestions" element={<ImportRuleSuggestions />} />
+                            <Route path="/import-export/batches/:batchId/rule-suggestions" element={<ImportRuleSuggestions />} />
+                            <Route path="/import-export/profiles/:profileId/rule-suggestions" element={<ImportRuleSuggestions />} />
+                            <Route path="/import-export" element={<ImportExport />} />
+                            <Route path="/tasks" element={<Tasks />} />
+                            <Route path="/settings" element={<Settings />} />
+                            <Route path="/help" element={<Help />} />
+                            <Route path="/help/:topic" element={<Help />} />
+                          </Routes>
+                        </Suspense>
+                      </div>
+                    </div>
                   </div>
-                  {authEnabled && (
-                    <button
-                      onClick={handleLogout}
+                  {navProfileMenu && activeLocalProfile && (
+                    <div
+                      ref={navProfileMenuRef}
+                      onMouseDown={e => e.stopPropagation()}
                       style={{
-                        width: '100%',
-                        background: 'none',
+                        position: 'fixed',
+                        left: Math.min(navProfileMenu.x, window.innerWidth - 160),
+                        top: Math.min(navProfileMenu.y, window.innerHeight - 100),
+                        zIndex: 30,
+                        background: 'var(--surface)',
                         border: '1px solid var(--border)',
-                        color: 'var(--text)',
-                        borderRadius: 8,
-                        padding: '8px 10px',
-                        cursor: 'pointer',
+                        borderRadius: 10,
+                        boxShadow: '0 14px 36px rgba(0,0,0,0.18)',
+                        padding: 4,
+                        minWidth: 150,
                       }}
                     >
-                      Sign out
-                    </button>
+                      <button
+                        onClick={() => {
+                          setNavProfileMenu(null)
+                          setNavProfileDraft(activeLocalProfile.name)
+                          setNavProfileEditing(true)
+                        }}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          textAlign: 'left',
+                          background: 'none',
+                          border: 'none',
+                          borderRadius: 8,
+                          padding: '8px 10px',
+                          fontSize: 13,
+                          cursor: 'pointer',
+                          color: 'var(--text)',
+                        }}
+                      >
+                        Rename
+                      </button>
+                    </div>
                   )}
-                </div>
-                <div
-                  className={`nav-resize-handle${navResizing ? ' is-resizing' : ''}`}
-                  onMouseDown={startNavPaneResize}
-                  onDoubleClick={resetNavPaneWidth}
-                  role="separator"
-                  aria-orientation="vertical"
-                  aria-label="Resize navigation pane"
-                  title="Drag to resize · double-click to reset"
-                />
-              </nav>
-              <div style={s.main}>
-                {shouldShowFilterBar(location.pathname) ? <FilterBar /> : null}
-                <div style={s.content}>
-                  {/* Route-level lazy loading keeps the shell responsive and avoids forcing every large screen into
-                    the initial bundle before the user ever visits it. */}
-                  <Suspense fallback={<RouteLoadingFallback />}>
-                    <Routes>
-                      <Route path="/" element={<Dashboard />} />
-                      <Route path="/transactions" element={<Transactions />} />
-                      <Route path="/categories" element={<Categories />} />
-                      <Route path="/rules" element={<Rules />} />
-                      <Route path="/accounts" element={<Accounts />} />
-                      <Route path="/import-export/rule-suggestions" element={<ImportRuleSuggestions />} />
-                      <Route path="/import-export/batches/:batchId/rule-suggestions" element={<ImportRuleSuggestions />} />
-                      <Route path="/import-export/profiles/:profileId/rule-suggestions" element={<ImportRuleSuggestions />} />
-                      <Route path="/import-export" element={<ImportExport />} />
-                      <Route path="/tasks" element={<Tasks />} />
-                      <Route path="/settings" element={<Settings />} />
-                      <Route path="/help" element={<Help />} />
-                      <Route path="/help/:topic" element={<Help />} />
-                    </Routes>
-                  </Suspense>
-                </div>
-              </div>
-            </div>
-            {navProfileMenu && activeLocalProfile && (
-              <div
-                ref={navProfileMenuRef}
-                onMouseDown={e => e.stopPropagation()}
-                style={{
-                  position: 'fixed',
-                  left: Math.min(navProfileMenu.x, window.innerWidth - 160),
-                  top: Math.min(navProfileMenu.y, window.innerHeight - 100),
-                  zIndex: 30,
-                  background: 'var(--surface)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 10,
-                  boxShadow: '0 14px 36px rgba(0,0,0,0.18)',
-                  padding: 4,
-                  minWidth: 150,
-                }}
-              >
-                <button
-                  onClick={() => {
-                    setNavProfileMenu(null)
-                    setNavProfileDraft(activeLocalProfile.name)
-                    setNavProfileEditing(true)
-                  }}
-                  style={{
-                    display: 'block',
-                    width: '100%',
-                    textAlign: 'left',
-                    background: 'none',
-                    border: 'none',
-                    borderRadius: 8,
-                    padding: '8px 10px',
-                    fontSize: 13,
-                    cursor: 'pointer',
-                    color: 'var(--text)',
-                  }}
-                >
-                  Rename
-                </button>
-              </div>
-            )}
-            </ImportedCategoryWorkspaceProvider>
-            </UnifiedDuplicatesViewerProvider>
+                </ImportedCategoryWorkspaceProvider>
+              </UnifiedDuplicatesViewerProvider>
             </PanelStackProvider>
           </FilterProvider>
         </UserPreferencesProvider>

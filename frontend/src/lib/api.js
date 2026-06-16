@@ -35,6 +35,18 @@ function signalDataMutated() {
   }, 250)
 }
 
+// Build an Error from a non-OK response body. FastAPI `detail` may be a plain string or a structured
+// object ({code, message, ...}); surface a readable message either way and keep the raw object on
+// `error.detail` so callers can branch on `code` (e.g. the demo-data and restore-compatibility guards).
+function buildResponseError(body, status) {
+  const detail = body?.detail
+  const message = typeof detail === 'string' ? detail : (detail?.message || detail?.code || 'Request failed')
+  const error = new Error(message)
+  error.status = status
+  error.detail = detail
+  return error
+}
+
 async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
     headers: {
@@ -47,9 +59,7 @@ async function request(path, options = {}) {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    const error = new Error(err.detail || 'Request failed')
-    error.status = res.status
-    throw error
+    throw buildResponseError(err, res.status)
   }
   const method = (options.method || 'GET').toUpperCase()
   if (method !== 'GET' && method !== 'HEAD') signalDataMutated()
@@ -90,6 +100,8 @@ export const api = {
   deleteLocalPreferenceProfile: (id) =>
     request(`/auth/local-preference-profiles/${id}`, { method: 'DELETE' }),
   loadDemoData: () => request('/auth/demo-data', { method: 'POST' }),
+  getDemoDataStatus: () => request('/auth/demo-data'),
+  clearDemoData: () => request('/auth/demo-data/clear', { method: 'POST' }),
   getRuntimeConfigDefaults: () => request('/auth/runtime-config/defaults'),
   saveRuntimeConfig: (data) =>
     request('/auth/runtime-config', { method: 'POST', body: JSON.stringify(data) }),
@@ -242,6 +254,8 @@ export const api = {
   getCategoryDeletePreview: (id) => request(`/categories/${id}/delete-preview`),
   deleteCategory: (id, data = {}) => request(`/categories/${id}`, { method: 'DELETE', body: JSON.stringify(data) }),
   reactivateCategory: (id) => request(`/categories/${id}/reactivate`, { method: 'POST' }),
+  getStarterRules: () => request('/categories/starter-rules'),
+  generateStarterSet: (data = {}) => request('/categories/generate-starter', { method: 'POST', body: JSON.stringify(data) }),
   hardDeleteCategory: (id) => request(`/categories/${id}/forever`, { method: 'DELETE' }),
   getEmptyCleanupPreview: () => request('/categories/empty-cleanup-preview'),
   runEmptyCleanup: () => request('/categories/empty-cleanup', { method: 'POST' }),
@@ -349,9 +363,7 @@ export const api = {
     return fetch('/api/import-export/run', { method: 'POST', body: fd }).then(async res => {
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }))
-        const error = new Error(err.detail || 'Request failed')
-        error.status = res.status
-        throw error
+        throw buildResponseError(err, res.status)
       }
       signalDataMutated()
       return res.json()
@@ -470,14 +482,9 @@ export const api = {
     const res = await fetch('/api/import-export/restore-file', { method: 'POST', body: fd })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }))
-      // The compatibility guard returns a structured detail object (409). Keep it intact so the
-      // caller can show the right confirmation and retry with force, instead of stringifying it.
-      const detail = err.detail
-      const message = typeof detail === 'string' ? detail : (detail?.code || 'Request failed')
-      const error = new Error(message)
-      error.status = res.status
-      error.detail = detail
-      throw error
+      // The compatibility and demo-data guards return structured detail objects (409). buildResponseError
+      // keeps `detail` intact so the caller can branch on `code` and retry with force.
+      throw buildResponseError(err, res.status)
     }
     signalDataMutated()
     return res.json()

@@ -264,18 +264,11 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
     return pending
 
 
-def seed_default_rules(conn: sqlite3.Connection):
-    import uuid
-
-    def cat_id(name: str) -> str | None:
-        # Default rules target leaf categories; restrict to leaves so a group that shares a leaf's
-        # name (now permitted) can never be picked as a rule's category.
-        row = conn.execute(
-            "SELECT id FROM category WHERE name = ? AND parent_id IS NOT NULL", (name,)
-        ).fetchone()
-        return row["id"] if row else None
-
-    rules = [
+# Built-in starter rule catalog: (keyword, leaf category name, priority, amount_min, amount_max).
+# Single source of truth for the opt-in starter rule set — surfaced for selection (the starter-rules
+# catalog endpoint) and seeded on demand (generate-starter, demo). Rules target leaf categories by
+# NAME, so the matching starter leaves must already exist (_seed_default_categories(include_leaves=True)).
+DEFAULT_RULE_SEEDS: list[tuple[str, str, int, float | None, float | None]] = [
         ("whole foods",  "Groceries",        10, None, None),
         ("trader joe",   "Groceries",        10, None, None),
         ("kroger",       "Groceries",         8, None, None),
@@ -320,9 +313,27 @@ def seed_default_rules(conn: sqlite3.Connection):
         ("united",       "Air Travel",         9, None, None),
         ("payroll",      "Salary",            10, None, None),
         ("direct dep",   "Salary",             9, None, None),
-    ]
+]
 
-    for keyword, cat_name, priority, amt_min, amt_max in rules:
+
+def seed_default_rules(conn: sqlite3.Connection, *, keywords: list[str] | None = None) -> int:
+    """Seed built-in starter rules (opt-in). `keywords` optionally restricts seeding to a subset by
+    keyword (the user's checkbox selection); None seeds the whole catalog. Existing keyword+category
+    pairs are left untouched, so this is safe to re-run. Returns the number of rules actually created."""
+    import uuid
+
+    def cat_id(name: str) -> str | None:
+        # Rules target leaf categories; restrict to leaves so a group sharing a leaf's name isn't picked.
+        row = conn.execute(
+            "SELECT id FROM category WHERE name = ? AND parent_id IS NOT NULL", (name,)
+        ).fetchone()
+        return row["id"] if row else None
+
+    wanted = None if keywords is None else {str(k).strip().lower() for k in keywords}
+    created = 0
+    for keyword, cat_name, priority, amt_min, amt_max in DEFAULT_RULE_SEEDS:
+        if wanted is not None and keyword.lower() not in wanted:
+            continue
         cid = cat_id(cat_name)
         if not cid:
             continue
@@ -337,3 +348,5 @@ def seed_default_rules(conn: sqlite3.Connection):
                    VALUES (?,?,?,?,?,?)""",
                 (str(uuid.uuid4()), cid, keyword, priority, amt_min, amt_max),
             )
+            created += 1
+    return created

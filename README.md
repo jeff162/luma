@@ -46,6 +46,20 @@ You can:
 
 All core functionality runs locally on your machine. External integrations are optional.
 
+## Getting started: what to expect
+
+The first time you open FinTrack you give yourself a name and then **bring in some data** — import a CSV export, connect a data source, or load the bundled demo dataset to explore. That first import is what brings the rest of the app to life; nothing else needs to be set up first.
+
+Two things drive everything else: **reports** (mostly the dashboard) and **searching** your transaction history. Accounts, owners, categories, tags, and rules all exist to make those two better, and you can adopt each one when it earns a place in your reports:
+
+- **Categories** group transactions for reporting — start from a common starter set or build your own.
+
+- **Tags** are cross-cutting labels (e.g. *Essential Expenses*, *Kids*) that span accounts, owners, and categories, on income and expenses alike.
+
+- **Rules** apply categories and tags to new transactions automatically as they arrive — you approve them before they take effect, and they are easy to change later.
+
+The same overview is available any time inside the app under **Help → How FinTrack works**.
+
 ## Who is this for?
 
 FinTrack is a good fit for people who:

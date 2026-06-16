@@ -33,6 +33,7 @@ import json
 import uuid
 import os
 import re
+from contextlib import nullcontext
 from datetime import datetime, date
 from difflib import SequenceMatcher
 from typing import Optional
@@ -42,6 +43,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from backend.db.database import SHARED_OWNER_ID, get_db
+from backend.db.demo_data import is_demo_data_loaded
 from backend.db.control_database import auth_required, get_local_preference_profile
 from backend.json_utils import safe_json_dict
 from backend.time_utils import utcnow_iso
@@ -2046,20 +2048,38 @@ async def run_import(
     config: str        = Form(...),
 ):
     """
-    Execute the import. Accepts the CSV file as a multipart upload so the full
-    file is parsed server-side — the preview only returns 10 rows to the client,
-    so we re-read the whole file here rather than relying on a rows list in the body.
+    Execute the import from a multipart upload. The CSV is parsed server-side (the preview only returns
+    10 rows), so we re-read the whole file here. This endpoint only handles the HTTP/multipart envelope
+    and the demo guard; the actual import is `run_import_core`, so the same logic is reusable in-process
+    (e.g. the demo loader builds its data through the real pipeline) without going through HTTP.
     """
     try:
         cfg = json.loads(config)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid config JSON")
 
+    with get_db() as conn:
+        if is_demo_data_loaded(conn):
+            raise HTTPException(status_code=409, detail={
+                "code": "demo_data_loaded",
+                "message": "Clear the demo data before importing your own data.",
+            })
+
     content = await file.read()
     try:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError:
         text = content.decode("latin-1")
+    return run_import_core(text, cfg, filename=file.filename or cfg.get("filename", "upload.csv"))
+
+
+def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=None) -> dict:
+    """Core import logic, independent of HTTP/multipart. Given the raw file text and a config dict, it
+    parses rows, creates/resolves accounts, inserts + dedupes + categorizes transactions, writes the
+    batch and its account-coverage rows, runs the post-import suspect sweep, and returns the result
+    summary. The /run endpoint is a thin wrapper around this. A caller may pass its own `conn` to run
+    inside an existing transaction (the demo loader does, so its owners/accounts/profiles are visible to
+    the import and everything commits together); when omitted, the core opens and commits its own."""
     file_content_hash = make_import_file_hash(text)
     all_lines = text.splitlines()
 
@@ -2105,7 +2125,6 @@ async def run_import(
     text_strategy_enabled = duplicate_strategies_cfg.get(TEXT_DUPLICATE_STRATEGY_KEY, True) is not False
     profile_id        = cfg.get("profile_id") or None
     replace_batch_id  = cfg.get("replace_batch_id") or None
-    filename          = file.filename or cfg.get("filename", "upload.csv")
 
     batch_id = str(uuid.uuid4())
     imported = 0
@@ -2123,7 +2142,8 @@ async def run_import(
     duplicate_rows = []
     skip_set = set(skip_accounts_cfg)
 
-    with get_db() as conn:
+    # Run inside the caller's transaction when one is supplied (demo loader); otherwise own the connection.
+    with (nullcontext(conn) if conn is not None else get_db()) as conn:
         default_owner_id = resolve_default_owner_id(conn, None)
         valid_category_ids = {
             row["id"] for row in conn.execute("SELECT id FROM category").fetchall()

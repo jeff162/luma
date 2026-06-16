@@ -20,8 +20,9 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from backend.db.control_database import auth_required
-from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
+from backend.db.database import SHARED_OWNER_ID, _seed_default_categories, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export.backup import RestoreRequest, build_backup_data, restore_backup
+from backend.services.categorizer import seed_default_rules
 
 # Data-DB tables deliberately NOT in the regular backup (credentials/encryption config/schema meta).
 EXCLUDED_TABLES = {"plaid_item", "backup_recipient", "db_meta"}
@@ -71,6 +72,10 @@ class BackupRestoreTests(unittest.TestCase):
         a1, a2 = str(uuid.uuid4()), str(uuid.uuid4())
         with self._use_db_path():
             with get_db() as conn:
+                # Starter leaves + rules are opt-in now; this coverage fixture needs a leaf category and
+                # a rule (and rule_tag) to populate, so seed the starter set explicitly.
+                _seed_default_categories(conn, include_leaves=True)
+                seed_default_rules(conn)
                 for acc in (a1, a2):
                     conn.execute(
                         """

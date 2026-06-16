@@ -27,6 +27,14 @@ function describeRestoreIncompatibility(detail) {
 }
 
 export function BackupRestoreTab() {
+  const demoRestoreMessage = 'Restoring a backup is disabled while demo data is loaded — clear it from the banner above first.'
+  // Restore is blocked server-side while demo data is loaded; disable the file picker to match.
+  const [demoLoaded, setDemoLoaded] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    api.getDemoDataStatus().then(r => { if (!cancelled) setDemoLoaded(!!r?.loaded) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
   const [backupRecipients, setBackupRecipients] = useState([])
   const [credentialBackupStatus, setCredentialBackupStatus] = useState({ has_credentials: false, credential_count: 0 })
   const [restoreFile, setRestoreFile] = useState(null)
@@ -243,8 +251,18 @@ export function BackupRestoreTab() {
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Restore from data backup</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>Replaces all existing data from the selected backup. Plaid credentials are not affected. Encrypted backups require the matching RSA private key file.</div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input type="file" accept=".json,.zip,application/json,application/zip" onChange={e => handleRestoreFileChange(e.target.files[0])} style={{ fontSize: 13 }} />
+            <input
+              type="file"
+              accept=".json,.zip,application/json,application/zip"
+              disabled={demoLoaded}
+              title={demoLoaded ? demoRestoreMessage : undefined}
+              onChange={e => handleRestoreFileChange(e.target.files[0])}
+              style={{ fontSize: 13, cursor: demoLoaded ? 'not-allowed' : undefined }}
+            />
           </div>
+          {demoLoaded && (
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>{demoRestoreMessage}</div>
+          )}
           {inspectingRestore && (
             <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
               Inspecting backup file...

@@ -679,6 +679,8 @@ export default function Categories() {
   const [applyingBulk, setApplyingBulk] = useState(false)
   const [pendingBulkTrash, setPendingBulkTrash] = useState(false)
   const [bulkNotice, setBulkNotice] = useState('')
+  const [starterNotice, setStarterNotice] = useState('')
+  const [addingStarter, setAddingStarter] = useState(false)
   const matchingSelection = useTransactionSelection()
   const [rulePrompt, setRulePrompt] = useState(null)
   const [selected, setSelected] = useState(null)
@@ -1874,6 +1876,34 @@ export default function Categories() {
   return (
     <div data-browser-context-passthrough="true" style={{ padding: 32, display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
       <PageHeader title="Categories">
+        {/* Empty-state-only offer: a one-time head start, shown only while the tree has no leaf
+            categories. Once any leaf exists (starter set added, imported, or hand-made) it's gone, and
+            deleting one category won't bring it back while others remain. */}
+        {!flatCats.some(cat => cat.parent_id) ? (
+          <Button
+            small
+            variant="ghost"
+            disabled={addingStarter}
+            onClick={async () => {
+              setAddingStarter(true)
+              try {
+                const result = await api.generateStarterSet({ include_leaves: true })
+                await loadCategories()
+                const added = result?.categories_added || 0
+                setStarterNotice(added > 0
+                  ? `Added ${added} starter categor${added === 1 ? 'y' : 'ies'}.`
+                  : 'All starter categories are already present.')
+              } catch (err) {
+                setStarterNotice(err?.message || 'Could not add starter categories.')
+              } finally {
+                setAddingStarter(false)
+              }
+            }}
+            title="Add a set of common categories to get started"
+          >
+            {addingStarter ? 'Adding…' : 'Add starter categories'}
+          </Button>
+        ) : null}
         <Button
           small
           variant="ghost"
@@ -2342,26 +2372,29 @@ export default function Categories() {
                       }}
                     >
                       {!selected.parent_id ? (
-                        <label
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            fontSize: 12,
-                            color: 'var(--muted)',
-                            cursor: 'pointer',
-                            whiteSpace: 'nowrap',
-                            userSelect: 'none',
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={!!selected.exclude_from_totals}
-                            onChange={e => handleExcludeChange(selected.id, e.target.checked)}
-                            style={{ accentColor: 'var(--accent)', width: 14, height: 14, cursor: 'pointer' }}
-                          />
-                          Exclude from totals
-                        </label>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <label
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              fontSize: 12,
+                              color: 'var(--muted)',
+                              cursor: 'pointer',
+                              whiteSpace: 'nowrap',
+                              userSelect: 'none',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={!!selected.exclude_from_totals}
+                              onChange={e => handleExcludeChange(selected.id, e.target.checked)}
+                              style={{ accentColor: 'var(--accent)', width: 14, height: 14, cursor: 'pointer' }}
+                            />
+                            Exclude from totals
+                          </label>
+                          <FeatureExplainer topic="exclude-from-totals" placement="bottom-left" />
+                        </span>
                       ) : null}
                       {(() => {
                         // Tag attachment for the selected category. Direct tags get the
@@ -2730,6 +2763,10 @@ export default function Categories() {
 
       {bulkNotice ? (
         <AppNoticeDialog title="Bulk action" description={bulkNotice} onClose={() => setBulkNotice('')} />
+      ) : null}
+
+      {starterNotice ? (
+        <AppNoticeDialog title="Starter categories" description={starterNotice} onClose={() => setStarterNotice('')} />
       ) : null}
 
       {rulePrompt ? (

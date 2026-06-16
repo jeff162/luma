@@ -13,6 +13,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from backend.db.database import get_db
+from backend.db.demo_data import is_demo_data_loaded
 from backend.routers.accounts import resolve_default_owner_id
 from backend.services import crypto_service, plaid_service
 
@@ -35,6 +36,12 @@ def get_link_token():
 
 @router.post("/exchange")
 def exchange_token(body: PublicTokenExchange, request: Request):
+    with get_db() as conn:
+        if is_demo_data_loaded(conn):
+            raise HTTPException(status_code=409, detail={
+                "code": "demo_data_loaded",
+                "message": "Clear the demo data before connecting a data source.",
+            })
     try:
         result       = plaid_service.exchange_public_token(body.public_token)
         access_token = result["access_token"]

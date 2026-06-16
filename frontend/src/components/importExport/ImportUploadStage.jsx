@@ -39,7 +39,9 @@ export function ImportUploadStage({
   handleDrop,
   handleFile,
   loading,
+  demoLoaded = false,
 }) {
+  const demoImportMessage = 'Imports are disabled while demo data is loaded — clear it from the banner above to import your own data.'
   return (
         <>
           <div style={{ width: '100%', display: 'grid', gap: 18 }}>
@@ -130,18 +132,19 @@ export function ImportUploadStage({
             <div style={{ width: '100%' }}>
               <div
                 ref={dropRef}
-                onDragOver={e => { if (uploadChoiceReady) e.preventDefault() }}
-                onDrop={handleDrop}
-                onClick={() => { if (uploadChoiceReady) fileInputRef.current?.click() }}
+                title={demoLoaded ? demoImportMessage : undefined}
+                onDragOver={e => { if (uploadChoiceReady && !demoLoaded) e.preventDefault() }}
+                onDrop={demoLoaded ? (e => e.preventDefault()) : handleDrop}
+                onClick={() => { if (uploadChoiceReady && !demoLoaded) fileInputRef.current?.click() }}
                 style={{
                   border: `2px dashed ${uploadChoiceReady ? 'var(--border)' : 'color-mix(in srgb, var(--border) 78%, transparent)'}`,
                   borderRadius: 12,
                   padding: '48px 32px',
                   textAlign: 'center',
-                  cursor: uploadChoiceReady ? 'pointer' : 'default',
+                  cursor: demoLoaded ? 'not-allowed' : (uploadChoiceReady ? 'pointer' : 'default'),
                   background: uploadChoiceReady ? 'var(--surface2)' : 'color-mix(in srgb, var(--surface2) 65%, var(--surface))',
                   marginBottom: 24,
-                  opacity: uploadChoiceReady ? 1 : 0.72,
+                  opacity: (uploadChoiceReady && !demoLoaded) ? 1 : 0.72,
                 }}
                 onMouseEnter={e => {
                   if (uploadChoiceReady) e.currentTarget.style.borderColor = 'var(--accent)'
@@ -164,9 +167,11 @@ export function ImportUploadStage({
                         color: 'color-mix(in srgb, var(--text) 84%, var(--muted))',
                         lineHeight: 1.45,
                       }}>
-                        {profiles.length === 0
-                          ? 'Press Skip or add a Data Source to begin'
-                          : 'Select a saved data source, create a new one, or press Skip to use a temporary draft.'}
+                        {demoLoaded
+                          ? demoImportMessage
+                          : profiles.length === 0
+                            ? 'Press Skip or add a Data Source to begin'
+                            : 'Select a saved data source, create a new one, or press Skip to use a temporary draft.'}
                       </div>
                     </div>
                     <div style={{
@@ -294,7 +299,7 @@ export function ImportUploadStage({
                 ) : null}
                 <div style={{ fontSize: 32, marginBottom: 12 }}>{uploadChoiceReady ? '📂' : '🧭'}</div>
                 <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>
-                  {uploadChoiceReady ? 'Drop a CSV file here, or click to browse' : (profiles.length === 0 ? 'Create a data source or select skip to begin' : 'Choose a data source or select skip to begin')}
+                  {demoLoaded ? 'Imports are disabled while demo data is loaded' : uploadChoiceReady ? 'Drop a CSV file here, or click to browse' : (profiles.length === 0 ? 'Create a data source or select skip to begin' : 'Choose a data source or select skip to begin')}
                 </div>
                 <input
                   ref={fileInputRef}

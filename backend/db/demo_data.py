@@ -19,7 +19,9 @@ later re-import of equivalent rows dedupes naturally.
 can never overwrite or pollute real data.
 """
 
+import csv
 import hashlib
+import io
 import json
 import uuid
 from datetime import date, timedelta
@@ -28,11 +30,41 @@ from datetime import date, timedelta
 ESSENTIAL_TAG = "Essential Expenses"
 DISCRETIONARY_TAG = "Discretionary"
 
+# Marker (in the data DB's import_workflow_state) recording that this tenant's data is the demo set.
+# It is the contract that keeps demo and real data from ever mixing: while it is present, new imports
+# and data-source connections are blocked, and the demo-clear wipe refuses to run unless it is present
+# (so the wipe can never destroy real data, which never carries the marker).
+DEMO_DATA_STATE_KEY = "demo_data"
+
 
 def _content_hash(date_str: str, amount: float, description: str) -> str:
     # Mirrors routers/import_export/core.make_hash so demo rows dedupe against an equivalent re-import.
     raw = f"{date_str.strip()}|{amount:.2f}|{description.strip().lower()}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _render_csv(headers: list[str], rows: list[tuple]) -> str:
+    """Render header + rows to CSV text (proper quoting), so the demo feeds the real import pipeline the
+    same way a user-supplied file would."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(headers)
+    for row in rows:
+        writer.writerow(row)
+    return buf.getvalue()
+
+
+def _insert_demo_profile(conn, name: str, column_map: dict, *, use_imported_categories: int) -> str:
+    """Create a saved data-source profile so the demo's imported files land under a named source (with the
+    realistic 'use categories present in the data' default) instead of the unknown-source bucket."""
+    pid = str(uuid.uuid4())
+    conn.execute(
+        """INSERT INTO csv_import_profile
+             (id, name, column_map, date_format, amount_convention, use_imported_categories)
+           VALUES (?, ?, ?, '%Y-%m-%d', 'single_signed', ?)""",
+        (pid, name, json.dumps(column_map), use_imported_categories),
+    )
+    return pid
 
 
 def _category_lookup(conn):
@@ -50,6 +82,21 @@ def is_demo_loadable(conn) -> bool:
     accounts = conn.execute("SELECT COUNT(*) FROM account").fetchone()[0]
     txns = conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0]
     return accounts == 0 and txns == 0
+
+
+def is_demo_data_loaded(conn) -> bool:
+    """True when this tenant's data was loaded by the demo loader (the marker in import_workflow_state).
+    This is the gate for the demo-clear wipe — real data never carries the marker, so the wipe refuses to
+    run on it — and the signal that blocks new imports/connections so demo and real data never mix."""
+    row = conn.execute(
+        "SELECT payload_json FROM import_workflow_state WHERE key = ?", (DEMO_DATA_STATE_KEY,)
+    ).fetchone()
+    if not row:
+        return False
+    try:
+        return bool(json.loads(row["payload_json"] or "{}").get("loaded"))
+    except (ValueError, TypeError):
+        return False
 
 
 def _seed_demo_preferences(conn, scope_id: str) -> None:
@@ -76,9 +123,20 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     if not is_demo_loadable(conn):
         return {"skipped": True, "reason": "tenant already has accounts or transactions"}
 
-    groups, leaves = _category_lookup(conn)
+    from backend.db.database import _seed_default_categories, SHARED_OWNER_ID
+    from backend.routers.import_export.core import run_import_core
 
-    # --- Owners ---
+    # An organized starter tree to map imported labels into: a file category that matches a starter leaf
+    # reuses it; one that doesn't (e.g. "Pet Care") is created under Unassigned by the import itself.
+    _seed_default_categories(conn, include_leaves=True)
+
+    today = date.today()
+
+    def d(days_ago: int) -> str:
+        return (today - timedelta(days=days_ago)).isoformat()
+
+    # --- Owners + accounts up front (typed + owned). The CSVs reference accounts by name, so the import
+    # maps onto these rather than creating untyped, unowned accounts. ---
     owners = {
         "Alex": (str(uuid.uuid4()), "Alex Rivera", "#2563eb"),
         "Jordan": (str(uuid.uuid4()), "Jordan Lee", "#db2777"),
@@ -86,171 +144,178 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     for oid, name, color in owners.values():
         conn.execute("INSERT INTO owner (id, name, color) VALUES (?, ?, ?)", (oid, name, color))
 
-    # --- Accounts (non-Plaid: plaid_account_id NULL, plaid_item_id 'manual') ---
     accounts = {
         "checking": (str(uuid.uuid4()), "Everyday Checking", "depository", owners["Alex"][0]),
-        "savings": (str(uuid.uuid4()), "Rainy Day Savings", "savings", owners["Alex"][0]),
+        "savings": (str(uuid.uuid4()), "Rainy Day Savings", "savings", SHARED_OWNER_ID),
         "card": (str(uuid.uuid4()), "Rewards Card", "credit", owners["Jordan"][0]),
         "brokerage": (str(uuid.uuid4()), "Brokerage", "investment", owners["Jordan"][0]),
     }
     for aid, name, acct_type, owner_id in accounts.values():
         conn.execute(
-            """INSERT INTO account
-                 (id, plaid_account_id, plaid_item_id, name, display_name, type, owner_id)
+            """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, owner_id)
                VALUES (?, NULL, 'manual', ?, ?, ?, ?)""",
             (aid, name, name, acct_type, owner_id),
         )
+    name_of = {key: accounts[key][1] for key in accounts}
 
-    # --- Import batches: the demo arrives the way real data does — one statement import per account —
-    # so transactions carry provenance (import history shows it) and the cross-account duplicate sweep,
-    # which only compares ACROSS batches, has a genuine cross-batch pair to find. ---
-    batch_ids = {}
-    for key, (_aid, name, _type, _owner) in accounts.items():
-        bid = str(uuid.uuid4())
-        conn.execute(
-            "INSERT INTO import_batch (id, filename, status) VALUES (?, ?, 'completed')",
-            (bid, f"{name}.csv"),
+    # ===== Source 1: "Everyday Bank" — a curated export WITH a Category column (checking + savings).
+    # Format A headers: Date, Description, Category, Amount, Account. Spending positive, income negative. =====
+    bank_rows = []  # (date, description, category, amount, account_name)
+
+    # `amount` is the intended STORED value (spending +, income −). The CSV carries the natural bank
+    # convention (income +, spending −); single_signed import negates it back (parse_amount → -val).
+    def bank(days_ago, desc, category, amount, acct):
+        bank_rows.append((d(days_ago), desc, category, f"{-amount:.2f}", name_of[acct]))
+
+    for i in range(6):
+        bank(7 + i * 14, "Acme Corp Payroll", "Salary", -3200.00, "checking")
+    for m in range(3):
+        base = m * 30
+        bank(base + 1, "Parkside Apartments", "Rent & Mortgage", 2200.00, "checking")
+        bank(base + 3, "City Power & Light", "Electricity", 94.50 + m, "checking")
+        bank(base + 4, "Fiberlink", "Internet", 69.99, "checking")
+        bank(base + 5, "CellOne Mobile", "Phone", 55.00, "checking")
+        bank(base + 6, "Metro Water", "Water", 38.25, "checking")
+    bank(30, "Transfer to Savings", "Bank Transfer", 500.00, "checking")
+    bank(30, "Transfer from Checking", "Bank Transfer", -500.00, "savings")
+    bank(31, "Interest Payment", "Interest Income", -12.18, "savings")
+    # "Pet Care" isn't a starter leaf, so importing it here creates the leaf (under Unassigned).
+    bank(20, "Petco", "Pet Care", 46.20, "checking")
+    bank(48, "Chewy", "Pet Care", 61.85, "checking")
+    # A handful of categories that AREN'T in the starter set, so they land in Unassigned and give the
+    # "Group imported categories" workspace something to demonstrate. (Labels matching a starter leaf
+    # reuse it, and income labels auto-file under the Income group, so only novel expense labels surface.)
+    bank(12, "WeWork Desk", "Home Office", 180.00, "checking")
+    bank(22, "Bright Kids Daycare", "Childcare", 850.00, "checking")
+    bank(40, "City Vet Clinic", "Veterinary", 120.00, "checking")
+    bank(52, "Red Cross Donation", "Charitable Giving", 75.00, "checking")
+    bank(26, "Annual Membership", "Fees & Charges", 96.00, "checking")   # cross-account duplicate, leg A
+
+    # ===== Source 2: "Rewards Card" — a raw export WITHOUT categories (card + brokerage). Format B uses
+    # different header names (so it's a distinct data source); rows here are categorized only by the rules
+    # created below, or land uncategorized — demonstrating the other import path. =====
+    card_rows = []  # (transaction date, payee, amount, account_name)
+
+    def card(days_ago, payee, amount, acct="card"):
+        card_rows.append((d(days_ago), payee, f"{-amount:.2f}", name_of[acct]))
+
+    for m in range(3):
+        base = m * 30
+        card(base + 8, "Netflix", 15.99)        # rule → Streaming Services
+        card(base + 9, "FitClub", 40.00)        # no rule → uncategorized
+    grocers = ["Costco", "Trader Joe's", "Whole Foods", "Safeway"]
+    grocery_amts = [182.40, 64.10, 121.75, 88.30]
+    for i in range(12):
+        card(2 + i * 7, grocers[i % 4], grocery_amts[i % 4] + i)   # Costco → rule; the rest uncategorized
+    coffee_amts = [4.75, 5.40, 6.25, 4.10, 5.95]
+    for i in range(10):
+        card(1 + i * 6, "Starbucks" if i % 2 else "Blue Bottle", coffee_amts[i % 5])  # Starbucks → rule
+    diners = ["The Corner Bistro", "Sushi House", "Taco Stand", "Pasta Bar"]
+    for i in range(8):
+        card(3 + i * 9, diners[i % 4], 28.50 + i * 4)             # uncategorized
+    for i in range(6):
+        card(4 + i * 11, "Shell" if i % 2 else "Chevron", 42.00 + i * 3)   # Shell → rule
+    online_amts = [23.99, 119.40, 14.25, 56.80, 31.10, 78.65, 19.99, 44.50]
+    for i in range(8):
+        card(5 + i * 8, "Amazon", online_amts[i])                # Amazon → rule
+    card(15, "Amazon Refund", -45.00)                            # refund (income); "amazon" → rule
+    card(45, "Quarterly Dividend", -52.40, "brokerage")          # uncategorized income
+    card(26, "Annual Membership", 96.00)                         # cross-account duplicate, leg B
+
+    bank_cols = {"date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "account": "Account"}
+    card_cols = {"date": "Transaction Date", "description": "Payee", "amount": "Amount", "account": "Account"}
+    bank_profile_id = _insert_demo_profile(conn, "Everyday Bank", bank_cols, use_imported_categories=1)
+    card_profile_id = _insert_demo_profile(conn, "Rewards Card", card_cols, use_imported_categories=0)
+
+    def _import(text, *, profile_id, column_map, account_keys, use_imported_categories, filename):
+        run_import_core(
+            text,
+            {
+                "profile_id": profile_id,
+                "filename": filename,
+                "account_map": {name_of[k]: accounts[k][0] for k in account_keys},
+                "column_map": column_map,
+                "date_format": "%Y-%m-%d",
+                "amount_convention": "single_signed",
+                "apply_categorization": True,
+                "use_imported_categories": use_imported_categories,
+            },
+            filename=filename,
+            conn=conn,
         )
-        batch_ids[key] = bid
 
-    # --- A custom category (shows the tree isn't frozen to the seeded set) ---
-    pet_care_id = str(uuid.uuid4())
-    conn.execute(
-        "INSERT INTO category (id, parent_id, name, category_type) VALUES (?, ?, ?, 'expense')",
-        (pet_care_id, groups["Household"], "Pet Care"),
+    # Import the curated source first (categories trusted) — this also creates the Pet Care leaf.
+    _import(
+        _render_csv(["Date", "Description", "Category", "Amount", "Account"], bank_rows),
+        profile_id=bank_profile_id, column_map=bank_cols, account_keys=("checking", "savings"),
+        use_imported_categories=True, filename="everyday-bank.csv",
     )
-    leaves["Pet Care"] = pet_care_id
 
-    # --- Demo rules (skip any keyword already seeded so we don't fork duplicates) ---
+    # Seed a few rules now (Pet Care exists). They categorize the raw card statement imported next,
+    # demonstrating rules working on an uncategorized import; rows with no matching rule stay uncategorized.
+    _groups, leaves = _category_lookup(conn)
     for keyword, leaf_name in [
-        ("amazon", "Online Shopping"),
         ("starbucks", "Coffee & Drinks"),
         ("netflix", "Streaming Services"),
         ("costco", "Groceries"),
         ("shell", "Gas"),
-        ("petco", "Pet Care"),   # a rule onto the custom category
+        ("amazon", "Online Shopping"),
+        ("petco", "Pet Care"),
         ("chewy", "Pet Care"),
     ]:
-        exists = conn.execute(
+        if leaf_name in leaves and not conn.execute(
             "SELECT 1 FROM category_rule WHERE LOWER(keyword) = ?", (keyword,)
-        ).fetchone()
-        if not exists:
+        ).fetchone():
             conn.execute(
                 "INSERT INTO category_rule (id, category_id, keyword, priority) VALUES (?, ?, ?, 5)",
                 (str(uuid.uuid4()), leaves[leaf_name], keyword),
             )
 
-    # --- Tags applied at the category level → transactions inherit them ---
+    # Import the raw source (no categories). The core's post-import sweep flags the cross-account
+    # "Annual Membership" duplicate against the checking row from the first import.
+    _import(
+        _render_csv(["Transaction Date", "Payee", "Amount", "Account"], card_rows),
+        profile_id=card_profile_id, column_map=card_cols, account_keys=("card", "brokerage"),
+        use_imported_categories=False, filename="rewards-card.csv",
+    )
+
+    # --- Category-level tags (transactions inherit them through their category/group) ---
+    groups, leaves = _category_lookup(conn)
+
     def add_tag(name, color, sort_order, leaf_names=(), group_names=()):
         tid = str(uuid.uuid4())
-        conn.execute(
-            "INSERT INTO tag (id, name, color, sort_order) VALUES (?, ?, ?, ?)",
-            (tid, name, color, sort_order),
-        )
+        conn.execute("INSERT INTO tag (id, name, color, sort_order) VALUES (?, ?, ?, ?)", (tid, name, color, sort_order))
         for n in leaf_names:
-            conn.execute("INSERT INTO category_tag (category_id, tag_id) VALUES (?, ?)", (leaves[n], tid))
+            if n in leaves:
+                conn.execute("INSERT INTO category_tag (category_id, tag_id) VALUES (?, ?)", (leaves[n], tid))
         for n in group_names:
-            conn.execute("INSERT INTO category_tag (category_id, tag_id) VALUES (?, ?)", (groups[n], tid))
+            if n in groups:
+                conn.execute("INSERT INTO category_tag (category_id, tag_id) VALUES (?, ?)", (groups[n], tid))
         return tid
 
-    # Essential: the Utilities *group* (every utility leaf inherits) plus specific essential leaves.
-    add_tag(ESSENTIAL_TAG, "#16a34a", 0,
-            leaf_names=("Groceries", "Rent & Mortgage", "Gas", "Auto Insurance"),
-            group_names=("Utilities",))
-    # Discretionary: the Entertainment + Shopping *groups* plus the indulgent Food leaves.
-    add_tag(DISCRETIONARY_TAG, "#f59e0b", 1,
-            leaf_names=("Dining Out", "Coffee & Drinks", "Take-out"),
-            group_names=("Entertainment", "Shopping"))
+    add_tag(ESSENTIAL_TAG, "#16a34a", 0, leaf_names=("Groceries", "Rent & Mortgage", "Gas"), group_names=("Utilities",))
+    add_tag(DISCRETIONARY_TAG, "#f59e0b", 1, leaf_names=("Dining Out", "Coffee & Drinks"), group_names=("Entertainment", "Shopping"))
 
-    # --- Transactions: ~3 months, anchored on today so the demo always looks current ---
-    today = date.today()
-    rows = []  # (days_ago, account_key, leaf_name, merchant, amount)
-
-    def add(days_ago, acct, leaf, merchant, amount):
-        rows.append((days_ago, acct, leaf, merchant, amount))
-
-    # Bi-weekly paycheck (income → negative), monthly bills (spending → positive).
-    for i in range(6):
-        add(7 + i * 14, "checking", "Salary", "Acme Corp Payroll", -3200.00)
-    for m in range(3):
-        base = m * 30
-        add(base + 1, "checking", "Rent & Mortgage", "Parkside Apartments", 2200.00)
-        add(base + 3, "checking", "Electricity", "City Power & Light", 94.50 + m)
-        add(base + 4, "checking", "Internet", "Fiberlink", 69.99)
-        add(base + 5, "checking", "Phone", "CellOne Mobile", 55.00)
-        add(base + 6, "checking", "Water", "Metro Water", 38.25)
-        add(base + 8, "card", "Streaming Services", "Netflix", 15.99)
-        add(base + 9, "card", "Gym Membership", "FitClub", 40.00)
-
-    grocers = ["Costco", "Trader Joe's", "Whole Foods", "Safeway"]
-    grocery_amts = [182.40, 64.10, 121.75, 88.30]
-    for i in range(12):
-        add(2 + i * 7, "card", "Groceries", grocers[i % 4], grocery_amts[i % 4] + i)
-    coffee_amts = [4.75, 5.40, 6.25, 4.10, 5.95]
-    for i in range(10):
-        add(1 + i * 6, "card", "Coffee & Drinks", "Starbucks" if i % 2 else "Blue Bottle", coffee_amts[i % 5])
-    diners = ["The Corner Bistro", "Sushi House", "Taco Stand", "Pasta Bar"]
-    for i in range(8):
-        add(3 + i * 9, "card", "Dining Out", diners[i % 4], 28.50 + i * 4)
-    for i in range(6):
-        add(4 + i * 11, "card", "Gas", "Shell" if i % 2 else "Chevron", 42.00 + i * 3)
-    online_amts = [23.99, 119.40, 14.25, 56.80, 31.10, 78.65, 19.99, 44.50]
-    for i in range(8):
-        add(5 + i * 8, "card", "Online Shopping", "Amazon", online_amts[i])
-    add(20, "card", "Pet Care", "Petco", 46.20)
-    add(48, "card", "Pet Care", "Chewy", 61.85)
-
-    # One-offs: a refund (income), inter-account transfer (two legs), interest, a dividend.
-    add(15, "card", "Refund", "Amazon Refund", -45.00)
-    add(30, "checking", "Bank Transfer", "Transfer to Savings", 500.00)
-    add(30, "savings", "Bank Transfer", "Transfer from Checking", -500.00)
-    add(31, "savings", "Interest Income", "Interest Payment", -12.18)
-    add(45, "brokerage", "Investment", "Quarterly Dividend", -52.40)
-
-    # A cross-account duplicate: the same charge captured on two accounts (e.g. overlapping statement
-    # imports). Same date/amount/merchant but DIFFERENT accounts and batches, so the real post-import
-    # sweep flags it for review. (A same-account exact dup would instead be hard-rejected on import.)
-    add(26, "checking", "Fees & Charges", "Annual Membership", 96.00)
-    add(26, "card", "Fees & Charges", "Annual Membership", 96.00)
-
-    inserted = 0
-    for days_ago, acct_key, leaf_name, merchant, amount in rows:
-        txn_date = (today - timedelta(days=days_ago)).isoformat()
-        account_id = accounts[acct_key][0]
-        owner_id = accounts[acct_key][3]
-        conn.execute(
-            """INSERT INTO txn
-                 (id, account_id, category_id, amount, merchant_name, display_name, raw_name,
-                  date, category_source, owner_id, content_hash, import_batch_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?)""",
-            (
-                str(uuid.uuid4()), account_id, leaves[leaf_name], amount, merchant, merchant, merchant,
-                txn_date, owner_id, _content_hash(txn_date, amount, merchant), batch_ids[acct_key],
-            ),
-        )
-        inserted += 1
-
-    for key, bid in batch_ids.items():
-        conn.execute(
-            "UPDATE import_batch SET row_count = (SELECT COUNT(*) FROM txn WHERE import_batch_id = ?) WHERE id = ?",
-            (bid, bid),
-        )
-
-    # Run the REAL post-import suspect sweep for the card statement (imported after checking): it flags
-    # the cross-account "Annual Membership" match for review, exactly as a live import would — so the
-    # demo's review queue is produced by the genuine detection logic, not a hand-set flag.
-    from backend.services.duplicate_detection import mark_import_suspects
-    suspects_flagged = mark_import_suspects(conn, batch_ids["card"])
+    # Mark demo-loaded LAST — after the imports, so the import-block guard never trips during the build.
+    conn.execute(
+        """INSERT INTO import_workflow_state (key, payload_json) VALUES (?, ?)
+           ON CONFLICT(key) DO UPDATE SET payload_json = excluded.payload_json""",
+        (DEMO_DATA_STATE_KEY, json.dumps({"loaded": True, "loaded_at": today.isoformat()})),
+    )
 
     if scope_id:
         _seed_demo_preferences(conn, scope_id)
 
+    txn_count = conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0]
+    suspects_flagged = conn.execute(
+        "SELECT COUNT(*) FROM txn WHERE suspect_duplicate_of IS NOT NULL"
+    ).fetchone()[0]
     return {
         "skipped": False,
         "owners": len(owners),
         "accounts": len(accounts),
-        "batches": len(batch_ids),
-        "transactions": inserted,
+        "batches": 2,
+        "transactions": txn_count,
         "suspects_flagged": suspects_flagged,
         "tags": [ESSENTIAL_TAG, DISCRETIONARY_TAG],
     }
