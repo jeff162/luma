@@ -2077,7 +2077,7 @@ export default function Settings() {
 
           <StickySection
             title="Appearance"
-            description="Choose a light, dark, or system color theme."
+            description="Choose your color theme."
             scrollContainerRef={settingsScrollRef}
             {...bindSection('appearance')}
           >
