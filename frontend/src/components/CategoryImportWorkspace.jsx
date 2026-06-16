@@ -1450,7 +1450,7 @@ export default function CategoryImportWorkspace({
                 {remainingCount > 0 ? `${remainingCount} ${remainingItemLabel} still need a group.` : `${processedCount} ${processedItemLabel} organized.`}
               </div>
               {sourceMeta?.truncated ? (
-                <div style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 8, padding: '7px 10px', borderRadius: 12, border: '1px solid color-mix(in srgb, #f59e0b 34%, var(--border))', background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))', color: 'color-mix(in srgb, #f59e0b 72%, var(--text))', fontSize: 11, lineHeight: 1.4 }}>
+                <div style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 8, padding: '7px 10px', borderRadius: 12, border: '1px solid color-mix(in srgb, var(--warning) 34%, var(--border))', background: 'color-mix(in srgb, var(--warning) 10%, var(--surface2))', color: 'color-mix(in srgb, var(--warning) 72%, var(--text))', fontSize: 11, lineHeight: 1.4 }}>
                   <span>This column has {sourceMeta.total_count} unique values. Showing the first {sourceMeta.limit} here.</span>
                 </div>
               ) : null}

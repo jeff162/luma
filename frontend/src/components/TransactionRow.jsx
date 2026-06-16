@@ -554,7 +554,7 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
               aria-label="Possible duplicate — review"
               style={{
                 ...iconButtonStyle,
-                color: '#f59e0b',
+                color: 'var(--warning)',
                 fontSize: 13,
                 fontWeight: 700,
               }}

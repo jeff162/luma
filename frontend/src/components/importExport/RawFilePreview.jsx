@@ -67,7 +67,7 @@ export function RawFilePreview({
   if (!rawLines?.length) return null
 
   const containerBackground = embedded
-    ? 'color-mix(in srgb, var(--surface2) 78%, #0b1220)'
+    ? 'color-mix(in srgb, var(--surface2) 85%, var(--bg))'
     : 'var(--surface)'
   const containerBorder = embedded
     ? '1px solid color-mix(in srgb, var(--accent2) 18%, var(--border))'
@@ -76,13 +76,13 @@ export function RawFilePreview({
     ? 'inset 0 1px 0 rgba(255,255,255,0.05), 0 14px 36px rgba(15, 23, 42, 0.22)'
     : '0 8px 32px rgba(0,0,0,0.35)'
   const headerBackground = embedded
-    ? 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 62%, var(--accent) 8%), color-mix(in srgb, var(--surface2) 88%, #111827))'
+    ? 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 62%, var(--accent) 8%), color-mix(in srgb, var(--surface2) 88%, var(--bg)))'
     : 'var(--surface2)'
   const noteBackground = embedded
-    ? 'color-mix(in srgb, #f59e0b 18%, #1f2937)'
-    : 'color-mix(in srgb, #f59e0b 10%, var(--surface2))'
+    ? 'color-mix(in srgb, var(--warning) 18%, var(--surface2))'
+    : 'color-mix(in srgb, var(--warning) 10%, var(--surface2))'
   const noteBorderColor = embedded
-    ? 'color-mix(in srgb, #f59e0b 28%, var(--border))'
+    ? 'color-mix(in srgb, var(--warning) 28%, var(--border))'
     : 'var(--border)'
 
   return (
@@ -126,7 +126,7 @@ export function RawFilePreview({
         <div style={{
           padding: '10px 12px',
           fontSize: 12,
-          color: '#f59e0b',
+          color: 'var(--warning)',
           background: noteBackground,
           borderBottom: `1px solid ${noteBorderColor}`,
           fontWeight: 500,
@@ -139,7 +139,7 @@ export function RawFilePreview({
         overflowY: 'auto', overflowX: 'auto',
         height: embedded ? embeddedHeight : size.h,
         borderRadius: '0 0 10px 10px',
-        background: embedded ? 'color-mix(in srgb, #0f172a 82%, var(--surface2))' : 'transparent',
+        background: embedded ? 'color-mix(in srgb, var(--bg) 82%, var(--surface2))' : 'transparent',
       }}>
         {rawLines.map((line, i) => {
           const actualLineIndex = lineNumberOffset + i
@@ -152,9 +152,9 @@ export function RawFilePreview({
               background: isHeader
                 ? 'color-mix(in srgb, var(--accent) 18%, var(--surface2))'
                 : embedded
-                  ? 'color-mix(in srgb, #111827 88%, transparent)'
+                  ? 'color-mix(in srgb, var(--bg) 88%, transparent)'
                   : 'transparent',
-              borderBottom: `1px solid ${embedded ? 'color-mix(in srgb, var(--border) 76%, #0f172a)' : 'var(--border)'}`,
+              borderBottom: `1px solid ${embedded ? 'color-mix(in srgb, var(--border) 76%, var(--bg))' : 'var(--border)'}`,
               opacity: dimmed ? (embedded ? 0.62 : 0.25) : 1,
             }}>
               <span style={{
@@ -163,17 +163,16 @@ export function RawFilePreview({
                 textAlign: 'right',
                 flexShrink: 0,
                 fontSize: 10,
-                color: embedded ? 'color-mix(in srgb, var(--muted) 62%, #cbd5e1)' : 'var(--muted)',
-                borderRight: `1px solid ${embedded ? 'color-mix(in srgb, var(--border) 76%, #0f172a)' : 'var(--border)'}`,
-                background: embedded ? 'color-mix(in srgb, #111827 76%, var(--surface2))' : 'var(--surface2)',
+                color: embedded ? 'color-mix(in srgb, var(--muted) 62%, var(--text))' : 'var(--muted)',
+                borderRight: `1px solid ${embedded ? 'color-mix(in srgb, var(--border) 76%, var(--bg))' : 'var(--border)'}`,
+                background: embedded ? 'color-mix(in srgb, var(--bg) 76%, var(--surface2))' : 'var(--surface2)',
                 fontWeight: isHeader ? 600 : 400,
               }}>{actualLineIndex + 1}</span>
               <span style={{
                 padding: '4px 10px',
                 whiteSpace: 'pre',
-                color: embedded ? 'color-mix(in srgb, var(--text) 88%, #e5eefc)' : 'var(--text)',
+                color: 'var(--text)',
                 fontWeight: isHeader ? 600 : 400,
-                textShadow: embedded ? '0 1px 0 rgba(0,0,0,0.28)' : 'none',
               }}>{line || ' '}</span>
               {isHeader && <span style={{ marginLeft: 'auto', padding: '3px 8px', flexShrink: 0, fontSize: 10, color: 'var(--accent2)', fontFamily: 'sans-serif', fontWeight: 600 }}>← header</span>}
             </div>

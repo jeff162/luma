@@ -218,7 +218,7 @@ export function BackupRestoreTab() {
             </div>
           )}
           {hasStoredCredentials ? (
-            <div style={{ display: 'inline-block', fontSize: 13, background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))', border: '1px solid #f59e0b', borderRadius: 6, padding: '8px 12px', marginTop: 10 }}>
+            <div style={{ display: 'inline-block', fontSize: 13, background: 'color-mix(in srgb, var(--warning) 10%, var(--surface2))', border: '1px solid var(--warning)', borderRadius: 6, padding: '8px 12px', marginTop: 10 }}>
               ⚠️ Plain credentials backups contain Plaid access tokens.
             </div>
           ) : null}
@@ -367,7 +367,7 @@ export function BackupRestoreTab() {
               width: 'min(520px, 100%)',
               background: 'var(--surface)',
               borderRadius: 14,
-              border: `1px solid ${pendingConfirm.variant === 'danger' ? 'color-mix(in srgb, var(--danger) 35%, var(--border))' : '#f59e0b'}`,
+              border: `1px solid ${pendingConfirm.variant === 'danger' ? 'color-mix(in srgb, var(--danger) 35%, var(--border))' : 'var(--warning)'}`,
               boxShadow: '0 24px 60px rgba(15, 23, 42, 0.28)',
               padding: 20,
               display: 'grid',
@@ -382,7 +382,7 @@ export function BackupRestoreTab() {
                 color: pendingConfirm.variant === 'danger' ? 'var(--danger)' : '#b45309',
                 background: pendingConfirm.variant === 'danger'
                   ? 'color-mix(in srgb, var(--danger) 10%, var(--surface2))'
-                  : 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
+                  : 'color-mix(in srgb, var(--warning) 10%, var(--surface2))',
                 borderRadius: 8,
                 padding: '8px 10px',
                 textAlign: 'center',

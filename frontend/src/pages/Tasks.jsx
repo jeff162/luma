@@ -8,7 +8,7 @@ import { useFilters } from '../lib/FilterContext.jsx'
 import { Card, PageHeader, Spinner } from '../components/ui.jsx'
 
 const SEVERITY_COLORS = {
-  warning: { bg: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))', border: '#f59e0b', icon: '!' },
+  warning: { bg: 'color-mix(in srgb, var(--warning) 10%, var(--surface2))', border: 'var(--warning)', icon: '!' },
   info: { bg: 'color-mix(in srgb, var(--accent) 8%, var(--surface2))', border: 'var(--accent)', icon: 'i' },
 }
 
@@ -29,7 +29,7 @@ function TaskSeverityIcon({ severity }) {
         border: `1px solid ${style.border}`,
         background: isInfo
           ? 'color-mix(in srgb, var(--accent) 84%, var(--surface) 16%)'
-          : 'color-mix(in srgb, #f59e0b 72%, var(--surface) 28%)',
+          : 'color-mix(in srgb, var(--warning) 72%, var(--surface) 28%)',
         color: isInfo ? '#f8fafc' : '#fff7ed',
         fontSize: isInfo ? 13 : 15,
         fontWeight: 700,

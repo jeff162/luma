@@ -11,6 +11,7 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { THEME_PREF_KEY, THEME_SYSTEM, THEME_CHOICES, THEME_LABELS } from '../lib/theme.js'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { TagGlyph, TAG_COLOR_PALETTE } from '../components/TagUi.jsx'
 
@@ -225,7 +226,7 @@ function UserAdminSection({ passwordPolicy }) {
         </div>
 
         {error && (
-          <div style={{ padding: '10px 16px', color: '#ef4444', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
+          <div style={{ padding: '10px 16px', color: 'var(--danger)', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
             {error}
           </div>
         )}
@@ -517,7 +518,7 @@ function AccountSecuritySection() {
       )}
 
       {recoveryCodes.length > 0 && (
-        <div style={{ marginTop: 14, padding: 14, border: '1px solid #f59e0b', borderRadius: 10, background: 'color-mix(in srgb, #f59e0b 10%, var(--surface))' }}>
+        <div style={{ marginTop: 14, padding: 14, border: '1px solid var(--warning)', borderRadius: 10, background: 'color-mix(in srgb, var(--warning) 10%, var(--surface))' }}>
           <div style={{ fontSize: 13, color: 'var(--muted)' }}>
             Save these recovery codes somewhere secure. They are shown only once and each code can be used one time.
           </div>
@@ -537,7 +538,7 @@ function AccountSecuritySection() {
       )}
 
       {error && (
-        <div style={{ marginTop: 14, color: '#ef4444', fontSize: 13 }}>
+        <div style={{ marginTop: 14, color: 'var(--danger)', fontSize: 13 }}>
           {error}
         </div>
       )}
@@ -608,7 +609,7 @@ function PlaidTokenProtectionSection() {
         </div>
       </InsetPanel>
       {error && (
-        <div style={{ marginTop: 14, color: '#ef4444', fontSize: 13 }}>
+        <div style={{ marginTop: 14, color: 'var(--danger)', fontSize: 13 }}>
           {error}
         </div>
       )}
@@ -945,7 +946,7 @@ function BackupRecipientsSection() {
           </div>
         </form>
 
-        {error && <div style={{ padding: '10px 16px', color: '#ef4444', fontSize: 13, borderBottom: '1px solid var(--border)' }}>{error}</div>}
+        {error && <div style={{ padding: '10px 16px', color: 'var(--danger)', fontSize: 13, borderBottom: '1px solid var(--border)' }}>{error}</div>}
         {loading ? <Spinner /> : recipients.length === 0 ? (
           <div style={{ padding: '18px 16px', color: 'var(--muted)', fontSize: 13 }}>
             Add an RSA public key here if you wish to generate encrypted backups.
@@ -1253,7 +1254,7 @@ function TransactionTagsSection() {
         </form>
 
         {error ? (
-          <div style={{ padding: '10px 16px', color: '#ef4444', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
+          <div style={{ padding: '10px 16px', color: 'var(--danger)', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
             {error}
           </div>
         ) : null}
@@ -1455,7 +1456,7 @@ function EnvironmentSection({ authEnabled, currentUser }) {
             </div>
           )}
           {error && (
-            <div style={{ fontSize: 13, color: '#ef4444' }}>
+            <div style={{ fontSize: 13, color: 'var(--danger)' }}>
               {error}
             </div>
           )}
@@ -2002,6 +2003,44 @@ function AboutSection({ dbInstanceId }) {
   )
 }
 
+// Compact segmented chooser for the color theme. Writes the choice straight through the preference
+// store; ThemeController (App.jsx) reacts to the change and applies it to <html>, so this stays a
+// pure selection control. Built inline (no shared segmented primitive exists yet); extract to ui.jsx
+// if a second one appears.
+function ThemeSection() {
+  const [themeChoice, setThemeChoice] = useUserPreference(THEME_PREF_KEY, THEME_SYSTEM)
+  return (
+    <div role="radiogroup" aria-label="Color theme" style={{ display: 'inline-flex', gap: 4, padding: 4, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 10 }}>
+      {THEME_CHOICES.map(choice => {
+        const selected = themeChoice === choice
+        return (
+          <button
+            key={choice}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            onClick={() => setThemeChoice(choice)}
+            style={{
+              minWidth: 76,
+              padding: '6px 14px',
+              borderRadius: 7,
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: 13,
+              fontWeight: 600,
+              background: selected ? 'var(--accent)' : 'transparent',
+              color: selected ? '#fff' : 'var(--muted)',
+              transition: 'background 0.12s, color 0.12s',
+            }}
+          >
+            {THEME_LABELS[choice]}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function Settings() {
   const {
     authEnabled,
@@ -2035,6 +2074,15 @@ export default function Settings() {
 
       <div data-browser-context-passthrough="true" ref={settingsScrollRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 28px 24px' }}>
         <div style={{ width: SETTINGS_CONTENT_WIDTH, margin: '0 auto' }}>
+
+          <StickySection
+            title="Appearance"
+            description="Choose a light, dark, or system color theme."
+            scrollContainerRef={settingsScrollRef}
+            {...bindSection('appearance')}
+          >
+            <ThemeSection />
+          </StickySection>
 
           <StickySection
             title="Backup recipients"

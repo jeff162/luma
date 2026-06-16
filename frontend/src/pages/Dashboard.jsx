@@ -1053,8 +1053,8 @@ function CompareRow({ label, color, kind = 'category', a, b, maxVal, onClick }) 
         {diffPct !== null && (
           <span style={{
             fontSize: 11, fontWeight: 600, padding: '1px 6px', borderRadius: 99,
-            background: diff > 0 ? '#ef444422' : '#22c55e22',
-            color: diff > 0 ? '#ef4444' : '#22c55e',
+            background: diff > 0 ? 'color-mix(in srgb, var(--danger) 13%, transparent)' : 'color-mix(in srgb, var(--success) 13%, transparent)',
+            color: diff > 0 ? 'var(--danger)' : 'var(--success)',
           }}>
             {diff > 0 ? '▲' : '▼'} {Math.abs(diffPct).toFixed(0)}%
           </span>
@@ -2235,7 +2235,7 @@ export default function Dashboard() {
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>
                       Total income · {singlePeriodLabel}
                     </div>
-                    <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--success, #22c55e)' }}>{formatCurrency(totalIncome)}</div>
+                    <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--success)' }}>{formatCurrency(totalIncome)}</div>
                   </Card>
                 )}
                 {selectedGroup && level !== 'groups' && (
@@ -2685,7 +2685,7 @@ export default function Dashboard() {
                   {cmpTotalB > 0 && (
                     <div style={{
                       fontSize: 12, marginTop: 2,
-                      color: cmpTotalA > cmpTotalB ? '#ef4444' : '#22c55e',
+                      color: cmpTotalA > cmpTotalB ? 'var(--danger)' : 'var(--success)',
                     }}>
                       {cmpTotalA > cmpTotalB ? '▲' : '▼'} {Math.abs(((cmpTotalA - cmpTotalB) / cmpTotalB) * 100).toFixed(0)}% vs {periodLabel(periodA)}
                     </div>

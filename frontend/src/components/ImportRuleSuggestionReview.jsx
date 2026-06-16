@@ -733,9 +733,9 @@ function MatchingTransactionsModal({ state, categories, onClose, onKeepCategory,
                             borderRadius: 999,
                             fontSize: 10.5,
                             fontWeight: 600,
-                            color: 'color-mix(in srgb, #f59e0b 72%, var(--text))',
-                            background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
-                            border: '1px solid color-mix(in srgb, #f59e0b 28%, var(--border))',
+                            color: 'color-mix(in srgb, var(--warning) 72%, var(--text))',
+                            background: 'color-mix(in srgb, var(--warning) 10%, var(--surface2))',
+                            border: '1px solid color-mix(in srgb, var(--warning) 28%, var(--border))',
                             whiteSpace: 'nowrap',
                           }}>
                             conflicting rule
@@ -907,9 +907,9 @@ function getStatusPalette(tone = 'default') {
       color: 'var(--muted)',
     },
     pending: {
-      background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
-      border: 'color-mix(in srgb, #f59e0b 36%, var(--border))',
-      color: 'color-mix(in srgb, #f59e0b 72%, var(--text))',
+      background: 'color-mix(in srgb, var(--warning) 10%, var(--surface2))',
+      border: 'color-mix(in srgb, var(--warning) 36%, var(--border))',
+      color: 'color-mix(in srgb, var(--warning) 72%, var(--text))',
     },
     accepted: {
       background: 'color-mix(in srgb, var(--success) 12%, var(--surface2))',
@@ -2872,9 +2872,9 @@ export default function ImportRuleSuggestionReview({
                     borderRadius: 999,
                     fontSize: 11,
                     fontWeight: 600,
-                    color: 'color-mix(in srgb, #f59e0b 72%, var(--text))',
-                    background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
-                    border: '1px solid color-mix(in srgb, #f59e0b 28%, var(--border))',
+                    color: 'color-mix(in srgb, var(--warning) 72%, var(--text))',
+                    background: 'color-mix(in srgb, var(--warning) 10%, var(--surface2))',
+                    border: '1px solid color-mix(in srgb, var(--warning) 28%, var(--border))',
                     whiteSpace: 'nowrap',
                     cursor: allowConflictOpen ? 'pointer' : 'default',
                   }}
@@ -2990,7 +2990,7 @@ export default function ImportRuleSuggestionReview({
             ) : null}
 
             {suggestion.needs_resolution && filterKey === 'pending' && isConflictLead ? (
-              <div style={{ marginTop: 8, fontSize: 12, color: 'color-mix(in srgb, #f59e0b 72%, var(--text))' }}>
+              <div style={{ marginTop: 8, fontSize: 12, color: 'color-mix(in srgb, var(--warning) 72%, var(--text))' }}>
                 Conflicting category assignments for the same merchant. Pick one or add selection criteria to distinguish them.
               </div>
             ) : null}

@@ -341,7 +341,7 @@ export default function UnifiedDuplicatesDialog({
   function ruleBadge(entry) {
     const confidence = entry.confidence || 'medium'
     const accent = confidence === 'high' ? 'var(--accent)'
-                 : confidence === 'low'  ? '#f59e0b'
+                 : confidence === 'low'  ? 'var(--warning)'
                  : 'var(--accent2)'
     const raw = entry.rule_label || entry.rule_key || 'unknown'
     const parenIdx = raw.indexOf(' (')
@@ -454,8 +454,8 @@ export default function UnifiedDuplicatesDialog({
         <span style={{
           display: 'inline-flex', alignItems: 'center', padding: '0 5px',
           borderRadius: 4, fontSize: 9.5, fontWeight: 700, letterSpacing: '0.02em',
-          background: 'color-mix(in srgb, #f59e0b 14%, var(--surface2))',
-          color: '#f59e0b', border: '1px solid color-mix(in srgb, #f59e0b 40%, var(--border))',
+          background: 'color-mix(in srgb, var(--warning) 14%, var(--surface2))',
+          color: 'var(--warning)', border: '1px solid color-mix(in srgb, var(--warning) 40%, var(--border))',
           marginRight: 4,
         }}>NO SPECIFIC MATCH</span>
       )
@@ -594,7 +594,7 @@ export default function UnifiedDuplicatesDialog({
             {ruleBreakdown.map(rule => {
               const active = activeRuleFilter === rule.rule_key
               const accent = rule.confidence === 'high' ? 'var(--accent)'
-                          : rule.confidence === 'low'  ? '#f59e0b'
+                          : rule.confidence === 'low'  ? 'var(--warning)'
                           : 'var(--accent2)'
               return (
                 <button
@@ -621,7 +621,7 @@ export default function UnifiedDuplicatesDialog({
               const count = reviewKindBreakdown[k.key]
               if (!count) return null
               const active = activeKindFilter === k.key
-              const accent = '#f59e0b'  // amber = needs attention, matching the Kind-cell styling
+              const accent = 'var(--warning)'  // amber = needs attention, matching the Kind-cell styling
               return (
                 <button
                   key={k.key}
@@ -739,9 +739,9 @@ export default function UnifiedDuplicatesDialog({
                   const isConfirmedSoftFlag = entry.kind === 'hard_reject' && !!entry.incoming?.txn_id
                   const isAdvisoryReview = !!entry.review_substate  // unreviewed coverage advisory
                   const isAcknowledged = entry.kind === 'hard_reject' && entry.reviewed && !!entry.matched?.covered
-                  const stripe = isSoft ? '#f59e0b'
-                               : isConfirmedSoftFlag ? 'color-mix(in srgb, #f59e0b 60%, var(--border))'
-                               : isAdvisoryReview ? 'color-mix(in srgb, #f59e0b 30%, var(--border))'
+                  const stripe = isSoft ? 'var(--warning)'
+                               : isConfirmedSoftFlag ? 'color-mix(in srgb, var(--warning) 60%, var(--border))'
+                               : isAdvisoryReview ? 'color-mix(in srgb, var(--warning) 30%, var(--border))'
                                : 'var(--border)'
                   const a = actionsFor(entry)
                   return (
@@ -753,7 +753,7 @@ export default function UnifiedDuplicatesDialog({
                           onChange={() => toggleEntry(entry)}
                         />
                       </td>
-                      <td style={{ padding: '6px 8px', color: (isSoft || isAdvisoryReview) ? '#f59e0b' : 'var(--muted)', fontWeight: (isSoft || isAdvisoryReview) ? 600 : 400, whiteSpace: 'nowrap' }}>
+                      <td style={{ padding: '6px 8px', color: (isSoft || isAdvisoryReview) ? 'var(--warning)' : 'var(--muted)', fontWeight: (isSoft || isAdvisoryReview) ? 600 : 400, whiteSpace: 'nowrap' }}>
                         {isSoft ? 'Review' : isConfirmedSoftFlag ? 'Resolved' : isAdvisoryReview ? 'Rejected · review' : isAcknowledged ? 'Reviewed' : 'Rejected'}
                       </td>
                       <td style={{ padding: '6px 8px' }}>{ruleBadge(entry)}</td>

@@ -103,7 +103,7 @@ function RuleRow({ rule, owners, accounts, onSave, onDelete, gridTemplateColumns
           <>
             <button
               onClick={() => { setConfirmDel(false); onDelete(rule.id) }}
-              style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 7px', fontSize: 11, cursor: 'pointer', fontWeight: 600 }}
+              style={{ background: 'var(--danger)', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 7px', fontSize: 11, cursor: 'pointer', fontWeight: 600 }}
             >Del</button>
             <button
               onClick={() => setConfirmDel(false)}

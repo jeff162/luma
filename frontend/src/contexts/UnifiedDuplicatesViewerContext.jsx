@@ -209,9 +209,9 @@ export function MinimizedDuplicatesNavItem() {
         display: 'flex', alignItems: 'center', gap: 8,
         padding: '6px 10px',
         margin: '4px 0',
-        background: 'color-mix(in srgb, #f59e0b 14%, var(--surface2))',
+        background: 'color-mix(in srgb, var(--warning) 14%, var(--surface2))',
         color: 'var(--text)',
-        border: '1px solid color-mix(in srgb, #f59e0b 40%, var(--border))',
+        border: '1px solid color-mix(in srgb, var(--warning) 40%, var(--border))',
         borderRadius: 8,
         cursor: 'pointer',
         fontSize: 12,
@@ -220,13 +220,13 @@ export function MinimizedDuplicatesNavItem() {
         overflow: 'hidden',
       }}
     >
-      <span style={{ fontSize: 13, lineHeight: 1, color: '#f59e0b' }}>↗</span>
+      <span style={{ fontSize: 13, lineHeight: 1, color: 'var(--warning)' }}>↗</span>
       <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         Duplicates — {viewer.title}
       </span>
       {unresolvedRows > 0 ? (
         <span style={{
-          background: '#f59e0b', color: '#fff',
+          background: 'var(--warning)', color: '#fff',
           fontSize: 10, fontWeight: 700,
           padding: '1px 6px', borderRadius: 99,
           lineHeight: '16px', minWidth: 18, textAlign: 'center',

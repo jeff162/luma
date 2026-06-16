@@ -207,18 +207,18 @@ export default function ImportBatchDetail({
           </div>
         </div>
         {visibleDeduped.length > 0 ? (
-          <div style={{ flex: '0 0 auto', border: '1px solid color-mix(in srgb, #f59e0b 30%, var(--border))', borderRadius: 8, background: 'color-mix(in srgb, #f59e0b 6%, var(--surface2))', overflow: 'hidden' }}>
+          <div style={{ flex: '0 0 auto', border: '1px solid color-mix(in srgb, var(--warning) 30%, var(--border))', borderRadius: 8, background: 'color-mix(in srgb, var(--warning) 6%, var(--surface2))', overflow: 'hidden' }}>
             <button
               type="button"
               onClick={() => setDedupedOpen(open => !open)}
               style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', fontSize: 12.5, textAlign: 'left' }}
             >
-              <span style={{ color: '#f59e0b' }}>{dedupedOpen ? '▾' : '▸'}</span>
+              <span style={{ color: 'var(--warning)' }}>{dedupedOpen ? '▾' : '▸'}</span>
               <span style={{ fontWeight: 600 }}>Removed as duplicates ({visibleDeduped.length})</span>
               <span style={{ color: 'var(--muted)', fontWeight: 400 }}>— the matching copy is kept on another account</span>
             </button>
             {dedupedOpen ? (
-              <div style={{ maxHeight: 180, overflow: 'auto', borderTop: '1px solid color-mix(in srgb, #f59e0b 24%, var(--border))' }}>
+              <div style={{ maxHeight: 180, overflow: 'auto', borderTop: '1px solid color-mix(in srgb, var(--warning) 24%, var(--border))' }}>
                 {visibleDeduped.map(r => {
                   const survivor = r.surviving_account_name
                     ? (r.surviving_account_merged_into && r.surviving_account_merged_into !== r.surviving_account_name

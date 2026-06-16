@@ -66,7 +66,7 @@ function DeleteConfirm({ label, onConfirm, onCancel }) {
           onConfirm()
         }}
         style={{
-          background: '#ef4444',
+          background: 'var(--danger)',
           color: '#fff',
           border: 'none',
           borderRadius: 5,

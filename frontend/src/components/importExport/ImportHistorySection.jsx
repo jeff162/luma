@@ -286,9 +286,9 @@ export function ImportHistorySection({
                                         marginLeft: 4,
                                         padding: '1px 7px',
                                         borderRadius: 99,
-                                        background: 'color-mix(in srgb, #f59e0b 12%, var(--surface2))',
-                                        color: '#f59e0b',
-                                        border: '1px solid color-mix(in srgb, #f59e0b 50%, var(--border))',
+                                        background: 'color-mix(in srgb, var(--warning) 12%, var(--surface2))',
+                                        color: 'var(--warning)',
+                                        border: '1px solid color-mix(in srgb, var(--warning) 50%, var(--border))',
                                         fontSize: 11,
                                         fontWeight: 600,
                                         cursor: 'pointer',
@@ -545,11 +545,11 @@ export function ImportHistorySection({
                                             padding: '2px 7px',
                                             borderRadius: 99,
                                             background: hasSoft
-                                              ? 'color-mix(in srgb, #f59e0b 12%, var(--surface2))'
+                                              ? 'color-mix(in srgb, var(--warning) 12%, var(--surface2))'
                                               : 'var(--surface2)',
-                                            color: hasSoft ? '#f59e0b' : 'var(--muted)',
+                                            color: hasSoft ? 'var(--warning)' : 'var(--muted)',
                                             border: hasSoft
-                                              ? '1px solid color-mix(in srgb, #f59e0b 50%, var(--border))'
+                                              ? '1px solid color-mix(in srgb, var(--warning) 50%, var(--border))'
                                               : '1px solid var(--border)',
                                             cursor: 'pointer',
                                             fontWeight: hasSoft ? 600 : 400,

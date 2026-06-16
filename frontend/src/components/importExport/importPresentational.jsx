@@ -176,9 +176,9 @@ export function ActionCountBadge({ count, tone = 'accent' }) {
   if (!count) return null
   const palette = tone === 'warning'
     ? {
-      background: 'color-mix(in srgb, #f59e0b 18%, var(--surface))',
-      border: '1px solid color-mix(in srgb, #f59e0b 42%, var(--border))',
-      color: '#f59e0b',
+      background: 'color-mix(in srgb, var(--warning) 18%, var(--surface))',
+      border: '1px solid color-mix(in srgb, var(--warning) 42%, var(--border))',
+      color: 'var(--warning)',
     }
     : {
       background: 'color-mix(in srgb, var(--accent) 14%, var(--surface))',

@@ -375,11 +375,11 @@ function ProfileForm({
           flexDirection: 'column',
           gap: 8,
           padding: '10px 12px',
-          background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
-          border: '1px solid color-mix(in srgb, #f59e0b 34%, var(--border))',
+          background: 'color-mix(in srgb, var(--warning) 10%, var(--surface2))',
+          border: '1px solid color-mix(in srgb, var(--warning) 34%, var(--border))',
           borderRadius: 8,
         }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'color-mix(in srgb, #f59e0b 72%, var(--text))' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'color-mix(in srgb, var(--warning) 72%, var(--text))' }}>
             This template does not match any of the imported files currently tracked from this data source.
           </div>
           <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>

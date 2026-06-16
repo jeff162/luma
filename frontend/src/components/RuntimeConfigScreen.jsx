@@ -281,7 +281,7 @@ export default function RuntimeConfigScreen({ runtimeConfig }) {
         )}
 
         {error && (
-          <div style={{ marginTop: 14, fontSize: 13, color: '#ef4444' }}>
+          <div style={{ marginTop: 14, fontSize: 13, color: 'var(--danger)' }}>
             {error}
           </div>
         )}

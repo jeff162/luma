@@ -32,6 +32,8 @@ This document defines UI behavior and interaction patterns. For underlying data 
 
 - [Floating detail panels](#floating-detail-panels)
 
+- [Theming](#theming)
+
 - [Charts and overlays](#charts-and-overlays)
 
 - [When to document a new pattern](#when-to-document-a-new-pattern)
@@ -409,6 +411,20 @@ Account, category, payee, single-month-transactions, and tag-signature detail dr
 - **Default panel width** is sized to fit the standard transaction table without clipping the Amount column. New detail panels that host a transaction table should not override that down to a narrower value.
 
 - **Scroll-container contract.** The actual scroll viewport for paginated transaction lists inside detail panels is the outer wrapper of `TransactionListTable` (the div `scrollRef` lands on) — the pill header pins inside it via `position: sticky; top: 0`. Under `fillHeight=true` that wrapper takes its height from the flex chain above it, so every ancestor between the panel shell and `TransactionListTable` must propagate height via a flex column — each wrapper needs either `flex: 1, minHeight: 0` or an explicit `height` that resolves against a flex parent. A plain block wrapper anywhere in the chain silently breaks percentage-height resolution for its descendants, the scroll viewport ends up sized to its content (no overflow), and wheel events bubble out through the floating-panel backdrop (`pointer-events: none`) into the page behind. If you add a new wrapper around `TransactionListTable`, give it `display: flex, flexDirection: column, flex: 1, minHeight: 0` and verify scroll still works in the BatchDetail panel against a large file.
+
+## Theming
+
+The app supports Light, Dark, and System color themes, chosen from the Appearance section at the top of Settings (the most-common single-user setting, so it leads the section list). Dark is the original look; light is a "soft slate" palette.
+
+- **CSS custom properties are the theming mechanism.** All structural color flows through ~11 vars defined once in `frontend/index.html` — `:root` holds the dark theme (also the no-attribute default), and `[data-theme="light"]` reassigns the same vars. A theme switch is purely a var swap; component logic never branches on the theme. Each block also sets `color-scheme` so native controls (scrollbars, date pickers) match.
+
+- **Semantic color must reference a var, never a hardcoded copy.** `var(--danger)`, `var(--success)`, `var(--warning)`, `var(--accent)`, etc. — including inside `color-mix(in srgb, var(--warning) X%, var(--surface2))`, which adapts automatically because the mixed-in surface/border/text vars flip too. A literal like `#ef4444` for "danger" is a bug: it stays dark-slate-era red in light mode. White text *on a colored fill* (`color: '#fff'` on a `var(--accent)` button/pill) is the deliberate exception — it is correct on both themes.
+
+- **Decorative palettes are the other deliberate exception** and stay as literals: the tag color palette (`TAG_COLOR_PALETTE`), category badge themes (`categoryAppearance.js`), and the chart-series palette (`Dashboard.jsx`). These are background-agnostic identity colors, not semantic state. Canvas drawing colors (`ctx.fillStyle`/`strokeStyle`) also stay literal — a canvas context cannot resolve CSS vars.
+
+- **The choice is a user preference** (`ui.appearance.theme`, via `useUserPreference`), applied by `ThemeController` in `App.jsx`; a `system` choice tracks the OS `prefers-color-scheme` live through a `matchMedia` listener. The single source of truth for *applying* a theme is `src/lib/theme.js`.
+
+- **Anti-FOUC cache.** Preferences round-trip from the backend (too slow to gate first paint), so `theme.js` mirrors the resolved choice into a `localStorage` cache (`fintrack.theme`) that a tiny inline script in `index.html` reads to set `data-theme` before React mounts. Without it, the pre-React paint and the "Loading preferences…" screen would flash dark before a light preference loads. The backend preference stays authoritative; the app reconciles the cache to it on load.
 
 ## Charts and overlays
 

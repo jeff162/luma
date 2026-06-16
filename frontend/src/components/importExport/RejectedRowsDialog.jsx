@@ -67,8 +67,8 @@ export function RejectedRowsDialog({ rows = [], headers = [], count = 0, title =
                             fontWeight: 600,
                             border: '1px solid var(--border)',
                             background: row.kind === 'zero_amount'
-                              ? 'color-mix(in srgb, #f59e0b 12%, var(--surface2))'
-                              : 'color-mix(in srgb, #ef4444 10%, var(--surface2))',
+                              ? 'color-mix(in srgb, var(--warning) 12%, var(--surface2))'
+                              : 'color-mix(in srgb, var(--danger) 10%, var(--surface2))',
                             color: row.kind === 'zero_amount' ? '#b45309' : '#dc2626',
                           }}>
                             {row.kind === 'zero_amount' ? 'Zero amount' : 'Validation error'}

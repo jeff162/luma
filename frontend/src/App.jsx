@@ -10,7 +10,8 @@ import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
 import RuntimeConfigScreen from './components/RuntimeConfigScreen.jsx'
 import { api, setLocalPreferenceProfileId } from './lib/api.js'
-import { UserPreferencesProvider } from './lib/UserPreferencesContext.jsx'
+import { UserPreferencesProvider, useUserPreference } from './lib/UserPreferencesContext.jsx'
+import { THEME_PREF_KEY, THEME_SYSTEM, applyTheme, normalizeThemeChoice } from './lib/theme.js'
 import { AppSessionProvider } from './lib/AppSessionContext.jsx'
 import {
   UnifiedDuplicatesViewerProvider,
@@ -39,7 +40,7 @@ class AppErrorBoundary extends Component {
     if (this.state.error) {
       return (
         <div data-browser-context-passthrough="true" style={{ padding: 40, fontFamily: 'sans-serif' }}>
-          <h2 style={{ color: '#ef4444', marginBottom: 12 }}>Something went wrong</h2>
+          <h2 style={{ color: 'var(--danger)', marginBottom: 12 }}>Something went wrong</h2>
           <pre data-browser-context-passthrough="true" style={{ fontSize: 13, color: '#666', marginBottom: 20, whiteSpace: 'pre-wrap' }}>
             {this.state.error?.message}
           </pre>
@@ -143,7 +144,7 @@ const ROUTE_PREFETCHERS = [
 // severity here AND in TASK_SEVERITY_ORDER, then ensure the backend uses the same key.
 const TASK_BADGE_COLORS = {
   info: 'var(--accent)',
-  warning: '#f59e0b',
+  warning: 'var(--warning)',
 }
 const TASK_SEVERITY_ORDER = ['info', 'warning']
 function pickTopTaskSeverity(tasks) {
@@ -854,6 +855,23 @@ export function notifyAccountsChanged() {
   window.dispatchEvent(new CustomEvent('fintrack:accounts-changed'))
 }
 
+// Applies the user's stored theme choice to <html> and keeps a 'system' choice in sync with the OS.
+// Lives inside UserPreferencesProvider so it reads the per-profile preference; the pre-paint script in
+// index.html handles first paint from the localStorage cache, this reconciles to the real preference.
+function ThemeController() {
+  const [themeChoice] = useUserPreference(THEME_PREF_KEY, THEME_SYSTEM)
+  useEffect(() => {
+    applyTheme(themeChoice)
+    if (normalizeThemeChoice(themeChoice) !== THEME_SYSTEM) return undefined
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    const onChange = () => applyTheme(themeChoice)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [themeChoice])
+  return null
+}
+
 export default function App() {
   /*
    * App boots through one of three gates before the main shell exists: runtime-config recovery, authenticated
@@ -1470,6 +1488,7 @@ export default function App() {
             <PanelStackProvider>
               <UnifiedDuplicatesViewerProvider>
                 <ImportedCategoryWorkspaceProvider>
+                  <ThemeController />
                   <UnifiedDuplicatesViewerRenderer />
                   <ImportedCategoryWorkspaceRenderer />
                   <style>{GLOBAL_SCROLLBAR_STYLES}</style>

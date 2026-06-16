@@ -2784,7 +2784,7 @@ function ImportTab() {
       {stage === 'mapping' && preview && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20, alignItems: 'flex-start' }}>
           {preview.previous_batch && (
-            <div style={{ width: IMPORT_CONFIG_MAX_WIDTH, background: 'color-mix(in srgb, #f59e0b 12%, var(--surface2))', border: '1px solid #f59e0b', borderRadius: 8, padding: '12px 16px' }}>
+            <div style={{ width: IMPORT_CONFIG_MAX_WIDTH, background: 'color-mix(in srgb, var(--warning) 12%, var(--surface2))', border: '1px solid var(--warning)', borderRadius: 8, padding: '12px 16px' }}>
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>⚠️ This file has been previously imported</div>
               <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
                 This exact file was imported on{' '}
@@ -2906,13 +2906,13 @@ function ImportTab() {
                 marginBottom: 14,
                 padding: '12px 14px',
                 borderRadius: 10,
-                background: 'color-mix(in srgb, #f59e0b 11%, var(--surface2))',
-                border: '1px solid color-mix(in srgb, #f59e0b 48%, var(--border))',
+                background: 'color-mix(in srgb, var(--warning) 11%, var(--surface2))',
+                border: '1px solid color-mix(in srgb, var(--warning) 48%, var(--border))',
                 boxShadow: '0 8px 24px rgba(15, 23, 42, 0.12)',
               }}>
                 <div style={{ display: 'grid', gap: 4 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: '#f59e0b' }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--warning)' }}>
                       Header located on line {detectedHeaderOffset + 1}
                     </span>
                     <span style={{
@@ -2921,9 +2921,9 @@ function ImportTab() {
                       minHeight: 22,
                       padding: '0 8px',
                       borderRadius: 999,
-                      background: 'color-mix(in srgb, #f59e0b 18%, var(--surface))',
-                      border: '1px solid color-mix(in srgb, #f59e0b 44%, var(--border))',
-                      color: '#f59e0b',
+                      background: 'color-mix(in srgb, var(--warning) 18%, var(--surface))',
+                      border: '1px solid color-mix(in srgb, var(--warning) 44%, var(--border))',
+                      color: 'var(--warning)',
                       fontSize: 11,
                       fontWeight: 600,
                     }}>
@@ -3090,9 +3090,9 @@ function ImportTab() {
                         <div style={{
                           padding: '7px 10px',
                           borderRadius: 12,
-                          border: '1px solid color-mix(in srgb, #f59e0b 34%, var(--border))',
-                          background: 'color-mix(in srgb, #f59e0b 10%, var(--surface2))',
-                          color: 'color-mix(in srgb, #f59e0b 72%, var(--text))',
+                          border: '1px solid color-mix(in srgb, var(--warning) 34%, var(--border))',
+                          background: 'color-mix(in srgb, var(--warning) 10%, var(--surface2))',
+                          color: 'color-mix(in srgb, var(--warning) 72%, var(--text))',
                           fontSize: 10.5,
                           lineHeight: 1.4,
                         }}>
