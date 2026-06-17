@@ -42,26 +42,3 @@ def set_preference(scope_id: str, pref_key: str, pref_value: str) -> None:
 def clear_preferences(scope_id: str) -> None:
     with get_db() as conn:
         conn.execute("DELETE FROM ui_preference WHERE scope_id = ?", (scope_id,))
-
-
-def relocate_legacy_preferences(scope_id: str, *, is_auth: bool) -> dict[str, str]:
-    """Transitional bridge: preferences used to live in the control DB. The first time a scope's
-    data-DB preferences come up empty, copy that scope's values over from the control DB and clear
-    the control-DB copy, so the move is invisible to the user. Returns the relocated values (empty
-    if there were none). Remove this — and the control-DB pref tables — once all active scopes have
-    migrated.
-    """
-    from backend.db.control_database import (
-        clear_local_preferences,
-        clear_user_preferences,
-        get_local_preferences,
-        get_user_preferences,
-    )
-
-    legacy = get_user_preferences(scope_id) if is_auth else get_local_preferences(scope_id)
-    if not legacy:
-        return {}
-    for pref_key, pref_value in legacy.items():
-        set_preference(scope_id, pref_key, pref_value)
-    (clear_user_preferences if is_auth else clear_local_preferences)(scope_id)
-    return get_preferences(scope_id)

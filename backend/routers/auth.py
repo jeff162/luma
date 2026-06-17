@@ -58,7 +58,6 @@ from backend.db.control_database import (
 from backend.services.preferences import (
     clear_preferences,
     get_preferences,
-    relocate_legacy_preferences,
     set_preference,
 )
 from backend.db.database import get_db, get_db_instance_id, ensure_shared_owner, _seed_default_categories
@@ -287,12 +286,8 @@ def _resolve_preference_scope(request: Request) -> tuple[str, bool]:
 
 @router.get("/preferences")
 def auth_preferences(request: Request):
-    scope_id, is_auth = _resolve_preference_scope(request)
+    scope_id, _ = _resolve_preference_scope(request)
     prefs = get_preferences(scope_id)
-    if not prefs:
-        # Transitional: first read after preferences moved to the data DB relocates this scope's
-        # values out of the control DB. No-op once everything has migrated.
-        prefs = relocate_legacy_preferences(scope_id, is_auth=is_auth)
     parsed = {}
     for key, value in prefs.items():
         try:

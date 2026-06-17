@@ -204,27 +204,18 @@ def init_control_db():
                 updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
-            CREATE TABLE IF NOT EXISTS user_preference (
-                user_id     TEXT NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,
-                pref_key    TEXT NOT NULL,
-                pref_value  TEXT NOT NULL,
-                updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY (user_id, pref_key)
-            );
-
             CREATE TABLE IF NOT EXISTS local_preference_profile (
                 id         TEXT PRIMARY KEY,
                 name       TEXT NOT NULL UNIQUE,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
-            CREATE TABLE IF NOT EXISTS local_preference_value (
-                profile_id  TEXT NOT NULL REFERENCES local_preference_profile(id) ON DELETE CASCADE,
-                pref_key    TEXT NOT NULL,
-                pref_value  TEXT NOT NULL,
-                updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY (profile_id, pref_key)
-            );
+            -- Preferences moved to the data DB's `ui_preference` table (so backups carry them);
+            -- the control DB now keeps only identity/secrets + local-profile definitions. Drop the
+            -- now-unused control-DB preference copies. (The lazy-relocation bridge that emptied them
+            -- into the data DB has been removed.)
+            DROP TABLE IF EXISTS user_preference;
+            DROP TABLE IF EXISTS local_preference_value;
             """
         )
         try:
@@ -284,36 +275,6 @@ def set_app_setting(key: str, value: str):
             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
             """,
             (key, value),
-        )
-
-
-def get_user_preferences(user_id: str) -> dict[str, str]:
-    with get_control_db() as conn:
-        rows = conn.execute(
-            "SELECT pref_key, pref_value FROM user_preference WHERE user_id = ?",
-            (user_id,),
-        ).fetchall()
-    return {row["pref_key"]: row["pref_value"] for row in rows}
-
-
-def set_user_preference(user_id: str, pref_key: str, pref_value: str):
-    with get_control_db() as conn:
-        conn.execute(
-            """
-            INSERT INTO user_preference (user_id, pref_key, pref_value, updated_at)
-            VALUES (?, ?, ?, datetime('now'))
-            ON CONFLICT(user_id, pref_key)
-            DO UPDATE SET pref_value = excluded.pref_value, updated_at = datetime('now')
-            """,
-            (user_id, pref_key, pref_value),
-        )
-
-
-def clear_user_preferences(user_id: str):
-    with get_control_db() as conn:
-        conn.execute(
-            "DELETE FROM user_preference WHERE user_id = ?",
-            (user_id,),
         )
 
 
@@ -402,36 +363,6 @@ def delete_local_preference_profile(profile_id: str):
 def clear_all_local_preference_profiles():
     with get_control_db() as conn:
         conn.execute("DELETE FROM local_preference_profile")
-
-
-def get_local_preferences(profile_id: str) -> dict[str, str]:
-    with get_control_db() as conn:
-        rows = conn.execute(
-            "SELECT pref_key, pref_value FROM local_preference_value WHERE profile_id = ?",
-            (profile_id,),
-        ).fetchall()
-    return {row["pref_key"]: row["pref_value"] for row in rows}
-
-
-def set_local_preference(profile_id: str, pref_key: str, pref_value: str):
-    with get_control_db() as conn:
-        conn.execute(
-            """
-            INSERT INTO local_preference_value (profile_id, pref_key, pref_value, updated_at)
-            VALUES (?, ?, ?, datetime('now'))
-            ON CONFLICT(profile_id, pref_key)
-            DO UPDATE SET pref_value = excluded.pref_value, updated_at = datetime('now')
-            """,
-            (profile_id, pref_key, pref_value),
-        )
-
-
-def clear_local_preferences(profile_id: str):
-    with get_control_db() as conn:
-        conn.execute(
-            "DELETE FROM local_preference_value WHERE profile_id = ?",
-            (profile_id,),
-        )
 
 
 def get_password_policy() -> str:

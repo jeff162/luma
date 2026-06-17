@@ -34,7 +34,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
-import { Button, Spinner, EmptyState } from './ui.jsx'
+import { Button, Spinner, EmptyState, SelectAllCheckbox } from './ui.jsx'
 import {
   DetailPanelShell,
   useDetailPanelChrome,
@@ -717,10 +717,9 @@ export default function UnifiedDuplicatesDialog({
               <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1, boxShadow: '0 1px 0 var(--border)' }}>
                 <tr style={{ color: 'var(--muted)', textAlign: 'left' }}>
                   <th style={{ padding: '8px 8px 8px 16px', width: 32 }}>
-                    <input
-                      type="checkbox"
-                      ref={el => { if (el) el.indeterminate = someVisibleSelected }}
+                    <SelectAllCheckbox
                       checked={allVisibleSelected}
+                      indeterminate={someVisibleSelected}
                       onChange={toggleSelectAllVisible}
                       title={allVisibleSelected ? 'Deselect all visible' : 'Select all visible'}
                     />

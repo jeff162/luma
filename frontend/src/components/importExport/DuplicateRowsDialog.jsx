@@ -15,6 +15,7 @@ import {
   FloatingPanel,
   FloatingPanelHeader,
   OverlayBackdrop,
+  SelectAllCheckbox,
   Spinner,
 } from '../ui.jsx'
 import PillGridTable from '../PillGridTable.jsx'
@@ -417,10 +418,11 @@ export function DuplicateRowsDialog({
                           cellPadding: '0',
                           render: () => (
                             importableRowNumbers.length > 0 ? (
-                              <input
-                                type="checkbox"
+                              <SelectAllCheckbox
                                 checked={allImportableSelected}
+                                indeterminate={selectedImportableCount > 0 && !allImportableSelected}
                                 onChange={event => toggleAllImportable(event.target.checked)}
+                                title={allImportableSelected ? 'Deselect all importable' : 'Select all importable'}
                               />
                             ) : null
                           ),
