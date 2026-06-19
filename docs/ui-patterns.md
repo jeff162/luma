@@ -70,6 +70,8 @@ Shared controls should be treated as finished product surfaces, not reused snip
 
 - Put editing where the data is primarily viewed. If a page is the natural place to inspect a thing, prefer editing it there instead of duplicating the same controls on Settings.
 
+- **Creating is available wherever assigning is.** Anywhere the user picks a value from a managed set — a category, a group, a tag, a note, an owner, and so on — they can also create a *new* member of that set inline, in the same control, and have it applied immediately. The user is never bounced to a separate management screen just to mint the thing they want to assign: they invent it and assign it in one motion (create a category from the category picker, a tag from the tag picker). This is a deliberate stance that the UI must not get in the way of the user's actual intent. Only *creation in service of an assignment* has to be inline — deletion, renaming, reordering, and other maintenance can live on a dedicated screen, because that is not what the user is in the middle of doing. When adding a new picker/selector for any assignable thing, include its inline create affordance from the start rather than deferring it to "manage it in Settings."
+
 - Favor consistency over novelty. When a control already exists elsewhere in the app, reuse the same interaction and styling unless there is a strong reason not to.
 
 - Keep look and feel consistent across pages. Similar data structures should use the same spacing, controls, and interaction patterns so the app feels like one coherent tool rather than a set of isolated screens.
@@ -81,6 +83,8 @@ Shared controls should be treated as finished product surfaces, not reused snip
 - The reason for this consistency is not only aesthetics. Reusing the same interaction language lowers relearning cost, makes the product feel more trustworthy, and avoids the impression that one screen is a lesser or temporary version of another.
 
 - Shared form controls and dialog footers should come from shared primitives where possible so cancel/save rows and everyday input chrome do not drift across pages.
+
+- **Native `title` tooltips are an acceptable choice, and sometimes the better one.** The shared `<Tooltip>` (`frontend/src/components/ui.jsx`) is the default whenever hover content needs theming, markup, links, or hover-into-it interaction. But a plain-text hint with none of those needs does not require it — a bare `title` attribute is fine. A native tooltip is also genuinely *better* in some cases: the browser draws it outside the page, so it auto-positions and can spill past the window edge, whereas the DOM `<Tooltip>` is viewport-clamped and can only ever stay inside the window. Where that edge behavior matters more than visual consistency — for example the Help page's section jump-nav — prefer native `title` and accept the look-and-feel mismatch as a deliberate trade.
 
 - When a UI behavior is meant to be shared, implement the shared behavior first. Do not land a one-sided or page-specific version and plan to “sync it up” later unless the narrower scope is intentional and explicitly documented.
 
@@ -232,13 +236,19 @@ Transaction tables should share the same row-level metadata treatment.
 
 ### Bulk select and edit
 
-A "Select" toggle puts a transaction table into bulk mode: a leading checkbox column appears with a select-all checkbox in its header, and a bulk action bar offers Edit… (a `BulkEditPanel` modal — category, tag add/remove, notes, merchant, date) and Move to trash. Shared pieces so every table behaves the same: selection state is `lib/useTransactionSelection.js` (explicit ids, or all-matching + an excluded set), the editor is `components/BulkEditPanel.jsx`, and the bulk write is `api.bulkUpdateTransactions`.
+A "Bulk Edit" toggle puts a transaction table into bulk mode: a leading checkbox column appears with a select-all checkbox in its header, and a bulk action bar offers Edit… (a `BulkEditPanel` — category, tag add/remove, notes, merchant, date) and Move to trash.
 
-- **Select-all means all rows matching the current filter, not just loaded rows.** The header checkbox switches to "all matching"; the action bar says so, and the API resolves the set server-side from the page's current filter (passed via `toSelectionPayload`). Individually unchecking after select-all adds to an exclude set.
+**One shared controller owns the behavior** — `lib/useBulkTransactionEditing.jsx`. A host calls the hook with `{ rows, setRows, total, filterParams, categories, … }` and gets back `toggle`, `tableProps` (spread onto `TransactionListTable`), and a `<BulkEditChrome controller={…}/>` companion that renders the action bar plus the edit/confirm/notice dialogs. The host renders only its own toggle *button* (placement is page-contextual) and spreads `tableProps`; everything below — selection, the apply call, the in-place reconcile — lives in the controller, so a new surface is a prop-pass, not a re-implementation. Underneath it still composes the shared leaf pieces: selection state `lib/useTransactionSelection.js`, the editor `components/BulkEditPanel.jsx`, the header `SelectAllCheckbox` (`ui.jsx`), and the write `api.bulkUpdateTransactions`.
+
+- **Select-all has two strategies.** Default (`'filter'`): the header checkbox switches to "all matching", and the API resolves the set server-side from the host's `filterParams` (passed via `toSelectionPayload`), so it covers rows past the loaded page. `'loaded'`: for a list whose visible rows are a *client-side* subset no server filter can re-resolve (TagDetail's exact tag-signature list), select-all instead checks every loaded row by id (ids mode) — the rows are already fully in memory, so "all" needs no server round-trip. Individually unchecking after select-all adds to an exclude set.
+- **`filterParams` must mirror the host's list fetch exactly**, including any date/account/owner/tag scope. A select-all payload that omitted the date on a period-scoped list (the Dashboard drills, the month panels) would silently edit rows outside the visible scope — the same hidden-filter hazard called out for detail-panel date scope.
 - The select column is injected at render only (never persisted into the user's column config) and is non-sortable/non-draggable/non-resizable; its header checkbox uses the pill header's per-column `render` hook (`PillTableHeader`) rather than a sort pill.
 - Delete is soft-delete to the transaction trash (recoverable from Settings → Trash), confirmed before running — not a separate "hidden" state.
-- **Apply reconciles the loaded rows in place rather than re-fetching the list**, so the user's sort order and scroll position survive a bulk edit. Trashed rows drop; field changes (including recategorization that moves a row out of the current scope) are patched onto the visible rows and *linger* — matching the per-row handlers, a mis-tap stays correctable and the Refresh button prunes rows that no longer match. "All matching" selections may touch unloaded rows too, but those aren't on screen, so only the loaded ones are patched.
-- Wired on the Transactions page and the Categories matching-transactions list. `TransactionListTable` supports it opt-in (`bulkActive` / `bulkSelection` / `bulkTotal` props that inject the leading select column), and the header select-all uses the shared `SelectAllCheckbox` (`ui.jsx`) — so any other `TransactionListTable` surface (detail panels, etc.) can adopt it by passing those props, and the duplicate-detection dialog's hand-rolled select-all can migrate onto this shared pattern too.
+- **Apply reconciles the loaded rows in place** (hosts pass `setRows`), so the user's sort order and scroll position survive a bulk edit. Trashed rows drop; field changes (including recategorization that moves a row out of the current scope) are patched onto the visible rows and *linger* — a mis-tap stays correctable and a Refresh (where present) prunes rows that no longer match. A host whose source of truth is a paginated re-fetch (the Transactions ledger) passes `onReload` instead of `setRows`.
+- **The edit panel is draggable** (`AppDialog draggable`): its backdrop is transparent and click-through and the header is a drag handle, so the form can be moved aside to read — and still act on — the ledger behind it. Position is session-only and re-centers on reopen.
+- Wired on: the Transactions page, the Categories matching-transactions list, both Dashboard single-period drill tables (selected category, selected group), and the floating detail panels — MonthDetail, CategoryDetail, AccountDetail, ImportBatchDetail, and TagDetail (`'loaded'` strategy). The duplicate-detection dialog deliberately stays on its own `row_number`-keyed selection (its finite, non-server-filter selection doesn't fit this model).
+
+**Applying a rule to existing rows reconciles the same way — in place, not by re-fetch.** When the per-row "create rule" toast (`RuleSuggestionToast`) applies a rule to existing transactions, the rows it recategorizes must update *on screen but stay on the list* — re-running a scoped query (e.g. an "uncategorized only" drill) would drop the now-recategorized rows out of view, which reads as the data silently vanishing or, worse, lingering with the old category. So the apply endpoint (`POST /rules/{id}/apply`) returns the **`transaction_ids` it changed**, threaded through the toast's `onSaved`, and the host calls the shared `reconcileRowsAfterRuleApply(rows, ids, setRows)` (`lib/txnMutations.js`): it re-fetches just the affected rows that are *currently on screen* by id (the transaction-list endpoint's `ids=` filter) and merges them back in place, so they keep their slot with the new category. Wired on the in-place surfaces that surface the toast — the Dashboard drills, the Categories matching list, and the payee `TransactionDetail`. The Transactions ledger is the deliberate exception: as the one paginated source of truth it stays on a full `load()` (matching its bulk-edit `onReload`).
 
 If a list introduces the same kind of object the user already manages elsewhere, start from the existing row/chip behavior first. A lighter presentation is fine, but it should still preserve the same core expectations for clicking, editing, Enter/Escape, and removal.
 
@@ -314,6 +324,76 @@ First-run setup should feel like a guided welcome, not a blank admin prompt.
 
 - Deeper onboarding guidance should be available from the same screen, but tucked behind a deliberate `More information` or similar affordance so users who only want to get started are not forced to read it first.
 
+## Help and contextual explainers
+
+Feature guidance is authored once in a single content registry (`frontend/src/help/content.jsx`,
+`HELP_TOPICS`) and surfaced three ways from that one source, so the popover, the standalone Help page,
+and the in-context tip can never drift in copy. Each topic is `{ id, title, surfaces, summary, body }`:
+a one-line `summary` sized for a popover and a longer `body` for the `/help` page.
+
+- **Standalone Help (`/help`, `/help/:topic`).** `pages/Help.jsx` renders the topic index and each
+  full body. A reached-from path is carried in `Link` `state.from` and surfaced as a `Return to <page>`
+  link on both the index and a topic page; `HelpLink` (not a bare `<Link>`) and the index/topic links
+  forward it so the affordance survives hops within the Help section. The left-nav Help item carries no
+  `from`, so arriving that way shows no return link. `labelForPath` (`help/navigation.js`) maps the path
+  to a human label — sub-routes (e.g. `…/rule-suggestions`) get their own name ahead of the top-level
+  section.
+
+- **In-place viewer (`HelpTopicDialog`).** "Read more" from an inline explainer opens the topic's full
+  body in a portal'd overlay rendered above everything (z-index past the floating-panel stack) rather
+  than navigating the page. This is what lets a `?` or tip *inside a floating panel* (e.g. the
+  duplicate-detection report) show its full guidance on top of that panel instead of behind it — the
+  user keeps their place and closing the overlay returns them to exactly what they were doing. Inside
+  the viewer, `HelpLink` cross-links switch the dialog's topic in place (via `HelpNavContext`) instead
+  of routing. The viewer already shows the full body, so its footer links to the `/help` *index* (a
+  distinct destination, not a repeat of the same text) and stamps the page behind the overlay as
+  `state.from` so the index offers a `Return to <page>` link back. The overlay carries
+  `data-modal-overlay` so a panel underneath yields Escape to it.
+
+- **Always-present `?` (`FeatureExplainer`).** A small `?` button next to a stable feature surface that
+  opens the topic's `summary` plus a "Read more" link to `/help/:id`. Use it where the surface is always
+  present and the guidance is always relevant (e.g. the amount-convention picker, the duplicate-report
+  header, the Group Imported Categories title, the Accounts merge area).
+
+- **Placement convention — page-level vs feature-level `?`.** A page or surface that has a single
+  *overview* topic ("what is this page") puts its `?` in one consistent launcher spot: **immediately to
+  the left of the page/surface title**, so the launcher is a stable anchor regardless of title length.
+  `PageHeader` exposes a `help` slot for exactly this; surfaces with their own header (the Accounts
+  `<h1>`, the Group Imported Categories modal, the duplicate-report panel header) place the `?` left of
+  their title the same way. A `?` that explains *one control* instead stays next to that control (the
+  amount-convention picker, the Transactions search box, a Categories group's exclude-from-totals
+  toggle) — those are not page-level and do not move to the title.
+
+- **Context-triggered "explain this" (`ContextualExplainer`).** The counterpart for guidance that is only
+  relevant when the app *recognizes a situation* — a two-stage affordance so it informs without nagging.
+  While the host surface reports the situation as live (`active`), it first shows a quiet inline **tip
+  callout** (the same registry summary + "Read more"); once dismissed it collapses to the persistent `?`
+  popover so the guidance stays one click away for re-reading. The persistent popover reuses
+  `FeatureExplainer`'s panel, so the callout and the `?` are the same content. The host decides when the
+  situation is live and passes `active` — the help layer never reaches into domain state itself (e.g. the
+  duplicate report passes its own ±2-day / cross-account counts; the rule-suggestion review passes whether
+  a conflict set exists).
+
+- **Dismissal is per-tip and persisted.** It uses the shared user-preference model
+  (`ui.help.dismissedTips`, a `{ [tipKey]: true }` map via `useUserPreference`) — local cache plus
+  best-effort backend sync, and covered by backup like other ui preferences. `tipKey` defaults to the
+  topic id but is set explicitly when one topic anchors several surfaces, so each surface's tip dismisses
+  independently. The reason dismissal persists rather than living in component state is that a tip the
+  user has read and dismissed should stay dismissed across sessions, while still leaving the `?` behind
+  for the rare re-read.
+
+- **Global on/off + reset.** A single `ui.help.hintsEnabled` preference (default true) gates the
+  proactive callouts: when off, `ContextualExplainer` skips the callout stage and shows only the
+  persistent `?`, so turning hints off never hides the guidance — it just stops pushing it. The Help
+  page (`/help` index) carries the manage control: a "Show first-use hints" toggle plus a "Reset hints"
+  action that turns hints back on and clears `ui.help.dismissedTips` so every tip shows again on its
+  next encounter. The first-run welcome screen also offers a "Skip first-use hints" toggle; because it
+  runs before a preference profile exists, the choice is written to the new profile's
+  `ui.help.hintsEnabled` right after it's created (the keys live in `frontend/src/help/preferences.js`).
+
+The import/reconciliation guidance is authored from `docs/import-reconciliation-playbook.md`, which
+stays the content source of truth; keep the topics in step with it as the tools evolve.
+
 ## Import-specific patterns
 
 CSV import has a few special rules:
@@ -382,6 +462,8 @@ Ownership-related rules:
 
 - **Categories / groups:** no owner field. The Categories page right-hand panel surfaces a tags row for the selected category or group, with the shared inline `+ New tag` affordance for both creating and attaching tags.
 
+- **Tags follow the "creating is available wherever assigning is" rule** (see General principles). Every tag-attachment surface uses the shared `TagPickerWithCreate` (existing tags as checkboxes plus an inline "+ New tag"): transaction rows, the payee `TransactionDetail`, the Categories panel, rule editing, and the bulk-edit "Add tags" section. The two exceptions are the bulk-edit "Remove tags" chips (you cannot create a tag in order to strip it) and the tag *filter* surfaces such as the filter bar (selection, not assignment).
+
 - **Inherited tag display:** tags inherited from a parent group render in italic without a remove `×` on the leaf's panel, since removing them at the leaf would not propagate; the user must edit the group's tags instead. On transaction rows, inherited tags use the outline tag glyph and a tooltip that names the source.
 
 - **No transaction-level override of inherited tags yet:** if a transaction needs to opt out of an inherited tag, retag at the level the inheritance comes from. A future "block inherited" mechanism (parallel to the existing `manual_state` for direct tags) can be added when an actual case calls for it.
@@ -392,11 +474,13 @@ Account, category, payee, single-month-transactions, and tag-signature detail dr
 
 - **Open behavior.** Panels open docked at a sensible spot. The first drag converts them to floating, with a small stacking offset when more than one is open at once.
 
-- **Resize.** A `nwse-resize` handle in the bottom-right corner lets the user resize any panel. The first resize gesture also promotes the panel to floating geometry so size and position stay coherent. Min/max are clamped to keep the panel inside the viewport; size is session-only (not persisted).
+- **Resize.** Every edge and corner is a resize handle (the shared shell renders all eight; only the bottom-right corner carries a visible grip, the rest are cursor-advertised hit zones straddling the border in the exterior gutter so they don't sit over the body's scrollbar). Dragging a west or north edge also moves the panel's origin so the opposite edge stays anchored. The first resize gesture promotes the panel to floating geometry so size and position stay coherent. Min/max are clamped to keep the panel inside the viewport; size is session-only (not persisted).
 
 - **Stacking and click-to-focus.** Z-index is managed by a single app-level registry in `frontend/src/contexts/PanelStackContext.jsx`. Every `DetailPanelShell` claims a slot via `usePanelStackSlot` on mount; the slot returns its current `zIndex`, an `isTopmost` flag for header styling, and a stable `bringToFront` callback. Clicking anywhere on a panel surface (`onMouseDownCapture` in the shell) lifts that panel to the front of the stack — works across panels rendered in different parts of the tree (e.g., the App-level duplicate-detection dialog and route-mounted batch/account/month panels coordinate through the same stack). Re-opening the same target focuses the existing panel rather than spawning a duplicate; if the target's payload differs from the existing panel's payload (e.g., the duplicate-report drill-through opens the same batch with vs. without a date filter), the existing panel's payload is replaced rather than ignored, so the second click reflects the new parameters.
 
 - **A panel may open another panel.** A detail panel's inner transaction list can itself open a further detail panel — e.g. the merchant `↗` in `AccountDetail`'s month list opens the payee `TransactionDetail` (for the per-transaction origin/source info). It is hosted as a *child* of the opening panel, not by the page, so it lights up wherever that panel appears without per-page wiring and closes together with its parent; the shared stack registry still gives it its own z-order slot, so it stacks and focuses correctly despite being nested in the tree. Edits made in the child reconcile back into the parent's list. The deliberate trade-off is lifecycle coupling (closing the parent closes the child); use page-level sibling hosting instead when the opened panel must outlive its opener.
+
+- **Edits inside a detail panel must reconcile back to whoever opened it — the full set, not a subset.** `TransactionDetail` (and the other editable drawers) only mutate their own local copy and the backend; the *host* is responsible for patching its on-screen row(s) via the panel's callbacks. The complete set is `onCategorized`, `onNotesSaved`, `onTagsChanged`, and `onTrashed` — a host that wires only some leaves the others silently stale (the page behind shows the old category/tag while the panel shows the new one, and reopening the panel re-passes the host's stale `txn` so even the panel's header goes stale while its re-fetched inner list looks correct). A host that holds the same row in more than one place (e.g. the Dashboard's two drill tables *and* its open-panel `txn` copies) must patch all of them in the callback. Every `TransactionDetail` host is expected to wire all four; add the matching callback whenever the panel gains a new editable field.
 
 - **Dismissal.** Panels close on `×` in the header or Escape. Escape dismisses only the topmost panel, and the shared chrome (`DetailPanelShell`) suppresses it in two cases so it never destroys more than the user intends: when focus is in a text field (the inline editor reverts its own edit instead, so a half-finished note/name edit is never lost) and when a modal dialog is open above the panel (detected via the `data-modal-overlay` marker on `OverlayBackdrop` — the dialog owns Escape). Escape does *not* require focus to be inside the panel, because opening a panel by click leaves focus on the trigger in the page behind. Backdrop-click dismissal is intentionally avoided so a half-finished edit is not lost to a stray click.
 

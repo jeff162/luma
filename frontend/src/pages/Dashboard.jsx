@@ -7,7 +7,7 @@ import {
   BarChart, Bar, ComposedChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, ReferenceLine,
 } from 'recharts'
 import { api } from '../lib/api.js'
-import { txnMutations } from '../lib/txnMutations.js'
+import { txnMutations, reconcileRowsAfterRuleApply } from '../lib/txnMutations.js'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import MonthDetail from '../components/MonthDetail.jsx'
 import TagDetail from '../components/TagDetail.jsx'
@@ -26,6 +26,7 @@ import { AppDialog, Button, Card, Input, PageHeader, Select, Spinner, EmptyState
 import { TagGlyph } from '../components/TagUi.jsx'
 import { format, subMonths } from 'date-fns'
 import TransactionListTable from '../components/TransactionListTable.jsx'
+import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import { useUserPreference, useDeferredPreference } from '../lib/UserPreferencesContext.jsx'
 
@@ -1704,7 +1705,9 @@ export default function Dashboard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTagReport?.id, activeTagReport?.dismissedMissingWarning, availableTags])
   const [txnData, setTxnData]     = useState([])
+  const [txnDataTotal, setTxnDataTotal] = useState(0)
   const [groupTxnData, setGroupTxnData] = useState([])
+  const [groupTxnDataTotal, setGroupTxnDataTotal] = useState(0)
   const [detailTxns, setDetailTxns]     = useState([])
   const [detailMonths, setDetailMonths] = useState([])
   const [categories, setCategories]     = useState([])
@@ -1718,6 +1721,44 @@ export default function Dashboard() {
   const [level, setLevel]         = useState('groups')
   const [selectedGroup, setSelectedGroup] = useState(null)
   const [selectedCat,   setSelectedCat]   = useState(null)
+
+  // Bulk edit for the two single-period drill tables. The filter params mirror the drill fetches exactly
+  // (category/group + the active date/account/owner/tag scope) so "select all matching" resolves the same
+  // rows server-side, including any past the loaded cap; rows reconcile in place.
+  const selectedCatBulk = useBulkTransactionEditing({
+    rows: txnData,
+    setRows: setTxnData,
+    total: txnDataTotal,
+    filterParams: {
+      ...summaryFilters,
+      date_start: dateStart || undefined,
+      date_end: dateEnd || undefined,
+      category_id: selectedCat?.category_id,
+      account_id: accountId || undefined,
+      tag_ids: tagIds,
+      owner_ids: ownerIds,
+    },
+    categories,
+    availableTags,
+    onRowsTrashed: count => setTxnDataTotal(prev => Math.max(0, prev - count)),
+  })
+  const selectedGroupBulk = useBulkTransactionEditing({
+    rows: groupTxnData,
+    setRows: setGroupTxnData,
+    total: groupTxnDataTotal,
+    filterParams: {
+      ...summaryFilters,
+      date_start: dateStart || undefined,
+      date_end: dateEnd || undefined,
+      group_ids: selectedGroup?.group_id,
+      account_id: accountId || undefined,
+      tag_ids: tagIds,
+      owner_ids: ownerIds,
+    },
+    categories,
+    availableTags,
+    onRowsTrashed: count => setGroupTxnDataTotal(prev => Math.max(0, prev - count)),
+  })
 
   const [periodA, setPeriodA] = useState(presetToPeriod('this_month'))
   // B is always conceptually "what to compare A against." We store the selected mode
@@ -1782,6 +1823,20 @@ export default function Dashboard() {
       ...prev.filter(item => item.id !== txn.id),
       txn,
     ])
+  }
+
+  // Reconcile an edit made inside the payee detail panel back into every place the dashboard holds that
+  // row: the two drill tables and the open-panel copies (so reopening the panel shows the change, not a
+  // stale snapshot). `patch` null means the row was trashed and should drop.
+  function reconcileDetailEdit(txnId, patch) {
+    const apply = list => (
+      patch === null
+        ? list.filter(row => row.id !== txnId)
+        : list.map(row => (row.id === txnId ? { ...row, ...patch } : row))
+    )
+    setTxnData(apply)
+    setGroupTxnData(apply)
+    setDetailTxns(apply)
   }
 
   function closeTransactionDetail(txnId) {
@@ -1977,6 +2032,7 @@ export default function Dashboard() {
     ])
     setCatRows(rows)
     setGroupTxnData(txnResp.transactions)
+    setGroupTxnDataTotal(Number(txnResp.total || 0))
     setLevel('categories')
     setDrillLoading(false)
   }, [groupRows, accountId, dateStart, dateEnd, tagIds, ownerIds, summaryFilters, filters.date?.start, filters.date?.end])
@@ -2022,6 +2078,7 @@ export default function Dashboard() {
       limit: 200,
     })
     setTxnData(data.transactions)
+    setTxnDataTotal(Number(data.total || 0))
     setLevel('transactions')
     setDrillLoading(false)
   }
@@ -2181,6 +2238,7 @@ export default function Dashboard() {
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
       <PageHeader
         title="Dashboard"
+        help={<FeatureExplainer topic="how-fintrack-works" placement="bottom-left" />}
         leftAdornment={(mode === 'single' || mode === 'trends') && (
           <div style={{
             display: 'flex', background: 'var(--surface2)',
@@ -2213,7 +2271,6 @@ export default function Dashboard() {
               </button>
             ))}
           </div>
-          <FeatureExplainer topic="how-fintrack-works" placement="bottom-left" />
         </div>
       </PageHeader>
       </div>
@@ -2518,27 +2575,38 @@ export default function Dashboard() {
                     <div style={{ gridColumn: '1 / -1' }}>
                       <Card style={{ padding: 0, overflow: 'hidden' }}>
                         {txnData.length === 0 ? <EmptyState message="No transactions" /> : (
-                          <TransactionListTable
-                            rows={txnData}
-                            categories={categories}
-                            onCategorySave={(txnId, catId, catObj) => {
-                              const cat = catObj || categories.find(c => c.id === catId)
-                              setTxnData(prev => prev.map(x => x.id === txnId ? {
-                                ...x,
-                                category_id: catId,
-                                category_name: cat?.name ?? null,
-                                category_color: null,
-                                category_overridden: 1,
-                              } : x))
-                              txnMutations.setCategory(txnId, catId)
-                            }}
-                            onRulePrompt={setRulePrompt}
-                            onRowsChange={setTxnData}
-                            onTransactionOpenDetail={openTransactionDetail}
-                            showCategory={false}
-                            columnConfig={categoryTxnColumns}
-                            onColumnConfigChange={setCategoryTxnColumns}
-                          />
+                          <>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 12px 0' }}>
+                              <Button variant="ghost" small onClick={selectedCatBulk.toggle}>
+                                {selectedCatBulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
+                              </Button>
+                            </div>
+                            <div style={{ padding: '0 12px' }}>
+                              <BulkEditChrome controller={selectedCatBulk} />
+                            </div>
+                            <TransactionListTable
+                              rows={txnData}
+                              categories={categories}
+                              {...selectedCatBulk.tableProps}
+                              onCategorySave={(txnId, catId, catObj) => {
+                                const cat = catObj || categories.find(c => c.id === catId)
+                                setTxnData(prev => prev.map(x => x.id === txnId ? {
+                                  ...x,
+                                  category_id: catId,
+                                  category_name: cat?.name ?? null,
+                                  category_color: null,
+                                  category_overridden: 1,
+                                } : x))
+                                txnMutations.setCategory(txnId, catId)
+                              }}
+                              onRulePrompt={setRulePrompt}
+                              onRowsChange={setTxnData}
+                              onTransactionOpenDetail={openTransactionDetail}
+                              showCategory={false}
+                              columnConfig={categoryTxnColumns}
+                              onColumnConfigChange={setCategoryTxnColumns}
+                            />
+                          </>
                         )}
                       </Card>
                     </div>
@@ -2647,15 +2715,27 @@ export default function Dashboard() {
                   <div style={{
                     padding: '12px 16px', fontSize: 14, fontWeight: 600,
                     borderBottom: '1px solid var(--border)',
+                    display: 'flex', alignItems: 'center', gap: 8,
                   }}>
-                    {selectedGroup.group_name} · {groupTxnData.length} transactions
-                    <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--muted)', marginLeft: 8 }}>
-                      Click a category above to filter
+                    <span>
+                      {selectedGroup.group_name} · {groupTxnData.length} transactions
+                      <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--muted)', marginLeft: 8 }}>
+                        Click a category above to filter
+                      </span>
                     </span>
+                    <div style={{ marginLeft: 'auto' }}>
+                      <Button variant="ghost" small onClick={selectedGroupBulk.toggle}>
+                        {selectedGroupBulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
+                      </Button>
+                    </div>
+                  </div>
+                  <div style={{ padding: '8px 12px 0' }}>
+                    <BulkEditChrome controller={selectedGroupBulk} />
                   </div>
                   <TransactionListTable
                     rows={groupTxnData}
                     categories={categories}
+                    {...selectedGroupBulk.tableProps}
                     onCategorySave={(txnId, catId, catObj) => {
                       const cat = catObj || categories.find(c => c.id === catId)
                       setGroupTxnData(prev => prev.map(x => x.id === txnId ? {
@@ -2774,6 +2854,15 @@ export default function Dashboard() {
           stackIndex={index}
           isTopmost={index === detailTxns.length - 1 && detailMonths.length === 0}
           onClose={() => closeTransactionDetail(txn.id)}
+          onCategorized={(txnId, cat) => reconcileDetailEdit(txnId, {
+            category_id: cat?.id ?? null,
+            category_name: cat?.name ?? null,
+            category_color: null,
+            category_overridden: 1,
+          })}
+          onNotesSaved={(txnId, notes) => reconcileDetailEdit(txnId, { notes })}
+          onTagsChanged={(txnId, tags) => reconcileDetailEdit(txnId, { tags })}
+          onTrashed={txnId => reconcileDetailEdit(txnId, null)}
           dateStart={dateStart || undefined}
           dateEnd={dateEnd || undefined}
         />
@@ -2815,6 +2904,13 @@ export default function Dashboard() {
       {rulePrompt && (
         <RuleSuggestionToast
           prompt={rulePrompt}
+          onSaved={({ applyToExisting, transactionIds }) => {
+            // Patch the rule's recategorization onto whichever drill list shows the affected rows, in
+            // place — they stay on the page (now with the new category) instead of vanishing on a refilter.
+            if (!applyToExisting || !transactionIds?.length) return
+            reconcileRowsAfterRuleApply(txnData, transactionIds, setTxnData)
+            reconcileRowsAfterRuleApply(groupTxnData, transactionIds, setGroupTxnData)
+          }}
           onDismiss={() => setRulePrompt(null)}
         />
       )}

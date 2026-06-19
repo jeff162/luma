@@ -18,6 +18,8 @@
 
 export const THEME_PREF_KEY = 'ui.appearance.theme'
 export const THEME_CACHE_KEY = 'fintrack.theme'
+// Records which backend database the cached choice belongs to (see reconcileThemeCacheForDb).
+export const THEME_CACHE_DB_KEY = 'fintrack.theme.db'
 
 export const THEME_SYSTEM = 'system'
 export const THEME_LIGHT = 'light'
@@ -70,4 +72,27 @@ export function applyTheme(choice) {
     window.localStorage.setItem(THEME_CACHE_KEY, normalized)
   } catch { /* private mode: skip the cache, first paint just uses the OS default next time */ }
   return effective
+}
+
+// The pre-paint cache (THEME_CACHE_KEY) survives a backend database reset, so a recreated/empty
+// database would otherwise inherit the palette configured for the *previous* one — most visibly the
+// welcome screen, which renders before any per-profile theme loads and so shows only the cached value.
+// Tag the cache with the db_instance_id it was written under: when that id changes (a different or
+// freshly recreated database, which defines no theme yet), the cached choice is stale, so fall back to
+// System (the OS scheme). Clearing local profiles on the *same* database leaves the id unchanged, so a
+// theme configured there is still honored. A first run with no tag adopts the current id without
+// resetting, so existing setups keep their theme.
+export function reconcileThemeCacheForDb(dbInstanceId) {
+  const dbId = dbInstanceId || ''
+  let cachedDbId = null
+  try {
+    cachedDbId = window.localStorage.getItem(THEME_CACHE_DB_KEY)
+  } catch {
+    return
+  }
+  if (cachedDbId === dbId) return
+  if (cachedDbId) applyTheme(THEME_SYSTEM)
+  try {
+    window.localStorage.setItem(THEME_CACHE_DB_KEY, dbId)
+  } catch { /* private mode: best-effort; the cache just stays untagged */ }
 }

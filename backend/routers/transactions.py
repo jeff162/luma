@@ -488,7 +488,7 @@ def _build_transaction_filter(
     month=None, date_start=None, date_end=None, import_batch_id=None,
     account_id=None, account_ids=None, category_id=None, group_ids=None,
     category_ids=None, tag_ids=None, owner_ids=None, payees=None,
-    direction=None, view=None, search=None, quick_filter=None,
+    direction=None, view=None, search=None, quick_filter=None, ids=None,
     include_trashed=False,
 ):
     # Single source of truth for the transaction-list WHERE clause, shared by the list feed and the
@@ -515,6 +515,15 @@ def _build_transaction_filter(
     if import_batch_id:
         clauses.append("t.import_batch_id = ?")
         params.append(import_batch_id)
+    # Explicit id set, used to re-fetch a specific group of rows by id (e.g. reconciling exactly the rows a
+    # rule just recategorized back into an in-place list). Comma-separated to match the other multi filters;
+    # the isinstance check mirrors the other multi-filters so a direct (non-HTTP) call with an unset Query
+    # default doesn't trip the clause.
+    if ids and isinstance(ids, str):
+        id_list = [i.strip() for i in ids.split(',') if i.strip()]
+        if id_list:
+            clauses.append(f"t.id IN ({','.join('?' * len(id_list))})")
+            params.extend(id_list)
     _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
     if _append_uncategorized_filter(clauses, params, category_id=category_id):
         pass
@@ -656,6 +665,7 @@ def list_transactions(
     view:         Optional[str] = Query(None, description="spending | income — mirrors monthly-trend's category-type scope filter"),
     search:       Optional[str] = Query(None),
     quick_filter: Optional[str] = Query(None),
+    ids:          Optional[str] = Query(None, description="comma-separated transaction IDs — re-fetch a specific set of rows"),
     include_trashed: bool       = Query(False, description="Include rows in the trash. Off by default — the trash view sets this explicitly."),
     limit:        int           = Query(200, le=1000),
     offset:       int           = Query(0),
@@ -669,7 +679,7 @@ def list_transactions(
         month=month, date_start=date_start, date_end=date_end, import_batch_id=import_batch_id,
         account_id=account_id, account_ids=account_ids, category_id=category_id, group_ids=group_ids,
         category_ids=category_ids, tag_ids=tag_ids, owner_ids=owner_ids, payees=payees,
-        direction=direction, view=view, search=search, quick_filter=quick_filter,
+        direction=direction, view=view, search=search, quick_filter=quick_filter, ids=ids,
         include_trashed=include_trashed,
     )
 

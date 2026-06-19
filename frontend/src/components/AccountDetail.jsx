@@ -5,9 +5,10 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
-import { Spinner } from './ui.jsx'
+import { Button, Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
+import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import {
   DETAIL_LIST_MAX_HEIGHT,
@@ -85,6 +86,17 @@ export default function AccountDetail({ account, categories = [], onClose, force
 
   const selectedMonthRow = trend.find(r => r.month === selectedMonth)
   const monthSectionHeight = getDetailMonthSectionHeight(trend)
+
+  // Bulk edit over the selected month's rows for this account. Scope is month + account, so "select all
+  // matching" resolves the full month even when the list is paged; the count comes from the trend row.
+  const bulk = useBulkTransactionEditing({
+    rows: localMonthTxns,
+    setRows: setLocalMonthTxns,
+    total: selectedMonthRow?.count || localMonthTxns.length,
+    filterParams: { month: selectedMonth, account_ids: String(account.id) },
+    categories,
+  })
+
   const header = (
     <>
       <div style={{ fontSize: 17, fontWeight: 600 }}>{displayName}</div>
@@ -134,9 +146,16 @@ export default function AccountDetail({ account, categories = [], onClose, force
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                    <Button variant="ghost" small onClick={bulk.toggle}>
+                      {bulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
+                    </Button>
+                  </div>
+                  <BulkEditChrome controller={bulk} />
                   <TransactionListTable
                     rows={localMonthTxns}
                     categories={categories}
+                    {...bulk.tableProps}
                     onCategorySave={saveCategory}
                     onTransactionOpenDetail={setPayeeDetail}
                     onRowsChange={setLocalMonthTxns}
@@ -176,6 +195,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
         )))}
         onTrashed={txnId => setLocalMonthTxns(prev => prev.filter(t => t.id !== txnId))}
         onNotesSaved={(txnId, notes) => setLocalMonthTxns(prev => prev.map(t => (t.id === txnId ? { ...t, notes } : t)))}
+        onTagsChanged={(txnId, tags) => setLocalMonthTxns(prev => prev.map(t => (t.id === txnId ? { ...t, tags } : t)))}
         forceFloating
         stackIndex={stackIndex + 1}
         dateStart={dateStart}

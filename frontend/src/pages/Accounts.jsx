@@ -8,6 +8,7 @@ import { Card, Button, Spinner, AppConfirmDialog, AppNoticeDialog, AppTextEntryD
 import AccountDetail from '../components/AccountDetail.jsx'
 import PillTableHeader from '../components/PillTableHeader.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useDismissibleLayer, useDismissiblePopup, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
@@ -2483,7 +2484,10 @@ export default function Accounts() {
             width: 'fit-content',
             maxWidth: '100%',
           }}>
-            <h1 style={{ fontSize: 22, fontWeight: 600 }}>Accounts</h1>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <FeatureExplainer topic="merging-accounts" placement="bottom-left" />
+              <h1 style={{ fontSize: 22, fontWeight: 600 }}>Accounts</h1>
+            </div>
           </div>
           {showOwnerFilterRow ? (
             <div style={{

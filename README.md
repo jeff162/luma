@@ -94,6 +94,10 @@ FinTrack is built on a few core principles:
 
 - Users should be able to act directly where their data lives
 
+- Changes should be reversible and rarely destructive
+
+- Overlapping data should be safe to import — duplicates are detected, not feared
+
 ## Features
 
 FinTrack focuses on making common tasks easy and reducing the effort required to maintain accurate data over time.

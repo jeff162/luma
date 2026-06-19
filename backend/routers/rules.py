@@ -113,7 +113,7 @@ def _rule_matches_txn(rule, txn) -> bool:
     return _amount_rule_matches(txn["amount"], rule["amount_min"], rule["amount_max"], rule["debit_credit"])
 
 
-def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False, txn_ids: Optional[list[str]] = None) -> int:
+def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False, txn_ids: Optional[list[str]] = None) -> list[str]:
     # `preserve_manual` reclaims the rows a rule should own — including import-locked ones
     # (category_source = 'import') — while leaving a deliberate per-transaction manual edit
     # (category_source = 'manual') untouched. Used when a merge/replace changes the governing rule:
@@ -135,7 +135,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
         where_clauses.append("t.category_source IS NOT 'manual'")
     if txn_ids is not None:
         if not txn_ids:
-            return 0
+            return []
         where_clauses.append(f"t.id IN ({','.join('?' * len(txn_ids))})")
         where_params.extend(txn_ids)
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
@@ -164,7 +164,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
         ).fetchall()
     ]
 
-    updated = 0
+    affected_ids: list[str] = []
     for txn in txns:
         if not _rule_matches_txn(rule, txn):
             continue
@@ -198,9 +198,9 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
             sync_rule_tags_for_transaction(conn, txn["id"], merged_rule_tag_ids, clear_manual_blocks=True)
             row_changed = True
         if row_changed:
-            updated += 1
+            affected_ids.append(txn["id"])
 
-    return updated
+    return affected_ids
 
 
 class RulePreview(BaseModel):
@@ -632,8 +632,11 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
 @router.post("/{rule_id}/apply")
 def apply_rule(rule_id: str, preserve_manual: bool = False):
     with get_db() as conn:
-        updated = _apply_rule_to_existing(conn, rule_id, preserve_manual=preserve_manual)
-    return {"updated": updated}
+        affected_ids = _apply_rule_to_existing(conn, rule_id, preserve_manual=preserve_manual)
+    # `transaction_ids` lets an in-place caller reconcile exactly the rows the rule changed (re-fetch them
+    # by id and merge them back) instead of re-running its scoped query, which would drop the now-
+    # recategorized rows out of the view.
+    return {"updated": len(affected_ids), "transaction_ids": affected_ids}
 
 
 class ApplyToTransactionsBody(BaseModel):
@@ -646,10 +649,10 @@ def apply_rule_to_transactions(rule_id: str, body: ApplyToTransactionsBody):
     generated an accepted import-rule suggestion — so the user's review edits land on exactly those
     rows. Skips manual rows (deliberate exceptions) and rows the matcher no longer matches."""
     with get_db() as conn:
-        updated = _apply_rule_to_existing(
+        affected_ids = _apply_rule_to_existing(
             conn, rule_id, preserve_manual=True, txn_ids=body.transaction_ids,
         )
-    return {"updated": updated}
+    return {"updated": len(affected_ids), "transaction_ids": affected_ids}
 
 
 @router.delete("/{rule_id}")

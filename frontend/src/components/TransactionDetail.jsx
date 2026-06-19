@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
-import { txnMutations } from '../lib/txnMutations.js'
+import { txnMutations, reconcileRowsAfterRuleApply } from '../lib/txnMutations.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { AppConfirmDialog, Spinner } from './ui.jsx'
 import { CategoryCell, getTxnMerchantLabel } from './TransactionRow.jsx'
@@ -13,7 +13,8 @@ import RuleSuggestionToast from './RuleSuggestionToast.jsx'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransactionListTable from './TransactionListTable.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
-import { TagBadge, TagGlyph } from './TagUi.jsx'
+import { TagBadge } from './TagUi.jsx'
+import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import {
   DETAIL_LIST_MAX_HEIGHT,
   getDetailMonthSectionHeight,
@@ -35,7 +36,7 @@ const TRANSACTION_DETAIL_TABLE_PREF_KEY = 'ui.transactionDetail.transactions.col
  * locally editable, but it can also branch straight into rule creation when a manual recategorization looks
  * like the start of a repeatable pattern.
  */
-export default function TransactionDetail({ txn, categories, onClose, onTrashed, onCategorized, onNotesSaved, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true, dateStart = null, dateEnd = null }) {
+export default function TransactionDetail({ txn, categories, onClose, onTrashed, onCategorized, onNotesSaved, onTagsChanged, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true, dateStart = null, dateEnd = null }) {
   // Date scope is the caller's call: Dashboard/Transactions pass their global filter; pages without a
   // filter bar pass nothing, in which case the payee trend defaults to the merchant's full history.
   const { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
@@ -192,6 +193,9 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
   async function handleToggleTag(tag, present) {
     const result = await api.updateTransactionTag(detailTxn.id, tag.id, present)
     patchDetailTxn({ tags: result.tags || [] })
+    // Reconcile the host's row too, otherwise the tag persists to the DB but the surface behind the
+    // panel keeps reading its stale copy and shows no tag marker (same contract as onCategorized/onNotesSaved).
+    onTagsChanged?.(detailTxn.id, result.tags || [])
   }
 
   const selectedMonthRow = trend.find(r => r.month === selectedMonth)
@@ -303,7 +307,9 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
                     }}
                   />
                   {detailTxn.category_overridden ? (
-                    <span style={{ fontSize: 11, color: 'var(--muted)' }}>manual</span>
+                    <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                      {detailTxn.category_source === 'import' ? 'imported' : 'manual'}
+                    </span>
                   ) : null}
                 </div>
               </div>
@@ -336,31 +342,20 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
                   <span style={{ fontSize: 12, color: 'var(--muted)' }}>No tags on this transaction.</span>
                 )}
               </div>
-              {tagsLoading ? (
-                <div style={{ fontSize: 12, color: 'var(--muted)' }}>Loading tags…</div>
-              ) : availableTags.length > 0 ? (
-                <div style={{ display: 'grid', gap: 6 }}>
-                  {availableTags.map(tag => {
-                    const checked = visibleTagIds.has(tag.id)
-                    return (
-                      <label
-                        key={tag.id}
-                        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => handleToggleTag(tag, !checked)}
-                        />
-                        <TagGlyph color={tag.color} size={13} />
-                        <span>{tag.name}</span>
-                      </label>
-                    )
-                  })}
-                </div>
-              ) : (
-                <div style={{ fontSize: 12, color: 'var(--muted)' }}>No tags defined yet. Create them in Settings.</div>
-              )}
+              {/* Shared picker: existing tags as checkboxes plus an inline "+ New tag" so a tag can be
+                  invented and attached here without hopping to Settings (same affordance as the
+                  transaction rows, Categories panel, and rule editor). Rendered inline (relative). */}
+              <TagPickerWithCreate
+                allTags={availableTags}
+                selectedTagIds={visibleTagIds}
+                onToggleTag={(tag, present) => handleToggleTag(tag, present)}
+                onTagCreated={created => setAvailableTags(prev => (
+                  prev.some(tag => tag.id === created.id) ? prev : [...prev, created]
+                ))}
+                onClose={() => {}}
+                loading={tagsLoading}
+                positioning="relative"
+              />
             </div>
 
             <div style={{ display: 'grid', gap: 8 }}>
@@ -459,8 +454,7 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
                     {detailTxn.category_source ? (
                       <div>
                         <span style={{ color: 'var(--muted)' }}>Categorized by:</span>{' '}
-                        {detailTxn.category_overridden ? 'manual override'
-                          : detailTxn.category_source === 'rule'   ? 'a categorization rule'
+                        {detailTxn.category_source === 'rule'   ? 'a categorization rule'
                           : detailTxn.category_source === 'import' ? 'category present in the source data'
                           : detailTxn.category_source === 'manual' ? 'manual edit'
                           : detailTxn.category_source}
@@ -547,15 +541,11 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
       {rulePrompt && (
         <RuleSuggestionToast
           prompt={rulePrompt}
-          onSaved={({ applyToExisting }) => {
+          onSaved={({ applyToExisting, transactionIds }) => {
+            // Applying the rule can recategorize several rows in this month; patch exactly those in place
+            // (re-fetched by id) so they show the new category without re-fetching the whole drawer.
             if (applyToExisting) {
-              // Applying the new rule can recategorize many rows in the current month, so refresh the drawer instead of patching only the clicked row.
-              api.getTransactions({
-                month: selectedMonth,
-                payees: payee,
-                limit: monthTxns.length || 100,
-                offset: 0,
-              }).then(d => setMonthTxns(d.transactions))
+              reconcileRowsAfterRuleApply(monthTxns, transactionIds, setMonthTxns)
             }
           }}
           onDismiss={() => setRulePrompt(null)}

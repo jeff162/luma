@@ -5,8 +5,7 @@ import { useState, useEffect, useRef, useCallback, useLayoutEffect, useMemo } fr
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { PageHeader, Spinner, EmptyState, CategoryMarker, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, DialogActions, Button, AppConfirmDialog, AppNoticeDialog } from '../components/ui.jsx'
-import BulkEditPanel from '../components/BulkEditPanel.jsx'
-import { useTransactionSelection } from '../lib/useTransactionSelection.js'
+import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import CategoryPicker from '../components/CategoryPicker.jsx'
 import {
@@ -20,7 +19,7 @@ import { useAppSession } from '../lib/AppSessionContext.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
-import { txnMutations } from '../lib/txnMutations.js'
+import { txnMutations, reconcileRowsAfterRuleApply } from '../lib/txnMutations.js'
 import { usePagedTransactions } from '../components/detailShared.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import { TagGlyph } from '../components/TagUi.jsx'
@@ -672,15 +671,11 @@ export default function Categories() {
   // Bumped to force the matching-transactions list to reload (e.g. after a rule the toast created
   // is applied to existing rows, which can change which transactions match the selected category).
   const [matchingReloadNonce, setMatchingReloadNonce] = useState(0)
-  // Bulk edit over the matching-transactions list (same shared mechanism as the Transactions page).
-  const [bulkMode, setBulkMode] = useState(false)
-  const [showBulkPanel, setShowBulkPanel] = useState(false)
-  const [applyingBulk, setApplyingBulk] = useState(false)
-  const [pendingBulkTrash, setPendingBulkTrash] = useState(false)
+  // Notice surface shared by the category-delete-skip path and the (controller-owned) bulk-edit flow's
+  // sibling actions. The matching-list bulk edit itself is the shared controller, wired up below.
   const [bulkNotice, setBulkNotice] = useState('')
   const [starterNotice, setStarterNotice] = useState('')
   const [addingStarter, setAddingStarter] = useState(false)
-  const matchingSelection = useTransactionSelection()
   const [rulePrompt, setRulePrompt] = useState(null)
   const [selected, setSelected] = useState(null)
   const [selectedCategoryIds, setSelectedCategoryIds] = useState([])
@@ -1681,90 +1676,7 @@ export default function Categories() {
     category_id: selectedCategoryFilter || undefined,
     category_ids: selectedCategoryIdsFilter || undefined,
   }
-  const bulkSelectedCount = matchingSelection.selectedCount(matchingTxnsTotal)
 
-  async function runMatchingBulkActions(actions) {
-    if (!actions.length) return
-    setApplyingBulk(true)
-    // Snapshot which loaded rows the selection covers *before* clearing it, so the optimistic
-    // patch below can reconcile exactly those rows in place. Works in both selection modes:
-    // isSelected() is true for every non-excluded row when "all matching" is active.
-    const affectedIds = new Set(pagedMatchingTxns.filter(txn => matchingSelection.isSelected(txn.id)).map(txn => txn.id))
-    try {
-      const result = await api.bulkUpdateTransactions(matchingSelection.toSelectionPayload(matchingFilterParams), actions)
-      matchingSelection.clear()
-      setShowBulkPanel(false)
-      setBulkMode(false)
-      setBulkNotice(`Updated ${result.updated_count} transaction${result.updated_count === 1 ? '' : 's'}.`)
-      patchMatchingTxnsForBulk(actions, affectedIds)
-    } catch (error) {
-      setBulkNotice(error?.message || 'Bulk update failed.')
-    } finally {
-      setApplyingBulk(false)
-    }
-  }
-
-  // Reconcile the loaded matching-list rows in place after a bulk apply instead of re-fetching the
-  // whole list — a reload resets to page 1 and throws away the user's sort order and scroll position.
-  // Mirrors the per-row handlers: re-categorized rows linger (a mis-tap stays correctable; the Refresh
-  // button prunes rows that no longer match), trashed rows drop. "all matching" selections may touch
-  // unloaded rows too, but those aren't on screen, so only the loaded ones need patching.
-  function patchMatchingTxnsForBulk(actions, affectedIds) {
-    if (!affectedIds.size) return
-    const tagsById = new Map(availableTags.map(tag => [tag.id, tag]))
-    let trashedCount = 0
-    setPagedMatchingTxns(prev => {
-      let next = prev
-      for (const action of actions) {
-        if (action.type === 'trash') {
-          const before = next.length
-          next = next.filter(txn => !affectedIds.has(txn.id))
-          trashedCount = before - next.length
-          continue
-        }
-        next = next.map(txn => {
-          if (!affectedIds.has(txn.id)) return txn
-          switch (action.type) {
-            case 'set_category': {
-              const cat = flatCats.find(c => c.id === action.category_id)
-              return {
-                ...txn,
-                category_id: action.category_id || null,
-                category_name: cat?.name ?? null,
-                category_color: null,
-                category_overridden: 1,
-              }
-            }
-            case 'set_notes':
-              return { ...txn, notes: action.notes || null }
-            case 'set_merchant':
-              return { ...txn, display_name: action.merchant }
-            case 'set_date':
-              return { ...txn, date: action.date }
-            case 'add_tags': {
-              const present = new Set((txn.tags || []).map(tag => tag.id))
-              const additions = action.tag_ids
-                .filter(id => !present.has(id))
-                .map(id => {
-                  const meta = tagsById.get(id)
-                  return { id, name: meta?.name ?? '', color: meta?.color ?? null, source: 'direct' }
-                })
-              return additions.length ? { ...txn, tags: [...(txn.tags || []), ...additions] } : txn
-            }
-            case 'remove_tags': {
-              const removing = new Set(action.tag_ids)
-              // Only drop the *direct* attachment; an inherited tag stays (the backend keeps it too).
-              return { ...txn, tags: (txn.tags || []).filter(tag => !(removing.has(tag.id) && tag.source === 'direct')) }
-            }
-            default:
-              return txn
-          }
-        })
-      }
-      return next
-    })
-    if (trashedCount) setMatchingTxnsTotal(prev => Math.max(0, prev - trashedCount))
-  }
   // The Categories page operates on its own scope and intentionally has no filter bar (see
   // shouldShowFilterBar in App.jsx), so the matching-transactions list must NOT inherit the global
   // date filter — doing so silently hid older rows here and disagreed with the all-time delete-impact
@@ -1796,6 +1708,18 @@ export default function Categories() {
   } = usePagedTransactions({
     activeKey: matchingTxnsKey,
     loadPage: loadMatchingTxnPage,
+  })
+
+  // Bulk edit over the matching-transactions list. Scope is the selected category/categories (no date
+  // filter), so "select all matching" resolves the same rows server-side; rows reconcile in place.
+  const matchingBulk = useBulkTransactionEditing({
+    rows: pagedMatchingTxns,
+    setRows: setPagedMatchingTxns,
+    total: matchingTxnsTotal,
+    filterParams: matchingFilterParams,
+    categories: flatCats,
+    availableTags,
+    onRowsTrashed: count => setMatchingTxnsTotal(prev => Math.max(0, prev - count)),
   })
 
   function addMatchingCategory(cat) {
@@ -2516,35 +2440,16 @@ export default function Categories() {
                       <Button
                         variant="ghost"
                         small
-                        onClick={() => { setBulkMode(v => !v); matchingSelection.clear() }}
+                        onClick={matchingBulk.toggle}
                         disabled={!matchingTxnsKey || pagedMatchingTxns.length === 0}
                         title="Select multiple transactions to edit at once"
                       >
-                        {bulkMode ? '✕ Done' : 'Bulk Edit'}
+                        {matchingBulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
                       </Button>
                     </div>
                   </div>
 
-                  {bulkMode ? (
-                    <div style={{
-                      padding: '8px 12px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-                      border: '1px solid color-mix(in srgb, var(--accent) 32%, var(--border))',
-                      background: 'color-mix(in srgb, var(--accent) 8%, var(--surface2))', borderRadius: 8,
-                    }}>
-                      <span style={{ fontSize: 13, fontWeight: 600 }}>
-                        {bulkSelectedCount > 0
-                          ? `${bulkSelectedCount} selected${matchingSelection.allMatching ? ' · all matching' : ''}`
-                          : 'Select transactions to edit, or use the header checkbox to select all.'}
-                      </span>
-                      <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-                        <Button small onClick={() => setShowBulkPanel(true)} disabled={bulkSelectedCount === 0}>Edit…</Button>
-                        <Button small variant="ghost" onClick={() => setPendingBulkTrash(true)} disabled={bulkSelectedCount === 0}>Move to trash</Button>
-                        {bulkSelectedCount > 0 ? (
-                          <Button small variant="ghost" onClick={() => matchingSelection.clear()}>Clear</Button>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : null}
+                  <BulkEditChrome controller={matchingBulk} />
 
                   {matchingTxnsLoading ? <Spinner /> : pagedMatchingTxns.length === 0 ? (
                     <div style={{
@@ -2561,9 +2466,7 @@ export default function Categories() {
                     <TransactionListTable
                       rows={pagedMatchingTxns}
                       categories={flatCats}
-                      bulkActive={bulkMode}
-                      bulkSelection={matchingSelection}
-                      bulkTotal={matchingTxnsTotal}
+                      {...matchingBulk.tableProps}
                       onCategorySave={saveMatchingTxnCategory}
                       onCategoryOpenDetail={category => openDetailPanel('category', category)}
                       onTransactionOpenDetail={detailTxn => openDetailPanel('txn', detailTxn)}
@@ -2620,6 +2523,11 @@ export default function Categories() {
               onNotesSaved={(txnId, notes) => {
                 setPagedMatchingTxns(prev => prev.map(txn =>
                   txn.id === txnId ? { ...txn, notes } : txn
+                ))
+              }}
+              onTagsChanged={(txnId, tags) => {
+                setPagedMatchingTxns(prev => prev.map(txn =>
+                  txn.id === txnId ? { ...txn, tags } : txn
                 ))
               }}
               onTrashed={txnId => {
@@ -2693,30 +2601,6 @@ export default function Categories() {
         />
       ) : null}
 
-      {showBulkPanel && (
-        <BulkEditPanel
-          count={bulkSelectedCount}
-          categories={flatCats}
-          applying={applyingBulk}
-          onApply={runMatchingBulkActions}
-          onCancel={() => setShowBulkPanel(false)}
-        />
-      )}
-
-      {pendingBulkTrash && (
-        <AppConfirmDialog
-          title={`Move ${bulkSelectedCount} transaction${bulkSelectedCount === 1 ? '' : 's'} to trash?`}
-          description="They are removed from all views but recoverable from Settings → Trash."
-          confirmLabel={applyingBulk ? 'Moving…' : 'Move to trash'}
-          confirmVariant="danger"
-          confirmDisabled={applyingBulk}
-          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
-          onConfirm={async () => { setPendingBulkTrash(false); await runMatchingBulkActions([{ type: 'trash' }]) }}
-          onCancel={() => setPendingBulkTrash(false)}
-          width="min(520px, 100%)"
-        />
-      )}
-
       {pendingHardDelete && (
         <AppConfirmDialog
           title={`Permanently delete "${pendingHardDelete.name}"?`}
@@ -2770,11 +2654,12 @@ export default function Categories() {
       {rulePrompt ? (
         <RuleSuggestionToast
           prompt={rulePrompt}
-          onSaved={({ applyToExisting }) => {
-            // The rule is applied via txnMutations.applyRule, which already refreshed the Tasks
-            // count; here we only reload the matching list, whose membership can have changed.
+          onSaved={({ applyToExisting, transactionIds }) => {
+            // Patch the rule's recategorization onto the affected rows in place (re-fetched by id) so they
+            // stay on the matching list rather than dropping on a reload — a mis-tap stays correctable, and
+            // the Refresh button is still there to prune rows that no longer match when the user wants.
             if (applyToExisting) {
-              setMatchingReloadNonce(n => n + 1)
+              reconcileRowsAfterRuleApply(pagedMatchingTxns, transactionIds, setPagedMatchingTxns)
             }
           }}
           onDismiss={() => setRulePrompt(null)}

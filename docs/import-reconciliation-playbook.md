@@ -6,9 +6,9 @@ accounts or categories better than others, and the same activity often arrives m
 
 It is deliberately separate from the developer docs: `architecture.md` and `data-model.md` record the
 *why* and the invariants behind these tools; this file records the *when/how* for the person using
-the app. It also serves as the **content backlog/source** for surfacing this guidance inside the app
-later (see [the in-app surfacing task](#future-work) — the Help/FeatureExplainer registry is the
-intended home). Examples are generic on purpose so they can be reused as help copy.
+the app. It is also the **content source** for the in-app version of this guidance (see
+[in-app surfacing](#in-app-surfacing) — the Help/FeatureExplainer registry is its home). Examples are
+generic on purpose so they can be reused as help copy.
 
 ## Mental model
 
@@ -51,17 +51,24 @@ duplicates between them. **Importing then merging** and **merging then importing
 state. **Detaching** an account later reverses the merge's auto-confirmations (your explicit
 Reject/Replace decisions are preserved).
 
-### Foreign transactions look off by a day or two (timezone)
+### A covered-range row is off by a day or two, or has no match (±2 days / no specific match)
 
-A charge posted in a far-ahead timezone is dated a calendar day ahead in one source, so the usual
-pending-vs-posted ±1-day drift becomes **±2 days**. These show in the report as **Rejected · review →
-Matched ±2 days**.
+When an earlier import already covered a date range, every transaction in that range is expected to
+already be in the ledger, so a new row landing inside it is rejected as a presumed duplicate and paired
+against the existing data by date and amount — the exact date first, then ±1 day, then ±2 days. Two of
+the pairing outcomes are surfaced for review:
 
-- Filter to the **Matched ±2 days** pill, eyeball that they're the expected timezone twins, and
-  **Mark reviewed** in bulk (they're already rejected — this just clears them from the
-  needs-attention list).
-- The **No specific match** pill is the one to actually investigate — usually a row present in one
-  file but genuinely missing from the other, which you can **Import anyway**.
+- **Matched ±2 days** — a counterpart turned up only after the window widened to ±2 days. Posting dates
+  drift between sources for several reasons — pending-vs-posted timing, weekend or holiday settlement,
+  and time-zone differences on foreign charges — so the same transaction can sit a day or two apart in
+  two sources. After the pair is confirmed, **Mark reviewed** in bulk (or per row) clears it from the
+  needs-attention list. If a pair is *not* the same transaction, select the rows and **import both**.
+- **No specific match** — the date is covered but nothing paired at all, even at ±2 days. This is the
+  one to actually investigate: usually a row present in one source and genuinely missing from the
+  other, in which case **Import anyway** keeps it.
+
+A covered row that pairs cleanly on the exact date or ±1 day stays rejected without being flagged — only
+the two cases above need a look.
 
 ### A source duplicates rows *within a single file*
 
@@ -121,9 +128,16 @@ essential/discretionary, business/personal — are **tags**, attached at whichev
 (transaction, leaf category, or group), and they're additive. Use tags rather than trying to encode
 those dimensions in the account or category tree.
 
-## Future work
+## In-app surfacing
 
-Surfacing this guidance inside the app (inline `?` explainers, and a context-triggered "explain this"
-when the app recognizes one of the situations above) is tracked separately — see the project memory
-*surface-import-playbook-in-app*. This doc is the content source for that effort; keep it current as
-the reconciliation tools evolve.
+The situations above are surfaced inside the app through the Help/FeatureExplainer registry
+(`frontend/src/help/content.jsx`) — see `docs/ui-patterns.md` → *Help and contextual explainers* for
+the pattern. Each situation is a help topic, reachable three ways from that single source: the `/help`
+pages, an always-present `?` next to the relevant surface (the duplicate-report header, the
+amount-convention picker, the Group Imported Categories title, the Accounts merge area, the rule-
+suggestion review, the file-ledger search and removed-as-duplicates list), and a context-triggered
+"explain this" tip that appears only when the app recognizes the situation (cross-account matches,
+covered-range ±2-day and no-match rows, unknown-source files, rule-suggestion conflicts).
+
+**This doc remains the content source of truth.** When a reconciliation tool changes, update the
+situation here first, then reconcile the matching help topic so the in-app copy doesn't drift.

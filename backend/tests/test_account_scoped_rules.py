@@ -137,7 +137,7 @@ class AccountScopedRulesTests(unittest.TestCase):
 
         with self._use_db_path():
             with get_db() as conn:
-                self.assertEqual(_apply_rule_to_existing(conn, rule_id), 1)
+                self.assertEqual(len(_apply_rule_to_existing(conn, rule_id)), 1)
                 txn = conn.execute(
                     "SELECT category_id, category_source, category_overridden FROM txn WHERE id = ?",
                     (txn_id,),
@@ -182,7 +182,7 @@ class AccountScopedRulesTests(unittest.TestCase):
                 }
 
         # Import-locked + uncategorized rows reclaimed by the rule; the manual edit is left untouched.
-        self.assertEqual(updated, 2)
+        self.assertEqual(len(updated), 2)
         self.assertEqual(rows[import_txn]["category_id"], food)
         self.assertEqual(rows[import_txn]["category_source"], "rule")
         self.assertEqual(rows[uncat_txn]["category_id"], food)

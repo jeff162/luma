@@ -4,8 +4,9 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
 import { formatCurrency } from '../lib/utils.js'
-import { Spinner } from './ui.jsx'
+import { Button, Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
+import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import {
   DETAIL_LIST_MAX_HEIGHT,
@@ -47,6 +48,16 @@ export default function TagDetail({
   const [loading, setLoading] = useState(true)
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
     preferenceKey: TAG_DETAIL_TABLE_PREF_KEY,
+  })
+
+  // The visible rows are a client-side exact-signature subset of an OR-match fetch, so no server filter
+  // can re-resolve them — "select all" selects every loaded row by id ('loaded' strategy) rather than
+  // flipping to server all-matching.
+  const bulk = useBulkTransactionEditing({
+    rows: transactions,
+    setRows: setTransactions,
+    selectAllStrategy: 'loaded',
+    categories,
   })
 
   const signatureTagIds = signature?.signature_tag_ids || []
@@ -119,14 +130,23 @@ export default function TagDetail({
       ) : transactions.length === 0 ? (
         <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
       ) : (
-        <TransactionListTable
-          rows={transactions}
-          categories={categories}
-          onRowsChange={setTransactions}
-          columnConfig={columnConfig}
-          onColumnConfigChange={setColumnConfig}
-          maxHeight={DETAIL_LIST_MAX_HEIGHT}
-        />
+        <>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+            <Button variant="ghost" small onClick={bulk.toggle}>
+              {bulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
+            </Button>
+          </div>
+          <BulkEditChrome controller={bulk} />
+          <TransactionListTable
+            rows={transactions}
+            categories={categories}
+            {...bulk.tableProps}
+            onRowsChange={setTransactions}
+            columnConfig={columnConfig}
+            onColumnConfigChange={setColumnConfig}
+            maxHeight={DETAIL_LIST_MAX_HEIGHT}
+          />
+        </>
       )}
     </DetailPanelShell>
   )

@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Button } from './ui.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { api } from '../lib/api.js'
 import {
   getSharedPillCornerRemoveButtonStyle,
@@ -1447,7 +1448,10 @@ export default function CategoryImportWorkspace({
         <div style={{ padding: '18px 22px 14px', borderBottom: '1px solid var(--border)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 84%, var(--surface)), color-mix(in srgb, var(--surface2) 62%, var(--surface)))' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 18 }}>
             <div>
-              <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>{title}</div>
+              <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <FeatureExplainer topic="imported-category-cleanup" placement="bottom-left" />
+                {title}
+              </div>
               <div style={{ fontSize: 13, color: 'var(--muted)', maxWidth: 700, lineHeight: 1.55 }}>
                 {description}
               </div>

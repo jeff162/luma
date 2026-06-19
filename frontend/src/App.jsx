@@ -10,8 +10,9 @@ import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
 import RuntimeConfigScreen from './components/RuntimeConfigScreen.jsx'
 import { api, setLocalPreferenceProfileId } from './lib/api.js'
+import { HELP_HINTS_ENABLED_PREF_KEY } from './help/preferences.js'
 import { UserPreferencesProvider, useUserPreference } from './lib/UserPreferencesContext.jsx'
-import { THEME_PREF_KEY, THEME_SYSTEM, applyTheme, normalizeThemeChoice } from './lib/theme.js'
+import { THEME_PREF_KEY, THEME_SYSTEM, applyTheme, normalizeThemeChoice, reconcileThemeCacheForDb } from './lib/theme.js'
 import { AppSessionProvider } from './lib/AppSessionContext.jsx'
 import {
   UnifiedDuplicatesViewerProvider,
@@ -25,7 +26,7 @@ import {
 } from './contexts/ImportedCategoryWorkspaceContext.jsx'
 import { PanelStackProvider } from './contexts/PanelStackContext.jsx'
 import { useDismissibleLayer } from './lib/uiInteractions.js'
-import { AppConfirmDialog } from './components/ui.jsx'
+import { AppConfirmDialog, Toggle } from './components/ui.jsx'
 import TransientTextInput from './components/TransientTextInput.jsx'
 import {
   APP_NAME,
@@ -370,6 +371,7 @@ function LocalPreferenceProfileScreen({
   onCancel,
 }) {
   const [name, setName] = useState('')
+  const [skipHints, setSkipHints] = useState(false)
   const [showWelcomeHelp, setShowWelcomeHelp] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [editingName, setEditingName] = useState('')
@@ -389,7 +391,7 @@ function LocalPreferenceProfileScreen({
   // catch-all completion contract is { name, destination, loadDemo } (see handleCompleteWelcomeSetup).
   function completeWelcome(choice) {
     if (!trimmedName || creating) return
-    onCompleteWelcome?.({ name: trimmedName, ...choice })
+    onCompleteWelcome?.({ name: trimmedName, disableHints: skipHints, ...choice })
   }
 
   const dataEntryChoices = [
@@ -762,6 +764,13 @@ function LocalPreferenceProfileScreen({
               Connecting a data source links accounts through <DataProviderInfoButton />.
             </div>
 
+            <Toggle
+              checked={skipHints}
+              onChange={setSkipHints}
+              label="Skip first-use hints (you can turn them back on from the Help page)"
+              style={{ fontSize: 12, color: 'var(--muted)' }}
+            />
+
             {creating ? (
               <div style={{ fontSize: 12, color: 'var(--muted)' }}>Setting up…</div>
             ) : null}
@@ -987,6 +996,10 @@ export default function App() {
         setExperimentalSecuritySettings(!!status.experimental_security_settings)
         setDeveloperOptionsEnabled(!!status.developer_options_enabled)
         setDbInstanceId(status.db_instance_id || '')
+        // Drop a theme cache left over from a different/previous database (e.g. a recreated DB) so the
+        // welcome screen — which paints before any per-profile theme loads — falls back to System
+        // rather than inheriting the old palette. Same-DB profile clears keep their configured theme.
+        reconcileThemeCacheForDb(status.db_instance_id || '')
         setBootPreferences(null)
         setBootPreferenceSubjectId('')
 
@@ -1296,6 +1309,11 @@ export default function App() {
 
       // Demo data is scoped to the active preference profile, so make the new profile active first.
       setLocalPreferenceProfileId(profile.id)
+      // Persist the welcome screen's "skip first-use hints" choice against the brand-new profile (the
+      // profile header is now set), before the app mounts the preferences provider and navigates.
+      if (setup?.disableHints) {
+        await api.saveUserPreference(HELP_HINTS_ENABLED_PREF_KEY, false).catch(() => {})
+      }
       if (loadDemo) {
         await api.loadDemoData()
         setDemoLoaded(true)

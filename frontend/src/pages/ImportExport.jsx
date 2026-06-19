@@ -19,6 +19,7 @@ import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorksp
 import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
 import ImportColumnMappingSection from '../components/ImportColumnMappingSection.jsx'
 import ImportProfilesManager from '../components/ImportProfilesManager.jsx'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
 import {
   DataSourcePill,
@@ -2982,6 +2983,7 @@ function ImportTab() {
                   }}>
                     {AMOUNT_CONVENTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                   </select>
+                  <FeatureExplainer topic="amount-conventions" placement="bottom-left" />
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
                   Skip

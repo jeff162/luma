@@ -26,9 +26,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { formatMoneyMagnitude } from '../lib/moneyDisplay.js'
-import { Spinner } from './ui.jsx'
+import { Button, Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
+import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { DetailPanelShell, useDetailPanelChrome, usePagedTransactions } from './detailShared.jsx'
 
 const IMPORT_BATCH_DETAIL_TABLE_PREF_KEY = 'ui.importBatchDetail.transactions.columns'
@@ -92,6 +94,22 @@ export default function ImportBatchDetail({
   } = usePagedTransactions({
     activeKey: `${batch.id}|${dateStart || ''}|${dateEnd || ''}|${debouncedFilter}`,
     loadPage,
+  })
+
+  // Bulk edit over this file's imported rows. Scope mirrors the list fetch (batch + date/search), so
+  // "select all matching" resolves the whole file even though the list is paged; rows reconcile in place.
+  const bulk = useBulkTransactionEditing({
+    rows,
+    setRows,
+    total: totalCount,
+    filterParams: {
+      import_batch_id: batch.id,
+      ...(dateStart ? { date_start: dateStart } : {}),
+      ...(dateEnd ? { date_end: dateEnd } : {}),
+      ...(debouncedFilter ? { quick_filter: debouncedFilter } : {}),
+    },
+    categories,
+    onRowsTrashed: count => setTotalCount(prev => Math.max(0, prev - count)),
   })
 
   useEffect(() => {
@@ -205,18 +223,28 @@ export default function ImportBatchDetail({
           <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, flex: '1 1 220px' }}>
             Imported transactions from this file. Category changes made here update the underlying transactions directly.
           </div>
+          <FeatureExplainer topic="searching-transactions" placement="bottom-left" />
+          <Button variant="ghost" small onClick={bulk.toggle}>
+            {bulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
+          </Button>
         </div>
+        <BulkEditChrome controller={bulk} />
         {visibleDeduped.length > 0 ? (
           <div style={{ flex: '0 0 auto', border: '1px solid color-mix(in srgb, var(--warning) 30%, var(--border))', borderRadius: 8, background: 'color-mix(in srgb, var(--warning) 6%, var(--surface2))', overflow: 'hidden' }}>
-            <button
-              type="button"
-              onClick={() => setDedupedOpen(open => !open)}
-              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', fontSize: 12.5, textAlign: 'left' }}
-            >
-              <span style={{ color: 'var(--warning)' }}>{dedupedOpen ? '▾' : '▸'}</span>
-              <span style={{ fontWeight: 600 }}>Removed as duplicates ({visibleDeduped.length})</span>
-              <span style={{ color: 'var(--muted)', fontWeight: 400 }}>— the matching copy is kept on another account</span>
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => setDedupedOpen(open => !open)}
+                style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', fontSize: 12.5, textAlign: 'left' }}
+              >
+                <span style={{ color: 'var(--warning)' }}>{dedupedOpen ? '▾' : '▸'}</span>
+                <span style={{ fontWeight: 600 }}>Removed as duplicates ({visibleDeduped.length})</span>
+                <span style={{ color: 'var(--muted)', fontWeight: 400 }}>— the matching copy is kept on another account</span>
+              </button>
+              <span style={{ paddingRight: 10, display: 'inline-flex' }}>
+                <FeatureExplainer topic="removed-as-duplicates" placement="bottom-left" />
+              </span>
+            </div>
             {dedupedOpen ? (
               <div style={{ maxHeight: 180, overflow: 'auto', borderTop: '1px solid color-mix(in srgb, var(--warning) 24%, var(--border))' }}>
                 {visibleDeduped.map(r => {
@@ -246,6 +274,7 @@ export default function ImportBatchDetail({
           <TransactionListTable
             rows={rows}
             categories={categories}
+            {...bulk.tableProps}
             onCategorySave={handleCategorySave}
             onAddCategory={onAddCategory}
             onRowsChange={setRows}

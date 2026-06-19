@@ -69,10 +69,11 @@ function RuleModal({ prompt, onSave, onCancel }) {
         setPendingMerge({ ruleData, applyToExisting, existingRuleId: updated.existing_rule_id, fromEdit: true, editedRuleId: existingRule.id })
         return
       }
+      let applied = null
       if (applyToExisting) {
-        await txnMutations.applyRule(existingRule.id)
+        applied = await txnMutations.applyRule(existingRule.id)
       }
-      onSave({ applyToExisting, ruleData, ruleId: existingRule.id, updatedExisting: true })
+      onSave({ applyToExisting, ruleData, ruleId: existingRule.id, updatedExisting: true, transactionIds: applied?.transaction_ids })
       return
     }
 
@@ -92,10 +93,11 @@ function RuleModal({ prompt, onSave, onCancel }) {
     }
     // 'created' (new rule) or 'duplicate' (already exists — resolve to it).
     const ruleId = created?.id
+    let applied = null
     if (applyToExisting && ruleId) {
-      await txnMutations.applyRule(ruleId)
+      applied = await txnMutations.applyRule(ruleId)
     }
-    onSave({ applyToExisting, ruleData, ruleId, updatedExisting: created?.status === 'duplicate' })
+    onSave({ applyToExisting, ruleData, ruleId, updatedExisting: created?.status === 'duplicate', transactionIds: applied?.transaction_ids })
   }
 
   async function confirmMerge() {
@@ -105,11 +107,12 @@ function RuleModal({ prompt, onSave, onCancel }) {
     } else {
       await api.createRule(ruleData, { onExisting: 'merge' })
     }
+    let applied = null
     if (applyToExisting && existingRuleId) {
-      await txnMutations.applyRule(existingRuleId)
+      applied = await txnMutations.applyRule(existingRuleId)
     }
     setPendingMerge(null)
-    onSave({ applyToExisting, ruleData, ruleId: existingRuleId, updatedExisting: true })
+    onSave({ applyToExisting, ruleData, ruleId: existingRuleId, updatedExisting: true, transactionIds: applied?.transaction_ids })
   }
 
   return (

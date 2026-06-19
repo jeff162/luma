@@ -20,6 +20,7 @@ import {
 import { Card, Button, Spinner, getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground, OverlayBackdrop, FloatingPanel, AppNoticeDialog } from './ui.jsx'
 import ImportColumnMappingSection from './ImportColumnMappingSection.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 
 const AMOUNT_CONVENTIONS = [
   { value: 'single_signed', label: 'Single column — negative = debit' },
@@ -424,7 +425,10 @@ function ProfileForm({
           </select>
         </div>
         <div>
-          <label htmlFor={`${fid}-amtconv`} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Amount convention</label>
+          <label htmlFor={`${fid}-amtconv`} style={{ fontSize: 11, color: 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+            Amount convention
+            <FeatureExplainer topic="amount-conventions" placement="bottom-left" />
+          </label>
           <select id={`${fid}-amtconv`} value={amtConv} onChange={e => setAmtConv(e.target.value)} style={selStyle}>
             {AMOUNT_CONVENTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
           </select>

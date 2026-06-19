@@ -119,7 +119,7 @@ export function useDetailPanelChrome(onClose, options = {}) {
   const [resizing, setResizing] = useState(false)
   const panelRef = useRef(null)
   const dragOffset = useRef({ x: 0, y: 0 })
-  const resizeStart = useRef({ x: 0, y: 0, width: 0, height: 0 })
+  const resizeStart = useRef({ x: 0, y: 0, left: 0, top: 0, width: 0, height: 0, dir: 'se' })
   const hasDragged = useRef(false)
 
   function clampSize(next) {
@@ -147,10 +147,17 @@ export function useDetailPanelChrome(onClose, options = {}) {
   // Resize converts the panel into floating mode (matching drag) so size and
   // position stay coherent: once the user has explicitly sized a panel, it
   // should stick at that geometry regardless of where it was originally docked.
-  function onResizeStart(e) {
+  // `dir` is the handle's edge/corner ('n','s','e','w','ne','nw','se','sw'); dragging a
+  // west/north edge also moves the panel's origin so the opposite edge stays anchored.
+  function onResizeStart(e, dir = 'se') {
     if (!panelRef.current) return
     const rect = panelRef.current.getBoundingClientRect()
-    resizeStart.current = { x: e.clientX, y: e.clientY, width: rect.width, height: rect.height }
+    resizeStart.current = {
+      x: e.clientX, y: e.clientY,
+      left: rect.left, top: rect.top,
+      width: rect.width, height: rect.height,
+      dir,
+    }
     if (!size) setSize({ width: rect.width, height: rect.height })
     if (!pos) setPos({ x: rect.left, y: rect.top })
     setResizing(true)
@@ -231,12 +238,26 @@ export function useDetailPanelChrome(onClose, options = {}) {
   useEffect(() => {
     if (!resizing) return
     function onMove(e) {
-      const { x, y, width, height } = resizeStart.current
-      const next = clampSize({
-        width: width + (e.clientX - x),
-        height: height + (e.clientY - y),
-      })
-      setSize(next)
+      const { x, y, left, top, width, height, dir } = resizeStart.current
+      const dx = e.clientX - x
+      const dy = e.clientY - y
+      let nextWidth = width
+      let nextHeight = height
+      if (dir.includes('e')) nextWidth = width + dx
+      if (dir.includes('w')) nextWidth = width - dx
+      if (dir.includes('s')) nextHeight = height + dy
+      if (dir.includes('n')) nextHeight = height - dy
+      const clamped = clampSize({ width: nextWidth, height: nextHeight })
+      setSize(clamped)
+      // West/north edges grow the panel toward the origin, so move left/top by however much the
+      // clamped size actually changed — that keeps the opposite (east/south) edge pinned in place.
+      // Clamp against the *new* size (not the panel's stale pre-resize rect) so a horizontal/vertical
+      // viewport clamp doesn't drag the anchored edge off its mark.
+      if (dir.includes('w') || dir.includes('n')) {
+        const nextLeft = dir.includes('w') ? left + (width - clamped.width) : left
+        const nextTop = dir.includes('n') ? top + (height - clamped.height) : top
+        setPos(clampPanelPosition({ x: nextLeft, y: nextTop }, clamped))
+      }
     }
     function onUp() { setResizing(false) }
     window.addEventListener('mousemove', onMove)
@@ -599,6 +620,21 @@ export function DetailTrendChart({ trend, selectedMonth, onSelectMonth }) {
   )
 }
 
+// Resize handles for every edge and corner. Each straddles the panel border (mostly in the exterior
+// gutter) so the grab zones don't sit over the body's scrollbar; edges run between the corner squares.
+// Only the bottom-right corner shows a visible diagonal grip — the rest are invisible hit areas whose
+// cursor advertises them on hover.
+const PANEL_RESIZE_HANDLES = [
+  { dir: 'n', cursor: 'ns-resize', style: { top: -4, left: 16, right: 16, height: 8 } },
+  { dir: 's', cursor: 'ns-resize', style: { bottom: -4, left: 16, right: 16, height: 8 } },
+  { dir: 'e', cursor: 'ew-resize', style: { right: -4, top: 16, bottom: 16, width: 8 } },
+  { dir: 'w', cursor: 'ew-resize', style: { left: -4, top: 16, bottom: 16, width: 8 } },
+  { dir: 'ne', cursor: 'nesw-resize', style: { top: -4, right: -4, width: 16, height: 16 } },
+  { dir: 'nw', cursor: 'nwse-resize', style: { top: -4, left: -4, width: 16, height: 16 } },
+  { dir: 'se', cursor: 'nwse-resize', style: { bottom: -4, right: -4, width: 16, height: 16 } },
+  { dir: 'sw', cursor: 'nesw-resize', style: { bottom: -4, left: -4, width: 16, height: 16 } },
+]
+
 export function DetailPanelShell({
   pos,
   size,
@@ -705,28 +741,31 @@ export function DetailPanelShell({
         <div style={{ flex: 1, overflow: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column' }}>
           {children}
         </div>
-        {onResizeStart && (
+        {onResizeStart && PANEL_RESIZE_HANDLES.map(handle => (
           <div
-            onMouseDown={onResizeStart}
+            key={handle.dir}
+            onMouseDown={e => onResizeStart(e, handle.dir)}
             title="Drag to resize"
             style={{
               position: 'absolute',
-              right: 0, bottom: 0,
-              width: 18, height: 18,
-              cursor: 'nwse-resize',
+              zIndex: 5,
+              cursor: handle.cursor,
               touchAction: 'none',
+              ...handle.style,
             }}
           >
-            <div style={{
-              position: 'absolute',
-              right: 4, bottom: 4,
-              width: 9, height: 9,
-              borderRight: '2px solid var(--muted)',
-              borderBottom: '2px solid var(--muted)',
-              opacity: 0.55,
-            }} />
+            {handle.dir === 'se' && (
+              <div style={{
+                position: 'absolute',
+                right: 8, bottom: 8,
+                width: 9, height: 9,
+                borderRight: '2px solid var(--muted)',
+                borderBottom: '2px solid var(--muted)',
+                opacity: 0.55,
+              }} />
+            )}
           </div>
-        )}
+        ))}
       </div>
     </div>
   )

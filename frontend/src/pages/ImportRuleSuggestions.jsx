@@ -6,6 +6,7 @@ import { Link, useNavigate, useParams, useLocation } from 'react-router-dom'
 import { Card, PageHeader, Button, Spinner } from '../components/ui.jsx'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
 import ImportRuleSuggestionReview from '../components/ImportRuleSuggestionReview.jsx'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
@@ -801,7 +802,10 @@ export default function ImportRuleSuggestions() {
                 </Button>
               )}
             </div>
-            <PageHeader title="Imported Rule Suggestions">
+            <PageHeader
+              title="Imported Rule Suggestions"
+              help={<FeatureExplainer topic="generate-rules" placement="bottom-left" />}
+            >
               <RecategorizeButton
                 pendingCount={recategorizePendingCount}
                 onRun={runRecategorize}

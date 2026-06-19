@@ -83,3 +83,19 @@ export const txnMutations = {
     return result
   },
 }
+
+// Reconcile an in-place transaction list after a rule was applied to existing rows. The rule's apply
+// returns the ids it changed (`transaction_ids`); here we re-fetch *only the affected rows that are
+// currently on screen* by id and merge them back in place. Replacing the scoped list query instead would
+// drop the just-recategorized rows out of a view like "uncategorized only" — the user wants them to stay
+// (with their new category) so the change is visible and a mis-tap is still correctable. No-ops when the
+// rule touched nothing on screen.
+export async function reconcileRowsAfterRuleApply(rows, affectedIds, setRows) {
+  if (!affectedIds?.length || !rows?.length) return
+  const present = new Set(rows.map(row => row.id))
+  const onScreen = affectedIds.filter(id => present.has(id))
+  if (!onScreen.length) return
+  const resp = await api.getTransactions({ ids: onScreen.join(','), limit: onScreen.length })
+  const fresh = new Map((resp?.transactions || []).map(row => [row.id, row]))
+  setRows(prev => prev.map(row => fresh.get(row.id) ?? row))
+}

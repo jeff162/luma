@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react'
 import { AppDialog, Button, getFormControlStyle } from './ui.jsx'
 import CategoryPicker from './CategoryPicker.jsx'
+import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import { api } from '../lib/api.js'
 
 /*
@@ -102,9 +103,10 @@ export default function BulkEditPanel({ count, categories = [], onApply, onCance
   return (
     <AppDialog
       title={`Edit ${count} transaction${count === 1 ? '' : 's'}`}
-      description="Only the fields you enable are changed. Other fields are left as they are."
+      description="Only the fields you enable are changed. Drag the header to move this aside and see the transactions."
       onClose={onCancel}
       width="min(560px, 100%)"
+      draggable
       actions={(
         <>
           <Button variant="ghost" onClick={onCancel}>Cancel</Button>
@@ -126,7 +128,24 @@ export default function BulkEditPanel({ count, categories = [], onApply, onCance
       </FieldRow>
 
       <FieldRow enabled={doAddTags} onToggle={setDoAddTags} label="Add tags">
-        <TagChips tags={allTags} selected={addTagIds} onToggle={toggleIn(setAddTagIds)} tone="add" />
+        {/* Shared picker so a brand-new tag can be invented and added here too — "everywhere a tag can be
+            assigned, it can be created" (same affordance as the rows / detail panel / rule editor). Remove
+            tags stays existing-only chips: you can't create a tag in order to strip it. */}
+        <TagPickerWithCreate
+          allTags={allTags}
+          selectedTagIds={addTagIds}
+          onToggleTag={(tag, present) => setAddTagIds(prev => {
+            const next = new Set(prev)
+            if (present) next.add(tag.id)
+            else next.delete(tag.id)
+            return next
+          })}
+          onTagCreated={created => setAllTags(prev => (
+            prev.some(tag => tag.id === created.id) ? prev : [...prev, created]
+          ))}
+          onClose={() => {}}
+          positioning="relative"
+        />
       </FieldRow>
 
       <FieldRow enabled={doRemoveTags} onToggle={setDoRemoveTags} label="Remove tags">

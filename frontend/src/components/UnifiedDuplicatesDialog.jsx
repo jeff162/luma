@@ -41,6 +41,9 @@ import {
   DETAIL_PANEL_MIN_WIDTH,
   DETAIL_PANEL_MIN_HEIGHT,
 } from './detailShared.jsx'
+import ContextualExplainer from '../help/ContextualExplainer.jsx'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
+import HelpHoverCard from '../help/HelpHoverCard.jsx'
 
 // Sticky UI state for the dialog. Sort survives close/reopen so a user who prefers
 // merchant-asc gets it on the next visit; panel geometry is restored if the user has dragged
@@ -63,9 +66,9 @@ const COMPACT_ACTION_BTN_STYLE = { padding: '3px 8px', fontSize: 11.5, borderRad
 // action. Mirrors the Kind-cell label precedence below (soft flag → Review; a coverage hard-reject
 // with no specific match and not yet resolved → Rejected · review). Returns null for the rest.
 const REVIEW_KIND_PILLS = [
-  { key: 'review', label: 'Review' },
-  { key: 'matched_2d', label: 'Matched ±2 days' },
-  { key: 'no_match', label: 'No specific match' },
+  { key: 'review', label: 'Review', topic: 'cross-account-duplicates' },
+  { key: 'matched_2d', label: 'Matched ±2 days', topic: 'covered-range-review' },
+  { key: 'no_match', label: 'No specific match', topic: 'covered-range-review' },
 ]
 
 // Soft flags need a Keep/Discard/Replace decision. Advisory coverage rejects (already rejected,
@@ -523,6 +526,9 @@ export default function UnifiedDuplicatesDialog({
 
   const dialogHeader = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1 }}>
+      <span onMouseDown={e => e.stopPropagation()} style={{ display: 'inline-flex', flexShrink: 0 }}>
+        <FeatureExplainer topic="duplicate-report" placement="bottom-left" />
+      </span>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
         <div style={{ fontWeight: 600, fontSize: 15 }}>Duplicate detection report — {title}</div>
         <div style={{ fontSize: 12, color: 'var(--muted)' }}>
@@ -573,6 +579,12 @@ export default function UnifiedDuplicatesDialog({
       isTopmost={isTopmost}
     >
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, margin: '-20px -24px', overflow: 'hidden' }}>
+        <ContextualExplainer
+          topic="duplicate-report"
+          active={entries.length > 0}
+          persistentButton={false}
+          style={{ margin: '10px 16px 4px' }}
+        />
         {(ruleBreakdown.length > 0 || reviewKindBreakdown.review || reviewKindBreakdown.matched_2d || reviewKindBreakdown.no_match) ? (
           <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 6, alignItems: 'baseline', background: 'color-mix(in srgb, var(--surface2) 50%, transparent)' }}>
             <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>Show:</span>
@@ -623,21 +635,21 @@ export default function UnifiedDuplicatesDialog({
               const active = activeKindFilter === k.key
               const accent = 'var(--warning)'  // amber = needs attention, matching the Kind-cell styling
               return (
-                <button
-                  key={k.key}
-                  type="button"
-                  title={`Show only "${k.label}" entries (then use the header checkbox to select all)`}
-                  onClick={() => { setActiveKindFilter(active ? null : k.key); setActiveRuleFilter(null) }}
-                  style={{
-                    fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer',
-                    background: active ? accent : `color-mix(in srgb, ${accent} 10%, var(--surface2))`,
-                    color: active ? 'white' : accent,
-                    border: `1px solid color-mix(in srgb, ${accent} 40%, var(--border))`,
-                    fontWeight: active ? 600 : 500,
-                  }}
-                >
-                  {k.label} ({count})
-                </button>
+                <HelpHoverCard key={k.key} topic={k.topic}>
+                  <button
+                    type="button"
+                    onClick={() => { setActiveKindFilter(active ? null : k.key); setActiveRuleFilter(null) }}
+                    style={{
+                      fontSize: 11, padding: '2px 10px', borderRadius: 99, cursor: 'pointer',
+                      background: active ? accent : `color-mix(in srgb, ${accent} 10%, var(--surface2))`,
+                      color: active ? 'white' : accent,
+                      border: `1px solid color-mix(in srgb, ${accent} 40%, var(--border))`,
+                      fontWeight: active ? 600 : 500,
+                    }}
+                  >
+                    {k.label} ({count})
+                  </button>
+                </HelpHoverCard>
               )
             })}
             </div>

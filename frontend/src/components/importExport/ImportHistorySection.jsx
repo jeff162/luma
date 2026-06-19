@@ -14,6 +14,7 @@ import { Button, Card, EmptyState } from '../ui.jsx'
 import { ActionCountBadge, ImportedCategoryUsageInline } from './importPresentational.jsx'
 import { getSuggestedDataSourceName } from '../../lib/importExport/importDraft.js'
 import { summarizeImportOutcome } from '../../lib/importExport/importOutcome.js'
+import ContextualExplainer from '../../help/ContextualExplainer.jsx'
 import {
   summarizeImportedCategorySettings,
   extractImportedCategorySettings,
@@ -126,6 +127,11 @@ export function ImportHistorySection({
               </div>
             </div>
           </div>
+          {dataSourceRows.some(row => row.kind === 'manual' || row.kind === 'unknown') ? (
+            <div style={{ marginBottom: 12 }}>
+              <ContextualExplainer topic="unknown-data-source" active />
+            </div>
+          ) : null}
           <Card style={{ padding: 0, overflow: 'hidden', width: '100%' }}>
             {dataSourceRows.length === 0 ? <EmptyState message="No data sources or temporary drafts yet" /> : (
               <>

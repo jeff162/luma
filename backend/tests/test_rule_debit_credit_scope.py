@@ -137,7 +137,7 @@ class RuleDebitCreditScopeTests(unittest.TestCase):
 
         with self._use_db_path():
             with get_db() as conn:
-                self.assertEqual(_apply_rule_to_existing(conn, rule_id), 1)
+                self.assertEqual(len(_apply_rule_to_existing(conn, rule_id)), 1)
                 txns = conn.execute(
                     "SELECT id, category_id, category_source FROM txn ORDER BY id"
                 ).fetchall()

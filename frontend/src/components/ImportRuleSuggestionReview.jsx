@@ -27,6 +27,7 @@ import {
 import { RuleEditorModal } from './importRuleSuggestions/RuleEditorModal.jsx'
 import { ConflictSetModal } from './importRuleSuggestions/ConflictSetModal.jsx'
 import { MatchingTransactionsModal } from './importRuleSuggestions/MatchingTransactionsModal.jsx'
+import ContextualExplainer from '../help/ContextualExplainer.jsx'
 
 export default function ImportRuleSuggestionReview({
   onLoadSuggestionMatches,
@@ -1952,6 +1953,12 @@ export default function ImportRuleSuggestionReview({
           </div>
         </div>
       </div>
+
+      <ContextualExplainer
+        topic="generate-rules"
+        tipKey="generate-rules-conflicts"
+        active={suggestions.some(suggestion => suggestion.conflict_group_id)}
+      />
 
       {showFullScreenLoading ? (
         <Spinner />

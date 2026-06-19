@@ -5,8 +5,9 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
-import { Spinner, Badge, CategoryMarker } from './ui.jsx'
+import { Button, Spinner, Badge, CategoryMarker } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
+import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import {
   DETAIL_LIST_MAX_HEIGHT,
@@ -67,6 +68,16 @@ export default function CategoryDetail({ category, categories = [], onClose, for
   useEffect(() => {
     setLocalMonthTxns(monthTxns)
   }, [monthTxns])
+
+  // Bulk edit over the selected month's rows for this category. Scope is month + category, so "select
+  // all matching" resolves the full month even when the list is paged; the count comes from the trend row.
+  const bulk = useBulkTransactionEditing({
+    rows: localMonthTxns,
+    setRows: setLocalMonthTxns,
+    total: selectedMonthRow?.count || localMonthTxns.length,
+    filterParams: { month: selectedMonth, category_ids: String(category.id) },
+    categories,
+  })
 
   function saveCategory(txnId, catId, catObj) {
     const cat = catObj || categories.find(c => c.id === catId)
@@ -137,9 +148,16 @@ export default function CategoryDetail({ category, categories = [], onClose, for
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                    <Button variant="ghost" small onClick={bulk.toggle}>
+                      {bulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
+                    </Button>
+                  </div>
+                  <BulkEditChrome controller={bulk} />
                   <TransactionListTable
                     rows={localMonthTxns}
                     categories={categories}
+                    {...bulk.tableProps}
                     onCategorySave={saveCategory}
                     onRowsChange={setLocalMonthTxns}
                     columnConfig={columnConfig}

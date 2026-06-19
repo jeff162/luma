@@ -9,7 +9,7 @@ import { formatDate } from '../lib/utils.js'
 import ImportBatchDetail from '../components/ImportBatchDetail.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
-import { AppConfirmDialog, AppNoticeDialog, Card, PageHeader, Spinner, EmptyState, Input, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, SelectAllCheckbox } from '../components/ui.jsx'
+import { AppConfirmDialog, Card, PageHeader, Spinner, EmptyState, Input, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, SelectAllCheckbox } from '../components/ui.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
@@ -17,11 +17,12 @@ import { MerchantCell, CategoryCell, ContextMenu, useContextMenu, NotePopover, T
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import RuleForm from '../components/RuleForm.jsx'
-import BulkEditPanel from '../components/BulkEditPanel.jsx'
-import { useTransactionSelection, BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
+import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
+import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 
 const COLUMN_DEFS = [
   { key: 'date', label: 'Date', defaultWidth: 100, minWidth: 70 },
@@ -399,15 +400,9 @@ export default function Transactions() {
     () => new URLSearchParams(location.search).get('uncategorized') === '1'
   )
 
-  // Bulk edit state. Selection lives in a shared hook; the filter params below mirror the list fetch
-  // exactly so "select all matching" resolves the same rows server-side.
-  const [bulkMode, setBulkMode] = useState(false)
-  const [showBulkPanel, setShowBulkPanel] = useState(false)
-  const [applyingBulk, setApplyingBulk] = useState(false)
-  const [pendingBulkTrash, setPendingBulkTrash] = useState(false)
-  const [bulkNotice, setBulkNotice] = useState('')
-  const selection = useTransactionSelection()
-
+  // Bulk edit. The filter params below mirror the list fetch exactly so "select all matching" resolves
+  // the same rows server-side. The ledger is the paginated source of truth, so Apply re-fetches (via
+  // onReload) rather than patching rows in place.
   const currentFilterParams = useMemo(() => {
     const sel = filters.selections || []
     const ofType = (type, key = 'id') => sel.filter(s => s.type === type).map(s => s[key])
@@ -430,26 +425,6 @@ export default function Transactions() {
       quick_filter: debouncedQuickFilter || undefined,
     }
   }, [filters, uncategorizedOnly, debouncedQuickFilter])
-
-  const bulkSelectedCount = selection.selectedCount(data.total)
-
-  async function runBulkActions(actions) {
-    if (!actions.length) return
-    setApplyingBulk(true)
-    try {
-      const result = await api.bulkUpdateTransactions(selection.toSelectionPayload(currentFilterParams), actions)
-      selection.clear()
-      setShowBulkPanel(false)
-      setBulkMode(false)
-      setBulkNotice(`Updated ${result.updated_count} transaction${result.updated_count === 1 ? '' : 's'}.`)
-      isFirstLoad.current = true
-      await load()
-    } catch (error) {
-      setBulkNotice(error?.message || 'Bulk update failed.')
-    } finally {
-      setApplyingBulk(false)
-    }
-  }
 
 
   useEffect(() => {
@@ -556,6 +531,19 @@ export default function Transactions() {
       isFirstLoad.current = false
     })
   }, [load])
+
+  const bulk = useBulkTransactionEditing({
+    rows: data.transactions,
+    total: data.total,
+    filterParams: currentFilterParams,
+    categories,
+    onReload: async () => { isFirstLoad.current = true; await load() },
+  })
+  // Aliases so the page's custom PillGridTable select-column wiring (header + per-row checkbox) reads
+  // from the controller without restating `bulk.` at every site.
+  const selection = bulk.selection
+  const bulkMode = bulk.bulkMode
+  const bulkSelectedCount = bulk.selectedCount
 
   const maybeLoadMore = useCallback(() => {
     if (initialLoading || loadingMore) return
@@ -994,6 +982,7 @@ export default function Transactions() {
                 Clear
               </button>
             )}
+            <FeatureExplainer topic="searching-transactions" placement="bottom-left" />
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
             <button
@@ -1011,7 +1000,7 @@ export default function Transactions() {
               {uncategorizedOnly ? '✕ Uncategorized only' : 'Uncategorized only'}
             </button>
             <button
-              onClick={() => { setBulkMode(v => !v); selection.clear() }}
+              onClick={bulk.toggle}
               style={{
                 padding: '4px 11px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
                 border: `1px solid ${bulkMode ? 'var(--accent)' : 'var(--border)'}`,
@@ -1028,55 +1017,7 @@ export default function Transactions() {
           </div>
         </div>
 
-        {bulkMode ? (
-          <div style={{
-            padding: '8px 12px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-            border: '1px solid color-mix(in srgb, var(--accent) 32%, var(--border))',
-            background: 'color-mix(in srgb, var(--accent) 8%, var(--surface2))', borderRadius: 8,
-          }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>
-              {bulkSelectedCount > 0
-                ? `${bulkSelectedCount} selected${selection.allMatching ? ' · all matching the current filter' : ''}`
-                : 'Select transactions to edit, or use the header checkbox to select all.'}
-            </span>
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-              <button
-                onClick={() => setShowBulkPanel(true)}
-                disabled={bulkSelectedCount === 0}
-                style={{
-                  padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
-                  border: 'none', cursor: bulkSelectedCount === 0 ? 'not-allowed' : 'pointer',
-                  background: bulkSelectedCount === 0 ? 'var(--surface)' : 'var(--accent)',
-                  color: bulkSelectedCount === 0 ? 'var(--muted)' : '#fff',
-                }}
-              >
-                Edit…
-              </button>
-              <button
-                onClick={() => setPendingBulkTrash(true)}
-                disabled={bulkSelectedCount === 0}
-                style={{
-                  padding: '5px 12px', borderRadius: 6, fontSize: 12,
-                  border: '1px solid var(--border)', cursor: bulkSelectedCount === 0 ? 'not-allowed' : 'pointer',
-                  background: 'var(--surface)', color: bulkSelectedCount === 0 ? 'var(--muted)' : 'var(--danger)',
-                }}
-              >
-                Move to trash
-              </button>
-              {bulkSelectedCount > 0 ? (
-                <button
-                  onClick={() => selection.clear()}
-                  style={{
-                    padding: '5px 10px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
-                    border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--muted)',
-                  }}
-                >
-                  Clear
-                </button>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
+        <BulkEditChrome controller={bulk} barStyle={{ marginBottom: 12 }} />
 
         {/* Card clips the rounded corners; the inner div is the actual scroll viewport
             so the sticky PillTableHeader inside pins to it. listScrollRef + maybeLoadMore
@@ -1252,38 +1193,6 @@ export default function Transactions() {
           />
         )}
 
-        {showBulkPanel && (
-          <BulkEditPanel
-            count={bulkSelectedCount}
-            categories={categories}
-            applying={applyingBulk}
-            onApply={runBulkActions}
-            onCancel={() => setShowBulkPanel(false)}
-          />
-        )}
-
-        {pendingBulkTrash && (
-          <AppConfirmDialog
-            title={`Move ${bulkSelectedCount} transaction${bulkSelectedCount === 1 ? '' : 's'} to trash?`}
-            description="They are removed from all views but recoverable from Settings → Trash."
-            confirmLabel={applyingBulk ? 'Moving…' : 'Move to trash'}
-            confirmVariant="danger"
-            confirmDisabled={applyingBulk}
-            borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
-            onConfirm={async () => { setPendingBulkTrash(false); await runBulkActions([{ type: 'trash' }]) }}
-            onCancel={() => setPendingBulkTrash(false)}
-            width="min(520px, 100%)"
-          />
-        )}
-
-        {bulkNotice ? (
-          <AppNoticeDialog
-            title="Bulk edit"
-            description={bulkNotice}
-            onClose={() => setBulkNotice('')}
-          />
-        ) : null}
-
         {tagTarget && (
           <div style={{
             position: 'fixed', inset: 0, zIndex: 400,
@@ -1324,6 +1233,7 @@ export default function Transactions() {
                 dateEnd={filters.date?.end || undefined}
                 onCategorized={handlePanelCategorized}
                 onNotesSaved={updateNote}
+                onTagsChanged={updateTags}
                 onTrashed={txnId => setData(prev => ({
                   ...prev,
                   transactions: prev.transactions.filter(t => t.id !== txnId),

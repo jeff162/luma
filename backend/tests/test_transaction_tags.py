@@ -208,7 +208,7 @@ class TransactionTagsTests(unittest.TestCase):
                     """,
                     (tagged_txn_id, other_tag_id),
                 )
-                self.assertEqual(_apply_rule_to_existing(conn, rule_id), 1)
+                self.assertEqual(len(_apply_rule_to_existing(conn, rule_id)), 1)
             ledger = list_transactions(
                 month=None,
                 date_start=None,

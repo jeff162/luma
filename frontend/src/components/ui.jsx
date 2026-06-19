@@ -3,7 +3,7 @@
 
 /* eslint-disable react-refresh/only-export-components -- shared UI kit: primitive components live alongside style helpers used to compose them */
 
-import { forwardRef, useEffect, useId, useRef, useState } from 'react'
+import { forwardRef, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
 
@@ -14,27 +14,84 @@ import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
  */
 
 /*
- * Shared hover/focus tooltip — the one passive hint surface for the app. Themed (so it matches in dark
- * and light, unlike a native `title`), rendered through a portal with fixed positioning so it escapes
+ * Shared hover/focus tooltip — the one hint surface for the app. Themed (so it matches in dark and
+ * light, unlike a native `title`), rendered through a portal with fixed positioning so it escapes
  * ancestor `overflow` clipping (e.g. scrolling tables). `content` may be a string or rich JSX; `tone`
  * shifts the border for warning/validation hints. Trigger wrapper is inline-flex so it doesn't disturb
  * layout. This is the primitive native `title=` and page-local tooltips should migrate onto.
+ *
+ * Two opt-in modes for richer hints:
+ *   - `interactive` keeps the popover alive while the pointer is over it (a brief close delay bridges
+ *     the gap from trigger to popover) and makes it clickable, so the content can hold a link or button.
+ *   - `bare` drops the themed box chrome and only positions `content`, for content that brings its own
+ *     card (e.g. a help summary panel). Combine both for a hover help card.
  */
-export function Tooltip({ children, content, maxWidth = 280, align = 'left', tone = 'neutral' }) {
+export function Tooltip({ children, content, maxWidth = 280, align = 'left', tone = 'neutral', interactive = false, bare = false }) {
   const triggerRef = useRef(null)
+  const tipRef = useRef(null)
+  const [open, setOpen] = useState(false)
   const [pos, setPos] = useState(null)
+  const closeTimer = useRef(null)
+  useEffect(() => () => clearTimeout(closeTimer.current), [])
+  // Position only once the tooltip is mounted, so its real measured size is known. A portaled DOM
+  // tooltip can't paint past the window the way a native `title` can, so the best it can do is stay
+  // fully inside the viewport: clamp horizontally to keep it on-screen, and flip above the trigger
+  // when placing it below would run off the bottom edge.
+  useLayoutEffect(() => {
+    if (!open) { setPos(null); return }
+    const trigger = triggerRef.current?.getBoundingClientRect()
+    const tip = tipRef.current?.getBoundingClientRect()
+    if (!trigger || !tip) return
+    const margin = 8
+    const vw = document.documentElement.clientWidth
+    const vh = document.documentElement.clientHeight
+    let left = align === 'right' ? trigger.right - tip.width : trigger.left
+    left = Math.min(Math.max(margin, left), Math.max(margin, vw - margin - tip.width))
+    let top = trigger.bottom + 6
+    if (top + tip.height > vh - margin) {
+      const above = trigger.top - 6 - tip.height
+      top = above >= margin ? above : Math.max(margin, vh - margin - tip.height)
+    }
+    setPos({ top, left })
+  }, [open, content, align])
   if (!content) return children
   function show() {
-    const rect = triggerRef.current?.getBoundingClientRect()
-    if (!rect) return
-    setPos(align === 'right'
-      ? { top: rect.bottom + 6, right: window.innerWidth - rect.right }
-      : { top: rect.bottom + 6, left: rect.left })
+    clearTimeout(closeTimer.current)
+    setOpen(true)
   }
-  const hide = () => setPos(null)
+  function hide() {
+    if (interactive) closeTimer.current = setTimeout(() => setOpen(false), 140)
+    else setOpen(false)
+  }
   const borderColor = tone === 'warning'
     ? 'color-mix(in srgb, var(--danger) 55%, var(--border))'
     : 'color-mix(in srgb, var(--text) 24%, var(--border))'
+  // Render hidden until measured so the first frame never flashes at an unclamped spot.
+  const positionStyle = {
+    position: 'fixed',
+    top: pos?.top ?? 0,
+    left: pos?.left ?? 0,
+    visibility: pos ? 'visible' : 'hidden',
+    zIndex: 4000,
+    pointerEvents: interactive ? 'auto' : 'none',
+  }
+  // `bare` lets the content supply its own card; otherwise wrap it in the themed hint box.
+  const boxStyle = bare ? positionStyle : {
+    ...positionStyle,
+    background: 'var(--surface)',
+    border: `1px solid ${borderColor}`,
+    borderRadius: 8,
+    padding: '6px 10px',
+    fontSize: 12,
+    color: 'var(--text)',
+    // max-content keeps the tooltip from inheriting a tiny trigger's width as its wrap budget.
+    width: 'max-content',
+    maxWidth,
+    whiteSpace: 'normal',
+    wordBreak: 'break-word',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+    textAlign: 'left',
+  }
   return (
     <span
       ref={triggerRef}
@@ -45,29 +102,13 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
       onBlur={hide}
     >
       {children}
-      {pos ? createPortal(
+      {open ? createPortal(
         <div
+          ref={tipRef}
           role="tooltip"
-          style={{
-            position: 'fixed',
-            top: pos.top,
-            ...(pos.left != null ? { left: pos.left } : { right: pos.right }),
-            zIndex: 4000,
-            background: 'var(--surface)',
-            border: `1px solid ${borderColor}`,
-            borderRadius: 8,
-            padding: '6px 10px',
-            fontSize: 12,
-            color: 'var(--text)',
-            // max-content keeps the tooltip from inheriting a tiny trigger's width as its wrap budget.
-            width: 'max-content',
-            maxWidth,
-            whiteSpace: 'normal',
-            wordBreak: 'break-word',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
-            pointerEvents: 'none',
-            textAlign: 'left',
-          }}
+          onMouseEnter={interactive ? () => clearTimeout(closeTimer.current) : undefined}
+          onMouseLeave={interactive ? hide : undefined}
+          style={boxStyle}
         >
           {content}
         </div>,
@@ -249,6 +290,10 @@ export function OverlayBackdrop({
   padding = 24,
   alignItems = 'center',
   justifyContent = 'center',
+  // 'none' lets clicks fall through to the page behind so a non-blocking floating dialog can sit over
+  // live content (the panel itself re-enables pointer events). Children inherit 'none' unless they opt
+  // back in, so the centered panel must set pointerEvents: 'auto'.
+  pointerEvents = 'auto',
 }) {
   return (
     <div
@@ -266,6 +311,7 @@ export function OverlayBackdrop({
         padding,
         background: tint,
         backdropFilter: blur ? `blur(${blur}px)` : undefined,
+        pointerEvents,
       }}
     >
       {children}
@@ -328,23 +374,68 @@ export function AppDialog({
   bodyStyle,
   footerAlign = 'end',
   dismissOnBackdrop = false,
+  // Opt-in: the header becomes a drag handle and the backdrop turns transparent + click-through, so the
+  // dialog floats over live content the user can still see and interact with (e.g. drag the bulk-edit
+  // form aside to read the transactions behind it). Position is session-only — re-centers on reopen.
+  draggable = false,
 }) {
+  const [drag, setDrag] = useState({ x: 0, y: 0 })
+  const panelRef = useRef(null)
+
+  function startDrag(event) {
+    if (!draggable || event.button !== 0) return
+    event.preventDefault()
+    const panel = panelRef.current
+    const rect = panel?.getBoundingClientRect()
+    const startX = event.clientX
+    const startY = event.clientY
+    const origin = drag
+    // Clamp against the panel's untranslated base position so a margin always stays grabbable on-screen.
+    const margin = 56
+    const baseLeft = rect ? rect.left - origin.x : 0
+    const baseTop = rect ? rect.top - origin.y : 0
+    const minX = rect ? margin - rect.width - baseLeft : -Infinity
+    const maxX = rect ? window.innerWidth - margin - baseLeft : Infinity
+    const minY = rect ? -baseTop : -Infinity
+    const maxY = rect ? window.innerHeight - margin - baseTop : Infinity
+    const clamp = (value, lo, hi) => Math.min(Math.max(value, lo), hi)
+    function onMove(moveEvent) {
+      setDrag({
+        x: clamp(origin.x + moveEvent.clientX - startX, minX, maxX),
+        y: clamp(origin.y + moveEvent.clientY - startY, minY, maxY),
+      })
+    }
+    function onUp() {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   return (
     <OverlayBackdrop
       zIndex={zIndex}
-      tint={tint}
+      tint={draggable ? 'transparent' : tint}
+      blur={draggable ? 0 : 2}
+      pointerEvents={draggable ? 'none' : 'auto'}
       onClick={dismissOnBackdrop ? onClose : undefined}
     >
       <FloatingPanel
+        ref={panelRef}
         onClick={event => event.stopPropagation()}
         style={{
           width,
           border: `1px solid ${borderColor}`,
+          ...(draggable ? { pointerEvents: 'auto', transform: `translate(${drag.x}px, ${drag.y}px)` } : null),
           ...panelStyle,
         }}
       >
         {(title || description) ? (
-          <FloatingPanelHeader style={{ padding: headerPadding }}>
+          <FloatingPanelHeader
+            onMouseDown={draggable ? startDrag : undefined}
+            style={{ padding: headerPadding, ...(draggable ? { cursor: 'move', userSelect: 'none' } : null) }}
+          >
             <div>
               {title ? <div style={{ fontSize: 16, fontWeight: 600 }}>{title}</div> : null}
               {description ? (
@@ -528,14 +619,21 @@ export function DialogActions({ children, align = 'end', style, background = 'va
   )
 }
 
-export function PageHeader({ title, children, leftAdornment }) {
+// `help` is the page-level overview explainer slot: a `?` that sits immediately left of the title, the
+// app's consistent launcher spot for "what is this page" help (pass a node, e.g. <FeatureExplainer …/>,
+// so this primitive stays free of help-module imports). `leftAdornment` renders to the right of the
+// title for page-scoped controls; `children` are the right-aligned actions.
+export function PageHeader({ title, children, leftAdornment, help }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       marginBottom: 24,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 600 }}>{title}</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {help}
+          <h1 style={{ fontSize: 22, fontWeight: 600 }}>{title}</h1>
+        </div>
         {leftAdornment}
       </div>
       <div style={{ display: 'flex', gap: 8 }}>{children}</div>
@@ -693,6 +791,49 @@ export function SelectAllCheckbox({ checked, indeterminate, onChange, title }) {
       title={title}
       style={{ cursor: 'pointer', margin: 0 }}
     />
+  )
+}
+
+// Shared on/off switch for boolean settings. A pill track with a sliding knob (flex alignment
+// positions the knob, so there is no manual offset math), rendered as an accessible role="switch"
+// button with an optional trailing label. Prefer this over a bare checkbox for settings toggles so
+// the look stays consistent across the app.
+export function Toggle({ checked, onChange, label, disabled = false, style }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => { if (!disabled) onChange(!checked) }}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 8,
+        background: 'none', border: 'none', padding: 0,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        color: 'var(--text)', fontSize: 13, lineHeight: 1.4,
+        opacity: disabled ? 0.6 : 1,
+        textAlign: 'left',
+        ...style,
+      }}
+    >
+      <span style={{
+        flex: '0 0 auto',
+        display: 'inline-flex', alignItems: 'center',
+        justifyContent: checked ? 'flex-end' : 'flex-start',
+        width: 34, height: 20, padding: 2, boxSizing: 'border-box',
+        borderRadius: 999,
+        background: checked ? 'var(--accent)' : 'var(--surface2)',
+        border: '1px solid color-mix(in srgb, var(--accent) 20%, var(--border))',
+        transition: 'background 120ms ease',
+      }}>
+        <span style={{
+          width: 14, height: 14, borderRadius: '50%',
+          background: '#fff',
+          boxShadow: '0 1px 2px rgba(15, 23, 42, 0.35)',
+        }} />
+      </span>
+      {label ? <span>{label}</span> : null}
+    </button>
   )
 }
 

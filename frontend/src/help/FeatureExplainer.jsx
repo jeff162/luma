@@ -2,22 +2,37 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useRef, useState } from 'react'
-import { Link, useLocation } from 'react-router-dom'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { HELP_TOPICS_BY_ID } from './content.jsx'
+import { HelpPopoverPanel } from './helpPanel.jsx'
+import { useHelpTopicViewer } from './useHelpTopicViewer.jsx'
+
+// Card chrome for the floating `?` popover (the tip callout supplies its own inline style).
+const HELP_POPOVER_CARD_STYLE = {
+  background: 'var(--surface)',
+  border: '1px solid var(--border)',
+  borderRadius: 10,
+  boxShadow: '0 12px 32px rgba(15,23,42,0.32)',
+  padding: '12px 14px',
+  width: 'min(340px, calc(100vw - 32px))',
+  fontSize: 13,
+  lineHeight: 1.5,
+  color: 'var(--text)',
+}
 
 /*
  * Inline explainer affordance for a feature surface. Renders a small `?` button that
  * opens a popover showing the topic's one-line summary and a "Read more" link to the
- * standalone Help page. Both surfaces consume the same content registry so popover
- * and Help-page text cannot drift.
+ * standalone Help page. Popover, Help page, and the context-triggered tip callout
+ * (ContextualExplainer) all consume the same content registry via `HelpPopoverPanel`,
+ * so their text cannot drift.
  */
 export default function FeatureExplainer({ topic, label = 'About this feature', placement = 'bottom-right' }) {
   const [open, setOpen] = useState(false)
   const popoverRef = useRef(null)
   const buttonRef = useRef(null)
-  const location = useLocation()
   const entry = HELP_TOPICS_BY_ID[topic]
+  const { openTopic, viewerNode } = useHelpTopicViewer()
 
   useDismissibleLayer({
     open,
@@ -52,49 +67,19 @@ export default function FeatureExplainer({ topic, label = 'About this feature', 
         }}
       >?</button>
       {open && (
-        <div
-          ref={popoverRef}
-          role="dialog"
+        <HelpPopoverPanel
+          topic={topic}
+          containerRef={popoverRef}
+          onClose={() => setOpen(false)}
+          onReadMore={() => { setOpen(false); openTopic(topic) }}
           style={{
             position: 'absolute', zIndex: 540,
             ...positionStyle, marginTop: 6,
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 10,
-            boxShadow: '0 12px 32px rgba(15,23,42,0.32)',
-            padding: '12px 14px',
-            width: 'min(340px, calc(100vw - 32px))',
-            fontSize: 13,
-            lineHeight: 1.5,
-            color: 'var(--text)',
+            ...HELP_POPOVER_CARD_STYLE,
           }}
-        >
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{entry.title}</div>
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              style={{
-                background: 'none', border: 'none',
-                color: 'var(--muted)', cursor: 'pointer',
-                fontSize: 16, lineHeight: 1, padding: 0,
-              }}
-              aria-label="Close"
-            >&times;</button>
-          </div>
-          <div style={{ color: 'var(--muted)' }}>{entry.summary}</div>
-          <div style={{ marginTop: 8, textAlign: 'right' }}>
-            <Link
-              to={`/help/${entry.id}`}
-              state={{ from: `${location.pathname}${location.search}${location.hash}` }}
-              onClick={() => setOpen(false)}
-              style={{ fontSize: 12, color: 'var(--accent2)' }}
-            >
-              Read more &rarr;
-            </Link>
-          </div>
-        </div>
+        />
       )}
+      {viewerNode}
     </span>
   )
 }
