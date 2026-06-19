@@ -189,24 +189,29 @@ export default function Help() {
           edge) better than a viewport-clamped DOM tooltip would here. The look-and-feel mismatch is
           an accepted trade for that. See docs/ui-patterns.md on native vs. custom tooltips.
         */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 22 }}>
-          {HELP_SECTIONS.map(section => (
-            HELP_TOPICS.some(t => t.section === section.key) ? (
-              <button
-                key={section.key}
-                type="button"
-                title={section.blurb}
-                onClick={() => scrollToSection(section.key)}
-                style={{
-                  background: 'var(--surface2)', border: '1px solid var(--border)',
-                  borderRadius: 999, padding: '5px 12px', cursor: 'pointer',
-                  color: 'var(--text)', fontSize: 12.5, whiteSpace: 'nowrap',
-                }}
-              >
-                {section.label}
-              </button>
-            ) : null
-          ))}
+        <div style={{ marginBottom: 22 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>
+            Topic index
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, paddingLeft: 12 }}>
+            {HELP_SECTIONS.map(section => (
+              HELP_TOPICS.some(t => t.section === section.key) ? (
+                <button
+                  key={section.key}
+                  type="button"
+                  title={section.blurb}
+                  onClick={() => scrollToSection(section.key)}
+                  style={{
+                    background: 'var(--surface2)', border: '1px solid var(--border)',
+                    borderRadius: 999, padding: '5px 12px', cursor: 'pointer',
+                    color: 'var(--text)', fontSize: 12.5, whiteSpace: 'nowrap',
+                  }}
+                >
+                  {section.label}
+                </button>
+              ) : null
+            ))}
+          </div>
         </div>
 
         {HELP_SECTIONS.map(section => {
