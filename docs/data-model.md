@@ -183,7 +183,7 @@ Categories carry three flags: **`is_active`** (default 1), **`set_aside`** (defa
 
 This is used for things like transfers and credit-card-payment categories.
 
-Categories and groups themselves do **not** have an `owner_id`; the column was dropped in migration `m19_drop_category_owner_id`. The dimensions a user wants to report by — personal/shared, essential/discretionary, business/personal, and similar — are expressed through tags, attached at whichever level matches the user's intent (group, leaf category, or individual transaction). Tag attachment for categories is stored in `category_tag(category_id, tag_id)` with `ON DELETE CASCADE` on both foreign keys, so deleting a tag also drops its `category_tag` rows and deleting a category also drops its attachments. Reporting endpoints (`/summary/by-group`, `/summary/by-category`, `/summary/monthly-trend`, `/summary/monthly-by-group`) no longer accept the old `category_owner_ids` parameter; tag-aware filtering via `tag_ids` is the replacement.
+Categories and groups themselves do **not** have an `owner_id`; the schema does not define that column. The dimensions a user wants to report by — personal/shared, essential/discretionary, business/personal, and similar — are expressed through tags, attached at whichever level matches the user's intent (group, leaf category, or individual transaction). Tag attachment for categories is stored in `category_tag(category_id, tag_id)` with `ON DELETE CASCADE` on both foreign keys, so deleting a tag also drops its `category_tag` rows and deleting a category also drops its attachments. Reporting endpoints (`/summary/by-group`, `/summary/by-category`, `/summary/monthly-trend`, `/summary/monthly-by-group`) no longer accept the old `category_owner_ids` parameter; tag-aware filtering via `tag_ids` is the replacement.
 
 Reporting should not assume every transaction inside an expense or income branch shares the same sign.
 
@@ -383,15 +383,21 @@ The `/preferences` API (`auth.py`) is the single façade: it resolves the scope 
 
 ## Schema evolution
 
-The SQLite schema is versioned and migrated automatically on startup.
+Fresh installs are created directly in the current schema by `init_db` and stamped at
+`CURRENT_VERSION`. The incremental migration chain (v1..v32) that upgraded pre-existing databases
+in place was removed at the Luma rebrand break point, and `CURRENT_VERSION` was reset to `1` as the
+new baseline. There is currently **no in-place migration path**: the supported way to bring data off
+an older database is backup + restore into a fresh install (see the backup envelope note above), not
+migration.
 
-If the schema changes:
+If the schema changes from here:
 
-- add a migration in `backend/db/database.py`
+- update `init_db` in `backend/db/database.py` so fresh databases are created directly in the new
+  shape
 
-- bump the current schema version
-
-- keep migrations idempotent when practical
+- for the first change that must upgrade *existing* databases in place, reintroduce a migration
+  runner starting from this `1` baseline (bump `CURRENT_VERSION`, add the migration, keep it
+  idempotent when practical) — until then, fresh-install schema is the only schema that exists
 
 ## Reporting assumptions
 

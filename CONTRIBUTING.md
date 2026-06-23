@@ -36,7 +36,7 @@ python -m venv venv
 venv\Scripts\activate    # Windows
 source venv/bin/activate # Unix-like shells
 pip install -r requirements.txt
-uvicorn main:app --reload --reload-exclude "db/test_fixtures" --host 0.0.0.0 --port 8000
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ```bash

@@ -4,8 +4,8 @@
 """
 Import placeholder-category coverage.
 
-These tests keep the uncategorized model consistent across import, migration, and
-later filtering by ensuring labels like "Uncategorized" stay as `category_id = NULL`
+These tests keep the uncategorized model consistent across import and later
+filtering by ensuring labels like "Uncategorized" stay as `category_id = NULL`
 instead of becoming real leaf categories under the protected `Unassigned` group.
 """
 
@@ -22,7 +22,6 @@ from backend.db.database import (
     SHARED_OWNER_ID,
     get_db,
     init_db,
-    m14_uncategorized_import_placeholders,
     reset_current_db_path,
     set_current_db_path,
 )
@@ -175,47 +174,6 @@ class ImportUncategorizedPlaceholderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transactions[0]["category_overridden"], 1)
 
         self.assertEqual(self._fetch_unassigned_children(), [{"id": transactions[0]["category_id"], "name": "Subscription"}])
-
-    def test_migration_cleans_existing_uncategorized_leaf(self):
-        account_id = self._insert_account("Checking")
-
-        with self._use_db_path():
-            with get_db() as conn:
-                unassigned_group = conn.execute(
-                    "SELECT id FROM category WHERE system_key = 'unassigned'"
-                ).fetchone()
-                category_id = str(uuid.uuid4())
-                txn_id = str(uuid.uuid4())
-                conn.execute(
-                    """
-                    INSERT INTO category (id, parent_id, name, category_type, sort_order, exclude_from_totals, system_key, import_source_batch_id)
-                    VALUES (?, ?, ?, NULL, 0, 0, NULL, NULL)
-                    """,
-                    (category_id, unassigned_group["id"], "Uncategorized"),
-                )
-                conn.execute(
-                    """
-                    INSERT INTO txn
-                      (id, account_id, owner_id, category_id, amount, merchant_name, display_name, raw_name, date, is_pending,
-                       category_overridden, category_source, imported_category)
-                    VALUES (?, ?, ?, ?, 8.75, 'Merchant', 'Merchant', 'Merchant', '2026-01-02', 0, 1, 'import', 'Uncategorized')
-                    """,
-                    (txn_id, account_id, SHARED_OWNER_ID, category_id),
-                )
-
-                m14_uncategorized_import_placeholders(conn)
-
-                txn = conn.execute(
-                    "SELECT category_id, imported_category, category_source, category_overridden FROM txn WHERE id = ?",
-                    (txn_id,),
-                ).fetchone()
-                remaining = conn.execute("SELECT 1 FROM category WHERE id = ?", (category_id,)).fetchone()
-
-        self.assertIsNone(txn["category_id"])
-        self.assertIsNone(txn["imported_category"])
-        self.assertIsNone(txn["category_source"])
-        self.assertEqual(txn["category_overridden"], 0)
-        self.assertIsNone(remaining)
 
 
 if __name__ == "__main__":

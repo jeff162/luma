@@ -27,9 +27,6 @@ from backend.db.database import (
     SHARED_OWNER_ID,
     get_db,
     init_db,
-    m26_category_is_active,
-    m29_category_set_aside,
-    m30_category_import_pending,
     reset_current_db_path,
     set_current_db_path,
 )
@@ -199,9 +196,9 @@ class InactiveCategoryTests(unittest.IsolatedAsyncioTestCase):
                 ).fetchall()
         return [dict(r) for r in rows]
 
-    # --- migration --------------------------------------------------------------
+    # --- fresh schema -----------------------------------------------------------
 
-    def test_fresh_db_has_active_column_index_and_backfill(self):
+    def test_fresh_db_has_active_columns_index_and_defaults(self):
         with self._use_db_path():
             with get_db() as conn:
                 columns = {row["name"] for row in conn.execute("PRAGMA table_info(category)").fetchall()}
@@ -214,19 +211,15 @@ class InactiveCategoryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(inactive, 0)
                 parked = conn.execute("SELECT COUNT(*) AS n FROM category WHERE set_aside <> 0").fetchone()["n"]
                 self.assertEqual(parked, 0)
-                # New rows default to active (the backfill value) without specifying the column.
+                # New rows default to active without specifying the column.
                 cid = str(uuid.uuid4())
                 conn.execute(
-                    "INSERT INTO category (id, parent_id, name, sort_order, exclude_from_totals) VALUES (?, ?, 'Backfill Probe', 0, 0)",
+                    "INSERT INTO category (id, parent_id, name, sort_order, exclude_from_totals) VALUES (?, ?, 'Default Probe', 0, 0)",
                     (cid, self._unassigned_group_id(conn)),
                 )
                 self.assertEqual(conn.execute("SELECT is_active FROM category WHERE id = ?", (cid,)).fetchone()["is_active"], 1)
                 self.assertEqual(conn.execute("SELECT set_aside FROM category WHERE id = ?", (cid,)).fetchone()["set_aside"], 0)
                 self.assertEqual(conn.execute("SELECT import_pending FROM category WHERE id = ?", (cid,)).fetchone()["import_pending"], 0)
-                # Migrations are idempotent when the columns already exist.
-                m26_category_is_active(conn)
-                m29_category_set_aside(conn)
-                m30_category_import_pending(conn)
 
     # --- deactivate / reactivate ------------------------------------------------
 

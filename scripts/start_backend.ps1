@@ -163,7 +163,7 @@ try {
   Write-Host "Checking/installing backend dependencies. This can take a minute on first run..."
   & $venvPython -m pip install -r backend/requirements.txt
   Write-Host "Starting backend on port $backendPort"
-  & $venvPython -m uvicorn backend.main:app --reload --reload-dir backend --reload-exclude 'backend/db/test_fixtures' --host 0.0.0.0 --port $backendPort
+  & $venvPython -m uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port $backendPort
 } finally {
   Pop-Location
   if (-not [string]::IsNullOrWhiteSpace($LogPath)) {

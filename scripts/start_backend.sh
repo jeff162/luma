@@ -29,7 +29,10 @@ get_env_value() {
   local file="$1"
   local key="$2"
   [[ -f "$file" ]] || return 0
-  grep -E "^${key}=" "$file" | tail -1 | cut -d= -f2-
+  # A missing key is normal (optional setting): grep exits 1, which under `set -o pipefail`
+  # would fail the surrounding command substitution and, with `set -e`, silently kill the
+  # caller. Swallow the no-match so an absent key yields an empty value, not an exit.
+  grep -E "^${key}=" "$file" | tail -1 | cut -d= -f2- || true
 }
 
 port_in_use() {
@@ -208,5 +211,5 @@ cd "$ROOT_DIR"
 echo "Checking/installing backend dependencies. This can take a minute on first run..."
 "$VENV_PYTHON" -m pip install -r backend/requirements.txt
 echo "Starting backend on port $BACKEND_PORT"
-#exec "$VENV_PYTHON" -m uvicorn backend.main:app --reload --reload-dir backend --reload-exclude "backend/db/test_fixtures" --host 0.0.0.0 --port "$BACKEND_PORT"
-"$VENV_PYTHON" -m uvicorn backend.main:app --reload --reload-dir backend --reload-exclude "backend/db/test_fixtures" --host 0.0.0.0 --port "$BACKEND_PORT"
+#exec "$VENV_PYTHON" -m uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port "$BACKEND_PORT"
+"$VENV_PYTHON" -m uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port "$BACKEND_PORT"

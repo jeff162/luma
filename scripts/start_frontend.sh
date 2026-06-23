@@ -35,7 +35,10 @@ get_env_value() {
   local file="$1"
   local key="$2"
   [[ -f "$file" ]] || return 0
-  grep -E "^${key}=" "$file" | tail -1 | cut -d= -f2-
+  # A missing key is normal (optional setting): grep exits 1, which under `set -o pipefail`
+  # would fail the surrounding command substitution and, with `set -e`, silently kill the
+  # caller. Swallow the no-match so an absent key yields an empty value, not an exit.
+  grep -E "^${key}=" "$file" | tail -1 | cut -d= -f2- || true
 }
 
 port_in_use() {

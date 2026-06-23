@@ -24,7 +24,7 @@ A key input to that dial: the user does not review most of the code directly and
 
 - Do not add defensive complexity unless it has a clear payoff. Recovery behavior for unusual or corrupt states can be noted for future consideration without being implemented immediately.
 
--schema changes should normally use migrations
+- Schema changes currently land directly in `init_db` (fresh-install schema only); there is no in-place migration chain since the Luma rebrand break point. See "Schema evolution" in `docs/data-model.md` before reintroducing one.
 
 ## UI And Interaction Preferences
 

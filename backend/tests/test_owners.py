@@ -2,8 +2,8 @@
 
 Deleting a personal owner must (a) unassign that owner's own accounts/transactions through the
 ON DELETE SET NULL foreign keys, and (b) when the household collapses back to a single personal
-owner, clear the now-meaningless "Shared" assignments. The collapse branch referenced the dropped
-`category.owner_id` column (removed in migration m19) and raised
+owner, clear the now-meaningless "Shared" assignments. The collapse branch referenced a
+`category.owner_id` column that the schema no longer defines and raised
 `sqlite3.OperationalError: no such column: owner_id`, turning a routine delete into a 500. This
 exercises that exact branch so the dead reference can't come back.
 """

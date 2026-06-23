@@ -38,7 +38,7 @@ The browser talks only to the local backend API. Core application data and pers
 
 - **`backend/main.py`:** bootstrap, middleware, and router registration
 
-- **`backend/db/database.py`:** SQLite connection handling, schema creation, migrations, and seed data
+- **`backend/db/database.py`:** SQLite connection handling, schema creation, and seed data
 
 - **`backend/routers/`:** feature-oriented API endpoints
 
@@ -291,7 +291,7 @@ Where commands differ, the repo should provide script wrappers or document the 
 
 - **New API behavior:** add or update a router in `backend/routers/`
 
-- **Schema changes:** add a migration in `backend/db/database.py`
+- **Schema changes:** update `init_db` in `backend/db/database.py` (see "Schema evolution" in `docs/data-model.md` — there is currently no in-place migration path)
 
 - **Shared transaction editing/display behavior:** update `TransactionRow.jsx`
 
