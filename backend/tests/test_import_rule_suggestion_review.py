@@ -15,6 +15,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 import uuid
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -504,6 +505,138 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(cats[preserved], (other, "manual"))
         # The row that wasn't part of this suggestion is left alone, not reassigned.
         self.assertEqual(cats[bystander], (other, "import"))
+
+
+    def test_matches_report_scopes_to_row_ids_when_provided(self):
+        # The report must show exactly the card's own rows when given row_ids, not every same-keyword row,
+        # so a generic suggestion's report doesn't sweep in rows owned by other (e.g. discarded) suggestions.
+        account_id = self._insert_account("Card")
+        leaf = self._insert_expense_leaf("FixtureBillPay")
+        batch_id = self._insert_import_batch()
+        r1 = self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=leaf, merchant_name="Zorptech Bill", amount=-10.0)
+        r2 = self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=leaf, merchant_name="Zorptech Bill", amount=-20.0)
+        self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=leaf, merchant_name="Zorptech Bill", amount=-30.0)
+
+        with self._use_db_path():
+            full = get_system_rule_suggestion_matches(BatchRuleSuggestionMatchRequest(keyword="Zorptech Bill"))
+            scoped = get_system_rule_suggestion_matches(BatchRuleSuggestionMatchRequest(keyword="Zorptech Bill", row_ids=[r1, r2]))
+
+        self.assertEqual(full["count"], 3)
+        self.assertEqual(scoped["count"], 2)
+        self.assertEqual({row["id"] for row in scoped["transactions"]}, {r1, r2})
+
+    def test_generated_suggestion_carries_latest_txn_date(self):
+        # The look-back lens hides stale suggestions by recency, so each suggestion must report the most
+        # recent date among the rows it was generated from.
+        account_id = self._insert_account("Card")
+        leaf = self._insert_expense_leaf("Zorptech Monthly")
+        batch_id = self._insert_import_batch()
+        self._seed_monthly_import_transactions(
+            batch_id=batch_id, account_id=account_id, category_id=leaf,
+            merchant_name="Zorptech Monthly", amounts=[-9.99] * 6, start_year=2025,
+        )
+
+        with self._use_db_path():
+            result = get_system_rule_suggestions("")
+
+        sugg = [s for s in result["suggestions"] if s["keyword"] == "zorptech monthly"]
+        self.assertEqual(len(sugg), 1)
+        # 6 monthly rows from 2025-01-15 .. 2025-06-15 → newest is 2025-06-15.
+        self.assertEqual(sugg[0]["latest_txn_date"], "2025-06-15")
+
+    def test_accepted_suggestion_stays_in_list_after_rows_become_rule_sourced(self):
+        # Regression: accepting a suggestion creates a rule and flips its rows to category_source='rule',
+        # so they leave the candidate pool and _generate_rule_suggestions no longer rebuilds the
+        # suggestion. It must still appear in the response under its accepted status — otherwise the
+        # accepted/discarded filters show only the few suggestions whose rows happen to still regenerate
+        # while the summary pills count the full reviewed set, so the list and the counts disagree.
+        account_id = self._insert_account("Primary Checking")
+        category_id = self._insert_expense_leaf("Groceries")
+        batch_id = self._insert_import_batch()
+        row_ids = [
+            self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=category_id, merchant_name="WHOLEFDS BRKLNE", amount=10.99),
+            self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=category_id, merchant_name="WHOLEFDS BRKLNE", amount=20.00),
+        ]
+
+        with self._use_db_path():
+            pending = [s for s in get_system_rule_suggestions("")["suggestions"] if s["review_status"] == "pending"]
+            self.assertEqual(len(pending), 1)
+            suggestion = pending[0]
+
+            # Accept it the way the UI does: create the rule, apply it to the rows (flipping them to
+            # category_source='rule'), then record the acceptance.
+            created = create_rule(RuleCreate(keyword=suggestion["keyword"], category_id=category_id))
+            apply_rule_to_transactions(created["id"], ApplyToTransactionsBody(transaction_ids=row_ids))
+            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+                suggestion_id=suggestion["id"],
+                status="accepted",
+                rule_id=created["id"],
+                keyword=suggestion["keyword"],
+                target_category_id=category_id,
+                target_category_name="Groceries",
+            ))
+
+            after = get_system_rule_suggestions("")
+
+        with self._use_db_path():
+            with get_db() as conn:
+                sources = {
+                    row["id"]: row["category_source"]
+                    for row in conn.execute("SELECT id, category_source FROM txn").fetchall()
+                }
+        # Guard the precondition: without rule-sourced rows the bug can't reproduce.
+        self.assertEqual({sources[row_id] for row_id in row_ids}, {"rule"})
+
+        returned_ids = {s["id"] for s in after["suggestions"]}
+        self.assertIn(suggestion["id"], returned_ids)
+        accepted = [s for s in after["suggestions"] if s["id"] == suggestion["id"]][0]
+        self.assertEqual(accepted["review_status"], "accepted")
+        # The accepted rule's id is surfaced so the editor updates that rule in place instead of
+        # creating a duplicate when an already-accepted suggestion is edited.
+        self.assertEqual(accepted["rule_id"], created["id"])
+
+        # The returned list must match the summary pills the UI renders, status for status.
+        status_counts = Counter(s["review_status"] for s in after["suggestions"])
+        summary = after["review_summary"]
+        self.assertEqual(len(after["suggestions"]), summary["total_count"])
+        self.assertEqual(status_counts["accepted"], summary["accepted_count"])
+        self.assertEqual(status_counts["pending"], summary["pending_count"])
+        self.assertEqual(status_counts["discarded"], summary["discarded_count"])
+
+
+    def test_clearing_owner_on_accept_persists_to_suggestion_entry(self):
+        # Generalizing a rule by removing its owner must be written back into the suggestion record. An
+        # explicit null was previously dropped (only non-null owner_id was stored), so the accepted card
+        # kept its old owner even though the created rule was unscoped.
+        self._save_review_state({
+            "suggestions": {
+                "aji restaurant": {
+                    "keyword": "aji restaurant",
+                    "merchant_label": "AJI RESTAURANT",
+                    "target_category_id": "restaurants",
+                    "target_category_name": "Restaurants",
+                    "owner_id": "owner-jeff",
+                    "owner_name": "Jeff",
+                },
+            },
+            "statuses": {},
+        })
+
+        with self._use_db_path():
+            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+                suggestion_id="aji restaurant",
+                status="accepted",
+                rule_id="rule-1",
+                keyword="aji restaurant",
+                target_category_id="restaurants",
+                target_category_name="Restaurants",
+                owner_id=None,
+            ))
+
+        review_state = self._load_review_state()
+        entry = review_state["suggestions"]["aji restaurant"]
+        self.assertIsNone(entry.get("owner_id"))
+        self.assertEqual(review_state["statuses"]["aji restaurant"]["status"], "accepted")
 
 
 if __name__ == "__main__":

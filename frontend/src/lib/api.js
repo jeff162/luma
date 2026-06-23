@@ -217,6 +217,24 @@ export const api = {
       body: JSON.stringify({ category_id, notes }),
     }),
 
+  // Settle the rows behind a rejected rule suggestion. mode 'keep' records a category as a manual
+  // decision (the existing one, or `category_id` when given — the conflict screen's "keep as a
+  // different category"); mode 'clear' discards it to the `cleared` source (rule-eligible, label kept,
+  // not re-grabbed by a trust-flag re-toggle). Both clear the `import` source and spare manual edits.
+  setRejectedSuggestionDisposition: (transaction_ids, mode, category_id = null) =>
+    request('/transactions/rejected-suggestion-disposition', {
+      method: 'POST',
+      body: JSON.stringify({ transaction_ids, mode, category_id }),
+    }),
+
+  // Undo for the above: restore each row to a previously captured category snapshot (the `rows`
+  // returned by setRejectedSuggestionDisposition).
+  restoreCategorization: (rows) =>
+    request('/transactions/restore-categorization', {
+      method: 'POST',
+      body: JSON.stringify({ rows }),
+    }),
+
   // Re-pin an imported transaction's category as a corrected *file* categorization (keeps it driving
   // rule suggestions), vs overrideCategory which marks it a manual exception.
   setImportedCategory: (txnId, category_id) =>

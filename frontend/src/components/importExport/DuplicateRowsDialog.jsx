@@ -19,39 +19,9 @@ import {
   Spinner,
 } from '../ui.jsx'
 import PillGridTable from '../PillGridTable.jsx'
-import { useUserPreference } from '../../lib/UserPreferencesContext.jsx'
+import { useColumnPreference } from '../../lib/useColumnPreference.js'
 import { formatTransactionAmount } from '../../lib/moneyDisplay.js'
 import { DUPLICATE_ROWS_COLUMNS_PREF_KEY } from '../../lib/importExport/constants.js'
-
-function normalizeDuplicateRowsColumnConfig(savedColumns, defaultColumns) {
-  if (!Array.isArray(defaultColumns) || defaultColumns.length === 0) return []
-
-  const defaultByKey = new Map(defaultColumns.map(column => [column.key, column]))
-  const seen = new Set()
-  const merged = []
-
-  if (Array.isArray(savedColumns)) {
-    for (const savedColumn of savedColumns) {
-      const key = savedColumn?.key
-      if (!defaultByKey.has(key) || seen.has(key)) continue
-      const defaultColumn = defaultByKey.get(key)
-      const requestedWidth = Number(savedColumn?.width)
-      const minWidth = Number(defaultColumn.minWidth || 44)
-      merged.push({
-        ...defaultColumn,
-        width: Number.isFinite(requestedWidth) ? Math.max(minWidth, Math.min(640, requestedWidth)) : defaultColumn.width,
-      })
-      seen.add(key)
-    }
-  }
-
-  for (const defaultColumn of defaultColumns) {
-    if (seen.has(defaultColumn.key)) continue
-    merged.push({ ...defaultColumn })
-  }
-
-  return merged
-}
 
 export function DuplicateRowsDialog({
   rows = [],
@@ -206,15 +176,10 @@ export function DuplicateRowsDialog({
     ]),
     [dataColumnWidths, matchWidthPx, tableHeaders],
   )
-  const [savedDuplicateColumns, setSavedDuplicateColumns] = useUserPreference(DUPLICATE_ROWS_COLUMNS_PREF_KEY, [])
-  const [cols, setCols] = useState(() => normalizeDuplicateRowsColumnConfig(savedDuplicateColumns, defaultColumns))
+  const [cols, handleColumnUpdate] = useColumnPreference(DUPLICATE_ROWS_COLUMNS_PREF_KEY, defaultColumns)
   const [selectedRows, setSelectedRows] = useState(() => new Set())
   const [ruleStates, setRuleStates] = useState({})
   const [sortState, setSortState] = useState({ key: '__row__', dir: 'asc' })
-
-  useEffect(() => {
-    setCols(normalizeDuplicateRowsColumnConfig(savedDuplicateColumns, defaultColumns))
-  }, [defaultColumns, savedDuplicateColumns])
 
   useEffect(() => {
     setSelectedRows(new Set())
@@ -281,11 +246,6 @@ export function DuplicateRowsDialog({
 
   const allImportableSelected = importableRowNumbers.length > 0 && importableRowNumbers.every(row => selectedRows.has(row))
   const selectedImportableCount = importableRowNumbers.filter(row => selectedRows.has(row)).length
-
-  function handleColumnUpdate(nextColumns) {
-    setCols(nextColumns)
-    setSavedDuplicateColumns(nextColumns).catch(() => {})
-  }
 
   function renderGridCell(col, row, rowNumber) {
     if (col.key === '__select__') {

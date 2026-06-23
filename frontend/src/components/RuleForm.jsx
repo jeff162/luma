@@ -1046,6 +1046,7 @@ const RuleForm = forwardRef(function RuleForm({
                 categories={categories}
                 onChange={setCatId}
                 onCategoryCreated={() => onCategoriesChanged?.()}
+                clearable
               />
             </div>
           </div>

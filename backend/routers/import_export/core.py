@@ -287,6 +287,10 @@ class BatchRuleSuggestionMatchRequest(BaseModel):
     account_id: Optional[str] = None
     amount_min: Optional[float] = None
     amount_max: Optional[float] = None
+    # When provided, the report is limited to exactly these transaction ids (the card's own source rows),
+    # so a generic suggestion's report doesn't sweep in same-keyword rows owned by other (e.g. discarded)
+    # suggestions. Omitted -> the keyword/scope match defines the set (legacy behavior).
+    row_ids: Optional[list[str]] = None
 
 
 class BatchDuplicateImportRequest(BaseModel):
@@ -1305,6 +1309,9 @@ def _generate_rule_suggestions(conn, candidate_rows: list[dict], selected_owner_
                     "amount_min": amount_min if amount_scoped else None,
                     "amount_max": amount_max if amount_scoped else None,
                     "txn_count": len(target_rows),
+                    # Most-recent activity for this suggestion, so the review's look-back lens can hide
+                    # stale patterns by recency while counts/threshold stay computed from full history.
+                    "latest_txn_date": max((row["date"] for row in target_rows if row.get("date")), default=None),
                     "conflict_count": max(0, len(by_target) - 1) if needs_resolution else 0,
                     "conflict_group_id": conflict_group_id,
                     "conflict_group_total_rows": conflict_group_total_rows,
@@ -1374,7 +1381,18 @@ def _merge_review_state_suggestions(generated_suggestions: list[dict], review_st
     review_statuses = review_state.get("statuses") or {}
 
     for suggestion_id, entry in (review_state.get("suggestions") or {}).items():
-        if suggestion_id in generated_ids or not isinstance(entry, dict) or not entry.get("synthetic"):
+        if suggestion_id in generated_ids or not isinstance(entry, dict):
+            continue
+        # Re-add entries that no longer regenerate from live rows but still belong in the review:
+        #   - synthetic pending follow-ups (created when an accept only partially covered its rows), and
+        #   - reviewed entries (accepted / discarded / skipped) whose rows have left the candidate pool
+        #     (accepting makes the rows rule-sourced; discard-and-clear drops their category), so
+        #     _generate_rule_suggestions no longer rebuilds them.
+        # These are exactly the entries refresh_rule_suggestion_review keeps, and the summary pills count
+        # them; without re-adding here the accepted/discarded filters showed only the few suggestions
+        # whose rows happened to still regenerate while the pills counted the full reviewed set.
+        status = (review_statuses.get(suggestion_id) or {}).get("status")
+        if not (entry.get("synthetic") or status in RULE_SUGGESTION_REVIEW_STATUSES):
             continue
         if selected_owner_ids and entry.get("owner_id") not in selected_owner_ids:
             continue
@@ -1400,6 +1418,11 @@ def _merge_review_state_suggestions(generated_suggestions: list[dict], review_st
             "needs_resolution": bool(entry.get("needs_resolution")),
             "resolution_reason": entry.get("resolution_reason"),
             "review_status": (review_statuses.get(suggestion_id) or {}).get("status") or "pending",
+            # The rule this suggestion was accepted into, so editing it later updates that rule in place
+            # instead of spawning a duplicate (see the matching field on the generated path below).
+            "rule_id": (review_statuses.get(suggestion_id) or {}).get("rule_id"),
+            # Carried so the matching-transactions report can scope to this suggestion's own rows.
+            "source_row_ids": list(entry.get("source_row_ids") or []),
         })
 
     merged.sort(key=lambda item: (
@@ -1439,7 +1462,11 @@ def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_own
     suggestions, _ = _generate_rule_suggestions(conn, candidate_rows, selected_owner_ids)
 
     for suggestion in suggestions:
-        suggestion["review_status"] = (review_statuses.get(suggestion["id"]) or {}).get("status") or "pending"
+        status_entry = review_statuses.get(suggestion["id"]) or {}
+        suggestion["review_status"] = status_entry.get("status") or "pending"
+        # Carry the accepted rule's id so the editor updates that rule in place rather than creating a
+        # new one (and orphaning the original) when an already-accepted suggestion is edited.
+        suggestion["rule_id"] = status_entry.get("rule_id")
 
     review_summary = review_state.get("summary")
     should_persist = False
@@ -1907,10 +1934,14 @@ def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) ->
         ).fetchall()
         for row in rows:
             # Same precedence as import: the file label only fills rows nothing else has claimed.
-            # Skip manual mappings AND rule-categorized rows — enabling imported categories for a
-            # source must not override a category the user's rules already chose, and must not mint
-            # an unused label category for a row a rule has placed. The label is a bootstrap fallback.
-            if row["category_source"] in ("manual", "rule"):
+            # Skip manual mappings, rule-categorized rows, AND user-cleared rows — enabling imported
+            # categories must not override a category the user's rules already chose, must not mint an
+            # unused label category for a row a rule has placed, and must not resurrect a label the
+            # user deliberately discarded (`category_source = 'cleared'`; see
+            # set_rejected_suggestion_disposition). The label is only a bootstrap fallback for rows
+            # nothing else owns; `cleared` is a distinct source from NULL precisely so this re-grab
+            # can tell "user discarded this" apart from "ordinary uncategorized" (which it still fills).
+            if row["category_source"] in ("manual", "rule", "cleared"):
                 continue
             scope_tokens = batch_account_tokens_by_id.get(row["account_id"]) or [
                 _category_scope_token_for_import_row("", row["account_id"], False, snapshot.get("single_account_new"))
@@ -3604,9 +3635,12 @@ def update_batch_rule_suggestion_review(batch_id: str, body: BatchRuleSuggestion
             suggestion_entries[body.suggestion_id]["target_category_id"] = body.target_category_id
         if body.keyword is not None:
             suggestion_entries[body.suggestion_id]["keyword"] = normalize_rule_keyword(body.keyword)
-        if body.owner_id is not None:
+        # Use model_fields_set so an explicit null clears the field (generalizing a rule by removing its
+        # owner/account). Without this an explicit "clear to none" was dropped and the suggestion kept
+        # its old scope even though the created rule was generalized.
+        if body.owner_id is not None or "owner_id" in body.model_fields_set:
             suggestion_entries[body.suggestion_id]["owner_id"] = body.owner_id or None
-        if body.account_id is not None:
+        if body.account_id is not None or "account_id" in body.model_fields_set:
             suggestion_entries[body.suggestion_id]["account_id"] = body.account_id or None
         if body.amount_min is not None or "amount_min" in body.model_fields_set:
             suggestion_entries[body.suggestion_id]["amount_min"] = body.amount_min
@@ -3693,9 +3727,12 @@ def update_profile_rule_suggestion_review(profile_id: str, body: BatchRuleSugges
             suggestion_entries[body.suggestion_id]["target_category_id"] = body.target_category_id
         if body.keyword is not None:
             suggestion_entries[body.suggestion_id]["keyword"] = normalize_rule_keyword(body.keyword)
-        if body.owner_id is not None:
+        # Use model_fields_set so an explicit null clears the field (generalizing a rule by removing its
+        # owner/account). Without this an explicit "clear to none" was dropped and the suggestion kept
+        # its old scope even though the created rule was generalized.
+        if body.owner_id is not None or "owner_id" in body.model_fields_set:
             suggestion_entries[body.suggestion_id]["owner_id"] = body.owner_id or None
-        if body.account_id is not None:
+        if body.account_id is not None or "account_id" in body.model_fields_set:
             suggestion_entries[body.suggestion_id]["account_id"] = body.account_id or None
         if body.amount_min is not None or "amount_min" in body.model_fields_set:
             suggestion_entries[body.suggestion_id]["amount_min"] = body.amount_min
@@ -3793,9 +3830,12 @@ def update_system_rule_suggestion_review(body: BatchRuleSuggestionReviewUpdateRe
             suggestion_entries[body.suggestion_id]["target_category_id"] = body.target_category_id
         if body.keyword is not None:
             suggestion_entries[body.suggestion_id]["keyword"] = normalize_rule_keyword(body.keyword)
-        if body.owner_id is not None:
+        # Use model_fields_set so an explicit null clears the field (generalizing a rule by removing its
+        # owner/account). Without this an explicit "clear to none" was dropped and the suggestion kept
+        # its old scope even though the created rule was generalized.
+        if body.owner_id is not None or "owner_id" in body.model_fields_set:
             suggestion_entries[body.suggestion_id]["owner_id"] = body.owner_id or None
-        if body.account_id is not None:
+        if body.account_id is not None or "account_id" in body.model_fields_set:
             suggestion_entries[body.suggestion_id]["account_id"] = body.account_id or None
         if body.amount_min is not None or "amount_min" in body.model_fields_set:
             suggestion_entries[body.suggestion_id]["amount_min"] = body.amount_min
@@ -3896,9 +3936,14 @@ def get_system_rule_suggestion_matches(body: BatchRuleSuggestionMatchRequest):
             """
         ).fetchall()
 
+    row_ids_set = {str(value) for value in body.row_ids} if body.row_ids else None
     matching_rows = []
     for base_row in rows:
         row = dict(base_row)
+        # When the caller passes the card's own source rows, the report is exactly those rows — so a
+        # generic suggestion doesn't pull in same-keyword rows owned by other (e.g. discarded) suggestions.
+        if row_ids_set is not None and str(row["id"]) not in row_ids_set:
+            continue
         row["display_amount"] = get_import_display_amount(row["amount"], "single_signed")
         row_keyword = normalize_rule_keyword(
             row["display_name"] or row["merchant_name"] or row["raw_name"] or ""

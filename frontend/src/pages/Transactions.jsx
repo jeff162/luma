@@ -607,12 +607,18 @@ export default function Transactions() {
   }
 
   function saveCategory(txnId, catId, catObj) {
+    setEditId(null)
+    if (catId == null) {
+      // The picker's "Uncategorized" clear: drop the override back to unassigned.
+      reconcileCategorizedRow(txnId, null)
+      txnMutations.uncategorize(txnId)
+      return
+    }
     const cat = catObj || categories.find(c => c.id === catId)
     if (catObj && !categories.find(c => c.id === catObj.id)) {
       setCategories(prev => [...prev, catObj])
     }
     reconcileCategorizedRow(txnId, cat)
-    setEditId(null)
     txnMutations.setCategory(txnId, catId)
   }
 

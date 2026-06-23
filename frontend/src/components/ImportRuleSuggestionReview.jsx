@@ -4,22 +4,27 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { txnMutations } from '../lib/txnMutations.js'
-import { Spinner } from './ui.jsx'
+import { api } from '../lib/api.js'
+import { Spinner, Tooltip } from './ui.jsx'
 import CategoryPicker from './CategoryPicker.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import { TagBadge } from './TagUi.jsx'
 import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 import {
+  IMPORT_RULE_LOOKBACK_CHOICES,
+  IMPORT_RULE_LOOKBACK_PREF_KEY,
   IMPORT_RULE_SORT_PREF_KEY,
   IMPORT_RULE_SORT_STORAGE_KEY,
   buildCategoryDisplayLabel,
   findNearestScrollParent,
   getSuggestionFilterPills,
+  normalizeImportRuleLookback,
   normalizeImportRuleSortOrder,
 } from '../lib/importRuleSuggestions.js'
 import {
   CriteriaGroup,
   ProgressPill,
+  ReportArrowButton,
   SuggestionActionButton,
   SuggestionPill,
   SuggestionStatusBadge,
@@ -27,6 +32,8 @@ import {
 import { RuleEditorModal } from './importRuleSuggestions/RuleEditorModal.jsx'
 import { ConflictSetModal } from './importRuleSuggestions/ConflictSetModal.jsx'
 import { MatchingTransactionsModal } from './importRuleSuggestions/MatchingTransactionsModal.jsx'
+import { ConflictSetCard } from './importRuleSuggestions/ConflictSetCard.jsx'
+import TransactionDetail from './TransactionDetail.jsx'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
 
 export default function ImportRuleSuggestionReview({
@@ -48,6 +55,10 @@ export default function ImportRuleSuggestionReview({
   onSetSuggestionStatusBulk,
   onSaveSuggestionsAsIsBulk,
   onSetSuggestionStatus,
+  onRejectSuggestionDisposition,
+  onBulkRejectDisposition,
+  onApplyConflictSet,
+  applyingConflict,
   editingSuggestionId,
   categories,
   owners,
@@ -70,6 +81,7 @@ export default function ImportRuleSuggestionReview({
   const categoryPickerHasOpenedRef = useRef(false)
   const latestCategoriesRef = useRef(categories)
   const sortControlRef = useRef(null)
+  const lookbackControlRef = useRef(null)
   const listTopRef = useRef(null)
   const [editingKeywordSuggestionId, setEditingKeywordSuggestionId] = useState(null)
   const [editingKeywordDraft, setEditingKeywordDraft] = useState('')
@@ -80,6 +92,7 @@ export default function ImportRuleSuggestionReview({
   const [bulkMenu, setBulkMenu] = useState(null)
   const [suggestionMenu, setSuggestionMenu] = useState(null)
   const [sortMenu, setSortMenu] = useState(null)
+  const [lookbackMenu, setLookbackMenu] = useState(null)
   const [stickyTopOffset, setStickyTopOffset] = useState(0)
   const [singleRowActionOverride, setSingleRowActionOverride] = useState(false)
   const [merchantFilterText, setMerchantFilterText] = useState('')
@@ -100,6 +113,21 @@ export default function ImportRuleSuggestionReview({
     rows: [],
     applyingAll: false,
   })
+  // The match viewer's merchant ↗ opens the standard merchant spending report (TransactionDetail) as a
+  // floating panel above the modal; edits there are reflected back by reloading the match rows.
+  const [payeeDetail, setPayeeDetail] = useState(null)
+  async function openMerchantReport(row) {
+    if (!row?.id) return
+    // The match-row shape is lighter than a full transaction (no category name, source file, tags, or
+    // import evidence), so fetch the canonical record first — otherwise the report paints with gaps.
+    // Fall back to the match row if the fetch fails.
+    try {
+      const result = await api.getTransactions({ ids: row.id })
+      setPayeeDetail(result?.transactions?.[0] || row)
+    } catch {
+      setPayeeDetail(row)
+    }
+  }
 
   useEffect(() => {
     latestCategoriesRef.current = categories
@@ -118,22 +146,89 @@ export default function ImportRuleSuggestionReview({
   )
   const availableOwners = owners
   const showOwnerFilter = availableOwners.length > 1
-  const bulkAvailable = reviewFilter !== 'total'
+  // Conflicts render as ConflictSetCards resolved as a unit, so bulk-select (per-suggestion) is off there.
+  const bulkAvailable = reviewFilter !== 'total' && reviewFilter !== 'conflicts'
   const sortOrder = normalizeImportRuleSortOrder(getPreference(IMPORT_RULE_SORT_PREF_KEY, null))
     || legacySortOrderRef.current
     || 'row_count'
   const normalizedMerchantFilter = merchantFilterText.trim().toLowerCase()
+
+  // Look-back lens: split pending suggestions by recency. The pending/conflicts views show only rows with
+  // activity inside the chosen window (0 = all time); the `older` view shows the complement (the stale
+  // tail), so pending + older = all pending. View filter only — never changes generation or stored state,
+  // and the substance threshold stays full-history. A conflict set is kept whole (any member in-window).
+  const lookbackYears = normalizeImportRuleLookback(getPreference(IMPORT_RULE_LOOKBACK_PREF_KEY, 2))
+  const lookbackCutoff = useMemo(() => {
+    if (!lookbackYears) return null
+    const cutoff = new Date()
+    cutoff.setFullYear(cutoff.getFullYear() - lookbackYears)
+    return cutoff.toISOString().slice(0, 10)
+  }, [lookbackYears])
+  const hasLens = lookbackCutoff != null
+  const lensRelevant = reviewFilter === 'pending' || reviewFilter === 'conflicts' || reviewFilter === 'older'
+  // A conflict set resolves as a unit, so it counts as in-window if ANY of its members is.
+  const inWindowConflictGroups = useMemo(() => {
+    const groups = new Set()
+    if (!lookbackCutoff) return groups
+    for (const suggestion of suggestions) {
+      if (suggestion.conflict_group_id && (suggestion.latest_txn_date || '') >= lookbackCutoff) {
+        groups.add(suggestion.conflict_group_id)
+      }
+    }
+    return groups
+  }, [suggestions, lookbackCutoff])
+  // Pure recency test (no review-status / view logic). Undatable rows count as in-window — we can't call
+  // them stale. With no window, everything is in-window.
+  const inLookbackWindow = useCallback(suggestion => {
+    if (!hasLens) return true
+    if (!suggestion.latest_txn_date) return true
+    if (suggestion.conflict_group_id) return inWindowConflictGroups.has(suggestion.conflict_group_id)
+    return suggestion.latest_txn_date >= lookbackCutoff
+  }, [hasLens, lookbackCutoff, inWindowConflictGroups])
+  // Recency slice for the active view: pending/conflicts show in-window, `older` shows the stale
+  // complement, every other view is unaffected.
+  const passesLensForView = useCallback(suggestion => {
+    if (reviewFilter === 'older') return hasLens && !inLookbackWindow(suggestion)
+    if (reviewFilter === 'pending' || reviewFilter === 'conflicts') return inLookbackWindow(suggestion)
+    return true
+  }, [reviewFilter, hasLens, inLookbackWindow])
+  // Pill counts (member counts, not merchant-filtered, so the pills describe the whole review). The lens
+  // splits pending into the in-window `pending` pill and the stale `older` pill; they sum to all pending.
+  const pendingInWindowCount = useMemo(
+    () => suggestions.filter(s => s.review_status === 'pending' && inLookbackWindow(s)).length,
+    [suggestions, inLookbackWindow],
+  )
+  const pendingOlderCount = useMemo(
+    () => suggestions.filter(s => s.review_status === 'pending' && !inLookbackWindow(s)).length,
+    [suggestions, inLookbackWindow],
+  )
+  // Conflicts pill counts in-window pending conflict GROUPS (one per card), matching the pending pill's lens.
+  const conflictsPillCount = useMemo(() => {
+    const groups = new Set()
+    for (const suggestion of suggestions) {
+      if (suggestion.review_status === 'pending' && suggestion.conflict_group_id && inLookbackWindow(suggestion)) {
+        groups.add(suggestion.conflict_group_id)
+      }
+    }
+    return groups.size
+  }, [suggestions, inLookbackWindow])
 
   useEffect(() => {
     if (migratedSortPreferenceRef.current) return
     const legacySortOrder = legacySortOrderRef.current
     if (hasPreference(IMPORT_RULE_SORT_PREF_KEY) || legacySortOrder === 'row_count') return
     migratedSortPreferenceRef.current = true
-    setPreference(IMPORT_RULE_SORT_PREF_KEY, legacySortOrder).catch(() => {})
+    setPreference(IMPORT_RULE_SORT_PREF_KEY, legacySortOrder).catch(() => { })
   }, [hasPreference, setPreference])
   function matchesReviewFilter(suggestion, filterKey) {
     if (filterKey === 'total') return true
     if (filterKey === 'pending') return suggestion.review_status === 'pending'
+    // Conflicts is the still-pending subset that belongs to a conflict set (a merchant filed under
+    // several categories) — the slice the user resolves as units before the remaining plain pending rules.
+    if (filterKey === 'conflicts') return suggestion.review_status === 'pending' && Boolean(suggestion.conflict_group_id)
+    // `older` is the pending status too — the in/out-of-window split is applied by the lens layer
+    // (passesLensForView), not here.
+    if (filterKey === 'older') return suggestion.review_status === 'pending'
     if (filterKey === 'accepted') return suggestion.review_status === 'accepted'
     if (filterKey === 'deferred') return suggestion.review_status === 'skipped'
     if (filterKey === 'discarded') return suggestion.review_status === 'discarded'
@@ -143,16 +238,19 @@ export default function ImportRuleSuggestionReview({
   const sortSuggestionsForDisplay = useCallback(list => {
     const next = [...list]
     if (sortOrder === 'row_count') {
+      // Group by merchant (keyword) so every suggestion for one merchant sorts together; the group's
+      // combined row count across all members (scope variants + conflicts) drives its position, so a
+      // small owner-scoped variant rides next to its high-volume sibling instead of sinking down the list.
       const grouped = new Map()
       for (const suggestion of next) {
-        const groupKey = suggestion.conflict_group_id || `single:${suggestion.id}`
+        const groupKey = suggestion.keyword || `__id:${suggestion.id}`
         const entry = grouped.get(groupKey) || {
           suggestions: [],
-          totalRows: suggestion.conflict_group_id ? (suggestion.conflict_group_total_rows || suggestion.txn_count || 0) : (suggestion.txn_count || 0),
+          totalRows: 0,
           merchantLabel: String(suggestion.merchant_label || ''),
-          isConflictGroup: Boolean(suggestion.conflict_group_id),
         }
         entry.suggestions.push(suggestion)
+        entry.totalRows += (suggestion.txn_count || 0)
         grouped.set(groupKey, entry)
       }
 
@@ -161,11 +259,11 @@ export default function ImportRuleSuggestionReview({
         return a.merchantLabel.localeCompare(b.merchantLabel, undefined, { sensitivity: 'base' })
       })
 
+      // Within a merchant, biggest first then by category name. Conflict members reorder inside their own
+      // card, so the flat order here only needs to be stable and readable.
       return orderedGroups.flatMap(([, group]) => (
         [...group.suggestions].sort((a, b) => {
-          if (group.isConflictGroup && (a.txn_count || 0) !== (b.txn_count || 0)) {
-            return (b.txn_count || 0) - (a.txn_count || 0)
-          }
+          if ((a.txn_count || 0) !== (b.txn_count || 0)) return (b.txn_count || 0) - (a.txn_count || 0)
           return String(a.target_category_name || '').localeCompare(String(b.target_category_name || ''), undefined, { sensitivity: 'base' })
         })
       ))
@@ -194,15 +292,45 @@ export default function ImportRuleSuggestionReview({
     return { followerIds, leadIds }
   }
 
-  const filteredSuggestions = suggestions.filter(suggestion => {
+  // Stable display order. The list's order is frozen as a sorted id list that refreshes ONLY when the
+  // sort order changes or the SET of suggestions changes (reload / generate / undo / accept-spawned
+  // items) -- never when an individual suggestion's status or row count changes. Acting on one item
+  // (e.g. saving a conflict lead, which drops the group's sort key to a follower's count) must not
+  // reshuffle its siblings out from under the user, who needs to resolve the whole group together.
+  const suggestionIdSetKey = useMemo(
+    () => suggestions.map(suggestion => suggestion.id).slice().sort().join(','),
+    [suggestions],
+  )
+  const displayOrderIds = useMemo(
+    () => sortSuggestionsForDisplay(suggestions).map(suggestion => suggestion.id),
+    // Intentionally keyed only on the id-set and sort order: re-sort on those, not on row content.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [suggestionIdSetKey, sortOrder],
+  )
+
+  const matchesMerchantAndReviewFilter = useCallback(suggestion => {
     const merchantMatches = !normalizedMerchantFilter
       || String(suggestion.merchant_label || '').toLowerCase().includes(normalizedMerchantFilter)
     return merchantMatches && matchesReviewFilter(suggestion, reviewFilter)
-  })
-  const visibleSuggestions = useMemo(
-    () => sortSuggestionsForDisplay(filteredSuggestions),
-    [filteredSuggestions, sortSuggestionsForDisplay],
+  }, [normalizedMerchantFilter, reviewFilter])
+  const filteredSuggestions = suggestions.filter(
+    suggestion => matchesMerchantAndReviewFilter(suggestion) && passesLensForView(suggestion),
   )
+  const visibleSuggestions = useMemo(() => {
+    // Order the currently-visible (filtered) suggestions by the frozen display order. Items missing
+    // from the order (e.g. arrived just before it last refreshed) trail at the end so nothing vanishes.
+    const byId = new Map(filteredSuggestions.map(suggestion => [suggestion.id, suggestion]))
+    const ordered = []
+    for (const id of displayOrderIds) {
+      const suggestion = byId.get(id)
+      if (suggestion) {
+        ordered.push(suggestion)
+        byId.delete(id)
+      }
+    }
+    for (const suggestion of byId.values()) ordered.push(suggestion)
+    return ordered
+  }, [filteredSuggestions, displayOrderIds])
   const visibleConflictContext = useMemo(
     () => getConflictContext(visibleSuggestions),
     [visibleSuggestions],
@@ -251,6 +379,8 @@ export default function ImportRuleSuggestionReview({
   const emptyMessages = {
     total: 'No rule suggestions are available for this import.',
     pending: summary.total_count > 0 ? 'No pending suggestions in this view.' : 'No missing rules were found from the categorized rows in this file.',
+    conflicts: 'No conflicts left to resolve.',
+    older: 'No older suggestions outside the look-back window.',
     accepted: 'No accepted suggestions in this view.',
     deferred: 'No deferred suggestions in this view.',
     discarded: 'No discarded suggestions in this view.',
@@ -307,6 +437,14 @@ export default function ImportRuleSuggestionReview({
     setBulkMenu(null)
   }, [bulkAvailable])
 
+  // The conflicts and older filters only exist while their pill has a count (the pill is hidden
+  // otherwise). Once that count hits zero, drop back to pending so the user isn't stranded on an empty
+  // view with no active pill.
+  useEffect(() => {
+    if (reviewFilter === 'conflicts' && conflictsPillCount === 0) onChangeReviewFilter('pending')
+    else if (reviewFilter === 'older' && pendingOlderCount === 0) onChangeReviewFilter('pending')
+  }, [reviewFilter, conflictsPillCount, pendingOlderCount, onChangeReviewFilter])
+
   useEffect(() => {
     if (!openConflictGroupId) return
     const hasSuggestions = suggestions.some(suggestion => suggestion.conflict_group_id === openConflictGroupId)
@@ -348,11 +486,12 @@ export default function ImportRuleSuggestionReview({
   }, [hoveredRemoveTooltip])
 
   useEffect(() => {
-    if (!bulkMenu && !suggestionMenu && !sortMenu) return undefined
+    if (!bulkMenu && !suggestionMenu && !sortMenu && !lookbackMenu) return undefined
     function dismiss() {
       setBulkMenu(null)
       setSuggestionMenu(null)
       setSortMenu(null)
+      setLookbackMenu(null)
     }
     window.addEventListener('mousedown', dismiss)
     window.addEventListener('scroll', dismiss, true)
@@ -362,7 +501,7 @@ export default function ImportRuleSuggestionReview({
       window.removeEventListener('scroll', dismiss, true)
       window.removeEventListener('resize', dismiss)
     }
-  }, [bulkMenu, suggestionMenu, sortMenu])
+  }, [bulkMenu, suggestionMenu, sortMenu, lookbackMenu])
 
   useEffect(() => {
     if (!bulkMode) {
@@ -410,7 +549,17 @@ export default function ImportRuleSuggestionReview({
   function handleSortOrderChange(nextSortOrder) {
     const normalized = normalizeImportRuleSortOrder(nextSortOrder)
     if (!normalized) return
-    setPreference(IMPORT_RULE_SORT_PREF_KEY, normalized).catch(() => {})
+    setPreference(IMPORT_RULE_SORT_PREF_KEY, normalized).catch(() => { })
+  }
+
+  function handleLookbackChange(nextYears) {
+    setLookbackMenu(null)
+    setPreference(IMPORT_RULE_LOOKBACK_PREF_KEY, normalizeImportRuleLookback(nextYears)).catch(() => { })
+  }
+
+  function lookbackLabel(years) {
+    if (!years) return 'All time'
+    return `${years} year${years === 1 ? '' : 's'}`
   }
 
   function getSuggestionKey(suggestionId) {
@@ -418,10 +567,15 @@ export default function ImportRuleSuggestionReview({
   }
 
   function getBulkActions() {
-    if (reviewFilter === 'pending') {
+    if (reviewFilter === 'pending' || reviewFilter === 'older') {
+      // Discard, keep = settle the suggestions but leave the rows imported (still claimable by a later
+      // apply). Discard, clear = also clear the rows' categories. No bare "Remove" — keeping is the
+      // honest default for "I reviewed these, don't build rules." Same set in the `older` (stale) view,
+      // which is the prime place to bulk-settle the tail.
       return [
         { key: 'defer', label: 'Defer', run: suggestionsToActOn => onSetSuggestionStatusBulk(suggestionsToActOn, 'skipped') },
-        { key: 'remove', label: 'Remove', run: suggestionsToActOn => onSetSuggestionStatusBulk(suggestionsToActOn, 'discarded') },
+        { key: 'discard-keep', label: 'Discard, keep categories', run: suggestionsToActOn => onBulkRejectDisposition(suggestionsToActOn, 'keep') },
+        { key: 'discard-clear', label: 'Discard, clear categories', run: suggestionsToActOn => onBulkRejectDisposition(suggestionsToActOn, 'clear') },
       ]
     }
     if (reviewFilter === 'accepted') {
@@ -597,6 +751,18 @@ export default function ImportRuleSuggestionReview({
     if (!onLoadSuggestionMatches) return
     const resolvedSuggestion = getResolvedSuggestion(suggestion)
     const referenceSuggestion = getConflictReferenceSuggestion(suggestion)
+    // Limit the report to exactly the rows this card represents: a conflict card covers its whole group
+    // (union of member source rows), a single card just its own. This keeps the report's rows matching the
+    // card's "N rows" count instead of every same-keyword row — including ones owned by other suggestions.
+    const scopedRowIds = suggestion.conflict_group_id
+      ? [...new Set(
+          (visibleConflictGroupMembers.get(suggestion.conflict_group_id) || [])
+            .map(id => suggestions.find(item => item.id === id))
+            .filter(Boolean)
+            .flatMap(member => member.source_row_ids || [])
+            .map(String),
+        )]
+      : (resolvedSuggestion.source_row_ids || []).map(String)
     setMatchViewerState({
       open: true,
       loading: true,
@@ -610,6 +776,7 @@ export default function ImportRuleSuggestionReview({
       accountName: resolvedSuggestion.account_name || '',
       amountMin: resolvedSuggestion.amount_min,
       amountMax: resolvedSuggestion.amount_max,
+      rowIds: scopedRowIds,
       count: 0,
       rows: [],
     })
@@ -621,6 +788,7 @@ export default function ImportRuleSuggestionReview({
         account_id: resolvedSuggestion.account_id || null,
         amount_min: resolvedSuggestion.amount_min,
         amount_max: resolvedSuggestion.amount_max,
+        row_ids: scopedRowIds.length ? scopedRowIds : undefined,
       })
       setMatchViewerState(prev => ({
         ...prev,
@@ -645,6 +813,7 @@ export default function ImportRuleSuggestionReview({
       account_id: matchViewerState.accountId,
       amount_min: matchViewerState.amountMin,
       amount_max: matchViewerState.amountMax,
+      row_ids: matchViewerState.rowIds?.length ? matchViewerState.rowIds : undefined,
     })
     setMatchViewerState(prev => ({
       ...prev,
@@ -818,15 +987,15 @@ export default function ImportRuleSuggestionReview({
       ...prev,
       [suggestionKey]: nextValue
         ? {
-            ...(prev[suggestionKey] || {}),
-            cleanName: nextValue,
-            removeRename: false,
-          }
+          ...(prev[suggestionKey] || {}),
+          cleanName: nextValue,
+          removeRename: false,
+        }
         : {
-            ...(prev[suggestionKey] || {}),
-            cleanName: '',
-            removeRename: true,
-          },
+          ...(prev[suggestionKey] || {}),
+          cleanName: '',
+          removeRename: true,
+        },
     }))
     setEditingActionPill(null)
     setEditingActionDraft('')
@@ -868,11 +1037,36 @@ export default function ImportRuleSuggestionReview({
   const resolvedEditingSuggestion = editingSuggestion ? getResolvedSuggestion(editingSuggestion) : null
   const reviewFilterPills = [
     { key: 'total', label: 'total', value: summary.total_count || 0, tone: 'default' },
-    { key: 'pending', label: 'pending', value: summary.pending_count || 0, tone: 'pending' },
+    // Pending is lensed to the in-window count so the pill matches its list; the stale remainder gets its
+    // own `older` pill below, so pending + older = all pending and clicking each shows its own rows.
+    { key: 'pending', label: 'pending', value: pendingInWindowCount, tone: 'pending' },
+    // Only surfaced while there are (in-window) conflicts to resolve: a perpetual "0 conflicts" filter
+    // would be a dead, empty view. It disappears once the last set is settled (and falls back to pending).
+    ...(conflictsPillCount > 0
+      ? [{ key: 'conflicts', label: conflictsPillCount === 1 ? 'conflict' : 'conflicts', value: conflictsPillCount, tone: 'conflict' }]
+      : []),
+    // The stale tail hidden by the look-back lens. Click to see exactly those rows (and bulk-settle them);
+    // hidden when none are stale or the window is All time. Muted tone — it's set-aside-by-recency, not a status.
+    ...(pendingOlderCount > 0
+      ? [{ key: 'older', label: 'older', value: pendingOlderCount, tone: 'older' }]
+      : []),
     { key: 'accepted', label: 'accepted', value: summary.accepted_count || 0, tone: 'accepted' },
     { key: 'deferred', label: 'deferred', value: summary.skipped_count || 0, tone: 'skipped' },
     { key: 'discarded', label: 'discarded', value: summary.discarded_count || 0, tone: 'discarded' },
   ]
+
+  // A title + one-line description for whichever filter is active, so it's always clear what the list
+  // below is showing. Shown on the controls row beneath the pills.
+  const viewHeaders = {
+    total: { title: 'All suggestions', description: 'Every proposed rule, in any state.' },
+    pending: { title: 'Pending', description: 'Proposed rules awaiting a decision.' },
+    conflicts: { title: 'Conflicts', description: 'One merchant filed under several categories — resolve each set.' },
+    older: { title: 'Older', description: `Pending with no activity in the last ${lookbackLabel(lookbackYears).toLowerCase()} — settle in bulk or widen the window.` },
+    accepted: { title: 'Accepted', description: 'Suggestions you turned into rules.' },
+    deferred: { title: 'Deferred', description: 'Suggestions set aside for later.' },
+    discarded: { title: 'Discarded', description: 'Suggestions you dismissed.' },
+  }
+  const activeViewHeader = viewHeaders[reviewFilter] || viewHeaders.pending
 
   function getSuggestionActions(suggestion) {
     const resolvedSuggestion = getResolvedSuggestion(suggestion)
@@ -885,24 +1079,24 @@ export default function ImportRuleSuggestionReview({
     return [
       resolvedSuggestion.target_category_id
         ? {
-            key: 'category',
-            label: `category: ${categoryLabel}`,
-            onRemove: () => removeSuggestionAction(suggestion.id, 'removeCategory'),
-            onMouseDown: () => beginCategoryActionEdit(suggestion),
-          }
+          key: 'category',
+          label: `category: ${categoryLabel}`,
+          onRemove: () => removeSuggestionAction(suggestion.id, 'removeCategory'),
+          onMouseDown: () => beginCategoryActionEdit(suggestion),
+        }
         : null,
       resolvedSuggestion.clean_name_suggestion
         ? {
-            key: 'rename',
-            label: `rename to ${resolvedSuggestion.clean_name_suggestion}`,
-            onRemove: () => removeSuggestionAction(suggestion.id, 'removeRename'),
-            onClick: () => beginRenameActionEdit(suggestion),
-            editing: editingActionPill?.suggestionId === suggestionKey && editingActionPill?.actionKey === 'rename',
-            editValue: editingActionDraft,
-            onEditValueChange: setEditingActionDraft,
-            onEditCommit: () => commitRenameActionEdit(suggestion),
-            onEditCancel: cancelRenameActionEdit,
-          }
+          key: 'rename',
+          label: `rename to ${resolvedSuggestion.clean_name_suggestion}`,
+          onRemove: () => removeSuggestionAction(suggestion.id, 'removeRename'),
+          onClick: () => beginRenameActionEdit(suggestion),
+          editing: editingActionPill?.suggestionId === suggestionKey && editingActionPill?.actionKey === 'rename',
+          editValue: editingActionDraft,
+          onEditValueChange: setEditingActionDraft,
+          onEditCommit: () => commitRenameActionEdit(suggestion),
+          onEditCancel: cancelRenameActionEdit,
+        }
         : null,
     ].filter(Boolean)
   }
@@ -927,13 +1121,26 @@ export default function ImportRuleSuggestionReview({
         label: 'Add tag…',
         onClick: () => beginTagEdit(suggestion),
       })
+      // No rule: reject the suggestion and settle the rows it covered. 'keep' records the file's
+      // category as a manual decision; 'clear' discards it (the `cleared` source). See the page's
+      // rejectSuggestionWithDisposition.
+      actions.push({
+        key: 'reject-keep',
+        label: 'Discard and keep categorization',
+        onClick: () => onRejectSuggestionDisposition(suggestion, 'keep'),
+      })
+      actions.push({
+        key: 'reject-clear',
+        label: 'Discard and remove categorization',
+        onClick: () => onRejectSuggestionDisposition(suggestion, 'clear'),
+      })
+    } else {
+      actions.push({
+        key: 'remove',
+        label: 'Remove',
+        onClick: () => onSetSuggestionStatus(suggestion, 'discarded'),
+      })
     }
-
-    actions.push({
-      key: 'remove',
-      label: 'Remove',
-      onClick: () => onSetSuggestionStatus(suggestion, 'discarded'),
-    })
 
     actions.push({
       key: 'editor',
@@ -1128,54 +1335,131 @@ export default function ImportRuleSuggestionReview({
       <div style={{
         display: 'inline-flex',
         alignItems: 'center',
-        gap: 6,
-        padding: '6px 12px',
+        gap: 5,
+        padding: '3px 9px',
         borderRadius: 999,
         border: '1px solid color-mix(in srgb, var(--border) 72%, white 12%)',
         background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 96%, white 4%), color-mix(in srgb, var(--surface2) 84%, var(--surface)))',
         color: 'var(--text)',
-          boxShadow: '0 4px 12px rgba(15, 23, 42, 0.10), inset 0 1px 0 rgba(255,255,255,0.04)',
-          fontSize: 12,
-          lineHeight: 1.2,
-          opacity: bulkMode ? 0.5 : 1,
-        }}>
-          <span style={{ whiteSpace: 'nowrap' }}>Sort order</span>
-          <button
-            ref={sortControlRef}
-            type="button"
-            onMouseDown={event => event.stopPropagation()}
-            onClick={event => {
-              event.stopPropagation()
-              if (bulkMode) return
-              if (sortMenu) {
-                setSortMenu(null)
-                return
-              }
-              openSortMenu()
-            }}
-            disabled={bulkMode}
-            style={{
-              background: 'none',
-              border: 'none',
-              padding: '0 2px',
-              margin: 0,
-              font: 'inherit',
-              position: 'relative',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4,
-              cursor: bulkMode ? 'not-allowed' : 'pointer',
-              color: 'inherit',
-            }}
-          >
-            <span style={{ fontSize: 12, lineHeight: 1.2, whiteSpace: 'nowrap' }}>
-              {currentSortLabel}
+        boxShadow: '0 4px 12px rgba(15, 23, 42, 0.10), inset 0 1px 0 rgba(255,255,255,0.04)',
+        fontSize: 11.5,
+        lineHeight: 1.2,
+        opacity: bulkMode ? 0.5 : 1,
+      }}>
+        <span style={{ whiteSpace: 'nowrap' }}>Sort order</span>
+        <button
+          ref={sortControlRef}
+          type="button"
+          onMouseDown={event => event.stopPropagation()}
+          onClick={event => {
+            event.stopPropagation()
+            if (bulkMode) return
+            if (sortMenu) {
+              setSortMenu(null)
+              return
+            }
+            openSortMenu()
+          }}
+          disabled={bulkMode}
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: '0 2px',
+            margin: 0,
+            font: 'inherit',
+            position: 'relative',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            cursor: bulkMode ? 'not-allowed' : 'pointer',
+            color: 'inherit',
+          }}
+        >
+          <span style={{ fontSize: 12, lineHeight: 1.2, whiteSpace: 'nowrap' }}>
+            {currentSortLabel}
+          </span>
+          <span style={{ fontSize: 10, lineHeight: 1, color: 'inherit' }}>▾</span>
+        </button>
+      </div>
+    )
+  }
+
+  function openLookbackMenu() {
+    const rect = lookbackControlRef.current?.getBoundingClientRect?.()
+    if (!rect) return
+    const menuWidth = 148
+    const margin = 12
+    const x = Math.max(margin, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - margin))
+    const y = Math.min(rect.bottom + 8, window.innerHeight - 180)
+    setBulkMenu(null)
+    setSuggestionMenu(null)
+    setSortMenu(null)
+    setLookbackMenu({ x, y })
+  }
+
+  // Only meaningful where the lens runs (pending / conflicts / older); hidden elsewhere so it doesn't
+  // imply an effect it isn't having on the accepted/discarded/total views.
+  function renderLookbackControl() {
+    if (!lensRelevant) return null
+    const longestLookbackLabel = IMPORT_RULE_LOOKBACK_CHOICES
+      .map(lookbackLabel)
+      .reduce((longest, label) => (label.length > longest.length ? label : longest), '')
+    return (
+      <div style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        padding: '3px 9px',
+        borderRadius: 999,
+        border: '1px solid color-mix(in srgb, var(--border) 72%, white 12%)',
+        background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface2) 96%, white 4%), color-mix(in srgb, var(--surface2) 84%, var(--surface)))',
+        color: 'var(--text)',
+        boxShadow: '0 4px 12px rgba(15, 23, 42, 0.10), inset 0 1px 0 rgba(255,255,255,0.04)',
+        fontSize: 11.5,
+        lineHeight: 1.2,
+      }}>
+        <span style={{ whiteSpace: 'nowrap' }}>Look back</span>
+        <button
+          ref={lookbackControlRef}
+          type="button"
+          onMouseDown={event => event.stopPropagation()}
+          onClick={event => {
+            event.stopPropagation()
+            if (lookbackMenu) {
+              setLookbackMenu(null)
+              return
+            }
+            openLookbackMenu()
+          }}
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: '0 2px',
+            margin: 0,
+            font: 'inherit',
+            position: 'relative',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            cursor: 'pointer',
+            color: 'inherit',
+          }}
+        >
+          {/* An invisible sizer holds the width of the widest choice ("All time"), so the pill doesn't
+              resize as you flip between "1 year" / "2 years" / "All time". */}
+          <span style={{ display: 'inline-grid', fontSize: 12, lineHeight: 1.2 }}>
+            <span aria-hidden="true" style={{ gridArea: '1 / 1', visibility: 'hidden', whiteSpace: 'nowrap' }}>
+              {longestLookbackLabel}
             </span>
-            <span style={{ fontSize: 10, lineHeight: 1, color: 'inherit' }}>▾</span>
-          </button>
-        </div>
-      )
-    }
+            <span style={{ gridArea: '1 / 1', whiteSpace: 'nowrap' }}>
+              {lookbackLabel(lookbackYears)}
+            </span>
+          </span>
+          <span style={{ fontSize: 10, lineHeight: 1, color: 'inherit' }}>▾</span>
+        </button>
+      </div>
+    )
+  }
 
   function renderMerchantFilterControl() {
     if (merchantFilterOpen) {
@@ -1432,12 +1716,12 @@ export default function ImportRuleSuggestionReview({
       conflictLeadIds: leadIds = conflictLeadIds,
       allowConflictOpen = true,
     } = {},
-    ) {
-      const resolvedSuggestion = getResolvedSuggestion(suggestion)
-      const actionLabels = getSuggestionActions(suggestion)
-      const filterPills = getSuggestionFilterPills(resolvedSuggestion)
-      const isConflictFollower = filterKey === 'pending' && followerIds.has(suggestion.id)
-      const isConflictLead = leadIds.has(suggestion.id)
+  ) {
+    const resolvedSuggestion = getResolvedSuggestion(suggestion)
+    const actionLabels = getSuggestionActions(suggestion)
+    const filterPills = getSuggestionFilterPills(resolvedSuggestion)
+    const isConflictFollower = filterKey === 'pending' && followerIds.has(suggestion.id)
+    const isConflictLead = leadIds.has(suggestion.id)
     const conflictGroupIds = suggestion.conflict_group_id
       ? (visibleConflictGroupMembers.get(suggestion.conflict_group_id) || []).map(getSuggestionKey)
       : []
@@ -1450,71 +1734,71 @@ export default function ImportRuleSuggestionReview({
         : suggestion.review_status === 'discarded'
           ? { label: 'Removed', tone: 'discarded' }
           : null
-      const showStatusBadge = Boolean(
-        statusBadge && (
-          filterKey === 'total'
-          || filterKey === 'accepted'
-          || filterKey === 'deferred'
-          || filterKey === 'discarded'
-        )
+    const showStatusBadge = Boolean(
+      statusBadge && (
+        filterKey === 'total'
+        || filterKey === 'accepted'
+        || filterKey === 'deferred'
+        || filterKey === 'discarded'
       )
-      const rowActionScope = getRowActionScope(suggestion, resolvedSuggestion)
-      const usesSelectedRows = rowActionScope.selected
-      const saveLabel = usesSelectedRows ? 'Save Selected' : 'Save'
-      const deferLabel = usesSelectedRows ? 'Defer Selected' : 'Defer'
-      const resumeLabel = usesSelectedRows ? 'Resume Selected' : 'Resume'
-      const restoreLabel = usesSelectedRows ? 'Restore Selected' : 'Restore'
-      const returnsToPending = suggestion.review_status === 'accepted' || suggestion.review_status === 'skipped'
-      const removeActionStatus = returnsToPending ? 'pending' : 'discarded'
-      const removeTitle = returnsToPending
-        ? (usesSelectedRows
-          ? `Return selected suggestion${rowActionScope.count === 1 ? '' : 's'} to pending`
-          : 'Return suggestion to pending')
-        : (usesSelectedRows
-          ? `Discard selected suggestion${rowActionScope.count === 1 ? '' : 's'}`
-          : 'Discard suggestion')
+    )
+    const rowActionScope = getRowActionScope(suggestion, resolvedSuggestion)
+    const usesSelectedRows = rowActionScope.selected
+    const saveLabel = usesSelectedRows ? 'Save Selected' : 'Save'
+    const deferLabel = usesSelectedRows ? 'Defer Selected' : 'Defer'
+    const resumeLabel = usesSelectedRows ? 'Resume Selected' : 'Resume'
+    const restoreLabel = usesSelectedRows ? 'Restore Selected' : 'Restore'
+    const returnsToPending = suggestion.review_status === 'accepted' || suggestion.review_status === 'skipped'
+    const removeActionStatus = returnsToPending ? 'pending' : 'discarded'
+    const removeTitle = returnsToPending
+      ? (usesSelectedRows
+        ? `Return selected suggestion${rowActionScope.count === 1 ? '' : 's'} to pending`
+        : 'Return suggestion to pending')
+      : (usesSelectedRows
+        ? `Discard selected suggestion${rowActionScope.count === 1 ? '' : 's'}`
+        : 'Discard suggestion')
 
-      return (
-        <div
+    return (
+      <div
         key={suggestion.id}
-          onMouseLeave={() => setHoveredRemoveTooltip(current => (current?.id === suggestion.id ? null : current))}
-          onContextMenu={event => {
-            event.preventDefault()
-            if (bulkMode && bulkAvailable) {
-              event.stopPropagation()
-              setSuggestionMenu(null)
-              setSortMenu(null)
-              setBulkMenu({
-                x: event.clientX,
-                y: event.clientY,
-                scopeIds: getScopedBulkIdsForSuggestion(suggestion),
-              })
-              return
-            }
-            setBulkMenu(null)
+        onMouseLeave={() => setHoveredRemoveTooltip(current => (current?.id === suggestion.id ? null : current))}
+        onContextMenu={event => {
+          event.preventDefault()
+          if (bulkMode && bulkAvailable) {
+            event.stopPropagation()
+            setSuggestionMenu(null)
             setSortMenu(null)
-            setSuggestionMenu({
+            setBulkMenu({
               x: event.clientX,
               y: event.clientY,
-              suggestion,
-              resolvedSuggestion,
+              scopeIds: getScopedBulkIdsForSuggestion(suggestion),
+            })
+            return
+          }
+          setBulkMenu(null)
+          setSortMenu(null)
+          setSuggestionMenu({
+            x: event.clientX,
+            y: event.clientY,
+            suggestion,
+            resolvedSuggestion,
           })
         }}
-          style={{
-            position: 'relative',
-            marginLeft: isConflictFollower ? 30 : 0,
-            // Each card is its own stacking context (position + z-index), so an inline popover (the tag
-            // picker) can't paint over the *next* card unless this card outranks it while open.
-            zIndex: editingTagSuggestionId === getSuggestionKey(suggestion.id)
-              ? 30
-              : (hoveredRemoveTooltip?.id === suggestion.id ? 8 : 0),
-            border: '1px solid var(--border)',
-            borderRadius: 14,
-            overflow: 'visible',
-            isolation: hoveredRemoveTooltip?.id === suggestion.id ? 'isolate' : 'auto',
-            background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))',
-          }}
-        >
+        style={{
+          position: 'relative',
+          marginLeft: isConflictFollower ? 30 : 0,
+          // Each card is its own stacking context (position + z-index), so an inline popover (the tag
+          // picker) can't paint over the *next* card unless this card outranks it while open.
+          zIndex: editingTagSuggestionId === getSuggestionKey(suggestion.id)
+            ? 30
+            : (hoveredRemoveTooltip?.id === suggestion.id ? 8 : 0),
+          border: '1px solid var(--border)',
+          borderRadius: 14,
+          overflow: 'visible',
+          isolation: hoveredRemoveTooltip?.id === suggestion.id ? 'isolate' : 'auto',
+          background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))',
+        }}
+      >
         {isConflictFollower ? (
           <span
             aria-hidden="true"
@@ -1565,62 +1849,63 @@ export default function ImportRuleSuggestionReview({
             tone={statusBadge.tone}
             left={bulkMode ? 42 : 14}
           />
+        ) : null}
+        {suggestion.review_status === 'accepted' ? (
+          <>
+            {hoveredRemoveTooltip?.id === suggestion.id ? (
+              <div style={getRemoveTooltipStyle(hoveredRemoveTooltip.align, hoveredRemoveTooltip.offset)}>
+                {removeTitle}
+                <span style={getRemoveTooltipArrowStyle(hoveredRemoveTooltip.align)} />
+              </div>
             ) : null}
-              {suggestion.review_status !== 'discarded' ? (
-                <>
-                {hoveredRemoveTooltip?.id === suggestion.id ? (
-                  <div style={getRemoveTooltipStyle(hoveredRemoveTooltip.align, hoveredRemoveTooltip.offset)}>
-                    {removeTitle}
-                    <span style={getRemoveTooltipArrowStyle(hoveredRemoveTooltip.align)} />
-                  </div>
-                ) : null}
-                <button
-                  type="button"
-                  aria-label={removeTitle}
-                  onMouseEnter={event => showRemoveTooltip(suggestion.id, removeTitle, event.currentTarget)}
-                  onMouseLeave={() => setHoveredRemoveTooltip(current => (current?.id === suggestion.id ? null : current))}
-                  onFocus={event => showRemoveTooltip(suggestion.id, removeTitle, event.currentTarget)}
-                  onBlur={() => setHoveredRemoveTooltip(current => (current?.id === suggestion.id ? null : current))}
-                  onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, removeActionStatus)}
-                  style={{
-                    position: 'absolute',
-                    top: 10,
-                    right: 10,
-                    zIndex: 1,
-                    border: '1px solid color-mix(in srgb, var(--danger) 22%, var(--border))',
-                    background: 'color-mix(in srgb, var(--surface) 82%, transparent)',
-                    color: 'var(--danger)',
-                    borderRadius: 999,
-                    width: 24,
-                    height: 24,
-                    padding: 0,
-                    fontSize: 13,
-                    fontWeight: 700,
-                    lineHeight: 1,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    cursor: 'pointer',
-                  }}
-                >
-                  ×
-                </button>
-              </>
-            ) : null}
+            <button
+              type="button"
+              aria-label={removeTitle}
+              onMouseEnter={event => showRemoveTooltip(suggestion.id, removeTitle, event.currentTarget)}
+              onMouseLeave={() => setHoveredRemoveTooltip(current => (current?.id === suggestion.id ? null : current))}
+              onFocus={event => showRemoveTooltip(suggestion.id, removeTitle, event.currentTarget)}
+              onBlur={() => setHoveredRemoveTooltip(current => (current?.id === suggestion.id ? null : current))}
+              onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, removeActionStatus)}
+              style={{
+                position: 'absolute',
+                top: 10,
+                right: 10,
+                zIndex: 1,
+                border: '1px solid color-mix(in srgb, var(--danger) 22%, var(--border))',
+                background: 'color-mix(in srgb, var(--surface) 82%, transparent)',
+                color: 'var(--danger)',
+                borderRadius: 999,
+                width: 24,
+                height: 24,
+                padding: 0,
+                fontSize: 13,
+                fontWeight: 700,
+                lineHeight: 1,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+              }}
+            >
+              ×
+            </button>
+          </>
+        ) : null}
         <div style={{
           padding: showStatusBadge
             ? (suggestion.review_status === 'discarded'
-              ? `14px 16px 14px ${bulkMode ? 72 : 44}px`
-              : `14px 52px 14px ${bulkMode ? 72 : 44}px`)
+              ? `11px 16px 11px ${bulkMode ? 72 : 44}px`
+              : `11px 52px 11px ${bulkMode ? 72 : 44}px`)
             : (suggestion.review_status === 'discarded'
-              ? `14px 16px 14px ${bulkMode ? 44 : 16}px`
-              : `14px 52px 14px ${bulkMode ? 44 : 16}px`),
+              ? `11px 16px 11px ${bulkMode ? 44 : 16}px`
+              : `11px 52px 11px ${bulkMode ? 44 : 16}px`),
           display: 'flex',
           alignItems: 'flex-start',
           justifyContent: 'space-between',
           gap: 14,
+          flexWrap: 'wrap',
         }}>
-          <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ minWidth: 0, flex: '1 1 280px' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
               <CriteriaGroup
                 merchantLabel={resolvedSuggestion.merchant_label}
@@ -1636,24 +1921,10 @@ export default function ImportRuleSuggestionReview({
                 onKeywordCancel={cancelKeywordEdit}
               />
               {suggestion.txn_count ? (
-                <button
-                  type="button"
-                  onClick={() => openMatchingTransactionsViewer(suggestion)}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    padding: 0,
-                    margin: 0,
-                    fontSize: 12,
-                    color: 'var(--muted)',
-                    whiteSpace: 'nowrap',
-                    cursor: 'pointer',
-                    textDecoration: 'underline',
-                    textUnderlineOffset: 2,
-                  }}
-                >
+                <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                   {suggestion.txn_count} matching row{suggestion.txn_count === 1 ? '' : 's'}
-                </button>
+                  <ReportArrowButton onClick={() => openMatchingTransactionsViewer(suggestion)} />
+                </span>
               ) : null}
               {showConflictMarker ? (
                 <button
@@ -1682,7 +1953,7 @@ export default function ImportRuleSuggestionReview({
               ) : null}
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
               <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>actions:</span>
               {actionLabels.length > 0 ? actionLabels.map(action => (
                 action.key === 'category' && editingCategorySuggestionId === getSuggestionKey(suggestion.id) ? (
@@ -1735,7 +2006,7 @@ export default function ImportRuleSuggestionReview({
             </div>
 
             {(resolvedSuggestion.tag_ids?.length || editingTagSuggestionId === getSuggestionKey(suggestion.id)) ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
                 <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>tags:</span>
                 {resolvedSuggestion.tag_ids.map(tagId => {
                   const tag = tags.find(item => String(item.id) === String(tagId))
@@ -1788,39 +2059,150 @@ export default function ImportRuleSuggestionReview({
             ) : null}
 
             {suggestion.needs_resolution && filterKey === 'pending' && isConflictLead ? (
-              <div style={{ marginTop: 8, fontSize: 12, color: 'color-mix(in srgb, var(--warning) 72%, var(--text))' }}>
+              <div style={{ marginTop: 6, fontSize: 12, color: 'color-mix(in srgb, var(--warning) 72%, var(--text))' }}>
                 Conflicting category assignments for the same merchant. Pick one or add selection criteria to distinguish them.
               </div>
             ) : null}
           </div>
 
-          <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0, alignItems: 'flex-end' }}>
             {suggestion.review_status === 'discarded' ? (
               <SuggestionActionButton onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, 'pending')}>
                 {restoreLabel}
               </SuggestionActionButton>
             ) : (
               <>
-                <SuggestionActionButton onClick={() => onEditSuggestion(suggestion.id)} active={editingSuggestionId === suggestion.id}>
-                  {editingSuggestionId === suggestion.id ? 'Rule Editor Open' : 'Open Rule Editor'}
-                </SuggestionActionButton>
-                {suggestion.review_status === 'skipped' ? (
-                  <SuggestionActionButton onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, 'pending')}>
-                    {resumeLabel}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <SuggestionActionButton onClick={() => onEditSuggestion(suggestion.id)} active={editingSuggestionId === suggestion.id}>
+                    {editingSuggestionId === suggestion.id ? 'Rule Editor Open' : 'Open Rule Editor'}
                   </SuggestionActionButton>
-                ) : (
-                  <SuggestionActionButton onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, 'skipped')}>
-                    {deferLabel}
-                  </SuggestionActionButton>
-                )}
+                  {suggestion.review_status === 'skipped' ? (
+                    <SuggestionActionButton onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, 'pending')}>
+                      {resumeLabel}
+                    </SuggestionActionButton>
+                  ) : (
+                    <SuggestionActionButton onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, 'skipped')}>
+                      {deferLabel}
+                    </SuggestionActionButton>
+                  )}
+                  {suggestion.review_status !== 'accepted' ? (
+                    <SuggestionActionButton onClick={() => runRowSaveAction(suggestion, resolvedSuggestion)}>
+                      {saveLabel}
+                    </SuggestionActionButton>
+                  ) : null}
+                </div>
                 {suggestion.review_status !== 'accepted' ? (
-                  <SuggestionActionButton onClick={() => runRowSaveAction(suggestion, resolvedSuggestion)}>
-                    {saveLabel}
-                  </SuggestionActionButton>
+                  // Reject the suggestion and settle the rows it covered. The two buttons complete the
+                  // "discard and …" label and are grouped in a bordered chip so it reads as one unit; the
+                  // wording ("…categorization") makes clear it acts on the transactions, not the category.
+                  // 'remove' -> cleared source; 'keep' -> file category becomes a manual decision.
+                  <div style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    border: '1px solid var(--border)', borderRadius: 9, padding: '3px 4px 3px 8px',
+                    background: 'color-mix(in srgb, var(--surface) 70%, transparent)',
+                  }}>
+                    <span style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }}>discard and</span>
+                    <Tooltip content="Discard this proposed rule and clear the transactions' categorization">
+                      <SuggestionActionButton
+                        onClick={() => onRejectSuggestionDisposition(suggestion, 'clear')}
+                        style={{ fontSize: 11, padding: '3px 8px' }}
+                      >
+                        remove categorization
+                      </SuggestionActionButton>
+                    </Tooltip>
+                    <Tooltip content="Discard this proposed rule but keep the transactions' current categorization">
+                      <SuggestionActionButton
+                        onClick={() => onRejectSuggestionDisposition(suggestion, 'keep')}
+                        style={{ fontSize: 11, padding: '3px 8px' }}
+                      >
+                        keep categorization
+                      </SuggestionActionButton>
+                    </Tooltip>
+                  </div>
                 ) : null}
               </>
             )}
           </div>
+        </div>
+      </div>
+    )
+  }
+
+  // A conflict subset (same merchant + scope, different categories) renders as one resolution card. The
+  // members are collected from the whole visible set by conflict_group_id, so a card shows every member
+  // regardless of where they fall in the flat order.
+  function renderConflictSetCard(suggestion) {
+    const members = (visibleConflictGroupMembers.get(suggestion.conflict_group_id) || [])
+      .map(id => visibleSuggestions.find(item => item.id === id))
+      .filter(Boolean)
+      .map(raw => ({
+        ...getResolvedSuggestion(raw),
+        imported_category_id: raw.target_category_id,
+        imported_category_name: raw.target_category_name,
+      }))
+    return (
+      <ConflictSetCard
+        key={`conflict:${suggestion.conflict_group_id}`}
+        members={members}
+        applying={applyingConflict}
+        onApply={winnerId => onApplyConflictSet(members, winnerId)}
+        onDefer={() => onSetSuggestionStatusBulk(members, 'skipped')}
+        onOpenReport={() => openMatchingTransactionsViewer(suggestion)}
+        onEditRule={memberId => onEditSuggestion(memberId)}
+        categories={categories}
+        onSetMemberCategory={(member, categoryId) => commitCategoryActionEdit(member, categoryId)}
+        onCategoryCreated={async () => {
+          const nextCategories = await onCategoriesChanged?.()
+          if (Array.isArray(nextCategories)) latestCategoriesRef.current = nextCategories
+        }}
+      />
+    )
+  }
+
+  // Same-merchant (same keyword) suggestions render together inside one bordered container so the user
+  // can see the whole pattern — scope variants and conflicts — and decide as a unit. A group with a
+  // single item (one plain card, or one conflict set with no variants) renders bare to avoid a redundant
+  // outer border. The combined row count drives the group's sort position (see sortSuggestionsForDisplay).
+  function renderMerchantGroup(group, useConflictCards) {
+    const items = []
+    const seenConflict = new Set()
+    for (const suggestion of group.members) {
+      if (useConflictCards && suggestion.conflict_group_id) {
+        if (seenConflict.has(suggestion.conflict_group_id)) continue
+        seenConflict.add(suggestion.conflict_group_id)
+        items.push({ key: `conflict:${suggestion.conflict_group_id}`, node: renderConflictSetCard(suggestion) })
+      } else {
+        items.push({ key: `single:${suggestion.id}`, node: renderSuggestionCard(suggestion) })
+      }
+    }
+
+    if (items.length <= 1) return items[0]?.node ?? null
+
+    const lead = group.members[0]
+    const totalRows = group.members.reduce((sum, member) => sum + (member.txn_count || 0), 0)
+    const categoryCount = new Set(
+      group.members.map(member => member.target_category_id || `name:${member.target_category_name || ''}`),
+    ).size
+    return (
+      <div
+        key={`merchant:${group.key}`}
+        style={{
+          border: '1px solid color-mix(in srgb, var(--border) 86%, var(--text) 8%)',
+          borderRadius: 16,
+          padding: 12,
+          display: 'grid',
+          gap: 12,
+          background: 'color-mix(in srgb, var(--surface2) 30%, transparent)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', padding: '0 2px' }}>
+          <span style={{ fontWeight: 700, fontSize: 13 }}>{lead.merchant_label}</span>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+            {categoryCount} categor{categoryCount === 1 ? 'y' : 'ies'} · {totalRows} row{totalRows === 1 ? '' : 's'}
+          </span>
+        </div>
+        <div style={{ display: 'grid', gap: 12 }}>
+          {items.map(item => <div key={item.key}>{item.node}</div>)}
         </div>
       </div>
     )
@@ -1834,21 +2216,21 @@ export default function ImportRuleSuggestionReview({
         event.preventDefault()
         setBulkMenu({ x: event.clientX, y: event.clientY, scopeIds: null })
       }}
-        style={{ display: 'grid', gap: 16 }}
-      >
+      style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 12, minWidth: 0 }}
+    >
       <div
         onContextMenu={event => {
           if (!bulkMode || !bulkAvailable) return
           event.preventDefault()
           setBulkMenu({ x: event.clientX, y: event.clientY, scopeIds: null })
         }}
-          style={{
-            position: 'sticky',
-            top: stickyTopOffset,
-            zIndex: 5,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
+        style={{
+          position: 'sticky',
+          top: stickyTopOffset,
+          zIndex: 5,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
           gap: 12,
           flexWrap: 'wrap',
           padding: '10px 12px',
@@ -1860,8 +2242,8 @@ export default function ImportRuleSuggestionReview({
           boxShadow: '0 10px 22px rgba(15, 23, 42, 0.14)',
         }}
       >
-        <div style={{ display: 'grid', gap: 12, width: '100%' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', alignItems: 'center', gap: 10, minHeight: 42, width: '100%' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 12, width: '100%', minWidth: 0 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', alignItems: 'center', gap: 10, minHeight: 42, width: '100%', minWidth: 0 }}>
             <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', whiteSpace: 'nowrap' }}>
               Filters:
             </span>
@@ -1886,36 +2268,45 @@ export default function ImportRuleSuggestionReview({
               {renderOwnerFilterControl()}
             </div>
           </div>
+          {/* Pills get their own full-width row so the set is stable — clicking a filter no longer
+              reflows them (the per-view controls below changed width before and shoved the pills around). */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
+            {reviewFilterPills.map(pill => (
+              <ProgressPill
+                key={pill.key}
+                label={pill.label}
+                value={pill.value}
+                tone={pill.tone}
+                active={reviewFilter === pill.key}
+                onClick={bulkMode ? undefined : () => onChangeReviewFilter(pill.key)}
+                disabled={bulkMode}
+              />
+            ))}
+          </div>
+          {/* Bottom line: the active view's header on the left, the controls (look back / sort / bulk)
+              pinned to the right so they sit on one consistent line instead of floating mid-panel. */}
           <div
             onContextMenu={event => {
               if (!bulkMode) return
               event.preventDefault()
               setBulkMenu({ x: event.clientX, y: event.clientY, scopeIds: null })
             }}
-            style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', alignItems: 'center', gap: 12, width: '100%' }}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', minWidth: 0 }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0, flex: '1 1 auto' }}>
-              {reviewFilterPills.map(pill => (
-                <ProgressPill
-                  key={pill.key}
-                  label={pill.label}
-                  value={pill.value}
-                  tone={pill.tone}
-                  active={reviewFilter === pill.key}
-                  onClick={bulkMode ? undefined : () => onChangeReviewFilter(pill.key)}
-                  disabled={bulkMode}
-                />
-              ))}
+            <div style={{ minWidth: 0, flex: '1 1 220px' }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{activeViewHeader.title}</span>
+              {activeViewHeader.description ? (
+                <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>{activeViewHeader.description}</span>
+              ) : null}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', justifySelf: 'end' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              {renderLookbackControl()}
               {renderSortControl()}
               <span
                 title={showInlineRefreshing ? 'Updating' : ''}
                 style={{
-                  width: 18,
-                  height: 18,
-                  marginLeft: 8,
-                  marginRight: 2,
+                  width: 16,
+                  height: 16,
                   display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -1933,18 +2324,17 @@ export default function ImportRuleSuggestionReview({
               {bulkAvailable ? (
                 <SuggestionActionButton
                   onClick={() => {
-                      setBulkMode(prev => {
-                        const next = !prev
-                        if (!next) {
-                          setSelectedSuggestionIds([])
-                          setBulkMenu(null)
-                        }
-                        setSortMenu(null)
-                        return next
-                      })
-                    }}
-                    active={bulkMode}
-                  style={{ marginLeft: 12 }}
+                    setBulkMode(prev => {
+                      const next = !prev
+                      if (!next) {
+                        setSelectedSuggestionIds([])
+                        setBulkMenu(null)
+                      }
+                      setSortMenu(null)
+                      return next
+                    })
+                  }}
+                  active={bulkMode}
                 >
                   Bulk Select
                 </SuggestionActionButton>
@@ -1958,6 +2348,9 @@ export default function ImportRuleSuggestionReview({
         topic="generate-rules"
         tipKey="generate-rules-conflicts"
         active={suggestions.some(suggestion => suggestion.conflict_group_id)}
+        // The page header already carries a `?` for this topic, so don't leave a second one behind
+        // when the first-use tip is dismissed.
+        persistentButton={false}
       />
 
       {showFullScreenLoading ? (
@@ -1981,7 +2374,29 @@ export default function ImportRuleSuggestionReview({
         </div>
       ) : (
         <div ref={listTopRef} style={{ display: 'grid', gap: 12 }}>
-          {visibleSuggestions.map(suggestion => renderSuggestionCard(suggestion))}
+          {(() => {
+            // Bulk-select mode stays flat: every suggestion is its own selectable card, no grouping.
+            if (bulkMode) return visibleSuggestions.map(suggestion => renderSuggestionCard(suggestion))
+
+            // Otherwise group same-merchant (same keyword) suggestions into one bordered container so the
+            // whole pattern reads together. In the pending/conflicts/older (all pending) views a conflict
+            // subset still resolves as a unit (ConflictSetCard); other filters show individual status cards.
+            // Groups keep first-seen order, which the keyword-aware sort already arranged by row count.
+            const useConflictCards = reviewFilter === 'pending' || reviewFilter === 'conflicts' || reviewFilter === 'older'
+            const groups = []
+            const groupByKeyword = new Map()
+            for (const suggestion of visibleSuggestions) {
+              const key = suggestion.keyword || `__id:${suggestion.id}`
+              let group = groupByKeyword.get(key)
+              if (!group) {
+                group = { key, members: [] }
+                groupByKeyword.set(key, group)
+                groups.push(group)
+              }
+              group.members.push(suggestion)
+            }
+            return groups.map(group => renderMerchantGroup(group, useConflictCards))
+          })()}
         </div>
       )}
 
@@ -1999,8 +2414,29 @@ export default function ImportRuleSuggestionReview({
         onSetAllCategories={setAllMatchCategories}
         onCategoriesChanged={onCategoriesChanged}
         applyingAll={matchViewerState.applyingAll}
+        onOpenMerchantReport={openMerchantReport}
         onClose={() => setMatchViewerState(prev => ({ ...prev, open: false }))}
       />
+
+      {payeeDetail ? (
+        // Stack the merchant spending report above the match modal (z 905). Detail panels live in the
+        // 401+ band, so a high-z wrapper lifts the whole panel subtree over the modal. Rendered
+        // non-floating (a centered modal) so it doesn't do the floating-panel measure-then-snap on
+        // open. Edits reflect back into the match rows via reloadMatchViewer.
+        <div style={{ position: 'fixed', inset: 0, zIndex: 960 }}>
+          <TransactionDetail
+            txn={payeeDetail}
+            categories={categories}
+            availableTags={tags}
+            showPayeeActivity={false}
+            onClose={() => setPayeeDetail(null)}
+            onCategorized={() => reloadMatchViewer()}
+            onTrashed={() => { reloadMatchViewer(); setPayeeDetail(null) }}
+            onNotesSaved={() => reloadMatchViewer()}
+            onTagsChanged={() => reloadMatchViewer()}
+          />
+        </div>
+      ) : null}
 
       {resolvedEditingSuggestion ? (
         <RuleEditorModal
@@ -2048,29 +2484,34 @@ export default function ImportRuleSuggestionReview({
             onCancelEdit()
           }}
           onDiscard={onCancelEdit}
+          // A conflict member is edited from the ConflictSetCard's "Edit rule"; the editor must only stash
+          // the draft (which feeds the card's Apply), never accept and bypass the set's other dispositions.
+          // The conflict card renders in both the pending and conflicts filters, so draft-only covers both.
+          // Single suggestions (no conflict group) keep the normal accept-on-save editor.
+          draftOnly={Boolean(resolvedEditingSuggestion?.conflict_group_id) && (reviewFilter === 'pending' || reviewFilter === 'conflicts')}
         />
       ) : null}
 
-        {bulkMenu ? (
-          <div
-            onMouseDown={event => event.stopPropagation()}
-            onClick={event => event.stopPropagation()}
-            onContextMenu={event => event.preventDefault()}
+      {bulkMenu ? (
+        <div
+          onMouseDown={event => event.stopPropagation()}
+          onClick={event => event.stopPropagation()}
+          onContextMenu={event => event.preventDefault()}
           style={getMenuPanelStyle(bulkMenu)}
         >
-            <button
-              type="button"
-              onClick={() => selectAllScoped(bulkMenu.scopeIds)}
-              style={getMenuButtonStyle()}
-            >
-              Select All
-            </button>
-            <button
-              type="button"
-              onClick={() => clearScopedSelection(bulkMenu.scopeIds)}
-              style={getMenuButtonStyle()}
-            >
-              Clear All
+          <button
+            type="button"
+            onClick={() => selectAllScoped(bulkMenu.scopeIds)}
+            style={getMenuButtonStyle()}
+          >
+            Select All
+          </button>
+          <button
+            type="button"
+            onClick={() => clearScopedSelection(bulkMenu.scopeIds)}
+            style={getMenuButtonStyle()}
+          >
+            Clear All
           </button>
           <div style={{ height: 1, background: 'var(--border)' }} />
           {bulkActions.map(action => (
@@ -2084,39 +2525,60 @@ export default function ImportRuleSuggestionReview({
               {action.label}
             </button>
           ))}
-          </div>
-        ) : null}
+        </div>
+      ) : null}
 
-        {sortMenu ? (
-          <div
-            onMouseDown={event => event.stopPropagation()}
-            onClick={event => event.stopPropagation()}
-            onContextMenu={event => event.preventDefault()}
-            style={getMenuPanelStyle(sortMenu)}
+      {sortMenu ? (
+        <div
+          onMouseDown={event => event.stopPropagation()}
+          onClick={event => event.stopPropagation()}
+          onContextMenu={event => event.preventDefault()}
+          style={getMenuPanelStyle(sortMenu)}
+        >
+          <button
+            type="button"
+            onClick={() => handleSortChange('alpha')}
+            style={getSortMenuItemStyle(sortOrder === 'alpha')}
           >
-            <button
-              type="button"
-              onClick={() => handleSortChange('alpha')}
-              style={getSortMenuItemStyle(sortOrder === 'alpha')}
-            >
-              <span>A-Z</span>
-              {sortOrder === 'alpha' ? <span style={{ fontSize: 11 }}>✓</span> : null}
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSortChange('row_count')}
-              style={getSortMenuItemStyle(sortOrder === 'row_count')}
-            >
-              <span># rows</span>
-              {sortOrder === 'row_count' ? <span style={{ fontSize: 11 }}>✓</span> : null}
-            </button>
-          </div>
-        ) : null}
+            <span>A-Z</span>
+            {sortOrder === 'alpha' ? <span style={{ fontSize: 11 }}>✓</span> : null}
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSortChange('row_count')}
+            style={getSortMenuItemStyle(sortOrder === 'row_count')}
+          >
+            <span># rows</span>
+            {sortOrder === 'row_count' ? <span style={{ fontSize: 11 }}>✓</span> : null}
+          </button>
+        </div>
+      ) : null}
 
-        {suggestionMenu ? (
-          <div
-            onMouseDown={event => event.stopPropagation()}
-            onClick={event => event.stopPropagation()}
+      {lookbackMenu ? (
+        <div
+          onMouseDown={event => event.stopPropagation()}
+          onClick={event => event.stopPropagation()}
+          onContextMenu={event => event.preventDefault()}
+          style={getMenuPanelStyle(lookbackMenu)}
+        >
+          {IMPORT_RULE_LOOKBACK_CHOICES.map(years => (
+            <button
+              key={years}
+              type="button"
+              onClick={() => handleLookbackChange(years)}
+              style={getSortMenuItemStyle(lookbackYears === years)}
+            >
+              <span>{lookbackLabel(years)}</span>
+              {lookbackYears === years ? <span style={{ fontSize: 11 }}>✓</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {suggestionMenu ? (
+        <div
+          onMouseDown={event => event.stopPropagation()}
+          onClick={event => event.stopPropagation()}
           onContextMenu={event => event.preventDefault()}
           style={getMenuPanelStyle(suggestionMenu)}
         >

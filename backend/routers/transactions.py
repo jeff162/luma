@@ -64,6 +64,29 @@ class TransactionTagUpdate(BaseModel):
     present: bool
 
 
+class RejectedSuggestionDisposition(BaseModel):
+    # When a rule suggestion is rejected, the rows it covered still need a disposition. `mode` chooses
+    # between keeping their imported category as a settled manual decision, or clearing it. See
+    # set_rejected_suggestion_disposition. `category_id` is only meaningful in 'keep' mode: when given
+    # the rows are *re-pointed* to that category as the manual decision (the conflict screen's "keep
+    # these, but as a different category" case); when omitted 'keep' leaves the existing category.
+    transaction_ids: list[str] = []
+    mode: str  # 'keep' | 'clear'
+    category_id: Optional[str] = None
+
+
+class CategorizationSnapshot(BaseModel):
+    # One row's category state captured before a change, for Undo (see restore_categorization).
+    id: str
+    category_id: Optional[str] = None
+    category_source: Optional[str] = None
+    category_overridden: int = 0
+
+
+class CategorizationRestore(BaseModel):
+    rows: list[CategorizationSnapshot] = []
+
+
 # Bulk edit applies one or more field changes to a selection that is either an explicit id list or
 # "everything matching the current filter" (minus a few unchecked ids). Filter mode lets the UI act on
 # rows the user never scrolled into. See bulk_update_transactions.
@@ -333,7 +356,9 @@ def _append_payee_filter(clauses, params, *, payees: Optional[str]):
 # - merchant and category stay broad substring matches so partial labels still work naturally
 # - account labels match normalized whole words/phrases so generic fragments like `check` do not expand to every
 #   `Checking` account and drown out rows whose merchant is actually `CHECK`
-# - date and amount parsing add more precise matches when the input looks like those domains
+# - date and amount parsing add more precise matches when the input looks like those domains; a full
+#   date / year / month jumps to that exact slot, while a year-less partial (a bare month, or month/day)
+#   matches that calendar slot across every year
 # - a `<field>:<value>` prefix (merchant/category/account/date/amount) restricts the search to that one field;
 #   when the prefix is explicit we also drop the account-term exclusion list because the user has asked specifically
 # - the result stays additive with the normal ledger filters instead of replacing them
@@ -402,6 +427,18 @@ def _build_quick_filter_clause(value: str):
         if year:
             or_clauses.append("t.date LIKE ?")
             params.append(f"{year}-%")
+        # Partial dates with no year (a bare month, or month/day) match that calendar slot in every
+        # year — e.g. "9/29" finds Sept 29 across all years, "9" finds every September. Stored dates
+        # are ISO YYYY-MM-DD, so the leading "-" anchors the match to the month/day fields and keeps
+        # a bare month like "09" from also matching a day or a year fragment.
+        month_day = _parse_quick_filter_month_day(search_text)
+        if month_day:
+            or_clauses.append("t.date LIKE ?")
+            params.append(f"%-{month_day}")
+        month = _parse_quick_filter_month(search_text)
+        if month:
+            or_clauses.append("t.date LIKE ?")
+            params.append(f"%-{month}-%")
 
     if want("amount"):
         amount_value = _parse_quick_filter_amount(search_text)
@@ -467,6 +504,27 @@ def _parse_quick_filter_year(value: str) -> Optional[str]:
     # ORs with the amount match, so "2023" also finds $2023.00; the date-year clause is additive.
     text = (value or "").strip()
     return text if re.fullmatch(r"(?:19|20)\d{2}", text) else None
+
+
+def _parse_quick_filter_month_day(value: str) -> Optional[str]:
+    # A month/day with no year (mm/dd or mm-dd) returns "MM-DD" for an any-year match. Validated by
+    # range rather than strptime so leap days like 2/29 are not rejected against an arbitrary year.
+    match = re.fullmatch(r"\s*(\d{1,2})[/-](\d{1,2})\s*", value or "")
+    if not match:
+        return None
+    month, day = int(match.group(1)), int(match.group(2))
+    if 1 <= month <= 12 and 1 <= day <= 31:
+        return f"{month:02d}-{day:02d}"
+    return None
+
+
+def _parse_quick_filter_month(value: str) -> Optional[str]:
+    # A bare 1-12 returns the zero-padded month for an any-year match. It still ORs with the amount
+    # match, so "9" also finds $9.00; the date-month clause is additive.
+    text = (value or "").strip()
+    if re.fullmatch(r"\d{1,2}", text) and 1 <= int(text) <= 12:
+        return f"{int(text):02d}"
+    return None
 
 
 def _parse_quick_filter_amount(value: str) -> Optional[Decimal]:
@@ -821,6 +879,104 @@ def set_imported_category(txn_id: str, body: CategoryOverride):
             (body.category_id, cat["name"], txn_id),
         )
     return {"ok": True}
+
+
+@router.post("/rejected-suggestion-disposition")
+def set_rejected_suggestion_disposition(body: RejectedSuggestionDisposition):
+    # Settle the imported rows behind a rejected rule suggestion. Three outcomes by intent:
+    #
+    #   'keep' (no category_id, or category_id == the row's current category) -> KEEP AS IMPORTED: leave
+    #             the row untouched at `category_source = 'import'`. Keeping the file's own category is not
+    #             an override, so the row stays re-derivable and — crucially — still reclaimable by an
+    #             explicit rule apply / "apply to existing" toast later (a `manual` row would be spared by
+    #             that, defeating the toast). The caller marks the suggestion discarded; the row is fine.
+    #   'keep' with a *different* category_id -> RE-POINT AS MANUAL (`category_source = 'manual'`, locked):
+    #             a genuine override (the conflict screen's "keep these, but as a different category").
+    #             Survives Run categorization and is spared even by an explicit apply.
+    #   'clear' -> discard the category to the `cleared` source (`category_id = NULL`, override = 0).
+    #             Rule-eligible again, but the raw `imported_category` text is retained for audit and the
+    #             `cleared` marker keeps the trust-flag re-derivation from re-applying that label (see
+    #             _set_batch_imported_category_usage). `cleared` is distinct from a plain NULL source
+    #             precisely so the re-derivation can tell "user discarded this" from "ordinary uncategorized".
+    #
+    # All spare a row the user already settled by hand (`category_source = 'manual'`): a deliberate
+    # per-transaction edit is the final say and is never undone here.
+    ids = [str(i) for i in body.transaction_ids if str(i).strip()]
+    mode = (body.mode or "").strip().lower()
+    if mode not in ("keep", "clear"):
+        raise HTTPException(status_code=400, detail="mode must be 'keep' or 'clear'")
+    keep_category_id = (body.category_id or "").strip() or None
+    if keep_category_id and mode != "keep":
+        raise HTTPException(status_code=400, detail="category_id is only valid with mode 'keep'")
+    if not ids:
+        return {"updated": 0, "rows": []}
+    if keep_category_id:
+        # Re-pointing requires an assignable leaf (the shared group guard) that is also active — a stale
+        # decision can't park rows on an inactive branch, the same invariant rules/imports honor.
+        with get_db() as conn:
+            _reject_group_category_assignment(conn, keep_category_id)
+            target = conn.execute(
+                "SELECT COALESCE(is_active, 1) AS is_active FROM category WHERE id = ?",
+                (keep_category_id,),
+            ).fetchone()
+        if not target["is_active"]:
+            raise HTTPException(status_code=400, detail="Cannot assign transactions to an inactive category")
+    # Snapshot the prior state of exactly the rows we are about to change (the same `IS NOT 'manual'`
+    # filter the UPDATE uses) so the caller can stash it for Undo and later POST it to
+    # /restore-categorization. Only the affected rows are returned, so restore touches nothing else.
+    prior: list[dict] = []
+    with get_db() as conn:
+        for chunk in _chunk(ids):
+            placeholders = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"SELECT id, category_id, category_source, category_overridden FROM txn "
+                f"WHERE id IN ({placeholders}) AND category_source IS NOT 'manual'",
+                list(chunk),
+            ).fetchall()
+            if mode == "keep" and keep_category_id:
+                # Re-point only the rows whose category actually changes. Keeping a row at the category it
+                # already has is not an override, so it stays `import` (re-derivable, toast-claimable) —
+                # only a genuine move to a different category becomes `manual`.
+                changing = [row for row in rows if str(row["category_id"] or "") != str(keep_category_id)]
+                prior.extend(dict(row) for row in changing)
+                for change_chunk in _chunk([row["id"] for row in changing]):
+                    change_placeholders = ",".join("?" * len(change_chunk))
+                    conn.execute(
+                        f"UPDATE txn SET category_id = ?, category_overridden = 1, category_source = 'manual' "
+                        f"WHERE id IN ({change_placeholders})",
+                        [keep_category_id, *change_chunk],
+                    )
+            elif mode == "keep":
+                # Keep exactly as imported: leave the rows untouched at `import` (nothing changes, so
+                # nothing to snapshot for undo). The caller marks the suggestion discarded.
+                pass
+            else:
+                prior.extend(dict(row) for row in rows)
+                conn.execute(
+                    f"UPDATE txn SET category_id = NULL, category_overridden = 0, category_source = 'cleared' "
+                    f"WHERE id IN ({placeholders}) AND category_source IS NOT 'manual'",
+                    list(chunk),
+                )
+    return {"updated": len(prior), "rows": prior}
+
+
+@router.post("/restore-categorization")
+def restore_categorization(body: CategorizationRestore):
+    # Undo support: set each row back to a previously captured (category_id, category_source,
+    # category_overridden) snapshot. Used to reverse a rejected-suggestion disposition; the rows come
+    # from set_rejected_suggestion_disposition's `rows`, so only the deliberately-changed rows are
+    # restored and exactly to their pre-change state.
+    restored = 0
+    with get_db() as conn:
+        for row in body.rows:
+            if not str(row.id or "").strip():
+                continue
+            conn.execute(
+                "UPDATE txn SET category_id = ?, category_source = ?, category_overridden = ? WHERE id = ?",
+                (row.category_id, row.category_source, int(row.category_overridden or 0), row.id),
+            )
+            restored += 1
+    return {"restored": restored}
 
 
 @router.patch("/{txn_id}/merchant")

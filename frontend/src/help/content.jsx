@@ -78,12 +78,12 @@ export const HELP_TOPICS = [
         <p>
           A handful of deliberate design choices shape how FinTrack behaves and how it is best
           used -- see <HelpLink to="/help/design-principles">how FinTrack is designed to be
-          used</HelpLink>.
+            used</HelpLink>.
         </p>
         <p>
-        All of the data remains local unless you move it somewhere else; FinTrack never makes an outgoing
-        connection unless specifically requested (eg. downloading
-        transactions from a data provider). 
+          All of the data remains local unless you move it somewhere else; FinTrack never makes an outgoing
+          connection unless specifically requested (eg. downloading
+          transactions from a data provider).
         </p>
         <p>
           To get started:
@@ -357,7 +357,7 @@ export const HELP_TOPICS = [
           pills. Click <strong>+ Tag</strong> to attach an existing tag or create a new one inline.
         </p>
         <p>
-          When a leaf category is selected it, the assigned tags are displayed as well as 
+          When a leaf category is selected it, the assigned tags are displayed as well as
           any <em>inherited</em> tags from the group. These are displayed in italics and do
           not have a remove button.  To remove an <em>inherited</em> tag,
           select the group itself and remove the tag there; the change automatically propagates.
@@ -383,7 +383,7 @@ export const HELP_TOPICS = [
         <p>
           The dashboard’s &quot;Spending by…&quot; picker offers two built-in breakdowns
           (<em>group</em>, <em>category</em>) plus saved tag reports. A tag report is a
-          named set of tags that become the wedges along with the <em>remaining</em> category. For example 
+          named set of tags that become the wedges along with the <em>remaining</em> category. For example
           a <em>Per-owner</em> report might select tags Alice, Bob, Shared.
         </p>
         <p>
@@ -443,7 +443,7 @@ export const HELP_TOPICS = [
     ),
   },
   {
-    id: 'recategorizing',
+    id: 're-categorizing',
     section: 'organizing',
     title: 'What changes a transaction’s category',
     surfaces: ['Rules page'],
@@ -453,7 +453,7 @@ export const HELP_TOPICS = [
         <p>
           A transaction’s category can come from a few different places, and the two bulk actions that
           re-categorize -- <strong>Run categorization</strong> and a rule’s <strong>apply to matching
-          transactions</strong> -- treat those origins differently. The practical effect of each is
+            transactions</strong> -- treat those origins differently. The practical effect of each is
           below; a closing section ranks the sources in full for anyone who wants it.
         </p>
         <h4>Run categorization</h4>
@@ -472,7 +472,7 @@ export const HELP_TOPICS = [
           it offers to apply to every transaction its matcher catches: the keyword together with any
           owner, account, or amount limits. This apply is <strong>full force</strong>. It claims all
           matching rows and sets them to the rule’s category, <strong>including rows categorized by hand
-          or by a trusted import</strong>. It is the one bulk action that overrides a manual edit, so
+            or by a trusted import</strong>. It is the one bulk action that overrides a manual edit, so
           the match count is worth a glance before applying if manual edits might be caught in it.
         </p>
         <h4>How categorization sources rank</h4>
@@ -489,7 +489,9 @@ export const HELP_TOPICS = [
             conflict screen can re-categorize it in place -- see below.</li>
           <li><strong>Rule</strong> -- assigned by a matching rule. Not protected: re-evaluated by Run
             categorization and replaced by any apply.</li>
-          <li><strong>Uncategorized</strong> -- no category yet; any rule is free to claim it.</li>
+          <li><strong>Uncategorized</strong> -- no category yet; any rule is free to claim it. (A row whose
+            imported category was <em>cleared</em> when a suggested rule was rejected sits here too: rules
+            can categorize it, but the discarded file label is kept on the row and never re-applied.)</li>
         </ul>
         <p>
           The asymmetry is the part to remember: <strong>Run categorization</strong> respects the two
@@ -516,7 +518,7 @@ export const HELP_TOPICS = [
     section: 'duplicates',
     title: 'Reading the duplicate-detection report',
     surfaces: ['Import / Export (file ↗ report)', 'Duplicate-detection report'],
-    summary: 'When the same activity arrives from more than one source, the report settles the clear cases and groups the rest into pills. Review is an undecided match that needs a decision — and the only category counted as pending work (the file’s “to review” count and the Tasks warning). Rejected · review (Matched ±2 days, No specific match) is already rejected and advisory: examine it, Import anyway if it shouldn’t have been rejected, or Mark reviewed. Click a pill to show just that group; hover a pill for a short explanation.',
+    summary: 'When the same activity arrives from more than one source, this report resolves the clear cases and groups the rest into pills. Review is an undecided match that needs a decision — and the only category counted as pending work (the file’s “to review” count and the Tasks warning). Rejected · review (Matched ±2 days, No specific match) are already rejected and advisory: examine it, Import anyway if it shouldn’t have been rejected, or Mark reviewed. Click a pill to show just that group; hover a pill for a short explanation.',
     body: () => (
       <>
         <p>
@@ -779,8 +781,9 @@ export const HELP_TOPICS = [
         </p>
         <ul>
           <li>a <strong>year</strong> &mdash; <code>2023</code></li>
-          <li>a <strong>month</strong> &mdash; <code>03/2023</code></li>
+          <li>a <strong>month in a year</strong> &mdash; <code>03/2023</code></li>
           <li>a <strong>day</strong> &mdash; <code>03/15/2023</code></li>
+          <li>a <strong>month</strong> or <strong>month/day</strong> with no year &mdash; <code>03</code> or <code>03/15</code> &mdash; matches that date in every year</li>
           <li>an <strong>amount</strong> &mdash; <code>68</code></li>
         </ul>
         <p>and the list jumps to matching rows.</p>
@@ -796,27 +799,45 @@ export const HELP_TOPICS = [
     body: () => (
       <>
         <p>
-          If arriving from another tool where the transactions already carry curated categories, tell
-          FinTrack the import’s data is clean (turn on <em>“use the categories present in the data”</em>
-          on the file’s card). FinTrack keeps those categories on the imported rows, and
-          then <strong>Generate rules</strong> studies them to propose rules that would reproduce the
+          If the data comes from another tool where the transactions already carry meaningful categories, tell
+          FinTrack the import’s data is category data is useful (turn on <em>“use the categories present in the data”</em>
+          on the file’s card). FinTrack keeps those categories on the imported rows, adds any which are missing to
+          the system’s list of categories, and <strong>Generate rules</strong> analyzes them to propose rules that reproduce the
           same categorization on future, uncategorized data. Nothing takes effect until it has been
           reviewed.
         </p>
         <p>
-          The important framing: <strong>the output of Generate rules is rules</strong>, not a
+          The <strong>output of Generate rules is rules</strong>, not a
           re-categorization of the file. The imported rows are already categorized -- that is the
           input; the goal is to capture the <em>pattern</em> so future imports categorize themselves.
-          Two things on this screen do still change the underlying rows, in defined ways -- accepting a
-          suggestion applies its rule to exactly the rows that generated it, and resolving a conflict
-          can re-categorize rows -- but those are means to a clean rule set, not the point.
+          That said, two things on this screen do still change the underlying rows.
+          <ol type="a">
+            <li>
+              Accepting a suggestion applies its rule to exactly the rows that generated it. The
+              category value usually does not move (the rule came from those rows), but it hands them
+              from the file’s categorization to the rule’s -- so an edit made to the rule first (a
+              tweaked category, added tags, a rename) lands on those rows too, and they shift from
+              import-locked to rule-governed (see{' '}
+              <HelpLink to="/help/re-categorizing">what changes a transaction’s category</HelpLink>).
+            </li>
+            <li>
+              Resolving a conflict has various options to re-categorize rows.
+            </li>
+          </ol>
         </p>
         <p>Available actions for each suggested rule:</p>
         <ul>
           <li><strong>Save</strong> it (optionally after editing its keyword, category, owner/account
             scope, amount range, rename, or tags),</li>
           <li><strong>Defer</strong> it to decide later, or</li>
-          <li><strong>Remove</strong> (discard) it.</li>
+          <li><strong>Discard</strong> -- reject the proposed rule. The two buttons under
+            <em>discard and&hellip;</em> choose what happens to the rows it covered:
+            <em>keep categorization</em> leaves them exactly as imported -- the file&rsquo;s category
+            sticks as a settled decision, stays trusted-import, and is still reclaimable later if a
+            matching rule is created and applied; <em>remove categorization</em> clears the category
+            instead, freeing the rows for rules to categorize later (the discarded file label is kept on
+            the row but is never re-applied). Keep is the choice for a genuine exception (an annual fee
+            filed under its own category); remove is for a file category that was wrong or messy.</li>
         </ul>
         <h4>Conflict sets, and the different ways to resolve them</h4>
         <p>
@@ -841,7 +862,24 @@ export const HELP_TOPICS = [
           The distinction between the last two is what produces different results: a bulk re-categorize
           keeps rows in the trusted-import learning set and re-targets the rule, while Preserve carves a
           row out as an untouchable manual decision. How those weights behave afterward is covered
-          in <HelpLink to="/help/recategorizing">what changes a transaction’s category</HelpLink>.
+          in <HelpLink to="/help/re-categorizing">what changes a transaction’s category</HelpLink>.
+        </p>
+        <h4>Older suggestions, and clearing them out in bulk</h4>
+        <p>
+          Rules are forward-looking, so a merchant pattern with no recent activity is unlikely to recur.
+          Suggestions whose newest matching transaction falls outside the <em>Look back</em> window move
+          off the main <em>pending</em> list onto a separate <em>older</em> pill, so the pending count
+          reflects only patterns that are still live. Nothing is lost -- widening the look-back window
+          brings them back, and the underlying rows are untouched by the lens itself.
+        </p>
+        <p>
+          Because older suggestions are already out of the way, settling them is optional -- a stale tail
+          can simply be left alone. When tidying is wanted, open the <em>older</em> pill, select several
+          rows at once, and apply a bulk disposition: <em>Discard, keep categories</em> marks them
+          reviewed while leaving their rows exactly as imported (the honest default for a pattern not
+          worth a rule), or <em>Discard, clear categories</em> additionally clears those rows so future
+          rules may categorize them. Either choice changes each row&rsquo;s import state the same way the
+          single-suggestion Discard does above.
         </p>
         <p>
           See also:{' '}

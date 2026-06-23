@@ -72,8 +72,8 @@ export default function ImportRuleSuggestions() {
   const contextKey = isSystemContext
     ? 'system'
     : isProfileContext
-    ? `profile:${profileId}`
-    : `batch:${batchId}`
+      ? `profile:${profileId}`
+      : `batch:${batchId}`
   const [owners, setOwners] = useState([])
   const [accounts, setAccounts] = useState([])
   const [categories, setCategories] = useState([])
@@ -114,6 +114,7 @@ export default function ImportRuleSuggestions() {
   const [merchantFilterOpen, setMerchantFilterOpen] = useUserPreference(IMPORT_RULE_MERCHANT_FILTER_OPEN_PREF_KEY, true)
   const [ownerFilterOpen, setOwnerFilterOpen] = useUserPreference(IMPORT_RULE_OWNER_FILTER_OPEN_PREF_KEY, false)
   const [undoStack, setUndoStack] = useState([])
+  const [applyingConflict, setApplyingConflict] = useState(false)
   const MAX_UNDO = 10
   const {
     pendingCount: recategorizePendingCount,
@@ -139,22 +140,22 @@ export default function ImportRuleSuggestions() {
     isSystemContext
       ? api.getSystemRuleSuggestions(ownerIds)
       : isProfileContext
-      ? api.getProfileRuleSuggestions(profileId, ownerIds)
-      : api.getBatchRuleSuggestions(batchId, ownerIds)
+        ? api.getProfileRuleSuggestions(profileId, ownerIds)
+        : api.getBatchRuleSuggestions(batchId, ownerIds)
   ), [isSystemContext, isProfileContext, profileId, batchId])
   const updateSuggestionReviewForContext = payload => (
     isSystemContext
       ? api.updateSystemRuleSuggestionReview(payload)
       : isProfileContext
-      ? api.updateProfileRuleSuggestionReview(profileId, payload)
-      : api.updateBatchRuleSuggestionReview(batchId, payload)
+        ? api.updateProfileRuleSuggestionReview(profileId, payload)
+        : api.updateBatchRuleSuggestionReview(batchId, payload)
   )
   const loadSuggestionMatchesForContext = payload => (
     isSystemContext
       ? api.getSystemRuleSuggestionMatches(payload)
       : isProfileContext
-      ? api.getProfileRuleSuggestionMatches(profileId, payload)
-      : api.getBatchRuleSuggestionMatches(batchId, payload)
+        ? api.getProfileRuleSuggestionMatches(profileId, payload)
+        : api.getBatchRuleSuggestionMatches(batchId, payload)
   )
 
   useEffect(() => {
@@ -285,14 +286,17 @@ export default function ImportRuleSuggestions() {
     })
   }
 
-  function pushUndo(suggestionIds) {
+  // `rowRestore` (optional) is the prior-state snapshot of transactions a reject disposition changed,
+  // so undo can put the rows back as well as the suggestion's review status — one atomic-feeling step.
+  function pushUndo(suggestionIds, rowRestore = null) {
     const idSet = new Set(suggestionIds)
-    const snapshot = {}
+    const statuses = {}
     for (const s of ruleSuggestionState.suggestions) {
       if (idSet.has(s.id)) {
-        snapshot[s.id] = { review_status: s.review_status, rule_id: s.rule_id ?? null }
+        statuses[s.id] = { review_status: s.review_status, rule_id: s.rule_id ?? null }
       }
     }
+    const snapshot = { statuses, rows: rowRestore && rowRestore.length ? rowRestore : null }
     setUndoStack(prev => [...prev.slice(-(MAX_UNDO - 1)), snapshot])
   }
 
@@ -300,13 +304,18 @@ export default function ImportRuleSuggestions() {
     if (undoStack.length === 0) return
     const snapshot = undoStack[undoStack.length - 1]
     setUndoStack(prev => prev.slice(0, -1))
+    // Restore any row dispositions first, so the rows are back to their prior categorization before the
+    // suggestion returns to the queue.
+    if (snapshot.rows && snapshot.rows.length) {
+      await txnMutations.restoreCategorization(snapshot.rows).catch(() => { })
+    }
     // Accepted suggestions may have created or linked rules, so undo has to replay
     // the server-side review state instead of only rolling back local UI state.
-    for (const [suggestionId, prev] of Object.entries(snapshot)) {
+    for (const [suggestionId, prev] of Object.entries(snapshot.statuses || {})) {
       await updateSuggestionReviewForContext({
         suggestion_id: suggestionId,
         status: prev.review_status,
-      }).catch(() => {})
+      }).catch(() => { })
     }
     await reloadSuggestions()
   }
@@ -356,9 +365,10 @@ export default function ImportRuleSuggestions() {
       .map(suggestion => suggestion.id)
   }
 
-  async function setSuggestionStatus(suggestion, status) {
+  // Write a suggestion's review status (no undo bookkeeping — callers push the undo entry, so a reject
+  // with a row disposition can record both in one entry).
+  async function applySuggestionStatus(suggestion, status) {
     setEditingSuggestionId(null)
-    pushUndo([suggestion.id])
     const result = await updateSuggestionReviewForContext({
       suggestion_id: suggestion.id,
       status,
@@ -372,6 +382,78 @@ export default function ImportRuleSuggestions() {
       review_summary: result.review_summary || undefined,
       generated_at: result.generated_at || undefined,
     })
+  }
+
+  async function setSuggestionStatus(suggestion, status) {
+    pushUndo([suggestion.id])
+    await applySuggestionStatus(suggestion, status)
+  }
+
+  // Reject a suggestion (no rule) and settle the rows it covered. 'keep' records the file's category
+  // as a manual decision; 'clear' discards it to the `cleared` source. The disposition returns the rows'
+  // prior state, which rides in the undo entry so undo restores the rows and the suggestion together.
+  // The disposition is best-effort: a failure there still records the rejection so the suggestion leaves
+  // the queue (the rows keep their imported category and can be settled by hand).
+  async function rejectSuggestionWithDisposition(suggestion, mode) {
+    const rowIds = suggestion?.source_row_ids || []
+    let priorRows = null
+    if (rowIds.length) {
+      try {
+        const result = await txnMutations.setRejectedSuggestionDisposition(rowIds, mode)
+        priorRows = result?.rows || null
+      } catch {
+        // fall through to record the rejection regardless
+      }
+    }
+    pushUndo([suggestion.id], priorRows)
+    await applySuggestionStatus(suggestion, 'discarded')
+  }
+
+  // Bulk reject + settle, in one undo entry. 'keep' leaves the rows imported (status-only — the rows
+  // keep their category and stay reclaimable by a later apply); 'clear' clears their categories. Mirrors
+  // rejectSuggestionWithDisposition but bundles every selected suggestion's row snapshots into one undo
+  // entry, like applyConflictSet. A disposition failure still records the rejections (best-effort).
+  async function bulkRejectWithDisposition(suggestions, mode) {
+    setEditingSuggestionId(null)
+    setRuleSuggestionState(prev => ({ ...prev, error: '' }))
+    let priorRows = null
+    if (mode === 'clear') {
+      const rowIds = suggestions.flatMap(s => s.source_row_ids || [])
+      if (rowIds.length) {
+        try {
+          const result = await txnMutations.setRejectedSuggestionDisposition(rowIds, 'clear')
+          priorRows = result?.rows || null
+        } catch {
+          // fall through to record the rejections regardless
+        }
+      }
+    }
+    pushUndo(suggestions.map(s => s.id), priorRows)
+    try {
+      let lastResult = null
+      for (const suggestion of suggestions) {
+        lastResult = await updateSuggestionReviewForContext({
+          suggestion_id: suggestion.id,
+          status: 'discarded',
+          merchant_label: suggestion.merchant_label,
+          target_category_name: suggestion.target_category_name,
+          keyword: suggestion.keyword,
+        })
+      }
+      const updatesById = Object.fromEntries(
+        suggestions.map(suggestion => [suggestion.id, { review_status: 'discarded' }]),
+      )
+      applyLocalSuggestionUpdates(updatesById, {
+        review_summary: lastResult?.review_summary || undefined,
+        generated_at: lastResult?.generated_at || undefined,
+      })
+    } catch (err) {
+      setRuleSuggestionState(prev => ({
+        ...prev,
+        loading: false,
+        error: err.message || 'Unable to update selected suggestions.',
+      }))
+    }
   }
 
   async function setSuggestionStatusBulk(suggestions, status) {
@@ -683,6 +765,123 @@ export default function ImportRuleSuggestions() {
     })
   }
 
+  // Resolve a whole conflict set in one action, driven entirely by each member's *target* category.
+  // `winnerId` null = no rule: every member is settled to its target as a manual decision. With a
+  // winner, that member becomes the rule, and each other member is classified by its target:
+  //   - target == the winner's category -> the rule owns those rows (reclaimed via preserve-manual);
+  //   - target is another category       -> kept as a manual exception at that target;
+  //   - target is empty (category removed)-> cleared to the rule-eligible `cleared` source.
+  // Everything lands in ONE combined undo entry — prior member statuses captured up front, the manual/
+  // clear row snapshots gathered as we go (rows the rule reclaims aren't snapshotted, matching the
+  // single-accept path, since undo replays the review status rather than the rule apply).
+  async function applyConflictSet(members, winnerId) {
+    if (applyingConflict) return
+    setApplyingConflict(true)
+    setResolveSummary(null)
+    setReconcileApplyNote(null)
+    setRuleSuggestionState(prev => ({ ...prev, error: '' }))
+
+    const idSet = new Set(members.map(member => member.id))
+    const priorStatuses = {}
+    for (const s of ruleSuggestionState.suggestions) {
+      if (idSet.has(s.id)) priorStatuses[s.id] = { review_status: s.review_status, rule_id: s.rule_id ?? null }
+    }
+    const rowSnapshots = []
+    const ruleRowIds = []
+
+    try {
+      const winner = winnerId ? members.find(member => member.id === winnerId) : null
+      const winnerCategoryId = winner ? winner.target_category_id : null
+      let createdRuleId = null
+
+      if (winner) {
+        const ruleData = {
+          keyword: winner.keyword,
+          category_id: winner.target_category_id,
+          amount_min: winner.amount_min,
+          amount_max: winner.amount_max,
+          clean_name: winner.clean_name_suggestion || null,
+          owner_id: winner.owner_id || null,
+          account_id: winner.account_id || null,
+          tag_ids: winner.tag_ids || [],
+        }
+        const createdRule = await api.createRule(ruleData, { onExisting: 'merge' })
+        if (createdRule?.status === 'conflict') {
+          setResolveSummary({ created: 0, merged: 0, skipped: 0, conflicts: [buildConflictEntry(winner, ruleData, createdRule)] })
+          await reloadSuggestions()
+          return
+        }
+        createdRuleId = createdRule?.id || null
+        await updateSuggestionReviewForContext({
+          suggestion_id: winner.id,
+          status: 'accepted',
+          rule_id: createdRuleId,
+          merchant_label: winner.merchant_label,
+          target_category_name: winner.target_category_name,
+          target_category_id: winner.target_category_id,
+          keyword: winner.keyword,
+          owner_id: winner.owner_id || null,
+          account_id: winner.account_id || null,
+          amount_min: winner.amount_min,
+          amount_max: winner.amount_max,
+          clean_name_suggestion: winner.clean_name_suggestion || null,
+        })
+        if (winner.source_row_ids?.length) ruleRowIds.push(...winner.source_row_ids)
+        if (createdRule?.status === 'merged' && createdRule.relation !== 'duplicate') {
+          recordReconciledRule(createdRule.id, 'merged')
+        }
+      }
+
+      for (const member of members) {
+        if (member.id === winnerId) continue
+        const targetId = member.target_category_id || null
+        const rowIds = member.source_row_ids || []
+        if (winner && String(targetId) === String(winnerCategoryId)) {
+          // The rule's category — let the rule reclaim these rows alongside the winner's own.
+          if (rowIds.length) ruleRowIds.push(...rowIds)
+        } else if (rowIds.length) {
+          // A different target keeps the rows as a manual exception there; an empty target clears them.
+          const mode = targetId ? 'keep' : 'clear'
+          try {
+            const result = await txnMutations.setRejectedSuggestionDisposition(rowIds, mode, targetId)
+            if (result?.rows?.length) rowSnapshots.push(...result.rows)
+          } catch {
+            // best-effort; still record the discard below
+          }
+        }
+        // Write the discard server-side WITHOUT a per-member local update: touching local state here
+        // drops the member from the pending view mid-loop, so the card would visibly shed rows one by
+        // one. The single reloadSuggestions() below swaps the whole card out in one render instead.
+        await updateSuggestionReviewForContext({
+          suggestion_id: member.id,
+          status: 'discarded',
+          merchant_label: member.merchant_label,
+          target_category_name: member.target_category_name,
+          keyword: member.keyword,
+        })
+      }
+
+      // Apply the rule to every row it should own (winner's rows + non-winners retargeted to it),
+      // preserve-manual so import-locked rows are reclaimed but deliberate manual edits are spared.
+      if (createdRuleId && ruleRowIds.length) {
+        try {
+          await txnMutations.applyRuleToTransactions(createdRuleId, ruleRowIds)
+        } catch {
+          // The rule saved; failing to back-apply to its rows shouldn't fail the resolution.
+        }
+      }
+
+      setUndoStack(prev => [
+        ...prev.slice(-(MAX_UNDO - 1)),
+        { statuses: priorStatuses, rows: rowSnapshots.length ? rowSnapshots : null },
+      ])
+      setEditingSuggestionId(null)
+      await reloadSuggestions()
+    } finally {
+      setApplyingConflict(false)
+    }
+  }
+
   async function saveSuggestionsAsIsBulk(suggestions) {
     setEditingSuggestionId(null)
     setResolveSummary(null)
@@ -763,24 +962,25 @@ export default function ImportRuleSuggestions() {
   const contextHasImportedCategories = isSystemContext
     ? systemCleanBatches.some(item => item.has_imported_categories)
     : isProfileContext
-    ? profileBatches.some(item => item.has_imported_categories)
-    : !!batch?.has_imported_categories
+      ? profileBatches.some(item => item.has_imported_categories)
+      : !!batch?.has_imported_categories
   const contextTitle = isSystemContext
     ? 'All categorized imports'
     : isProfileContext
-    ? (profile?.name || 'Data source')
-    : (batch?.filename || 'Import')
+      ? (profile?.name || 'Data source')
+      : (batch?.filename || 'Import')
   const contextSummary = isSystemContext
-    ? `${systemCleanBatches.length} imported file${systemCleanBatches.length === 1 ? '' : 's'} using categories from the data`
+    ? `Using ${systemCleanBatches.length} imported file${systemCleanBatches.length === 1 ? '' : 's'
+    }.`
     : isProfileContext
-    ? `${profileBatches.length} imported file${profileBatches.length === 1 ? '' : 's'}`
-    : `Imported ${formatImportedAt(batch?.imported_at)}${formatImportSummary(batch) ? ` · ${formatImportSummary(batch)}` : ''}`
+      ? `${profileBatches.length} imported file${profileBatches.length === 1 ? '' : 's'} `
+      : `Imported ${formatImportedAt(batch?.imported_at)}${formatImportSummary(batch) ? ` · ${formatImportSummary(batch)}` : ''} `
   const emptyStateTitle = isSystemContext ? 'No categorized imports yet' : (isProfileContext ? 'Data source not found' : 'Import not found')
   const emptyStateDescription = isSystemContext
     ? 'Use the categories present in the data from Import / Export to include an imported file in rule suggestions.'
     : isProfileContext
-    ? 'This data source may have been deleted or no longer has imported files attached.'
-    : 'This import may have been undone or is no longer available in Recent imports.'
+      ? 'This data source may have been deleted or no longer has imported files attached.'
+      : 'This import may have been undone or is no longer available in Recent imports.'
   const showBlockingLoading = loadingBatchContext || (!batchContextError && !initialSuggestionLoadComplete)
 
   return (
@@ -821,8 +1021,15 @@ export default function ImportRuleSuggestions() {
             style={{ margin: '12px 32px 0' }}
           />
 
-          <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 32px 32px' }}>
-            <div style={{ width: '100%', maxWidth: 1120, display: 'grid', gap: 18 }}>
+          {/* Reserve the scrollbar gutter so a short view (no scrollbar) and a tall one (scrollbar) keep
+              the same content width — otherwise the width change re-wraps the header description and the
+              whole panel jumps when switching filters. */}
+          <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflow: 'auto', scrollbarGutter: 'stable', padding: '4px 32px 32px' }}>
+            {/* minmax(0, 1fr) lets the single column shrink below its children's min-content so the cards
+                reflow as the window narrows, instead of the implicit `auto` track holding them wide and
+                getting clipped. overflow:auto above is the safety net: anything that still can't shrink
+                scrolls rather than truncating. */}
+            <div style={{ width: '100%', maxWidth: 1120, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 18 }}>
               {batchContextError ? (
                 <Card>
                   <div style={{ fontSize: 14, color: 'var(--danger)' }}>{batchContextError}</div>
@@ -842,10 +1049,10 @@ export default function ImportRuleSuggestions() {
                   <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{isSystemContext ? 'No categorized imports available yet' : 'No categories from the data were used'}</div>
                   <div style={{ fontSize: 13, color: 'var(--muted)' }}>
                     {isSystemContext
-                      ? 'Only imported files that use categories present in the data contribute category and rule patterns to this system-wide review.'
+                      ? 'Imported files that are marked as having useful category information contribute category and rule patterns to this system-wide review.'
                       : isProfileContext
-                      ? 'This data source does not have imported transactions using categories from the data that can be used to infer rules.'
-                      : 'This import does not contain transactions using categories from the data that can be used to infer rules.'}
+                        ? 'This data source does not indicate that the imported transactions carry useful information that can be used to suggest rules.'
+                        : 'This imported file does not indicate that the transactions contain useful categorization information.'}
                   </div>
                 </Card>
               ) : (
@@ -860,16 +1067,16 @@ export default function ImportRuleSuggestions() {
                       </div>
                       <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                         {ruleSuggestionState.generated_at
-                          ? `Generated ${ruleSuggestionState.generated_at.slice(0, 16).replace('T', ' ')}`
+                          ? `Generated ${ruleSuggestionState.generated_at.slice(0, 16).replace('T', ' ')} `
                           : 'Suggestions will be generated from this imported data.'}
                       </div>
                     </div>
                     <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
                       {isSystemContext
-                        ? 'Generate categorization rules from imported transactions that used categories present in the data across every imported file.'
+                        ? 'Generate categorization rules from the imported files which are marked as having useful categorization data.'
                         : isProfileContext
-                        ? 'Generate categorization rules from imported transactions attached to this data source that used categories present in the data.'
-                        : 'Generate categorization rules from imported transactions in this file that used categories present in the data.'}
+                          ? 'Generate categorization rules from imported transactions attached to this data source with category information.'
+                          : 'Generate categorization rules from imported transactions in this file that contain category information.'}
                     </div>
                   </Card>
 
@@ -885,7 +1092,7 @@ export default function ImportRuleSuggestions() {
                             {[
                               resolveSummary.replaced ? `${resolveSummary.replaced} existing rule${resolveSummary.replaced === 1 ? '' : 's'} replaced` : null,
                               resolveSummary.merged ? `${resolveSummary.merged} merged into an existing rule` : null,
-                              resolveSummary.skipped ? `${resolveSummary.skipped} already existed (skipped)` : null,
+                              resolveSummary.skipped ? `${resolveSummary.skipped} already existed(skipped)` : null,
                             ].filter(Boolean).join(' · ')}
                           </div>
                         ) : null}
@@ -939,7 +1146,7 @@ export default function ImportRuleSuggestions() {
                         {reconcileApplyNote != null ? (
                           <div style={{ marginTop: 8, fontSize: 12.5, color: reconcileApplyNote > 0 ? 'var(--success)' : 'var(--muted)' }}>
                             {reconcileApplyNote > 0
-                              ? `↻ ${reconcileApplyNote} transaction${reconcileApplyNote === 1 ? '' : 's'} re-categorized.`
+                              ? `↻ ${reconcileApplyNote} transaction${reconcileApplyNote === 1 ? '' : 's'} re - categorized.`
                               : '↻ No matching transactions needed re-categorization.'}
                           </div>
                         ) : resolveSummary.reconciledRuleIds?.length ? (
@@ -984,6 +1191,10 @@ export default function ImportRuleSuggestions() {
                     onSetSuggestionStatusBulk={setSuggestionStatusBulk}
                     onSaveSuggestionsAsIsBulk={saveSuggestionsAsIsBulk}
                     onSetSuggestionStatus={setSuggestionStatus}
+                    onRejectSuggestionDisposition={rejectSuggestionWithDisposition}
+                    onBulkRejectDisposition={bulkRejectWithDisposition}
+                    onApplyConflictSet={applyConflictSet}
+                    applyingConflict={applyingConflict}
                     editingSuggestionId={editingSuggestionId}
                     categories={categories}
                     owners={owners}

@@ -250,6 +250,10 @@ export default function CategoryPicker({
   openToken = 0,
   showSelectedBadge = false,
   compact = false,
+  // When set, a "Uncategorized" row appears at the top of the open list *while a category is assigned*,
+  // emitting onChange(null) so callers that support an unassigned state can clear back to it. Off by
+  // default: callers whose value can't be null (or means something else, e.g. bulk-set) shouldn't show it.
+  clearable = false,
   style,
   onOpenChange,
   // The dropdown is portaled to <body>; raise this above any modal it's used inside (AppDialog is 1200).
@@ -472,6 +476,13 @@ export default function CategoryPicker({
     setCreating(null)
   }
 
+  function clearSelection() {
+    onChange(null)
+    setQuery('')
+    setOpen(false)
+    setCreating(null)
+  }
+
   function handleKeyDown(e) {
     e.stopPropagation()
     if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) {
@@ -653,6 +664,18 @@ export default function CategoryPicker({
             </div>
           ) : (
             <>
+              {clearable && value && !trimmedQuery ? (
+                <>
+                  <div
+                    onMouseDown={e => { e.preventDefault(); clearSelection() }}
+                    style={{ padding: '6px 10px', fontSize: 13, color: 'var(--muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                  >
+                    <span style={{ fontSize: 12, opacity: 0.75 }} aria-hidden>⊘</span>
+                    <span style={{ fontStyle: 'italic' }}>Uncategorized</span>
+                  </div>
+                  <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
+                </>
+              ) : null}
               {displayGroups.map(({ group, categories: groupCategories }) => {
                 const creatingHere = creating?.type === 'leaf' && creating.groupId === group.id
                 return (

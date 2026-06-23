@@ -3,19 +3,32 @@
 
 // Modal listing the imported transactions a suggestion/rule matches, with per-row and bulk inline
 // category editing (the "Set all to" / Maps-To pickers), Preserve / Use-majority actions on conflict
-// rows, and width estimation so the sticky header grid stays aligned with the scrollable body. The
+// rows. The table is the shared resizable/reorderable pill-header control (PillGridTable): the dialog
+// owns one outer scroll container with the header pinned via position: sticky, and column geometry
+// (order + widths) persists through useUserPreference like the duplicate-rows dialog reference. The
 // parent owns the row data (`state`) and the mutation callbacks; this component holds only the
 // transient edit/picker UI state.
 
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import CategoryPicker from '../CategoryPicker.jsx'
 import CategoryDisplay from '../CategoryDisplay.jsx'
-import { Spinner } from '../ui.jsx'
+import PillGridTable from '../PillGridTable.jsx'
+import { Spinner, Tooltip } from '../ui.jsx'
+import { useColumnPreference } from '../../lib/useColumnPreference.js'
 import { formatDate } from '../../lib/utils.js'
 import { formatTransactionAmount, getTransactionAmountColor } from '../../lib/moneyDisplay.js'
-import { buildCategoryDisplayLabel, formatSuggestionAmountLabel } from '../../lib/importRuleSuggestions.js'
+import {
+  buildCategoryDisplayLabel,
+  formatSuggestionAmountLabel,
+  IMPORT_RULE_MATCHES_COLUMNS_PREF_KEY,
+} from '../../lib/importRuleSuggestions.js'
 
-export function MatchingTransactionsModal({ state, categories, onClose, onKeepCategory, onSetRowCategory, onSetAllCategories, onCategoriesChanged, applyingAll }) {
+function estimateColumnWidth(values, { min = 80, max = 260, perChar = 8, extra = 24 } = {}) {
+  const longest = values.reduce((maxLen, value) => Math.max(maxLen, String(value || '').length), 0)
+  return Math.max(min, Math.min(max, Math.round(longest * perChar + extra)))
+}
+
+export function MatchingTransactionsModal({ state, categories, onClose, onKeepCategory, onSetRowCategory, onSetAllCategories, onCategoriesChanged, applyingAll, onOpenMerchantReport }) {
   // Per-row inline category edit: editingRowId picks the row whose Maps-To picker is open; the token
   // force-opens the picker the moment edit mode is entered (CategoryPicker only auto-opens on a bump).
   const [editingRowId, setEditingRowId] = useState(null)
@@ -27,35 +40,12 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
   // refs let us ignore that stray close so entering edit mode doesn't instantly cancel (the "blink").
   const rowPickerOpenedRef = useRef(false)
   const bulkPickerOpenedRef = useRef(false)
-  if (!state?.open) return null
+  // Client-side column sort for the (fully-loaded) match rows. Seeded to the order the backend already
+  // returns the rows in (date descending — see the /rule-suggestions/matches ORDER BY) so the Date pill
+  // shows its sort indicator from first paint and the user can see how the list is ordered.
+  const [sort, setSort] = useState({ key: 'date', dir: 'desc' })
 
-  const summaryParts = []
-  if (state.keyword) summaryParts.push(`merchant contains ${state.keyword}`)
-  if (state.ownerName) summaryParts.push(`owner ${state.ownerName}`)
-  if (state.accountName) summaryParts.push(`account ${state.accountName}`)
-  const amountSummary = formatSuggestionAmountLabel(state.amountMin, state.amountMax)
-  if (amountSummary) summaryParts.push(amountSummary)
-
-  function estimateColumnWidth(values, { min = 80, max = 260, perChar = 8, extra = 24 } = {}) {
-    const longest = values.reduce((maxLen, value) => Math.max(maxLen, String(value || '').length), 0)
-    return Math.max(min, Math.min(max, Math.round(longest * perChar + extra)))
-  }
-
-  function measureScrollbarWidth() {
-    if (typeof document === 'undefined') return 0
-    const probe = document.createElement('div')
-    probe.style.width = '120px'
-    probe.style.height = '120px'
-    probe.style.overflow = 'scroll'
-    probe.style.position = 'absolute'
-    probe.style.top = '-9999px'
-    document.body.appendChild(probe)
-    const width = probe.offsetWidth - probe.clientWidth
-    document.body.removeChild(probe)
-    return width
-  }
-
-  const viewerRows = state.rows || []
+  const viewerRows = state?.rows || []
   const mapsToLabels = viewerRows.map(row => (
     buildCategoryDisplayLabel(categories, row.target_category_id, row.target_category_name || '')
   ))
@@ -76,22 +66,275 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
     ['Amount', ...viewerRows.map(row => formatTransactionAmount(row.amount))],
     { min: 92, max: 118, perChar: 8, extra: 18 },
   )
+  // Size to the merchant name only. The owner·account subtitle below it ellipsizes, so feeding its
+  // (often long) "Account ···1234" text into the estimate is what blew this column out to its max and
+  // left a wide empty gap before the next column; the floor still leaves the subtitle a readable home.
   const merchantWidth = estimateColumnWidth(
-    [
-      'Merchant',
-      ...viewerRows.map(row => row.display_name || row.merchant_name || row.raw_name || 'Unnamed merchant'),
-      ...viewerRows.map(row => [row.owner_name, row.account_name ? `${row.account_name}${row.account_mask ? ` ···${row.account_mask}` : ''}` : null].filter(Boolean).join(' · ')),
-    ],
-    { min: 210, max: 360, perChar: 7.8, extra: 26 },
+    ['Merchant', ...viewerRows.map(row => row.display_name || row.merchant_name || row.raw_name || 'Unnamed merchant')],
+    { min: 180, max: 280, perChar: 7.4, extra: 22 },
   )
-  const viewerGridTemplateColumns = `${dateWidth}px ${merchantWidth}px ${importedCategoryWidth}px ${mapsToWidth}px ${amountWidth}px`
-  const viewerColumnGap = 12
-  const tableHorizontalPadding = 32
-  // Reserve real scrollbar width so the sticky header grid stays aligned with the
-  // scrollable body across platforms that render wider native scrollbars.
-  const scrollbarWidth = measureScrollbarWidth()
-  const tableContentWidth = dateWidth + merchantWidth + importedCategoryWidth + mapsToWidth + amountWidth + (viewerColumnGap * 4) + tableHorizontalPadding
-  const viewerDesiredWidth = Math.max(700, Math.min(1200, tableContentWidth + scrollbarWidth + 36))
+
+  // Default geometry seeded from the content estimates; the user's persisted order/widths win over it.
+  const defaultColumns = useMemo(() => ([
+    { key: 'date', label: 'Date', width: dateWidth, minWidth: 80, align: 'start' },
+    { key: 'merchant', label: 'Merchant', width: merchantWidth, minWidth: 160, align: 'start' },
+    { key: 'imported_category', label: 'Category From File', width: importedCategoryWidth, minWidth: 120, align: 'start' },
+    { key: 'maps_to', label: 'Maps To', width: mapsToWidth, minWidth: 150, align: 'start' },
+    { key: 'amount', label: 'Amount', width: amountWidth, minWidth: 90, align: 'end' },
+  ]), [dateWidth, merchantWidth, importedCategoryWidth, mapsToWidth, amountWidth])
+
+  const [cols, handleColumnUpdate] = useColumnPreference(IMPORT_RULE_MATCHES_COLUMNS_PREF_KEY, defaultColumns)
+
+  if (!state?.open) return null
+
+  const summaryParts = []
+  if (state.keyword) summaryParts.push(`merchant contains ${state.keyword}`)
+  if (state.ownerName) summaryParts.push(`owner ${state.ownerName}`)
+  if (state.accountName) summaryParts.push(`account ${state.accountName}`)
+  const amountSummary = formatSuggestionAmountLabel(state.amountMin, state.amountMax)
+  if (amountSummary) summaryParts.push(amountSummary)
+
+  // Breakdown of where the matched rows currently map, largest-first, so the conflict is legible at a
+  // glance and the per-row "Use majority" action has a visible referent. Counts update live as rows are
+  // recategorized; the reference (majority) category is flagged.
+  const categoryBreakdown = (() => {
+    const counts = new Map()
+    for (const row of viewerRows) {
+      const key = row.target_category_id || '__none__'
+      const existing = counts.get(key)
+      if (existing) { existing.count += 1; continue }
+      counts.set(key, {
+        id: row.target_category_id || null,
+        label: buildCategoryDisplayLabel(categories, row.target_category_id, row.target_category_name || '') || 'Unresolved',
+        count: 1,
+      })
+    }
+    return [...counts.values()].sort((a, b) => b.count - a.count)
+  })()
+
+  function sortValue(row, key) {
+    switch (key) {
+      case 'date': return row.date || ''
+      case 'merchant': return (row.display_name || row.merchant_name || row.raw_name || '').toLowerCase()
+      case 'imported_category': return (row.imported_category || '').toLowerCase()
+      case 'maps_to': return buildCategoryDisplayLabel(categories, row.target_category_id, row.target_category_name || '').toLowerCase()
+      case 'amount': return Number(row.amount) || 0
+      default: return ''
+    }
+  }
+  function handleSort(key) {
+    setSort(prev => (prev?.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }))
+  }
+  const sortedRows = !sort ? viewerRows : [...viewerRows].sort((a, b) => {
+    const dir = sort.dir === 'desc' ? -1 : 1
+    const av = sortValue(a, sort.key)
+    const bv = sortValue(b, sort.key)
+    if (av < bv) return -dir
+    if (av > bv) return dir
+    return 0
+  })
+
+  function renderCell(col, row) {
+    if (col.key === 'date') {
+      return <span style={{ color: 'var(--muted)', fontSize: 11.5 }}>{formatDate(row.date)}</span>
+    }
+    if (col.key === 'merchant') {
+      return (
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {row.display_name || row.merchant_name || row.raw_name || 'Unnamed merchant'}
+            </span>
+            {onOpenMerchantReport ? (
+              <Tooltip content="Open merchant spending report">
+                <button
+                  type="button"
+                  aria-label="Open merchant spending report"
+                  onClick={() => onOpenMerchantReport(row)}
+                  style={{
+                    flexShrink: 0, border: '1px solid var(--border)', background: 'var(--surface2)',
+                    color: 'var(--accent2)', borderRadius: 6, width: 18, height: 18, padding: 0,
+                    fontSize: 11, lineHeight: 1, cursor: 'pointer',
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                >↗</button>
+              </Tooltip>
+            ) : null}
+          </div>
+          <div style={{
+            marginTop: 3,
+            fontSize: 11.5,
+            color: 'var(--muted)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}>
+            {[row.owner_name, row.account_name ? `${row.account_name}${row.account_mask ? ` ···${row.account_mask}` : ''}` : null].filter(Boolean).join(' · ')}
+          </div>
+        </div>
+      )
+    }
+    if (col.key === 'imported_category') {
+      return (
+        <div title={row.imported_category} style={{
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          justifySelf: 'start',
+        }}>
+          {row.imported_category}
+        </div>
+      )
+    }
+    if (col.key === 'maps_to') {
+      const resolvedCategoryLabel = buildCategoryDisplayLabel(
+        categories,
+        row.target_category_id,
+        row.target_category_name || '',
+      )
+      return (
+        <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {editingRowId === row.id ? (
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <CategoryPicker
+                value={row.target_category_id}
+                categories={categories}
+                onChange={value => { setEditingRowId(null); rowPickerOpenedRef.current = false; if (value) onSetRowCategory?.(row, value) }}
+                onCategoryCreated={onCategoriesChanged}
+                compact
+                openToken={rowPickerToken}
+                onOpenChange={open => {
+                  if (open) { rowPickerOpenedRef.current = true; return }
+                  if (rowPickerOpenedRef.current) { setEditingRowId(null); rowPickerOpenedRef.current = false }
+                }}
+              />
+            </div>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => { setEditingRowId(row.id); setRowPickerToken(token => token + 1) }}
+                disabled={row.keeping}
+                title="Change the category for this transaction"
+                style={{ background: 'none', border: 'none', padding: 0, margin: 0, cursor: row.keeping ? 'wait' : 'pointer', textAlign: 'left' }}
+              >
+                <CategoryDisplay
+                  id={row.target_category_id}
+                  name={resolvedCategoryLabel}
+                  emptyLabel="Unresolved"
+                  emptyFontSize={12}
+                />
+              </button>
+              {row.category_source === 'manual' ? (
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '2px 7px',
+                  borderRadius: 999,
+                  fontSize: 10.5,
+                  fontWeight: 600,
+                  color: 'color-mix(in srgb, var(--accent2) 70%, var(--text))',
+                  background: 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
+                  border: '1px solid color-mix(in srgb, var(--accent2) 24%, var(--border))',
+                  whiteSpace: 'nowrap',
+                }}>
+                  manual override
+                </span>
+              ) : null}
+              {row.conflicts_with_reference ? (
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '2px 7px',
+                  borderRadius: 999,
+                  fontSize: 10.5,
+                  fontWeight: 600,
+                  color: 'color-mix(in srgb, var(--warning) 72%, var(--text))',
+                  background: 'color-mix(in srgb, var(--warning) 10%, var(--surface2))',
+                  border: '1px solid color-mix(in srgb, var(--warning) 28%, var(--border))',
+                  whiteSpace: 'nowrap',
+                }}>
+                  conflicting rule
+                </span>
+              ) : null}
+              {row.target_category_id && row.category_source !== 'manual' && row.conflicts_with_reference ? (
+                <button
+                  type="button"
+                  onClick={() => onKeepCategory?.(row)}
+                  disabled={row.keeping}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    color: 'var(--text)',
+                    background: 'color-mix(in srgb, var(--surface2) 82%, white 4%)',
+                    border: '1px solid color-mix(in srgb, var(--border) 84%, white 8%)',
+                    cursor: row.keeping ? 'wait' : 'pointer',
+                    opacity: row.keeping ? 0.7 : 1,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {row.keeping ? 'Keeping…' : 'Preserve This Categorization'}
+                </button>
+              ) : null}
+              {state.referenceTargetCategoryId
+                && row.category_source !== 'manual'
+                && row.conflicts_with_reference
+                && String(row.target_category_id) !== String(state.referenceTargetCategoryId) ? (
+                <button
+                  type="button"
+                  onClick={() => onSetRowCategory?.(row, state.referenceTargetCategoryId)}
+                  disabled={row.keeping}
+                  title={`Recategorize this transaction as ${buildCategoryDisplayLabel(categories, state.referenceTargetCategoryId) || 'the majority category'}`}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    color: 'var(--accent)',
+                    background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
+                    border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
+                    cursor: row.keeping ? 'wait' : 'pointer',
+                    opacity: row.keeping ? 0.7 : 1,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Use majority
+                </button>
+              ) : null}
+            </>
+          )}
+        </div>
+      )
+    }
+    if (col.key === 'amount') {
+      return (
+        <div style={{ textAlign: 'right' }}>
+          <span style={{
+            fontVariantNumeric: 'tabular-nums',
+            color: getTransactionAmountColor(row.amount),
+          }}>
+            {formatTransactionAmount(row.amount)}
+          </span>
+        </div>
+      )
+    }
+    return null
+  }
+
+  // Initial dialog width fits the default geometry; once columns exceed the dialog the table scrolls
+  // horizontally inside its own viewport rather than widening the dialog.
+  const defaultContentWidth = defaultColumns.reduce((sum, column) => sum + column.width, 0)
+  const viewerDesiredWidth = Math.max(700, Math.min(1200, defaultContentWidth + 96))
 
   return (
     <div
@@ -140,6 +383,34 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
             <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 5 }}>
               {state.loading ? 'Loading matching rows…' : `${state.count || 0} matching row${state.count === 1 ? '' : 's'}`}
             </div>
+            {!state.loading && categoryBreakdown.length >= 2 ? (
+              <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                {categoryBreakdown.map(entry => {
+                  const isMajority = state.referenceTargetCategoryId != null
+                    && String(entry.id) === String(state.referenceTargetCategoryId)
+                  return (
+                    <span
+                      key={entry.id || '__none__'}
+                      title={`${entry.label} · ${entry.count} row${entry.count === 1 ? '' : 's'}${isMajority ? ' · majority' : ''}`}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 6,
+                        padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600,
+                        whiteSpace: 'nowrap', maxWidth: 240,
+                        color: isMajority ? 'var(--accent2)' : 'var(--muted)',
+                        background: isMajority ? 'color-mix(in srgb, var(--accent) 12%, var(--surface2))' : 'var(--surface2)',
+                        border: `1px solid ${isMajority ? 'color-mix(in srgb, var(--accent) 36%, var(--border))' : 'var(--border)'}`,
+                      }}
+                    >
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{entry.label}</span>
+                      <span style={{ fontVariantNumeric: 'tabular-nums', opacity: 0.85, flexShrink: 0 }}>{entry.count}</span>
+                      {isMajority ? (
+                        <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', flexShrink: 0 }}>majority</span>
+                      ) : null}
+                    </span>
+                  )
+                })}
+              </div>
+            ) : null}
             {!state.loading && state.rows?.length ? (
               <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 {bulkEditing ? (
@@ -204,7 +475,7 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
           </button>
         </div>
 
-        <div style={{ padding: 16, display: 'grid', gap: 12, minHeight: 0, flex: 1 }}>
+        <div style={{ padding: 16, display: 'grid', gap: 12, minHeight: 0, flex: 1, minWidth: 0 }}>
           {state.error ? (
             <div style={{ fontSize: 13, color: 'var(--danger)' }}>{state.error}</div>
           ) : state.loading ? (
@@ -221,211 +492,47 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
               display: 'flex',
               flexDirection: 'column',
               minHeight: 0,
-              width: 'fit-content',
-              maxWidth: '100%',
             }}>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: viewerGridTemplateColumns,
-                gap: viewerColumnGap,
-                padding: `7px ${12 + scrollbarWidth}px 7px 12px`,
-                fontSize: 10.5,
-                fontWeight: 600,
-                color: 'var(--muted)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-                background: 'var(--surface2)',
-                borderBottom: '1px solid var(--border)',
-              }}>
-                <span>Date</span>
-                <span>Merchant</span>
-                <span>Category From File</span>
-                <span>Maps To</span>
-                <span style={{ textAlign: 'right' }}>Amount</span>
-              </div>
-              <div style={{ overflowY: 'auto', minHeight: 0, scrollbarGutter: 'stable' }}>
-                {state.rows.map(row => {
-                  const resolvedCategoryLabel = buildCategoryDisplayLabel(
-                    categories,
-                    row.target_category_id,
-                    row.target_category_name || '',
-                  )
-                  return (
-                    <div
-                      key={row.id}
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: viewerGridTemplateColumns,
-                        gap: viewerColumnGap,
-                        padding: '8px 12px',
-                        alignItems: 'start',
-                        fontSize: 12.5,
-                        borderBottom: '1px solid var(--border)',
-                      }}
-                    >
-                      <span style={{ color: 'var(--muted)', fontSize: 11.5 }}>{formatDate(row.date)}</span>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{
-                          fontWeight: 600,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {row.display_name || row.merchant_name || row.raw_name || 'Unnamed merchant'}
-                        </div>
-                        <div style={{
-                          marginTop: 3,
-                          fontSize: 11.5,
-                          color: 'var(--muted)',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {[row.owner_name, row.account_name ? `${row.account_name}${row.account_mask ? ` ···${row.account_mask}` : ''}` : null].filter(Boolean).join(' · ')}
-                        </div>
-                      </div>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                          justifySelf: 'start',
-                        }}>
-                          {row.imported_category}
-                        </div>
-                      </div>
-                      <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        {editingRowId === row.id ? (
-                          <div style={{ minWidth: 200, maxWidth: 280 }}>
-                            <CategoryPicker
-                              value={row.target_category_id}
-                              categories={categories}
-                              onChange={value => { setEditingRowId(null); rowPickerOpenedRef.current = false; if (value) onSetRowCategory?.(row, value) }}
-                              onCategoryCreated={onCategoriesChanged}
-                              compact
-                              openToken={rowPickerToken}
-                              onOpenChange={open => {
-                                if (open) { rowPickerOpenedRef.current = true; return }
-                                if (rowPickerOpenedRef.current) { setEditingRowId(null); rowPickerOpenedRef.current = false }
-                              }}
-                            />
-                          </div>
-                        ) : (
-                        <>
-                        <button
-                          type="button"
-                          onClick={() => { setEditingRowId(row.id); setRowPickerToken(token => token + 1) }}
-                          disabled={row.keeping}
-                          title="Change the category for this transaction"
-                          style={{ background: 'none', border: 'none', padding: 0, margin: 0, cursor: row.keeping ? 'wait' : 'pointer', textAlign: 'left' }}
+              {/* Single outer scroll container; PillGridTable's header pins via position: sticky. A
+                  nested body scroll would consume width from the last column under this grid model. */}
+              <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                <PillGridTable
+                  columns={cols.map(col => ({
+                    ...col,
+                    title: `Click to sort. Drag to move ${col.label}`,
+                  }))}
+                  onColumnsChange={handleColumnUpdate}
+                  sortState={sort}
+                  onSort={handleSort}
+                  headerStyle={{
+                    padding: '6px 0',
+                    background: 'color-mix(in srgb, var(--surface2) 92%, var(--surface))',
+                    position: 'sticky',
+                    top: 0,
+                    zIndex: 2,
+                  }}
+                  renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
+                    <div style={{ fontSize: 12.5 }}>
+                      {sortedRows.map(row => (
+                        <div
+                          key={row.id}
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns,
+                            alignItems: 'start',
+                            borderBottom: '1px solid var(--border)',
+                          }}
                         >
-                          <CategoryDisplay
-                            id={row.target_category_id}
-                            name={resolvedCategoryLabel}
-                            emptyLabel="Unresolved"
-                            emptyFontSize={12}
-                          />
-                        </button>
-                        {row.category_source === 'manual' ? (
-                          <span style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            padding: '2px 7px',
-                            borderRadius: 999,
-                            fontSize: 10.5,
-                            fontWeight: 600,
-                            color: 'color-mix(in srgb, var(--accent2) 70%, var(--text))',
-                            background: 'color-mix(in srgb, var(--accent2) 10%, var(--surface2))',
-                            border: '1px solid color-mix(in srgb, var(--accent2) 24%, var(--border))',
-                            whiteSpace: 'nowrap',
-                          }}>
-                            manual override
-                          </span>
-                        ) : null}
-                        {row.conflicts_with_reference ? (
-                          <span style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            padding: '2px 7px',
-                            borderRadius: 999,
-                            fontSize: 10.5,
-                            fontWeight: 600,
-                            color: 'color-mix(in srgb, var(--warning) 72%, var(--text))',
-                            background: 'color-mix(in srgb, var(--warning) 10%, var(--surface2))',
-                            border: '1px solid color-mix(in srgb, var(--warning) 28%, var(--border))',
-                            whiteSpace: 'nowrap',
-                          }}>
-                            conflicting rule
-                          </span>
-                        ) : null}
-                        {row.target_category_id && row.category_source !== 'manual' && row.conflicts_with_reference ? (
-                          <button
-                            type="button"
-                            onClick={() => onKeepCategory?.(row)}
-                            disabled={row.keeping}
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 6,
-                              padding: '2px 8px',
-                              borderRadius: 999,
-                              fontSize: 10.5,
-                              fontWeight: 600,
-                              color: 'var(--text)',
-                              background: 'color-mix(in srgb, var(--surface2) 82%, white 4%)',
-                              border: '1px solid color-mix(in srgb, var(--border) 84%, white 8%)',
-                              cursor: row.keeping ? 'wait' : 'pointer',
-                              opacity: row.keeping ? 0.7 : 1,
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            {row.keeping ? 'Keeping…' : 'Preserve This Categorization'}
-                          </button>
-                        ) : null}
-                        {state.referenceTargetCategoryId
-                          && row.category_source !== 'manual'
-                          && row.conflicts_with_reference
-                          && String(row.target_category_id) !== String(state.referenceTargetCategoryId) ? (
-                          <button
-                            type="button"
-                            onClick={() => onSetRowCategory?.(row, state.referenceTargetCategoryId)}
-                            disabled={row.keeping}
-                            title={`Recategorize this transaction as ${buildCategoryDisplayLabel(categories, state.referenceTargetCategoryId) || 'the majority category'}`}
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 6,
-                              padding: '2px 8px',
-                              borderRadius: 999,
-                              fontSize: 10.5,
-                              fontWeight: 600,
-                              color: 'var(--accent)',
-                              background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
-                              border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
-                              cursor: row.keeping ? 'wait' : 'pointer',
-                              opacity: row.keeping ? 0.7 : 1,
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            Use majority
-                          </button>
-                        ) : null}
-                        </>
-                        )}
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <span style={{
-                          fontVariantNumeric: 'tabular-nums',
-                          color: getTransactionAmountColor(row.amount),
-                        }}>
-                          {formatTransactionAmount(row.amount)}
-                        </span>
-                      </div>
+                          {activeColumns.map(col => (
+                            <div key={`${row.id}:${col.key}`} style={{ padding: '8px 8px', minWidth: 0 }}>
+                              {renderCell(col, row)}
+                            </div>
+                          ))}
+                        </div>
+                      ))}
                     </div>
-                  )
-                })}
+                  )}
+                />
               </div>
             </div>
           )}

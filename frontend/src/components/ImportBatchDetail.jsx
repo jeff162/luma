@@ -13,9 +13,9 @@
  *   - an optional date range from `batch._dateFilter` (set by drill-through callers; lives
  *     on the batch payload so the parent doesn't need to plumb extra props through its
  *     stacked-panel state)
- *   - the user's debounced search input (matches display_name / merchant_name / raw_name via
- *     the backend's LIKE filter — does NOT match dates; for date lookups, sort by Date and
- *     scroll)
+ *   - the user's debounced search input (the backend quick-filter: merchant / category / account /
+ *     amount, plus date jumps — a full date, year, or month, or a year-less partial like a bare
+ *     month or month/day that matches that calendar slot across every year)
  *
  * The panel itself is read-write for categories: changes the user makes from this drawer
  * (via the inline CategoryPicker) update the underlying txn rows directly, the same way the
@@ -205,9 +205,9 @@ export default function ImportBatchDetail({
             type="search"
             value={filterInput}
             onChange={(e) => setFilterInput(e.target.value)}
-            placeholder="Search merchant, amount, or date (2023, 03/2023, 03/15/2023)…"
+            placeholder="Search merchant, amount, or date (2023, 03, 03/15, 03/2023, 03/15/2023)…"
             aria-label="Search transactions by merchant, amount, or date"
-            title="Matches merchant, category, account, amount, or date. Date jumps support a year (2023), month (03/2023), or day (03/15/2023). Prefix to restrict, e.g. amount:68 or date:03/2023."
+            title="Matches merchant, category, account, amount, or date. Date jumps support a year (2023), month-in-year (03/2023), or day (03/15/2023); a year-less month (03) or month/day (03/15) matches that slot across every year. Prefix to restrict, e.g. amount:68 or date:03/2023."
             style={{
               flex: '0 1 360px',
               minWidth: 240,

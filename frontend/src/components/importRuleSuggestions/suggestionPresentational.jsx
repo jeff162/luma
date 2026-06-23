@@ -74,6 +74,39 @@ export function ProgressPill({ label, value, tone = 'default', active = false, o
   )
 }
 
+// The shared "opens a report" affordance: a small boxed ↗ glyph — the app-wide signal that a count
+// drills into a report (matching the import file cards' rejected-rows / duplicates pattern). Pair it
+// with a plain count label rather than turning the label itself into an underlined link, so every
+// report launcher in the rule-suggestion review reads the same.
+export function ReportArrowButton({ onClick, title = 'Open matching transactions report' }) {
+  return (
+    <button
+      type="button"
+      aria-label={title}
+      title={title}
+      onClick={onClick}
+      style={{
+        border: '1px solid var(--border)',
+        background: 'var(--surface2)',
+        color: 'var(--accent2)',
+        borderRadius: 6,
+        width: 18,
+        height: 18,
+        padding: 0,
+        fontSize: 11,
+        lineHeight: 1,
+        cursor: 'pointer',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+      }}
+    >
+      &#8599;
+    </button>
+  )
+}
+
 export function SuggestionStatusBadge({ label, tone, left = 14 }) {
   const palette = getStatusPalette(tone)
   const symbol = getStatusSymbol(tone)
@@ -156,7 +189,7 @@ export function CriteriaGroup({
         flexWrap: 'wrap',
         minWidth: 0,
         maxWidth: '100%',
-        padding: '7px 11px',
+        padding: '5px 10px',
       }}>
         <button
           type="button"
@@ -174,7 +207,7 @@ export function CriteriaGroup({
             textAlign: 'left',
           }}
         >
-          <span style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.45 }}>
+          <span style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.3 }}>
             {merchantLabel}
           </span>
         </button>
@@ -218,6 +251,8 @@ export function SuggestionPill({
   onEditValueChange,
   onEditCommit,
   onEditCancel,
+  maxWidth,
+  title,
 }) {
   const pillTone = tone === 'muted' ? 'default' : 'accent'
   const LabelTag = onClick && !editing ? 'button' : 'span'
@@ -232,7 +267,10 @@ export function SuggestionPill({
   }, [editing])
 
   return (
-    <span style={{ ...getSharedPillStyle({ tone: pillTone }), position: 'relative' }}>
+    <span
+      title={title}
+      style={{ ...getSharedPillStyle({ tone: pillTone }), position: 'relative', maxWidth, minWidth: 0 }}
+    >
       {editing ? (
         <TransientTextInput
           value={editValue}
@@ -276,6 +314,7 @@ export function SuggestionPill({
               cursor: 'pointer',
               textAlign: 'left',
             } : {}),
+            ...(maxWidth ? { overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 } : {}),
           }}
         >
           {label}

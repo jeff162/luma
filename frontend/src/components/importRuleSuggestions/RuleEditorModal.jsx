@@ -4,6 +4,10 @@
 // The "Rule editor" modal for the import rule-suggestion review: wraps the shared RuleForm in an
 // overlay, holds the draft/working/error state for one suggestion, and exposes Accept / Save /
 // Close-with-draft / Discard. The parent owns the suggestion and the persistence callbacks.
+//
+// In draft-only mode (editing a conflict-set member) it offers only Close: accept/defer/discard belong
+// to the conflict card's Apply, and Close always stashes the edits as the card's draft, so leaving the
+// editor — via the button, the × , or the backdrop — is never destructive.
 
 import { useEffect, useRef, useState } from 'react'
 import RuleForm from '../RuleForm.jsx'
@@ -18,6 +22,10 @@ export function RuleEditorModal({
   onSaveAccepted,
   onCloseWithDraft,
   onDiscard,
+  // When the editor is opened to tweak a conflict-set winner, accepting here would bypass the card's
+  // Apply (which handles the other rows' dispositions). In that mode the primary action just saves the
+  // edits as a draft and closes; the conflict card's Apply then creates the rule from those edits.
+  draftOnly = false,
 }) {
   const isAccepted = suggestion.review_status === 'accepted'
   const formRef = useRef(null)
@@ -143,11 +151,14 @@ export function RuleEditorModal({
           <div>
             <div style={{ fontSize: 15, fontWeight: 600 }}>Rule editor</div>
             <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
-              Review and refine the proposed rule before saving it.
+              {draftOnly
+                ? 'Refine this rule. Your edits stay on the conflict card and are used when you Apply it.'
+                : 'Review and refine the proposed rule before saving it.'}
             </div>
           </div>
           <button
             type="button"
+            title={isAccepted ? 'Cancel' : 'Close'}
             onClick={() => {
               if (working) return
               if (isAccepted) onDiscard()
@@ -227,6 +238,18 @@ export function RuleEditorModal({
                   {working ? 'Saving…' : 'Save'}
                 </button>
               </>
+            ) : draftOnly ? (
+              // Conflict-member edit: there is no accept/save here — those belong to the conflict card's
+              // Apply. Close just keeps the edits (always stashed as the draft), so it's never destructive.
+              <button
+                type="button"
+                onClick={handleCloseWithDraft}
+                disabled={working}
+                title="Close — your edits stay on the conflict card; its Apply creates the rule"
+                style={{ background: 'transparent', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 16px', fontSize: 13, cursor: working ? 'not-allowed' : 'pointer', opacity: working ? 0.7 : 1 }}
+              >
+                Close
+              </button>
             ) : (
               <>
                 <button

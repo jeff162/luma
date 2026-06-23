@@ -71,6 +71,23 @@ export const txnMutations = {
     return result
   },
 
+  // Settle the rows behind a rejected suggestion: 'keep' marks them manual (category kept, or set to
+  // `categoryId` when given — the conflict screen's "keep as a different category"), 'clear' discards
+  // the category to the `cleared` source. Both drop the import lock and spare manual edits. Returns
+  // `{ updated, rows }` where `rows` is the prior state of the changed rows (for Undo).
+  async setRejectedSuggestionDisposition(transactionIds, mode, categoryId = null) {
+    const result = await api.setRejectedSuggestionDisposition(transactionIds, mode, categoryId)
+    notifyTransactionsChanged()
+    return result
+  },
+
+  // Undo a disposition: restore rows to the prior-state snapshot returned above.
+  async restoreCategorization(rows) {
+    const result = await api.restoreCategorization(rows)
+    notifyTransactionsChanged()
+    return result
+  },
+
   async trashTransaction(txnId) {
     const result = await api.trashTransaction(txnId)
     notifyTransactionsChanged()

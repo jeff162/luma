@@ -678,12 +678,13 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
   // Picking an existing category and creating-then-assigning a new one both arrive here through the
   // picker's onChange; createdRef lets the new-category case carry the real object to the save + rule prompt.
   function handlePick(catId) {
-    if (catId == null) return
-    const created = createdRef.current?.id === catId ? createdRef.current : null
+    // catId === null is the picker's "Uncategorized" clear; persist it but never fire a rule prompt
+    // (there's no category to learn a rule from).
+    const created = catId != null && createdRef.current?.id === catId ? createdRef.current : null
     createdRef.current = null
     setEditing(false)
-    onSave(txn.id, catId, created || undefined)
-    fireRulePrompt(catId, created)
+    onSave(txn.id, catId ?? null, created || undefined)
+    if (catId != null) fireRulePrompt(catId, created)
   }
 
   if (editing) {
@@ -693,6 +694,7 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
         categories={categories}
         compact
         showSelectedBadge
+        clearable
         openToken={1}
         onChange={handlePick}
         onAddCategory={onAddCategory}

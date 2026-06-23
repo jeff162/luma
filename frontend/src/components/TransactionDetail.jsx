@@ -36,7 +36,7 @@ const TRANSACTION_DETAIL_TABLE_PREF_KEY = 'ui.transactionDetail.transactions.col
  * locally editable, but it can also branch straight into rule creation when a manual recategorization looks
  * like the start of a repeatable pattern.
  */
-export default function TransactionDetail({ txn, categories, onClose, onTrashed, onCategorized, onNotesSaved, onTagsChanged, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true, dateStart = null, dateEnd = null }) {
+export default function TransactionDetail({ txn, categories, onClose, onTrashed, onCategorized, onNotesSaved, onTagsChanged, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true, dateStart = null, dateEnd = null, showPayeeActivity = true, availableTags: providedAvailableTags = null }) {
   // Date scope is the caller's call: Dashboard/Transactions pass their global filter; pages without a
   // filter bar pass nothing, in which case the payee trend defaults to the merchant's full history.
   const { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
@@ -47,8 +47,8 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
   const [rulePrompt, setRulePrompt]     = useState(null)
   const [detailCategories, setDetailCategories] = useState(categories)
   const [detailTxn, setDetailTxn] = useState(txn)
-  const [availableTags, setAvailableTags] = useState([])
-  const [tagsLoading, setTagsLoading] = useState(true)
+  const [availableTags, setAvailableTags] = useState(providedAvailableTags || [])
+  const [tagsLoading, setTagsLoading] = useState(!providedAvailableTags)
   const [trashConfirmOpen, setTrashConfirmOpen] = useState(false)
   const [originExpanded, setOriginExpanded] = useState(false)
 
@@ -89,6 +89,13 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
   } = usePagedMonthTransactions({ selectedMonth, loadPage: loadMonthPage })
 
   useEffect(() => {
+    // When the caller already has the tag list (e.g. a host that loaded it), use it and skip the fetch
+    // so the Tags picker is ready at first paint instead of settling in after the panel is shown.
+    if (providedAvailableTags) {
+      setAvailableTags(providedAvailableTags)
+      setTagsLoading(false)
+      return
+    }
     let cancelled = false
     setTagsLoading(true)
     api.getTags()
@@ -102,9 +109,13 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
         if (!cancelled) setTagsLoading(false)
       })
     return () => { cancelled = true }
-  }, [])
+  }, [providedAvailableTags])
 
   useEffect(() => {
+    // When the caller hides the payee-activity section (e.g. the import rule-suggestions report, where
+    // all-time activity would include transactions outside the curated files), skip the trend fetch
+    // entirely — it isn't shown, and skipping it also removes an extra paint stage.
+    if (!showPayeeActivity) { setTrendLoading(false); return }
     setTrendLoading(true)
     api.getPayeeTrend(payee, dateStart || undefined, dateEnd || undefined).then(rows => {
       setTrend(rows)
@@ -113,7 +124,7 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
         setSelectedMonth(rows[rows.length - 1].month)
       }
     })
-  }, [payee, dateStart, dateEnd])
+  }, [payee, dateStart, dateEnd, showPayeeActivity])
 
   // Keep the visible month in sync with the just-saved override so the drawer reflects the manual fix immediately.
   function handleCatSaved(txnId, cat) {
@@ -451,7 +462,12 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
                       })
                       return out
                     })()}
-                    {detailTxn.category_source ? (
+                    {detailTxn.category_source === 'cleared' ? (
+                      <div>
+                        <span style={{ color: 'var(--muted)' }}>Imported category cleared</span>{' '}
+                        &mdash; rules can re-categorize it.
+                      </div>
+                    ) : detailTxn.category_source ? (
                       <div>
                         <span style={{ color: 'var(--muted)' }}>Categorized by:</span>{' '}
                         {detailTxn.category_source === 'rule'   ? 'a categorization rule'
@@ -466,6 +482,8 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
             </div>
           </div>
 
+          {showPayeeActivity ? (
+          <>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
             Activity at {payee}{dateStart || dateEnd ? '' : ' — all time'}
           </div>
@@ -525,6 +543,8 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
               )}
             </div>
           )}
+          </>
+          ) : null}
       </DetailPanelShell>
       {trashConfirmOpen && (
         <AppConfirmDialog

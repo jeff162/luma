@@ -60,6 +60,7 @@ export default function HelpTopicDialog({ topicId, onClose }) {
       <div
         role="dialog"
         aria-modal="true"
+        data-browser-context-passthrough="true"
         onMouseDown={event => event.stopPropagation()}
         style={{
           width: 'min(680px, 100%)',

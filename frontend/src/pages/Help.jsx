@@ -96,7 +96,7 @@ export default function Help() {
     return (
       <div ref={scrollRef} style={{ height: '100%', overflowY: 'auto' }}>
         <style>{HELP_BODY_CSS}</style>
-        <div style={{ padding: '32px', maxWidth: 760, margin: '0 auto' }}>
+        <div data-browser-context-passthrough="true" style={{ padding: '32px', maxWidth: 760, margin: '0 auto' }}>
           <PageHeader title={entry.title} />
           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: (backTopicTitle || fromLabel) ? 6 : 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <Link to="/help" state={{ ...(fromPath ? { from: fromPath } : {}), returnTo: topic }} style={{ color: 'var(--accent2)' }}>&larr; All help topics</Link>
@@ -133,7 +133,7 @@ export default function Help() {
 
   return (
     <div style={{ height: '100%', overflowY: 'auto' }}>
-      <div style={{ padding: '32px', maxWidth: 760, margin: '0 auto' }}>
+      <div data-browser-context-passthrough="true" style={{ padding: '32px', maxWidth: 760, margin: '0 auto' }}>
         <PageHeader title="Help" />
         {fromLabel ? (
           <div style={{ marginBottom: 16 }}>

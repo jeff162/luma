@@ -203,9 +203,14 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
         display_name_changed = display_name != (txn["display_name"] or txn["merchant_name"] or txn["raw_name"])
         tags_changed = would_sync_rule_tags_change(conn, txn["id"], matched_tag_ids, existing_rows=tag_rows_by_txn.get(txn["id"], {}))
         if category_changed or display_name_changed:
+            # When a rule assigns a category the row becomes rule-owned; when none does it falls back to
+            # uncategorized (NULL) — EXCEPT a user-`cleared` row, which keeps its `cleared` marker so a
+            # rename/tag-only rule match can clean its name without silently dropping the marker (which
+            # would re-expose it to the trust-flag re-grab). See set_rejected_suggestion_disposition.
+            next_source = "rule" if cat_id else ("cleared" if txn["category_source"] == "cleared" else None)
             conn.execute(
                 "UPDATE txn SET category_id = ?, display_name = ?, category_source = ? WHERE id = ?",
-                (cat_id, display_name, "rule" if cat_id else None, txn["id"]),
+                (cat_id, display_name, next_source, txn["id"]),
             )
         if sync_rule_tags_for_transaction(conn, txn["id"], matched_tag_ids):
             tags_changed = True
