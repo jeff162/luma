@@ -1,6 +1,6 @@
 # Architecture
 
-This document provides a compact technical overview of FinTrack.
+This document provides a compact technical overview of Luma.
 
 For domain concepts such as ownership, categories, and rules, see `data-model.md`.
 
@@ -24,7 +24,7 @@ For UI interaction patterns and shared behavior, see `ui-patterns.md`.
 
 ## High-level shape
 
-FinTrack is a local-first web application with:
+Luma is a local-first web application with:
 
 - a **FastAPI** backend in `backend/`
 
@@ -100,7 +100,7 @@ Typical request flow:
 
 For many inline edits, the UI updates first and the API call is fire-and-forget. This keeps interaction responsive and is acceptable because the backend remains the durable source of truth and the expected level of concurrent editing is low.
 
-This is a deliberate tradeoff toward local responsiveness. FinTrack is optimized for a mostly single-user, local-first workflow, so a small amount of optimistic UI is preferable to making everyday edits feel remote or form-heavy.
+This is a deliberate tradeoff toward local responsiveness. Luma is optimized for a mostly single-user, local-first workflow, so a small amount of optimistic UI is preferable to making everyday edits feel remote or form-heavy.
 
 ## Major subsystems
 
@@ -199,7 +199,7 @@ That core concentration is intentional. Import behavior is one of the places whe
 
 ### Storage layers
 
-FinTrack uses several distinct storage layers for working state.
+Luma uses several distinct storage layers for working state.
 
 #### Browser-local storage
 
@@ -221,7 +221,7 @@ FinTrack uses several distinct storage layers for working state.
 
 #### Preference storage in the control database
 
-- **Lives in:** `backend/fintrack-control.db`
+- **Lives in:** `backend/luma-control.db`
 
 - **Lifespan:** durable until explicitly changed or cleared
 
@@ -235,7 +235,7 @@ FinTrack uses several distinct storage layers for working state.
 
 #### Local-profile records in the control database
 
-- **Lives in:** `backend/fintrack-control.db`
+- **Lives in:** `backend/luma-control.db`
 
 - **Lifespan:** durable until explicitly deleted
 
@@ -245,7 +245,7 @@ FinTrack uses several distinct storage layers for working state.
 
 #### Application data database
 
-- **Lives in:** `backend/fintrack-data.db`
+- **Lives in:** `backend/luma-data.db`
 
 - **Lifespan:** durable application data until changed, deleted, restored, or replaced
 
@@ -259,7 +259,7 @@ FinTrack uses several distinct storage layers for working state.
 
 #### Developer reset tools
 
-When `FINTRACK\_DEVELOPER\_OPTIONS=true`, the Settings page exposes developer reset actions that clear these layers selectively:
+When `LUMA\_DEVELOPER\_OPTIONS=true`, the Settings page exposes developer reset actions that clear these layers selectively:
 
 - **`Clear browser-local state`:** clears browser `localStorage` / `sessionStorage`
 
@@ -275,7 +275,7 @@ The separation is important because "resetting the app" can mean very different 
 
 ## Cross-platform approach
 
-FinTrack is intended to run on:
+Luma is intended to run on:
 
 - Windows
 

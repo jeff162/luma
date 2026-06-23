@@ -2,7 +2,7 @@
 
 # Nightly transaction sync
 # Install: crontab -e
-# Add:     0 3 * * * /path/to/fintrack/scripts/sync.sh >> /var/log/fintrack-sync.log 2>&1
+# Add:     0 3 * * * /path/to/luma/scripts/sync.sh >> /var/log/luma-sync.log 2>&1
 
 set -e
 cd "$(dirname "$0")/.."

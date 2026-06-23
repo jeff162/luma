@@ -291,8 +291,8 @@ function ImportTab() {
     function onCategoriesChanged() {
       api.getCategories().then(setCategories).catch(() => {})
     }
-    window.addEventListener('fintrack:categories-changed', onCategoriesChanged)
-    return () => window.removeEventListener('fintrack:categories-changed', onCategoriesChanged)
+    window.addEventListener('luma:categories-changed', onCategoriesChanged)
+    return () => window.removeEventListener('luma:categories-changed', onCategoriesChanged)
   }, [])
 
   const activeUploadProfile = useMemo(

@@ -17,7 +17,7 @@ export function setLocalPreferenceProfileId(profileId) {
 // Single app-wide "something was persisted" signal. Every successful mutation pings it: all non-GET
 // requests through `request()` below, plus the multipart upload helpers (import/run, restore) that
 // can't use the JSON path. Derived views that show server-computed counts — the nav Tasks badge and
-// the Tasks page — listen for `fintrack:data-mutated` and refetch.
+// the Tasks page — listen for `luma:data-mutated` and refetch.
 //
 // Trailing-debounced so a burst of writes (bulk categorize, an import inserting many rows, a bulk
 // duplicate-resolve) coalesces into one refetch instead of N. The point is that *mutating is the
@@ -31,7 +31,7 @@ function signalDataMutated() {
   if (dataMutatedTimer) clearTimeout(dataMutatedTimer)
   dataMutatedTimer = setTimeout(() => {
     dataMutatedTimer = null
-    window.dispatchEvent(new CustomEvent('fintrack:data-mutated'))
+    window.dispatchEvent(new CustomEvent('luma:data-mutated'))
   }, 250)
 }
 

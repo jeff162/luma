@@ -8,6 +8,7 @@ import { HELP_TOPICS, HELP_TOPICS_BY_ID, HELP_SECTIONS } from '../help/content.j
 import { labelForPath } from '../help/navigation.js'
 import { HELP_BODY_CSS } from '../help/helpBody.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { APP_NAME } from '../lib/appConfig.js'
 import { HELP_HINTS_ENABLED_PREF_KEY, HELP_DISMISSED_TIPS_PREF_KEY } from '../help/preferences.js'
 
 const EMPTY_DISMISSED = {}
@@ -150,7 +151,7 @@ export default function Help() {
           </div>
         ) : null}
         <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, marginBottom: 18 }}>
-          Short explainers for how features in FinTrack are designed to be used. Each topic also
+          Short explainers for how features in {APP_NAME} are designed to be used. Each topic also
           appears as a <strong>?</strong> popover next to the feature it describes, so the same
           guidance is one click away when you’re actually looking at the thing.
         </div>

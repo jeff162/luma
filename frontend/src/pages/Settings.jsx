@@ -1321,7 +1321,7 @@ function EnvironmentSection({ authEnabled, currentUser }) {
     plaid_client_id: '',
     plaid_secret: '',
     plaid_env: 'sandbox',
-    fintrack_use_log_files: false,
+    luma_use_log_files: false,
     env_file_path: '',
     env_file_present: false,
   })
@@ -1344,7 +1344,7 @@ function EnvironmentSection({ authEnabled, currentUser }) {
             plaid_client_id: resp.plaid_client_id || '',
             plaid_secret: resp.plaid_secret || '',
             plaid_env: resp.plaid_env || 'sandbox',
-            fintrack_use_log_files: !!resp.fintrack_use_log_files,
+            luma_use_log_files: !!resp.luma_use_log_files,
             env_file_path: resp.env_file_path || '',
             env_file_present: !!resp.env_file_present,
           })
@@ -1379,7 +1379,7 @@ function EnvironmentSection({ authEnabled, currentUser }) {
         plaid_client_id: settings.plaid_client_id,
         plaid_secret: settings.plaid_secret,
         plaid_env: settings.plaid_env,
-        fintrack_use_log_files: settings.fintrack_use_log_files,
+        luma_use_log_files: settings.luma_use_log_files,
       })
       setSettings(prev => ({
         ...prev,
@@ -1439,8 +1439,8 @@ function EnvironmentSection({ authEnabled, currentUser }) {
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
               <input
                 type="checkbox"
-                checked={settings.fintrack_use_log_files}
-                onChange={e => setSettings(prev => ({ ...prev, fintrack_use_log_files: e.target.checked }))}
+                checked={settings.luma_use_log_files}
+                onChange={e => setSettings(prev => ({ ...prev, luma_use_log_files: e.target.checked }))}
               />
               Enable log files at startup
             </label>

@@ -58,7 +58,7 @@ router = APIRouter()
 
 def _dated_backup_filename(stem: str, suffix: str) -> str:
     """Suggested download name stamped with the *local* date — this is a local-first app, so the
-    server clock is the user's clock. Yields names like `fintrack_backup-2026-06-16.zip` that sort
+    server clock is the user's clock. Yields names like `luma_backup-2026-06-16.zip` that sort
     chronologically and disambiguate multiple backups without manual renaming.
 
     Intentionally LOCAL date (`date.today()`), not `utcnow_iso()`: this is a user-facing filename, not
@@ -188,7 +188,7 @@ def _build_encrypted_backup_bytes(payload_bytes: bytes, recipients: list[dict]) 
     encrypted_payload = aesgcm.encrypt(nonce, payload_bytes, None)
 
     manifest = {
-        "format": "fintrack-encrypted-backup",
+        "format": "luma-encrypted-backup",
         "version": 1,
         "cipher": "AES-256-GCM",
         "wrapped_keys": [],
@@ -238,7 +238,10 @@ def _inspect_backup_upload(content: bytes, upload_name: str, expected_member_pre
                 if not (has_manifest and has_payload):
                     raise HTTPException(status_code=400, detail="Encrypted backup ZIP must include both manifest.json and payload.bin")
                 manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
-                if manifest.get("format") != "fintrack-encrypted-backup":
+                # New backups write "luma-encrypted-backup"; the legacy "fintrack-encrypted-backup"
+                # is still accepted so a backup taken from the pre-rename app can be restored into
+                # this one (the supported migration path is: back up in the old app, restore here).
+                if manifest.get("format") not in {"luma-encrypted-backup", "fintrack-encrypted-backup"}:
                     raise HTTPException(status_code=400, detail="Unsupported encrypted backup format")
                 wrapped_keys = manifest.get("wrapped_keys")
                 if not isinstance(wrapped_keys, list) or not wrapped_keys:
@@ -518,7 +521,7 @@ def export_transactions_csv(
     return StreamingResponse(
         generate(),
         media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="fintrack_export.csv"'},
+        headers={"Content-Disposition": 'attachment; filename="luma_export.csv"'},
     )
 
 def build_backup_data(conn) -> dict:
@@ -584,13 +587,13 @@ def export_backup(encrypted: bool = Query(False)):
         if not recipients:
             raise HTTPException(status_code=400, detail="No enabled backup recipients are configured")
         content = _build_encrypted_backup_bytes(
-            _zip_json_bytes("fintrack_backup.json", payload),
+            _zip_json_bytes("luma_backup.json", payload),
             recipients,
         )
-        filename = _dated_backup_filename("fintrack_backup", ".encrypted.zip")
+        filename = _dated_backup_filename("luma_backup", ".encrypted.zip")
     else:
-        content = _zip_json_bytes("fintrack_backup.json", payload)
-        filename = _dated_backup_filename("fintrack_backup", ".zip")
+        content = _zip_json_bytes("luma_backup.json", payload)
+        filename = _dated_backup_filename("luma_backup", ".zip")
     return StreamingResponse(
         iter([content]),
         media_type="application/zip",
@@ -633,13 +636,13 @@ def export_credentials(request: Request, encrypted: bool = Query(False)):
         if not recipients:
             raise HTTPException(status_code=400, detail="No enabled backup recipients are configured")
         content = _build_encrypted_backup_bytes(
-            _zip_json_bytes("fintrack_credentials.json", payload),
+            _zip_json_bytes("luma_credentials.json", payload),
             recipients,
         )
-        filename = _dated_backup_filename("fintrack_credentials", ".encrypted.zip")
+        filename = _dated_backup_filename("luma_credentials", ".encrypted.zip")
     else:
-        content = _zip_json_bytes("fintrack_credentials.json", payload)
-        filename = _dated_backup_filename("fintrack_credentials", ".zip")
+        content = _zip_json_bytes("luma_credentials.json", payload)
+        filename = _dated_backup_filename("luma_credentials", ".zip")
     return StreamingResponse(
         iter([content]),
         media_type="application/zip",

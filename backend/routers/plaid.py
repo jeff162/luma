@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Plaid onboarding bridges Link into FinTrack's local account model.
+Plaid onboarding bridges Link into Luma's local account model.
 
 The router treats a Plaid item as the durable credential boundary: one token
 exchange can create many accounts, while the access token is stored separately

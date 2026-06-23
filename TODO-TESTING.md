@@ -25,8 +25,8 @@ clear of the dev 5174 / 8001) and tears them down after. Playwright ships its
 own browsers, so no system Chrome is needed.
 
 - **Isolation.** `scripts/run-e2e-backend.sh` points the backend at a wiped temp
-  dir via `FINTRACK_ENV_FILE` (data, control, and tenant DBs all throwaway), so
-  E2E never touches the real `fintrack-data.db` / `fintrack-control.db`.
+  dir via `LUMA_ENV_FILE` (data, control, and tenant DBs all throwaway), so
+  E2E never touches the real `luma-data.db` / `luma-control.db`.
 - **Seeding.** `frontend/tests/globalSetup.js` creates one local preference
   profile so specs land past the "Getting Started" onboarding gate. A richer
   demo dataset (owners/accounts/transactions) is a planned follow-up that will

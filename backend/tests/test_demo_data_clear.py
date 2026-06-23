@@ -13,6 +13,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
+from backend.db import control_database
 from backend.db.database import get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.db.demo_data import is_demo_data_loaded, load_demo_data
 from backend.routers.auth import clear_demo_data_endpoint, demo_data_status
@@ -34,8 +35,14 @@ class DemoDataClearTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tempdir.name) / "demo-clear.db"
         init_db(str(self.db_path))
+        # Isolate the control DB: these endpoints read app_setting, so point it at a fresh temp
+        # file and initialize it rather than falling back to whatever control DB sits in the CWD.
+        self._orig_control_path = control_database.CONTROL_DB_PATH
+        control_database.CONTROL_DB_PATH = str(Path(self.tempdir.name) / "control.db")
+        control_database.init_control_db()
 
     def tearDown(self):
+        control_database.CONTROL_DB_PATH = self._orig_control_path
         self.tempdir.cleanup()
 
     @contextmanager

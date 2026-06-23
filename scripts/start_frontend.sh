@@ -9,7 +9,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 ENV_PATH="$ROOT_DIR/.env"
 ENV_EXAMPLE_PATH="$ROOT_DIR/.env_example"
-LOG_PATH="${FINTRACK_LOG_PATH:-}"
+LOG_PATH="${LUMA_LOG_PATH:-}"
 SYSTEM_PYTHON=""
 
 if [[ -n "$LOG_PATH" ]]; then

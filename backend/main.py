@@ -14,11 +14,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Allow the dotenv path to be redirected: the Playwright E2E harness points FINTRACK_ENV_FILE at an
+# Allow the dotenv path to be redirected: the Playwright E2E harness points LUMA_ENV_FILE at an
 # isolated env file so its throwaway DB paths take effect. override=True still keeps the chosen .env
 # authoritative over a stale shell environment — unchanged for the default repo .env.
 load_dotenv(
-    dotenv_path=os.getenv("FINTRACK_ENV_FILE") or (Path(__file__).resolve().parent.parent / ".env"),
+    dotenv_path=os.getenv("LUMA_ENV_FILE") or (Path(__file__).resolve().parent.parent / ".env"),
     override=True,
 )
 
@@ -35,7 +35,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from backend.db.control_database import auth_required, get_local_mode_user, get_user_by_id, init_control_db
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
 from backend.routers import accounts, auth, categories, import_export, owners, plaid, rules, sync, tags, tasks, transactions
-from backend.runtime_config import runtime_config_status
+from backend.runtime_config import APP_NAME, runtime_config_status
 
 
 def _env_int(name: str, default: int) -> int:
@@ -123,7 +123,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="FinTrack", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title=APP_NAME, version="0.2.0", lifespan=lifespan)
 app.add_middleware(TenantSessionMiddleware)
 app.add_middleware(
     SessionMiddleware,

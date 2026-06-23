@@ -217,7 +217,7 @@ revisited in the context of whatever filter UI Trends mode gets.
 
 ### Getting-started guide
 
-**Context.** A high-level user-facing introduction: what FinTrack is for,
+**Context.** A high-level user-facing introduction: what Luma is for,
 how the main concepts (accounts → transactions → categories → rules →
 tags) compose, the order operations usually go in for a new user.
 
@@ -493,7 +493,7 @@ path **plus** the dedupe subsystem, and no one has asked yet.
 - Tolerant parser: OFX 1.x is SGML (unclosed tags, not valid XML), 2.x is XML;
   all carry a header block. Either a dependency (`ofxparse`, somewhat
   unmaintained) or a small hand-rolled tolerant parser.
-- **Sign flip:** OFX `TRNAMT` is signed with negative = debit; FinTrack is
+- **Sign flip:** OFX `TRNAMT` is signed with negative = debit; Luma is
   `amount > 0 = money out` — the opposite. Invert exactly.
 - **`FITID` is a high-confidence dedupe key** — a bank-assigned, per-account
   unique transaction id, far more reliable than the content-hash + heuristic
@@ -528,7 +528,7 @@ exercised yet.
   pipeline; account linking.
 - The per-transaction `id` is a **stable per-account dedupe key** (like `FITID`
   / `plaid_transaction_id`) — key off it.
-- **Sign flip** (negative = money out → FinTrack positive) and **epoch
+- **Sign flip** (negative = money out → Luma positive) and **epoch
   timestamps**, same as OFX.
 - Lighter than Plaid: no Link widget, no link-token endpoint, no paid SDK — two
   HTTP calls and JSON. Much of the account model, sync loop, credential crypto,

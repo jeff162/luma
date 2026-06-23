@@ -17,10 +17,10 @@
  * moved down here. An eslint `no-restricted-properties` rule forbids calling the wrapped `api`
  * methods directly outside this module so the notification can't be skipped again.
  *
- * The nav Tasks badge is NOT refreshed here: every successful mutation emits `fintrack:data-mutated`
+ * The nav Tasks badge is NOT refreshed here: every successful mutation emits `luma:data-mutated`
  * from the api layer (see `signalDataMutated` in api.js), which the badge and Tasks page listen for.
  * That already covers transaction writes, so this seam only fans out the transaction-specific
- * `fintrack:transactions-changed` event for views the global signal doesn't serve.
+ * `luma:transactions-changed` event for views the global signal doesn't serve.
  */
 
 import { api } from './api.js'
@@ -31,9 +31,9 @@ import { api } from './api.js'
 function notifyTransactionsChanged() {
   // Broadcast so derived views (e.g. the dashboard's group/category totals) can refresh in place
   // without each call site having to know which aggregates a given edit invalidated. (The nav Tasks
-  // badge refreshes separately via the api layer's `fintrack:data-mutated` signal.)
+  // badge refreshes separately via the api layer's `luma:data-mutated` signal.)
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('fintrack:transactions-changed'))
+    window.dispatchEvent(new CustomEvent('luma:transactions-changed'))
   }
 }
 

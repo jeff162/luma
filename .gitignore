@@ -16,7 +16,7 @@ data/
 
 # ── Database Backups ─────────────────────────────────────────────────────────
 # Your personal financial data — never commit these
-fintrack_backup.json
+luma_backup.json
 
 # ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/

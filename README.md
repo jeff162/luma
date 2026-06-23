@@ -1,22 +1,22 @@
-# FinTrack
+# Luma
 
 > Your financial data, without the friction.
 
-FinTrack is a personal finance tool that helps you import your data, categorize it, and keep it organized with minimal friction.
+Luma is a personal finance tool that helps you import your data, categorize it, and keep it organized with minimal friction.
 
-Start with a CSV export or connect an account, clean up your categories, define rules for common transactions, and let FinTrack apply them as new data comes in.
+Start with a CSV export or connect an account, clean up your categories, define rules for common transactions, and let Luma apply them as new data comes in.
 
-You stay in control — FinTrack makes it easy to review what changed, spot anything that looks off, and adjust when needed.
+You stay in control — Luma makes it easy to review what changed, spot anything that looks off, and adjust when needed.
 
 Less repetition. Fewer manual fixes. Clear, usable financial data.
 
-## Why FinTrack?
+## Why Luma?
 
 Most personal finance tools follow the same basic model: import data, categorize transactions, define rules, and review the results.
 
 The difference is how much friction that introduces.
 
-FinTrack is designed to reduce that friction:
+Luma is designed to reduce that friction:
 
 - Getting data in is quick and flexible (CSV or connected accounts)
 
@@ -26,11 +26,11 @@ FinTrack is designed to reduce that friction:
 
 - Reviewing your data is straightforward — no digging through menus or workflows
 
-You still do the same core tasks — FinTrack just makes them easier to do and easier to maintain over time.
+You still do the same core tasks — Luma just makes them easier to do and easier to maintain over time.
 
-## What does FinTrack do?
+## What does Luma do?
 
-FinTrack helps you turn raw financial data into something organized and usable.
+Luma helps you turn raw financial data into something organized and usable.
 
 You can:
 
@@ -48,7 +48,7 @@ All core functionality runs locally on your machine. External integrations are o
 
 ## Getting started: what to expect
 
-The first time you open FinTrack you give yourself a name and then **bring in some data** — import a CSV export, connect a data source, or load the bundled demo dataset to explore. That first import is what brings the rest of the app to life; nothing else needs to be set up first.
+The first time you open Luma you give yourself a name and then **bring in some data** — import a CSV export, connect a data source, or load the bundled demo dataset to explore. That first import is what brings the rest of the app to life; nothing else needs to be set up first.
 
 Two things drive everything else: **reports** (mostly the dashboard) and **searching** your transaction history. Accounts, owners, categories, tags, and rules all exist to make those two better, and you can adopt each one when it earns a place in your reports:
 
@@ -58,11 +58,11 @@ Two things drive everything else: **reports** (mostly the dashboard) and **searc
 
 - **Rules** apply categories and tags to new transactions automatically as they arrive — you approve them before they take effect, and they are easy to change later.
 
-The same overview is available any time inside the app under **Help → How FinTrack works**.
+The same overview is available any time inside the app under **Help → How Luma works**.
 
 ## Who is this for?
 
-FinTrack is a good fit for people who:
+Luma is a good fit for people who:
 
 - want to import and organize financial data quickly
 
@@ -82,7 +82,7 @@ It may not be ideal for:
 
 ## Philosophy
 
-FinTrack is built on a few core principles:
+Luma is built on a few core principles:
 
 - Financial tools should reduce effort, not create it
 
@@ -100,7 +100,7 @@ FinTrack is built on a few core principles:
 
 ## Features
 
-FinTrack focuses on making common tasks easy and reducing the effort required to maintain accurate data over time.
+Luma focuses on making common tasks easy and reducing the effort required to maintain accurate data over time.
 
 ### Core capabilities
 
@@ -148,7 +148,7 @@ FinTrack focuses on making common tasks easy and reducing the effort required to
 
 ## Platform support
 
-FinTrack is intended to run on:
+Luma is intended to run on:
 
 - **Windows**
 
@@ -185,15 +185,15 @@ Windows Task Scheduler or run inside a Linux environment.
 ### Quick start
 
 ```bash
-git clone https://github.com/your-username/fintrack.git
-cd fintrack
+git clone https://github.com/your-username/luma.git
+cd luma
 ```
 
 Then launch the backend and frontend together with the script for your platform:
 
-- **Windows** (Command Prompt or double-click): `scripts\start_fintrack.bat`
-- **Windows PowerShell**: `powershell -ExecutionPolicy Bypass -File .\scripts\start_fintrack.ps1`
-- **macOS / Linux / Raspberry Pi**: `bash ./scripts/start_fintrack.sh`
+- **Windows** (Command Prompt or double-click): `scripts\start_luma.bat`
+- **Windows PowerShell**: `powershell -ExecutionPolicy Bypass -File .\scripts\start_luma.ps1`
+- **macOS / Linux / Raspberry Pi**: `bash ./scripts/start_luma.sh`
 
 The helper scripts:
 
@@ -211,7 +211,7 @@ After startup, review `.env` as needed to customize ports, Plaid settings, loggi
 
 ## Testing
 
-FinTrack currently has a small set of test paths that are useful for catching regressions:
+Luma currently has a small set of test paths that are useful for catching regressions:
 
 - **Backend duplicate-detection tests:** fixture-driven import tests live in `backend/tests/test_import_duplicate_detection.py` with anonymized CSV fixtures under `backend/tests/fixtures/import_duplicates/`
 - **Backend suspect-duplicate detection tests:** unit-style coverage of the soft-match flow (cross-account import-time flagging, payee normalization, per-pair-distinct filter via `account_pair_distinct`, broad-Keep cascade, keep/reject resolution with the `dedupe_resolved_by` provenance marker, promote-on-merge with same-batch transitivity clear, auto-restore-on-detach for auto_merge rows, user-Reject preservation across detach, conservation invariants for credit-card-reissue and N-way-merge scenarios) in `backend/tests/test_suspect_duplicates.py`
@@ -221,7 +221,7 @@ FinTrack currently has a small set of test paths that are useful for catching re
 
 ### Running the backend tests
 
-A helper script under `scripts/` wraps `python -m unittest` using the backend venv, so the same command works whether you've installed the backend deps system-wide or only inside `backend/venv/`. Tests use isolated SQLite files in `tempfile.TemporaryDirectory()`s — they do not touch the live `fintrack-data.db`, so they're safe to run with the backend still up.
+A helper script under `scripts/` wraps `python -m unittest` using the backend venv, so the same command works whether you've installed the backend deps system-wide or only inside `backend/venv/`. Tests use isolated SQLite files in `tempfile.TemporaryDirectory()`s — they do not touch the live `luma-data.db`, so they're safe to run with the backend still up.
 
 ```bash
 scripts/run_tests.sh                                              # everything
@@ -245,7 +245,7 @@ These UI tests are intentionally small and are mainly meant to catch regressions
 
 ## Contributing
 
-FinTrack is an early-stage project and evolving quickly. Feedback, bug reports, and contributions are welcome.
+Luma is an early-stage project and evolving quickly. Feedback, bug reports, and contributions are welcome.
 
 To contribute:
 
@@ -257,7 +257,7 @@ To contribute:
 
 ## Documentation
 
-FinTrack is built around a small set of coordinated systems. The following documents describe how those systems are structured and how they work together:
+Luma is built around a small set of coordinated systems. The following documents describe how those systems are structured and how they work together:
 
 - **Architecture:** `docs/architecture.md` — application structure, data flow, and major subsystems
 
@@ -265,7 +265,7 @@ FinTrack is built around a small set of coordinated systems. The following docum
 
 - **UI patterns:** `docs/ui-patterns.md` — interaction patterns and shared UI behavior
 
-These documents are intended for development and deeper understanding of how FinTrack works internally.
+These documents are intended for development and deeper understanding of how Luma works internally.
 
 For implementation details, see inline comments in the codebase, which document system behavior and invariants at the module level.
 

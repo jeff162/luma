@@ -20,8 +20,8 @@ from pathlib import Path
 
 from backend.app_logging import log_info
 
-DB_PATH = os.getenv("DB_PATH", "fintrack-data.db")
-_current_db_path: ContextVar[str | None] = ContextVar("fintrack_current_db_path", default=None)
+DB_PATH = os.getenv("DB_PATH", "luma-data.db")
+_current_db_path: ContextVar[str | None] = ContextVar("luma_current_db_path", default=None)
 SHARED_OWNER_ID = "shared-owner"
 SHARED_OWNER_NAME = "shared"
 SHARED_OWNER_COLOR = "#6366f1"

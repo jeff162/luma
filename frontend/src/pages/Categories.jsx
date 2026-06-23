@@ -35,7 +35,7 @@ const SECTION_META = {
   expense: { label: 'Expense' },
 }
 
-const LEFT_PANEL_WIDTH_STORAGE_KEY_PREFIX = 'fintrack.categories.left-panel-width'
+const LEFT_PANEL_WIDTH_STORAGE_KEY_PREFIX = 'luma.categories.left-panel-width'
 const SECTION_PREF_KEY = 'ui.categories.collapsedSections'
 const GROUP_PREF_KEY = 'ui.categories.collapsedGroups'
 // Stable default so the preference value keeps a constant identity when nothing is stored yet.
@@ -801,8 +801,8 @@ export default function Categories() {
   // refresh the tree when it (or any category mutation) fans out a change so groups appear immediately.
   useEffect(() => {
     function onCategoriesChanged() { loadCategories() }
-    window.addEventListener('fintrack:categories-changed', onCategoriesChanged)
-    return () => window.removeEventListener('fintrack:categories-changed', onCategoriesChanged)
+    window.addEventListener('luma:categories-changed', onCategoriesChanged)
+    return () => window.removeEventListener('luma:categories-changed', onCategoriesChanged)
   }, [loadCategories])
   useEffect(() => {
     api.getTags().then(rows => setAvailableTags(Array.isArray(rows) ? rows : [])).catch(() => setAvailableTags([]))

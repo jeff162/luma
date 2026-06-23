@@ -53,7 +53,7 @@ Many contributors may use WSL on Windows, so shell examples and local tooling sh
 Set in `.env` to expose Developer options on the main Settings page:
 
 ```bash
-FINTRACK_DEVELOPER_OPTIONS=true
+LUMA_DEVELOPER_OPTIONS=true
 ```
 
 ## Useful checks

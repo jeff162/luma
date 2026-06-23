@@ -19,6 +19,11 @@ from pathlib import Path
 from dotenv import dotenv_values, set_key
 
 
+# Display name for the application, surfaced in user-facing backend strings (the FastAPI title, the
+# Plaid Link client name, the TOTP issuer, setup messages). Overridable by env for white-labelling;
+# mirrors the frontend's build-time VITE_APP_NAME so the two stay in step.
+APP_NAME = (os.getenv("APP_NAME") or "Luma").strip() or "Luma"
+
 DEFAULT_SESSION_SECRET = "dev-session-secret-change-me"
 PLACEHOLDER_SESSION_SECRET = "change_me_to_a_long_random_value"
 
@@ -37,7 +42,7 @@ def env_example_path() -> Path:
 
 def default_session_cookie_name() -> str:
     base = "".join(ch.lower() if ch.isalnum() else "_" for ch in project_root().name).strip("_")
-    return f"{base or 'fintrack'}_session"
+    return f"{base or 'luma'}_session"
 
 
 def _invalid_session_secret(value: str | None) -> bool:
@@ -77,7 +82,7 @@ def runtime_config_status() -> dict:
             "code": "session_secret_not_configured",
             "title": "Finish environment setup",
             "message": (
-                "FinTrack needs a unique SESSION_SECRET before this instance should be used. "
+                f"{APP_NAME} needs a unique SESSION_SECRET before this instance should be used. "
                 + (
                     "Restart the backend to load the new settings from .env."
                     if pending_restart else
@@ -170,15 +175,15 @@ def read_environment_settings() -> dict:
     plaid_client_id = (values.get("PLAID_CLIENT_ID") or os.getenv("PLAID_CLIENT_ID") or "").strip()
     plaid_secret = (values.get("PLAID_SECRET") or os.getenv("PLAID_SECRET") or "").strip()
     plaid_env = (values.get("PLAID_ENV") or os.getenv("PLAID_ENV") or "sandbox").strip() or "sandbox"
-    log_value = values.get("FINTRACK_USE_LOG_FILES")
+    log_value = values.get("LUMA_USE_LOG_FILES")
     if log_value is None:
-        log_value = os.getenv("FINTRACK_USE_LOG_FILES")
+        log_value = os.getenv("LUMA_USE_LOG_FILES")
 
     return {
         "plaid_client_id": plaid_client_id,
         "plaid_secret": plaid_secret,
         "plaid_env": plaid_env,
-        "fintrack_use_log_files": _truthy_env(log_value, default=False),
+        "luma_use_log_files": _truthy_env(log_value, default=False),
         "env_file_present": env_path.exists(),
         "env_file_path": str(env_path),
     }
@@ -189,7 +194,7 @@ def write_environment_settings(
     plaid_client_id: str | None,
     plaid_secret: str | None,
     plaid_env: str | None,
-    fintrack_use_log_files: bool | None,
+    luma_use_log_files: bool | None,
 ) -> dict:
     env_path = _ensure_env_file_exists()
 
@@ -206,8 +211,8 @@ def write_environment_settings(
         set_key(str(env_path), "PLAID_SECRET", plaid_secret.strip())
     if normalized_plaid_env is not None:
         set_key(str(env_path), "PLAID_ENV", normalized_plaid_env)
-    if fintrack_use_log_files is not None:
-        set_key(str(env_path), "FINTRACK_USE_LOG_FILES", "true" if fintrack_use_log_files else "false")
+    if luma_use_log_files is not None:
+        set_key(str(env_path), "LUMA_USE_LOG_FILES", "true" if luma_use_log_files else "false")
 
     return {
         "settings": read_environment_settings(),

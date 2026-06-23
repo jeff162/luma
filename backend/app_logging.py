@@ -17,7 +17,7 @@ def _resolve_logger(level: int, logger_name: str | None = None) -> tuple[logging
     if uvicorn_logger.hasHandlers() and uvicorn_logger.isEnabledFor(level):
         return uvicorn_logger, False
 
-    logger = logging.getLogger(logger_name or "fintrack")
+    logger = logging.getLogger(logger_name or "luma")
     if logger.hasHandlers() and logger.isEnabledFor(level):
         return logger, False
 

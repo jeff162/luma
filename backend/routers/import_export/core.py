@@ -114,7 +114,7 @@ GENERIC_DUPLICATE_TEXT_TOKENS = {
 
 
 def _developer_options_enabled() -> bool:
-    return str(os.getenv("FINTRACK_DEVELOPER_OPTIONS", "")).strip().lower() in {"1", "true", "yes", "on"}
+    return str(os.getenv("LUMA_DEVELOPER_OPTIONS", "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _require_developer_access(request: Request):
@@ -2813,7 +2813,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             #   1. An explicit per-label mapping from the review screen always wins.
             #   2. The user's own rules run BEFORE the file's category. If a rule categorizes the row
             #      we store it under the rule's category and intentionally do NOT create a category
-            #      from the file label — that label category would be empty and unused. FinTrack's
+            #      from the file label — that label category would be empty and unused. Luma's
             #      rules are the source of truth; the file label is only a bootstrap fallback (see
             #      docs/data-model.md "imported categories"). Tag-only rules still apply their tags
             #      while leaving the category open for the fallback below.

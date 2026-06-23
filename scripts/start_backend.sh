@@ -11,7 +11,7 @@ ENV_PATH="$ROOT_DIR/.env"
 ENV_EXAMPLE_PATH="$ROOT_DIR/.env_example"
 VENV_DIR="$BACKEND_DIR/venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
-LOG_PATH="${FINTRACK_LOG_PATH:-}"
+LOG_PATH="${LUMA_LOG_PATH:-}"
 SYSTEM_PYTHON=""
 
 if [[ -n "$LOG_PATH" ]]; then
@@ -106,7 +106,7 @@ from pathlib import Path
 import sys
 
 name = Path(sys.argv[1]).name.lower()
-sanitized = ''.join(ch if ch.isalnum() else '_' for ch in name).strip('_') or 'fintrack'
+sanitized = ''.join(ch if ch.isalnum() else '_' for ch in name).strip('_') or 'luma'
 print(f"{sanitized}_session")
 PY
 }

@@ -96,7 +96,7 @@ export function buildEmptyDataSourceBody(name) {
 }
 
 export function getImportDraftStorageKey(instanceId, subjectId) {
-  return instanceId && subjectId ? `fintrack.importDraft.v2.${instanceId}.${subjectId}` : null
+  return instanceId && subjectId ? `luma.importDraft.v2.${instanceId}.${subjectId}` : null
 }
 
 export function loadSavedImportDraftRecord(instanceId, subjectId) {

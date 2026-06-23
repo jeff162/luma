@@ -23,9 +23,10 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db.database import DB_PATH, init_db
+from backend.runtime_config import APP_NAME
 
 
-CONTROL_DB_PATH = str(Path(os.getenv("CONTROL_DB_PATH", "fintrack-control.db")))
+CONTROL_DB_PATH = str(Path(os.getenv("CONTROL_DB_PATH", "luma-control.db")))
 TENANT_DATA_ROOT = Path(os.getenv("TENANT_DATA_ROOT", "data"))
 PASSWORD_ITERATIONS = 600_000
 TOTP_PERIOD = 30
@@ -135,7 +136,7 @@ def verify_totp_code(secret: str, code: str, window: int = 1) -> bool:
     return False
 
 
-def build_totp_uri(username: str, secret: str, issuer: str = "FinTrack") -> str:
+def build_totp_uri(username: str, secret: str, issuer: str = APP_NAME) -> str:
     label = urllib.parse.quote(f"{issuer}:{username}")
     issuer_q = urllib.parse.quote(issuer)
     return f"otpauth://totp/{label}?secret={secret}&issuer={issuer_q}&algorithm=SHA1&digits=6&period={TOTP_PERIOD}"
@@ -421,7 +422,7 @@ def security_profile_guidance(profile: str | None = None) -> dict:
             "suggested_password_policy": PASSWORD_POLICY_STRONG,
         }
     return {
-        "summary": "Use this when FinTrack runs only on the same machine as the browser and never needs access outside localhost.",
+        "summary": f"Use this when {APP_NAME} runs only on the same machine as the browser and never needs access outside localhost.",
         "recommended_auth": False,
         "suggested_password_policy": PASSWORD_POLICY_NONE,
     }
@@ -501,7 +502,7 @@ def _legacy_db_path() -> str:
 
 
 def _tenant_db_filename() -> str:
-    return Path(DB_PATH).name or "fintrack-data.db"
+    return Path(DB_PATH).name or "luma-data.db"
 
 
 def _default_tenant_db_path(tenant_id: str) -> str:

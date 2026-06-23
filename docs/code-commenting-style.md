@@ -5,7 +5,7 @@ help a reader understand *why the code exists* and *how to think about
 it*, not restate what it does.
 
 The underlying concern is that low-value comments create noise without
-preserving the reasoning that actually prevents regressions. FinTrack
+preserving the reasoning that actually prevents regressions. Luma
 changes fastest around workflows, invariants, and shared UI behavior, so
 comments need to capture the mental model behind those systems rather
 than narrate obvious code.

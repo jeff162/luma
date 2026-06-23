@@ -17,9 +17,9 @@
  */
 
 export const THEME_PREF_KEY = 'ui.appearance.theme'
-export const THEME_CACHE_KEY = 'fintrack.theme'
+export const THEME_CACHE_KEY = 'luma.theme'
 // Records which backend database the cached choice belongs to (see reconcileThemeCacheForDb).
-export const THEME_CACHE_DB_KEY = 'fintrack.theme.db'
+export const THEME_CACHE_DB_KEY = 'luma.theme.db'
 
 export const THEME_SYSTEM = 'system'
 export const THEME_LIGHT = 'light'

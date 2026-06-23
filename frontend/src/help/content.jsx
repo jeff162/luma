@@ -23,6 +23,7 @@
  */
 
 import HelpLink from './HelpLink.jsx'
+import { APP_NAME } from '../lib/appConfig.js'
 
 /*
  * Help-index sections. The standalone /help page groups topics under these headings, in this
@@ -36,7 +37,7 @@ export const HELP_SECTIONS = [
   {
     key: 'getting-started',
     label: 'Getting started',
-    blurb: 'What FinTrack is for, and loading the first data.',
+    blurb: `What ${APP_NAME} is for, and loading the first data.`,
   },
   {
     key: 'importing',
@@ -62,26 +63,26 @@ export const HELP_SECTIONS = [
 
 export const HELP_TOPICS = [
   {
-    id: 'how-fintrack-works',
+    id: 'how-luma-works',
     section: 'getting-started',
-    title: 'How FinTrack works',
+    title: `How ${APP_NAME} works`,
     surfaces: ['Getting started', 'Dashboard'],
-    summary: 'FinTrack is for two things: reports (mostly the dashboard) and searching the transaction history. Everything else -- accounts, owners, categories, tags, rules -- exist to make those two better.',
+    summary: `${APP_NAME} is for two things: reports (mostly the dashboard) and searching the transaction history. Everything else -- accounts, owners, categories, tags, rules -- exist to make those two better.`,
     body: () => (
       <>
         <p>
-          Two features sit at the center of FinTrack: <strong>reports</strong> (mostly through the
+          Two features sit at the center of {APP_NAME}: <strong>reports</strong> (mostly through the
           dashboard) and <strong>searching</strong> the transaction history. All of the other features --
           accounts, owners, categories, tags, and rules -- exist to make those two better, and
           can be used or not as fits your use case.
         </p>
         <p>
-          A handful of deliberate design choices shape how FinTrack behaves and how it is best
-          used -- see <HelpLink to="/help/design-principles">how FinTrack is designed to be
+          A handful of deliberate design choices shape how {APP_NAME} behaves and how it is best
+          used -- see <HelpLink to="/help/design-principles">how {APP_NAME} is designed to be
             used</HelpLink>.
         </p>
         <p>
-          All of the data remains local unless you move it somewhere else; FinTrack never makes an outgoing
+          All of the data remains local unless you move it somewhere else; {APP_NAME} never makes an outgoing
           connection unless specifically requested (eg. downloading
           transactions from a data provider).
         </p>
@@ -149,9 +150,9 @@ export const HELP_TOPICS = [
     ),
   },
   {
-    id: 'parts-of-fintrack',
+    id: 'parts-of-luma',
     section: 'getting-started',
-    title: 'The parts of FinTrack',
+    title: `The parts of ${APP_NAME}`,
     surfaces: ['Getting started'],
     summary: 'A tour of the app -- what each section is for (Import/Export, accounts & owners, categories & groups, tags, rules, the dashboard) and the two ways rules come into being.',
     body: () => (
@@ -220,7 +221,7 @@ export const HELP_TOPICS = [
               anything takes effect.
             </li>
             <li>
-              When a transaction is categorized, FinTrack offers to
+              When a transaction is categorized, {APP_NAME} offers to
               turn that action into a rule -- give it conditions and actions, apply it to other matching
               transactions, and save it. From then on it runs automatically against newly imported data
               (Categorizing imported data can be controlled when importing a file and there is
@@ -239,13 +240,13 @@ export const HELP_TOPICS = [
   {
     id: 'design-principles',
     section: 'getting-started',
-    title: 'How FinTrack is designed to be used',
+    title: `How ${APP_NAME} is designed to be used`,
     surfaces: ['Getting started'],
-    summary: 'A few deliberate choices shape how FinTrack behaves -- categorization that compounds instead of repeating, editing in place, non-destructive toggles, and dedupe that makes overlapping imports safe. Knowing the reasoning makes the rest of the app easier to use.',
+    summary: `A few deliberate choices shape how ${APP_NAME} behaves -- categorization that compounds instead of repeating, editing in place, non-destructive toggles, and dedupe that makes overlapping imports safe. Knowing the reasoning makes the rest of the app easier to use.`,
     body: () => (
       <>
         <p>
-          FinTrack makes a handful of deliberate choices, all aimed at keeping routine work
+          {APP_NAME} makes a handful of deliberate choices, all aimed at keeping routine work
           low-friction. It is meant to act as a window into the data and to stay out of the way
           rather than enforce one particular method -- so when something seems like it should be
           possible but is not, that is usually a gap worth reporting rather than an intended limit.
@@ -258,7 +259,7 @@ export const HELP_TOPICS = [
             transaction is not a one-off edit -- it can become a rule that reproduces the same
             decision across every matching transaction, now and on future imports. So time spent
             refining a few good rules pays off more than re-touching individual rows. See{' '}
-            <HelpLink to="/help/parts-of-fintrack">how rules come into being</HelpLink>.
+            <HelpLink to="/help/parts-of-luma">how rules come into being</HelpLink>.
           </li>
           <li>
             <strong>Editing happens where the data is shown.</strong> Wherever a thing is viewed it
@@ -269,7 +270,7 @@ export const HELP_TOPICS = [
           </li>
           <li>
             <strong>Each feature is adopted only when it earns a place.</strong> Reports and search
-            are the two things FinTrack exists to do well; accounts, owners, categories, tags, and
+            are the two things {APP_NAME} exists to do well; accounts, owners, categories, tags, and
             rules all exist to make those better. None are mandatory, and each can be left aside
             until it pays off in a report worth having -- there is no obligation to fill everything
             in up front.
@@ -294,7 +295,7 @@ export const HELP_TOPICS = [
           <li>
             <strong>Ambiguous cases are surfaced, not guessed.</strong> Where more than one reading
             is reasonable -- which account a transaction belongs to, whether a row is a duplicate,
-            how something should be categorized -- FinTrack asks rather than deciding silently, and a
+            how something should be categorized -- {APP_NAME} asks rather than deciding silently, and a
             manual choice overrides what a rule would otherwise do. A prompt asking for a decision is
             doing real work, and manual corrections stick.
           </li>
@@ -522,7 +523,7 @@ export const HELP_TOPICS = [
     body: () => (
       <>
         <p>
-          FinTrack builds one clean ledger out of several sources over time, and the same activity often
+          {APP_NAME} builds one clean ledger out of several sources over time, and the same activity often
           arrives more than once &mdash; once from a card, again from the bank that pays it off, or from an
           aggregator that has seen both. The dedupe engine settles the clear, high-confidence cases on its
           own and surfaces the rest here, grouped into pills along the top. They fall into two kinds:
@@ -677,7 +678,7 @@ export const HELP_TOPICS = [
             another.</li>
         </ul>
         <p>
-          FinTrack tries to infer the convention from the file, but it’s worth confirming &mdash; an amount
+          {APP_NAME} tries to infer the convention from the file, but it’s worth confirming &mdash; an amount
           mapped with the wrong convention flips income and expense.
         </p>
       </>
@@ -800,8 +801,8 @@ export const HELP_TOPICS = [
       <>
         <p>
           If the data comes from another tool where the transactions already carry meaningful categories, tell
-          FinTrack the import’s data is category data is useful (turn on <em>“use the categories present in the data”</em>
-          on the file’s card). FinTrack keeps those categories on the imported rows, adds any which are missing to
+          {APP_NAME} the import’s data is category data is useful (turn on <em>“use the categories present in the data”</em>
+          on the file’s card). {APP_NAME} keeps those categories on the imported rows, adds any which are missing to
           the system’s list of categories, and <strong>Generate rules</strong> analyzes them to propose rules that reproduce the
           same categorization on future, uncategorized data. Nothing takes effect until it has been
           reviewed.
@@ -883,7 +884,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           See also:{' '}
-          <HelpLink to="/help/parts-of-fintrack">how rules come into being</HelpLink>.
+          <HelpLink to="/help/parts-of-luma">how rules come into being</HelpLink>.
         </p>
       </>
     ),

@@ -148,10 +148,10 @@ export function UnifiedDuplicatesViewerProvider({ children }) {
         reloadRef.current?.()
       }, 300)
     }
-    window.addEventListener('fintrack:accounts-changed', onAccountsChanged)
+    window.addEventListener('luma:accounts-changed', onAccountsChanged)
     return () => {
       if (pendingTimeout) clearTimeout(pendingTimeout)
-      window.removeEventListener('fintrack:accounts-changed', onAccountsChanged)
+      window.removeEventListener('luma:accounts-changed', onAccountsChanged)
     }
   }, [])
 

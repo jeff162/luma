@@ -1,6 +1,6 @@
 # UI Patterns
 
-This document records the UI patterns FinTrack should prefer. It is not a full design system; it is a working reference for visual and interaction consistency.
+This document records the UI patterns Luma should prefer. It is not a full design system; it is a working reference for visual and interaction consistency.
 
 This document defines UI behavior and interaction patterns. For underlying data structures and system flow, see `architecture.md` and `data-model.md`.
 
@@ -40,7 +40,7 @@ This document defines UI behavior and interaction patterns. For underlying data 
 
 ## Product intent
 
-FinTrack should feel polished, quiet, and immediately useful. The UI should support routine work in place rather than forcing separate admin or settings flows for common actions.
+Luma should feel polished, quiet, and immediately useful. The UI should support routine work in place rather than forcing separate admin or settings flows for common actions.
 
 Polish is part of the feature, not a later cleanup step.
 
@@ -508,7 +508,7 @@ The app offers five theme choices from the Appearance section at the top of Sett
 
 - **The choice is a user preference** (`ui.appearance.theme`, via `useUserPreference`), applied by `ThemeController` in `App.jsx`; a `system` choice tracks the OS `prefers-color-scheme` live through a `matchMedia` listener. The single source of truth for *applying* a theme is `src/lib/theme.js`.
 
-- **Anti-FOUC cache.** Preferences round-trip from the backend (too slow to gate first paint), so `theme.js` mirrors the resolved choice into a `localStorage` cache (`fintrack.theme`) that a tiny inline script in `index.html` reads to set `data-theme` before React mounts. Without it, the pre-React paint and the "Loading preferences…" screen would flash dark before a light preference loads. The backend preference stays authoritative; the app reconciles the cache to it on load.
+- **Anti-FOUC cache.** Preferences round-trip from the backend (too slow to gate first paint), so `theme.js` mirrors the resolved choice into a `localStorage` cache (`luma.theme`) that a tiny inline script in `index.html` reads to set `data-theme` before React mounts. Without it, the pre-React paint and the "Loading preferences…" screen would flash dark before a light preference loads. The backend preference stays authoritative; the app reconciles the cache to it on load.
 
 ## Charts and overlays
 

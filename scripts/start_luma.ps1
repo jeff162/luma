@@ -105,7 +105,7 @@ if (-not $powerShellExe) {
   throw "PowerShell executable not found."
 }
 
-$useLogFiles = Test-Truthy (Get-EnvValue $envPath 'FINTRACK_USE_LOG_FILES') $false
+$useLogFiles = Test-Truthy (Get-EnvValue $envPath 'LUMA_USE_LOG_FILES') $false
 $backendPort = Get-EnvValue $envPath 'BACKEND_PORT'
 if ([string]::IsNullOrWhiteSpace($backendPort)) {
   $backendPort = '8000'
@@ -114,17 +114,17 @@ $frontendPort = Get-EnvValue $envPath 'FRONTEND_PORT'
 if ([string]::IsNullOrWhiteSpace($frontendPort)) {
   $frontendPort = '5173'
 }
-$backendReadyTimeout = Get-IntValue (Get-EnvValue $envPath 'FINTRACK_BACKEND_READY_TIMEOUT') 180
+$backendReadyTimeout = Get-IntValue (Get-EnvValue $envPath 'LUMA_BACKEND_READY_TIMEOUT') 180
 $backendHealthUrl = "http://127.0.0.1:$backendPort/api/health"
 
 if (Test-PortInUse ([int]$backendPort)) {
-  throw "Backend port $backendPort is already in use. Stop the running backend before running start_fintrack again."
+  throw "Backend port $backendPort is already in use. Stop the running backend before running start_luma again."
 }
 if (Test-PortInUse ([int]$frontendPort)) {
-  throw "Frontend port $frontendPort is already in use. Stop the running frontend before running start_fintrack again."
+  throw "Frontend port $frontendPort is already in use. Stop the running frontend before running start_luma again."
 }
 
-Write-Host "Starting FinTrack backend in a new window..."
+Write-Host "Starting Luma backend in a new window..."
 $backendArgs = @(
   '-NoExit',
   '-ExecutionPolicy', 'Bypass',
@@ -134,7 +134,7 @@ if ($useLogFiles) {
   $backendArgs += @('-LogPath', $backendLog)
 }
 
-wt.exe -w 0 new-tab --title "FinTrack Backend" $powerShellExe @backendArgs
+wt.exe -w 0 new-tab --title "Luma Backend" $powerShellExe @backendArgs
 
 Write-Host "Waiting for backend to respond on $backendHealthUrl ..."
 if (Wait-BackendReady -Url $backendHealthUrl -TimeoutSeconds $backendReadyTimeout) {
@@ -143,7 +143,7 @@ if (Wait-BackendReady -Url $backendHealthUrl -TimeoutSeconds $backendReadyTimeou
   Write-Host "Backend did not become ready within $backendReadyTimeout seconds. Starting the frontend anyway."
 }
 
-Write-Host "Starting FinTrack frontend in a new window..."
+Write-Host "Starting Luma frontend in a new window..."
 $frontendArgs = @(
   '-NoExit',
   '-ExecutionPolicy', 'Bypass',
@@ -155,15 +155,15 @@ if ($useLogFiles) {
 
 #note, title won't stick for frontend window because after npm run
 #dev Vite will change it to ...\system32\cmd
-wt.exe -w 0 new-tab --title "FinTrack Frontend" $powerShellExe @frontendArgs
+wt.exe -w 0 new-tab --title "Luma Frontend" $powerShellExe @frontendArgs
 
 Write-Host ""
-Write-Host "FinTrack launch requested."
+Write-Host "Luma launch requested."
 Write-Host "Two terminal windows should open: one for the backend and one for the frontend."
 if ($useLogFiles) {
   Write-Host "Logs are overwritten on each launch:"
   Write-Host "  $backendLog"
   Write-Host "  $frontendLog"
 } else {
-  Write-Host "Log files are disabled by FINTRACK_USE_LOG_FILES in .env."
+  Write-Host "Log files are disabled by LUMA_USE_LOG_FILES in .env."
 }

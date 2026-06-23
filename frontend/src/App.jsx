@@ -102,7 +102,7 @@ const NAV_LINKS = [
   ['/help', 'Help'],
 ]
 
-const LOCAL_PROFILE_STORAGE_KEY_PREFIX = 'fintrack.localPreferenceProfile'
+const LOCAL_PROFILE_STORAGE_KEY_PREFIX = 'luma.localPreferenceProfile'
 const STARTUP_ROUTE_PREFERENCE_KEY = 'ui.startupRoute'
 const DATA_PROVIDER_STARTUP_ROUTE = '/accounts'
 const loadDashboardPage = () => import('./pages/Dashboard.jsx')
@@ -216,7 +216,7 @@ const GLOBAL_SCROLLBAR_STYLES = `
   }
 `
 
-const NAV_PANE_WIDTH_STORAGE_KEY = 'fintrack.ui.navPaneWidth'
+const NAV_PANE_WIDTH_STORAGE_KEY = 'luma.ui.navPaneWidth'
 const NAV_PANE_DEFAULT_WIDTH = 220
 const NAV_PANE_MIN_WIDTH = 140
 const NAV_PANE_MAX_WIDTH = NAV_PANE_DEFAULT_WIDTH
@@ -861,7 +861,7 @@ function LocalPreferenceProfileScreen({
 // auto-refreshes its entries when the user edits accounts based on what the report shows.
 // Other surfaces can listen for the same event if they need to react to account mutations.
 export function notifyAccountsChanged() {
-  window.dispatchEvent(new CustomEvent('fintrack:accounts-changed'))
+  window.dispatchEvent(new CustomEvent('luma:accounts-changed'))
 }
 
 // Applies the user's stored theme choice to <html> and keeps a 'system' choice in sync with the OS.
@@ -1105,10 +1105,10 @@ export default function App() {
     }
 
     fetchTasks()
-    window.addEventListener('fintrack:data-mutated', fetchTasks)
-    return () => window.removeEventListener('fintrack:data-mutated', fetchTasks)
+    window.addEventListener('luma:data-mutated', fetchTasks)
+    return () => window.removeEventListener('luma:data-mutated', fetchTasks)
     // Two refresh triggers, by design:
-    //   * `fintrack:data-mutated` — same-session immediacy: any successful mutation anywhere emits
+    //   * `luma:data-mutated` — same-session immediacy: any successful mutation anywhere emits
     //     this from the api layer (see `signalDataMutated` in api.js), so the badge updates without
     //     the user navigating, and no call site has to remember to refresh it.
     //   * `location.pathname` in the deps — navigation backstop: re-fetch on every route change to

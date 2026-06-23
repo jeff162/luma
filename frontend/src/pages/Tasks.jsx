@@ -122,11 +122,11 @@ export default function Tasks() {
     fetchTasks()
     // Re-fetch when work elsewhere (categorizing transactions, etc.) resolves task items,
     // so the per-task counts shown here stay current without a manual reload. Every successful
-    // mutation emits `fintrack:data-mutated` from the api layer (see `signalDataMutated`).
-    window.addEventListener('fintrack:data-mutated', fetchTasks)
+    // mutation emits `luma:data-mutated` from the api layer (see `signalDataMutated`).
+    window.addEventListener('luma:data-mutated', fetchTasks)
     return () => {
       cancelled = true
-      window.removeEventListener('fintrack:data-mutated', fetchTasks)
+      window.removeEventListener('luma:data-mutated', fetchTasks)
     }
   }, [])
 

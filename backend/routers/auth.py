@@ -127,7 +127,7 @@ class EnvironmentSettingsRequest(BaseModel):
     plaid_client_id: str | None = None
     plaid_secret: str | None = None
     plaid_env: str | None = None
-    fintrack_use_log_files: bool | None = None
+    luma_use_log_files: bool | None = None
 
 
 class PasswordPolicyRequest(BaseModel):
@@ -222,11 +222,11 @@ def _auth_status_payload(request: Request | None = None) -> dict:
     with get_db() as conn:
         db_instance_id = get_db_instance_id(conn)
     experimental_security_settings = _truthy_env(
-        os.getenv("FINTRACK_EXPERIMENTAL_SECURITY_SETTINGS"),
+        os.getenv("LUMA_EXPERIMENTAL_SECURITY_SETTINGS"),
         default=False,
     )
     developer_options_enabled = _truthy_env(
-        os.getenv("FINTRACK_DEVELOPER_OPTIONS"),
+        os.getenv("LUMA_DEVELOPER_OPTIONS"),
         default=False,
     )
     payload = {
@@ -405,7 +405,7 @@ def delete_local_profile(profile_id: str):
 @router.delete("/local-preference-profiles")
 def clear_local_profiles(request: Request):
     if not _truthy_env(
-        os.getenv("FINTRACK_DEVELOPER_OPTIONS"),
+        os.getenv("LUMA_DEVELOPER_OPTIONS"),
         default=False,
     ):
         raise HTTPException(status_code=404, detail="Developer options are not enabled")
@@ -450,7 +450,7 @@ def save_environment_settings(body: EnvironmentSettingsRequest, request: Request
             plaid_client_id=body.plaid_client_id,
             plaid_secret=body.plaid_secret,
             plaid_env=body.plaid_env,
-            fintrack_use_log_files=body.fintrack_use_log_files,
+            luma_use_log_files=body.luma_use_log_files,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

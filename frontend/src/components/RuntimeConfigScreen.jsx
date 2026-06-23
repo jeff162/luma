@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
 import { APP_NAME } from '../lib/appConfig.js'
 
-const WAITING_STORAGE_KEY = 'fintrack.runtimeConfigWaitingForRestart'
+const WAITING_STORAGE_KEY = 'luma.runtimeConfigWaitingForRestart'
 const WAITING_STORAGE_TTL_MS = 5 * 60 * 1000
 
 /*

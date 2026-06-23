@@ -16,13 +16,13 @@ import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
 
 const ACCOUNTS_SECTIONS_PREF_KEY = 'ui.accounts.sections'
-const ACCOUNTS_SECTIONS_STORAGE_KEY_PREFIX = 'fintrack.accounts.sections'
+const ACCOUNTS_SECTIONS_STORAGE_KEY_PREFIX = 'luma.accounts.sections'
 const LEGACY_ACCOUNT_OWNERS_PREF_KEY = 'ui.accounts.accountOwnersExpanded'
-const LEGACY_ACCOUNT_OWNERS_STORAGE_KEY_PREFIX = 'fintrack.accounts.accountOwnersExpanded'
+const LEGACY_ACCOUNT_OWNERS_STORAGE_KEY_PREFIX = 'luma.accounts.accountOwnersExpanded'
 const ACCOUNTS_COLLAPSED_PREF_KEY = 'ui.accounts.collapsedGroups'
-const ACCOUNTS_COLLAPSED_STORAGE_KEY_PREFIX = 'fintrack.accounts.collapsedGroups'
+const ACCOUNTS_COLLAPSED_STORAGE_KEY_PREFIX = 'luma.accounts.collapsedGroups'
 const ACCOUNTS_SORT_PREF_KEY = 'ui.accounts.sort'
-const ACCOUNTS_SORT_STORAGE_KEY_PREFIX = 'fintrack.accounts.sort'
+const ACCOUNTS_SORT_STORAGE_KEY_PREFIX = 'luma.accounts.sort'
 const ACCOUNT_ROW_COLUMNS = '22px minmax(0, 1.2fr) minmax(112px, 0.4fr) minmax(116px, 0.42fr) minmax(0, 0.95fr) 28px'
 const ACCOUNT_ROW_CHILD_INDENT = 28
 const ACCOUNT_ROW_GAP = 10

@@ -33,7 +33,7 @@ const CategoryImportWorkspace = lazy(() => import('../components/CategoryImportW
 // Broadcast after the workspace mutates categories (apply / delete) so other surfaces that hold their
 // own category copy — the Import page, the Categories page — re-fetch. Exported for any future mutation
 // site that should fan out the same way.
-const CATEGORIES_CHANGED_EVENT = 'fintrack:categories-changed'
+const CATEGORIES_CHANGED_EVENT = 'luma:categories-changed'
 export function notifyCategoriesChanged() {
   if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(CATEGORIES_CHANGED_EVENT))
 }

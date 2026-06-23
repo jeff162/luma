@@ -72,7 +72,7 @@ cleanup_stray_processes() {
 
   # Find processes whose command includes the project path
   pids=$(ps -eo pid=,args= | awk -v root="$root" '
-    $0 ~ root && $0 !~ /awk/ && $0 !~ /start_fintrack.sh/ { print $1 }
+    $0 ~ root && $0 !~ /awk/ && $0 !~ /start_luma.sh/ { print $1 }
   ')
 
   if [[ -z "$pids" ]]; then
@@ -134,8 +134,8 @@ open_in_terminal() {
   local bash_command="bash \"$script_path\"; exec bash"
 
   if [[ -n "$log_path" ]]; then
-    env_prefix=(env FINTRACK_LOG_PATH="$log_path")
-    bash_command="FINTRACK_LOG_PATH=\"$log_path\" bash \"$script_path\"; exec bash"
+    env_prefix=(env LUMA_LOG_PATH="$log_path")
+    bash_command="LUMA_LOG_PATH=\"$log_path\" bash \"$script_path\"; exec bash"
   fi
 
   #  WSL detection
@@ -170,7 +170,7 @@ open_in_terminal() {
   return 1
 }
 
-USE_LOG_FILES_VALUE="$(get_env_value "$ENV_PATH" FINTRACK_USE_LOG_FILES)"
+USE_LOG_FILES_VALUE="$(get_env_value "$ENV_PATH" LUMA_USE_LOG_FILES)"
 if is_truthy "$USE_LOG_FILES_VALUE"; then
   USE_LOG_FILES=1
 else
@@ -183,7 +183,7 @@ BACKEND_PORT="$(get_env_value "$ENV_PATH" BACKEND_PORT)"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_PORT="$(get_env_value "$ENV_PATH" FRONTEND_PORT)"
 FRONTEND_PORT="${FRONTEND_PORT:-5173}"
-BACKEND_READY_TIMEOUT="$(get_positive_int "$(get_env_value "$ENV_PATH" FINTRACK_BACKEND_READY_TIMEOUT)" 180)"
+BACKEND_READY_TIMEOUT="$(get_positive_int "$(get_env_value "$ENV_PATH" LUMA_BACKEND_READY_TIMEOUT)" 180)"
 BACKEND_HEALTH_URL="http://127.0.0.1:${BACKEND_PORT}/api/health"
 
 if port_in_use "$BACKEND_PORT"; then
@@ -207,7 +207,7 @@ fi
 #   the parent terminal. Clean them up so they don't build up
 cleanup_stray_processes "$ROOT_DIR"
 
-if open_in_terminal "$BACKEND_SCRIPT" "FinTrack Backend" "$BACKEND_TERMINAL_LOG"; then
+if open_in_terminal "$BACKEND_SCRIPT" "Luma Backend" "$BACKEND_TERMINAL_LOG"; then
   echo "Started backend in a new terminal window."
 else
   echo "Could not open a new terminal window for the backend."
@@ -221,7 +221,7 @@ else
   echo "Backend did not become ready in time."
 fi
 
-if open_in_terminal "$FRONTEND_SCRIPT" "FinTrack Frontend" "$FRONTEND_TERMINAL_LOG"; then
+if open_in_terminal "$FRONTEND_SCRIPT" "Luma Frontend" "$FRONTEND_TERMINAL_LOG"; then
   echo "Started frontend in a new terminal window."
 else
   echo "Could not open a new terminal window for the frontend."
@@ -229,4 +229,4 @@ else
 fi
 
 echo
-echo "FinTrack launch requested."
+echo "Luma launch requested."

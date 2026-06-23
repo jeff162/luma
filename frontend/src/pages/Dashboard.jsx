@@ -1976,8 +1976,8 @@ export default function Dashboard() {
         loadTrendGroups()
       }
     }
-    window.addEventListener('fintrack:transactions-changed', onTxnChange)
-    return () => window.removeEventListener('fintrack:transactions-changed', onTxnChange)
+    window.addEventListener('luma:transactions-changed', onTxnChange)
+    return () => window.removeEventListener('luma:transactions-changed', onTxnChange)
   }, [mode, loadSingleTotals, loadCompareTotals, loadTrendSeries, loadTrendGroups, selectedGroup, cmpGroup, periodA, periodB, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters])
 
   useEffect(() => {
@@ -2238,7 +2238,7 @@ export default function Dashboard() {
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
       <PageHeader
         title="Dashboard"
-        help={<FeatureExplainer topic="how-fintrack-works" placement="bottom-left" />}
+        help={<FeatureExplainer topic="how-luma-works" placement="bottom-left" />}
         leftAdornment={(mode === 'single' || mode === 'trends') && (
           <div style={{
             display: 'flex', background: 'var(--surface2)',

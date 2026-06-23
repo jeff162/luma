@@ -19,6 +19,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
+from backend.db import control_database
 from backend.db.control_database import auth_required
 from backend.db.database import SHARED_OWNER_ID, _seed_default_categories, get_db, get_db_instance_id, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export.backup import RestoreRequest, build_backup_data, restore_backup
@@ -56,8 +57,14 @@ class BackupRestoreTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tempdir.name) / "backup-tests.db"
         init_db(str(self.db_path))
+        # Isolate the control DB: the restore guard reads app_setting, so point it at a fresh temp
+        # file and initialize it rather than falling back to whatever control DB sits in the CWD.
+        self._orig_control_path = control_database.CONTROL_DB_PATH
+        control_database.CONTROL_DB_PATH = str(Path(self.tempdir.name) / "control.db")
+        control_database.init_control_db()
 
     def tearDown(self):
+        control_database.CONTROL_DB_PATH = self._orig_control_path
         self.tempdir.cleanup()
 
     @contextmanager

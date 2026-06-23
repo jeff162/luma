@@ -34,7 +34,7 @@ const COLUMN_DEFS = [
 
 const DEFAULT_ORDER = ['date', 'merchant', 'category', 'account', 'amount']
 const TXN_COLUMNS_PREF_KEY = 'ui.transactions.columns'
-const TXN_SESSION_STATE_STORAGE_KEY = 'fintrack:txn-session-state'
+const TXN_SESSION_STATE_STORAGE_KEY = 'luma:txn-session-state'
 const DEFAULT_TRANSACTION_SORT = { key: 'date', dir: 'desc' }
 const TRANSACTIONS_BASE_PAGE_SIZE = 500
 const TRANSACTIONS_MAX_PAGE_SIZE = 1000

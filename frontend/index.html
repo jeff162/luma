@@ -6,7 +6,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>FinTrack</title>
+    <title>Luma</title>
     <!--
       Theme is driven entirely by these CSS custom properties. `:root` holds the dark theme
       (the default, used for data-theme="dark" and when no attr is set); [data-theme="light"]
@@ -21,7 +21,7 @@
       // resolved choice into this localStorage cache on every change to keep the next load correct.
       (function () {
         try {
-          var t = localStorage.getItem('fintrack.theme') || 'system'
+          var t = localStorage.getItem('luma.theme') || 'system'
           // Explicit palettes apply directly; 'system' (or anything unknown) resolves to the OS scheme.
           // Keep this palette list in sync with THEMES in src/lib/theme.js.
           var explicit = t === 'light' || t === 'soft' || t === 'dim' || t === 'dark'

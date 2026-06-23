@@ -89,7 +89,7 @@ function Get-DefaultSessionCookieName([string]$RootPath) {
   }) -join ''
   $sanitized = $sanitized.Trim('_')
   if ([string]::IsNullOrWhiteSpace($sanitized)) {
-    $sanitized = 'fintrack'
+    $sanitized = 'luma'
   }
   return "${sanitized}_session"
 }
