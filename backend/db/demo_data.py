@@ -267,7 +267,7 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
             "SELECT 1 FROM category_rule WHERE LOWER(keyword) = ?", (keyword,)
         ).fetchone():
             conn.execute(
-                "INSERT INTO category_rule (id, category_id, keyword, priority) VALUES (?, ?, ?, 5)",
+                "INSERT INTO category_rule (id, category_id, keyword) VALUES (?, ?, ?)",
                 (str(uuid.uuid4()), leaves[leaf_name], keyword),
             )
 

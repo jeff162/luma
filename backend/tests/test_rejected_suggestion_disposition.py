@@ -84,8 +84,8 @@ class RejectedSuggestionDispositionTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 """INSERT INTO category_rule
-                     (id, category_id, keyword, priority, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id)
-                   VALUES (?, ?, ?, 5, NULL, NULL, 'both', NULL, NULL, NULL)""",
+                     (id, category_id, keyword, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id)
+                   VALUES (?, ?, ?, NULL, NULL, 'both', NULL, NULL, NULL)""",
                 (rule_id, category_id, keyword),
             )
         return rule_id

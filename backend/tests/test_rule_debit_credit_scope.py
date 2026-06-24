@@ -86,8 +86,8 @@ class RuleDebitCreditScopeTests(unittest.TestCase):
                 conn.execute(
                     """
                     INSERT INTO category_rule
-                      (id, category_id, keyword, priority, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id)
-                    VALUES (?, ?, ?, 5, 100.0, NULL, ?, NULL, NULL, NULL)
+                      (id, category_id, keyword, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id)
+                    VALUES (?, ?, ?, 100.0, NULL, ?, NULL, NULL, NULL)
                     """,
                     (rule_id, category_id, keyword, debit_credit),
                 )

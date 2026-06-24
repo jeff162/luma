@@ -44,7 +44,7 @@ class StarterSetTests(unittest.TestCase):
             payload = list_starter_rules()
         self.assertEqual(len(payload["rules"]), len(DEFAULT_RULE_SEEDS))
         sample = payload["rules"][0]
-        self.assertEqual(set(sample), {"keyword", "category_name", "priority"})
+        self.assertEqual(set(sample), {"keyword", "category_name"})
 
     def test_generate_categories_only_adds_leaves_not_rules(self):
         with self._use_db_path():

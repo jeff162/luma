@@ -701,8 +701,8 @@ def reactivate_category(category_id: str):
 def list_starter_rules():
     return {
         "rules": [
-            {"keyword": keyword, "category_name": category_name, "priority": priority}
-            for keyword, category_name, priority, _amt_min, _amt_max in DEFAULT_RULE_SEEDS
+            {"keyword": keyword, "category_name": category_name}
+            for keyword, category_name, _amt_min, _amt_max in DEFAULT_RULE_SEEDS
         ]
     }
 

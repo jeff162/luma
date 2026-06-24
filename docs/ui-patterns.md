@@ -424,6 +424,34 @@ CSV import has a few special rules:
 
 - Recent-import file cards may use the same small `↗` detail affordance used elsewhere in the app to open a file-scoped ledger view of the transactions imported from that file. The same `↗` marks the other count pills that open a report (rejected rows, duplicates), so a pill that drills into a report is visually distinct from a static label pill (the account chips, which only describe what the file contained). Reuse the `↗` rather than restyling the whole pill; the glyph is the shared "opens a report" signal.
 
+### Rule suggestion review — bulk select alongside per-card actions
+
+The Generate Rules review (`ImportRuleSuggestionReview`) lets the user build a selection of suggestion
+cards. The "Bulk Select" toggle enters *bulk mode* (and becomes "Cancel" while active); a per-card
+checkbox feeds `selectedSuggestionIds`. The model deliberately keeps two channels separate:
+
+- **Bulk dispositions live only in a sticky bulk-actions bar.** While in bulk mode the header shows a
+  bulk-actions row with visible buttons for the active view (pending/older: Save · Defer · Discard-keep ·
+  Discard-clear; deferred: Resume · Save; discarded: Restore; etc.) plus Select all / Clear and the
+  selection count. Labels omit "selected" — the bar already scopes them. (A right-click context menu over
+  the list mirrors the same set as a power-user accelerator.) Running a bulk action settles the selection
+  and exits bulk mode (`resetBulkMode`).
+- **A card's own row buttons always act on just that card** — even when the card is part of the
+  selection — and never touch `selectedSuggestionIds`. This is the deliberate invariant: it lets the user
+  assemble a batch *and* pick off outliers individually at the same time, without the per-card actions
+  disturbing the in-progress selection. (An earlier design made a *selected* card's button act on the
+  whole selection, gated by a Ctrl escape hatch; that ambiguity was the "odd" behavior this model
+  removed.) Per-card edits and the per-card reject-with-disposition menu are likewise always single-card.
+
+So: **row buttons = this card only; the bulk-actions bar = the selection.** Anything refactoring this
+surface must keep that split — do not make a row button operate on the selection.
+
+The selection survives navigation: it is mirrored to **`sessionStorage`** (scoped by review context —
+import source + owner filter + view) and restored when Generate Rules reopens that same context, with
+stale ids dropped by intersecting against the suggestions currently visible. It is deliberately *not*
+written to the durable `ui_preference` store — an in-progress selection is a within-session convenience
+that should not outlive the session or land in a data backup.
+
 ### Import mapping persistence
 
 Import mapping persistence has two layers:

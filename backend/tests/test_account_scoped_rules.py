@@ -88,8 +88,8 @@ class AccountScopedRulesTests(unittest.TestCase):
                 conn.execute(
                     """
                     INSERT INTO category_rule
-                      (id, category_id, keyword, priority, amount_min, amount_max, clean_name, owner_id, account_id)
-                    VALUES (?, ?, ?, 5, NULL, NULL, NULL, NULL, ?)
+                      (id, category_id, keyword, amount_min, amount_max, clean_name, owner_id, account_id)
+                    VALUES (?, ?, ?, NULL, NULL, NULL, NULL, ?)
                     """,
                     (rule_id, category_id, keyword, account_id),
                 )

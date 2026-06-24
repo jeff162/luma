@@ -269,55 +269,55 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
     return pending
 
 
-# Built-in starter rule catalog: (keyword, leaf category name, priority, amount_min, amount_max).
+# Built-in starter rule catalog: (keyword, leaf category name, amount_min, amount_max).
 # Single source of truth for the opt-in starter rule set — surfaced for selection (the starter-rules
 # catalog endpoint) and seeded on demand (generate-starter, demo). Rules target leaf categories by
 # NAME, so the matching starter leaves must already exist (_seed_default_categories(include_leaves=True)).
-DEFAULT_RULE_SEEDS: list[tuple[str, str, int, float | None, float | None]] = [
-        ("whole foods",  "Groceries",        10, None, None),
-        ("trader joe",   "Groceries",        10, None, None),
-        ("kroger",       "Groceries",         8, None, None),
-        ("safeway",      "Groceries",         8, None, None),
-        ("aldi",         "Groceries",         8, None, None),
-        ("costco",       "Groceries",         7, None, None),
-        ("doordash",     "Dining Out",        10, None, None),
-        ("uber eats",    "Dining Out",        10, None, None),
-        ("grubhub",      "Dining Out",        10, None, None),
-        ("mcdonald",     "Dining Out",         9, None, None),
-        ("starbucks",    "Coffee & Drinks",    9, None, None),
-        ("chipotle",     "Dining Out",         9, None, None),
-        ("restaurant",   "Dining Out",         5, None, None),
-        ("cafe",         "Coffee & Drinks",    4, None, None),
-        ("uber",         "Rideshare",          9, None, None),
-        ("lyft",         "Rideshare",          9, None, None),
-        ("shell",        "Gas",                8, None, None),
-        ("chevron",      "Gas",                8, None, None),
-        ("exxon",        "Gas",                8, None, None),
-        ("bp",           "Gas",                7, None, None),
-        ("parking",      "Parking & Tolls",    6, None, None),
-        ("netflix",      "Streaming Services", 10, None, None),
-        ("spotify",      "Streaming Services", 10, None, None),
-        ("hulu",         "Streaming Services", 10, None, None),
-        ("apple.com",    "Streaming Services", 9, None, None),
-        ("amazon prime", "Streaming Services", 9, None, None),
-        ("youtube",      "Streaming Services", 8, None, None),
-        ("electric",     "Electricity",        8, None, None),
-        ("water bill",   "Water",              8, None, None),
-        ("comcast",      "Internet",           9, None, None),
-        ("verizon",      "Phone",              9, None, None),
-        ("at&t",         "Phone",              9, None, None),
-        ("cvs",          "Pharmacy",           8, None, None),
-        ("walgreen",     "Pharmacy",           8, None, None),
-        ("amazon",       "Online Shopping",    7, None, None),
-        ("target",       "Household Supplies", 8, None, None),
-        ("walmart",      "Household Supplies", 8, None, None),
-        ("best buy",     "Electronics",        9, None, None),
-        ("airbnb",       "Hotel",             10, None, None),
-        ("hotel",        "Hotel",              8, None, None),
-        ("delta",        "Air Travel",         9, None, None),
-        ("united",       "Air Travel",         9, None, None),
-        ("payroll",      "Salary",            10, None, None),
-        ("direct dep",   "Salary",             9, None, None),
+DEFAULT_RULE_SEEDS: list[tuple[str, str, float | None, float | None]] = [
+        ("whole foods",  "Groceries",        None, None),
+        ("trader joe",   "Groceries",        None, None),
+        ("kroger",       "Groceries",        None, None),
+        ("safeway",      "Groceries",        None, None),
+        ("aldi",         "Groceries",        None, None),
+        ("costco",       "Groceries",        None, None),
+        ("doordash",     "Dining Out",       None, None),
+        ("uber eats",    "Dining Out",       None, None),
+        ("grubhub",      "Dining Out",       None, None),
+        ("mcdonald",     "Dining Out",       None, None),
+        ("starbucks",    "Coffee & Drinks",  None, None),
+        ("chipotle",     "Dining Out",       None, None),
+        ("restaurant",   "Dining Out",       None, None),
+        ("cafe",         "Coffee & Drinks",  None, None),
+        ("uber",         "Rideshare",        None, None),
+        ("lyft",         "Rideshare",        None, None),
+        ("shell",        "Gas",              None, None),
+        ("chevron",      "Gas",              None, None),
+        ("exxon",        "Gas",              None, None),
+        ("bp",           "Gas",              None, None),
+        ("parking",      "Parking & Tolls",  None, None),
+        ("netflix",      "Streaming Services", None, None),
+        ("spotify",      "Streaming Services", None, None),
+        ("hulu",         "Streaming Services", None, None),
+        ("apple.com",    "Streaming Services", None, None),
+        ("amazon prime", "Streaming Services", None, None),
+        ("youtube",      "Streaming Services", None, None),
+        ("electric",     "Electricity",      None, None),
+        ("water bill",   "Water",            None, None),
+        ("comcast",      "Internet",         None, None),
+        ("verizon",      "Phone",            None, None),
+        ("at&t",         "Phone",            None, None),
+        ("cvs",          "Pharmacy",         None, None),
+        ("walgreen",     "Pharmacy",         None, None),
+        ("amazon",       "Online Shopping",  None, None),
+        ("target",       "Household Supplies", None, None),
+        ("walmart",      "Household Supplies", None, None),
+        ("best buy",     "Electronics",      None, None),
+        ("airbnb",       "Hotel",            None, None),
+        ("hotel",        "Hotel",            None, None),
+        ("delta",        "Air Travel",       None, None),
+        ("united",       "Air Travel",       None, None),
+        ("payroll",      "Salary",           None, None),
+        ("direct dep",   "Salary",           None, None),
 ]
 
 
@@ -336,7 +336,7 @@ def seed_default_rules(conn: sqlite3.Connection, *, keywords: list[str] | None =
 
     wanted = None if keywords is None else {str(k).strip().lower() for k in keywords}
     created = 0
-    for keyword, cat_name, priority, amt_min, amt_max in DEFAULT_RULE_SEEDS:
+    for keyword, cat_name, amt_min, amt_max in DEFAULT_RULE_SEEDS:
         if wanted is not None and keyword.lower() not in wanted:
             continue
         cid = cat_id(cat_name)
@@ -349,9 +349,9 @@ def seed_default_rules(conn: sqlite3.Connection, *, keywords: list[str] | None =
         if not existing:
             conn.execute(
                 """INSERT INTO category_rule
-                   (id, category_id, keyword, priority, amount_min, amount_max)
-                   VALUES (?,?,?,?,?,?)""",
-                (str(uuid.uuid4()), cid, keyword, priority, amt_min, amt_max),
+                   (id, category_id, keyword, amount_min, amount_max)
+                   VALUES (?,?,?,?,?)""",
+                (str(uuid.uuid4()), cid, keyword, amt_min, amt_max),
             )
             created += 1
     return created

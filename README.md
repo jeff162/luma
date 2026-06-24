@@ -98,6 +98,20 @@ Luma is built on a few core principles:
 
 - Overlapping data should be safe to import — duplicates are detected, not feared
 
+## Privacy
+
+Luma is local-first by design, and your data stays with you:
+
+- **Your data lives on your machine** — everything is kept in a local SQLite database, not in the cloud.
+
+- **No tracking** — Luma has no analytics, telemetry, or "phone home," and doesn't report on how you use it.
+
+- **Connections happen only when you ask** — the app reaches the network only for actions you initiate, such as syncing transactions from a data source you've connected through Plaid. Connect nothing, and Luma makes no outbound connections at all.
+
+- **Backups stay local** — exports are saved as files on your machine (optionally encrypted), never uploaded to a service.
+
+You decide what comes in, what stays, and what leaves. Luma is built to organize your financial data, not to collect it.
+
 ## Features
 
 Luma focuses on making common tasks easy and reducing the effort required to maintain accurate data over time.

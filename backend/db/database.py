@@ -5,10 +5,11 @@
 Primary application database: schema and seeding for each tenant DB.
 
 This file owns the durable model the routers and services share. Its key guarantees
-are that fresh databases are created directly in the current shape and core invariants
-like leaf-only transaction categories and the built-in shared owner are re-established
-on startup. The in-place migration chain was removed at the Luma rebrand break point
-(see CURRENT_VERSION below); older databases come across via backup/restore, not migration.
+are that fresh databases are created directly in the current shape, existing ones are
+advanced in place by `run_migrations`, and core invariants like leaf-only transaction
+categories and the built-in shared owner are re-established on startup. The migration
+chain is currently empty — it was reset to the baseline (v1) at the Luma rebrand (see
+CURRENT_VERSION); future schema changes register migrations from there.
 """
 
 import json
@@ -90,13 +91,25 @@ def get_db(db_path: str | None = None):
         conn.close()
 
 
-# Fresh installs are created directly at `CURRENT_VERSION` from the full schema in `init_db`. The
-# incremental migration chain (v1..v32) that upgraded pre-existing databases in place was removed at
-# the Luma rebrand break point: the supported upgrade path off any older database is now backup +
-# restore into a fresh install, not in-place migration. `CURRENT_VERSION` is reset to 1 as the new
-# baseline; the next schema change reintroduces a migration runner starting from here.
+# Fresh installs are created directly at `CURRENT_VERSION` from the full schema in `init_db` and
+# stamped there without replaying migrations. Existing databases are advanced in place by
+# `run_migrations`, which applies every registered migration newer than the DB's recorded version.
+#
+# The migration chain was *reset* at the Luma rebrand: the historical v1..v32 migrations were dropped
+# (there is no in-place upgrade path off a pre-rebrand database — those come across via backup/restore)
+# and the baseline is `1`. The runner and registry below are intentionally retained so the next schema
+# change registers `@migration(2)` and bumps `CURRENT_VERSION`; there are simply no migrations yet.
 
 CURRENT_VERSION = 1
+
+MIGRATIONS = {}
+
+
+def migration(version):
+    def decorator(fn):
+        MIGRATIONS[version] = fn
+        return fn
+    return decorator
 
 
 def get_db_version(conn) -> int:
@@ -121,6 +134,22 @@ def set_db_version(conn, version: int):
         "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('version', ?)",
         (str(version),)
     )
+
+
+def run_migrations(conn):
+    # Advance an existing database to `CURRENT_VERSION` by applying each registered migration newer than
+    # its recorded version, in order, stamping the version as it goes. Fresh installs never reach here —
+    # they are created at the current schema and stamped directly (see init_db). `MIGRATIONS` is empty
+    # today (reset at the Luma rebrand), so this is a no-op until the next schema change registers one.
+    current = get_db_version(conn)
+    if current >= CURRENT_VERSION:
+        return
+    for version in sorted(MIGRATIONS):
+        if version > current:
+            log_info(f"[db] applying migration v{version}...")
+            MIGRATIONS[version](conn)
+            set_db_version(conn, version)
+    log_info(f"[db] database is now at version {CURRENT_VERSION}")
 
 
 def get_db_instance_id(conn) -> str:
@@ -229,14 +258,15 @@ def init_db(db_path: str | None = None):
             CREATE INDEX IF NOT EXISTS idx_category_active ON category(is_active);
 
             -- keyword is matched as a case-insensitive substring of merchant_name or raw_name.
-            -- Higher priority wins when multiple rules match.
+            -- When several rules match a transaction the most specific wins, by the categorizer's
+            -- precedence order (owner-scoped, then account-scoped, then longer keyword, then more
+            -- conditions — see services/categorizer.load_categorization_rules).
             -- amount_min/amount_max allow the same payee to map to different categories
             -- depending on transaction size (e.g. small Costco = groceries, large = shopping).
             CREATE TABLE IF NOT EXISTS category_rule (
                 id           TEXT PRIMARY KEY,
                 category_id  TEXT REFERENCES category(id) ON DELETE CASCADE,
                 keyword      TEXT NOT NULL,
-                priority     INTEGER NOT NULL DEFAULT 5,
                 amount_min   REAL,
                 amount_max   REAL,
                 debit_credit TEXT NOT NULL DEFAULT 'both',
@@ -465,10 +495,11 @@ def init_db(db_path: str | None = None):
             _alphabetize_top_level_category_groups(conn)
             set_db_version(conn, CURRENT_VERSION)
             log_info(f"[db] created new database at schema version {CURRENT_VERSION}")
-        # An existing database needs nothing further: init_db's schema is all
-        # `CREATE TABLE IF NOT EXISTS`, so re-running it on a current database is a no-op. The
-        # in-place migration chain that used to run here was removed at the Luma rebrand (see
-        # CURRENT_VERSION above) — older databases come across via backup/restore, not migration.
+        else:
+            # Advance an existing database in place. init_db's schema is all `CREATE TABLE IF NOT
+            # EXISTS`, so structural changes belong in registered migrations, which run here. With the
+            # chain currently empty this is a no-op, but it is the hook every future migration runs through.
+            run_migrations(conn)
         ensure_shared_owner(conn)
 
 

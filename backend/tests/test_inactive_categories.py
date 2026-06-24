@@ -259,7 +259,7 @@ class InactiveCategoryTests(unittest.IsolatedAsyncioTestCase):
         with self._use_db_path():
             with get_db() as conn:
                 conn.execute(
-                    "INSERT INTO category_rule (id, category_id, keyword, priority) VALUES (?, ?, 'netflix', 5)",
+                    "INSERT INTO category_rule (id, category_id, keyword) VALUES (?, ?, 'netflix')",
                     (rule_id, leaf_id),
                 )
             delete_category(leaf_id, CategoryDelete(replacement_category_id=None))
@@ -647,7 +647,7 @@ class InactiveCategoryTests(unittest.IsolatedAsyncioTestCase):
         with self._use_db_path():
             with get_db() as conn:
                 conn.execute(
-                    "INSERT INTO category_rule (id, category_id, keyword, priority) VALUES (?, ?, 'starbucks', 100)",
+                    "INSERT INTO category_rule (id, category_id, keyword) VALUES (?, ?, 'starbucks')",
                     (str(uuid.uuid4()), leaf_id),
                 )
             preview = empty_cleanup_preview()

@@ -944,6 +944,33 @@ def _remove_pending_derived_rule_suggestions(review_state: dict, suggestion_id: 
     review_state["statuses"] = statuses
 
 
+def _prune_phantom_rule_suggestion_entry(review_state: dict, suggestion_id: str, status: str) -> None:
+    """Guard a review update from leaving a phantom suggestion behind. The review endpoints `setdefault`
+    an entry for whatever `suggestion_id` they're given and only fill fields that arrive in the request,
+    so a data-less call (notably undo, which replays just `{suggestion_id, status}`) could persist an
+    empty `{}` entry — which then renders as a blank card and inflates `total_count` (the summary counts
+    `len(suggestions)`). Two cases get dropped here, entry and status together:
+
+      - returning a suggestion to `pending` (it belongs back in the generated pool, where it regenerates
+        from live rows with its real row count and sorts correctly) — except a synthetic follow-up, which
+        has no live rows to regenerate from and must persist;
+      - any entry left without identifying content (no keyword, merchant, or rows), which is never a
+        real suggestion and is only ever the residue of a data-less restore.
+    """
+    suggestions = review_state.get("suggestions") or {}
+    statuses = review_state.get("statuses") or {}
+    entry = suggestions.get(suggestion_id)
+    is_synthetic = isinstance(entry, dict) and entry.get("synthetic")
+    has_content = isinstance(entry, dict) and (
+        entry.get("keyword") or entry.get("merchant_label") or entry.get("source_row_ids")
+    )
+    if (status == "pending" and not is_synthetic) or not has_content:
+        suggestions.pop(suggestion_id, None)
+        statuses.pop(suggestion_id, None)
+    review_state["suggestions"] = suggestions
+    review_state["statuses"] = statuses
+
+
 def refresh_rule_suggestion_review(review_state: dict, suggestions: list[dict]) -> dict:
     existing_entries = review_state.get("suggestions") or {}
     statuses = review_state.get("statuses") or {}
@@ -1185,6 +1212,22 @@ def _generate_rule_suggestions(conn, candidate_rows: list[dict], selected_owner_
     categories_by_name, categories_by_id = _load_import_rule_target_maps(conn)
     all_by_keyword: dict[str, list[dict]] = {}
 
+    # Owner-scoping is decided below from who maps a keyword to which category. That signal must be
+    # stable: it has to reflect every owner who uses the keyword, not just the ones whose rows are still
+    # awaiting a rule. Once an owner's rows are claimed by an accepted rule they leave `candidate_rows`,
+    # so a keyword that two owners share would look single-owner and silently drop the owner filter from
+    # the remaining owner's suggestion — broadening an owner-scoped set into a global rule that overlaps
+    # the accepted one. So fold existing owner-scoped rules for the keyword back into the signal; the
+    # decision then no longer depends on accept order.
+    rule_owner_targets: dict[str, dict[str, set]] = {}
+    for rule_row in conn.execute(
+        "SELECT keyword, owner_id, category_id FROM category_rule WHERE owner_id IS NOT NULL AND category_id IS NOT NULL"
+    ).fetchall():
+        rule_keyword = normalize_rule_keyword(rule_row["keyword"] or "")
+        if not rule_keyword:
+            continue
+        rule_owner_targets.setdefault(rule_keyword, {}).setdefault(rule_row["owner_id"], set()).add(rule_row["category_id"])
+
     for base_row in candidate_rows:
         row = dict(base_row)
         if selected_owner_ids and row["owner_id"] not in selected_owner_ids:
@@ -1229,6 +1272,10 @@ def _generate_rule_suggestions(conn, candidate_rows: list[dict], selected_owner_
             owner_targets.setdefault(row["owner_id"] or "__none__", set()).add(
                 row["target_category_id"] or f"name:{row['target_category_name']}"
             )
+        # Fold in owners who already hold an owner-scoped rule for this keyword (see note at the top), so
+        # an accepted rule keeps the keyword "multi-owner" even after its rows have left the candidate pool.
+        for rule_owner_id, rule_targets in rule_owner_targets.get(keyword, {}).items():
+            owner_targets.setdefault(rule_owner_id, set()).update(rule_targets)
 
         needs_owner_scope = len(owner_targets) > 1 and len({tuple(sorted(values)) for values in owner_targets.values()}) > 1
         scopes = {}
@@ -3690,6 +3737,7 @@ def update_batch_rule_suggestion_review(batch_id: str, body: BatchRuleSuggestion
             for entry in synthetic_entries:
                 suggestion_id = entry.pop("id")
                 review_state["suggestions"][suggestion_id] = entry
+        _prune_phantom_rule_suggestion_entry(review_state, body.suggestion_id, status)
         review_summary = summarize_rule_suggestion_review(review_state)
         snapshot[RULE_SUGGESTION_REVIEW_KEY] = review_state
         save_batch_snapshot(conn, batch_id, snapshot)
@@ -3782,6 +3830,7 @@ def update_profile_rule_suggestion_review(profile_id: str, body: BatchRuleSugges
             for entry in synthetic_entries:
                 suggestion_id = entry.pop("id")
                 review_state["suggestions"][suggestion_id] = entry
+        _prune_phantom_rule_suggestion_entry(review_state, body.suggestion_id, status)
         review_summary = summarize_rule_suggestion_review(review_state)
         column_map[RULE_SUGGESTION_REVIEW_KEY] = review_state
         _save_profile_column_map(conn, profile_id, column_map)
@@ -3885,6 +3934,7 @@ def update_system_rule_suggestion_review(body: BatchRuleSuggestionReviewUpdateRe
             for entry in synthetic_entries:
                 suggestion_id = entry.pop("id")
                 review_state["suggestions"][suggestion_id] = entry
+        _prune_phantom_rule_suggestion_entry(review_state, body.suggestion_id, status)
         review_summary = summarize_rule_suggestion_review(review_state)
         _save_system_rule_suggestion_review_state(conn, review_state)
 

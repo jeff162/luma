@@ -286,9 +286,12 @@ export default function ImportRuleSuggestions() {
     })
   }
 
-  // `rowRestore` (optional) is the prior-state snapshot of transactions a reject disposition changed,
-  // so undo can put the rows back as well as the suggestion's review status — one atomic-feeling step.
-  function pushUndo(suggestionIds, rowRestore = null) {
+  // `rowRestore` (optional) is the prior-state snapshot of transactions an action changed (a reject
+  // disposition, or a rule an accept applied to its rows), so undo can put the rows back as well as the
+  // suggestion's review status. `ruleIdsToDelete` (optional) are rules an accept *created*; undo must
+  // delete them, otherwise the rule keeps owning the rows and the suggestion can never regenerate —
+  // it vanishes and the total silently drops.
+  function pushUndo(suggestionIds, rowRestore = null, ruleIdsToDelete = null) {
     const idSet = new Set(suggestionIds)
     const statuses = {}
     for (const s of ruleSuggestionState.suggestions) {
@@ -296,7 +299,11 @@ export default function ImportRuleSuggestions() {
         statuses[s.id] = { review_status: s.review_status, rule_id: s.rule_id ?? null }
       }
     }
-    const snapshot = { statuses, rows: rowRestore && rowRestore.length ? rowRestore : null }
+    const snapshot = {
+      statuses,
+      rows: rowRestore && rowRestore.length ? rowRestore : null,
+      ruleIds: ruleIdsToDelete && ruleIdsToDelete.length ? ruleIdsToDelete : null,
+    }
     setUndoStack(prev => [...prev.slice(-(MAX_UNDO - 1)), snapshot])
   }
 
@@ -304,13 +311,18 @@ export default function ImportRuleSuggestions() {
     if (undoStack.length === 0) return
     const snapshot = undoStack[undoStack.length - 1]
     setUndoStack(prev => prev.slice(0, -1))
-    // Restore any row dispositions first, so the rows are back to their prior categorization before the
-    // suggestion returns to the queue.
+    // Delete any rules the accept created, so the accept is truly reversed: with the rule gone its rows
+    // are import-candidates again and the suggestion regenerates instead of disappearing.
+    for (const ruleId of snapshot.ruleIds || []) {
+      await api.deleteRule(ruleId).catch(() => { })
+    }
+    // Restore any row categorization the action changed, so the rows are back to their prior state before
+    // the suggestion returns to the queue.
     if (snapshot.rows && snapshot.rows.length) {
       await txnMutations.restoreCategorization(snapshot.rows).catch(() => { })
     }
-    // Accepted suggestions may have created or linked rules, so undo has to replay
-    // the server-side review state instead of only rolling back local UI state.
+    // Replay the server-side review status (an accept also touched it, and covered suggestions were
+    // auto-discarded), restoring each captured suggestion to where it was before the action.
     for (const [suggestionId, prev] of Object.entries(snapshot.statuses || {})) {
       await updateSuggestionReviewForContext({
         suggestion_id: suggestionId,
@@ -638,14 +650,17 @@ export default function ImportRuleSuggestions() {
   // generated it — and only those rows. The backend uses preserve_manual, so any row a user Preserved
   // (manual exception) is left untouched, and rows belonging to other (conflicting) suggestions aren't
   // in this set — they're left alone rather than silently reassigned to this rule's category.
+  // Returns the apply result (notably `prior_rows`, the rows' pre-apply categorization snapshot) so the
+  // caller can stash it for Undo; null if there was nothing to apply or the apply failed.
   async function applyRuleToSuggestionRows(ruleId, suggestion) {
     const rowIds = suggestion?.source_row_ids || []
-    if (!ruleId || !rowIds.length) return
+    if (!ruleId || !rowIds.length) return null
     try {
-      await txnMutations.applyRuleToTransactions(ruleId, rowIds)
+      return await txnMutations.applyRuleToTransactions(ruleId, rowIds)
     } catch {
       // The rule itself saved; a failure to back-apply to its own rows shouldn't fail the accept.
       // The user can still re-apply from the rule, and the rows surface again on the next generate.
+      return null
     }
   }
 
@@ -665,7 +680,14 @@ export default function ImportRuleSuggestions() {
       return
     }
     const coveredSuggestionIds = getCoveredSuggestionIds(suggestion, data)
-    pushUndo([suggestion.id, ...coveredSuggestionIds])
+    // Auto-apply the rule's outputs to this suggestion's own source rows (no extra step), capturing the
+    // rows' prior categorization *first* so Undo can restore it. The broad "apply to all matches" action
+    // below is opt-in and a superset; this scoped pass is the default.
+    const applyResult = await applyRuleToSuggestionRows(createdRule?.id, suggestion)
+    // Only a freshly *created* rule is ours to delete on undo; a save that merged into a pre-existing
+    // rule must not delete that rule (it wasn't created here).
+    const ruleIdsToDelete = createdRule?.id && createdRule?.status === 'created' ? [createdRule.id] : null
+    pushUndo([suggestion.id, ...coveredSuggestionIds], applyResult?.prior_rows || null, ruleIdsToDelete)
     await updateSuggestionReviewForContext({
       suggestion_id: suggestion.id,
       status: 'accepted',
@@ -680,9 +702,6 @@ export default function ImportRuleSuggestions() {
       amount_max: data.amount_max,
       clean_name_suggestion: data.clean_name || null,
     })
-    // Auto-apply the rule's outputs to this suggestion's own source rows (no extra step). The broad
-    // "apply to all matches" action below is opt-in and a superset; this scoped pass is the default.
-    await applyRuleToSuggestionRows(createdRule?.id, suggestion)
     if (applyToExisting && createdRule?.id) await txnMutations.applyRule(createdRule.id)
     // A merge that actually changed the existing rule (filled a category/rename or added tags — i.e. not
     // a pure duplicate) is a candidate for re-categorizing the rows it already matches.
@@ -701,8 +720,8 @@ export default function ImportRuleSuggestions() {
     const { applyToExisting, ...ruleData } = data
     let ruleId = suggestion.rule_id || null
     let mergedRuleId = null
+    let createdRuleIdToDelete = null
     const coveredSuggestionIds = getCoveredSuggestionIds(suggestion, data)
-    pushUndo([suggestion.id, ...coveredSuggestionIds])
 
     if (ruleId) {
       // Editing an accepted suggestion's rule can make it collide with another rule; auto-resolve
@@ -728,8 +747,14 @@ export default function ImportRuleSuggestions() {
       }
       ruleId = createdRule?.id || null
       if (createdRule?.status === 'merged' && createdRule.relation !== 'duplicate') mergedRuleId = createdRule.id
+      // A brand-new rule created here is ours to delete on undo (an updated/merged pre-existing rule is not).
+      if (createdRule?.status === 'created' && createdRule?.id) createdRuleIdToDelete = createdRule.id
     }
 
+    // Apply to the suggestion's rows first so undo can restore their prior categorization, then record the
+    // undo entry (the created rule to delete + the row snapshot) before flipping the review status.
+    const applyResult = await applyRuleToSuggestionRows(ruleId, suggestion)
+    pushUndo([suggestion.id, ...coveredSuggestionIds], applyResult?.prior_rows || null, createdRuleIdToDelete ? [createdRuleIdToDelete] : null)
     await updateSuggestionReviewForContext({
       suggestion_id: suggestion.id,
       status: 'accepted',
@@ -745,7 +770,6 @@ export default function ImportRuleSuggestions() {
       clean_name_suggestion: data.clean_name || null,
     })
 
-    await applyRuleToSuggestionRows(ruleId, suggestion)
     if (mergedRuleId) recordReconciledRule(mergedRuleId, 'merged')
     setEditingSuggestionId(null)
     await reloadSuggestions()
@@ -793,6 +817,7 @@ export default function ImportRuleSuggestions() {
       const winner = winnerId ? members.find(member => member.id === winnerId) : null
       const winnerCategoryId = winner ? winner.target_category_id : null
       let createdRuleId = null
+      let winnerRuleWasCreated = false
 
       if (winner) {
         const ruleData = {
@@ -812,6 +837,7 @@ export default function ImportRuleSuggestions() {
           return
         }
         createdRuleId = createdRule?.id || null
+        winnerRuleWasCreated = createdRule?.status === 'created'
         await updateSuggestionReviewForContext({
           suggestion_id: winner.id,
           status: 'accepted',
@@ -863,9 +889,11 @@ export default function ImportRuleSuggestions() {
 
       // Apply the rule to every row it should own (winner's rows + non-winners retargeted to it),
       // preserve-manual so import-locked rows are reclaimed but deliberate manual edits are spared.
+      // Capture those rows' prior categorization too, so undo restores them as well as the disposed ones.
       if (createdRuleId && ruleRowIds.length) {
         try {
-          await txnMutations.applyRuleToTransactions(createdRuleId, ruleRowIds)
+          const applyResult = await txnMutations.applyRuleToTransactions(createdRuleId, ruleRowIds)
+          if (applyResult?.prior_rows?.length) rowSnapshots.push(...applyResult.prior_rows)
         } catch {
           // The rule saved; failing to back-apply to its rows shouldn't fail the resolution.
         }
@@ -873,7 +901,13 @@ export default function ImportRuleSuggestions() {
 
       setUndoStack(prev => [
         ...prev.slice(-(MAX_UNDO - 1)),
-        { statuses: priorStatuses, rows: rowSnapshots.length ? rowSnapshots : null },
+        {
+          statuses: priorStatuses,
+          rows: rowSnapshots.length ? rowSnapshots : null,
+          // Delete the winner rule on undo (only if it was freshly created here) so the conflict set's
+          // rows are candidates again and the set regenerates instead of vanishing.
+          ruleIds: winnerRuleWasCreated && createdRuleId ? [createdRuleId] : null,
+        },
       ])
       setEditingSuggestionId(null)
       await reloadSuggestions()
@@ -1175,6 +1209,7 @@ export default function ImportRuleSuggestions() {
                     onLoadSuggestionMatches={loadSuggestionMatchesForContext}
                     onReloadSuggestions={reloadSuggestions}
                     ruleSuggestionState={ruleSuggestionState}
+                    persistKey={contextKey}
                     selectedOwnerIds={selectedOwnerIds}
                     reviewFilter={reviewFilter}
                     onChangeReviewFilter={setReviewFilter}

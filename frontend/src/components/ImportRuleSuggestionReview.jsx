@@ -36,9 +36,70 @@ import { ConflictSetCard } from './importRuleSuggestions/ConflictSetCard.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
 
+// Bulk-selection persistence. Deliberately sessionStorage, NOT the durable ui_preference store: the
+// in-progress selection is a within-session convenience that survives navigating away from the review
+// and reopening Generate Rules, but it should not outlive the session or get swept into data backups.
+// One slot, scoped by review context (import source + owner filter + view) so a saved selection is only
+// restored into the exact context it was built in, never bled across contexts.
+const BULK_SELECTION_STORAGE_KEY = 'luma.import-rule-suggestions.bulk-selection'
+
+function bulkSelectionScopeId(persistKey, selectedOwnerIds, reviewFilter) {
+  const owners = [...(selectedOwnerIds || [])].map(String).sort().join(',')
+  return `${persistKey || 'system'}::${owners}::${reviewFilter || 'pending'}`
+}
+
+function loadStoredBulkSelection(scopeId) {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.sessionStorage.getItem(BULK_SELECTION_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed || parsed.scopeId !== scopeId) return null
+    return Array.isArray(parsed.ids) ? parsed.ids.map(String) : null
+  } catch {
+    return null
+  }
+}
+
+function saveStoredBulkSelection(scopeId, ids) {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(BULK_SELECTION_STORAGE_KEY, JSON.stringify({ scopeId, ids }))
+  } catch { }
+}
+
+// Scope-aware clear: only drops the slot when it belongs to this context, so entering bulk mode in one
+// context never wipes a selection saved for another.
+function clearStoredBulkSelection(scopeId) {
+  if (typeof window === 'undefined') return
+  try {
+    const raw = window.sessionStorage.getItem(BULK_SELECTION_STORAGE_KEY)
+    if (!raw) return
+    const parsed = JSON.parse(raw)
+    if (scopeId && parsed?.scopeId && parsed.scopeId !== scopeId) return
+    window.sessionStorage.removeItem(BULK_SELECTION_STORAGE_KEY)
+  } catch { }
+}
+
+// Small text-style buttons (Select all / Clear) used inside the bulk-actions bar.
+function bulkLinkButtonStyle(disabled) {
+  return {
+    border: 'none',
+    background: 'none',
+    padding: 0,
+    fontSize: 12,
+    fontWeight: 600,
+    color: disabled ? 'var(--muted)' : 'var(--accent2)',
+    cursor: disabled ? 'default' : 'pointer',
+    opacity: disabled ? 0.6 : 1,
+    whiteSpace: 'nowrap',
+  }
+}
+
 export default function ImportRuleSuggestionReview({
   onLoadSuggestionMatches,
   ruleSuggestionState,
+  persistKey,
   selectedOwnerIds,
   reviewFilter,
   onChangeReviewFilter,
@@ -94,7 +155,6 @@ export default function ImportRuleSuggestionReview({
   const [sortMenu, setSortMenu] = useState(null)
   const [lookbackMenu, setLookbackMenu] = useState(null)
   const [stickyTopOffset, setStickyTopOffset] = useState(0)
-  const [singleRowActionOverride, setSingleRowActionOverride] = useState(false)
   const [merchantFilterText, setMerchantFilterText] = useState('')
   const [matchViewerState, setMatchViewerState] = useState({
     open: false,
@@ -504,32 +564,6 @@ export default function ImportRuleSuggestionReview({
   }, [bulkMenu, suggestionMenu, sortMenu, lookbackMenu])
 
   useEffect(() => {
-    if (!bulkMode) {
-      setSingleRowActionOverride(false)
-      return undefined
-    }
-
-    // In bulk mode, row actions normally apply to the current selection; Ctrl is
-    // the temporary escape hatch for acting on just the row under the cursor.
-    function syncModifierState(event) {
-      setSingleRowActionOverride(Boolean(event.ctrlKey))
-    }
-
-    function clearModifierState() {
-      setSingleRowActionOverride(false)
-    }
-
-    window.addEventListener('keydown', syncModifierState)
-    window.addEventListener('keyup', syncModifierState)
-    window.addEventListener('blur', clearModifierState)
-    return () => {
-      window.removeEventListener('keydown', syncModifierState)
-      window.removeEventListener('keyup', syncModifierState)
-      window.removeEventListener('blur', clearModifierState)
-    }
-  }, [bulkMode])
-
-  useEffect(() => {
     if (!merchantFilterOpen || bulkMode) return
     merchantFilterInputRef.current?.focus()
     merchantFilterInputRef.current?.select()
@@ -568,11 +602,13 @@ export default function ImportRuleSuggestionReview({
 
   function getBulkActions() {
     if (reviewFilter === 'pending' || reviewFilter === 'older') {
+      // Save = create the rules as-is (the primary bulk action, promoted from the per-card Save button).
       // Discard, keep = settle the suggestions but leave the rows imported (still claimable by a later
       // apply). Discard, clear = also clear the rows' categories. No bare "Remove" — keeping is the
       // honest default for "I reviewed these, don't build rules." Same set in the `older` (stale) view,
       // which is the prime place to bulk-settle the tail.
       return [
+        { key: 'save', label: 'Save', tone: 'primary', run: suggestionsToActOn => onSaveSuggestionsAsIsBulk(suggestionsToActOn) },
         { key: 'defer', label: 'Defer', run: suggestionsToActOn => onSetSuggestionStatusBulk(suggestionsToActOn, 'skipped') },
         { key: 'discard-keep', label: 'Discard, keep categories', run: suggestionsToActOn => onBulkRejectDisposition(suggestionsToActOn, 'keep') },
         { key: 'discard-clear', label: 'Discard, clear categories', run: suggestionsToActOn => onBulkRejectDisposition(suggestionsToActOn, 'clear') },
@@ -601,6 +637,38 @@ export default function ImportRuleSuggestionReview({
   const selectedResolvedSuggestions = visibleSuggestions
     .filter(suggestion => selectedSuggestionIds.includes(getSuggestionKey(suggestion.id)))
     .map(getResolvedSuggestion)
+  const selectedCount = selectedResolvedSuggestions.length
+
+  const bulkSelectionScope = bulkSelectionScopeId(persistKey, selectedOwnerIds, reviewFilter)
+  const bulkSelectionHydratedRef = useRef(false)
+
+  // Restore a saved selection once suggestions are available, so leaving the review and reopening
+  // Generate Rules in the same context comes back to the in-progress batch. Runs once per mount; stale
+  // ids (suggestions saved/disposed/regenerated since) are dropped by intersecting with what's visible,
+  // so a no-longer-present id silently falls away rather than restoring an empty/ghost selection.
+  useEffect(() => {
+    if (bulkSelectionHydratedRef.current) return
+    if (!visibleSuggestions.length) return
+    bulkSelectionHydratedRef.current = true
+    const stored = loadStoredBulkSelection(bulkSelectionScope)
+    if (!stored || !stored.length) return
+    const visibleKeys = new Set(visibleSuggestions.map(item => getSuggestionKey(item.id)))
+    const restored = stored.filter(id => visibleKeys.has(id))
+    if (!restored.length) return
+    setSelectedSuggestionIds(restored)
+    setBulkMode(true)
+  }, [visibleSuggestions, bulkSelectionScope])
+
+  // Persist on every change (sessionStorage writes are cheap, so there's no need to defer). Gated on
+  // hydration so the initial empty render can't clear the slot before the restore above has run.
+  useEffect(() => {
+    if (!bulkSelectionHydratedRef.current) return
+    if (bulkMode && selectedSuggestionIds.length) {
+      saveStoredBulkSelection(bulkSelectionScope, selectedSuggestionIds)
+    } else {
+      clearStoredBulkSelection(bulkSelectionScope)
+    }
+  }, [bulkMode, selectedSuggestionIds, bulkSelectionScope])
 
   function resetBulkMode() {
     setBulkMode(false)
@@ -1157,43 +1225,18 @@ export default function ImportRuleSuggestionReview({
     return actions
   }
 
-  function getRowActionScope(suggestion, resolvedSuggestion) {
-    const suggestionKey = getSuggestionKey(suggestion.id)
-    const useSelectedScope = bulkMode
-      && !singleRowActionOverride
-      && selectedSuggestionIds.includes(suggestionKey)
-      && selectedResolvedSuggestions.length > 0
-    if (useSelectedScope) {
-      return {
-        selected: true,
-        suggestions: selectedResolvedSuggestions,
-        count: selectedResolvedSuggestions.length,
-      }
-    }
-    return {
-      selected: false,
-      suggestions: [resolvedSuggestion],
-      count: 1,
-    }
-  }
-
+  // Invariant (see docs/ui-patterns.md "Rule suggestion review — bulk select alongside per-card
+  // actions"): a card's own row buttons ALWAYS act on just that card, even while it is part of a bulk
+  // selection. Bulk dispositions live solely in the sticky bulk-actions bar; row buttons never operate
+  // on the selection. This is what lets the user build a batch and pick off outliers individually at
+  // the same time. Do not reintroduce a "selected scope" branch here that makes a selected card's
+  // button act on the whole selection — that ambiguity (and the Ctrl escape hatch it needed) is the
+  // odd behavior this design removed.
   async function runRowStatusAction(suggestion, resolvedSuggestion, status) {
-    const scope = getRowActionScope(suggestion, resolvedSuggestion)
-    if (scope.selected) {
-      await onSetSuggestionStatusBulk(scope.suggestions, status)
-      resetBulkMode()
-      return
-    }
     await onSetSuggestionStatus(resolvedSuggestion, status)
   }
 
   async function runRowSaveAction(suggestion, resolvedSuggestion) {
-    const scope = getRowActionScope(suggestion, resolvedSuggestion)
-    if (scope.selected) {
-      await onSaveSuggestionsAsIsBulk(scope.suggestions)
-      resetBulkMode()
-      return
-    }
     await onSaveSuggestionAsIs(resolvedSuggestion)
   }
 
@@ -1742,21 +1785,15 @@ export default function ImportRuleSuggestionReview({
         || filterKey === 'discarded'
       )
     )
-    const rowActionScope = getRowActionScope(suggestion, resolvedSuggestion)
-    const usesSelectedRows = rowActionScope.selected
-    const saveLabel = usesSelectedRows ? 'Save Selected' : 'Save'
-    const deferLabel = usesSelectedRows ? 'Defer Selected' : 'Defer'
-    const resumeLabel = usesSelectedRows ? 'Resume Selected' : 'Resume'
-    const restoreLabel = usesSelectedRows ? 'Restore Selected' : 'Restore'
+    // Row buttons always act on this one card (bulk dispositions live in the bulk-actions bar), so the
+    // labels are unconditionally the single-card forms.
+    const saveLabel = 'Save'
+    const deferLabel = 'Defer'
+    const resumeLabel = 'Resume'
+    const restoreLabel = 'Restore'
     const returnsToPending = suggestion.review_status === 'accepted' || suggestion.review_status === 'skipped'
     const removeActionStatus = returnsToPending ? 'pending' : 'discarded'
-    const removeTitle = returnsToPending
-      ? (usesSelectedRows
-        ? `Return selected suggestion${rowActionScope.count === 1 ? '' : 's'} to pending`
-        : 'Return suggestion to pending')
-      : (usesSelectedRows
-        ? `Discard selected suggestion${rowActionScope.count === 1 ? '' : 's'}`
-        : 'Discard suggestion')
+    const removeTitle = returnsToPending ? 'Return suggestion to pending' : 'Discard suggestion'
 
     return (
       <div
@@ -2336,11 +2373,65 @@ export default function ImportRuleSuggestionReview({
                   }}
                   active={bulkMode}
                 >
-                  Bulk Select
+                  {bulkMode ? 'Cancel' : 'Bulk Select'}
                 </SuggestionActionButton>
               ) : null}
             </div>
           </div>
+          {/* Bulk-actions bar: appears only in bulk mode. All bulk dispositions live here as visible
+              buttons (Save/Defer/Discard variants per view) rather than riding on the cards' own row
+              buttons or hiding in a right-click menu. Labels omit "selected" — the bar's own header
+              already scopes them to the selection. */}
+          {bulkMode ? (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
+              flexWrap: 'wrap',
+              minWidth: 0,
+              padding: '8px 10px',
+              borderRadius: 12,
+              border: '1px solid color-mix(in srgb, var(--accent) 30%, var(--border))',
+              background: 'color-mix(in srgb, var(--accent) 8%, var(--surface))',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', minWidth: 0 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', whiteSpace: 'nowrap' }}>
+                  Bulk actions
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+                  {selectedCount} of {visibleSuggestions.length} selected
+                </span>
+                <button
+                  type="button"
+                  onClick={() => selectAllScoped()}
+                  style={bulkLinkButtonStyle(false)}
+                >
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedSuggestionIds([])}
+                  disabled={selectedCount === 0}
+                  style={bulkLinkButtonStyle(selectedCount === 0)}
+                >
+                  Clear
+                </button>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {bulkActions.map(action => (
+                  <SuggestionActionButton
+                    key={action.key}
+                    onClick={() => runBulkAction(action)}
+                    disabled={selectedCount === 0}
+                    active={action.tone === 'primary'}
+                  >
+                    {action.label}
+                  </SuggestionActionButton>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
 

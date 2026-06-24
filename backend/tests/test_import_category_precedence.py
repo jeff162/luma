@@ -84,7 +84,7 @@ class ImportCategoryPrecedenceTests(unittest.IsolatedAsyncioTestCase):
                     (leaf_id, group_id, category_name),
                 )
                 conn.execute(
-                    "INSERT INTO category_rule (id, category_id, keyword, priority) VALUES (?, ?, ?, 100)",
+                    "INSERT INTO category_rule (id, category_id, keyword) VALUES (?, ?, ?)",
                     (str(uuid.uuid4()), leaf_id, keyword),
                 )
         return leaf_id

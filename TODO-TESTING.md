@@ -145,56 +145,85 @@ tests (`// @vitest-environment jsdom` + `@testing-library/react`).
 
 ## Migration / fresh-schema parity
 
-**Context.** There are two ways a tenant DB's schema comes into existence, and
-they don't share code. A **fresh** install runs `init_db`'s `CREATE TABLE`
-script and is stamped straight to `CURRENT_VERSION` — the migration chain is
-deliberately skipped (`db/database.py`, `is_fresh_db` branch: "Fresh databases
-are stamped current immediately"). An **existing** file instead replays
-`MIGRATIONS[1..N]` via `run_migrations`. So every schema object exists in two
-places that must be kept in lockstep by hand: the canonical `CREATE TABLE`
-block *and* the migration that introduced (or altered) it.
+**Context.** A tenant DB's schema can come into existence two ways, and they
+don't share code. A **fresh** install runs `init_db`'s `CREATE TABLE` script and
+is stamped straight to `CURRENT_VERSION`, skipping migrations (`db/database.py`,
+`is_fresh_db` branch). An **existing** file is advanced in place by
+`run_migrations`, which applies each registered `MIGRATIONS[v]` newer than its
+recorded version. So once migrations exist, each schema change lives in two
+places that must stay in lockstep by hand: the canonical `CREATE TABLE` block
+*and* the migration that introduces (or alters) it.
 
-**Why it's worth a test.** Nothing currently asserts the two paths converge, so
-they can silently drift: add a column to the `init_db` CREATE block and forget
-the migration (or vice versa), and brand-new DBs and upgraded DBs end up with
-different schemas — a bug only users with old files hit. This session's
-`owner_id`-on-`category` crash was exactly this class: a migration dropped a
-column the delete path still referenced. A parity guard turns "someone
-remembers to edit both" into a failing test.
+**Status: dormant until the first post-rebrand migration.** The chain was reset
+at the Luma rebrand — `MIGRATIONS` is empty and the baseline is `v1`, so there is
+nothing for the two paths to disagree about *yet*. This entry exists so the
+parity guard is built alongside the **first** new migration, not after a drift
+bug. Until then there is nothing to test.
 
-### Backend unit test — build now, no browser
+**Why it's worth a test (once migrations exist).** Nothing asserts the two paths
+converge, so they can silently drift: add a column to the `init_db` CREATE block
+and forget the migration (or vice versa) and brand-new vs upgraded DBs end up
+with different schemas — a bug only users with old files hit.
 
-**Shape.** Build the schema both ways into two temp DBs and diff the resulting
-structure:
+### Backend unit test — build when the first migration lands
 
-- [ ] **Fresh:** `init_db(fresh_path)` → reads at `CURRENT_VERSION`.
-- [ ] **Migrated:** start from the true pre-migration baseline and run
-      `run_migrations` up to `CURRENT_VERSION`, then compare.
+**Shape.** Build the schema both ways into two temp DBs and diff the structure:
+
+- [ ] **Fresh:** `init_db(fresh_path)` → at `CURRENT_VERSION`.
+- [ ] **Migrated:** seed the **v1 baseline** (a snapshot of `init_db`'s schema as
+      it stood at the rebrand reset), then run `run_migrations` to
+      `CURRENT_VERSION`.
 - [ ] **Compare** the normalized schema of every user table: column names +
       types + NOT NULL + defaults (`PRAGMA table_info`), foreign keys
       (`PRAGMA foreign_key_list`), and indexes (`PRAGMA index_list` /
-      `index_info`). Assert the two are identical table-by-table; a mismatch
-      names the drifted object.
-- [ ] **Coverage guard:** derive the table list from `sqlite_master` on both
-      DBs and assert the *sets* match first, so "new table added to only one
-      path" trips before the per-table column diff.
+      `index_info`). Identical table-by-table; a mismatch names the drifted object.
+- [ ] **Coverage guard:** derive the table list from `sqlite_master` on both DBs
+      and assert the *sets* match first, so "new table added to only one path"
+      trips before the per-table column diff.
 
-**The catch to resolve first (why this was deferred).** The migration chain may
-not build a DB from absolute zero — historically migrations were *additive
-deltas* on top of an original baseline schema, not a from-scratch sequence. If
-migration v1 doesn't create the original base tables, replaying from an empty
-DB won't reproduce the full schema, and the naive "empty → migrate" comparison
-will spuriously fail. Before writing assertions, determine what the real v0
-baseline is (the schema as it stood when the migration system was introduced)
-and seed that, *then* migrate. If it turns out migrations genuinely can rebuild
-from empty, the test is simpler — but confirm that rather than assuming it.
+**Baseline to capture.** Unlike the old pre-rebrand chain (additive deltas with
+no from-zero build), the new baseline is well-defined: the **complete** `v1`
+schema, i.e. `init_db` as of the reset. Snapshot that DDL once as a fixture and
+migrate forward from it; a fresh `init_db` at the same version must match.
 
 **Notes.** Mirror the temp-DB harness in `backend/tests/`. Compare schema
-*structure* only — ignore `db_meta` version rows and any seeded data
+*structure* only — ignore `db_meta` version rows and seeded data
 (categories/rules), which differ legitimately. `sqlite_master.sql` text is too
 brittle to diff directly (whitespace, `IF NOT EXISTS`, column order); normalize
 via the `PRAGMA`s instead.
 
 ---
+
+## Rule-suggestion owner-scope stability across accepts
+
+**Context.** The Generate Rules generator (`_generate_rule_suggestions` in
+`backend/routers/import_export/core.py`) decides whether a keyword's suggestions
+are owner-scoped from `owner_targets`, which now folds in existing owner-scoped
+rules for the keyword (`rule_owner_targets`), not just the un-ruled candidate
+rows. That keeps a shared keyword "multi-owner" after one owner's rows are
+claimed by an accepted rule, so the remaining owner's suggestion keeps its owner
+filter instead of collapsing to a global (`__global__`) rule.
+
+**Why a test.** Real bug: accepting owner A's rule for a keyword silently dropped
+owner B's `owner=` filter (a global rule that overlaps A's). The fix is subtle
+and easy to regress — it lives in one `needs_owner_scope` expression. Verified
+manually this session via a DB-copy repro; not yet pinned by a test (the setup —
+two owners' candidate rows + a real rule — is more involved than the existing
+review-state-seeding tests).
+
+**To build (backend unit — no browser).**
+
+- [ ] Two owners share a keyword mapped to *different* categories, both with
+      candidate rows → generator owner-scopes both (each suggestion carries its
+      `owner_id`; `conflict_group_id` is owner-qualified, not `__global__`).
+- [ ] Owner A holds an owner-scoped *rule* for the keyword and has no remaining
+      candidate rows; owner B still has candidate rows → B's suggestion stays
+      owner-scoped (`owner_id` set), NOT global. (The regression guard.)
+- [ ] Single owner only (no sibling rows or rules) → suggestion is global
+      (`__global__`), confirming the fix doesn't over-scope.
+
+**Notes.** Build candidate rows + an inserted `category_rule` against the temp-DB
+harness; call `get_system_rule_suggestions` (or `_generate_rule_suggestions`
+directly). Watch seeded default rules — use fixture keywords.
 
 ## (add future test gaps below)

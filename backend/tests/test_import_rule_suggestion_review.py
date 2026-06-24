@@ -162,6 +162,57 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
                         ),
                     )
 
+    # --- undo / data-less restore invariants -----------------------------------------------------
+    # Undo replays only {suggestion_id, status} (no entry data). The review endpoints `setdefault` an
+    # entry for whatever id they're given, so a data-less call could persist an empty `{}` card and
+    # inflate total_count (the summary counts len(suggestions)). These pin the guard that prevents it.
+
+    def test_dataless_status_update_does_not_create_phantom_entry(self):
+        self._save_review_state({
+            "suggestions": {"alpha": {"merchant_label": "Alpha", "keyword": "alpha", "source_row_ids": ["r1"]}},
+            "statuses": {"alpha": {"status": "accepted"}},
+        })
+        with self._use_db_path():
+            result = update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+                suggestion_id="ghost", status="accepted",
+            ))
+        self.assertEqual(result["review_summary"]["total_count"], 1)
+        self.assertEqual(result["review_summary"]["accepted_count"], 1)
+        state = self._load_review_state()
+        self.assertNotIn("ghost", state["suggestions"])
+        self.assertNotIn("ghost", state["statuses"])
+
+    def test_returning_to_pending_drops_entry_back_to_generated_pool(self):
+        # Undo of an accept returns the suggestion to pending; it must leave the persisted review so it
+        # regenerates from live rows (real row count + sort position) instead of lingering as a pending
+        # shell — the cause of the "doesn't come back to the top" report.
+        self._save_review_state({
+            "suggestions": {"alpha": {"merchant_label": "Alpha", "keyword": "alpha", "source_row_ids": ["r1"]}},
+            "statuses": {"alpha": {"status": "accepted"}},
+        })
+        with self._use_db_path():
+            result = update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+                suggestion_id="alpha", status="pending",
+            ))
+        self.assertEqual(result["review_summary"]["total_count"], 0)
+        state = self._load_review_state()
+        self.assertNotIn("alpha", state["suggestions"])
+        self.assertNotIn("alpha", state["statuses"])
+
+    def test_returning_synthetic_followup_to_pending_keeps_it(self):
+        # A synthetic follow-up has no live rows to regenerate from, so unlike a normal suggestion it
+        # must survive a return to pending rather than vanishing.
+        self._save_review_state({
+            "suggestions": {"syn": {"merchant_label": "Syn", "keyword": "syn", "synthetic": True, "source_row_ids": ["r2"]}},
+            "statuses": {},
+        })
+        with self._use_db_path():
+            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+                suggestion_id="syn", status="pending",
+            ))
+        state = self._load_review_state()
+        self.assertIn("syn", state["suggestions"])
+
     def test_matches_report_includes_manually_reconciled_rows_unflagged(self):
         account_id = self._insert_account("Card")
         streaming = self._insert_expense_leaf("Streaming Services")

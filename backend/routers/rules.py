@@ -113,7 +113,10 @@ def _rule_matches_txn(rule, txn) -> bool:
     return _amount_rule_matches(txn["amount"], rule["amount_min"], rule["amount_max"], rule["debit_credit"])
 
 
-def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False, txn_ids: Optional[list[str]] = None) -> list[str]:
+def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False, txn_ids: Optional[list[str]] = None, capture_prior: Optional[list] = None) -> list[str]:
+    # `capture_prior` (optional): when given, the prior (category_id, category_source, category_overridden)
+    # of each row whose category this apply changes is appended to it — the same snapshot shape
+    # `/restore-categorization` consumes — so an accept can stash it for Undo and put the rows back.
     # `preserve_manual` reclaims the rows a rule should own — including import-locked ones
     # (category_source = 'import') — while leaving a deliberate per-transaction manual edit
     # (category_source = 'manual') untouched. Used when a merge/replace changes the governing rule:
@@ -149,6 +152,9 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
                t.amount,
                t.owner_id,
                t.account_id,
+               t.category_id          AS prior_category_id,
+               t.category_source      AS prior_category_source,
+               t.category_overridden  AS prior_category_overridden,
                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id
            FROM txn t
            JOIN account a ON a.id = t.account_id
@@ -175,6 +181,13 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
             if rule["category_id"] is not None:
                 # An explicit apply is the user asking the rule to own these matches, so any
                 # prior auto state is replaced with the rule's category output when provided.
+                if capture_prior is not None:
+                    capture_prior.append({
+                        "id": txn["id"],
+                        "category_id": txn["prior_category_id"],
+                        "category_source": txn["prior_category_source"],
+                        "category_overridden": txn["prior_category_overridden"],
+                    })
                 set_parts.extend(["category_id = ?", "category_overridden = 0", "category_source = 'rule'"])
                 params.append(rule["category_id"])
             if rule["clean_name"]:
@@ -295,7 +308,6 @@ def preview_rule(body: RulePreview):
 class RuleCreate(BaseModel):
     keyword:     str
     category_id: Optional[str] = None
-    priority:    int   = 5
     amount_min:  Optional[float] = None
     amount_max:  Optional[float] = None
     debit_credit: Literal["both", "debit", "credit"] = "both"
@@ -308,7 +320,6 @@ class RuleCreate(BaseModel):
 class RuleUpdate(BaseModel):
     keyword:     Optional[str]   = None
     category_id: Optional[str]   = None
-    priority:    Optional[int]   = None
     amount_min:  Optional[float] = None
     amount_max:  Optional[float] = None
     debit_credit: Optional[Literal["both", "debit", "credit"]] = None
@@ -331,7 +342,7 @@ def list_rules(search: Optional[str] = Query(None)):
         rows = conn.execute(
             f"""
             SELECT
-                cr.id, cr.keyword, cr.priority,
+                cr.id, cr.keyword,
                 cr.amount_min, cr.amount_max, cr.debit_credit, cr.clean_name,
                 cr.category_id,
                 cr.owner_id,
@@ -497,10 +508,10 @@ def create_rule(body: RuleCreate, on_existing: Literal["reject", "merge"] = "rej
         rid = str(uuid.uuid4())
         conn.execute(
             """INSERT INTO category_rule
-               (id, category_id, keyword, priority, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+               (id, category_id, keyword, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
             (rid, body.category_id, keyword,
-             body.priority, body.amount_min, body.amount_max, body.debit_credit, body.clean_name, body.owner_id, body.account_id),
+             body.amount_min, body.amount_max, body.debit_credit, body.clean_name, body.owner_id, body.account_id),
         )
         for tag_id in body.tag_ids:
             conn.execute(
@@ -593,7 +604,6 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
         fields, params = [], []
         if body.keyword     is not None: fields.append("keyword = ?");     params.append(resulting["keyword"])
         if body.category_id is not None: fields.append("category_id = ?"); params.append(body.category_id)
-        if body.priority    is not None: fields.append("priority = ?");    params.append(body.priority)
         if body.amount_min  is not None: fields.append("amount_min = ?");  params.append(body.amount_min)
         if body.amount_max  is not None: fields.append("amount_max = ?");  params.append(body.amount_max)
         if body.debit_credit is not None: fields.append("debit_credit = ?"); params.append(body.debit_credit)
@@ -648,11 +658,14 @@ def apply_rule_to_transactions(rule_id: str, body: ApplyToTransactionsBody):
     """Apply a rule's outputs (category/rename/tags) to a specific set of transactions — the rows that
     generated an accepted import-rule suggestion — so the user's review edits land on exactly those
     rows. Skips manual rows (deliberate exceptions) and rows the matcher no longer matches."""
+    prior_rows: list = []
     with get_db() as conn:
         affected_ids = _apply_rule_to_existing(
-            conn, rule_id, preserve_manual=True, txn_ids=body.transaction_ids,
+            conn, rule_id, preserve_manual=True, txn_ids=body.transaction_ids, capture_prior=prior_rows,
         )
-    return {"updated": len(affected_ids), "transaction_ids": affected_ids}
+    # `prior_rows` is the pre-apply categorization snapshot of the changed rows (restore-categorization
+    # shape), so an accepted suggestion's Undo can put the rows back before deleting the rule.
+    return {"updated": len(affected_ids), "transaction_ids": affected_ids, "prior_rows": prior_rows}
 
 
 @router.delete("/{rule_id}")
