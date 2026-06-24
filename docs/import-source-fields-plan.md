@@ -95,9 +95,10 @@ nothing just drops its row.
 
 ## Phases
 
-### Phase 1 — surface it (read-only, low risk) — IN PROGRESS
+### Phase 1 — surface it (read-only, low risk) — DONE
 
-No backend, no perf/footprint tradeoffs; the data is already in the transactions list payload.
+No perf/footprint tradeoffs; the data is already in the transactions list payload (one small backend
+add — see point 4 — extends it to the suggestion-match report).
 
 1. `frontend/src/lib/importSourceFields.js` — the registry + `parseImportEvidence(txn)` and
    `getTxnOriginRows(txn)` returning the ordered, populated rows (including expanded
@@ -109,22 +110,50 @@ No backend, no perf/footprint tradeoffs; the data is already in the transactions
    Transactions report **and** all detail-panel lists at once. The card's first line is the full
    visible merchant (covering the truncation case the native `title` handled), followed by the
    `name`/`text` rows and the source file. Built on the shared `<Tooltip>` (`ui.jsx`).
+4. The same hover is wired onto the Generate-Rules **matching-transactions report**
+   (`MatchingTransactionsModal`); the three suggestion-match endpoints now also return
+   `import_evidence_json` so the report rows can show their source text.
+5. **Rule editor source panel.** The rule editor's old editable "Current Rule" box is replaced by a
+   read-only, collapsible **"From the source file"** panel (`RuleForm`) that renders the example
+   transaction's captured source text via the same registry — shown only when the editor is anchored
+   to a real row (Transactions "create rule"); the open/closed state persists per user
+   (`ui.ruleForm.sourcePanelOpen`). The abstract hosts (Rules page edit, the aggregate suggestion
+   editor) have no single example, so the panel is absent there and source text is seen via the
+   matching-report hover instead. A read-only rule summary + the matching-row count moved to the
+   bottom of the form (always shown, even where the footer is hidden).
 
-### Phase 2 — match on it (opt-in, touches the categorizer)
+### Phase 2 — match on it (opt-in, touches the categorizer) — DONE
 
-Let a rule match captured source text. Start simple before structured per-field matchers:
+Let a rule match captured source text. Shipped the simple "anywhere in source text" form (structured
+`(field, op, value)` matchers stay deferred).
 
-- A per-rule **opt-in flag** ("also match the original / source text") that extends the
-  categorizer haystack to include the `text`-scope evidence values. Opt-in so existing keyword
-  rules don't silently change what they match.
-- **Existing rows:** `recategorize_all` / `preview_recategorize_count` / rule-apply read
-  `import_evidence_json` and fold its text in. Respect the perf contract — prefer extracting the
-  searchable text once (e.g. at load) over `json_extract`/`json.loads` per match in the hot loop.
-- **New imports:** thread the evidence text into `categorize_transaction` at import time (the row's
-  values are already in hand there).
-- Open question to settle when we start: does this stay an "anywhere in source text" match, or do
-  we eventually want structured `(field, op, value)` matchers? The registry supports either; the
-  flag is the cheap first step. Structured matchers would also reopen matcher-identity rules.
+**Backend (done):**
+
+- Per-rule **opt-in `category_rule.match_source_text`** column (schema baseline + migration `v2`,
+  the first migration since the rebrand reset). Default 0, so existing keyword rules are unchanged.
+- `categorize_transaction(..., source_text=…)` tests a flagged rule's keyword against the name text
+  **plus** the captured source text. `extract_source_match_text` / `source_match_text_from_json`
+  (in `services/categorizer.py`) build that haystack from the evidence (description + extra fields,
+  account label excluded).
+- **Matcher identity** includes the flag — `_existing_rule_for_matcher`, `update_rule`'s collision
+  check, and `_resulting_rule_state` all carry it, so two rules differing only by it coexist.
+- **Existing rows:** `recategorize_all` / `preview_recategorize_count` / `_apply_rule_to_existing` /
+  `_find_matching_rule` / `preview_rule` read `import_evidence_json` and fold its text in. The
+  per-row evidence parse is **gated** on the rule set actually containing a source-text rule, so the
+  common case stays exactly as cheap as before (perf contract green).
+- **New imports** thread the evidence text into `categorize_transaction` at import time
+  (`import_export/core.py`); the Plaid sync path has no evidence and passes `None`.
+- Covered by `backend/tests/test_rule_source_text_match.py` (positive, the name-only-doesn't-match
+  guard, engine-by-flag, matcher identity) plus a migration-fires check.
+
+**UI (done):** an "Also match the original / source statement text" checkbox inside the rule form's
+*Merchant Name Contains* condition (`RuleForm`), so it appears everywhere the form is hosted — the
+Rules page (create + edit), the Transactions "create rule", the per-row `RuleSuggestionToast`, and the
+suggestion-review `RuleEditorModal`. `RuleForm` threads `match_source_text` into both its preview and
+save payloads; `api.js` is a passthrough. The suggestion-review flow carries it through
+`getResolvedSuggestion`, the stashed draft (so the editor checkbox round-trips on reopen), and the
+conflict-set / bulk `createRule` builds. The Rules-page list shows a "matches source text" criterion so
+a source-text rule is distinguishable from a name-only one with the same keyword.
 
 ### Phase 3 — show it as columns (maybe never)
 

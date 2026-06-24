@@ -8,6 +8,7 @@ The important invariant is that every caller sees the same winner for the same
 transaction text, owner, account, and amount window.
 """
 
+import json
 import sqlite3
 
 from backend.services.transaction_tags import (
@@ -15,6 +16,36 @@ from backend.services.transaction_tags import (
     sync_rule_tags_for_transaction,
     would_sync_rule_tags_change,
 )
+
+
+def extract_source_match_text(evidence) -> str:
+    """The descriptive free text an import captured for a row, concatenated and lowercased into one
+    haystack for `match_source_text` rules: the normalized description slot plus the source-specific
+    `extra_text_fields` (e.g. an "Original Statement" column). The account label is deliberately
+    excluded — it identifies the account, not the statement text — matching what the merchant origin
+    surfaces show as `text`-scope. See `import_evidence_json` (data-model.md) and
+    docs/import-source-fields-plan.md.
+    """
+    if not isinstance(evidence, dict):
+        return ""
+    parts = []
+    description = evidence.get("description")
+    if isinstance(description, dict) and description.get("value"):
+        parts.append(str(description["value"]))
+    for field in (evidence.get("extra_text_fields") or []):
+        if isinstance(field, dict) and field.get("value"):
+            parts.append(str(field["value"]))
+    return " ".join(parts).lower()
+
+
+def source_match_text_from_json(evidence_json) -> str:
+    """`extract_source_match_text` over a stored `import_evidence_json` string; '' when absent/invalid."""
+    if not evidence_json:
+        return ""
+    try:
+        return extract_source_match_text(json.loads(evidence_json))
+    except (ValueError, TypeError):
+        return ""
 
 
 def _amount_matches(amount: float, amount_min, amount_max) -> bool:
@@ -67,7 +98,7 @@ def load_categorization_rules(conn: sqlite3.Connection) -> list:
     """
     return conn.execute(
         """SELECT cr.id, cr.category_id, cr.keyword, cr.amount_min, cr.amount_max,
-                  cr.debit_credit, cr.owner_id, cr.account_id, cr.clean_name
+                  cr.debit_credit, cr.owner_id, cr.account_id, cr.clean_name, cr.match_source_text
            FROM   category_rule cr
            LEFT   JOIN category c ON c.id = cr.category_id
            -- Deactivating a category prunes its rules, but stay defensive: a rule must never
@@ -104,9 +135,15 @@ def categorize_transaction(
     effective_account_id: str | None = None,
     rules: list | None = None,
     rule_tags_by_id: dict | None = None,
+    source_text: str | None = None,
 ) -> dict | None:
     text = " ".join(filter(None, [display_name, merchant_name, raw_name])).lower()
-    if not text:
+    # `source_text` is the captured import free text (description + extra fields), consulted only for a
+    # rule with `match_source_text` set — so a row whose visible merchant says nothing can still match
+    # on its "Original Statement"-style detail. Callers pass it from the import row / stored evidence;
+    # the Plaid sync path has none and passes None. See extract_source_match_text.
+    source_text_lc = (source_text or "").lower()
+    if not text and not source_text_lc:
         return None
     resolved_effective_account_id = _resolve_effective_account_id(conn, account_id, effective_account_id)
 
@@ -125,7 +162,8 @@ def categorize_transaction(
             continue
         if rule["account_id"] is not None and rule["account_id"] != resolved_effective_account_id:
             continue
-        if rule["keyword"].lower() not in text:
+        keyword = rule["keyword"].lower()
+        if keyword not in text and not (rule["match_source_text"] and source_text_lc and keyword in source_text_lc):
             continue
         if not _amount_rule_matches(amount, rule["amount_min"], rule["amount_max"], rule["debit_credit"]):
             continue
@@ -175,7 +213,8 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
                t.account_id,
                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
                t.category_id,
-               t.category_source
+               t.category_source,
+               t.import_evidence_json
            FROM   txn t
            JOIN   account a ON a.id = t.account_id
            WHERE  category_overridden = 0"""
@@ -184,8 +223,12 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
     rules = load_categorization_rules(conn)
     rule_tags_by_id = load_rule_tags_by_id(conn)
     tag_rows_by_txn = load_rule_tag_sync_rows(conn)
+    # Only pay the per-row evidence parse when at least one rule actually opts into source-text
+    # matching; the common case (no such rules) stays exactly as cheap as before.
+    needs_source_text = any(rule["match_source_text"] for rule in rules)
     updated = 0
     for txn in txns:
+        source_text = source_match_text_from_json(txn["import_evidence_json"]) if needs_source_text else None
         result = categorize_transaction(
             txn["merchant_name"], txn["raw_name"], txn["display_name"], txn["amount"], conn,
             owner_id=txn["owner_id"],
@@ -193,6 +236,7 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
             effective_account_id=txn["effective_account_id"],
             rules=rules,
             rule_tags_by_id=rule_tags_by_id,
+            source_text=source_text,
         )
         cat_id = result["category_id"] if isinstance(result, dict) else result
         matched_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
@@ -234,7 +278,8 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
                t.owner_id,
                t.account_id,
                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
-               t.category_id
+               t.category_id,
+               t.import_evidence_json
            FROM   txn t
            JOIN   account a ON a.id = t.account_id
            WHERE  category_overridden = 0"""
@@ -243,8 +288,10 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
     rules = load_categorization_rules(conn)
     rule_tags_by_id = load_rule_tags_by_id(conn)
     tag_rows_by_txn = load_rule_tag_sync_rows(conn)
+    needs_source_text = any(rule["match_source_text"] for rule in rules)
     pending = 0
     for txn in txns:
+        source_text = source_match_text_from_json(txn["import_evidence_json"]) if needs_source_text else None
         result = categorize_transaction(
             txn["merchant_name"], txn["raw_name"], txn["display_name"], txn["amount"], conn,
             owner_id=txn["owner_id"],
@@ -252,6 +299,7 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
             effective_account_id=txn["effective_account_id"],
             rules=rules,
             rule_tags_by_id=rule_tags_by_id,
+            source_text=source_text,
         )
         cat_id = result["category_id"] if isinstance(result, dict) else result
         matched_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []

@@ -829,6 +829,7 @@ export default function ImportRuleSuggestions() {
           owner_id: winner.owner_id || null,
           account_id: winner.account_id || null,
           tag_ids: winner.tag_ids || [],
+          match_source_text: !!winner.match_source_text,
         }
         const createdRule = await api.createRule(ruleData, { onExisting: 'merge' })
         if (createdRule?.status === 'conflict') {
@@ -938,6 +939,7 @@ export default function ImportRuleSuggestions() {
           owner_id: suggestion.owner_id || null,
           account_id: suggestion.account_id || null,
           tag_ids: suggestion.tag_ids || [],
+          match_source_text: !!suggestion.match_source_text,
         }, { onExisting: 'merge' })
         if (createdRule?.status === 'conflict') {
           summary.conflicts.push(buildConflictEntry(suggestion, {

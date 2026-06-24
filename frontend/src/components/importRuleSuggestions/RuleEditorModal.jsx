@@ -22,6 +22,9 @@ export function RuleEditorModal({
   onSaveAccepted,
   onCloseWithDraft,
   onDiscard,
+  // The single resolved source row when this suggestion is backed by exactly one — feeds RuleForm's
+  // read-only "From the source file" panel. Null for multi-row suggestions (use the matching report).
+  exampleTransaction = null,
   // When the editor is opened to tweak a conflict-set winner, accepting here would bypass the card's
   // Apply (which handles the other rows' dispositions). In that mode the primary action just saves the
   // edits as a draft and closes; the conflict card's Apply then creates the rule from those edits.
@@ -189,7 +192,9 @@ export function RuleEditorModal({
             catId: suggestion.target_category_id || '',
             cleanName: suggestion.clean_name_suggestion || '',
             tagIds: suggestion.tag_ids || [],
+            match_source_text: suggestion.match_source_text,
           }}
+          sourceTransaction={exampleTransaction}
           categories={categories}
           owners={owners}
           accounts={accounts}

@@ -12,7 +12,7 @@ from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 from typing import Literal, Optional
 from backend.db.database import get_db
-from backend.services.categorizer import _amount_rule_matches
+from backend.services.categorizer import _amount_rule_matches, source_match_text_from_json
 from backend.services.transaction_tags import sync_rule_tags_for_transaction, would_sync_rule_tags_change, get_visible_transaction_tag_map
 
 router = APIRouter()
@@ -46,13 +46,23 @@ def _load_rule_tag_map(conn, rule_ids: list[str]) -> dict[str, list[dict]]:
     return tag_map
 
 
+def _txn_source_match_text(txn) -> str:
+    """The row's captured import source text (lowercased), for `match_source_text` rules. Callers
+    whose txn SELECT omits `import_evidence_json` get '' (no source-text match), which is safe."""
+    try:
+        return source_match_text_from_json(txn["import_evidence_json"])
+    except (KeyError, IndexError):
+        return ""
+
+
 def _find_matching_rule(conn, txn):
     text = " ".join(filter(None, [
         txn["display_name"],
         txn["merchant_name"],
         txn["raw_name"],
     ])).lower()
-    if not text:
+    source_text = _txn_source_match_text(txn)
+    if not text and not source_text:
         return None
 
     # Mirror the engine's specificity ordering so "match this transaction" previews and
@@ -77,7 +87,7 @@ def _find_matching_rule(conn, txn):
     for rule in rules:
         full_rule = conn.execute(
             """
-            SELECT id, keyword, amount_min, amount_max, debit_credit, owner_id, account_id, category_id, clean_name
+            SELECT id, keyword, amount_min, amount_max, debit_credit, owner_id, account_id, category_id, clean_name, match_source_text
             FROM category_rule
             WHERE id = ?
             """,
@@ -87,7 +97,8 @@ def _find_matching_rule(conn, txn):
             continue
         if full_rule["account_id"] is not None and full_rule["account_id"] != txn["effective_account_id"]:
             continue
-        if full_rule["keyword"].lower() not in text:
+        keyword = full_rule["keyword"].lower()
+        if keyword not in text and not (full_rule["match_source_text"] and source_text and keyword in source_text):
             continue
         if not _amount_rule_matches(txn["amount"], full_rule["amount_min"], full_rule["amount_max"], full_rule["debit_credit"]):
             continue
@@ -108,7 +119,12 @@ def _rule_matches_txn(rule, txn) -> bool:
         txn["merchant_name"],
         txn["raw_name"],
     ])).lower()
-    if not text or rule["keyword"].lower() not in text:
+    keyword = rule["keyword"].lower()
+    matched = bool(text) and keyword in text
+    if not matched and rule["match_source_text"]:
+        source_text = _txn_source_match_text(txn)
+        matched = bool(source_text) and keyword in source_text
+    if not matched:
         return False
     return _amount_rule_matches(txn["amount"], rule["amount_min"], rule["amount_max"], rule["debit_credit"])
 
@@ -125,7 +141,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     # when accepting an import-rule suggestion so the rule's outputs land on exactly the rows that
     # generated it, leaving conflicting rows for other suggestions alone.
     rule = conn.execute(
-        """SELECT id, keyword, category_id, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id
+        """SELECT id, keyword, category_id, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, match_source_text
            FROM category_rule
            WHERE id = ?""",
         (rule_id,),
@@ -152,6 +168,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
                t.amount,
                t.owner_id,
                t.account_id,
+               t.import_evidence_json,
                t.category_id          AS prior_category_id,
                t.category_source      AS prior_category_source,
                t.category_overridden  AS prior_category_overridden,
@@ -226,6 +243,7 @@ class RulePreview(BaseModel):
     owner_id:     Optional[str] = None
     account_id:   Optional[str] = None
     tag_ids:      list[str] = []
+    match_source_text: bool = False
 
 
 @router.post("/preview")
@@ -240,6 +258,7 @@ def preview_rule(body: RulePreview):
         "clean_name":  body.clean_name,
         "owner_id":    body.owner_id,
         "account_id":  body.account_id,
+        "match_source_text": body.match_source_text,
     }
     rule_tag_ids = set(body.tag_ids)
 
@@ -248,7 +267,7 @@ def preview_rule(body: RulePreview):
             """
             SELECT
                 t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
-                t.is_pending, t.category_overridden, t.notes,
+                t.is_pending, t.category_overridden, t.notes, t.import_evidence_json,
                 COALESCE(a.parent_account_id, a.id) AS account_id,
                 t.owner_id,
                 COALESCE(a.display_name, a.name) AS account_name,
@@ -315,6 +334,7 @@ class RuleCreate(BaseModel):
     owner_id:    Optional[str]   = None
     account_id:  Optional[str]   = None
     tag_ids:     list[str]       = []
+    match_source_text: bool      = False
 
 
 class RuleUpdate(BaseModel):
@@ -327,6 +347,7 @@ class RuleUpdate(BaseModel):
     owner_id:    Optional[str]   = None
     account_id:  Optional[str]   = None
     tag_ids:     Optional[list[str]] = None
+    match_source_text: Optional[bool] = None
     clear_amount_min: bool = False
     clear_amount_max: bool = False
     clear_clean_name: bool = False
@@ -347,6 +368,7 @@ def list_rules(search: Optional[str] = Query(None)):
                 cr.category_id,
                 cr.owner_id,
                 cr.account_id,
+                cr.match_source_text,
                 c.name  AS category_name,
                 NULL    AS category_color,
                 p.name  AS parent_name,
@@ -396,6 +418,7 @@ def match_rule_for_transaction(txn_id: str):
                 t.amount,
                 t.owner_id,
                 t.account_id,
+                t.import_evidence_json,
                 COALESCE(a.parent_account_id, t.account_id) AS effective_account_id
             FROM txn t
             JOIN account a ON a.id = t.account_id
@@ -414,8 +437,9 @@ def _normalize_clean_name(value: Optional[str]) -> str:
 
 
 def _existing_rule_for_matcher(conn, keyword: str, body: "RuleCreate"):
-    # The matcher is keyword + the full scope (owner, account, amount range, direction). `IS` is
-    # SQLite's null-safe comparison, so the nullable scope columns match NULL-to-NULL too.
+    # The matcher is keyword + the full scope (owner, account, amount range, direction) + whether the
+    # rule also matches source text — two rules that differ only by `match_source_text` target different
+    # rows, so they are distinct matchers. `IS` is SQLite's null-safe comparison for the nullable scope.
     return conn.execute(
         """SELECT id, category_id, clean_name FROM category_rule
            WHERE keyword = ?
@@ -423,8 +447,10 @@ def _existing_rule_for_matcher(conn, keyword: str, body: "RuleCreate"):
              AND account_id   IS ?
              AND amount_min   IS ?
              AND amount_max   IS ?
-             AND debit_credit IS ?""",
-        (keyword, body.owner_id, body.account_id, body.amount_min, body.amount_max, body.debit_credit),
+             AND debit_credit IS ?
+             AND match_source_text IS ?""",
+        (keyword, body.owner_id, body.account_id, body.amount_min, body.amount_max, body.debit_credit,
+         int(bool(body.match_source_text))),
     ).fetchone()
 
 
@@ -508,10 +534,11 @@ def create_rule(body: RuleCreate, on_existing: Literal["reject", "merge"] = "rej
         rid = str(uuid.uuid4())
         conn.execute(
             """INSERT INTO category_rule
-               (id, category_id, keyword, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+               (id, category_id, keyword, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, match_source_text)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (rid, body.category_id, keyword,
-             body.amount_min, body.amount_max, body.debit_credit, body.clean_name, body.owner_id, body.account_id),
+             body.amount_min, body.amount_max, body.debit_credit, body.clean_name, body.owner_id, body.account_id,
+             int(bool(body.match_source_text))),
         )
         for tag_id in body.tag_ids:
             conn.execute(
@@ -533,6 +560,7 @@ def _resulting_rule_state(current: dict, body: RuleUpdate) -> dict:
         "debit_credit": body.debit_credit if body.debit_credit is not None else current["debit_credit"],
         "category_id":  body.category_id  if body.category_id  is not None else current["category_id"],
         "clean_name":   None if body.clear_clean_name else (body.clean_name if body.clean_name is not None else current["clean_name"]),
+        "match_source_text": int(bool(body.match_source_text)) if body.match_source_text is not None else current["match_source_text"],
     }
 
 
@@ -550,7 +578,7 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
     with get_db() as conn:
         current = conn.execute(
             """SELECT id, keyword, category_id, clean_name, owner_id, account_id,
-                      amount_min, amount_max, debit_credit
+                      amount_min, amount_max, debit_credit, match_source_text
                FROM category_rule WHERE id = ?""",
             (rule_id,),
         ).fetchone()
@@ -571,9 +599,11 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
                  AND account_id   IS ?
                  AND amount_min   IS ?
                  AND amount_max   IS ?
-                 AND debit_credit IS ?""",
+                 AND debit_credit IS ?
+                 AND match_source_text IS ?""",
             (rule_id, resulting["keyword"], resulting["owner_id"], resulting["account_id"],
-             resulting["amount_min"], resulting["amount_max"], resulting["debit_credit"]),
+             resulting["amount_min"], resulting["amount_max"], resulting["debit_credit"],
+             resulting["match_source_text"]),
         ).fetchone()
         if other:
             other_tag_ids = {
@@ -609,6 +639,7 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
         if body.debit_credit is not None: fields.append("debit_credit = ?"); params.append(body.debit_credit)
         if body.owner_id    is not None: fields.append("owner_id = ?");    params.append(body.owner_id)
         if body.account_id  is not None: fields.append("account_id = ?");  params.append(body.account_id)
+        if body.match_source_text is not None: fields.append("match_source_text = ?"); params.append(int(bool(body.match_source_text)))
         if body.clear_amount_min:        fields.append("amount_min = NULL")
         if body.clear_amount_max:        fields.append("amount_max = NULL")
         if body.clear_clean_name:        fields.append("clean_name = NULL")

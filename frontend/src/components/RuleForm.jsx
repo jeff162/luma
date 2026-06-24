@@ -20,6 +20,8 @@ import PillGridTable from './PillGridTable.jsx'
 import { CategoryCell, MerchantCell, TransactionAmountCell } from './TransactionRow.jsx'
 import { formatDate } from '../lib/utils.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { OriginFieldList } from './OriginFields.jsx'
+import { getTxnMerchantOriginRows } from '../lib/importSourceFields.js'
 
 const RULE_PREVIEW_COLUMNS_PREF_KEY = 'ui.rules.affectedTransactions.columns'
 
@@ -55,11 +57,6 @@ function normalizeRulePreviewColumnConfig(savedColumns, defaultColumns) {
   }
   return merged
 }
-import {
-  getSharedPillCornerRemoveButtonStyle,
-  getSharedPillLabelStyle,
-  getSharedPillStyle,
-} from './pillStyles.js'
 
 const sectionHeadStyle = {
   fontSize: 11, fontWeight: 700, color: 'var(--accent2)',
@@ -260,89 +257,6 @@ function ConditionChip({ label, summary, active, expanded = true, onActivate, on
       </div>
       {expanded ? <div style={{ padding: '10px 12px' }}>{children}</div> : null}
     </div>
-  )
-}
-
-function SummaryPill({
-  label,
-  onClear,
-  onClick,
-  editing = false,
-  editValue = '',
-  onEditValueChange,
-  onEditCommit,
-  onEditCancel,
-}) {
-  const LabelTag = onClick && !editing ? 'button' : 'span'
-  const labelRef = useRef(null)
-  const restoreFocusRef = useRef(false)
-
-  useEffect(() => {
-    if (!editing && restoreFocusRef.current) {
-      labelRef.current?.focus()
-      restoreFocusRef.current = false
-    }
-  }, [editing])
-
-  return (
-    <span style={{ ...getSharedPillStyle({ tone: 'accent' }), position: 'relative' }}>
-      {editing ? (
-        <input
-          autoFocus
-          value={editValue}
-          onChange={event => onEditValueChange?.(event.target.value)}
-          onBlur={() => onEditCommit?.()}
-          onKeyDown={event => {
-            if (event.key === 'Enter') {
-              event.stopPropagation()
-              onEditCommit?.()
-            }
-            if (event.key === 'Escape') {
-              event.stopPropagation()
-              restoreFocusRef.current = true
-              onEditCancel?.()
-            }
-          }}
-          style={{
-            ...getSharedPillLabelStyle(),
-            minWidth: 150,
-            background: 'none',
-            border: 'none',
-            padding: 0,
-            outline: 'none',
-          }}
-        />
-      ) : (
-        <LabelTag
-          ref={labelRef}
-          type={onClick ? 'button' : undefined}
-          onClick={onClick}
-          style={{
-            ...getSharedPillLabelStyle(),
-            ...(onClick ? {
-              background: 'none',
-              border: 'none',
-              padding: 0,
-              cursor: 'pointer',
-              textAlign: 'left',
-            } : {}),
-          }}
-        >
-          {label}
-        </LabelTag>
-      )}
-      <button
-        type="button"
-        onClick={event => {
-          event.stopPropagation()
-          onClear()
-        }}
-        style={getSharedPillCornerRemoveButtonStyle()}
-        title={`Remove ${label}`}
-      >
-        ×
-      </button>
-    </span>
   )
 }
 
@@ -553,6 +467,10 @@ const RuleForm = forwardRef(function RuleForm({
   onCancel,
   saveLabel = 'Save rule',
   transactionData = null,
+  // A source row used ONLY to populate the read-only "From the source file" panel — distinct from
+  // `transactionData` (which also seeds amount defaults). The suggestion editor passes a single
+  // resolved example row here so the panel can show without disturbing the suggestion's amount scope.
+  sourceTransaction = null,
   showApplyToExisting = true,
   hideFooter = false,
   onDraftChange,
@@ -602,6 +520,9 @@ const RuleForm = forwardRef(function RuleForm({
   const [amtSide, setAmtSide] = useState(initialAmount.amtSide)
   const [ownerId, setOwnerId] = useState(initialValues.ownerId ?? initialValues.owner_id ?? '')
   const [accountId, setAccountId] = useState(initialValues.accountId ?? initialValues.account_id ?? '')
+  // Opt-in: also match the keyword against the row's captured import source text (description + extra
+  // evidence fields like "Original Statement"), not just the merchant/raw/display name.
+  const [matchSourceText, setMatchSourceText] = useState(!!(initialValues.matchSourceText ?? initialValues.match_source_text ?? false))
 
   const [kwOpen, setKwOpen] = useState(!!initialValues.keyword)
   const [amtOpen, setAmtOpen] = useState(!!(initialAmount.amtLow != null || initialAmount.amtHigh != null || initialAmount.amtSide !== 'both'))
@@ -626,7 +547,6 @@ const RuleForm = forwardRef(function RuleForm({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [transactionDefaultsApplied, setTransactionDefaultsApplied] = useState(false)
-  const keywordSummaryInputRef = useRef(null)
   const keywordConditionRef = useRef(null)
   const renameConditionRef = useRef(null)
   const renameInputRef = useRef(null)
@@ -640,10 +560,9 @@ const RuleForm = forwardRef(function RuleForm({
     value: initialValues.cleanName ?? '',
     open: !!initialValues.cleanName,
   })
-  // Keyword and rename can be edited from both the summary sentence and the expanded chips, so Escape restores
-  // whichever value/open state the user started from instead of just closing the current field.
-  const [editingActionKey, setEditingActionKey] = useState(null)
-  const [renamePillDraft, setRenamePillDraft] = useState('')
+  // Keyword and rename Escape-restore to whichever value/open state the edit started from.
+  // The read-only source panel's collapsed state is remembered per user so it stays out of the way.
+  const [sourcePanelOpen, setSourcePanelOpen] = useUserPreference('ui.ruleForm.sourcePanelOpen', true)
 
   useEffect(() => {
     // Treat transaction-derived amount data as a starting suggestion; once the user edits the amount condition, stop auto-hydrating it.
@@ -702,6 +621,7 @@ const RuleForm = forwardRef(function RuleForm({
           owner_id: ownerId || null,
           account_id: accountId || null,
           tag_ids: tagIds,
+          match_source_text: matchSourceText,
         })
         setChangeCount(result.count)
         setChangeTransactions(result.transactions)
@@ -715,7 +635,7 @@ const RuleForm = forwardRef(function RuleForm({
       }
     }, 700)
     return () => clearTimeout(changeDebounceRef.current)
-  }, [keyword, amtLow, amtHigh, amtSide, ownerId, accountId, catId, cleanName, tagIds, hasAction])
+  }, [keyword, amtLow, amtHigh, amtSide, ownerId, accountId, catId, cleanName, tagIds, matchSourceText, hasAction])
 
   const buildDraftPayload = useCallback(() => ({
     keyword: keyword.trim(),
@@ -727,13 +647,14 @@ const RuleForm = forwardRef(function RuleForm({
     owner_id: ownerId || null,
     account_id: accountId || null,
     tag_ids: tagIds,
+    match_source_text: matchSourceText,
     clear_amount_min: amtLow === null,
     clear_amount_max: amtHigh === null,
     clear_clean_name: !cleanName.trim(),
     clear_owner: !ownerId,
     clear_account: !accountId,
     applyToExisting,
-  }), [keyword, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, tagIds, applyToExisting])
+  }), [keyword, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, tagIds, matchSourceText, applyToExisting])
 
   const getDraftState = useCallback(() => ({
     data: buildDraftPayload(),
@@ -840,120 +761,43 @@ const RuleForm = forwardRef(function RuleForm({
     }
   }
 
-  function commitRenamePillEdit() {
-    const nextValue = renamePillDraft.trim()
-    if (!nextValue) {
-      setCleanName('')
-      setRenameOpen(false)
-      setRenameExpanded(false)
-      setEditingActionKey(null)
-      return
-    }
-    setCleanName(nextValue)
-    setRenameOpen(true)
-    setRenameExpanded(false)
-    setEditingActionKey(null)
-  }
-
   const amtSummary = amountConditionSummary(amtLow, amtLowOp, amtHigh, amtHighOp, amtSide)
   const selectedCategoryName = getCategoryDisplayLabel(categories, catId)
-  const actionSummaryPills = [
-    catId && selectedCategoryName
-      ? {
-          key: 'category',
-          label: `category: ${selectedCategoryName}`,
-          onClear: () => setCatId(''),
-        }
-      : null,
-    renameOpen && cleanName.trim()
-      ? {
-          key: 'rename',
-          label: `rename to ${cleanName.trim()}`,
-          onClear: () => { setCleanName(''); setRenameOpen(false) },
-          onClick: () => {
-            setRenamePillDraft(cleanName.trim())
-            setEditingActionKey('rename')
-          },
-        }
-      : null,
-    ...selectedTags.map(tag => ({
-      key: `tag:${tag.id}`,
-      label: `tag: ${tag.name}`,
-      onClear: () => setTagIds(current => current.filter(id => id !== tag.id)),
-    })),
+  // Read-only action labels for the bottom rule summary (editing happens in the sections above).
+  const actionSummaryLabels = [
+    catId && selectedCategoryName ? `category: ${selectedCategoryName}` : null,
+    renameOpen && cleanName.trim() ? `rename to ${cleanName.trim()}` : null,
+    ...selectedTags.map(tag => `tag: ${tag.name}`),
   ].filter(Boolean)
+  // The captured source text for this rule's example transaction (when one anchors the form): the raw
+  // description + extra evidence fields like "Original Statement". Empty for abstract edits (Rules page)
+  // and the aggregate suggestion editor — those have no single source row.
+  const sourceRowForPanel = sourceTransaction || transactionData
+  const sourceOriginRows = sourceRowForPanel ? getTxnMerchantOriginRows(sourceRowForPanel) : []
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '14px 20px', borderBottom: '2px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 64%, var(--surface))' }}>
-        <div style={sectionHeadStyle}>Current Rule</div>
-        <div style={{ display: 'grid', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Merchant contains</span>
-            <input
-              ref={keywordSummaryInputRef}
-              value={keyword}
-              onFocus={() => {
-                captureKeywordEditState()
-                setKwOpen(true)
-              }}
-              onChange={e => {
-                setKwOpen(true)
-                setKeyword(e.target.value)
-              }}
-              onKeyDown={event => {
-                if (event.key !== 'Escape') return
-                event.stopPropagation()
-                event.preventDefault()
-                cancelKeywordEdit(event.currentTarget)
-              }}
-              placeholder="e.g. starbucks"
-              style={{
-                minWidth: 220,
-                flex: '1 1 280px',
-                maxWidth: 420,
-                boxSizing: 'border-box',
-                ...getFormControlStyle({ size: 'md', accent: true }),
-                border: '1px solid color-mix(in srgb, var(--accent) 22%, var(--border))',
-                borderRadius: 999,
-                padding: '7px 12px',
-              }}
-            />
-            <MatchCountInline
-              keyword={keyword}
-              amtLow={amtLow}
-              amtHigh={amtHigh}
-              amtSide={amtSide}
-              ownerId={ownerId}
-              accountId={accountId}
-              onCountChange={n => { setMatchCount(n); if (n === 0) setApplyToExisting(false) }}
-            />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>actions:</span>
-            {actionSummaryPills.length > 0 ? (
-              actionSummaryPills.map(pill => (
-                <SummaryPill
-                  key={pill.key}
-                  label={pill.label}
-                  onClear={pill.onClear}
-                  onClick={pill.key === 'rename' ? pill.onClick : undefined}
-                  editing={pill.key === 'rename' && editingActionKey === 'rename'}
-                  editValue={pill.key === 'rename' ? renamePillDraft : ''}
-                  onEditValueChange={pill.key === 'rename' ? setRenamePillDraft : undefined}
-                  onEditCommit={pill.key === 'rename' ? commitRenamePillEdit : undefined}
-                  onEditCancel={pill.key === 'rename' ? () => {
-                    setRenamePillDraft(cleanName.trim())
-                    setEditingActionKey(null)
-                  } : undefined}
-                />
-              ))
-            ) : (
-              <span style={{ fontSize: 12, color: 'var(--muted)' }}>No suggested actions yet.</span>
-            )}
-          </div>
+      {sourceOriginRows.length > 0 ? (
+        <div style={{ padding: '14px 20px', borderBottom: '2px solid var(--border)', background: 'color-mix(in srgb, var(--surface2) 64%, var(--surface))' }}>
+          <button
+            type="button"
+            onClick={() => setSourcePanelOpen(open => !open)}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}
+            title={sourcePanelOpen ? 'Hide the source text' : 'Show the source text'}
+          >
+            <span style={{ ...sectionHeadStyle, marginBottom: 0 }}>From The Source File</span>
+            <span aria-hidden="true" style={{ fontSize: 9, color: 'var(--muted)', transform: sourcePanelOpen ? 'rotate(90deg)' : 'none', transition: 'transform 120ms' }}>▶</span>
+          </button>
+          {sourcePanelOpen ? (
+            <div style={{ marginTop: 10 }}>
+              <OriginFieldList rows={sourceOriginRows} />
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>
+                What the bank reported for this transaction. Turn on &ldquo;match the original / source statement text&rdquo; below to build the rule on this text.
+              </div>
+            </div>
+          ) : null}
         </div>
-      </div>
+      ) : null}
 
       <div style={{ padding: '16px 20px', borderBottom: '2px solid var(--border)' }}>
         <div style={sectionHeadStyle}>If The Transaction Matches…</div>
@@ -982,6 +826,20 @@ const RuleForm = forwardRef(function RuleForm({
               style={{ width: '100%', boxSizing: 'border-box', ...getFormControlStyle({ size: 'md' }) }}
             />
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>Case-insensitive substring match</div>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 9, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={matchSourceText}
+                onChange={e => setMatchSourceText(e.target.checked)}
+                style={{ marginTop: 2, accentColor: 'var(--accent)', cursor: 'pointer' }}
+              />
+              <span style={{ fontSize: 12, lineHeight: 1.35 }}>
+                Also match the original / source statement text
+                <span style={{ display: 'block', fontSize: 11, color: 'var(--muted)' }}>
+                  Searches the imported source detail (e.g. the bank&rsquo;s &ldquo;Original Statement&rdquo;), not just the merchant name.
+                </span>
+              </span>
+            </label>
           </ConditionChip>
 
           <ConditionChip
@@ -1115,6 +973,41 @@ const RuleForm = forwardRef(function RuleForm({
               Matching transactions will gain these tags without replacing tags from other matching rules.
             </div>
           </ConditionChip>
+        </div>
+      </div>
+
+      {/* Read-only readout of the rule being built — the edits live in the sections above. Always
+          rendered (even when the footer is hidden) so the matching-row count is never lost. */}
+      <div style={{ padding: '14px 20px', borderBottom: hideFooter ? 'none' : '2px solid var(--border)' }}>
+        <div style={sectionHeadStyle}>Rule Summary</div>
+        <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+          {keyword.trim() ? (
+            <>
+              Merchant {matchSourceText ? 'name or source text' : 'name'} contains{' '}
+              <strong>&ldquo;{keyword.trim()}&rdquo;</strong>
+              {amtSummary ? <span style={{ color: 'var(--muted)' }}> · {amtSummary}</span> : null}
+              {ownerId ? <span style={{ color: 'var(--muted)' }}> · owner {owners.find(o => o.id === ownerId)?.name}</span> : null}
+              {accountId ? <span style={{ color: 'var(--muted)' }}> · account {accounts.find(a => a.id === accountId)?.name}</span> : null}
+            </>
+          ) : (
+            <span style={{ color: 'var(--muted)' }}>Add a merchant keyword above to define the rule.</span>
+          )}
+        </div>
+        {actionSummaryLabels.length > 0 ? (
+          <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 6 }}>
+            {actionSummaryLabels.join(' · ')}
+          </div>
+        ) : null}
+        <div style={{ marginTop: 8 }}>
+          <MatchCountInline
+            keyword={keyword}
+            amtLow={amtLow}
+            amtHigh={amtHigh}
+            amtSide={amtSide}
+            ownerId={ownerId}
+            accountId={accountId}
+            onCountChange={n => { setMatchCount(n); if (n === 0) setApplyToExisting(false) }}
+          />
         </div>
       </div>
 

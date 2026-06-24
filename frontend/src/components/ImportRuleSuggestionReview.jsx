@@ -158,6 +158,9 @@ export default function ImportRuleSuggestionReview({
   const [lookbackMenu, setLookbackMenu] = useState(null)
   const [stickyTopOffset, setStickyTopOffset] = useState(0)
   const [merchantFilterText, setMerchantFilterText] = useState('')
+  // The single source row backing the suggestion currently open in the rule editor, fetched so the
+  // editor's "From the source file" panel can show it. Null unless the suggestion has exactly one row.
+  const [editorExampleTxn, setEditorExampleTxn] = useState(null)
   const [matchViewerState, setMatchViewerState] = useState({
     open: false,
     loading: false,
@@ -793,6 +796,7 @@ export default function ImportRuleSuggestionReview({
         ? null
         : (override.cleanName ?? suggestion.clean_name_suggestion),
       tag_ids: override.tagIds ?? (suggestion.tag_ids || []),
+      match_source_text: override.matchSourceText ?? !!suggestion.match_source_text,
     }
   }
 
@@ -980,6 +984,7 @@ export default function ImportRuleSuggestionReview({
         removeAccount: Boolean(data.clear_account),
         cleanName: data.clean_name || '',
         removeRename: !data.clean_name,
+        matchSourceText: !!data.match_source_text,
       },
     }))
   }
@@ -1105,6 +1110,37 @@ export default function ImportRuleSuggestionReview({
     ? suggestions.find(suggestion => getSuggestionKey(suggestion.id) === getSuggestionKey(editingSuggestionId))
     : null
   const resolvedEditingSuggestion = editingSuggestion ? getResolvedSuggestion(editingSuggestion) : null
+
+  // When the rule editor opens for a suggestion backed by exactly one source row, fetch that row so the
+  // editor's "From the source file" panel can show its captured text. Multi-row suggestions skip this —
+  // their per-row source text is seen through the matching-transactions report's hover. Keyed on the
+  // suggestion id (the example is fixed by source_row_ids, so unsaved field edits don't refetch).
+  useEffect(() => {
+    if (!resolvedEditingSuggestion) { setEditorExampleTxn(null); return undefined }
+    const rowIds = (resolvedEditingSuggestion.source_row_ids || []).map(String)
+    const singleRow = rowIds.length === 1 || resolvedEditingSuggestion.txn_count === 1
+    if (!singleRow) { setEditorExampleTxn(null); return undefined }
+    let cancelled = false
+    setEditorExampleTxn(null)
+    ;(async () => {
+      try {
+        const result = await onLoadSuggestionMatches({
+          keyword: resolvedEditingSuggestion.keyword,
+          owner_id: resolvedEditingSuggestion.owner_id || null,
+          account_id: resolvedEditingSuggestion.account_id || null,
+          amount_min: resolvedEditingSuggestion.amount_min,
+          amount_max: resolvedEditingSuggestion.amount_max,
+          row_ids: rowIds.length ? rowIds : undefined,
+        })
+        if (!cancelled) setEditorExampleTxn((result?.transactions || [])[0] || null)
+      } catch {
+        if (!cancelled) setEditorExampleTxn(null)
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingSuggestionId])
+
   const reviewFilterPills = [
     { key: 'total', label: 'total', value: summary.total_count || 0, tone: 'default' },
     // Pending is lensed to the in-window count so the pill matches its list; the stale remainder gets its
@@ -2525,6 +2561,7 @@ export default function ImportRuleSuggestionReview({
           categories={categories}
           owners={owners}
           accounts={accounts}
+          exampleTransaction={editorExampleTxn}
           onCategoriesChanged={onCategoriesChanged}
           onAccept={async data => {
             persistSuggestionDraft(resolvedEditingSuggestion, data)

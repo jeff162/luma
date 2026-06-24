@@ -43,6 +43,10 @@ function describeRule(rule, owners, accounts) {
     }
   }
 
+  if (rule.match_source_text) {
+    parts.push('matches source text')
+  }
+
   return parts
 }
 
@@ -188,6 +192,7 @@ function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel 
               catId: rule.category_id,
               cleanName: rule.clean_name || '',
               tagIds: rule.tag_ids || [],
+              match_source_text: !!rule.match_source_text,
             }}
             categories={categories}
             owners={owners}

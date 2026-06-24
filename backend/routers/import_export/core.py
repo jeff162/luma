@@ -48,7 +48,13 @@ from backend.db.control_database import auth_required, get_local_preference_prof
 from backend.json_utils import safe_json_dict
 from backend.time_utils import utcnow_iso
 from backend.routers.accounts import resolve_default_owner_id
-from backend.services.categorizer import categorize_transaction, load_categorization_rules, load_rule_tags_by_id
+from backend.services.categorizer import (
+    categorize_transaction,
+    extract_source_match_text,
+    load_categorization_rules,
+    load_rule_tags_by_id,
+    source_match_text_from_json,
+)
 from backend.services.duplicate_detection import (
     DedupeContext,
     are_distinct_checks,
@@ -2027,7 +2033,7 @@ def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) ->
         if snapshot.get("apply_categorization", True):
             uncategorized_rows = conn.execute(
                 """
-                SELECT id, owner_id, account_id, amount, merchant_name, display_name, raw_name
+                SELECT id, owner_id, account_id, amount, merchant_name, display_name, raw_name, import_evidence_json
                 FROM   txn
                 WHERE  import_batch_id = ?
                   AND  category_id IS NULL
@@ -2037,7 +2043,9 @@ def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) ->
             ).fetchall()
             rules = load_categorization_rules(conn)
             rule_tags_by_id = load_rule_tags_by_id(conn)
+            needs_source_text = any(rule["match_source_text"] for rule in rules)
             for row in uncategorized_rows:
+                source_text = source_match_text_from_json(row["import_evidence_json"]) if needs_source_text else None
                 result = categorize_transaction(
                     row["merchant_name"] or row["raw_name"] or "",
                     row["raw_name"] or row["merchant_name"] or "",
@@ -2048,6 +2056,7 @@ def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) ->
                     account_id=row["account_id"],
                     rules=rules,
                     rule_tags_by_id=rule_tags_by_id,
+                    source_text=source_text,
                 )
                 cat_id = result["category_id"] if isinstance(result, dict) else result
                 rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
@@ -2884,6 +2893,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                     account_id=acc["id"],
                     rules=rules,
                     rule_tags_by_id=rule_tags_by_id,
+                    source_text=extract_source_match_text(import_evidence),
                 )
                 rule_cat_id = result["category_id"] if isinstance(result, dict) else result
                 rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
@@ -3576,7 +3586,7 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
         categorized_by_rules = 0
         if snapshot.get("apply_categorization", True):
             uncategorized_rows = conn.execute("""
-                SELECT id, owner_id, account_id, amount, merchant_name, display_name, raw_name
+                SELECT id, owner_id, account_id, amount, merchant_name, display_name, raw_name, import_evidence_json
                 FROM   txn
                 WHERE  import_batch_id = ?
                   AND  category_id IS NULL
@@ -3584,7 +3594,9 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
             """, (batch_id,)).fetchall()
             rules = load_categorization_rules(conn)
             rule_tags_by_id = load_rule_tags_by_id(conn)
+            needs_source_text = any(rule["match_source_text"] for rule in rules)
             for row in uncategorized_rows:
+                source_text = source_match_text_from_json(row["import_evidence_json"]) if needs_source_text else None
                 result = categorize_transaction(
                     row["merchant_name"] or row["raw_name"] or "",
                     row["raw_name"] or row["merchant_name"] or "",
@@ -3595,6 +3607,7 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
                     account_id=row["account_id"],
                     rules=rules,
                     rule_tags_by_id=rule_tags_by_id,
+                    source_text=source_text,
                 )
                 cat_id = result["category_id"] if isinstance(result, dict) else result
                 rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
@@ -3967,6 +3980,7 @@ def get_system_rule_suggestion_matches(body: BatchRuleSuggestionMatchRequest):
                 t.category_id,
                 t.category_overridden,
                 t.category_source,
+                t.import_evidence_json,
                 COALESCE(a.parent_account_id, t.account_id) AS account_id,
                 t.owner_id,
                 COALESCE(a.display_name, a.name) AS account_name,
@@ -4066,6 +4080,7 @@ def get_batch_rule_suggestion_matches(batch_id: str, body: BatchRuleSuggestionMa
                 t.category_id,
                 t.category_overridden,
                 t.category_source,
+                t.import_evidence_json,
                 COALESCE(a.parent_account_id, t.account_id) AS account_id,
                 t.owner_id,
                 COALESCE(a.display_name, a.name) AS account_name,
@@ -4160,6 +4175,7 @@ def get_profile_rule_suggestion_matches(profile_id: str, body: BatchRuleSuggesti
                 t.category_id,
                 t.category_overridden,
                 t.category_source,
+                t.import_evidence_json,
                 COALESCE(a.parent_account_id, t.account_id) AS account_id,
                 t.owner_id,
                 COALESCE(a.display_name, a.name) AS account_name,

@@ -100,7 +100,7 @@ def get_db(db_path: str | None = None):
 # and the baseline is `1`. The runner and registry below are intentionally retained so the next schema
 # change registers `@migration(2)` and bumps `CURRENT_VERSION`; there are simply no migrations yet.
 
-CURRENT_VERSION = 1
+CURRENT_VERSION = 2
 
 MIGRATIONS = {}
 
@@ -110,6 +110,14 @@ def migration(version):
         MIGRATIONS[version] = fn
         return fn
     return decorator
+
+
+@migration(2)
+def _add_rule_match_source_text(conn):
+    # Opt-in per-rule flag to also match the keyword against a row's captured import source text
+    # (description + extra evidence fields). Existing rules default to 0 (name-only), preserving
+    # behavior. Fresh installs get the column from the baseline CREATE TABLE above.
+    conn.execute("ALTER TABLE category_rule ADD COLUMN match_source_text INTEGER NOT NULL DEFAULT 0")
 
 
 def get_db_version(conn) -> int:
@@ -272,7 +280,11 @@ def init_db(db_path: str | None = None):
                 debit_credit TEXT NOT NULL DEFAULT 'both',
                 clean_name   TEXT,
                 owner_id     TEXT REFERENCES owner(id) ON DELETE SET NULL,
-                account_id   TEXT REFERENCES account(id) ON DELETE SET NULL
+                account_id   TEXT REFERENCES account(id) ON DELETE SET NULL,
+                -- 1 = also match the rule's keyword against the row's captured import source text
+                -- (description + extra evidence fields like "Original Statement"), not just the
+                -- merchant/raw/display name. Opt-in per rule; part of the rule's matcher identity.
+                match_source_text INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS owner (

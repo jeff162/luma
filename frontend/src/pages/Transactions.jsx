@@ -950,9 +950,9 @@ export default function Transactions() {
       txnId: txn.id,
       categoryId: txn.category_id || '',
       keywordSource,
-      transactionData: {
-        amount: txn.amount,
-      },
+      // Pass the whole row so the rule editor can show its captured source text (raw + evidence
+      // fields like "Original Statement"); only `amount` and the origin fields are read.
+      transactionData: { ...txn },
     })
   }
 

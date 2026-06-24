@@ -14,6 +14,8 @@ import CategoryPicker from '../CategoryPicker.jsx'
 import CategoryDisplay from '../CategoryDisplay.jsx'
 import PillGridTable from '../PillGridTable.jsx'
 import { Spinner, Tooltip } from '../ui.jsx'
+import { MerchantOriginHoverCard } from '../OriginFields.jsx'
+import { hasMerchantOriginDetail } from '../../lib/importSourceFields.js'
 import { useColumnPreference } from '../../lib/useColumnPreference.js'
 import { formatDate } from '../../lib/utils.js'
 import { formatTransactionAmount, getTransactionAmountColor } from '../../lib/moneyDisplay.js'
@@ -142,9 +144,21 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
       return (
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {row.display_name || row.merchant_name || row.raw_name || 'Unnamed merchant'}
-            </span>
+            {hasMerchantOriginDetail(row) ? (
+              <Tooltip
+                content={<MerchantOriginHoverCard txn={row} />}
+                maxWidth={380}
+                triggerStyle={{ minWidth: 0, overflow: 'hidden' }}
+              >
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {row.display_name || row.merchant_name || row.raw_name || 'Unnamed merchant'}
+                </span>
+              </Tooltip>
+            ) : (
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {row.display_name || row.merchant_name || row.raw_name || 'Unnamed merchant'}
+              </span>
+            )}
             {onOpenMerchantReport ? (
               <Tooltip content="Open merchant spending report">
                 <button
