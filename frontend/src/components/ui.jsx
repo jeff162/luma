@@ -26,7 +26,7 @@ import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
  *   - `bare` drops the themed box chrome and only positions `content`, for content that brings its own
  *     card (e.g. a help summary panel). Combine both for a hover help card.
  */
-export function Tooltip({ children, content, maxWidth = 280, align = 'left', tone = 'neutral', interactive = false, bare = false }) {
+export function Tooltip({ children, content, maxWidth = 280, align = 'left', tone = 'neutral', interactive = false, bare = false, triggerStyle = null }) {
   const triggerRef = useRef(null)
   const tipRef = useRef(null)
   const [open, setOpen] = useState(false)
@@ -95,7 +95,9 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
   return (
     <span
       ref={triggerRef}
-      style={{ position: 'relative', display: 'inline-flex' }}
+      // triggerStyle lets a caller make the wrapper shrink/ellipsize (e.g. wrapping a truncating
+      // table cell) since the default inline-flex wrapper carries a min-content floor otherwise.
+      style={{ position: 'relative', display: 'inline-flex', ...triggerStyle }}
       onMouseEnter={show}
       onMouseLeave={hide}
       onFocus={show}

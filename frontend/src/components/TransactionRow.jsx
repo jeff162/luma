@@ -14,6 +14,8 @@ import NoteEditor from './NoteEditor.jsx'
 import AmountDisplay from './AmountDisplay.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import { Tooltip } from './ui.jsx'
+import { MerchantOriginHoverCard } from './OriginFields.jsx'
+import { hasMerchantOriginDetail } from '../lib/importSourceFields.js'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 
 /*
@@ -205,9 +207,6 @@ export function MerchantCell({ txn, onOpenDetail, onRename }) {
   const [nameTruncated, setNameTruncated] = useState(false)
   const importedName = getTxnImportedMerchantLabel(txn)
   const renamed = Boolean(txn.display_name && txn.display_name !== importedName)
-  const merchantTitle = nameTruncated
-    ? (renamed ? `${name}\nOriginally: ${importedName}` : name)
-    : (renamed ? `Originally: ${importedName}` : '')
 
   const {
     editing,
@@ -278,29 +277,44 @@ export function MerchantCell({ txn, onOpenDetail, onRename }) {
     )
   }
 
+  const labelSpan = (
+    <span
+      ref={labelRef}
+      onClick={e => {
+        e.stopPropagation()
+        beginEdit(name)
+      }}
+      style={{
+        fontWeight: 500,
+        cursor: 'pointer',
+        minWidth: 0,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        flex: '0 1 auto',
+        display: 'inline-block',
+        maxWidth: '100%',
+      }}
+    >
+      {name}
+    </span>
+  )
+  // Hover the merchant name to reveal the captured import-source detail (full name when truncated,
+  // raw source text, "Original Statement"-style extras, the source file). Only attach the hover when
+  // there is something to show beyond the visible name. See lib/importSourceFields.js.
+  const showOriginHover = nameTruncated || hasMerchantOriginDetail(txn)
+
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0, maxWidth: '100%' }}>
-      <span
-        ref={labelRef}
-        onClick={e => {
-          e.stopPropagation()
-          beginEdit(name)
-        }}
-        style={{
-          fontWeight: 500,
-          cursor: 'pointer',
-          minWidth: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          flex: '0 1 auto',
-          display: 'inline-block',
-          maxWidth: '100%',
-        }}
-        title={merchantTitle || undefined}
-      >
-        {name}
-      </span>
+      {showOriginHover ? (
+        <Tooltip
+          content={<MerchantOriginHoverCard txn={txn} />}
+          maxWidth={380}
+          triggerStyle={{ minWidth: 0, flex: '0 1 auto', maxWidth: '100%' }}
+        >
+          {labelSpan}
+        </Tooltip>
+      ) : labelSpan}
       {onOpenDetail && (
         <Tooltip content="Open merchant spending report">
           <button

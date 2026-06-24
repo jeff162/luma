@@ -7,6 +7,8 @@ import { txnMutations, reconcileRowsAfterRuleApply } from '../lib/txnMutations.j
 import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { AppConfirmDialog, Spinner } from './ui.jsx'
 import { CategoryCell, getTxnMerchantLabel } from './TransactionRow.jsx'
+import { OriginRow } from './OriginFields.jsx'
+import { getTxnOriginRows } from '../lib/importSourceFields.js'
 import TransientTextInput from './TransientTextInput.jsx'
 import NoteEditor from './NoteEditor.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
@@ -213,7 +215,7 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
   const monthSectionHeight = getDetailMonthSectionHeight(trend)
   const visibleTags = Array.isArray(detailTxn.tags) ? detailTxn.tags : []
   const visibleTagIds = new Set(visibleTags.map(tag => tag.id))
-  const renamed = Boolean(detailTxn.display_name && detailTxn.display_name !== (detailTxn.merchant_name || detailTxn.raw_name || detailTxn.display_name))
+  const originRows = getTxnOriginRows(detailTxn)
   const header = (
     <>
       {editingName ? (
@@ -393,91 +395,13 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
                 </button>
               </div>
               <div style={{ display: 'grid', gap: 6, fontSize: 12 }}>
-                <div><span style={{ color: 'var(--muted)' }}>Visible merchant:</span> {getTxnMerchantLabel(detailTxn)}</div>
-                {renamed ? (
-                  <div><span style={{ color: 'var(--muted)' }}>Imported merchant:</span> {detailTxn.merchant_name || '—'}</div>
-                ) : null}
-                <div><span style={{ color: 'var(--muted)' }}>Raw source text:</span> {detailTxn.raw_name || '—'}</div>
-                {originExpanded ? (
-                  <>
-                    {detailTxn.import_batch_filename ? (
-                      <div>
-                        <span style={{ color: 'var(--muted)' }}>Source file:</span>{' '}
-                        <span title={detailTxn.import_batch_filename}>{detailTxn.import_batch_filename}</span>
-                        {detailTxn.import_batch_imported_at ? (
-                          <span style={{ color: 'var(--muted)' }}> · imported {(detailTxn.import_batch_imported_at || '').slice(0, 16).replace('T', ' ')}</span>
-                        ) : null}
-                      </div>
-                    ) : (
-                      <div><span style={{ color: 'var(--muted)' }}>Source file:</span> — (not from an import)</div>
-                    )}
-                    {detailTxn.imported_category ? (
-                      <div>
-                        <span style={{ color: 'var(--muted)' }}>Imported category:</span>{' '}
-                        {detailTxn.imported_category}
-                      </div>
-                    ) : null}
-                    {(() => {
-                      // import_evidence_json stores a compact subset of the original CSV row —
-                      // the account column the source called it, the raw description, and any
-                      // extra source-text fields (e.g. "Original Statement"). Surfacing these
-                      // closes "what did the bank statement actually say?" without making the
-                      // user dig through the source CSV.
-                      let evidence = null
-                      try {
-                        evidence = detailTxn.import_evidence_json
-                          ? JSON.parse(detailTxn.import_evidence_json)
-                          : null
-                      } catch {
-                        evidence = null
-                      }
-                      if (!evidence) return null
-                      const out = []
-                      if (evidence.account?.value) {
-                        out.push(
-                          <div key="src-acct">
-                            <span style={{ color: 'var(--muted)' }}>Source account label ({evidence.account.header || 'Account'}):</span>{' '}
-                            {evidence.account.value}
-                          </div>
-                        )
-                      }
-                      if (evidence.description?.value && evidence.description.value !== detailTxn.raw_name) {
-                        out.push(
-                          <div key="src-desc">
-                            <span style={{ color: 'var(--muted)' }}>Source description ({evidence.description.header || 'Description'}):</span>{' '}
-                            {evidence.description.value}
-                          </div>
-                        )
-                      }
-                      const extras = Array.isArray(evidence.extra_text_fields) ? evidence.extra_text_fields : []
-                      extras.forEach((field, idx) => {
-                        if (field?.value) {
-                          out.push(
-                            <div key={`extra-${idx}`}>
-                              <span style={{ color: 'var(--muted)' }}>{field.header || 'Other'}:</span>{' '}
-                              {field.value}
-                            </div>
-                          )
-                        }
-                      })
-                      return out
-                    })()}
-                    {detailTxn.category_source === 'cleared' ? (
-                      <div>
-                        <span style={{ color: 'var(--muted)' }}>Imported category cleared</span>{' '}
-                        &mdash; rules can re-categorize it.
-                      </div>
-                    ) : detailTxn.category_source ? (
-                      <div>
-                        <span style={{ color: 'var(--muted)' }}>Categorized by:</span>{' '}
-                        {detailTxn.category_source === 'rule'   ? 'a categorization rule'
-                          : detailTxn.category_source === 'import' ? 'category present in the source data'
-                          : detailTxn.category_source === 'manual' ? 'manual edit'
-                          : detailTxn.category_source}
-                      </div>
-                    ) : null}
-                  </>
-                ) : null}
+                {/* Origin rows come from the shared import-source-field registry so the panel and the
+                    merchant hover render the same captured detail (lib/importSourceFields.js). The
+                    `always` rows show unconditionally; the rest reveal under Show more. */}
+                {originRows.filter(row => row.always).map(row => <OriginRow key={row.key} row={row} />)}
+                {originExpanded
+                  ? originRows.filter(row => !row.always).map(row => <OriginRow key={row.key} row={row} />)
+                  : null}
               </div>
             </div>
           </div>
