@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Link } from 'react-router-dom'
 import { txnMutations } from '../lib/txnMutations.js'
 import { api } from '../lib/api.js'
-import { Spinner, Tooltip } from './ui.jsx'
+import { Spinner } from './ui.jsx'
 import CategoryPicker from './CategoryPicker.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import { TagBadge } from './TagUi.jsx'
@@ -26,9 +26,11 @@ import {
   ProgressPill,
   ReportArrowButton,
   SuggestionActionButton,
+  SuggestionDispositionActions,
   SuggestionPill,
   SuggestionStatusBadge,
 } from './importRuleSuggestions/suggestionPresentational.jsx'
+import { SettledConflictSetTable } from './importRuleSuggestions/SettledConflictSetTable.jsx'
 import { RuleEditorModal } from './importRuleSuggestions/RuleEditorModal.jsx'
 import { ConflictSetModal } from './importRuleSuggestions/ConflictSetModal.jsx'
 import { MatchingTransactionsModal } from './importRuleSuggestions/MatchingTransactionsModal.jsx'
@@ -1785,12 +1787,6 @@ export default function ImportRuleSuggestionReview({
         || filterKey === 'discarded'
       )
     )
-    // Row buttons always act on this one card (bulk dispositions live in the bulk-actions bar), so the
-    // labels are unconditionally the single-card forms.
-    const saveLabel = 'Save'
-    const deferLabel = 'Defer'
-    const resumeLabel = 'Resume'
-    const restoreLabel = 'Restore'
     const returnsToPending = suggestion.review_status === 'accepted' || suggestion.review_status === 'skipped'
     const removeActionStatus = returnsToPending ? 'pending' : 'discarded'
     const removeTitle = returnsToPending ? 'Return suggestion to pending' : 'Discard suggestion'
@@ -2102,64 +2098,15 @@ export default function ImportRuleSuggestionReview({
             ) : null}
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0, alignItems: 'flex-end' }}>
-            {suggestion.review_status === 'discarded' ? (
-              <SuggestionActionButton onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, 'pending')}>
-                {restoreLabel}
-              </SuggestionActionButton>
-            ) : (
-              <>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                  <SuggestionActionButton onClick={() => onEditSuggestion(suggestion.id)} active={editingSuggestionId === suggestion.id}>
-                    {editingSuggestionId === suggestion.id ? 'Rule Editor Open' : 'Open Rule Editor'}
-                  </SuggestionActionButton>
-                  {suggestion.review_status === 'skipped' ? (
-                    <SuggestionActionButton onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, 'pending')}>
-                      {resumeLabel}
-                    </SuggestionActionButton>
-                  ) : (
-                    <SuggestionActionButton onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, 'skipped')}>
-                      {deferLabel}
-                    </SuggestionActionButton>
-                  )}
-                  {suggestion.review_status !== 'accepted' ? (
-                    <SuggestionActionButton onClick={() => runRowSaveAction(suggestion, resolvedSuggestion)}>
-                      {saveLabel}
-                    </SuggestionActionButton>
-                  ) : null}
-                </div>
-                {suggestion.review_status !== 'accepted' ? (
-                  // Reject the suggestion and settle the rows it covered. The two buttons complete the
-                  // "discard and …" label and are grouped in a bordered chip so it reads as one unit; the
-                  // wording ("…categorization") makes clear it acts on the transactions, not the category.
-                  // 'remove' -> cleared source; 'keep' -> file category becomes a manual decision.
-                  <div style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 6,
-                    border: '1px solid var(--border)', borderRadius: 9, padding: '3px 4px 3px 8px',
-                    background: 'color-mix(in srgb, var(--surface) 70%, transparent)',
-                  }}>
-                    <span style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }}>discard and</span>
-                    <Tooltip content="Discard this proposed rule and clear the transactions' categorization">
-                      <SuggestionActionButton
-                        onClick={() => onRejectSuggestionDisposition(suggestion, 'clear')}
-                        style={{ fontSize: 11, padding: '3px 8px' }}
-                      >
-                        remove categorization
-                      </SuggestionActionButton>
-                    </Tooltip>
-                    <Tooltip content="Discard this proposed rule but keep the transactions' current categorization">
-                      <SuggestionActionButton
-                        onClick={() => onRejectSuggestionDisposition(suggestion, 'keep')}
-                        style={{ fontSize: 11, padding: '3px 8px' }}
-                      >
-                        keep categorization
-                      </SuggestionActionButton>
-                    </Tooltip>
-                  </div>
-                ) : null}
-              </>
-            )}
-          </div>
+          <SuggestionDispositionActions
+            suggestion={suggestion}
+            resolvedSuggestion={resolvedSuggestion}
+            editingSuggestionId={editingSuggestionId}
+            onEditSuggestion={onEditSuggestion}
+            runRowStatusAction={runRowStatusAction}
+            runRowSaveAction={runRowSaveAction}
+            onRejectSuggestionDisposition={onRejectSuggestionDisposition}
+          />
         </div>
       </div>
     )
@@ -2196,6 +2143,35 @@ export default function ImportRuleSuggestionReview({
     )
   }
 
+  // The settled-view (accepted / deferred / discarded / total) counterpart to renderConflictSetCard: a
+  // conflict set whose members have all been dispositioned tabulates read-only instead of stacking N
+  // full cards. Members are pulled from the whole visible set by conflict_group_id (same as the card
+  // path) so the table is complete regardless of flat order.
+  function renderSettledConflictTable(suggestion) {
+    const members = (visibleConflictGroupMembers.get(suggestion.conflict_group_id) || [])
+      .map(id => visibleSuggestions.find(item => item.id === id))
+      .filter(Boolean)
+    return (
+      <SettledConflictSetTable
+        key={`settled-conflict:${suggestion.conflict_group_id}`}
+        members={members}
+        showStatusColumn={reviewFilter === 'total'}
+        bulkMode={bulkMode && bulkAvailable}
+        selectedSuggestionIds={selectedSuggestionIds}
+        getSuggestionKey={getSuggestionKey}
+        onToggleSelection={toggleSuggestionSelection}
+        getResolvedSuggestion={getResolvedSuggestion}
+        tags={tags}
+        editingSuggestionId={editingSuggestionId}
+        onOpenReport={() => openMatchingTransactionsViewer(suggestion)}
+        onEditSuggestion={onEditSuggestion}
+        runRowStatusAction={runRowStatusAction}
+        runRowSaveAction={runRowSaveAction}
+        onRejectSuggestionDisposition={onRejectSuggestionDisposition}
+      />
+    )
+  }
+
   // Same-merchant (same keyword) suggestions render together inside one bordered container so the user
   // can see the whole pattern — scope variants and conflicts — and decide as a unit. A group with a
   // single item (one plain card, or one conflict set with no variants) renders bare to avoid a redundant
@@ -2203,11 +2179,25 @@ export default function ImportRuleSuggestionReview({
   function renderMerchantGroup(group, useConflictCards) {
     const items = []
     const seenConflict = new Set()
+    // In the settled views, collapse a conflict set into one read-only table — but only when ≥2 of its
+    // members are visible here; a lone settled member tabulates to nothing useful, so it stays a card.
+    const settledConflictCounts = new Map()
+    if (!useConflictCards) {
+      for (const suggestion of group.members) {
+        if (suggestion.conflict_group_id) {
+          settledConflictCounts.set(suggestion.conflict_group_id, (settledConflictCounts.get(suggestion.conflict_group_id) || 0) + 1)
+        }
+      }
+    }
     for (const suggestion of group.members) {
       if (useConflictCards && suggestion.conflict_group_id) {
         if (seenConflict.has(suggestion.conflict_group_id)) continue
         seenConflict.add(suggestion.conflict_group_id)
         items.push({ key: `conflict:${suggestion.conflict_group_id}`, node: renderConflictSetCard(suggestion) })
+      } else if (!useConflictCards && suggestion.conflict_group_id && (settledConflictCounts.get(suggestion.conflict_group_id) || 0) >= 2) {
+        if (seenConflict.has(suggestion.conflict_group_id)) continue
+        seenConflict.add(suggestion.conflict_group_id)
+        items.push({ key: `settled-conflict:${suggestion.conflict_group_id}`, node: renderSettledConflictTable(suggestion) })
       } else {
         items.push({ key: `single:${suggestion.id}`, node: renderSuggestionCard(suggestion) })
       }

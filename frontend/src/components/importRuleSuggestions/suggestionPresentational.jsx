@@ -7,7 +7,7 @@
 // keyword. They hold no state beyond local edit-focus restoration; the parent owns all data.
 
 import { useEffect, useRef } from 'react'
-import { Button } from '../ui.jsx'
+import { Button, Tooltip } from '../ui.jsx'
 import TransientTextInput from '../TransientTextInput.jsx'
 import {
   getSharedPillCornerRemoveButtonStyle,
@@ -157,6 +157,82 @@ export function SuggestionActionButton({ children, onClick, active = false, disa
     >
       {children}
     </Button>
+  )
+}
+
+// The per-row disposition action cluster, shared so a suggestion's status buttons read and behave the
+// same whether it renders as a full card or as a row in a settled-view conflict table. Row buttons act
+// on this one suggestion only (the bulk-actions bar owns the selection) — see ui-patterns.md. The
+// handlers and `editingSuggestionId` are owned by the parent; this component is pure layout.
+export function SuggestionDispositionActions({
+  suggestion,
+  resolvedSuggestion,
+  editingSuggestionId,
+  onEditSuggestion,
+  runRowStatusAction,
+  runRowSaveAction,
+  onRejectSuggestionDisposition,
+  align = 'flex-end',
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0, alignItems: align }}>
+      {suggestion.review_status === 'discarded' ? (
+        <SuggestionActionButton onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, 'pending')}>
+          Restore
+        </SuggestionActionButton>
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: align }}>
+            <SuggestionActionButton onClick={() => onEditSuggestion(suggestion.id)} active={editingSuggestionId === suggestion.id}>
+              {editingSuggestionId === suggestion.id ? 'Rule Editor Open' : 'Open Rule Editor'}
+            </SuggestionActionButton>
+            {suggestion.review_status === 'skipped' ? (
+              <SuggestionActionButton onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, 'pending')}>
+                Resume
+              </SuggestionActionButton>
+            ) : (
+              <SuggestionActionButton onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, 'skipped')}>
+                Defer
+              </SuggestionActionButton>
+            )}
+            {suggestion.review_status !== 'accepted' ? (
+              <SuggestionActionButton onClick={() => runRowSaveAction(suggestion, resolvedSuggestion)}>
+                Save
+              </SuggestionActionButton>
+            ) : null}
+          </div>
+          {suggestion.review_status !== 'accepted' ? (
+            // Reject the suggestion and settle the rows it covered. The two buttons complete the
+            // "discard and …" label and are grouped in a bordered chip so it reads as one unit; the
+            // wording ("…categorization") makes clear it acts on the transactions, not the category.
+            // 'remove' -> cleared source; 'keep' -> file category becomes a manual decision.
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              border: '1px solid var(--border)', borderRadius: 9, padding: '3px 4px 3px 8px',
+              background: 'color-mix(in srgb, var(--surface) 70%, transparent)',
+            }}>
+              <span style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }}>discard and</span>
+              <Tooltip content="Discard this proposed rule and clear the transactions' categorization">
+                <SuggestionActionButton
+                  onClick={() => onRejectSuggestionDisposition(suggestion, 'clear')}
+                  style={{ fontSize: 11, padding: '3px 8px' }}
+                >
+                  remove categorization
+                </SuggestionActionButton>
+              </Tooltip>
+              <Tooltip content="Discard this proposed rule but keep the transactions' current categorization">
+                <SuggestionActionButton
+                  onClick={() => onRejectSuggestionDisposition(suggestion, 'keep')}
+                  style={{ fontSize: 11, padding: '3px 8px' }}
+                >
+                  keep categorization
+                </SuggestionActionButton>
+              </Tooltip>
+            </div>
+          ) : null}
+        </>
+      )}
+    </div>
   )
 }
 
