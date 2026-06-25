@@ -112,6 +112,8 @@ There are two different bars here, one stricter than the other:
 
 - Keep `AGENTS.md` focused on stable repo-wide instructions.
 
+- `docs/agent-profile.md` is the place for distilled cross-session agent habits and operational footguns that are worth preserving, but do not belong in the always-read entry points or the product/system docs.
+
 - Keep `architecture.md`, `data-model.md`, and `ui-patterns.md` aligned with real shared systems and invariants.
 
 - Use this file for collaboration preferences and decision rules that affect implementation choices across the app but do not belong in the formal architecture or schema docs.
