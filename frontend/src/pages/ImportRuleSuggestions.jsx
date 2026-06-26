@@ -10,6 +10,7 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { isReturningAcceptedSuggestionToPending, reverseAcceptedSuggestionSideEffects } from '../lib/importExport/ruleSuggestionReviewStatus.js'
 
 const IMPORT_RULE_MERCHANT_FILTER_OPEN_PREF_KEY = 'ui.importRuleSuggestions.merchantFilterOpen'
 const IMPORT_RULE_OWNER_FILTER_OPEN_PREF_KEY = 'ui.importRuleSuggestions.ownerFilterOpen'
@@ -565,7 +566,7 @@ export default function ImportRuleSuggestions() {
   // with a row disposition can record both in one entry).
   async function applySuggestionStatus(suggestion, status) {
     setEditingSuggestionId(null)
-    const returningAcceptedToPending = status === 'pending' && suggestion.review_status === 'accepted'
+    const returningAcceptedToPending = isReturningAcceptedSuggestionToPending(suggestion, status)
     if (returningAcceptedToPending) {
       await reverseAcceptedSuggestion(suggestion)
     }
@@ -589,12 +590,10 @@ export default function ImportRuleSuggestions() {
   }
 
   async function reverseAcceptedSuggestion(suggestion) {
-    if (suggestion.accepted_prior_rows?.length) {
-      await txnMutations.restoreCategorization(suggestion.accepted_prior_rows)
-    }
-    if (suggestion.created_rule_id) {
-      await api.deleteRule(suggestion.created_rule_id)
-    }
+    await reverseAcceptedSuggestionSideEffects(suggestion, {
+      restoreCategorization: txnMutations.restoreCategorization,
+      deleteRule: api.deleteRule,
+    })
   }
 
   async function setSuggestionStatus(suggestion, status) {
@@ -677,7 +676,7 @@ export default function ImportRuleSuggestions() {
       let lastResult = null
       let shouldReload = false
       for (const suggestion of suggestions) {
-        if (status === 'pending' && suggestion.review_status === 'accepted') {
+        if (isReturningAcceptedSuggestionToPending(suggestion, status)) {
           await reverseAcceptedSuggestion(suggestion)
           shouldReload = true
         }

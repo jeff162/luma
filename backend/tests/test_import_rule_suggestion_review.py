@@ -30,6 +30,8 @@ from backend.routers.import_export import (
     _get_system_rule_suggestion_review_state,
     _save_system_rule_suggestion_review_state,
     _set_batch_imported_category_usage,
+    get_batch_rule_suggestion_matches,
+    get_profile_rule_suggestion_matches,
     get_system_rule_suggestion_matches,
     get_system_rule_suggestions,
     refine_system_rule_suggestion_match,
@@ -125,6 +127,34 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
                     (batch_id,),
                 )
         return batch_id
+
+    def _insert_import_profile(self, name: str = "Fixture Profile") -> str:
+        profile_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO csv_import_profile (id, name, column_map)
+                    VALUES (?, ?, '{}')
+                    """,
+                    (profile_id, name),
+                )
+        return profile_id
+
+    def _assign_batch_to_profile(self, batch_id: str, profile_id: str) -> None:
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE import_batch SET profile_id = ? WHERE id = ?", (profile_id, batch_id))
+
+    def _insert_tag(self, name: str) -> str:
+        tag_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO tag (id, name, color, sort_order) VALUES (?, ?, '#22c55e', 0)",
+                    (tag_id, name),
+                )
+        return tag_id
 
     def _insert_import_transaction(
         self,
@@ -241,6 +271,68 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             ))
         state = self._load_review_state()
         self.assertIn("syn", state["suggestions"])
+
+    def test_accepted_review_state_persists_owned_rule_and_row_restore_snapshot(self):
+        account_id = self._insert_account("Card")
+        leaf = self._insert_expense_leaf("FixtureAcceptedOwnedRule")
+        batch_id = self._insert_import_batch()
+        row_id = self._insert_import_transaction(
+            batch_id=batch_id,
+            account_id=account_id,
+            category_id=leaf,
+            merchant_name="Owned Rule Merchant",
+            amount=-12.34,
+        )
+        suggestion_id = f"owned rule merchant:__global__:{leaf}"
+        prior_rows = [{
+            "id": row_id,
+            "category_id": leaf,
+            "category_source": "import",
+            "category_overridden": 0,
+        }]
+        rule_id = str(uuid.uuid4())
+        self._save_review_state({
+            "suggestions": {
+                suggestion_id: {
+                    "keyword": "owned rule merchant",
+                    "merchant_label": "Owned Rule Merchant",
+                    "target_category_id": leaf,
+                    "target_category_name": "FixtureAcceptedOwnedRule",
+                    "source_row_ids": [row_id],
+                },
+            },
+            "statuses": {},
+        })
+        with self._use_db_path():
+            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+                suggestion_id=suggestion_id,
+                status="accepted",
+                rule_id=rule_id,
+                created_rule_id=rule_id,
+                accepted_prior_rows=prior_rows,
+                keyword="owned rule merchant",
+                merchant_label="Owned Rule Merchant",
+                target_category_id=leaf,
+                target_category_name="FixtureAcceptedOwnedRule",
+            ))
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET category_source = 'rule', category_overridden = 0 WHERE id = ?",
+                    (row_id,),
+                )
+            result = get_system_rule_suggestions("")
+
+        state = self._load_review_state()
+        status = state["statuses"][suggestion_id]
+        self.assertEqual(status["rule_id"], rule_id)
+        self.assertEqual(status["created_rule_id"], rule_id)
+        self.assertEqual(status["accepted_prior_rows"], prior_rows)
+        accepted = [suggestion for suggestion in result["suggestions"] if suggestion["id"] == suggestion_id]
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(accepted[0]["review_status"], "accepted")
+        self.assertEqual(accepted[0]["rule_id"], rule_id)
+        self.assertEqual(accepted[0]["created_rule_id"], rule_id)
+        self.assertEqual(accepted[0]["accepted_prior_rows"], prior_rows)
 
     def test_matches_report_includes_manually_reconciled_rows_unflagged(self):
         account_id = self._insert_account("Card")
@@ -598,6 +690,11 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(followups[0]["txn_count"], 1)
         self.assertTrue(all(s["review_status"] == "pending" for s in followups))
         self.assertTrue(all(s["conflict_group_id"] == "black earth compost:__global__" for s in followups))
+        original_source_ids = set().union(*(set(suggestion["source_row_ids"]) for suggestion in before))
+        refined_source_ids = set().union(*(set(suggestion["source_row_ids"]) for suggestion in unsuffixed))
+        followup_source_ids = set().union(*(set(suggestion["source_row_ids"]) for suggestion in followups))
+        self.assertFalse(refined_source_ids & followup_source_ids)
+        self.assertEqual(refined_source_ids | followup_source_ids, original_source_ids)
         canonical_remainder = [
             s for s in after
             if s["target_category_name"] == "FixtureTrashSplit" and ":followup:" not in s["id"]
@@ -850,6 +947,54 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         # The row that wasn't part of this suggestion is left alone, not reassigned.
         self.assertEqual(cats[bystander], (other, "import"))
 
+    def test_rule_create_preserves_all_editor_actions_and_match_scope(self):
+        owner_id = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("INSERT INTO owner (id, name) VALUES (?, ?)", (owner_id, "Rule Owner"))
+        account_id = self._insert_account("Rule Card", owner_id)
+        category_id = self._insert_expense_leaf("FixtureRuleActions")
+        tag_id = self._insert_tag("FixtureRuleTag")
+
+        with self._use_db_path():
+            created = create_rule(RuleCreate(
+                keyword="Example Merchant",
+                category_id=category_id,
+                amount_min=10.0,
+                amount_max=25.0,
+                debit_credit="debit",
+                clean_name="Example Clean Name",
+                owner_id=owner_id,
+                account_id=account_id,
+                tag_ids=[tag_id],
+                match_source_text=True,
+            ))
+            with get_db() as conn:
+                rule = conn.execute(
+                    """
+                    SELECT keyword, category_id, amount_min, amount_max, debit_credit, clean_name,
+                           owner_id, account_id, match_source_text
+                    FROM category_rule
+                    WHERE id = ?
+                    """,
+                    (created["id"],),
+                ).fetchone()
+                rule_tag_ids = [
+                    row["tag_id"]
+                    for row in conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (created["id"],)).fetchall()
+                ]
+
+        self.assertEqual(created["status"], "created")
+        self.assertEqual(rule["keyword"], "example merchant")
+        self.assertEqual(rule["category_id"], category_id)
+        self.assertEqual(rule["amount_min"], 10.0)
+        self.assertEqual(rule["amount_max"], 25.0)
+        self.assertEqual(rule["debit_credit"], "debit")
+        self.assertEqual(rule["clean_name"], "Example Clean Name")
+        self.assertEqual(rule["owner_id"], owner_id)
+        self.assertEqual(rule["account_id"], account_id)
+        self.assertEqual(rule["match_source_text"], 1)
+        self.assertEqual(rule_tag_ids, [tag_id])
+
 
     def test_matches_report_scopes_to_row_ids_when_provided(self):
         # The report must show exactly the card's own rows when given row_ids, not every same-keyword row,
@@ -907,6 +1052,46 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(without_source_text["count"], 0)
         self.assertEqual(with_source_text["count"], 1)
         self.assertEqual(with_source_text["transactions"][0]["id"], row_id)
+
+    def test_scoped_matches_report_includes_rule_owned_rows_for_system_batch_and_profile(self):
+        account_id = self._insert_account("Card")
+        leaf = self._insert_expense_leaf("FixtureMembershipAllContexts")
+        profile_id = self._insert_import_profile()
+        batch_id = self._insert_import_batch()
+        self._assign_batch_to_profile(batch_id, profile_id)
+        row_id = self._insert_import_transaction(
+            batch_id=batch_id,
+            account_id=account_id,
+            category_id=leaf,
+            merchant_name="Example Card",
+            amount=-95.0,
+            import_evidence_json=json.dumps({
+                "description": {"value": "annual renewal membership fee"},
+            }),
+        )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET category_source = 'rule', category_overridden = 0 WHERE id = ?",
+                    (row_id,),
+                )
+            request = BatchRuleSuggestionMatchRequest(
+                keyword="renewal",
+                match_source_text=True,
+                row_ids=[row_id],
+            )
+            results = [
+                get_system_rule_suggestion_matches(request),
+                get_batch_rule_suggestion_matches(batch_id, request),
+                get_profile_rule_suggestion_matches(profile_id, request),
+            ]
+
+        self.assertEqual([result["count"] for result in results], [1, 1, 1])
+        self.assertEqual(
+            [{row["id"] for row in result["transactions"]} for result in results],
+            [{row_id}, {row_id}, {row_id}],
+        )
 
     def test_generated_suggestion_carries_latest_txn_date(self):
         # The look-back lens hides stale suggestions by recency, so each suggestion must report the most
