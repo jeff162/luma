@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState, useEffect, useCallback, useId } from 'react'
+import { useState, useEffect, useCallback, useId, useRef } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
@@ -127,7 +127,51 @@ function RuleRow({ rule, owners, accounts, onSave, onDelete, gridTemplateColumns
 }
 
 function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel }) {
+  const formRef = useRef(null)
+  const [draftState, setDraftState] = useState({
+    data: null,
+    canSave: Boolean(rule?.keyword && (rule?.category_id || rule?.clean_name || rule?.tag_ids?.length)),
+  })
+  const [working, setWorking] = useState(false)
+  const [error, setError] = useState('')
+
   if (!rule) return null
+
+  async function handleSave() {
+    const currentDraftState = formRef.current?.getDraftState?.() || draftState
+    if (!currentDraftState.canSave || working) return
+    setWorking(true)
+    setError('')
+    try {
+      await onSave(currentDraftState.data)
+    } catch (err) {
+      setError(err.message || 'Failed to save rule')
+      setWorking(false)
+    }
+  }
+
+  const quietHeaderButtonStyle = {
+    background: 'transparent',
+    color: 'var(--muted)',
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+    padding: '5px 11px',
+    fontSize: 12,
+    fontWeight: 500,
+    cursor: working ? 'not-allowed' : 'pointer',
+    opacity: working ? 0.65 : 1,
+  }
+  const primaryHeaderButtonStyle = {
+    background: draftState.canSave ? 'color-mix(in srgb, var(--accent) 12%, var(--surface))' : 'var(--surface)',
+    color: draftState.canSave ? 'var(--accent2)' : 'var(--muted)',
+    border: `1px solid ${draftState.canSave ? 'color-mix(in srgb, var(--accent) 40%, var(--border))' : 'var(--border)'}`,
+    borderRadius: 8,
+    padding: '5px 12px',
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: working || !draftState.canSave ? 'not-allowed' : 'pointer',
+    opacity: working ? 0.65 : 1,
+  }
 
   return (
     <div style={{
@@ -164,24 +208,33 @@ function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel 
               Update conditions and actions without leaving the rules list
             </div>
           </div>
-          <button
-            onClick={onCancel}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--muted)',
-              cursor: 'pointer',
-              fontSize: 22,
-              lineHeight: 1,
-              padding: 2,
-            }}
-            title="Close editor"
-          >
-            ×
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={working || !draftState.canSave}
+              style={primaryHeaderButtonStyle}
+            >
+              {working ? 'Saving…' : 'Save changes'}
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={working}
+              style={quietHeaderButtonStyle}
+            >
+              Cancel
+            </button>
+          </div>
         </div>
         <div style={{ maxHeight: 'calc(100vh - 230px)', overflowY: 'auto' }}>
+          {error ? (
+            <div style={{ padding: '8px 20px 0', fontSize: 12, color: 'var(--danger)' }}>
+              {error}
+            </div>
+          ) : null}
           <RuleForm
+            ref={formRef}
             initialValues={{
               keyword: rule.keyword,
               amount_min: rule.amount_min ?? null,
@@ -199,7 +252,8 @@ function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel 
             accounts={accounts}
             onSave={onSave}
             onCancel={onCancel}
-            saveLabel="Save changes"
+            hideFooterActions
+            onDraftChange={setDraftState}
           />
         </div>
       </Card>

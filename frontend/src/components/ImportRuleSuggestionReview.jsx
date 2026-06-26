@@ -33,7 +33,7 @@ import {
 import { SettledConflictSetTable } from './importRuleSuggestions/SettledConflictSetTable.jsx'
 import { RuleEditorModal } from './importRuleSuggestions/RuleEditorModal.jsx'
 import { ConflictSetModal } from './importRuleSuggestions/ConflictSetModal.jsx'
-import { MatchingTransactionsModal } from './importRuleSuggestions/MatchingTransactionsModal.jsx'
+import { MatchingTransactionsModal, MatchingTransactionsReport } from './importRuleSuggestions/MatchingTransactionsModal.jsx'
 import { ConflictSetCard } from './importRuleSuggestions/ConflictSetCard.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
@@ -121,6 +121,7 @@ export default function ImportRuleSuggestionReview({
   onRejectSuggestionDisposition,
   onBulkRejectDisposition,
   onApplyConflictSet,
+  onRefineConflictMatch,
   applyingConflict,
   editingSuggestionId,
   categories,
@@ -146,6 +147,8 @@ export default function ImportRuleSuggestionReview({
   const sortControlRef = useRef(null)
   const lookbackControlRef = useRef(null)
   const listTopRef = useRef(null)
+  const stickyPanelRef = useRef(null)
+  const pendingBulkAnchorRef = useRef(null)
   const [editingKeywordSuggestionId, setEditingKeywordSuggestionId] = useState(null)
   const [editingKeywordDraft, setEditingKeywordDraft] = useState('')
   const [openConflictGroupId, setOpenConflictGroupId] = useState(null)
@@ -154,6 +157,7 @@ export default function ImportRuleSuggestionReview({
   const [hoveredRemoveTooltip, setHoveredRemoveTooltip] = useState(null)
   const [bulkMenu, setBulkMenu] = useState(null)
   const [suggestionMenu, setSuggestionMenu] = useState(null)
+  const [editingMatchMembers, setEditingMatchMembers] = useState(null)
   const [sortMenu, setSortMenu] = useState(null)
   const [lookbackMenu, setLookbackMenu] = useState(null)
   const [stickyTopOffset, setStickyTopOffset] = useState(0)
@@ -482,6 +486,33 @@ export default function ImportRuleSuggestionReview({
     }
   }, [])
 
+  // Bulk-mode scroll anchoring:
+  // - Grouped conflict cards and flat bulk cards share a suggestion id as their stable identity.
+  // - Skip clipped cards and capture the first whole card visible below the sticky controls.
+  // - After React rebuilds the list, put that same rule in the first slot below the resized controls.
+  useLayoutEffect(() => {
+    const anchorId = pendingBulkAnchorRef.current
+    if (anchorId == null) return
+    pendingBulkAnchorRef.current = null
+
+    const root = rootRef.current
+    const stickyPanel = stickyPanelRef.current
+    if (!root || !stickyPanel) return
+    const scrollParent = findNearestScrollParent(root)
+    if (!scrollParent) return
+
+    const anchor = Array.from(
+      listTopRef.current?.querySelectorAll('[data-rule-suggestion-id]') || [],
+    ).find(element => element.dataset.ruleSuggestionId === anchorId)
+    if (!anchor) return
+
+    const rootStyle = window.getComputedStyle(root)
+    const rowGap = Number.parseFloat(rootStyle.rowGap || rootStyle.gap || '0') || 0
+    const desiredTop = stickyPanel.getBoundingClientRect().bottom + rowGap
+    const delta = anchor.getBoundingClientRect().top - desiredTop
+    if (Math.abs(delta) > 0.5) scrollParent.scrollTop += delta
+  }, [bulkMode])
+
   useEffect(() => {
     const visibleIds = new Set(suggestions.map(suggestion => String(suggestion.id)))
     setSuggestionActionOverrides(prev => {
@@ -603,6 +634,42 @@ export default function ImportRuleSuggestionReview({
 
   function getSuggestionKey(suggestionId) {
     return String(suggestionId)
+  }
+
+  function toggleBulkMode() {
+    const root = rootRef.current
+    const stickyPanel = stickyPanelRef.current
+    const list = listTopRef.current
+    const scrollParent = root ? findNearestScrollParent(root) : null
+    if (stickyPanel && list && scrollParent && scrollParent.scrollTop > 1) {
+      const visibleTop = Math.max(
+        stickyPanel.getBoundingClientRect().bottom,
+        scrollParent.getBoundingClientRect().top,
+      )
+      const visibleBottom = scrollParent.getBoundingClientRect().bottom
+      const cards = Array.from(list.querySelectorAll('[data-rule-suggestion-card]'))
+      const fullyVisibleAnchor = cards.find(element => {
+        const rect = element.getBoundingClientRect()
+        return rect.top >= visibleTop - 1 && rect.bottom <= visibleBottom + 1
+      })
+      const anchor = fullyVisibleAnchor || cards.find(element => {
+        const rect = element.getBoundingClientRect()
+        return rect.top >= visibleTop - 1 && rect.top < visibleBottom
+      })
+      pendingBulkAnchorRef.current = anchor?.dataset.ruleSuggestionId ?? null
+    } else {
+      pendingBulkAnchorRef.current = null
+    }
+
+    setBulkMode(prev => {
+      const next = !prev
+      if (!next) {
+        setSelectedSuggestionIds([])
+        setBulkMenu(null)
+      }
+      setSortMenu(null)
+      return next
+    })
   }
 
   function getBulkActions() {
@@ -821,7 +888,7 @@ export default function ImportRuleSuggestionReview({
     return ranked[0]
   }
 
-  async function openMatchingTransactionsViewer(suggestion) {
+  async function openMatchingTransactionsViewer(suggestion, { referenceMode = false } = {}) {
     if (!onLoadSuggestionMatches) return
     const resolvedSuggestion = getResolvedSuggestion(suggestion)
     const referenceSuggestion = getConflictReferenceSuggestion(suggestion)
@@ -850,7 +917,9 @@ export default function ImportRuleSuggestionReview({
       accountName: resolvedSuggestion.account_name || '',
       amountMin: resolvedSuggestion.amount_min,
       amountMax: resolvedSuggestion.amount_max,
+      matchSourceText: !!resolvedSuggestion.match_source_text,
       rowIds: scopedRowIds,
+      referenceMode,
       count: 0,
       rows: [],
     })
@@ -862,6 +931,7 @@ export default function ImportRuleSuggestionReview({
         account_id: resolvedSuggestion.account_id || null,
         amount_min: resolvedSuggestion.amount_min,
         amount_max: resolvedSuggestion.amount_max,
+        match_source_text: !!resolvedSuggestion.match_source_text,
         row_ids: scopedRowIds.length ? scopedRowIds : undefined,
       })
       setMatchViewerState(prev => ({
@@ -879,6 +949,18 @@ export default function ImportRuleSuggestionReview({
     }
   }
 
+  function closeMatchingTransactionsReference() {
+    setMatchViewerState(prev => ({ ...prev, open: false, referenceMode: false }))
+  }
+
+  function toggleMatchingTransactionsReference(suggestion) {
+    if (matchViewerState.open && matchViewerState.referenceMode) {
+      closeMatchingTransactionsReference()
+      return
+    }
+    openMatchingTransactionsViewer(suggestion, { referenceMode: true })
+  }
+
   async function reloadMatchViewer() {
     const result = await onLoadSuggestionMatches?.({
       keyword: matchViewerState.keyword,
@@ -887,6 +969,7 @@ export default function ImportRuleSuggestionReview({
       account_id: matchViewerState.accountId,
       amount_min: matchViewerState.amountMin,
       amount_max: matchViewerState.amountMax,
+      match_source_text: !!matchViewerState.matchSourceText,
       row_ids: matchViewerState.rowIds?.length ? matchViewerState.rowIds : undefined,
     })
     setMatchViewerState(prev => ({
@@ -984,9 +1067,35 @@ export default function ImportRuleSuggestionReview({
         removeAccount: Boolean(data.clear_account),
         cleanName: data.clean_name || '',
         removeRename: !data.clean_name,
+        tagIds: data.tag_ids || [],
         matchSourceText: !!data.match_source_text,
       },
     }))
+  }
+
+  function buildMatchRefinePayload(members, data) {
+    return {
+      source_suggestions: members.map(member => ({
+        id: member.id,
+        merchant_label: member.merchant_label,
+        target_category_id: member.target_category_id || null,
+        target_category_name: member.target_category_name || null,
+        target_category_group_name: member.target_category_group_name || null,
+        owner_id: member.owner_id || null,
+        owner_name: member.owner_name || null,
+        account_id: member.account_id || null,
+        account_name: member.account_name || null,
+        clean_name_suggestion: member.clean_name_suggestion || null,
+        imported_categories: member.imported_categories || [],
+        source_row_ids: member.source_row_ids || [],
+      })),
+      keyword: data.keyword,
+      owner_id: data.owner_id || null,
+      account_id: data.account_id || null,
+      amount_min: data.amount_min,
+      amount_max: data.amount_max,
+      match_source_text: !!data.match_source_text,
+    }
   }
 
   function removeSuggestionAction(suggestionId, actionKey) {
@@ -1110,6 +1219,23 @@ export default function ImportRuleSuggestionReview({
     ? suggestions.find(suggestion => getSuggestionKey(suggestion.id) === getSuggestionKey(editingSuggestionId))
     : null
   const resolvedEditingSuggestion = editingSuggestion ? getResolvedSuggestion(editingSuggestion) : null
+  const resolvedEditingMatchMembers = (editingMatchMembers || []).map(getResolvedSuggestion)
+  const editingMatchReferenceSuggestion = resolvedEditingMatchMembers.length
+    ? getConflictReferenceSuggestion(resolvedEditingMatchMembers[0])
+    : null
+  const editingMatchRowCount = resolvedEditingMatchMembers.length
+    ? new Set(resolvedEditingMatchMembers.flatMap(member => member.source_row_ids || []).map(String)).size
+    : 0
+  const editorReferenceOpen = Boolean(resolvedEditingSuggestion || editingMatchReferenceSuggestion)
+
+  useEffect(() => {
+    if (editorReferenceOpen) return
+    setMatchViewerState(prev => (
+      prev.open && prev.referenceMode
+        ? { ...prev, open: false, referenceMode: false }
+        : prev
+    ))
+  }, [editorReferenceOpen])
 
   // When the rule editor opens for a suggestion backed by exactly one source row, fetch that row so the
   // editor's "From the source file" panel can show its captured text. Multi-row suggestions skip this —
@@ -1130,6 +1256,7 @@ export default function ImportRuleSuggestionReview({
           account_id: resolvedEditingSuggestion.account_id || null,
           amount_min: resolvedEditingSuggestion.amount_min,
           amount_max: resolvedEditingSuggestion.amount_max,
+          match_source_text: !!resolvedEditingSuggestion.match_source_text,
           row_ids: rowIds.length ? rowIds : undefined,
         })
         if (!cancelled) setEditorExampleTxn((result?.transactions || [])[0] || null)
@@ -1250,7 +1377,9 @@ export default function ImportRuleSuggestionReview({
 
     actions.push({
       key: 'editor',
-      label: 'Rule Editor',
+      label: resolvedSuggestion.pending_override && resolvedSuggestion.review_status === 'pending'
+        ? 'Selection criteria'
+        : 'Rule Editor',
       onClick: () => onEditSuggestion(suggestion.id),
     })
 
@@ -1830,6 +1959,8 @@ export default function ImportRuleSuggestionReview({
     return (
       <div
         key={suggestion.id}
+        data-rule-suggestion-card=""
+        data-rule-suggestion-id={getSuggestionKey(suggestion.id)}
         onMouseLeave={() => setHoveredRemoveTooltip(current => (current?.id === suggestion.id ? null : current))}
         onContextMenu={event => {
           event.preventDefault()
@@ -2142,6 +2273,12 @@ export default function ImportRuleSuggestionReview({
             runRowStatusAction={runRowStatusAction}
             runRowSaveAction={runRowSaveAction}
             onRejectSuggestionDisposition={onRejectSuggestionDisposition}
+            editLabel={resolvedSuggestion.pending_override && resolvedSuggestion.review_status === 'pending'
+              ? 'Edit selection criteria'
+              : undefined}
+            editOpenLabel={resolvedSuggestion.pending_override && resolvedSuggestion.review_status === 'pending'
+              ? 'Selection editor open'
+              : undefined}
           />
         </div>
       </div>
@@ -2168,6 +2305,7 @@ export default function ImportRuleSuggestionReview({
         onApply={winnerId => onApplyConflictSet(members, winnerId)}
         onDefer={() => onSetSuggestionStatusBulk(members, 'skipped')}
         onOpenReport={() => openMatchingTransactionsViewer(suggestion)}
+        onEditMatch={membersToEdit => setEditingMatchMembers(membersToEdit)}
         onEditRule={memberId => onEditSuggestion(memberId)}
         categories={categories}
         onSetMemberCategory={(member, categoryId) => commitCategoryActionEdit(member, categoryId)}
@@ -2271,6 +2409,28 @@ export default function ImportRuleSuggestionReview({
     )
   }
 
+  const matchingRowsReferencePanel = matchViewerState.open && matchViewerState.referenceMode ? (
+    <MatchingTransactionsReport
+      state={matchViewerState}
+      categories={categories}
+      onKeepCategory={keepMatchingTransactionCategory}
+      onSetRowCategory={setMatchRowCategory}
+      onSetAllCategories={setAllMatchCategories}
+      onCategoriesChanged={onCategoriesChanged}
+      applyingAll={matchViewerState.applyingAll}
+      onOpenMerchantReport={openMerchantReport}
+      onClose={closeMatchingTransactionsReference}
+      embedded
+      readOnly
+      allowPinnedOrigin
+    />
+  ) : null
+  const editingSuggestionUsesSelectionEditor = Boolean(
+    resolvedEditingSuggestion?.pending_override
+    && resolvedEditingSuggestion.review_status === 'pending'
+    && !resolvedEditingSuggestion.conflict_group_id
+  )
+
   return (
     <div
       ref={rootRef}
@@ -2282,6 +2442,7 @@ export default function ImportRuleSuggestionReview({
       style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 12, minWidth: 0 }}
     >
       <div
+        ref={stickyPanelRef}
         onContextMenu={event => {
           if (!bulkMode || !bulkAvailable) return
           event.preventDefault()
@@ -2386,17 +2547,7 @@ export default function ImportRuleSuggestionReview({
               </span>
               {bulkAvailable ? (
                 <SuggestionActionButton
-                  onClick={() => {
-                    setBulkMode(prev => {
-                      const next = !prev
-                      if (!next) {
-                        setSelectedSuggestionIds([])
-                        setBulkMenu(null)
-                      }
-                      setSortMenu(null)
-                      return next
-                    })
-                  }}
+                  onClick={toggleBulkMode}
                   active={bulkMode}
                 >
                   {bulkMode ? 'Cancel' : 'Bulk Select'}
@@ -2523,17 +2674,19 @@ export default function ImportRuleSuggestionReview({
         renderSuggestionCard={renderSuggestionCard}
       />
 
-      <MatchingTransactionsModal
-        state={matchViewerState}
-        categories={categories}
-        onKeepCategory={keepMatchingTransactionCategory}
-        onSetRowCategory={setMatchRowCategory}
-        onSetAllCategories={setAllMatchCategories}
-        onCategoriesChanged={onCategoriesChanged}
-        applyingAll={matchViewerState.applyingAll}
-        onOpenMerchantReport={openMerchantReport}
-        onClose={() => setMatchViewerState(prev => ({ ...prev, open: false }))}
-      />
+      {!matchViewerState.referenceMode ? (
+        <MatchingTransactionsModal
+          state={matchViewerState}
+          categories={categories}
+          onKeepCategory={keepMatchingTransactionCategory}
+          onSetRowCategory={setMatchRowCategory}
+          onSetAllCategories={setAllMatchCategories}
+          onCategoriesChanged={onCategoriesChanged}
+          applyingAll={matchViewerState.applyingAll}
+          onOpenMerchantReport={openMerchantReport}
+          onClose={() => setMatchViewerState(prev => ({ ...prev, open: false }))}
+        />
+      ) : null}
 
       {payeeDetail ? (
         // Stack the merchant spending report above the match modal (z 905). Detail panels live in the
@@ -2563,7 +2716,15 @@ export default function ImportRuleSuggestionReview({
           accounts={accounts}
           exampleTransaction={editorExampleTxn}
           onCategoriesChanged={onCategoriesChanged}
+          matchCount={resolvedEditingSuggestion.txn_count || (resolvedEditingSuggestion.source_row_ids || []).length}
+          matchingRowsOpen={Boolean(matchingRowsReferencePanel)}
+          matchingRowsPanel={matchingRowsReferencePanel}
+          onOpenMatchingTransactions={() => toggleMatchingTransactionsReference(resolvedEditingSuggestion)}
           onAccept={async data => {
+            if (editingSuggestionUsesSelectionEditor) {
+              await onRefineConflictMatch?.(buildMatchRefinePayload([resolvedEditingSuggestion], data))
+              return
+            }
             persistSuggestionDraft(resolvedEditingSuggestion, data)
             const nextCategory = data.category_id
               ? latestCategoriesRef.current.find(category => String(category.id) === String(data.category_id))
@@ -2576,11 +2737,16 @@ export default function ImportRuleSuggestionReview({
               amount_min: data.amount_min,
               amount_max: data.amount_max,
               clean_name_suggestion: data.clean_name || null,
+              tag_ids: data.tag_ids || [],
               owner_id: data.owner_id || null,
               account_id: data.account_id || null,
             }, data)
           }}
           onSaveAccepted={async data => {
+            if (editingSuggestionUsesSelectionEditor) {
+              await onRefineConflictMatch?.(buildMatchRefinePayload([resolvedEditingSuggestion], data))
+              return
+            }
             persistSuggestionDraft(resolvedEditingSuggestion, data)
             const nextCategory = data.category_id
               ? latestCategoriesRef.current.find(category => String(category.id) === String(data.category_id))
@@ -2593,11 +2759,16 @@ export default function ImportRuleSuggestionReview({
               amount_min: data.amount_min,
               amount_max: data.amount_max,
               clean_name_suggestion: data.clean_name || null,
+              tag_ids: data.tag_ids || [],
               owner_id: data.owner_id || null,
               account_id: data.account_id || null,
             }, data)
           }}
           onCloseWithDraft={data => {
+            if (editingSuggestionUsesSelectionEditor) {
+              onCancelEdit()
+              return
+            }
             persistSuggestionDraft(resolvedEditingSuggestion, data)
             onCancelEdit()
           }}
@@ -2605,8 +2776,39 @@ export default function ImportRuleSuggestionReview({
           // A conflict member is edited from the ConflictSetCard's "Edit rule"; the editor must only stash
           // the draft (which feeds the card's Apply), never accept and bypass the set's other dispositions.
           // The conflict card renders in both the pending and conflicts filters, so draft-only covers both.
-          // Single suggestions (no conflict group) keep the normal accept-on-save editor.
+          // A refined single suggestion is still a selection partition; saving it must regenerate the cards
+          // instead of accepting a rule against a now-stale one-row slice.
           draftOnly={Boolean(resolvedEditingSuggestion?.conflict_group_id) && (reviewFilter === 'pending' || reviewFilter === 'conflicts')}
+          mode={editingSuggestionUsesSelectionEditor ? 'match-only' : 'full'}
+        />
+      ) : null}
+
+      {editingMatchReferenceSuggestion ? (
+        <RuleEditorModal
+          suggestion={{
+            ...editingMatchReferenceSuggestion,
+            review_status: 'pending',
+            target_category_id: null,
+            target_category_name: null,
+            clean_name_suggestion: null,
+            tag_ids: [],
+          }}
+          categories={categories}
+          owners={owners}
+          accounts={accounts}
+          onCategoriesChanged={onCategoriesChanged}
+          matchCount={editingMatchRowCount || editingMatchReferenceSuggestion.txn_count || (editingMatchReferenceSuggestion.source_row_ids || []).length}
+          matchingRowsOpen={Boolean(matchingRowsReferencePanel)}
+          matchingRowsPanel={matchingRowsReferencePanel}
+          onOpenMatchingTransactions={() => toggleMatchingTransactionsReference(editingMatchReferenceSuggestion)}
+          onAccept={async data => {
+            await onRefineConflictMatch?.(buildMatchRefinePayload(resolvedEditingMatchMembers, data))
+            setEditingMatchMembers(null)
+          }}
+          onSaveAccepted={async () => {}}
+          onCloseWithDraft={() => setEditingMatchMembers(null)}
+          onDiscard={() => setEditingMatchMembers(null)}
+          mode="match-only"
         />
       ) : null}
 

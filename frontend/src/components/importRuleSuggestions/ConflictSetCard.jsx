@@ -27,7 +27,7 @@ import { formatSuggestionAmountLabel } from '../../lib/importRuleSuggestions.js'
  * apply / disposition endpoints in one combined undo entry; targets ride on each member's resolved
  * `target_category_id`, written through `onSetMemberCategory`. Per-row drill-in stays Phase 2.
  */
-export function ConflictSetCard({ members, onApply, onDefer, onOpenReport, onEditRule, categories, onSetMemberCategory, onCategoryCreated, applying = false }) {
+export function ConflictSetCard({ members, onApply, onDefer, onOpenReport, onEditRule, onEditMatch, categories, onSetMemberCategory, onCategoryCreated, applying = false }) {
   const [winnerId, setWinnerId] = useState(null)
   // Which row's target pill is currently swapped to the picker (one at a time, same toggle the single
   // suggestion cards use). Held by member id rather than a boolean so any row is independently editable.
@@ -122,14 +122,17 @@ export function ConflictSetCard({ members, onApply, onDefer, onOpenReport, onEdi
       borderRadius: 7, padding: '3px 9px', cursor: 'pointer', fontSize: 11.5, fontWeight: 600, whiteSpace: 'nowrap',
     }
   }
-
   return (
-    <div style={{
-      border: '1px solid color-mix(in srgb, var(--warning) 30%, var(--border))',
-      borderRadius: 14,
-      background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))',
-      padding: '14px 16px',
-    }}>
+    <div
+      data-rule-suggestion-card=""
+      data-rule-suggestion-id={String(lead.id)}
+      style={{
+        border: '1px solid color-mix(in srgb, var(--warning) 30%, var(--border))',
+        borderRadius: 14,
+        background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))',
+        padding: '14px 16px',
+      }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
         <span style={{ fontWeight: 700 }}>{merchant}</span>
         <span style={{ fontSize: 12, color: 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
@@ -138,8 +141,26 @@ export function ConflictSetCard({ members, onApply, onDefer, onOpenReport, onEdi
         </span>
       </div>
       <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-        Matches: merchant contains <strong style={{ color: 'var(--text)' }}>{lead.keyword}</strong>
-        {scopeBits.length ? ` · ${scopeBits.join(' · ')}` : ''}
+        <span>
+          Matches: merchant contains <strong style={{ color: 'var(--text)' }}>{lead.keyword}</strong>
+          {scopeBits.length ? ` · ${scopeBits.join(' · ')}` : ''}
+        </span>
+        {onEditMatch ? (
+          <button
+            type="button"
+            onClick={() => onEditMatch?.(members)}
+            style={{
+              ...segBtn(false),
+              marginLeft: 7,
+              padding: '2px 7px',
+              fontSize: 10.5,
+              verticalAlign: 'middle',
+            }}
+            title="Edit the selection criteria for this conflict set"
+          >
+            Edit match criteria
+          </button>
+        ) : null}
       </div>
 
       <div style={{ display: 'grid', gap: 6 }}>
@@ -160,17 +181,21 @@ export function ConflictSetCard({ members, onApply, onDefer, onOpenReport, onEdi
           const targetLabel = member.target_category_name || 'Uncategorized'
           const toWinner = Boolean(winner) && !isWinner && String(member.target_category_id || '') === String(winnerCategoryId || '')
           return (
-            <div key={member.id} style={{
-              display: 'grid', gridTemplateColumns: cols, gap: 10, alignItems: 'center',
-              padding: '6px 2px 3px', borderTop: '1px solid var(--border)', fontSize: 12.5, lineHeight: 1.2,
-            }}>
+            <div
+              key={member.id}
+              data-rule-suggestion-id={String(member.id)}
+              style={{
+                display: 'grid', gridTemplateColumns: cols, gap: 10, alignItems: 'center',
+                padding: '6px 2px 3px', borderTop: '1px solid var(--border)', fontSize: 12.5, lineHeight: 1.2,
+              }}
+            >
               <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
                 <input
                   type="radio"
                   name={`winner-${lead.conflict_group_id || lead.id}`}
                   aria-label={`Build the rule from ${importedLabel} (click again to clear)`}
                   checked={isWinner}
-                  onChange={() => {}}
+                  onChange={() => { }}
                   onClick={() => pickWinner(member.id)}
                   style={{ cursor: 'pointer', accentColor: 'var(--accent)', margin: 0 }}
                 />

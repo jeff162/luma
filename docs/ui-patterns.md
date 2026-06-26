@@ -442,6 +442,30 @@ checkbox feeds `selectedSuggestionIds`. The model deliberately keeps two channel
   disturbing the in-progress selection. (An earlier design made a *selected* card's button act on the
   whole selection, gated by a Ctrl escape hatch; that ambiguity was the "odd" behavior this model
   removed.) Per-card edits and the per-card reject-with-disposition menu are likewise always single-card.
+- **Entering bulk mode preserves the user's place by suggestion identity, not scroll distance.** The
+  ordinary review can combine related suggestions into merchant and conflict cards, while bulk mode
+  intentionally expands them into individually selectable cards. Before either transition, a card clipped
+  by the sticky controls is skipped and the first fully visible card is captured by suggestion id; after
+  the list is rebuilt, that same suggestion occupies the first slot below the resized controls. Fixed
+  pixel compensation cannot preserve position across this structural change.
+- **Aggregate rule editors use the matching-rows report for source-file detail.** A suggested rule can
+  cover many imported rows whose captured source text differs. The rule editor may show a single source
+  row only when the suggestion is truly one-row; otherwise it should expose the existing matching-row
+  report as a reference surface, preserving the table/hover model instead of inventing a misleading
+  "representative" source detail inside the editor. In the import rule editor this is an attached panel:
+  a floating report would require shared focus/stacking/window-management behavior that this page should
+  not hand-roll locally. Because that panel is reference material for the rule being edited, it is
+  read-only there: row/category reconciliation remains in the standalone matching-rows report. Source-file
+  merchant detail should be pinnable in the reference panel so the user can keep it visible while editing
+  the selection criteria. In match-only selection editing, the editor should label the report affordance as
+  the current suggestion/reference rows and suppress RuleForm's generic live match count. Saving the
+  match regenerates the real suggestion world, where rows can split, merge, or move to other cards; the
+  editor should not imply that its snapshot count is a live prediction of that regenerated state.
+  A refined pending override can later render as a single suggestion card, but selection edits still need
+  the same refinement endpoint so the review can release rows back to canonical generation, coalesce
+  equivalent suggestions, and persist the partition. Do not expose parallel "edit rule" and "edit
+  selection" buttons on that card; the existing editor entry point should route refined override saves
+  through the selection-refinement flow.
 
 So: **row buttons = this card only; the bulk-actions bar = the selection.** Anything refactoring this
 surface must keep that split — do not make a row button operate on the selection.

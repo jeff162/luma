@@ -88,12 +88,16 @@ export function SettledConflictSetTable({
   const cols = `${showLeading ? '30px ' : ''}46px minmax(150px, 1fr) auto`
 
   return (
-    <div style={{
-      border: '1px solid color-mix(in srgb, var(--warning) 30%, var(--border))',
-      borderRadius: 14,
-      background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))',
-      padding: '14px 16px',
-    }}>
+    <div
+      data-rule-suggestion-card=""
+      data-rule-suggestion-id={String(lead.id)}
+      style={{
+        border: '1px solid color-mix(in srgb, var(--warning) 30%, var(--border))',
+        borderRadius: 14,
+        background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))',
+        padding: '14px 16px',
+      }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
         <span style={{ fontWeight: 700 }}>{merchant}</span>
         <span style={{ fontSize: 12, color: 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
@@ -125,10 +129,14 @@ export function SettledConflictSetTable({
             .map(tagId => tags.find(item => String(item.id) === String(tagId)))
             .filter(Boolean)
           return (
-            <div key={member.id} style={{
-              display: 'grid', gridTemplateColumns: cols, gap: 10, alignItems: 'center',
-              padding: '8px 2px', borderTop: '1px solid var(--border)', fontSize: 12.5, lineHeight: 1.2,
-            }}>
+            <div
+              key={member.id}
+              data-rule-suggestion-id={String(member.id)}
+              style={{
+                display: 'grid', gridTemplateColumns: cols, gap: 10, alignItems: 'center',
+                padding: '8px 2px', borderTop: '1px solid var(--border)', fontSize: 12.5, lineHeight: 1.2,
+              }}
+            >
               {showLeading ? (
                 <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
                   {bulkMode ? (

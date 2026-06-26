@@ -1,21 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Modal listing the imported transactions a suggestion/rule matches, with per-row and bulk inline
-// category editing (the "Set all to" / Maps-To pickers), Preserve / Use-majority actions on conflict
-// rows. The table is the shared resizable/reorderable pill-header control (PillGridTable): the dialog
-// owns one outer scroll container with the header pinned via position: sticky, and column geometry
-// (order + widths) persists through useUserPreference like the duplicate-rows dialog reference. The
-// parent owns the row data (`state`) and the mutation callbacks; this component holds only the
-// transient edit/picker UI state.
+// Matching imported-transaction report for rule suggestions. The standalone modal is an editing
+// surface (per-row and bulk category reconciliation, Preserve / Use-majority actions); the embedded
+// rule-editor panel is read-only reference material with pinnable source-file detail. The table is the
+// shared resizable/reorderable pill-header control (PillGridTable): the shell owns one outer scroll
+// container with the header pinned via position: sticky, and column geometry (order + widths) persists
+// through useUserPreference like the duplicate-rows dialog reference. The parent owns the row data and
+// mutation callbacks; this component holds only transient edit/picker/reference UI state.
 
 import { useMemo, useRef, useState } from 'react'
 import CategoryPicker from '../CategoryPicker.jsx'
 import CategoryDisplay from '../CategoryDisplay.jsx'
 import PillGridTable from '../PillGridTable.jsx'
 import { Spinner, Tooltip } from '../ui.jsx'
-import { MerchantOriginHoverCard } from '../OriginFields.jsx'
-import { hasMerchantOriginDetail } from '../../lib/importSourceFields.js'
+import { MerchantOriginHoverCard, OriginFieldList } from '../OriginFields.jsx'
+import { getTxnMerchantOriginRows, hasMerchantOriginDetail } from '../../lib/importSourceFields.js'
 import { useColumnPreference } from '../../lib/useColumnPreference.js'
 import { formatDate } from '../../lib/utils.js'
 import { formatTransactionAmount, getTransactionAmountColor } from '../../lib/moneyDisplay.js'
@@ -30,7 +30,7 @@ function estimateColumnWidth(values, { min = 80, max = 260, perChar = 8, extra =
   return Math.max(min, Math.min(max, Math.round(longest * perChar + extra)))
 }
 
-export function MatchingTransactionsModal({ state, categories, onClose, onKeepCategory, onSetRowCategory, onSetAllCategories, onCategoriesChanged, applyingAll, onOpenMerchantReport }) {
+export function MatchingTransactionsReport({ state, categories, onClose, onKeepCategory, onSetRowCategory, onSetAllCategories, onCategoriesChanged, applyingAll, onOpenMerchantReport, embedded = false, readOnly = false, allowPinnedOrigin = false }) {
   // Per-row inline category edit: editingRowId picks the row whose Maps-To picker is open; the token
   // force-opens the picker the moment edit mode is entered (CategoryPicker only auto-opens on a bump).
   const [editingRowId, setEditingRowId] = useState(null)
@@ -42,16 +42,18 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
   // refs let us ignore that stray close so entering edit mode doesn't instantly cancel (the "blink").
   const rowPickerOpenedRef = useRef(false)
   const bulkPickerOpenedRef = useRef(false)
+  const [pinnedOriginRow, setPinnedOriginRow] = useState(null)
   // Client-side column sort for the (fully-loaded) match rows. Seeded to the order the backend already
   // returns the rows in (date descending — see the /rule-suggestions/matches ORDER BY) so the Date pill
   // shows its sort indicator from first paint and the user can see how the list is ordered.
   const [sort, setSort] = useState({ key: 'date', dir: 'desc' })
 
   const viewerRows = state?.rows || []
+  const showCategoryActions = !readOnly
   const mapsToLabels = viewerRows.map(row => (
     buildCategoryDisplayLabel(categories, row.target_category_id, row.target_category_name || '')
   ))
-  const hasConflictRows = viewerRows.some(row => row.conflicts_with_reference)
+  const hasConflictRows = showCategoryActions && viewerRows.some(row => row.conflicts_with_reference)
   const dateWidth = estimateColumnWidth(
     ['Date', ...viewerRows.map(row => formatDate(row.date))],
     { min: 86, max: 104, perChar: 7.2, extra: 12 },
@@ -87,13 +89,11 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
 
   const [cols, handleColumnUpdate] = useColumnPreference(IMPORT_RULE_MATCHES_COLUMNS_PREF_KEY, defaultColumns)
 
-  if (!state?.open) return null
-
   const summaryParts = []
-  if (state.keyword) summaryParts.push(`merchant contains ${state.keyword}`)
-  if (state.ownerName) summaryParts.push(`owner ${state.ownerName}`)
-  if (state.accountName) summaryParts.push(`account ${state.accountName}`)
-  const amountSummary = formatSuggestionAmountLabel(state.amountMin, state.amountMax)
+  if (state?.keyword) summaryParts.push(`${state?.matchSourceText ? 'merchant/source detail' : 'merchant'} contains ${state.keyword}`)
+  if (state?.ownerName) summaryParts.push(`owner ${state.ownerName}`)
+  if (state?.accountName) summaryParts.push(`account ${state.accountName}`)
+  const amountSummary = formatSuggestionAmountLabel(state?.amountMin, state?.amountMax)
   if (amountSummary) summaryParts.push(amountSummary)
 
   // Breakdown of where the matched rows currently map, largest-first, so the conflict is legible at a
@@ -141,13 +141,20 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
       return <span style={{ color: 'var(--muted)', fontSize: 11.5 }}>{formatDate(row.date)}</span>
     }
     if (col.key === 'merchant') {
+      const merchantHasOriginDetail = hasMerchantOriginDetail(row)
       return (
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
-            {hasMerchantOriginDetail(row) ? (
+            {merchantHasOriginDetail ? (
               <Tooltip
-                content={<MerchantOriginHoverCard txn={row} />}
+                content={(
+                  <MerchantOriginHoverCard
+                    txn={row}
+                    onPin={allowPinnedOrigin ? () => setPinnedOriginRow(row) : null}
+                  />
+                )}
                 maxWidth={380}
+                interactive={allowPinnedOrigin}
                 triggerStyle={{ minWidth: 0, overflow: 'hidden' }}
               >
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -208,7 +215,7 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
       )
       return (
         <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {editingRowId === row.id ? (
+          {editingRowId === row.id && showCategoryActions ? (
             <div style={{ minWidth: 0, flex: 1 }}>
               <CategoryPicker
                 value={row.target_category_id}
@@ -225,21 +232,30 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
             </div>
           ) : (
             <>
-              <button
-                type="button"
-                onClick={() => { setEditingRowId(row.id); setRowPickerToken(token => token + 1) }}
-                disabled={row.keeping}
-                title="Change the category for this transaction"
-                style={{ background: 'none', border: 'none', padding: 0, margin: 0, cursor: row.keeping ? 'wait' : 'pointer', textAlign: 'left' }}
-              >
+              {showCategoryActions ? (
+                <button
+                  type="button"
+                  onClick={() => { setEditingRowId(row.id); setRowPickerToken(token => token + 1) }}
+                  disabled={row.keeping}
+                  title="Change the category for this transaction"
+                  style={{ background: 'none', border: 'none', padding: 0, margin: 0, cursor: row.keeping ? 'wait' : 'pointer', textAlign: 'left' }}
+                >
+                  <CategoryDisplay
+                    id={row.target_category_id}
+                    name={resolvedCategoryLabel}
+                    emptyLabel="Unresolved"
+                    emptyFontSize={12}
+                  />
+                </button>
+              ) : (
                 <CategoryDisplay
                   id={row.target_category_id}
                   name={resolvedCategoryLabel}
                   emptyLabel="Unresolved"
                   emptyFontSize={12}
                 />
-              </button>
-              {row.category_source === 'manual' ? (
+              )}
+              {showCategoryActions && row.category_source === 'manual' ? (
                 <span style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -256,7 +272,7 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
                   manual override
                 </span>
               ) : null}
-              {row.conflicts_with_reference ? (
+              {showCategoryActions && row.conflicts_with_reference ? (
                 <span style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -273,7 +289,7 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
                   conflicting rule
                 </span>
               ) : null}
-              {row.target_category_id && row.category_source !== 'manual' && row.conflicts_with_reference ? (
+              {showCategoryActions && row.target_category_id && row.category_source !== 'manual' && row.conflicts_with_reference ? (
                 <button
                   type="button"
                   onClick={() => onKeepCategory?.(row)}
@@ -297,7 +313,8 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
                   {row.keeping ? 'Keeping…' : 'Preserve This Categorization'}
                 </button>
               ) : null}
-              {state.referenceTargetCategoryId
+              {showCategoryActions
+                && state.referenceTargetCategoryId
                 && row.category_source !== 'manual'
                 && row.conflicts_with_reference
                 && String(row.target_category_id) !== String(state.referenceTargetCategoryId) ? (
@@ -345,41 +362,22 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
     return null
   }
 
-  // Initial dialog width fits the default geometry; once columns exceed the dialog the table scrolls
-  // horizontally inside its own viewport rather than widening the dialog.
-  const defaultContentWidth = defaultColumns.reduce((sum, column) => sum + column.width, 0)
-  const viewerDesiredWidth = Math.max(700, Math.min(1200, defaultContentWidth + 96))
+  if (!state?.open) return null
 
   return (
     <div
-      onMouseDown={onClose}
       style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 905,
+        background: 'var(--surface)',
+        border: embedded ? '1px solid var(--border)' : 'none',
+        borderRadius: embedded ? 12 : 0,
+        overflow: 'hidden',
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'rgba(0,0,0,0.48)',
-        padding: 24,
+        flexDirection: 'column',
+        flex: embedded ? 1 : undefined,
+        minHeight: 0,
+        height: embedded ? '100%' : undefined,
       }}
     >
-      <div
-        onMouseDown={event => event.stopPropagation()}
-        style={{
-          background: 'var(--surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 14,
-          width: viewerDesiredWidth,
-          maxWidth: '96vw',
-          maxHeight: '88vh',
-          overflow: 'hidden',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.42)',
-          display: 'flex',
-          flexDirection: 'column',
-          minHeight: 0,
-        }}
-      >
         <div style={{
           display: 'flex',
           alignItems: 'flex-start',
@@ -388,9 +386,12 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
           padding: '18px 20px',
           borderBottom: '1px solid var(--border)',
           background: 'color-mix(in srgb, var(--surface) 94%, rgba(15, 23, 42, 0.12))',
-        }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>Matching imported transactions</div>
+        }}
+        >
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 15, fontWeight: 700 }}>Matching imported transactions</div>
+            </div>
             <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
               {summaryParts.join(' · ')}
             </div>
@@ -425,7 +426,32 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
                 })}
               </div>
             ) : null}
-            {!state.loading && state.rows?.length ? (
+            {pinnedOriginRow ? (
+              <div style={{
+                marginTop: 10,
+                padding: '9px 10px',
+                borderRadius: 10,
+                border: '1px solid color-mix(in srgb, var(--accent2) 24%, var(--border))',
+                background: 'color-mix(in srgb, var(--accent2) 7%, var(--surface2))',
+                display: 'grid',
+                gap: 6,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                  <div style={{ minWidth: 0, fontSize: 12, fontWeight: 700 }}>
+                    Source detail: {pinnedOriginRow.display_name || pinnedOriginRow.merchant_name || pinnedOriginRow.raw_name || 'Unnamed merchant'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPinnedOriginRow(null)}
+                    style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 0 }}
+                  >
+                    ×
+                  </button>
+                </div>
+                <OriginFieldList rows={getTxnMerchantOriginRows(pinnedOriginRow)} />
+              </div>
+            ) : null}
+            {showCategoryActions && !state.loading && state.rows?.length ? (
               <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 {bulkEditing ? (
                   <div style={{ minWidth: 220, maxWidth: 300 }}>
@@ -551,6 +577,43 @@ export function MatchingTransactionsModal({ state, categories, onClose, onKeepCa
             </div>
           )}
         </div>
+    </div>
+  )
+}
+
+export function MatchingTransactionsModal(props) {
+  if (!props.state?.open) return null
+
+  return (
+    <div
+      onMouseDown={props.onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 905,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'rgba(0,0,0,0.48)',
+        padding: 24,
+      }}
+    >
+      <div
+        onMouseDown={event => event.stopPropagation()}
+        style={{
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 14,
+          width: 'min(1200px, 96vw)',
+          maxHeight: '88vh',
+          overflow: 'hidden',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.42)',
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+        }}
+      >
+        <MatchingTransactionsReport {...props} />
       </div>
     </div>
   )

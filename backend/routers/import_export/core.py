@@ -36,11 +36,12 @@ import re
 from contextlib import nullcontext
 from datetime import datetime, date
 from difflib import SequenceMatcher
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.db.database import SHARED_OWNER_ID, get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.db.demo_data import is_demo_data_loaded
@@ -275,6 +276,7 @@ class BatchRuleSuggestionReviewUpdateRequest(BaseModel):
     suggestion_id: str
     status: str
     rule_id: Optional[str] = None
+    created_rule_id: Optional[str] = None
     merchant_label: Optional[str] = None
     target_category_name: Optional[str] = None
     target_category_id: Optional[str] = None
@@ -284,6 +286,48 @@ class BatchRuleSuggestionReviewUpdateRequest(BaseModel):
     amount_min: Optional[float] = None
     amount_max: Optional[float] = None
     clean_name_suggestion: Optional[str] = None
+    match_source_text: Optional[bool] = None
+    accepted_prior_rows: Optional[list[dict]] = None
+
+
+class BatchRuleSuggestionRefineSourceRequest(BaseModel):
+    id: str
+    merchant_label: Optional[str] = None
+    target_category_id: Optional[str] = None
+    target_category_name: Optional[str] = None
+    target_category_group_name: Optional[str] = None
+    owner_id: Optional[str] = None
+    owner_name: Optional[str] = None
+    account_id: Optional[str] = None
+    account_name: Optional[str] = None
+    clean_name_suggestion: Optional[str] = None
+    imported_categories: Optional[list[str]] = None
+    source_row_ids: list[str]
+
+
+class BatchRuleSuggestionMatchRefineRequest(BaseModel):
+    source_suggestions: list[BatchRuleSuggestionRefineSourceRequest]
+    keyword: str
+    owner_id: Optional[str] = None
+    account_id: Optional[str] = None
+    amount_min: Optional[float] = None
+    amount_max: Optional[float] = None
+    match_source_text: bool = False
+
+
+class RuleSuggestionDebugTraceRequest(BaseModel):
+    correlation_id: str
+    client_sequence: int
+    event: str
+    phase: str
+    context_type: str
+    context_id: Optional[str] = None
+    suggestion_ids: list[str] = Field(default_factory=list)
+    transaction_ids: list[str] = Field(default_factory=list)
+    rule_ids: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    undo_snapshot: Optional[dict[str, Any]] = None
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class BatchRuleSuggestionMatchRequest(BaseModel):
@@ -293,6 +337,7 @@ class BatchRuleSuggestionMatchRequest(BaseModel):
     account_id: Optional[str] = None
     amount_min: Optional[float] = None
     amount_max: Optional[float] = None
+    match_source_text: bool = False
     # When provided, the report is limited to exactly these transaction ids (the card's own source rows),
     # so a generic suggestion's report doesn't sweep in same-keyword rows owned by other (e.g. discarded)
     # suggestions. Omitted -> the keyword/scope match defines the set (legacy behavior).
@@ -838,7 +883,9 @@ def _build_rule_suggestion_review_entry(payload: dict) -> dict:
         "account_name": payload.get("account_name"),
         "amount_min": payload.get("amount_min"),
         "amount_max": payload.get("amount_max"),
+        "latest_txn_date": payload.get("latest_txn_date"),
         "clean_name_suggestion": payload.get("clean_name_suggestion"),
+        "match_source_text": bool(payload.get("match_source_text")),
         "target_category_group_name": payload.get("target_category_group_name"),
         "txn_count": payload.get("txn_count"),
         "conflict_count": payload.get("conflict_count"),
@@ -848,6 +895,7 @@ def _build_rule_suggestion_review_entry(payload: dict) -> dict:
         "needs_resolution": bool(payload.get("needs_resolution")),
         "resolution_reason": payload.get("resolution_reason"),
         "synthetic": bool(payload.get("synthetic")),
+        "pending_override": bool(payload.get("pending_override")),
         "derived_from_suggestion_id": payload.get("derived_from_suggestion_id"),
         "source_row_ids": sorted({str(value) for value in (payload.get("source_row_ids") or payload.get("_row_ids") or []) if str(value).strip()}),
     }
@@ -967,10 +1015,11 @@ def _prune_phantom_rule_suggestion_entry(review_state: dict, suggestion_id: str,
     statuses = review_state.get("statuses") or {}
     entry = suggestions.get(suggestion_id)
     is_synthetic = isinstance(entry, dict) and entry.get("synthetic")
+    is_pending_override = isinstance(entry, dict) and entry.get("pending_override")
     has_content = isinstance(entry, dict) and (
         entry.get("keyword") or entry.get("merchant_label") or entry.get("source_row_ids")
     )
-    if (status == "pending" and not is_synthetic) or not has_content:
+    if (status == "pending" and not is_synthetic and not is_pending_override) or not has_content:
         suggestions.pop(suggestion_id, None)
         statuses.pop(suggestion_id, None)
     review_state["suggestions"] = suggestions
@@ -984,11 +1033,18 @@ def refresh_rule_suggestion_review(review_state: dict, suggestions: list[dict]) 
 
     for suggestion in suggestions:
         suggestion_id = suggestion["id"]
+        existing_entry = existing_entries.get(suggestion_id)
+        if isinstance(existing_entry, dict) and existing_entry.get("pending_override"):
+            next_entries[suggestion_id] = existing_entry
+            continue
         next_entries[suggestion_id] = _build_rule_suggestion_review_entry(suggestion)
 
     for suggestion_id, entry in existing_entries.items():
         status = (statuses.get(suggestion_id) or {}).get("status")
-        if suggestion_id not in next_entries and (status in RULE_SUGGESTION_REVIEW_STATUSES or (isinstance(entry, dict) and entry.get("synthetic"))):
+        if suggestion_id not in next_entries and (
+            status in RULE_SUGGESTION_REVIEW_STATUSES
+            or (isinstance(entry, dict) and (entry.get("synthetic") or entry.get("pending_override")))
+        ):
             next_entries[suggestion_id] = entry if isinstance(entry, dict) else {}
 
     review_state["suggestions"] = next_entries
@@ -1033,6 +1089,7 @@ def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile
                 t.merchant_name,
                 t.display_name,
                 t.raw_name,
+                t.import_evidence_json,
                 t.imported_category,
                 t.category_id,
                 t.category_overridden,
@@ -1063,6 +1120,7 @@ def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile
                 t.merchant_name,
                 t.display_name,
                 t.raw_name,
+                t.import_evidence_json,
                 t.imported_category,
                 t.category_id,
                 t.category_overridden,
@@ -1095,6 +1153,7 @@ def _query_rule_suggestion_rows(conn, *, batch_id: Optional[str] = None, profile
                 t.merchant_name,
                 t.display_name,
                 t.raw_name,
+                t.import_evidence_json,
                 t.imported_category,
                 t.category_id,
                 t.category_overridden,
@@ -1193,10 +1252,13 @@ def _prune_redundant_rule_suggestions(suggestions: list[dict]) -> list[dict]:
 
 def _row_matches_rule_suggestion_entry(row: dict, entry: dict) -> bool:
     entry_keyword = normalize_rule_keyword(entry.get("keyword") or "")
-    row_keyword = normalize_rule_keyword(
+    row_text = normalize_rule_keyword(
         row.get("display_name") or row.get("merchant_name") or row.get("raw_name") or ""
     )
-    if not entry_keyword or not row_keyword or entry_keyword not in row_keyword:
+    matched = bool(entry_keyword) and bool(row_text) and entry_keyword in row_text
+    if not matched and entry.get("match_source_text"):
+        matched = entry_keyword in source_match_text_from_json(row.get("import_evidence_json"))
+    if not matched:
         return False
     if entry.get("owner_id") and row.get("owner_id") != entry.get("owner_id"):
         return False
@@ -1211,6 +1273,42 @@ def _row_matches_rule_suggestion_entry(row: dict, entry: dict) -> bool:
     if amount_max is not None and abs_amount > amount_max:
         return False
     return True
+
+
+def _row_matches_rule_suggestion_report_keyword(row: dict, keyword: str, match_source_text: bool) -> bool:
+    row_keyword = normalize_rule_keyword(
+        row.get("display_name") or row.get("merchant_name") or row.get("raw_name") or ""
+    )
+    if row_keyword and row_keyword == keyword:
+        return True
+    if match_source_text and keyword in source_match_text_from_json(row.get("import_evidence_json")):
+        return True
+    return False
+
+
+def _rule_suggestion_match_scope(body: BatchRuleSuggestionMatchRequest) -> tuple[list[str], str, str]:
+    row_ids = sorted({str(value) for value in (body.row_ids or []) if str(value).strip()})
+    if not row_ids:
+        return [], "", """
+              -- 'manual' keeps rows the user reconciled in this view visible alongside the still-from-file ones
+              AND t.category_source IN ('import', 'manual')
+              AND t.category_id IS NOT NULL
+        """
+    placeholders = ",".join("?" for _ in row_ids)
+    return row_ids, f"AND t.id IN ({placeholders})", ""
+
+
+def _partition_rule_suggestion_source_rows(rows: list[dict], source_row_ids: list[str], matcher_entry: dict) -> tuple[list[dict], list[dict]]:
+    source_row_id_set = {str(value) for value in source_row_ids if str(value).strip()}
+    source_rows = [
+        dict(row)
+        for row in rows
+        if str(row.get("id") or "").strip() and str(row.get("id")) in source_row_id_set
+    ]
+    matched_rows = [row for row in source_rows if _row_matches_rule_suggestion_entry(row, matcher_entry)]
+    matched_row_ids = {str(row["id"]) for row in matched_rows if row.get("id")}
+    remaining_rows = [row for row in source_rows if str(row.get("id") or "") not in matched_row_ids]
+    return matched_rows, remaining_rows
 
 
 def _generate_rule_suggestions(conn, candidate_rows: list[dict], selected_owner_ids: list[str]) -> tuple[list[dict], dict]:
@@ -1393,24 +1491,11 @@ def _build_synthetic_rule_suggestion_entries(
     source_entry: dict,
     rows: list[dict],
 ) -> list[dict]:
-    source_row_ids = {str(value) for value in (source_entry.get("source_row_ids") or []) if str(value).strip()}
-    if not source_row_ids:
-        return []
-
-    matched_row_ids = {
-        str(row.get("id"))
-        for row in rows
-        if str(row.get("id") or "").strip()
-        and str(row.get("id")) in source_row_ids
-        and _row_matches_rule_suggestion_entry(row, source_entry)
-    }
-    remaining_rows = [
-        dict(row)
-        for row in rows
-        if str(row.get("id") or "").strip()
-        and str(row.get("id")) in source_row_ids
-        and str(row.get("id")) not in matched_row_ids
-    ]
+    _, remaining_rows = _partition_rule_suggestion_source_rows(
+        rows,
+        source_entry.get("source_row_ids") or [],
+        source_entry,
+    )
     if not remaining_rows:
         return []
 
@@ -1445,7 +1530,7 @@ def _merge_review_state_suggestions(generated_suggestions: list[dict], review_st
         # them; without re-adding here the accepted/discarded filters showed only the few suggestions
         # whose rows happened to still regenerate while the pills counted the full reviewed set.
         status = (review_statuses.get(suggestion_id) or {}).get("status")
-        if not (entry.get("synthetic") or status in RULE_SUGGESTION_REVIEW_STATUSES):
+        if not (entry.get("synthetic") or entry.get("pending_override") or status in RULE_SUGGESTION_REVIEW_STATUSES):
             continue
         if selected_owner_ids and entry.get("owner_id") not in selected_owner_ids:
             continue
@@ -1463,6 +1548,7 @@ def _merge_review_state_suggestions(generated_suggestions: list[dict], review_st
             "account_name": entry.get("account_name"),
             "amount_min": entry.get("amount_min"),
             "amount_max": entry.get("amount_max"),
+            "latest_txn_date": entry.get("latest_txn_date"),
             "txn_count": entry.get("txn_count") or len(entry.get("source_row_ids") or []),
             "conflict_count": entry.get("conflict_count") or 0,
             "conflict_group_id": entry.get("conflict_group_id"),
@@ -1470,10 +1556,14 @@ def _merge_review_state_suggestions(generated_suggestions: list[dict], review_st
             "imported_categories": list(entry.get("imported_categories") or []),
             "needs_resolution": bool(entry.get("needs_resolution")),
             "resolution_reason": entry.get("resolution_reason"),
+            "match_source_text": bool(entry.get("match_source_text")),
+            "pending_override": bool(entry.get("pending_override")),
             "review_status": (review_statuses.get(suggestion_id) or {}).get("status") or "pending",
             # The rule this suggestion was accepted into, so editing it later updates that rule in place
             # instead of spawning a duplicate (see the matching field on the generated path below).
             "rule_id": (review_statuses.get(suggestion_id) or {}).get("rule_id"),
+            "created_rule_id": (review_statuses.get(suggestion_id) or {}).get("created_rule_id"),
+            "accepted_prior_rows": list((review_statuses.get(suggestion_id) or {}).get("accepted_prior_rows") or []),
             # Carried so the matching-transactions report can scope to this suggestion's own rows.
             "source_row_ids": list(entry.get("source_row_ids") or []),
         })
@@ -1488,7 +1578,21 @@ def _merge_review_state_suggestions(generated_suggestions: list[dict], review_st
 
 def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_owner_ids: list[str]) -> dict:
     review_statuses = review_state.get("statuses") or {}
-    candidate_rows = [dict(row) for row in rows if str(row["imported_category"] or "").strip()]
+    pending_partition_row_ids = {
+        str(row_id)
+        for suggestion_id, entry in (review_state.get("suggestions") or {}).items()
+        if isinstance(entry, dict)
+        and (entry.get("synthetic") or entry.get("pending_override"))
+        and not (review_statuses.get(suggestion_id) or {}).get("status")
+        for row_id in (entry.get("source_row_ids") or [])
+        if str(row_id).strip()
+    }
+    candidate_rows = [
+        dict(row)
+        for row in rows
+        if str(row["imported_category"] or "").strip()
+        and str(row["id"]) not in pending_partition_row_ids
+    ]
     threshold_meta = _calculate_rule_suggestion_threshold(candidate_rows)
 
     if selected_owner_ids:
@@ -1516,10 +1620,14 @@ def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_own
 
     for suggestion in suggestions:
         status_entry = review_statuses.get(suggestion["id"]) or {}
+        review_entry = (review_state.get("suggestions") or {}).get(suggestion["id"]) or {}
         suggestion["review_status"] = status_entry.get("status") or "pending"
         # Carry the accepted rule's id so the editor updates that rule in place rather than creating a
         # new one (and orphaning the original) when an already-accepted suggestion is edited.
         suggestion["rule_id"] = status_entry.get("rule_id")
+        suggestion["created_rule_id"] = status_entry.get("created_rule_id")
+        suggestion["accepted_prior_rows"] = list(status_entry.get("accepted_prior_rows") or [])
+        suggestion["match_source_text"] = bool(review_entry.get("match_source_text"))
 
     review_summary = review_state.get("summary")
     should_persist = False
@@ -1549,6 +1657,176 @@ def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_own
         "minimum_txn_count": threshold_meta["minimum_txn_count"],
         "distinct_month_count": threshold_meta["distinct_month_count"],
         "should_persist": should_persist,
+    }
+
+
+def _build_pending_override_entry(suggestion: dict) -> dict:
+    return _build_rule_suggestion_review_entry({
+        **suggestion,
+        "pending_override": True,
+    })
+
+
+def _rule_suggestion_rows_use_canonical_keyword(rows: list[dict], keyword: str) -> bool:
+    normalized_keyword = normalize_rule_keyword(keyword or "")
+    if not normalized_keyword or not rows:
+        return False
+    for row in rows:
+        row_keyword = normalize_rule_keyword(
+            row.get("display_name") or row.get("merchant_name") or row.get("raw_name") or ""
+        )
+        if row_keyword != normalized_keyword:
+            return False
+    return True
+
+
+def _refined_match_can_rejoin_canonical_generation(
+    matcher_entry: dict,
+    matched_rows: list[dict],
+    source_suggestions: list[BatchRuleSuggestionRefineSourceRequest],
+    review_state: dict,
+) -> bool:
+    if matcher_entry.get("match_source_text") or matcher_entry.get("account_id"):
+        return False
+    if matcher_entry.get("amount_min") is not None or matcher_entry.get("amount_max") is not None:
+        return False
+    if not _rule_suggestion_rows_use_canonical_keyword(matched_rows, matcher_entry.get("keyword") or ""):
+        return False
+    if not matcher_entry.get("owner_id"):
+        return True
+
+    # A refined one-row/card suggestion may carry an owner scope only because the source conflict did.
+    # When the user broadens that refined card back to the merchant's ordinary keyword, release it to the
+    # canonical generator so it can recompute owner scoping and conflicts with the rest of the merchant.
+    suggestions = review_state.get("suggestions") or {}
+    return bool(source_suggestions) and all(
+        isinstance(suggestions.get(source.id), dict) and suggestions[source.id].get("pending_override")
+        for source in source_suggestions
+    )
+
+
+def _refine_pending_conflict_group(
+    conn,
+    review_state: dict,
+    rows: list[dict],
+    body: BatchRuleSuggestionMatchRefineRequest,
+) -> dict:
+    source_suggestions = [source for source in body.source_suggestions if source.source_row_ids]
+    if not source_suggestions:
+        raise HTTPException(status_code=400, detail="No source suggestions supplied")
+
+    matcher_entry = {
+        "keyword": normalize_rule_keyword(body.keyword or ""),
+        "owner_id": body.owner_id or None,
+        "account_id": body.account_id or None,
+        "amount_min": body.amount_min,
+        "amount_max": body.amount_max,
+        "match_source_text": bool(body.match_source_text),
+    }
+    if not matcher_entry["keyword"]:
+        raise HTTPException(status_code=400, detail="Keyword is required")
+
+    source_row_ids = []
+    for source in source_suggestions:
+        source_row_ids.extend(str(row_id) for row_id in source.source_row_ids if str(row_id).strip())
+    source_row_ids = sorted(set(source_row_ids))
+
+    matched_rows, remaining_rows = _partition_rule_suggestion_source_rows(rows, source_row_ids, matcher_entry)
+    matched_suggestions, _ = _generate_rule_suggestions(conn, matched_rows, [])
+    remaining_suggestions, _ = _generate_rule_suggestions(conn, remaining_rows, [])
+
+    matched_owner_name = None
+    if matcher_entry["owner_id"]:
+        matched_owner_name = next(
+            (
+                row.get("owner_name")
+                for row in matched_rows
+                if row.get("owner_id") == matcher_entry["owner_id"] and row.get("owner_name")
+            ),
+            None,
+        )
+    matched_account_name = None
+    if matcher_entry["account_id"]:
+        matched_account_name = next(
+            (
+                row.get("account_name")
+                for row in matched_rows
+                if row.get("account_id") == matcher_entry["account_id"] and row.get("account_name")
+            ),
+            None,
+        )
+    refined_conflict_group_id = (
+        f"{source_suggestions[0].id}:refined"
+        if len(matched_suggestions) > 1
+        else None
+    )
+    for suggestion in matched_suggestions:
+        suggestion["keyword"] = matcher_entry["keyword"]
+        suggestion["owner_id"] = matcher_entry["owner_id"]
+        suggestion["owner_name"] = matched_owner_name if matcher_entry["owner_id"] else None
+        suggestion["account_id"] = matcher_entry["account_id"]
+        suggestion["account_name"] = matched_account_name if matcher_entry["account_id"] else None
+        suggestion["amount_min"] = matcher_entry["amount_min"]
+        suggestion["amount_max"] = matcher_entry["amount_max"]
+        suggestion["match_source_text"] = matcher_entry["match_source_text"]
+        if refined_conflict_group_id:
+            suggestion["conflict_group_id"] = refined_conflict_group_id
+            suggestion["conflict_group_total_rows"] = len(matched_rows)
+            suggestion["conflict_count"] = max(0, len(matched_suggestions) - 1)
+            suggestion["needs_resolution"] = True
+        else:
+            suggestion["conflict_group_id"] = None
+            suggestion["conflict_group_total_rows"] = suggestion.get("txn_count") or len(suggestion.get("source_row_ids") or [])
+            suggestion["conflict_count"] = 0
+            suggestion["needs_resolution"] = False
+
+    suggestions = dict(review_state.get("suggestions") or {})
+    statuses = dict(review_state.get("statuses") or {})
+
+    for source in source_suggestions:
+        _remove_pending_derived_rule_suggestions(review_state, source.id)
+    suggestions = dict(review_state.get("suggestions") or {})
+    statuses = dict(review_state.get("statuses") or {})
+
+    for source in source_suggestions:
+        source_id = source.id
+        suggestions.pop(source_id, None)
+        statuses.pop(source_id, None)
+
+    release_matched_rows = _refined_match_can_rejoin_canonical_generation(
+        matcher_entry,
+        matched_rows,
+        source_suggestions,
+        review_state,
+    )
+    if not release_matched_rows:
+        for suggestion in matched_suggestions:
+            suggestion_id = suggestion["id"]
+            suggestions[suggestion_id] = _build_pending_override_entry(suggestion)
+            statuses.pop(suggestion_id, None)
+
+    # The canonical generator rebuilds non-matching rows on the next read, together with analogous rows
+    # outside this conflict card. Persist a synthetic remainder only when its natural id collides with a
+    # refined override; otherwise persisting a card-local remainder would strand equivalent owner slices
+    # as duplicate global suggestions instead of letting them coalesce.
+    matched_suggestion_ids = {suggestion["id"] for suggestion in matched_suggestions} if not release_matched_rows else set()
+    seed_suggestion_id = source_suggestions[0].id
+    for suggestion in remaining_suggestions:
+        if suggestion["id"] not in matched_suggestion_ids:
+            continue
+        suggestions[f"{suggestion['id']}:followup:{seed_suggestion_id}"] = _build_rule_suggestion_review_entry({
+            **suggestion,
+            "synthetic": True,
+            "derived_from_suggestion_id": seed_suggestion_id,
+        })
+
+    review_state["suggestions"] = suggestions
+    review_state["statuses"] = statuses
+    review_summary = summarize_rule_suggestion_review(review_state)
+    return {
+        "ok": True,
+        "review_summary": review_summary,
+        "generated_at": review_state.get("generated_at"),
     }
 
 
@@ -1788,6 +2066,129 @@ def _save_system_rule_suggestion_review_state(conn, review_state: dict) -> None:
         SYSTEM_RULE_SUGGESTION_REVIEW_STATE_KEY,
         {RULE_SUGGESTION_REVIEW_KEY: review_state},
     )
+
+
+# Temporary Generate Rules diagnostic trail:
+# - The client supplies workflow identities and correlation metadata, never transaction descriptions.
+# - The server enriches each event from committed SQLite state so optimistic UI cannot mask the cause.
+# - Output is a fixed local JSONL file under data/ui (or a test-only environment override).
+def _rule_suggestion_trace_path() -> Path:
+    override = os.getenv("LUMA_RULE_SUGGESTION_TRACE_PATH")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[3] / "data" / "ui" / "import-rule-suggestion-debug.jsonl"
+
+
+def _load_rule_suggestion_trace_review_state(conn, body: RuleSuggestionDebugTraceRequest) -> dict:
+    if body.context_type == "batch" and body.context_id:
+        row = conn.execute(
+            "SELECT config_snapshot FROM import_batch WHERE id = ?",
+            (body.context_id,),
+        ).fetchone()
+        return get_rule_suggestion_review_state(safe_json_dict(row["config_snapshot"])) if row else {}
+    if body.context_type == "profile" and body.context_id:
+        row = conn.execute(
+            "SELECT column_map FROM csv_import_profile WHERE id = ?",
+            (body.context_id,),
+        ).fetchone()
+        return _get_profile_rule_suggestion_review_state(safe_json_dict(row["column_map"])) if row else {}
+    return _get_system_rule_suggestion_review_state(conn)
+
+
+def _build_rule_suggestion_trace_record(conn, body: RuleSuggestionDebugTraceRequest) -> dict:
+    transaction_ids = list(dict.fromkeys(str(value) for value in body.transaction_ids if str(value).strip()))[:5000]
+    rule_ids = list(dict.fromkeys(str(value) for value in body.rule_ids if str(value).strip()))[:500]
+    keywords = list(dict.fromkeys(normalize_rule_keyword(value) for value in body.keywords if normalize_rule_keyword(value)))[:500]
+    suggestion_ids = list(dict.fromkeys(str(value) for value in body.suggestion_ids if str(value).strip()))[:5000]
+
+    transactions = []
+    if transaction_ids:
+        placeholders = ",".join("?" * len(transaction_ids))
+        transactions = [
+            dict(row)
+            for row in conn.execute(
+                f"""
+                SELECT
+                    t.id,
+                    t.category_id,
+                    t.category_source,
+                    t.category_overridden,
+                    t.import_batch_id,
+                    b.use_imported_categories
+                FROM txn t
+                LEFT JOIN import_batch b ON b.id = t.import_batch_id
+                WHERE t.id IN ({placeholders})
+                ORDER BY t.id
+                """,
+                transaction_ids,
+            ).fetchall()
+        ]
+
+    rules = []
+    rule_where = []
+    rule_params = []
+    if rule_ids:
+        rule_where.append(f"r.id IN ({','.join('?' * len(rule_ids))})")
+        rule_params.extend(rule_ids)
+    if keywords:
+        rule_where.append(f"lower(r.keyword) IN ({','.join('?' * len(keywords))})")
+        rule_params.extend(keywords)
+    if rule_where:
+        rules = [
+            dict(row)
+            for row in conn.execute(
+                f"""
+                SELECT
+                    r.id,
+                    r.keyword,
+                    r.category_id,
+                    r.amount_min,
+                    r.amount_max,
+                    r.debit_credit,
+                    r.owner_id,
+                    r.account_id,
+                    r.match_source_text
+                FROM category_rule r
+                WHERE {" OR ".join(rule_where)}
+                ORDER BY r.id
+                """,
+                rule_params,
+            ).fetchall()
+        ]
+
+    review_state = _load_rule_suggestion_trace_review_state(conn, body)
+    review_statuses = review_state.get("statuses") or {}
+    review_entries = review_state.get("suggestions") or {}
+    suggestions = {
+        suggestion_id: {
+            "status": (review_statuses.get(suggestion_id) or {}).get("status") or "pending",
+            "rule_id": (review_statuses.get(suggestion_id) or {}).get("rule_id"),
+            "source_row_count": len((review_entries.get(suggestion_id) or {}).get("source_row_ids") or []),
+            "synthetic": bool((review_entries.get(suggestion_id) or {}).get("synthetic")),
+            "pending_override": bool((review_entries.get(suggestion_id) or {}).get("pending_override")),
+        }
+        for suggestion_id in suggestion_ids
+    }
+
+    return {
+        "server_timestamp": utcnow_iso(),
+        "correlation_id": body.correlation_id,
+        "client_sequence": body.client_sequence,
+        "event": body.event,
+        "phase": body.phase,
+        "context": {"type": body.context_type, "id": body.context_id},
+        "suggestion_ids": suggestion_ids,
+        "transaction_ids": transaction_ids,
+        "rule_ids": rule_ids,
+        "keywords": keywords,
+        "undo_snapshot": body.undo_snapshot,
+        "details": body.details,
+        "database": {
+            "transactions": transactions,
+            "rules": rules,
+            "suggestions": suggestions,
+        },
+    }
 
 
 def _get_unassigned_group(conn):
@@ -3708,6 +4109,8 @@ def update_batch_rule_suggestion_review(batch_id: str, body: BatchRuleSuggestion
             suggestion_entries[body.suggestion_id]["amount_max"] = body.amount_max
         if body.clean_name_suggestion is not None or "clean_name_suggestion" in body.model_fields_set:
             suggestion_entries[body.suggestion_id]["clean_name_suggestion"] = body.clean_name_suggestion
+        if body.match_source_text is not None or "match_source_text" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["match_source_text"] = bool(body.match_source_text)
 
         statuses = dict(review_state.get("statuses") or {})
         synthetic_entries: list[dict] = []
@@ -3720,6 +4123,10 @@ def update_batch_rule_suggestion_review(batch_id: str, body: BatchRuleSuggestion
             }
             if body.rule_id:
                 next_status["rule_id"] = body.rule_id
+            if body.created_rule_id:
+                next_status["created_rule_id"] = body.created_rule_id
+            if body.accepted_prior_rows is not None or "accepted_prior_rows" in body.model_fields_set:
+                next_status["accepted_prior_rows"] = list(body.accepted_prior_rows or [])
             statuses[body.suggestion_id] = next_status
             review_state["statuses"] = statuses
             if status == "accepted":
@@ -3801,6 +4208,8 @@ def update_profile_rule_suggestion_review(profile_id: str, body: BatchRuleSugges
             suggestion_entries[body.suggestion_id]["amount_max"] = body.amount_max
         if body.clean_name_suggestion is not None or "clean_name_suggestion" in body.model_fields_set:
             suggestion_entries[body.suggestion_id]["clean_name_suggestion"] = body.clean_name_suggestion
+        if body.match_source_text is not None or "match_source_text" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["match_source_text"] = bool(body.match_source_text)
 
         statuses = dict(review_state.get("statuses") or {})
         synthetic_entries: list[dict] = []
@@ -3813,6 +4222,10 @@ def update_profile_rule_suggestion_review(profile_id: str, body: BatchRuleSugges
             }
             if body.rule_id:
                 next_status["rule_id"] = body.rule_id
+            if body.created_rule_id:
+                next_status["created_rule_id"] = body.created_rule_id
+            if body.accepted_prior_rows is not None or "accepted_prior_rows" in body.model_fields_set:
+                next_status["accepted_prior_rows"] = list(body.accepted_prior_rows or [])
             statuses[body.suggestion_id] = next_status
             review_state["statuses"] = statuses
             if status == "accepted":
@@ -3868,6 +4281,17 @@ def get_system_rule_suggestions(owner_ids: Optional[str] = Query(None)):
     return result
 
 
+@router.post("/rule-suggestions/debug-trace")
+def write_rule_suggestion_debug_trace(body: RuleSuggestionDebugTraceRequest):
+    with get_db() as conn:
+        record = _build_rule_suggestion_trace_record(conn, body)
+    path = _rule_suggestion_trace_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as trace_file:
+        trace_file.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+    return {"ok": True}
+
+
 @router.post("/rule-suggestions/review")
 def update_system_rule_suggestion_review(body: BatchRuleSuggestionReviewUpdateRequest):
     status = (body.status or "").strip().lower()
@@ -3905,6 +4329,8 @@ def update_system_rule_suggestion_review(body: BatchRuleSuggestionReviewUpdateRe
             suggestion_entries[body.suggestion_id]["amount_max"] = body.amount_max
         if body.clean_name_suggestion is not None or "clean_name_suggestion" in body.model_fields_set:
             suggestion_entries[body.suggestion_id]["clean_name_suggestion"] = body.clean_name_suggestion
+        if body.match_source_text is not None or "match_source_text" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["match_source_text"] = bool(body.match_source_text)
 
         statuses = dict(review_state.get("statuses") or {})
         synthetic_entries: list[dict] = []
@@ -3917,6 +4343,10 @@ def update_system_rule_suggestion_review(body: BatchRuleSuggestionReviewUpdateRe
             }
             if body.rule_id:
                 next_status["rule_id"] = body.rule_id
+            if body.created_rule_id:
+                next_status["created_rule_id"] = body.created_rule_id
+            if body.accepted_prior_rows is not None or "accepted_prior_rows" in body.model_fields_set:
+                next_status["accepted_prior_rows"] = list(body.accepted_prior_rows or [])
             statuses[body.suggestion_id] = next_status
             review_state["statuses"] = statuses
             if status == "accepted":
@@ -3959,6 +4389,50 @@ def update_system_rule_suggestion_review(body: BatchRuleSuggestionReviewUpdateRe
     }
 
 
+@router.post("/batches/{batch_id}/rule-suggestions/refine-match")
+def refine_batch_rule_suggestion_match(batch_id: str, body: BatchRuleSuggestionMatchRefineRequest):
+    with get_db() as conn:
+        batch = conn.execute(
+            "SELECT id, config_snapshot FROM import_batch WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+
+        snapshot = safe_json_dict(batch["config_snapshot"])
+        review_state = get_rule_suggestion_review_state(snapshot)
+        rows = [dict(row) for row in _query_rule_suggestion_rows(conn, batch_id=batch_id)]
+        result = _refine_pending_conflict_group(conn, review_state, rows, body)
+        snapshot[RULE_SUGGESTION_REVIEW_KEY] = review_state
+        save_batch_snapshot(conn, batch_id, snapshot)
+    return result
+
+
+@router.post("/profiles/{profile_id}/rule-suggestions/refine-match")
+def refine_profile_rule_suggestion_match(profile_id: str, body: BatchRuleSuggestionMatchRefineRequest):
+    with get_db() as conn:
+        column_map = _load_profile_column_map(conn, profile_id)
+        review_state = _get_profile_rule_suggestion_review_state(column_map)
+        rows = [dict(row) for row in _query_rule_suggestion_rows(conn, profile_id=profile_id)]
+        result = _refine_pending_conflict_group(conn, review_state, rows, body)
+        column_map[RULE_SUGGESTION_REVIEW_KEY] = review_state
+        conn.execute(
+            "UPDATE csv_import_profile SET column_map = ? WHERE id = ?",
+            (json.dumps(column_map), profile_id),
+        )
+    return result
+
+
+@router.post("/rule-suggestions/refine-match")
+def refine_system_rule_suggestion_match(body: BatchRuleSuggestionMatchRefineRequest):
+    with get_db() as conn:
+        review_state = _get_system_rule_suggestion_review_state(conn)
+        rows = [dict(row) for row in _query_rule_suggestion_rows(conn, system_wide=True)]
+        result = _refine_pending_conflict_group(conn, review_state, rows, body)
+        _save_system_rule_suggestion_review_state(conn, review_state)
+    return result
+
+
 @router.post("/rule-suggestions/matches")
 def get_system_rule_suggestion_matches(body: BatchRuleSuggestionMatchRequest):
     keyword = normalize_rule_keyword(body.keyword or "")
@@ -3967,8 +4441,9 @@ def get_system_rule_suggestion_matches(body: BatchRuleSuggestionMatchRequest):
 
     with get_db() as conn:
         categories_by_name, categories_by_id = _load_import_rule_target_maps(conn)
+        row_ids, row_scope_clause, candidate_source_clause = _rule_suggestion_match_scope(body)
         rows = conn.execute(
-            """
+            f"""
             SELECT
                 t.id,
                 t.date,
@@ -3993,11 +4468,11 @@ def get_system_rule_suggestion_matches(body: BatchRuleSuggestionMatchRequest):
             LEFT JOIN owner o ON o.id = t.owner_id
             WHERE b.status = 'completed'
               AND b.use_imported_categories = 1
-              -- 'manual' keeps rows the user reconciled in this view visible alongside the still-from-file ones
-              AND t.category_source IN ('import', 'manual')
-              AND t.category_id IS NOT NULL
+              {row_scope_clause}
+              {candidate_source_clause}
             ORDER BY t.date DESC, t.id DESC
-            """
+            """,
+            row_ids,
         ).fetchall()
 
     row_ids_set = {str(value) for value in body.row_ids} if body.row_ids else None
@@ -4009,10 +4484,7 @@ def get_system_rule_suggestion_matches(body: BatchRuleSuggestionMatchRequest):
         if row_ids_set is not None and str(row["id"]) not in row_ids_set:
             continue
         row["display_amount"] = get_import_display_amount(row["amount"], "single_signed")
-        row_keyword = normalize_rule_keyword(
-            row["display_name"] or row["merchant_name"] or row["raw_name"] or ""
-        )
-        if not row_keyword or row_keyword != keyword:
+        if not _row_matches_rule_suggestion_report_keyword(row, keyword, body.match_source_text):
             continue
         if body.owner_id and row["owner_id"] != body.owner_id:
             continue
@@ -4067,8 +4539,9 @@ def get_batch_rule_suggestion_matches(batch_id: str, body: BatchRuleSuggestionMa
         amount_convention = snapshot.get("amount_convention", "single_signed")
 
         categories_by_name, categories_by_id = _load_import_rule_target_maps(conn)
+        row_ids, row_scope_clause, candidate_source_clause = _rule_suggestion_match_scope(body)
         rows = conn.execute(
-            """
+            f"""
             SELECT
                 t.id,
                 t.date,
@@ -4091,22 +4564,18 @@ def get_batch_rule_suggestion_matches(batch_id: str, body: BatchRuleSuggestionMa
             LEFT JOIN account p ON p.id = a.parent_account_id
             LEFT JOIN owner o ON o.id = t.owner_id
             WHERE t.import_batch_id = ?
-              -- 'manual' keeps rows the user reconciled in this view visible alongside the still-from-file ones
-              AND t.category_source IN ('import', 'manual')
-              AND t.category_id IS NOT NULL
+              {row_scope_clause}
+              {candidate_source_clause}
             ORDER BY t.date DESC, t.id DESC
             """,
-            (batch_id,),
+            [batch_id, *row_ids],
         ).fetchall()
 
     matching_rows = []
     for base_row in rows:
         row = dict(base_row)
         row["display_amount"] = get_import_display_amount(row["amount"], amount_convention)
-        row_keyword = normalize_rule_keyword(
-            row["display_name"] or row["merchant_name"] or row["raw_name"] or ""
-        )
-        if not row_keyword or row_keyword != keyword:
+        if not _row_matches_rule_suggestion_report_keyword(row, keyword, body.match_source_text):
             continue
         if body.owner_id and row["owner_id"] != body.owner_id:
             continue
@@ -4162,8 +4631,9 @@ def get_profile_rule_suggestion_matches(profile_id: str, body: BatchRuleSuggesti
         amount_convention = profile["amount_convention"] or "single_signed"
 
         categories_by_name, categories_by_id = _load_import_rule_target_maps(conn)
+        row_ids, row_scope_clause, candidate_source_clause = _rule_suggestion_match_scope(body)
         rows = conn.execute(
-            """
+            f"""
             SELECT
                 t.id,
                 t.date,
@@ -4188,22 +4658,18 @@ def get_profile_rule_suggestion_matches(profile_id: str, body: BatchRuleSuggesti
             LEFT JOIN owner o ON o.id = t.owner_id
             WHERE b.profile_id = ?
               AND b.status = 'completed'
-              -- 'manual' keeps rows the user reconciled in this view visible alongside the still-from-file ones
-              AND t.category_source IN ('import', 'manual')
-              AND t.category_id IS NOT NULL
+              {row_scope_clause}
+              {candidate_source_clause}
             ORDER BY t.date DESC, t.id DESC
             """,
-            (profile_id,),
+            [profile_id, *row_ids],
         ).fetchall()
 
     matching_rows = []
     for base_row in rows:
         row = dict(base_row)
         row["display_amount"] = get_import_display_amount(row["amount"], amount_convention)
-        row_keyword = normalize_rule_keyword(
-            row["display_name"] or row["merchant_name"] or row["raw_name"] or ""
-        )
-        if not row_keyword or row_keyword != keyword:
+        if not _row_matches_rule_suggestion_report_keyword(row, keyword, body.match_source_text):
             continue
         if body.owner_id and row["owner_id"] != body.owner_id:
             continue
@@ -4342,5 +4808,3 @@ def undo_batch(batch_id: str, force: bool = Query(False)):
             _remove_imported_batch_categories(conn, batch_id)
 
     return {"ok": True}
-
-

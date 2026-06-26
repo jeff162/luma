@@ -38,6 +38,7 @@ export function useRecategorize() {
     setResult(outcome.updated)
     setPendingCount(0)
     reloadPreview()
+    return outcome
   }, [reloadPreview])
 
   const dismissResult = useCallback(() => setResult(null), [])

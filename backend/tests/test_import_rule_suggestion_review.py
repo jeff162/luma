@@ -12,23 +12,29 @@ discard broader suggestions they do not actually replace.
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 import uuid
 from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.import_export import (
     BatchRuleSuggestionMatchRequest,
+    BatchRuleSuggestionMatchRefineRequest,
     BatchRuleSuggestionReviewUpdateRequest,
+    RuleSuggestionDebugTraceRequest,
     _get_system_rule_suggestion_review_state,
     _save_system_rule_suggestion_review_state,
     _set_batch_imported_category_usage,
     get_system_rule_suggestion_matches,
     get_system_rule_suggestions,
+    refine_system_rule_suggestion_match,
     update_system_rule_suggestion_review,
+    write_rule_suggestion_debug_trace,
 )
 from backend.routers.rules import (
     ApplyToTransactionsBody,
@@ -66,7 +72,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
             with get_db() as conn:
                 return _get_system_rule_suggestion_review_state(conn)
 
-    def _insert_account(self, name: str) -> str:
+    def _insert_account(self, name: str, owner_id: str = SHARED_OWNER_ID) -> str:
         account_id = str(uuid.uuid4())
         with self._use_db_path():
             with get_db() as conn:
@@ -85,7 +91,7 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
                         "checking",
                         "checking",
                         "1234",
-                        SHARED_OWNER_ID,
+                        owner_id,
                     ),
                 )
         return account_id
@@ -120,17 +126,40 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
                 )
         return batch_id
 
-    def _insert_import_transaction(self, *, batch_id: str, account_id: str, category_id: str, merchant_name: str, amount: float) -> str:
+    def _insert_import_transaction(
+        self,
+        *,
+        batch_id: str,
+        account_id: str,
+        category_id: str,
+        merchant_name: str,
+        amount: float,
+        owner_id: str = SHARED_OWNER_ID,
+        imported_category: str = "Groceries",
+        import_evidence_json: str | None = None,
+    ) -> str:
         txn_id = str(uuid.uuid4())
         with self._use_db_path():
             with get_db() as conn:
                 conn.execute(
                     """
                     INSERT INTO txn
-                      (id, account_id, owner_id, category_id, amount, merchant_name, display_name, raw_name, imported_category, date, is_pending, category_overridden, category_source, import_batch_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Groceries', '2026-04-27', 0, 0, 'import', ?)
+                      (id, account_id, owner_id, category_id, amount, merchant_name, display_name, raw_name, imported_category, date, is_pending, category_overridden, category_source, import_batch_id, import_evidence_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '2026-04-27', 0, 0, 'import', ?, ?)
                     """,
-                    (txn_id, account_id, SHARED_OWNER_ID, category_id, amount, merchant_name, merchant_name, merchant_name, batch_id),
+                    (
+                        txn_id,
+                        account_id,
+                        owner_id,
+                        category_id,
+                        amount,
+                        merchant_name,
+                        merchant_name,
+                        merchant_name,
+                        imported_category,
+                        batch_id,
+                        import_evidence_json,
+                    ),
                 )
         return txn_id
 
@@ -519,6 +548,270 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(row["category_id"], trash_id)
         self.assertEqual(row["category_source"], "import")
 
+    def test_refining_pending_conflict_match_repartitions_the_card_and_persists_the_split(self):
+        account_id = self._insert_account("Primary Checking")
+        trash_id = self._insert_expense_leaf("FixtureTrashSplit")
+        home_services_id = self._insert_expense_leaf("FixtureHomeServicesSplit")
+        batch_id = self._insert_import_batch()
+        for amount in [69.99, 69.99, 69.99, 69.99]:
+            self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=trash_id, merchant_name="Black Earth Compost", amount=amount)
+        for amount in [69.99, 44.99, 44.99]:
+            self._insert_import_transaction(batch_id=batch_id, account_id=account_id, category_id=home_services_id, merchant_name="Black Earth Compost", amount=amount)
+
+        with self._use_db_path():
+            before = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "black earth compost"]
+        self.assertEqual(len(before), 2)
+
+        with self._use_db_path():
+            refine_system_rule_suggestion_match(BatchRuleSuggestionMatchRefineRequest(
+                source_suggestions=[
+                    {
+                        "id": suggestion["id"],
+                        "merchant_label": suggestion["merchant_label"],
+                        "target_category_id": suggestion["target_category_id"],
+                        "target_category_name": suggestion["target_category_name"],
+                        "source_row_ids": suggestion["source_row_ids"],
+                    }
+                    for suggestion in before
+                ],
+                keyword="black earth compost",
+                amount_min=44.99,
+                amount_max=44.99,
+            ))
+            after = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "black earth compost"]
+            after_again = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "black earth compost"]
+
+        unsuffixed = [s for s in after if ":followup:" not in s["id"]]
+        self.assertEqual(len(unsuffixed), 2)
+        refined = [
+            s for s in unsuffixed
+            if s["target_category_name"] == "FixtureHomeServicesSplit"
+        ]
+        self.assertEqual(len(refined), 1)
+        self.assertEqual(refined[0]["txn_count"], 2)
+        self.assertEqual(refined[0]["amount_min"], 44.99)
+        self.assertEqual(refined[0]["amount_max"], 44.99)
+        self.assertEqual(refined[0]["review_status"], "pending")
+
+        followups = [s for s in after if ":followup:" in s["id"]]
+        self.assertEqual(len(followups), 1)
+        self.assertEqual(followups[0]["txn_count"], 1)
+        self.assertTrue(all(s["review_status"] == "pending" for s in followups))
+        self.assertTrue(all(s["conflict_group_id"] == "black earth compost:__global__" for s in followups))
+        canonical_remainder = [
+            s for s in after
+            if s["target_category_name"] == "FixtureTrashSplit" and ":followup:" not in s["id"]
+        ]
+        self.assertEqual(len(canonical_remainder), 1)
+        self.assertEqual(canonical_remainder[0]["txn_count"], 4)
+        self.assertEqual(
+            sorted(suggestion["id"] for suggestion in after),
+            sorted(suggestion["id"] for suggestion in after_again),
+        )
+
+    def test_refined_owner_conflict_recombines_equivalent_remainders_across_owners(self):
+        owner_a = str(uuid.uuid4())
+        owner_b = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.executemany(
+                "INSERT INTO owner (id, name) VALUES (?, ?)",
+                [(owner_a, "Owner A"), (owner_b, "Owner B")],
+            )
+        account_a = self._insert_account("Owner A Card", owner_a)
+        account_b = self._insert_account("Owner B Card", owner_b)
+        payment = self._insert_expense_leaf("FixtureCardPayment")
+        membership = self._insert_expense_leaf("FixtureMembership")
+        batch_id = self._insert_import_batch()
+
+        for _ in range(102):
+            self._insert_import_transaction(
+                batch_id=batch_id,
+                account_id=account_a,
+                owner_id=owner_a,
+                category_id=payment,
+                imported_category="FixtureCardPayment",
+                merchant_name="Riverstone",
+                amount=100,
+            )
+        for _ in range(54):
+            self._insert_import_transaction(
+                batch_id=batch_id,
+                account_id=account_b,
+                owner_id=owner_b,
+                category_id=payment,
+                imported_category="FixtureCardPayment",
+                merchant_name="Riverstone",
+                amount=100,
+            )
+        self._insert_import_transaction(
+            batch_id=batch_id,
+            account_id=account_b,
+            owner_id=owner_b,
+            category_id=membership,
+            imported_category="FixtureMembership",
+            merchant_name="Riverstone",
+            amount=100,
+            import_evidence_json=json.dumps({
+                "description": {"value": "annual renewal membership fee"},
+            }),
+        )
+
+        with self._use_db_path():
+            before = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "riverstone"]
+        owner_a_suggestions = [s for s in before if s["owner_id"] == owner_a]
+        owner_b_suggestions = [s for s in before if s["owner_id"] == owner_b]
+        self.assertEqual(len(owner_a_suggestions), 1)
+        self.assertEqual(owner_a_suggestions[0]["txn_count"], 102)
+        self.assertEqual(len(owner_b_suggestions), 2)
+        self.assertTrue(all(s["needs_resolution"] for s in owner_b_suggestions))
+
+        with self._use_db_path():
+            refine_system_rule_suggestion_match(BatchRuleSuggestionMatchRefineRequest(
+                source_suggestions=[
+                    {
+                        "id": suggestion["id"],
+                        "merchant_label": suggestion["merchant_label"],
+                        "target_category_id": suggestion["target_category_id"],
+                        "target_category_name": suggestion["target_category_name"],
+                        "owner_id": suggestion["owner_id"],
+                        "owner_name": suggestion["owner_name"],
+                        "source_row_ids": suggestion["source_row_ids"],
+                    }
+                    for suggestion in owner_b_suggestions
+                ],
+                keyword="renewal",
+                owner_id=owner_b,
+                match_source_text=True,
+            ))
+            after = get_system_rule_suggestions("")["suggestions"]
+
+        payment_suggestions = [
+            s for s in after
+            if s["keyword"] == "riverstone" and s["target_category_id"] == payment
+        ]
+        self.assertEqual(len(payment_suggestions), 1)
+        self.assertEqual(payment_suggestions[0]["txn_count"], 156)
+        self.assertIsNone(payment_suggestions[0]["owner_id"])
+        membership_suggestions = [
+            s for s in after
+            if s["keyword"] == "renewal" and s["target_category_id"] == membership
+        ]
+        self.assertEqual(len(membership_suggestions), 1)
+        self.assertEqual(membership_suggestions[0]["txn_count"], 1)
+        self.assertEqual(membership_suggestions[0]["owner_id"], owner_b)
+
+    def test_broadening_refined_match_rejoins_canonical_conflict_generation(self):
+        owner_a = str(uuid.uuid4())
+        owner_b = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.executemany(
+                "INSERT INTO owner (id, name) VALUES (?, ?)",
+                [(owner_a, "Owner A"), (owner_b, "Owner B")],
+            )
+        account_a = self._insert_account("Owner A Card", owner_a)
+        account_b = self._insert_account("Owner B Card", owner_b)
+        payment = self._insert_expense_leaf("FixtureCardPaymentBroaden")
+        membership = self._insert_expense_leaf("FixtureMembershipBroaden")
+        batch_id = self._insert_import_batch()
+
+        for _ in range(102):
+            self._insert_import_transaction(
+                batch_id=batch_id,
+                account_id=account_a,
+                owner_id=owner_a,
+                category_id=payment,
+                imported_category="FixtureCardPaymentBroaden",
+                merchant_name="Riverstone",
+                amount=100,
+            )
+        for _ in range(54):
+            self._insert_import_transaction(
+                batch_id=batch_id,
+                account_id=account_b,
+                owner_id=owner_b,
+                category_id=payment,
+                imported_category="FixtureCardPaymentBroaden",
+                merchant_name="Riverstone",
+                amount=100,
+            )
+        self._insert_import_transaction(
+            batch_id=batch_id,
+            account_id=account_b,
+            owner_id=owner_b,
+            category_id=membership,
+            imported_category="FixtureMembershipBroaden",
+            merchant_name="Riverstone",
+            amount=100,
+            import_evidence_json=json.dumps({
+                "description": {"value": "annual renewal membership fee"},
+            }),
+        )
+
+        with self._use_db_path():
+            initial = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "riverstone"]
+        owner_b_suggestions = [s for s in initial if s["owner_id"] == owner_b]
+        self.assertEqual(len(owner_b_suggestions), 2)
+
+        with self._use_db_path():
+            refine_system_rule_suggestion_match(BatchRuleSuggestionMatchRefineRequest(
+                source_suggestions=[
+                    {
+                        "id": suggestion["id"],
+                        "merchant_label": suggestion["merchant_label"],
+                        "target_category_id": suggestion["target_category_id"],
+                        "target_category_name": suggestion["target_category_name"],
+                        "owner_id": suggestion["owner_id"],
+                        "owner_name": suggestion["owner_name"],
+                        "source_row_ids": suggestion["source_row_ids"],
+                    }
+                    for suggestion in owner_b_suggestions
+                ],
+                keyword="renewal",
+                owner_id=owner_b,
+                match_source_text=True,
+            ))
+            narrowed = get_system_rule_suggestions("")["suggestions"]
+
+        narrowed_membership = [
+            s for s in narrowed
+            if s["keyword"] == "renewal" and s["target_category_id"] == membership
+        ]
+        self.assertEqual(len(narrowed_membership), 1)
+        self.assertEqual(narrowed_membership[0]["txn_count"], 1)
+        self.assertTrue(narrowed_membership[0]["pending_override"])
+
+        with self._use_db_path():
+            refine_system_rule_suggestion_match(BatchRuleSuggestionMatchRefineRequest(
+                source_suggestions=[
+                    {
+                        "id": narrowed_membership[0]["id"],
+                        "merchant_label": narrowed_membership[0]["merchant_label"],
+                        "target_category_id": narrowed_membership[0]["target_category_id"],
+                        "target_category_name": narrowed_membership[0]["target_category_name"],
+                        "owner_id": narrowed_membership[0]["owner_id"],
+                        "owner_name": narrowed_membership[0]["owner_name"],
+                        "source_row_ids": narrowed_membership[0]["source_row_ids"],
+                    }
+                ],
+                keyword="riverstone",
+                owner_id=owner_b,
+            ))
+            broadened = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "riverstone"]
+
+        self.assertEqual(len(broadened), 3)
+        owner_a_payment = [
+            s for s in broadened
+            if s["target_category_id"] == payment and s["owner_id"] == owner_a
+        ]
+        owner_b_conflict = [s for s in broadened if s["owner_id"] == owner_b]
+        self.assertEqual(len(owner_a_payment), 1)
+        self.assertFalse(owner_a_payment[0]["needs_resolution"])
+        self.assertEqual(owner_a_payment[0]["txn_count"], 102)
+        self.assertEqual(len(owner_b_conflict), 2)
+        self.assertTrue(all(s["needs_resolution"] for s in owner_b_conflict))
+        self.assertEqual({s["target_category_id"] for s in owner_b_conflict}, {payment, membership})
+        self.assertEqual({s["txn_count"] for s in owner_b_conflict}, {1, 54})
+
     def test_apply_rule_to_transactions_scopes_to_listed_rows_and_skips_manual(self):
         account_id = self._insert_account("Card")
         streaming = self._insert_expense_leaf("FixtureStreaming2")
@@ -575,6 +868,45 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(full["count"], 3)
         self.assertEqual(scoped["count"], 2)
         self.assertEqual({row["id"] for row in scoped["transactions"]}, {r1, r2})
+
+    def test_matches_report_honors_source_text_matching(self):
+        # A refined suggestion can use a keyword that appears only in imported source detail, not in the
+        # merchant name. Accepted suggestion rows are rule-owned, so a scoped matching-row report must
+        # use the stored row ids plus the same opt-in matcher or the card says "1 row" while the report
+        # opens empty.
+        account_id = self._insert_account("Card")
+        leaf = self._insert_expense_leaf("FixtureMembershipReport")
+        batch_id = self._insert_import_batch()
+        row_id = self._insert_import_transaction(
+            batch_id=batch_id,
+            account_id=account_id,
+            category_id=leaf,
+            merchant_name="Example Card",
+            amount=-95.0,
+            import_evidence_json=json.dumps({
+                "description": {"value": "annual renewal membership fee"},
+            }),
+        )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET category_source = 'rule', category_overridden = 0 WHERE id = ?",
+                    (row_id,),
+                )
+            without_source_text = get_system_rule_suggestion_matches(BatchRuleSuggestionMatchRequest(
+                keyword="renewal",
+                row_ids=[row_id],
+            ))
+            with_source_text = get_system_rule_suggestion_matches(BatchRuleSuggestionMatchRequest(
+                keyword="renewal",
+                match_source_text=True,
+                row_ids=[row_id],
+            ))
+
+        self.assertEqual(without_source_text["count"], 0)
+        self.assertEqual(with_source_text["count"], 1)
+        self.assertEqual(with_source_text["transactions"][0]["id"], row_id)
 
     def test_generated_suggestion_carries_latest_txn_date(self):
         # The look-back lens hides stale suggestions by recency, so each suggestion must report the most
@@ -688,6 +1020,70 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         entry = review_state["suggestions"]["aji restaurant"]
         self.assertIsNone(entry.get("owner_id"))
         self.assertEqual(review_state["statuses"]["aji restaurant"]["status"], "accepted")
+
+    def test_debug_trace_enriches_identifiers_from_committed_database_state(self):
+        account_id = self._insert_account("Primary Checking")
+        category_id = self._insert_expense_leaf("Groceries")
+        batch_id = self._insert_import_batch()
+        txn_id = self._insert_import_transaction(
+            batch_id=batch_id,
+            account_id=account_id,
+            category_id=category_id,
+            merchant_name="Fixture Merchant",
+            amount=12.34,
+        )
+        rule_id = str(uuid.uuid4())
+        self._save_review_state({
+            "suggestions": {
+                "fixture merchant": {
+                    "keyword": "fixture merchant",
+                    "merchant_label": "Fixture Merchant",
+                    "source_row_ids": [txn_id],
+                },
+            },
+            "statuses": {},
+        })
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO category_rule (id, category_id, keyword)
+                    VALUES (?, ?, 'fixture merchant')
+                    """,
+                    (rule_id, category_id),
+                )
+
+        trace_path = Path(self.tempdir.name) / "trace.jsonl"
+        with patch.dict("os.environ", {"LUMA_RULE_SUGGESTION_TRACE_PATH": str(trace_path)}):
+            with self._use_db_path():
+                result = write_rule_suggestion_debug_trace(RuleSuggestionDebugTraceRequest(
+                    correlation_id="trace-1",
+                    client_sequence=1,
+                    event="bulk-save",
+                    phase="before",
+                    context_type="system",
+                    suggestion_ids=["fixture merchant"],
+                    transaction_ids=[txn_id],
+                    rule_ids=[rule_id],
+                    keywords=["fixture merchant"],
+                    undo_snapshot={"rows": [], "rule_ids": []},
+                    details={"selected_count": 1},
+                ))
+
+        self.assertEqual(result, {"ok": True})
+        record = json.loads(trace_path.read_text(encoding="utf-8").strip())
+        self.assertEqual(record["correlation_id"], "trace-1")
+        self.assertEqual(record["database"]["transactions"], [{
+            "id": txn_id,
+            "category_id": category_id,
+            "category_source": "import",
+            "category_overridden": 0,
+            "import_batch_id": batch_id,
+            "use_imported_categories": 1,
+        }])
+        self.assertEqual(record["database"]["rules"][0]["id"], rule_id)
+        self.assertEqual(record["database"]["suggestions"]["fixture merchant"]["status"], "pending")
+        self.assertEqual(record["database"]["suggestions"]["fixture merchant"]["source_row_count"], 1)
 
 
 if __name__ == "__main__":

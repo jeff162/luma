@@ -173,6 +173,8 @@ export function SuggestionDispositionActions({
   runRowSaveAction,
   onRejectSuggestionDisposition,
   align = 'flex-end',
+  editLabel = 'Open Rule Editor',
+  editOpenLabel = 'Rule Editor Open',
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0, alignItems: align }}>
@@ -184,7 +186,7 @@ export function SuggestionDispositionActions({
         <>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: align }}>
             <SuggestionActionButton onClick={() => onEditSuggestion(suggestion.id)} active={editingSuggestionId === suggestion.id}>
-              {editingSuggestionId === suggestion.id ? 'Rule Editor Open' : 'Open Rule Editor'}
+              {editingSuggestionId === suggestion.id ? editOpenLabel : editLabel}
             </SuggestionActionButton>
             {suggestion.review_status === 'skipped' ? (
               <SuggestionActionButton onClick={() => runRowStatusAction(suggestion, resolvedSuggestion, 'pending')}>

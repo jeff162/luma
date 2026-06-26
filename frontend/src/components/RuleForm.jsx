@@ -397,14 +397,14 @@ function RulePreviewDetail({ transactions, categories, onClose }) {
   )
 }
 
-function MatchCountInline({ keyword, amtLow, amtHigh, amtSide, ownerId, accountId, onCountChange }) {
+function MatchCountInline({ keyword, amtLow, amtHigh, amtSide, ownerId, accountId, matchSourceText, onCountChange }) {
   const [count, setCount] = useState(null)
   const [loading, setLoading] = useState(false)
   const debounceRef = useRef(null)
 
   const hasKeyword = keyword.trim().length >= 2
   const hasAmount = amtLow != null || amtHigh != null
-  const canSearch = hasKeyword || hasAmount
+  const canSearch = !matchSourceText && (hasKeyword || hasAmount)
 
   useEffect(() => {
     if (!canSearch) {
@@ -441,7 +441,7 @@ function MatchCountInline({ keyword, amtLow, amtHigh, amtSide, ownerId, accountI
     }, 600)
     return () => clearTimeout(debounceRef.current)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keyword, amtLow, amtHigh, amtSide, ownerId, accountId, canSearch])
+  }, [keyword, amtLow, amtHigh, amtSide, ownerId, accountId, matchSourceText, canSearch])
 
   if (!canSearch) return null
   if (loading) return <span style={{ fontSize: 12, color: 'var(--muted)' }}>checking matches…</span>
@@ -473,8 +473,11 @@ const RuleForm = forwardRef(function RuleForm({
   sourceTransaction = null,
   showApplyToExisting = true,
   hideFooter = false,
+  hideFooterActions = false,
+  hideMatchCount = false,
   onDraftChange,
   onCategoriesChanged,
+  mode = 'full',
 }, ref) {
   const getTransactionAmountState = () => {
     if (!transactionData || transactionData.amount == null) return null
@@ -594,13 +597,22 @@ const RuleForm = forwardRef(function RuleForm({
   }, [])
 
   const selectedTags = availableTags.filter(tag => tagIds.includes(tag.id))
+  const matchOnly = mode === 'match-only'
   const hasAction = Boolean(catId || cleanName.trim() || tagIds.length > 0)
-  const canSave = keyword.trim().length > 0 && hasAction
+  const canSave = matchOnly ? keyword.trim().length > 0 : (keyword.trim().length > 0 && hasAction)
 
   useEffect(() => {
+    if (matchOnly) {
+      clearTimeout(changeDebounceRef.current)
+      setChangeCount(0)
+      setChangeTransactions([])
+      setApplyToExisting(false)
+      setPreviewDetailOpen(false)
+      return undefined
+    }
     const hasKeyword = keyword.trim().length >= 2
     const hasAmount = amtLow != null || amtHigh != null
-    if ((!hasKeyword && !hasAmount) || !hasAction) {
+    if ((!hasKeyword && !hasAmount) || (!matchOnly && !hasAction)) {
       clearTimeout(changeDebounceRef.current)
       setChangeCount(0)
       setChangeTransactions([])
@@ -635,7 +647,7 @@ const RuleForm = forwardRef(function RuleForm({
       }
     }, 700)
     return () => clearTimeout(changeDebounceRef.current)
-  }, [keyword, amtLow, amtHigh, amtSide, ownerId, accountId, catId, cleanName, tagIds, matchSourceText, hasAction])
+  }, [keyword, amtLow, amtHigh, amtSide, ownerId, accountId, catId, cleanName, tagIds, matchSourceText, hasAction, matchOnly])
 
   const buildDraftPayload = useCallback(() => ({
     keyword: keyword.trim(),
@@ -891,7 +903,8 @@ const RuleForm = forwardRef(function RuleForm({
         </div>
       </div>
 
-      <div style={{ padding: '16px 20px', borderBottom: '2px solid var(--border)' }}>
+      {matchOnly ? null : (
+        <div style={{ padding: '16px 20px', borderBottom: '2px solid var(--border)' }}>
         <div style={sectionHeadStyle}>Then These Actions Apply…</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div>
@@ -975,11 +988,12 @@ const RuleForm = forwardRef(function RuleForm({
           </ConditionChip>
         </div>
       </div>
+      )}
 
       {/* Read-only readout of the rule being built — the edits live in the sections above. Always
           rendered (even when the footer is hidden) so the matching-row count is never lost. */}
       <div style={{ padding: '14px 20px', borderBottom: hideFooter ? 'none' : '2px solid var(--border)' }}>
-        <div style={sectionHeadStyle}>Rule Summary</div>
+        <div style={sectionHeadStyle}>{matchOnly ? 'Match Summary' : 'Rule Summary'}</div>
         <div style={{ fontSize: 13, lineHeight: 1.5 }}>
           {keyword.trim() ? (
             <>
@@ -998,17 +1012,20 @@ const RuleForm = forwardRef(function RuleForm({
             {actionSummaryLabels.join(' · ')}
           </div>
         ) : null}
-        <div style={{ marginTop: 8 }}>
-          <MatchCountInline
-            keyword={keyword}
-            amtLow={amtLow}
-            amtHigh={amtHigh}
-            amtSide={amtSide}
-            ownerId={ownerId}
-            accountId={accountId}
-            onCountChange={n => { setMatchCount(n); if (n === 0) setApplyToExisting(false) }}
-          />
-        </div>
+        {!hideMatchCount ? (
+          <div style={{ marginTop: 8 }}>
+            <MatchCountInline
+              keyword={keyword}
+              amtLow={amtLow}
+              amtHigh={amtHigh}
+              amtSide={amtSide}
+              ownerId={ownerId}
+              accountId={accountId}
+              matchSourceText={matchSourceText}
+              onCountChange={n => { setMatchCount(n); if (n === 0) setApplyToExisting(false) }}
+            />
+          </div>
+        ) : null}
       </div>
 
       {hideFooter ? null : (
@@ -1040,24 +1057,28 @@ const RuleForm = forwardRef(function RuleForm({
               </button>
             </div>
           ) : null}
-          <DialogActions
-            style={{
-              padding: 0,
-              borderTop: 'none',
-              background: 'transparent',
-              alignItems: 'center',
-              marginTop: 12,
-            }}
-            align="end"
-          >
-            {error && <span style={{ fontSize: 12, color: 'var(--danger)', flex: 1 }}>{error}</span>}
-            <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
-              {onCancel && (
-                <Button variant="ghost" onClick={onCancel}>Cancel</Button>
-              )}
-              <Button onClick={handleSave} disabled={saving || !canSave}>{saving ? 'Saving…' : saveLabel}</Button>
-            </div>
-          </DialogActions>
+          {hideFooterActions ? (
+            error ? <div style={{ fontSize: 12, color: 'var(--danger)', marginTop: 10 }}>{error}</div> : null
+          ) : (
+            <DialogActions
+              style={{
+                padding: 0,
+                borderTop: 'none',
+                background: 'transparent',
+                alignItems: 'center',
+                marginTop: 12,
+              }}
+              align="end"
+            >
+              {error && <span style={{ fontSize: 12, color: 'var(--danger)', flex: 1 }}>{error}</span>}
+              <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+                {onCancel && (
+                  <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+                )}
+                <Button onClick={handleSave} disabled={saving || !canSave}>{saving ? 'Saving…' : saveLabel}</Button>
+              </div>
+            </DialogActions>
+          )}
         </div>
       )}
       {previewDetailOpen && changeTransactions.length > 0 && (

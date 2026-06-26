@@ -48,21 +48,22 @@ function buildResponseError(body, status) {
 }
 
 async function request(path, options = {}) {
+  const { suppressMutationSignal = false, ...fetchOptions } = options
   const res = await fetch(`${BASE}${path}`, {
     headers: {
       'Content-Type': 'application/json',
       // Preference profile selection is app-wide context, so the header is injected here instead of threaded through every call site.
       ...(localPreferenceProfileId ? { 'X-Fintrack-Preference-Profile': localPreferenceProfileId } : {}),
-      ...options.headers,
+      ...fetchOptions.headers,
     },
-    ...options,
+    ...fetchOptions,
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw buildResponseError(err, res.status)
   }
-  const method = (options.method || 'GET').toUpperCase()
-  if (method !== 'GET' && method !== 'HEAD') signalDataMutated()
+  const method = (fetchOptions.method || 'GET').toUpperCase()
+  if (!suppressMutationSignal && method !== 'GET' && method !== 'HEAD') signalDataMutated()
   return res.json()
 }
 
@@ -340,6 +341,12 @@ export const api = {
   applyRuleToTransactions: (id, transaction_ids) =>
     request(`/rules/${id}/apply-to-transactions`, { method: 'POST', body: JSON.stringify({ transaction_ids }) }),
   deleteRule: (id) => request(`/rules/${id}`, { method: 'DELETE' }),
+  traceImportRuleSuggestionAction: data =>
+    request('/import-export/rule-suggestions/debug-trace', {
+      method: 'POST',
+      body: JSON.stringify(data),
+      suppressMutationSignal: true,
+    }),
 
   runSync: (days = 30) => request(`/sync?days=${days}`, { method: 'POST' }),
   recategorize: () => request('/sync/recategorize', { method: 'POST' }),
@@ -436,13 +443,28 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  refineBatchRuleSuggestionMatch: (id, payload) =>
+    request(`/import-export/batches/${id}/rule-suggestions/refine-match`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   updateSystemRuleSuggestionReview: (payload) =>
     request('/import-export/rule-suggestions/review', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  refineSystemRuleSuggestionMatch: (payload) =>
+    request('/import-export/rule-suggestions/refine-match', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   updateProfileRuleSuggestionReview: (id, payload) =>
     request(`/import-export/profiles/${id}/rule-suggestions/review`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  refineProfileRuleSuggestionMatch: (id, payload) =>
+    request(`/import-export/profiles/${id}/rule-suggestions/refine-match`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
