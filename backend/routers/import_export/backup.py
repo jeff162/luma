@@ -238,9 +238,6 @@ def _inspect_backup_upload(content: bytes, upload_name: str, expected_member_pre
                 if not (has_manifest and has_payload):
                     raise HTTPException(status_code=400, detail="Encrypted backup ZIP must include both manifest.json and payload.bin")
                 manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
-                # New backups write "luma-encrypted-backup"; the legacy "fintrack-encrypted-backup"
-                # is still accepted so a backup taken from the pre-rename app can be restored into
-                # this one (the supported migration path is: back up in the old app, restore here).
                 if manifest.get("format") not in {"luma-encrypted-backup", "fintrack-encrypted-backup"}:
                     raise HTTPException(status_code=400, detail="Unsupported encrypted backup format")
                 wrapped_keys = manifest.get("wrapped_keys")
@@ -703,7 +700,7 @@ def restore_backup(body: RestoreRequest):
     """
     d = body.data
     if d.get("version") != 7:
-        raise HTTPException(status_code=400, detail="Unrecognised or unsupported backup version")
+        raise HTTPException(status_code=400, detail="Unrecognized or unsupported backup version")
 
     # Demo data must be cleared first: a restore would replace it but leave the demo marker stale, and
     # mixing real data into a demo tenant breaks the "clear is always safe" contract. Refuse outright.
@@ -921,7 +918,7 @@ async def inspect_backup_file(file: UploadFile = File(...)):
 def restore_credentials(body: CredentialsRestoreRequest, request: Request):
     d = body.data
     if d.get("version") != 1:
-        raise HTTPException(status_code=400, detail="Unrecognised credentials backup version")
+        raise HTTPException(status_code=400, detail="Unrecognized credentials backup version")
     items = d.get("plaid_items", [])
     user = getattr(request.state, "user", None)
     with get_db() as conn:
