@@ -62,7 +62,7 @@ export function RuleEditorModal({
   const [error, setError] = useState('')
 
   useEffect(() => {
-    // Rehydrate from the current suggestion whenever the editor is retargeted so
+    // Rehydrate from the current suggestion whenever the editor is re-targeted so
     // in-progress edits from one card never bleed into another.
     setDraftState({
       data: {
