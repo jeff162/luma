@@ -443,6 +443,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  clearBatchRuleSuggestions: (id, status, suggestionIds = null) =>
+    request(`/import-export/batches/${id}/rule-suggestions/clear`, {
+      method: 'POST',
+      body: JSON.stringify({ status, suggestion_ids: suggestionIds }),
+    }),
+  restoreBatchRuleSuggestionTrashSet: (id, trashSetId) =>
+    request(`/import-export/batches/${id}/rule-suggestions/trash/${trashSetId}/restore`, { method: 'POST' }),
   refineBatchRuleSuggestionMatch: (id, payload) =>
     request(`/import-export/batches/${id}/rule-suggestions/refine-match`, {
       method: 'POST',
@@ -453,6 +460,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  clearSystemRuleSuggestions: (status, suggestionIds = null) =>
+    request('/import-export/rule-suggestions/clear', {
+      method: 'POST',
+      body: JSON.stringify({ status, suggestion_ids: suggestionIds }),
+    }),
+  restoreSystemRuleSuggestionTrashSet: (trashSetId) =>
+    request(`/import-export/rule-suggestions/trash/${trashSetId}/restore`, { method: 'POST' }),
   refineSystemRuleSuggestionMatch: (payload) =>
     request('/import-export/rule-suggestions/refine-match', {
       method: 'POST',
@@ -463,6 +477,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  clearProfileRuleSuggestions: (id, status, suggestionIds = null) =>
+    request(`/import-export/profiles/${id}/rule-suggestions/clear`, {
+      method: 'POST',
+      body: JSON.stringify({ status, suggestion_ids: suggestionIds }),
+    }),
+  restoreProfileRuleSuggestionTrashSet: (id, trashSetId) =>
+    request(`/import-export/profiles/${id}/rule-suggestions/trash/${trashSetId}/restore`, { method: 'POST' }),
   refineProfileRuleSuggestionMatch: (id, payload) =>
     request(`/import-export/profiles/${id}/rule-suggestions/refine-match`, {
       method: 'POST',

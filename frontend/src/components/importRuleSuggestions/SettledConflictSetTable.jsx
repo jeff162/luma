@@ -54,6 +54,20 @@ function StatusIcon({ status }) {
   )
 }
 
+function formatCategoryChangeHint(reviewAction) {
+  const changes = Array.isArray(reviewAction?.category_changes)
+    ? reviewAction.category_changes
+    : []
+  const formerNames = [...new Set(
+    changes
+      .map(change => String(change.from_category_name || '').trim())
+      .filter(Boolean),
+  )]
+  if (!formerNames.length) return ''
+  if (formerNames.length === 1) return `was ${formerNames[0]}`
+  return `was ${formerNames.slice(0, 2).join(', ')}${formerNames.length > 2 ? ` +${formerNames.length - 2}` : ''}`
+}
+
 export function SettledConflictSetTable({
   members,
   showStatusColumn = false,
@@ -125,6 +139,7 @@ export function SettledConflictSetTable({
           const resolved = getResolvedSuggestion(member)
           const key = getSuggestionKey(member.id)
           const categoryLabel = resolved.target_category_name || 'Uncategorized'
+          const categoryChangeHint = formatCategoryChangeHint(resolved.review_action || member.review_action)
           const memberTags = (resolved.tag_ids || [])
             .map(tagId => tags.find(item => String(item.id) === String(tagId)))
             .filter(Boolean)
@@ -157,6 +172,11 @@ export function SettledConflictSetTable({
                 <span title={categoryLabel} style={{ fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {categoryLabel}
                 </span>
+                {categoryChangeHint ? (
+                  <span style={{ color: 'var(--muted)', fontSize: 11.5, whiteSpace: 'nowrap' }}>
+                    ({categoryChangeHint})
+                  </span>
+                ) : null}
                 {memberTags.map(tag => <TagBadge key={tag.id} tag={tag} />)}
               </div>
               <div style={{ justifySelf: 'end' }}>

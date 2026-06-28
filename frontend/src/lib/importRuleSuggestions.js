@@ -14,8 +14,8 @@ export const IMPORT_RULE_SORT_PREF_KEY = 'ui.importRuleSuggestions.sortOrder'
 // suggestion). Geometry rides the shared per-user preference model like the duplicate-rows dialog.
 export const IMPORT_RULE_MATCHES_COLUMNS_PREF_KEY = 'ui.importRuleSuggestions.matchesColumns'
 
-// Recency "look-back" lens for the pending review: hide suggestions whose most recent matching
-// transaction is older than this many years. 0 = show all (no lens). Default 2.
+// Recency "look-back" lens for the pending review: hide pending merchant/split groups whose newest
+// matching transaction is older than this many years. 0 = show all (no lens). Default 2.
 export const IMPORT_RULE_LOOKBACK_PREF_KEY = 'ui.importRuleSuggestions.lookbackYears'
 export const IMPORT_RULE_LOOKBACK_CHOICES = [1, 2, 3, 5, 0]
 
@@ -26,6 +26,99 @@ export function normalizeImportRuleLookback(value) {
 
 export function normalizeImportRuleSortOrder(value) {
   return value === 'alpha' || value === 'row_count' ? value : null
+}
+
+export function getRuleSuggestionSplitRootId(suggestion) {
+  const id = String(suggestion?.id || '')
+  const followupIndex = id.indexOf(':followup:')
+  return followupIndex >= 0 ? id.slice(0, followupIndex) : id
+}
+
+export function getRuleSuggestionSplitRootIds(suggestions) {
+  const roots = new Set()
+  for (const suggestion of suggestions || []) {
+    const id = String(suggestion?.id || '')
+    if (!id.includes(':followup:')) continue
+    const root = getRuleSuggestionSplitRootId(suggestion)
+    if (root) roots.add(root)
+  }
+  return roots
+}
+
+export function getRuleSuggestionMerchantGroupKey(suggestion, splitRootIds = null) {
+  const normalizeGroupText = value => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
+  const splitRootId = getRuleSuggestionSplitRootId(suggestion)
+  if (splitRootId && splitRootIds?.has?.(splitRootId)) {
+    return `split:${splitRootId}`
+  }
+  const conflictGroupId = String(suggestion?.conflict_group_id || '')
+  if (conflictGroupId && !conflictGroupId.endsWith(':refined')) {
+    const scopeSeparator = conflictGroupId.lastIndexOf(':')
+    const conflictKeyword = normalizeGroupText(scopeSeparator > 0 ? conflictGroupId.slice(0, scopeSeparator) : '')
+    if (conflictKeyword) return `merchant:${conflictKeyword}`
+  }
+  const merchantLabel = normalizeGroupText(suggestion?.merchant_label)
+  if (merchantLabel) return `merchant:${merchantLabel}`
+  const keyword = normalizeGroupText(suggestion?.keyword)
+  if (keyword) return `keyword:${keyword}`
+  return `suggestion:${suggestion?.id || ''}`
+}
+
+export function getRuleSuggestionMerchantGroupLabel(suggestion) {
+  return suggestion?.merchant_label || suggestion?.keyword || ''
+}
+
+function normalizeSelectionText(value) {
+  return String(value || '').trim()
+}
+
+function normalizeSelectionNullable(value) {
+  if (value == null || value === '') return null
+  return String(value)
+}
+
+function normalizedSuggestionSelection(data) {
+  return {
+    keyword: normalizeSelectionText(data?.keyword),
+    owner_id: normalizeSelectionNullable(data?.owner_id),
+    account_id: normalizeSelectionNullable(data?.account_id),
+    amount_min: normalizeSelectionNullable(data?.amount_min),
+    amount_max: normalizeSelectionNullable(data?.amount_max),
+    match_source_text: Boolean(data?.match_source_text),
+  }
+}
+
+export function suggestionSelectionChanged(suggestion, data) {
+  if (!suggestion) return false
+  const current = normalizedSuggestionSelection(suggestion)
+  const next = normalizedSuggestionSelection(data)
+  return current.keyword !== next.keyword
+    || current.owner_id !== next.owner_id
+    || current.account_id !== next.account_id
+    || current.amount_min !== next.amount_min
+    || current.amount_max !== next.amount_max
+    || current.match_source_text !== next.match_source_text
+}
+
+// A merchant/split working set stays active when any visible member is recent. Settling one chunk
+// should not immediately strand the user's remaining chunk in Older while they are still resolving the
+// same merchant-level review work.
+export function getInWindowPendingSuggestionGroups(suggestions, lookbackCutoff) {
+  const groups = new Set()
+  if (!lookbackCutoff) return groups
+  const splitRootIds = getRuleSuggestionSplitRootIds(suggestions)
+  const pendingGroupKeys = new Set()
+  for (const suggestion of suggestions || []) {
+    if (suggestion?.review_status !== 'pending') continue
+    pendingGroupKeys.add(getRuleSuggestionMerchantGroupKey(suggestion, splitRootIds))
+  }
+  for (const suggestion of suggestions || []) {
+    if (suggestion.latest_txn_date && suggestion.latest_txn_date < lookbackCutoff) continue
+    const groupKey = getRuleSuggestionMerchantGroupKey(suggestion, splitRootIds)
+    if (!pendingGroupKeys.has(groupKey)) continue
+    groups.add(groupKey)
+  }
+  return groups
 }
 
 export function findNearestScrollParent(element) {
@@ -61,6 +154,8 @@ export function getStatusSymbol(tone) {
     ? '✓'
     : tone === 'discarded'
       ? '×'
+      : tone === 'trash'
+        ? '🗑'
       : tone === 'skipped'
         ? '?'
         : tone === 'conflict'
@@ -103,6 +198,11 @@ export function getStatusPalette(tone = 'default') {
       background: 'color-mix(in srgb, var(--danger) 8%, var(--surface2))',
       border: 'color-mix(in srgb, var(--danger) 24%, var(--border))',
       color: 'var(--danger)',
+    },
+    trash: {
+      background: 'color-mix(in srgb, var(--text) 7%, var(--surface2))',
+      border: 'color-mix(in srgb, var(--text) 20%, var(--border))',
+      color: 'var(--muted)',
     },
     // The stale-by-recency tail. A denser grey than `default` (total) and carrying a clock glyph, so it
     // doesn't read as just another neutral count; not a status colour, since it isn't a review state.

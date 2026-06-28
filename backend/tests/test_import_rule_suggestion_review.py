@@ -30,11 +30,14 @@ from backend.routers.import_export import (
     _get_system_rule_suggestion_review_state,
     _save_system_rule_suggestion_review_state,
     _set_batch_imported_category_usage,
+    clear_system_rule_suggestions,
     get_batch_rule_suggestion_matches,
     get_profile_rule_suggestion_matches,
     get_system_rule_suggestion_matches,
     get_system_rule_suggestions,
     refine_system_rule_suggestion_match,
+    restore_system_rule_suggestion_trash_set,
+    RuleSuggestionClearRequest,
     update_system_rule_suggestion_review,
     write_rule_suggestion_debug_trace,
 )
@@ -797,6 +800,103 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(membership_suggestions[0]["txn_count"], 1)
         self.assertEqual(membership_suggestions[0]["owner_id"], owner_b)
 
+    def test_accepting_refined_split_keeps_followup_pending_with_its_own_rows(self):
+        owner_a = str(uuid.uuid4())
+        owner_b = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.executemany(
+                "INSERT INTO owner (id, name) VALUES (?, ?)",
+                [(owner_a, "Owner A"), (owner_b, "Owner B")],
+            )
+        account_a = self._insert_account("Owner A Card", owner_a)
+        account_b = self._insert_account("Owner B Card", owner_b)
+        pharmacy = self._insert_expense_leaf("FixturePharmacy")
+        batch_id = self._insert_import_batch()
+
+        for _ in range(3):
+            self._insert_import_transaction(
+                batch_id=batch_id,
+                account_id=account_a,
+                owner_id=owner_a,
+                category_id=pharmacy,
+                imported_category="FixturePharmacy",
+                merchant_name="Walgreens",
+                amount=25,
+            )
+        for _ in range(2):
+            self._insert_import_transaction(
+                batch_id=batch_id,
+                account_id=account_b,
+                owner_id=owner_b,
+                category_id=pharmacy,
+                imported_category="FixturePharmacy",
+                merchant_name="WALGREENS #13081",
+                amount=25,
+            )
+
+        with self._use_db_path():
+            before = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "walgreens"]
+        self.assertEqual(len(before), 1)
+        self.assertEqual(before[0]["txn_count"], 5)
+
+        with self._use_db_path():
+            refine_system_rule_suggestion_match(BatchRuleSuggestionMatchRefineRequest(
+                source_suggestions=[
+                    {
+                        "id": before[0]["id"],
+                        "merchant_label": before[0]["merchant_label"],
+                        "target_category_id": before[0]["target_category_id"],
+                        "target_category_name": before[0]["target_category_name"],
+                        "source_row_ids": before[0]["source_row_ids"],
+                    }
+                ],
+                keyword="walgreens",
+                owner_id=owner_a,
+            ))
+            split = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "walgreens"]
+
+        refined = [s for s in split if ":followup:" not in s["id"]]
+        followups = [s for s in split if ":followup:" in s["id"]]
+        self.assertEqual(len(refined), 1)
+        self.assertEqual(len(followups), 1)
+        self.assertEqual(refined[0]["owner_id"], owner_a)
+        self.assertEqual(refined[0]["txn_count"], 3)
+        self.assertEqual(followups[0]["txn_count"], 2)
+
+        with self._use_db_path(), get_db() as conn:
+            conn.executemany(
+                "UPDATE txn SET category_source = 'rule', category_overridden = 0 WHERE id = ?",
+                [(row_id,) for row_id in refined[0]["source_row_ids"]],
+            )
+            conn.commit()
+
+        with self._use_db_path():
+            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+                suggestion_id=refined[0]["id"],
+                status="accepted",
+                rule_id="fixture-rule-id",
+                created_rule_id="fixture-rule-id",
+                merchant_label=refined[0]["merchant_label"],
+                target_category_id=refined[0]["target_category_id"],
+                target_category_name=refined[0]["target_category_name"],
+                keyword=refined[0]["keyword"],
+                owner_id=refined[0]["owner_id"],
+                source_row_ids=refined[0]["source_row_ids"],
+                txn_count=refined[0]["txn_count"],
+                latest_txn_date=refined[0]["latest_txn_date"],
+            ))
+            after = [s for s in get_system_rule_suggestions("")["suggestions"] if s["keyword"] == "walgreens"]
+
+        accepted = [s for s in after if s["review_status"] == "accepted"]
+        pending = [s for s in after if s["review_status"] == "pending"]
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(accepted[0]["id"], refined[0]["id"])
+        self.assertEqual(accepted[0]["owner_id"], owner_a)
+        self.assertEqual(accepted[0]["txn_count"], 3)
+        self.assertEqual(len(pending), 1)
+        self.assertIn(":followup:", pending[0]["id"])
+        self.assertEqual(pending[0]["txn_count"], 2)
+
     def test_broadening_refined_match_rejoins_canonical_conflict_generation(self):
         owner_a = str(uuid.uuid4())
         owner_b = str(uuid.uuid4())
@@ -1172,6 +1272,164 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         self.assertEqual(status_counts["discarded"], summary["discarded_count"])
 
 
+    def test_clear_reviewed_suggestions_moves_whole_status_set_to_restorable_trash(self):
+        self._save_review_state({
+            "suggestions": {
+                "accepted-1": {"keyword": "accepted one", "merchant_label": "Accepted One"},
+                "accepted-2": {"keyword": "accepted two", "merchant_label": "Accepted Two"},
+                "deferred-1": {"keyword": "deferred one", "merchant_label": "Deferred One"},
+                "discarded-1": {"keyword": "discarded one", "merchant_label": "Discarded One"},
+                "pending-1": {"keyword": "pending one", "merchant_label": "Pending One"},
+            },
+            "statuses": {
+                "accepted-1": {"status": "accepted", "rule_id": "rule-a"},
+                "accepted-2": {"status": "accepted", "rule_id": "rule-b"},
+                "deferred-1": {"status": "skipped"},
+                "discarded-1": {"status": "discarded"},
+            },
+        })
+
+        with self._use_db_path():
+            result = clear_system_rule_suggestions(RuleSuggestionClearRequest(status="accepted"))
+
+        self.assertEqual(result["cleared_count"], 2)
+        self.assertEqual(result["review_summary"]["accepted_count"], 0)
+        self.assertEqual(result["review_summary"]["pending_count"], 1)
+        self.assertEqual(result["review_summary"]["skipped_count"], 1)
+        self.assertEqual(result["review_summary"]["discarded_count"], 1)
+        self.assertEqual(len(result["trash_sets"]), 1)
+        trash_set = result["trash_sets"][0]
+        self.assertEqual(trash_set["status"], "accepted")
+        self.assertEqual(trash_set["count"], 2)
+
+        review_state = self._load_review_state()
+        self.assertEqual(set(review_state["suggestions"]), {"deferred-1", "discarded-1", "pending-1"})
+        self.assertEqual(set(review_state["statuses"]), {"deferred-1", "discarded-1"})
+        self.assertEqual(len(review_state["trash_sets"]), 1)
+
+        with self._use_db_path():
+            restored = restore_system_rule_suggestion_trash_set(trash_set["id"])
+
+        self.assertEqual(restored["restored_count"], 2)
+        self.assertEqual(restored["review_summary"]["accepted_count"], 2)
+        self.assertEqual(restored["trash_sets"], [])
+        restored_state = self._load_review_state()
+        self.assertEqual(set(restored_state["suggestions"]), {"accepted-1", "accepted-2", "deferred-1", "discarded-1", "pending-1"})
+        self.assertEqual(restored_state["statuses"]["accepted-1"]["rule_id"], "rule-a")
+        self.assertEqual(restored_state["statuses"]["accepted-2"]["rule_id"], "rule-b")
+
+    def test_clearing_rule_suggestions_does_not_touch_live_rules_or_transactions(self):
+        account_id = self._insert_account("Primary Checking")
+        category_id = self._insert_expense_leaf("Fixture Groceries")
+        batch_id = self._insert_import_batch()
+        txn_id = self._insert_import_transaction(
+            batch_id=batch_id,
+            account_id=account_id,
+            category_id=category_id,
+            merchant_name="Fixture Market",
+            amount=12.34,
+        )
+        rule_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO category_rule (id, category_id, keyword)
+                    VALUES (?, ?, 'fixture market')
+                    """,
+                    (rule_id, category_id),
+                )
+        self._save_review_state({
+            "suggestions": {
+                "fixture market": {
+                    "keyword": "fixture market",
+                    "merchant_label": "Fixture Market",
+                    "target_category_id": category_id,
+                    "source_row_ids": [txn_id],
+                },
+            },
+            "statuses": {
+                "fixture market": {"status": "accepted", "rule_id": rule_id},
+            },
+        })
+
+        with self._use_db_path():
+            clear_system_rule_suggestions(RuleSuggestionClearRequest(status="accepted"))
+            with get_db() as conn:
+                rule = conn.execute("SELECT id FROM category_rule WHERE id = ?", (rule_id,)).fetchone()
+                txn = conn.execute(
+                    "SELECT id, category_id, category_source FROM txn WHERE id = ?",
+                    (txn_id,),
+                ).fetchone()
+
+        self.assertIsNotNone(rule)
+        self.assertEqual(txn["category_id"], category_id)
+        self.assertEqual(txn["category_source"], "import")
+
+    def test_clear_reviewed_suggestions_can_scope_to_visible_suggestion_ids(self):
+        self._save_review_state({
+            "suggestions": {
+                "visible-accepted": {"keyword": "visible", "merchant_label": "Visible"},
+                "hidden-accepted": {"keyword": "hidden", "merchant_label": "Hidden"},
+                "visible-discarded": {"keyword": "visible discarded", "merchant_label": "Visible Discarded"},
+            },
+            "statuses": {
+                "visible-accepted": {"status": "accepted"},
+                "hidden-accepted": {"status": "accepted"},
+                "visible-discarded": {"status": "discarded"},
+            },
+        })
+
+        with self._use_db_path():
+            result = clear_system_rule_suggestions(RuleSuggestionClearRequest(
+                status="accepted",
+                suggestion_ids=["visible-accepted", "visible-discarded"],
+            ))
+
+        self.assertEqual(result["cleared_count"], 1)
+        review_state = self._load_review_state()
+        self.assertNotIn("visible-accepted", review_state["suggestions"])
+        self.assertIn("hidden-accepted", review_state["suggestions"])
+        self.assertIn("visible-discarded", review_state["suggestions"])
+        self.assertEqual(review_state["summary"]["accepted_count"], 1)
+        self.assertEqual(review_state["summary"]["discarded_count"], 1)
+
+    def test_cleared_discarded_suggestions_do_not_regenerate_as_pending(self):
+        account_id = self._insert_account("Primary Checking")
+        category_id = self._insert_expense_leaf("Fixture Utilities")
+        batch_id = self._insert_import_batch()
+        self._insert_import_transaction(
+            batch_id=batch_id,
+            account_id=account_id,
+            category_id=category_id,
+            merchant_name="Fixture Power",
+            amount=42.00,
+            imported_category="Fixture Utilities",
+        )
+
+        with self._use_db_path():
+            initial = get_system_rule_suggestions("")
+            suggestion = next(s for s in initial["suggestions"] if s["keyword"] == "fixture power")
+            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+                suggestion_id=suggestion["id"],
+                status="discarded",
+                keyword=suggestion["keyword"],
+                target_category_id=suggestion["target_category_id"],
+                target_category_name=suggestion["target_category_name"],
+                merchant_label=suggestion["merchant_label"],
+            ))
+            clear_system_rule_suggestions(RuleSuggestionClearRequest(
+                status="discarded",
+                suggestion_ids=[suggestion["id"]],
+            ))
+            after = get_system_rule_suggestions("")
+
+        returned = [item for item in after["suggestions"] if item["id"] == suggestion["id"]]
+        self.assertEqual(returned, [])
+        self.assertEqual(after["review_summary"]["pending_count"], 0)
+        self.assertEqual(after["review_summary"]["discarded_count"], 0)
+        self.assertEqual(after["review_summary"]["trash_set_count"], 1)
+
     def test_clearing_owner_on_accept_persists_to_suggestion_entry(self):
         # Generalizing a rule by removing its owner must be written back into the suggestion record. An
         # explicit null was previously dropped (only non-null owner_id was stored), so the accepted card
@@ -1205,6 +1463,78 @@ class ImportRuleSuggestionReviewTests(unittest.TestCase):
         entry = review_state["suggestions"]["aji restaurant"]
         self.assertIsNone(entry.get("owner_id"))
         self.assertEqual(review_state["statuses"]["aji restaurant"]["status"], "accepted")
+
+    def test_accepted_edit_persists_refreshed_source_rows(self):
+        self._save_review_state({
+            "suggestions": {
+                "fixture pharmacy": {
+                    "keyword": "fixture pharmacy",
+                    "merchant_label": "Fixture Pharmacy",
+                    "target_category_id": "pharmacy",
+                    "target_category_name": "Pharmacy",
+                    "source_row_ids": ["old-row"],
+                    "txn_count": 1,
+                    "latest_txn_date": "2024-01-01",
+                },
+            },
+            "statuses": {"fixture pharmacy": {"status": "accepted", "rule_id": "rule-1"}},
+        })
+
+        with self._use_db_path():
+            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+                suggestion_id="fixture pharmacy",
+                status="accepted",
+                rule_id="rule-1",
+                keyword="fixture pharmacy",
+                target_category_id="pharmacy",
+                target_category_name="Pharmacy",
+                source_row_ids=["new-row", "old-row", "new-row"],
+                txn_count=2,
+                latest_txn_date="2026-04-26",
+            ))
+
+        review_state = self._load_review_state()
+        entry = review_state["suggestions"]["fixture pharmacy"]
+        self.assertEqual(entry["source_row_ids"], ["new-row", "old-row"])
+        self.assertEqual(entry["txn_count"], 2)
+        self.assertEqual(entry["latest_txn_date"], "2026-04-26")
+
+    def test_review_action_metadata_persists_with_settled_suggestion(self):
+        self._save_review_state({
+            "suggestions": {
+                "fixture cafe": {
+                    "keyword": "fixture cafe",
+                    "merchant_label": "Fixture Cafe",
+                    "target_category_id": "lunch",
+                    "target_category_name": "Lunch",
+                },
+            },
+            "statuses": {},
+        })
+        review_action = {
+            "kind": "category_changes",
+            "category_changes": [{
+                "from_category_id": "food",
+                "from_category_name": "Food & Dining",
+                "to_category_id": "lunch",
+                "to_category_name": "Lunch",
+                "count": 79,
+            }],
+        }
+
+        with self._use_db_path():
+            update_system_rule_suggestion_review(BatchRuleSuggestionReviewUpdateRequest(
+                suggestion_id="fixture cafe",
+                status="discarded",
+                keyword="fixture cafe",
+                target_category_id="lunch",
+                target_category_name="Lunch",
+                review_action=review_action,
+            ))
+
+        review_state = self._load_review_state()
+        self.assertEqual(review_state["suggestions"]["fixture cafe"]["review_action"], review_action)
+        self.assertEqual(review_state["statuses"]["fixture cafe"]["review_action"], review_action)
 
     def test_debug_trace_enriches_identifiers_from_committed_database_state(self):
         account_id = self._insert_account("Primary Checking")

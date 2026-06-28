@@ -28,13 +28,14 @@ function formatImportedAt(value) {
   return value ? value.slice(0, 16).replace('T', ' ') : ''
 }
 
-function buildReviewSummary(suggestions) {
+function buildReviewSummary(suggestions, trashSets = []) {
   return {
     total_count: suggestions.length,
     pending_count: suggestions.filter(suggestion => suggestion.review_status === 'pending').length,
     accepted_count: suggestions.filter(suggestion => suggestion.review_status === 'accepted').length,
     skipped_count: suggestions.filter(suggestion => suggestion.review_status === 'skipped').length,
     discarded_count: suggestions.filter(suggestion => suggestion.review_status === 'discarded').length,
+    trash_set_count: trashSets.length,
   }
 }
 
@@ -92,6 +93,7 @@ export default function ImportRuleSuggestions() {
     requires_owner_resolution: false,
     unowned_accounts: [],
     review_summary: null,
+    trash_sets: [],
     generated_at: null,
   })
   // Recap of the last accept action's collision reconciliation (merged into / skipped as duplicate of
@@ -228,6 +230,20 @@ export default function ImportRuleSuggestions() {
         ? api.refineProfileRuleSuggestionMatch(profileId, payload)
         : api.refineBatchRuleSuggestionMatch(batchId, payload)
   )
+  const clearRuleSuggestionsForContext = (status, suggestionIds = null) => (
+    isSystemContext
+      ? api.clearSystemRuleSuggestions(status, suggestionIds)
+      : isProfileContext
+        ? api.clearProfileRuleSuggestions(profileId, status, suggestionIds)
+        : api.clearBatchRuleSuggestions(batchId, status, suggestionIds)
+  )
+  const restoreRuleSuggestionTrashSetForContext = trashSetId => (
+    isSystemContext
+      ? api.restoreSystemRuleSuggestionTrashSet(trashSetId)
+      : isProfileContext
+        ? api.restoreProfileRuleSuggestionTrashSet(profileId, trashSetId)
+        : api.restoreBatchRuleSuggestionTrashSet(batchId, trashSetId)
+  )
   const loadSuggestionMatchesForContext = payload => (
     isSystemContext
       ? api.getSystemRuleSuggestionMatches(payload)
@@ -273,6 +289,12 @@ export default function ImportRuleSuggestions() {
     return nextCategories
   }
 
+  async function reloadTags() {
+    const nextTags = await api.getTags()
+    setTags(nextTags || [])
+    return nextTags || []
+  }
+
   useEffect(() => {
     setInitialSuggestionLoadComplete(false)
   }, [contextKey])
@@ -292,6 +314,7 @@ export default function ImportRuleSuggestions() {
           requires_owner_resolution: !!result.requires_owner_resolution,
           unowned_accounts: result.unowned_accounts || [],
           review_summary: result.review_summary || null,
+          trash_sets: result.trash_sets || [],
           generated_at: result.generated_at || null,
         })
         setInitialSuggestionLoadComplete(true)
@@ -305,6 +328,7 @@ export default function ImportRuleSuggestions() {
           requires_owner_resolution: false,
           unowned_accounts: [],
           review_summary: null,
+          trash_sets: [],
           generated_at: null,
         })
         setInitialSuggestionLoadComplete(true)
@@ -339,6 +363,7 @@ export default function ImportRuleSuggestions() {
       requires_owner_resolution: !!result.requires_owner_resolution,
       unowned_accounts: result.unowned_accounts || [],
       review_summary: result.review_summary || null,
+      trash_sets: result.trash_sets || [],
       generated_at: result.generated_at || null,
     })
     // Accepting/replacing suggestions creates or repoints rules, so the retroactive-apply preview
@@ -394,7 +419,7 @@ export default function ImportRuleSuggestions() {
         loading: false,
         error: '',
         suggestions: nextSuggestions,
-        review_summary: options.review_summary || buildReviewSummary(nextSuggestions),
+        review_summary: options.review_summary || buildReviewSummary(nextSuggestions, prev.trash_sets || []),
         generated_at: options.generated_at || prev.generated_at,
       }
     })
@@ -519,6 +544,38 @@ export default function ImportRuleSuggestions() {
 
   function getCategoryName(categoryId) {
     return categories.find(category => String(category.id) === String(categoryId))?.name || null
+  }
+
+  function getCategoryHistoryLabel(categoryId, fallback = null) {
+    if (!categoryId) return fallback || 'Uncategorized'
+    return getCategoryName(categoryId) || fallback || 'Unknown category'
+  }
+
+  function buildCategoryChangeReviewAction(priorRows, toCategoryId, toCategoryName = null) {
+    if (!priorRows?.length) return null
+    const toId = toCategoryId || null
+    const toName = getCategoryHistoryLabel(toId, toCategoryName)
+    const changesByPair = new Map()
+    for (const row of priorRows) {
+      const fromId = row.category_id || null
+      const key = `${fromId || ''}->${toId || ''}`
+      const existing = changesByPair.get(key) || {
+        from_category_id: fromId,
+        from_category_name: getCategoryHistoryLabel(fromId),
+        to_category_id: toId,
+        to_category_name: toName,
+        count: 0,
+      }
+      existing.count += 1
+      changesByPair.set(key, existing)
+    }
+    const categoryChanges = [...changesByPair.values()]
+      .filter(change => String(change.from_category_id || '') !== String(change.to_category_id || ''))
+    if (!categoryChanges.length) return null
+    return {
+      kind: 'category_changes',
+      category_changes: categoryChanges,
+    }
   }
 
   function getCoveredSuggestionIds(sourceSuggestion, data) {
@@ -704,6 +761,37 @@ export default function ImportRuleSuggestions() {
         ...prev,
         loading: false,
         error: err.message || 'Unable to update selected suggestions.',
+      }))
+    }
+  }
+
+  async function clearReviewedSuggestions(status, suggestionIds = null) {
+    setEditingSuggestionId(null)
+    setRuleSuggestionState(prev => ({ ...prev, error: '' }))
+    try {
+      await clearRuleSuggestionsForContext(status, suggestionIds)
+      await reloadSuggestions()
+      setReviewFilter('trash')
+    } catch (err) {
+      setRuleSuggestionState(prev => ({
+        ...prev,
+        loading: false,
+        error: err.message || 'Unable to clear rule suggestions.',
+      }))
+    }
+  }
+
+  async function restoreRuleSuggestionTrashSet(trashSetId) {
+    setEditingSuggestionId(null)
+    setRuleSuggestionState(prev => ({ ...prev, error: '' }))
+    try {
+      await restoreRuleSuggestionTrashSetForContext(trashSetId)
+      await reloadSuggestions()
+    } catch (err) {
+      setRuleSuggestionState(prev => ({
+        ...prev,
+        loading: false,
+        error: err.message || 'Unable to restore rule suggestions.',
       }))
     }
   }
@@ -906,6 +994,55 @@ export default function ImportRuleSuggestions() {
     }
   }
 
+  function buildSuggestionMatchPayload(data) {
+    return {
+      keyword: data.keyword,
+      owner_id: data.owner_id || null,
+      account_id: data.account_id || null,
+      amount_min: data.amount_min,
+      amount_max: data.amount_max,
+      match_source_text: !!data.match_source_text,
+    }
+  }
+
+  function mergeAcceptedPriorRows(existingRows, newRows, retainedIds) {
+    const retained = new Set((retainedIds || []).map(String))
+    const byId = new Map()
+    for (const row of newRows || []) {
+      if (retained.has(String(row.id))) byId.set(String(row.id), row)
+    }
+    for (const row of existingRows || []) {
+      if (retained.has(String(row.id))) byId.set(String(row.id), row)
+    }
+    return [...byId.values()]
+  }
+
+  async function loadCategorizationSnapshots(rowIds) {
+    const ids = [...new Set((rowIds || []).map(String).filter(Boolean))]
+    if (!ids.length) return []
+    const result = await api.getTransactions({ ids: ids.join(','), limit: ids.length })
+    return (result?.transactions || []).map(row => ({
+      id: row.id,
+      category_id: row.category_id ?? null,
+      category_source: row.category_source ?? null,
+      category_overridden: row.category_overridden ?? 0,
+    }))
+  }
+
+  async function loadSuggestionRowsMetadata(rowIds) {
+    const ids = [...new Set((rowIds || []).map(String).filter(Boolean))]
+    if (!ids.length) return { sourceRowIds: [], txnCount: 0, latestTxnDate: null }
+    const result = await api.getTransactions({ ids: ids.join(','), limit: ids.length })
+    const rows = result?.transactions || []
+    return {
+      sourceRowIds: ids,
+      txnCount: ids.length,
+      latestTxnDate: rows.reduce((latest, row) => (
+        row.date && (!latest || row.date > latest) ? row.date : latest
+      ), null),
+    }
+  }
+
   async function saveSuggestion(suggestion, data) {
     const correlationId = newTraceCorrelation('save-suggestion')
     await traceRuleSuggestionAction({
@@ -1043,16 +1180,70 @@ export default function ImportRuleSuggestions() {
       }
     }
 
-    // Apply to the suggestion's rows first so undo can restore their prior categorization, then record the
-    // undo entry (the created rule to delete + the row snapshot) before flipping the review status.
-    const applyResult = await applyRuleToSuggestionRows(ruleId, suggestion)
-    pushUndo([suggestion.id, ...coveredSuggestionIds], applyResult?.prior_rows || null, createdRuleIdToDelete ? [createdRuleIdToDelete] : null)
+    const previousSourceIds = (suggestion.source_row_ids || []).map(String)
+    let currentCandidateIds = []
+    try {
+      const matchResult = await loadSuggestionMatchesForContext(buildSuggestionMatchPayload(data))
+      currentCandidateIds = (matchResult?.transactions || []).map(row => String(row.id))
+    } catch {
+      currentCandidateIds = []
+    }
+    const candidateIds = [...new Set([...previousSourceIds, ...currentCandidateIds])]
+
+    // Editing an accepted rule redraws the accepted partition: newly matching import/manual rows join it,
+    // and previously accepted rows that no longer match are restored to their original import state so
+    // they can regenerate as pending suggestions instead of staying stranded as rule-sourced rows.
+    const applyResult = await applyRuleToSuggestionRows(ruleId, { ...suggestion, source_row_ids: candidateIds })
+    if (!applyResult) {
+      pushUndo([suggestion.id, ...coveredSuggestionIds], null, createdRuleIdToDelete ? [createdRuleIdToDelete] : null)
+      await updateSuggestionReviewForContext({
+        suggestion_id: suggestion.id,
+        status: 'accepted',
+        rule_id: ruleId,
+        created_rule_id: acceptedCreatedRuleId,
+        accepted_prior_rows: suggestion.accepted_prior_rows || [],
+        merchant_label: suggestion.merchant_label,
+        target_category_name: data.category_id ? getCategoryName(data.category_id) : null,
+        target_category_id: data.category_id || null,
+        keyword: data.keyword,
+        owner_id: data.owner_id || null,
+        account_id: data.account_id || null,
+        amount_min: data.amount_min,
+        amount_max: data.amount_max,
+        clean_name_suggestion: data.clean_name || null,
+        match_source_text: !!data.match_source_text,
+      })
+      if (mergedRuleId) recordReconciledRule(mergedRuleId, 'merged')
+      setEditingSuggestionId(null)
+      await reloadSuggestions()
+      return
+    }
+    const acceptedSourceIds = (applyResult?.transaction_ids || []).map(String)
+    const acceptedSourceIdSet = new Set(acceptedSourceIds)
+    const releasedSourceIds = previousSourceIds.filter(id => !acceptedSourceIdSet.has(id))
+    const releasedUndoRows = releasedSourceIds.length ? await loadCategorizationSnapshots(releasedSourceIds) : []
+    const releasedPriorRows = (suggestion.accepted_prior_rows || [])
+      .filter(row => releasedSourceIds.includes(String(row.id)))
+    if (releasedPriorRows.length) {
+      await txnMutations.restoreCategorization(releasedPriorRows)
+    }
+    const acceptedPriorRows = mergeAcceptedPriorRows(
+      suggestion.accepted_prior_rows || [],
+      applyResult?.prior_rows || [],
+      acceptedSourceIds,
+    )
+    const acceptedMetadata = await loadSuggestionRowsMetadata(acceptedSourceIds)
+    pushUndo(
+      [suggestion.id, ...coveredSuggestionIds],
+      [...(applyResult?.prior_rows || []), ...releasedUndoRows],
+      createdRuleIdToDelete ? [createdRuleIdToDelete] : null,
+    )
     await updateSuggestionReviewForContext({
       suggestion_id: suggestion.id,
       status: 'accepted',
       rule_id: ruleId,
       created_rule_id: acceptedCreatedRuleId,
-      accepted_prior_rows: applyResult?.prior_rows || suggestion.accepted_prior_rows || [],
+      accepted_prior_rows: acceptedPriorRows,
       merchant_label: suggestion.merchant_label,
       target_category_name: data.category_id ? getCategoryName(data.category_id) : null,
       target_category_id: data.category_id || null,
@@ -1063,6 +1254,9 @@ export default function ImportRuleSuggestions() {
       amount_max: data.amount_max,
       clean_name_suggestion: data.clean_name || null,
       match_source_text: !!data.match_source_text,
+      source_row_ids: acceptedMetadata.sourceRowIds,
+      txn_count: acceptedMetadata.txnCount,
+      latest_txn_date: acceptedMetadata.latestTxnDate,
     })
 
     if (mergedRuleId) recordReconciledRule(mergedRuleId, 'merged')
@@ -1123,6 +1317,7 @@ export default function ImportRuleSuggestions() {
     }
     const rowSnapshots = []
     const ruleRowIds = []
+    const reviewActionsBySuggestionId = {}
 
     try {
       const winner = winnerId ? members.find(member => member.id === winnerId) : null
@@ -1184,7 +1379,15 @@ export default function ImportRuleSuggestions() {
           const mode = targetId ? 'keep' : 'clear'
           try {
             const result = await txnMutations.setRejectedSuggestionDisposition(rowIds, mode, targetId)
-            if (result?.rows?.length) rowSnapshots.push(...result.rows)
+            if (result?.rows?.length) {
+              rowSnapshots.push(...result.rows)
+              const reviewAction = buildCategoryChangeReviewAction(
+                result.rows,
+                targetId,
+                targetId ? getCategoryName(targetId) : null,
+              )
+              if (reviewAction) reviewActionsBySuggestionId[member.id] = reviewAction
+            }
           } catch {
             // best-effort; still record the discard below
           }
@@ -1197,7 +1400,9 @@ export default function ImportRuleSuggestions() {
           status: 'discarded',
           merchant_label: member.merchant_label,
           target_category_name: member.target_category_name,
+          target_category_id: member.target_category_id || null,
           keyword: member.keyword,
+          review_action: reviewActionsBySuggestionId[member.id] || null,
         })
       }
 
@@ -1209,6 +1414,16 @@ export default function ImportRuleSuggestions() {
           const applyResult = await txnMutations.applyRuleToTransactions(createdRuleId, ruleRowIds)
           if (applyResult?.prior_rows?.length) {
             rowSnapshots.push(...applyResult.prior_rows)
+            for (const member of members) {
+              const rowIds = new Set((member.source_row_ids || []).map(String))
+              const memberPriorRows = applyResult.prior_rows.filter(row => rowIds.has(String(row.id)))
+              const reviewAction = buildCategoryChangeReviewAction(
+                memberPriorRows,
+                winnerCategoryId,
+                winner?.target_category_name || getCategoryName(winnerCategoryId),
+              )
+              if (reviewAction) reviewActionsBySuggestionId[member.id] = reviewAction
+            }
             if (winner) {
               await updateSuggestionReviewForContext({
                 suggestion_id: winner.id,
@@ -1226,6 +1441,19 @@ export default function ImportRuleSuggestions() {
                 amount_max: winner.amount_max,
                 clean_name_suggestion: winner.clean_name_suggestion || null,
                 match_source_text: !!winner.match_source_text,
+                review_action: reviewActionsBySuggestionId[winner.id] || null,
+              })
+            }
+            for (const member of members) {
+              if (member.id === winnerId || !reviewActionsBySuggestionId[member.id]) continue
+              await updateSuggestionReviewForContext({
+                suggestion_id: member.id,
+                status: 'discarded',
+                merchant_label: member.merchant_label,
+                target_category_name: member.target_category_name,
+                target_category_id: member.target_category_id || null,
+                keyword: member.keyword,
+                review_action: reviewActionsBySuggestionId[member.id],
               })
             }
           }
@@ -1696,14 +1924,18 @@ export default function ImportRuleSuggestions() {
                         details: { error: err.message || 'Unable to refine this match.' },
                       })
                       setRuleSuggestionState(prev => ({ ...prev, error: err.message || 'Unable to refine this match.' }))
+                      throw err
                     }
                   }}
                   categories={categories}
                   owners={owners}
                   accounts={accounts}
-                    tags={tags}
-                    onTagCreated={created => setTags(prev => (prev.some(tag => tag.id === created.id) ? prev : [...prev, created]))}
-                    onCategoriesChanged={reloadCategories}
+                  tags={tags}
+                  onTagCreated={created => setTags(prev => (prev.some(tag => tag.id === created.id) ? prev : [...prev, created]))}
+                  onReloadTags={reloadTags}
+                  onCategoriesChanged={reloadCategories}
+                  onClearReviewedSuggestions={clearReviewedSuggestions}
+                  onRestoreTrashSet={restoreRuleSuggestionTrashSet}
                   />
                 </>
               )}

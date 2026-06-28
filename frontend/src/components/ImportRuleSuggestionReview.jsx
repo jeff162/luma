@@ -17,9 +17,14 @@ import {
   IMPORT_RULE_SORT_STORAGE_KEY,
   buildCategoryDisplayLabel,
   findNearestScrollParent,
+  getInWindowPendingSuggestionGroups,
+  getRuleSuggestionMerchantGroupKey,
+  getRuleSuggestionMerchantGroupLabel,
+  getRuleSuggestionSplitRootIds,
   getSuggestionFilterPills,
   normalizeImportRuleLookback,
   normalizeImportRuleSortOrder,
+  suggestionSelectionChanged,
 } from '../lib/importRuleSuggestions.js'
 import {
   CriteriaGroup,
@@ -129,12 +134,16 @@ export default function ImportRuleSuggestionReview({
   accounts,
   tags = [],
   onTagCreated,
+  onReloadTags,
   onCategoriesChanged,
   onReloadSuggestions,
+  onClearReviewedSuggestions,
+  onRestoreTrashSet,
 }) {
   const rootRef = useRef(null)
   const { getPreference, hasPreference, setPreference } = useUserPreferences()
   const suggestions = useMemo(() => ruleSuggestionState?.suggestions || [], [ruleSuggestionState?.suggestions])
+  const trashSets = ruleSuggestionState?.trash_sets || []
   const summary = ruleSuggestionState?.review_summary || {}
   const [suggestionActionOverrides, setSuggestionActionOverrides] = useState({})
   const [editingActionPill, setEditingActionPill] = useState(null)
@@ -149,6 +158,7 @@ export default function ImportRuleSuggestionReview({
   const listTopRef = useRef(null)
   const stickyPanelRef = useRef(null)
   const pendingBulkAnchorRef = useRef(null)
+  const merchantGroupOrderRef = useRef({ signature: '', keys: [] })
   const [editingKeywordSuggestionId, setEditingKeywordSuggestionId] = useState(null)
   const [editingKeywordDraft, setEditingKeywordDraft] = useState('')
   const [openConflictGroupId, setOpenConflictGroupId] = useState(null)
@@ -216,16 +226,16 @@ export default function ImportRuleSuggestionReview({
   const availableOwners = owners
   const showOwnerFilter = availableOwners.length > 1
   // Conflicts render as ConflictSetCards resolved as a unit, so bulk-select (per-suggestion) is off there.
-  const bulkAvailable = reviewFilter !== 'total' && reviewFilter !== 'conflicts'
+  const bulkAvailable = reviewFilter !== 'total' && reviewFilter !== 'conflicts' && reviewFilter !== 'trash'
   const sortOrder = normalizeImportRuleSortOrder(getPreference(IMPORT_RULE_SORT_PREF_KEY, null))
     || legacySortOrderRef.current
     || 'row_count'
   const normalizedMerchantFilter = merchantFilterText.trim().toLowerCase()
 
-  // Look-back lens: split pending suggestions by recency. The pending/conflicts views show only rows with
-  // activity inside the chosen window (0 = all time); the `older` view shows the complement (the stale
-  // tail), so pending + older = all pending. View filter only — never changes generation or stored state,
-  // and the substance threshold stays full-history. A conflict set is kept whole (any member in-window).
+  // Look-back lens: split pending suggestions by recency. The pending/conflicts views show merchant
+  // groups with any pending activity inside the chosen window (0 = all time); the `older` view shows the
+  // complement. View filter only — never changes generation or stored state, and the substance threshold
+  // stays full-history. Grouping keeps refined remainders beside the active decision that created them.
   const lookbackYears = normalizeImportRuleLookback(getPreference(IMPORT_RULE_LOOKBACK_PREF_KEY, 2))
   const lookbackCutoff = useMemo(() => {
     if (!lookbackYears) return null
@@ -235,25 +245,25 @@ export default function ImportRuleSuggestionReview({
   }, [lookbackYears])
   const hasLens = lookbackCutoff != null
   const lensRelevant = reviewFilter === 'pending' || reviewFilter === 'conflicts' || reviewFilter === 'older'
-  // A conflict set resolves as a unit, so it counts as in-window if ANY of its members is.
-  const inWindowConflictGroups = useMemo(() => {
-    const groups = new Set()
-    if (!lookbackCutoff) return groups
-    for (const suggestion of suggestions) {
-      if (suggestion.conflict_group_id && (suggestion.latest_txn_date || '') >= lookbackCutoff) {
-        groups.add(suggestion.conflict_group_id)
-      }
-    }
-    return groups
-  }, [suggestions, lookbackCutoff])
+  const inWindowPendingSuggestionGroups = useMemo(
+    () => getInWindowPendingSuggestionGroups(suggestions, lookbackCutoff),
+    [suggestions, lookbackCutoff],
+  )
+  const suggestionSplitRootIds = useMemo(
+    () => getRuleSuggestionSplitRootIds(suggestions),
+    [suggestions],
+  )
   // Pure recency test (no review-status / view logic). Undatable rows count as in-window — we can't call
-  // them stale. With no window, everything is in-window.
+  // them stale. With no window, everything is in-window. Pending suggestions inherit the group result so
+  // a newly split older remainder does not vanish from the active merchant cluster.
   const inLookbackWindow = useCallback(suggestion => {
     if (!hasLens) return true
+    if (suggestion.review_status === 'pending') {
+      return inWindowPendingSuggestionGroups.has(getRuleSuggestionMerchantGroupKey(suggestion, suggestionSplitRootIds))
+    }
     if (!suggestion.latest_txn_date) return true
-    if (suggestion.conflict_group_id) return inWindowConflictGroups.has(suggestion.conflict_group_id)
     return suggestion.latest_txn_date >= lookbackCutoff
-  }, [hasLens, lookbackCutoff, inWindowConflictGroups])
+  }, [hasLens, lookbackCutoff, inWindowPendingSuggestionGroups, suggestionSplitRootIds])
   // Recency slice for the active view: pending/conflicts show in-window, `older` shows the stale
   // complement, every other view is unaffected.
   const passesLensForView = useCallback(suggestion => {
@@ -301,22 +311,22 @@ export default function ImportRuleSuggestionReview({
     if (filterKey === 'accepted') return suggestion.review_status === 'accepted'
     if (filterKey === 'deferred') return suggestion.review_status === 'skipped'
     if (filterKey === 'discarded') return suggestion.review_status === 'discarded'
+    if (filterKey === 'trash') return false
     return suggestion.review_status === 'pending'
   }
 
   const sortSuggestionsForDisplay = useCallback(list => {
     const next = [...list]
     if (sortOrder === 'row_count') {
-      // Group by merchant (keyword) so every suggestion for one merchant sorts together; the group's
-      // combined row count across all members (scope variants + conflicts) drives its position, so a
-      // small owner-scoped variant rides next to its high-volume sibling instead of sinking down the list.
+      // Group by displayed merchant identity so refinements that change the keyword (selection
+      // criteria) stay beside the broader suggestion they came from.
       const grouped = new Map()
       for (const suggestion of next) {
-        const groupKey = suggestion.keyword || `__id:${suggestion.id}`
+        const groupKey = getRuleSuggestionMerchantGroupKey(suggestion, suggestionSplitRootIds)
         const entry = grouped.get(groupKey) || {
           suggestions: [],
           totalRows: 0,
-          merchantLabel: String(suggestion.merchant_label || ''),
+          merchantLabel: getRuleSuggestionMerchantGroupLabel(suggestion),
         }
         entry.suggestions.push(suggestion)
         entry.totalRows += (suggestion.txn_count || 0)
@@ -340,7 +350,7 @@ export default function ImportRuleSuggestionReview({
 
     next.sort((a, b) => String(a.merchant_label || '').localeCompare(String(b.merchant_label || ''), undefined, { sensitivity: 'base' }))
     return next
-  }, [sortOrder])
+  }, [sortOrder, suggestionSplitRootIds])
 
   function getConflictContext(orderedSuggestions) {
     const byGroup = new Map()
@@ -453,6 +463,7 @@ export default function ImportRuleSuggestionReview({
     accepted: 'No accepted suggestions in this view.',
     deferred: 'No deferred suggestions in this view.',
     discarded: 'No discarded suggestions in this view.',
+    trash: 'No cleared rule suggestion sets.',
   }
   const emptyMessage = emptyMessages[reviewFilter] || emptyMessages.pending
   const showFullScreenLoading = ruleSuggestionState?.loading && suggestions.length === 0
@@ -1141,6 +1152,7 @@ export default function ImportRuleSuggestionReview({
   function beginTagEdit(suggestion) {
     setSuggestionMenu(null)
     setEditingTagSuggestionId(getSuggestionKey(suggestion.id))
+    Promise.resolve(onReloadTags?.()).catch(() => {})
   }
 
   // Tags are held as a transient override (`tagIds`) like the other suggestion edits; they're applied to
@@ -1286,6 +1298,7 @@ export default function ImportRuleSuggestionReview({
     { key: 'accepted', label: 'accepted', value: summary.accepted_count || 0, tone: 'accepted' },
     { key: 'deferred', label: 'deferred', value: summary.skipped_count || 0, tone: 'skipped' },
     { key: 'discarded', label: 'discarded', value: summary.discarded_count || 0, tone: 'discarded' },
+    { key: 'trash', label: 'trash', value: trashSets.length || summary.trash_set_count || 0, tone: 'trash' },
   ]
 
   // A title + one-line description for whichever filter is active, so it's always clear what the list
@@ -1298,6 +1311,7 @@ export default function ImportRuleSuggestionReview({
     accepted: { title: 'Accepted', description: 'Suggestions you turned into rules.' },
     deferred: { title: 'Deferred', description: 'Suggestions set aside for later.' },
     discarded: { title: 'Discarded', description: 'Suggestions you dismissed.' },
+    trash: { title: 'Trash', description: 'Cleared review sets that can be restored.' },
   }
   const activeViewHeader = viewHeaders[reviewFilter] || viewHeaders.pending
 
@@ -1540,6 +1554,7 @@ export default function ImportRuleSuggestionReview({
   }
 
   function renderSortControl() {
+    if (reviewFilter === 'trash') return null
     const currentSortLabel = sortOrder === 'row_count' ? '# rows' : 'A-Z'
     return (
       <div style={{
@@ -1667,6 +1682,99 @@ export default function ImportRuleSuggestionReview({
           </span>
           <span style={{ fontSize: 10, lineHeight: 1, color: 'inherit' }}>▾</span>
         </button>
+      </div>
+    )
+  }
+
+  function getClearStatusForView() {
+    if (reviewFilter === 'accepted') return 'accepted'
+    if (reviewFilter === 'deferred') return 'skipped'
+    if (reviewFilter === 'discarded') return 'discarded'
+    return null
+  }
+
+  function getReviewStatusLabel(status) {
+    if (status === 'accepted') return 'accepted'
+    if (status === 'skipped') return 'deferred'
+    if (status === 'discarded') return 'discarded'
+    return 'reviewed'
+  }
+
+  function renderClearReviewedControl() {
+    const status = getClearStatusForView()
+    if (
+      !status
+      || bulkMode
+      || visibleSuggestions.length === 0
+      || !onClearReviewedSuggestions
+    ) return null
+    const label = getReviewStatusLabel(status)
+    const visibleIds = visibleSuggestions.map(suggestion => suggestion.id)
+    return (
+      <SuggestionActionButton
+        onClick={() => onClearReviewedSuggestions(status, visibleIds)}
+        style={{
+          padding: '4px 9px',
+          fontSize: 11.5,
+          fontWeight: 600,
+          color: 'var(--muted)',
+          border: '1px solid color-mix(in srgb, var(--border) 70%, white 8%)',
+          background: 'color-mix(in srgb, var(--surface2) 42%, transparent)',
+          boxShadow: 'none',
+        }}
+      >
+        Clear {label}
+      </SuggestionActionButton>
+    )
+  }
+
+  function renderTrashSets() {
+    if (!trashSets.length) {
+      return (
+        <div ref={listTopRef} style={{ fontSize: 13, color: 'var(--muted)' }}>
+          {emptyMessage}
+        </div>
+      )
+    }
+    return (
+      <div ref={listTopRef} style={{ display: 'grid', gap: 12 }}>
+        {trashSets.map(item => {
+          const label = getReviewStatusLabel(item.status)
+          const clearedAt = item.cleared_at
+            ? item.cleared_at.slice(0, 16).replace('T', ' ')
+            : 'unknown time'
+          return (
+            <div
+              key={item.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 14,
+                flexWrap: 'wrap',
+                padding: '12px 14px',
+                border: '1px solid var(--border)',
+                borderRadius: 14,
+                background: 'color-mix(in srgb, var(--surface2) 70%, var(--surface))',
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>
+                  Cleared {item.count || 0} {label} suggestion{item.count === 1 ? '' : 's'}
+                </div>
+                <div style={{ marginTop: 3, fontSize: 12, color: 'var(--muted)' }}>
+                  {clearedAt}
+                </div>
+              </div>
+              <SuggestionActionButton
+                onClick={() => onRestoreTrashSet?.(item.id)}
+                disabled={!onRestoreTrashSet}
+              >
+                Restore
+              </SuggestionActionButton>
+            </div>
+          )
+        })}
       </div>
     )
   }
@@ -1943,13 +2051,16 @@ export default function ImportRuleSuggestionReview({
         ? { label: 'Deferred', tone: 'skipped' }
         : suggestion.review_status === 'discarded'
           ? { label: 'Removed', tone: 'discarded' }
-          : null
+          : suggestion.review_status === 'pending' && hasLens && !inLookbackWindow(suggestion)
+            ? { label: 'Older', tone: 'older' }
+            : null
     const showStatusBadge = Boolean(
       statusBadge && (
         filterKey === 'total'
         || filterKey === 'accepted'
         || filterKey === 'deferred'
         || filterKey === 'discarded'
+        || filterKey === 'older'
       )
     )
     const returnsToPending = suggestion.review_status === 'accepted' || suggestion.review_status === 'skipped'
@@ -2206,12 +2317,42 @@ export default function ImportRuleSuggestionReview({
             </div>
 
             {(resolvedSuggestion.tag_ids?.length || editingTagSuggestionId === getSuggestionKey(suggestion.id)) ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
-                <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>tags:</span>
-                {resolvedSuggestion.tag_ids.map(tagId => {
-                  const tag = tags.find(item => String(item.id) === String(tagId))
-                  if (!tag) return null
-                  return (
+	              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+	                <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>tags:</span>
+	                <span style={{ position: 'relative', display: 'inline-flex' }}>
+	                  <button
+	                    type="button"
+	                    // Open-only: while the picker is open its own outside-click dismissal closes it, so a
+	                    // toggling onClick would close-then-reopen on the same click.
+	                    onClick={editingTagSuggestionId === getSuggestionKey(suggestion.id)
+	                      ? undefined
+	                      : () => beginTagEdit(suggestion)}
+	                    style={{
+	                      display: 'inline-flex', alignItems: 'center', gap: 4,
+	                      padding: '3px 9px', borderRadius: 999, fontSize: 11.5, fontWeight: 600,
+	                      color: 'var(--muted)', background: 'transparent',
+	                      border: '1px dashed color-mix(in srgb, var(--border) 80%, var(--text) 12%)',
+	                      cursor: 'pointer', whiteSpace: 'nowrap',
+	                    }}
+	                  >
+	                    + tag
+	                  </button>
+	                  {editingTagSuggestionId === getSuggestionKey(suggestion.id) ? (
+	                    <TagPickerWithCreate
+	                      allTags={tags}
+	                      selectedTagIds={new Set(resolvedSuggestion.tag_ids)}
+	                      onToggleTag={(tag, present) => setSuggestionTag(suggestion, tag.id, present)}
+	                      onTagCreated={created => onTagCreated?.(created)}
+	                      onClose={() => setEditingTagSuggestionId(null)}
+	                      positioning="absolute"
+	                      align="left"
+	                    />
+	                  ) : null}
+	                </span>
+	                {resolvedSuggestion.tag_ids.map(tagId => {
+	                  const tag = tags.find(item => String(item.id) === String(tagId))
+	                  if (!tag) return null
+	                  return (
                     <span key={tagId} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                       <TagBadge tag={tag} />
                       <button
@@ -2222,40 +2363,10 @@ export default function ImportRuleSuggestionReview({
                       >
                         ×
                       </button>
-                    </span>
-                  )
-                })}
-                <span style={{ position: 'relative', display: 'inline-flex' }}>
-                  <button
-                    type="button"
-                    // Open-only: while the picker is open its own outside-click dismissal closes it, so a
-                    // toggling onClick would close-then-reopen on the same click.
-                    onClick={editingTagSuggestionId === getSuggestionKey(suggestion.id)
-                      ? undefined
-                      : () => setEditingTagSuggestionId(getSuggestionKey(suggestion.id))}
-                    style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 4,
-                      padding: '3px 9px', borderRadius: 999, fontSize: 11.5, fontWeight: 600,
-                      color: 'var(--muted)', background: 'transparent',
-                      border: '1px dashed color-mix(in srgb, var(--border) 80%, var(--text) 12%)',
-                      cursor: 'pointer', whiteSpace: 'nowrap',
-                    }}
-                  >
-                    + tag
-                  </button>
-                  {editingTagSuggestionId === getSuggestionKey(suggestion.id) ? (
-                    <TagPickerWithCreate
-                      allTags={tags}
-                      selectedTagIds={new Set(resolvedSuggestion.tag_ids)}
-                      onToggleTag={(tag, present) => setSuggestionTag(suggestion, tag.id, present)}
-                      onTagCreated={created => onTagCreated?.(created)}
-                      onClose={() => setEditingTagSuggestionId(null)}
-                      positioning="absolute"
-                      align="left"
-                    />
-                  ) : null}
-                </span>
-              </div>
+	                    </span>
+	                  )
+	                })}
+	              </div>
             ) : null}
 
             {suggestion.needs_resolution && filterKey === 'pending' && isConflictLead ? (
@@ -2430,6 +2541,12 @@ export default function ImportRuleSuggestionReview({
     && resolvedEditingSuggestion.review_status === 'pending'
     && !resolvedEditingSuggestion.conflict_group_id
   )
+  const shouldRefinePendingFullSuggestion = data => Boolean(
+    resolvedEditingSuggestion?.review_status === 'pending'
+    && !resolvedEditingSuggestion.conflict_group_id
+    && !editingSuggestionUsesSelectionEditor
+    && suggestionSelectionChanged(resolvedEditingSuggestion, data)
+  )
 
   return (
     <div
@@ -2467,7 +2584,7 @@ export default function ImportRuleSuggestionReview({
         }}
       >
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 12, width: '100%', minWidth: 0 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', alignItems: 'center', gap: 10, minHeight: 42, width: '100%', minWidth: 0 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr) auto', alignItems: 'center', gap: 10, minHeight: 42, width: '100%', minWidth: 0 }}>
             <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', whiteSpace: 'nowrap' }}>
               Filters:
             </span>
@@ -2490,6 +2607,9 @@ export default function ImportRuleSuggestionReview({
             }}>
               {renderMerchantFilterControl()}
               {renderOwnerFilterControl()}
+            </div>
+            <div style={{ justifySelf: 'end' }}>
+              {renderClearReviewedControl()}
             </div>
           </div>
           {/* Pills get their own full-width row so the set is stable — clicking a filter no longer
@@ -2636,6 +2756,8 @@ export default function ImportRuleSuggestionReview({
         }}>
           Owner filtering is blocked until these accounts have an owner: {ruleSuggestionState.unowned_accounts.join(', ')}. Assign owners in <Link to="/accounts" style={{ color: 'var(--accent2)', textDecoration: 'none' }}>Accounts</Link>, then return to filter this review.
         </div>
+      ) : reviewFilter === 'trash' ? (
+        renderTrashSets()
       ) : visibleSuggestions.length === 0 ? (
         <div ref={listTopRef} style={{ fontSize: 13, color: 'var(--muted)' }}>
           {emptyMessage}
@@ -2646,24 +2768,59 @@ export default function ImportRuleSuggestionReview({
             // Bulk-select mode stays flat: every suggestion is its own selectable card, no grouping.
             if (bulkMode) return visibleSuggestions.map(suggestion => renderSuggestionCard(suggestion))
 
-            // Otherwise group same-merchant (same keyword) suggestions into one bordered container so the
-            // whole pattern reads together. In the pending/conflicts/older (all pending) views a conflict
-            // subset still resolves as a unit (ConflictSetCard); other filters show individual status cards.
-            // Groups keep first-seen order, which the keyword-aware sort already arranged by row count.
+            // Otherwise group same-merchant suggestions into one bordered container so the whole pattern
+            // reads together. The group identity is the displayed merchant, not the exact keyword: a
+            // refined selection such as "merchant contains X renewal" is still part of merchant X's
+            // neighborhood. In pending/conflicts/older views, a conflict subset still resolves as a unit
+            // (ConflictSetCard); other filters show individual status cards. Establish group order from
+            // the visible row counts, then keep that order stable while the same merchant set remains on
+            // screen so resolving one card doesn't shove its siblings away.
             const useConflictCards = reviewFilter === 'pending' || reviewFilter === 'conflicts' || reviewFilter === 'older'
             const groups = []
-            const groupByKeyword = new Map()
+            const groupByMerchant = new Map()
             for (const suggestion of visibleSuggestions) {
-              const key = suggestion.keyword || `__id:${suggestion.id}`
-              let group = groupByKeyword.get(key)
+              const key = getRuleSuggestionMerchantGroupKey(suggestion, suggestionSplitRootIds)
+              let group = groupByMerchant.get(key)
               if (!group) {
                 group = { key, members: [] }
-                groupByKeyword.set(key, group)
+                groupByMerchant.set(key, group)
                 groups.push(group)
               }
               group.members.push(suggestion)
             }
-            return groups.map(group => renderMerchantGroup(group, useConflictCards))
+            function compareGroups(a, b) {
+              if (sortOrder === 'row_count') {
+                const aRows = a.members.reduce((sum, member) => sum + (member.txn_count || 0), 0)
+                const bRows = b.members.reduce((sum, member) => sum + (member.txn_count || 0), 0)
+                if (aRows !== bRows) return bRows - aRows
+              }
+              const aLabel = getRuleSuggestionMerchantGroupLabel(a.members[0])
+              const bLabel = getRuleSuggestionMerchantGroupLabel(b.members[0])
+              return String(aLabel).localeCompare(String(bLabel), undefined, { sensitivity: 'base' })
+            }
+            const groupKeySet = groups.map(group => group.key).slice().sort().join('\n')
+            const groupContextSignature = [
+              sortOrder,
+              reviewFilter,
+              normalizedMerchantFilter,
+              selectedOwnerIds.map(String).slice().sort().join(','),
+              lookbackYears,
+              groupKeySet,
+            ].join('|')
+            let orderedGroups
+            if (merchantGroupOrderRef.current.signature === groupContextSignature) {
+              const byKey = new Map(groups.map(group => [group.key, group]))
+              orderedGroups = merchantGroupOrderRef.current.keys
+                .map(key => byKey.get(key))
+                .filter(Boolean)
+            } else {
+              orderedGroups = [...groups].sort(compareGroups)
+              merchantGroupOrderRef.current = {
+                signature: groupContextSignature,
+                keys: orderedGroups.map(group => group.key),
+              }
+            }
+            return orderedGroups.map(group => renderMerchantGroup(group, useConflictCards))
           })()}
         </div>
       )}
@@ -2716,12 +2873,13 @@ export default function ImportRuleSuggestionReview({
           accounts={accounts}
           exampleTransaction={editorExampleTxn}
           onCategoriesChanged={onCategoriesChanged}
+          onTagCreated={onTagCreated}
           matchCount={resolvedEditingSuggestion.txn_count || (resolvedEditingSuggestion.source_row_ids || []).length}
           matchingRowsOpen={Boolean(matchingRowsReferencePanel)}
           matchingRowsPanel={matchingRowsReferencePanel}
           onOpenMatchingTransactions={() => toggleMatchingTransactionsReference(resolvedEditingSuggestion)}
           onAccept={async data => {
-            if (editingSuggestionUsesSelectionEditor) {
+            if (editingSuggestionUsesSelectionEditor || shouldRefinePendingFullSuggestion(data)) {
               await onRefineConflictMatch?.(buildMatchRefinePayload([resolvedEditingSuggestion], data))
               return
             }
@@ -2764,9 +2922,13 @@ export default function ImportRuleSuggestionReview({
               account_id: data.account_id || null,
             }, data)
           }}
-          onCloseWithDraft={data => {
+          onCloseWithDraft={async data => {
             if (editingSuggestionUsesSelectionEditor) {
               onCancelEdit()
+              return
+            }
+            if (shouldRefinePendingFullSuggestion(data)) {
+              await onRefineConflictMatch?.(buildMatchRefinePayload([resolvedEditingSuggestion], data))
               return
             }
             persistSuggestionDraft(resolvedEditingSuggestion, data)
@@ -2797,6 +2959,7 @@ export default function ImportRuleSuggestionReview({
           owners={owners}
           accounts={accounts}
           onCategoriesChanged={onCategoriesChanged}
+          onTagCreated={onTagCreated}
           matchCount={editingMatchRowCount || editingMatchReferenceSuggestion.txn_count || (editingMatchReferenceSuggestion.source_row_ids || []).length}
           matchingRowsOpen={Boolean(matchingRowsReferencePanel)}
           matchingRowsPanel={matchingRowsReferencePanel}

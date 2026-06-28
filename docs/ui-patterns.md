@@ -448,6 +448,20 @@ checkbox feeds `selectedSuggestionIds`. The model deliberately keeps two channel
   by the sticky controls is skipped and the first fully visible card is captured by suggestion id; after
   the list is rebuilt, that same suggestion occupies the first slot below the resized controls. Fixed
   pixel compensation cannot preserve position across this structural change.
+- **Clearing a settled pile is not bulk selection.** Accepted, deferred, and discarded views expose a
+  small Clear action for the suggestions currently visible in that settled view, including any merchant,
+  owner, or look-back filtering. It moves those entries into one restorable Trash set and then shows the
+  Trash view; Restore brings the entire set back to the status it came from. This is cleanup of review
+  artifacts only — it does not reverse accepted rules, reapply categories, or mutate transaction rows.
+- **Settled conflict tables preserve category-change context.** If resolving a conflict set re-pointed a
+  member's rows to another category, the settled table should show the current category with its former
+  category hint, e.g. `Lunch (was Food & Dining)`. This is display history for understanding the review
+  action; row categories remain as edited unless the user uses Undo.
+- **Merchant grouping follows the displayed merchant identity, not the exact keyword.** Selection edits
+  can deliberately narrow a suggestion's keyword or opt into source-text matching while the rule still
+  belongs to the same merchant work area. The outer review grouping and `# rows` ordering should keep
+  those refined variants beside their broader merchant siblings so saving a selection edit does not bury
+  the new one-row rule at the bottom of the review.
 - **Aggregate rule editors use the matching-rows report for source-file detail.** A suggested rule can
   cover many imported rows whose captured source text differs. The rule editor may show a single source
   row only when the suggestion is truly one-row; otherwise it should expose the existing matching-row
@@ -466,6 +480,10 @@ checkbox feeds `selectedSuggestionIds`. The model deliberately keeps two channel
   equivalent suggestions, and persist the partition. Do not expose parallel "edit rule" and "edit
   selection" buttons on that card; the existing editor entry point should route refined override saves
   through the selection-refinement flow.
+  For a normal pending suggestion opened in full-rule mode, the editor's primary header action should be
+  Close, not immediate rule creation: Close keeps the edited draft on the suggestion card so the user can
+  continue resolving the surrounding merchant group before saving. Creating the rule from inside the
+  editor may remain available as a secondary action, but it should not be the dominant path.
 
 So: **row buttons = this card only; the bulk-actions bar = the selection.** Anything refactoring this
 surface must keep that split — do not make a row button operate on the selection.

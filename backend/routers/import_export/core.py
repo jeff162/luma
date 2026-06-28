@@ -287,7 +287,16 @@ class BatchRuleSuggestionReviewUpdateRequest(BaseModel):
     amount_max: Optional[float] = None
     clean_name_suggestion: Optional[str] = None
     match_source_text: Optional[bool] = None
+    latest_txn_date: Optional[str] = None
+    txn_count: Optional[int] = None
+    source_row_ids: Optional[list[str]] = None
     accepted_prior_rows: Optional[list[dict]] = None
+    review_action: Optional[dict] = None
+
+
+class RuleSuggestionClearRequest(BaseModel):
+    status: str
+    suggestion_ids: Optional[list[str]] = None
 
 
 class BatchRuleSuggestionRefineSourceRequest(BaseModel):
@@ -834,8 +843,10 @@ def get_rule_suggestion_review_state(snapshot: dict) -> dict:
 
     suggestions = review_state.get("suggestions")
     statuses = review_state.get("statuses")
+    trash_sets = review_state.get("trash_sets")
     review_state["suggestions"] = suggestions if isinstance(suggestions, dict) else {}
     review_state["statuses"] = statuses if isinstance(statuses, dict) else {}
+    review_state["trash_sets"] = trash_sets if isinstance(trash_sets, list) else []
     return review_state
 
 
@@ -866,9 +877,116 @@ def summarize_rule_suggestion_review(review_state: dict) -> dict:
         "accepted_count": accepted_count,
         "skipped_count": skipped_count,
         "pending_count": pending_count,
+        "trash_set_count": len(review_state.get("trash_sets") or []),
     }
     review_state["summary"] = summary
     return summary
+
+
+def _public_rule_suggestion_trash_sets(review_state: dict) -> list[dict]:
+    sets = []
+    for item in review_state.get("trash_sets") or []:
+        if not isinstance(item, dict):
+            continue
+        sets.append({
+            "id": item.get("id"),
+            "status": item.get("status"),
+            "cleared_at": item.get("cleared_at"),
+            "count": item.get("count") or len(item.get("suggestions") or {}),
+        })
+    return sorted(sets, key=lambda item: item.get("cleared_at") or "", reverse=True)
+
+
+def _rule_suggestion_trash_ids(review_state: dict) -> set[str]:
+    ids: set[str] = set()
+    for item in review_state.get("trash_sets") or []:
+        if not isinstance(item, dict):
+            continue
+        ids.update(str(suggestion_id) for suggestion_id in (item.get("suggestions") or {}).keys())
+    return ids
+
+
+def _clear_rule_suggestion_review_status(review_state: dict, status: str, suggestion_ids: Optional[list[str]] = None) -> dict:
+    status = (status or "").strip().lower()
+    if status not in RULE_SUGGESTION_REVIEW_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid clear status")
+
+    suggestions = dict(review_state.get("suggestions") or {})
+    statuses = dict(review_state.get("statuses") or {})
+    requested_ids = {
+        str(suggestion_id)
+        for suggestion_id in (suggestion_ids or [])
+        if str(suggestion_id or "").strip()
+    }
+    clear_ids = [
+        suggestion_id
+        for suggestion_id, status_entry in statuses.items()
+        if isinstance(status_entry, dict)
+        and status_entry.get("status") == status
+        and isinstance(suggestions.get(suggestion_id), dict)
+        and (not requested_ids or suggestion_id in requested_ids)
+    ]
+    if not clear_ids:
+        review_summary = summarize_rule_suggestion_review(review_state)
+        return {
+            "ok": True,
+            "cleared_count": 0,
+            "review_summary": review_summary,
+            "trash_sets": _public_rule_suggestion_trash_sets(review_state),
+        }
+
+    trashed_suggestions = {suggestion_id: suggestions.pop(suggestion_id) for suggestion_id in clear_ids}
+    trashed_statuses = {suggestion_id: statuses.pop(suggestion_id) for suggestion_id in clear_ids}
+    trash_sets = list(review_state.get("trash_sets") or [])
+    trash_set = {
+        "id": str(uuid.uuid4()),
+        "kind": "import_rule_suggestions",
+        "status": status,
+        "cleared_at": utcnow_iso(),
+        "count": len(clear_ids),
+        "suggestions": trashed_suggestions,
+        "statuses": trashed_statuses,
+    }
+    trash_sets.append(trash_set)
+    review_state["suggestions"] = suggestions
+    review_state["statuses"] = statuses
+    review_state["trash_sets"] = trash_sets
+    review_summary = summarize_rule_suggestion_review(review_state)
+    return {
+        "ok": True,
+        "cleared_count": len(clear_ids),
+        "trash_set": _public_rule_suggestion_trash_sets({"trash_sets": [trash_set]})[0],
+        "review_summary": review_summary,
+        "trash_sets": _public_rule_suggestion_trash_sets(review_state),
+    }
+
+
+def _restore_rule_suggestion_trash_set(review_state: dict, trash_set_id: str) -> dict:
+    trash_sets = list(review_state.get("trash_sets") or [])
+    target = None
+    remaining = []
+    for item in trash_sets:
+        if isinstance(item, dict) and item.get("id") == trash_set_id:
+            target = item
+        else:
+            remaining.append(item)
+    if not target:
+        raise HTTPException(status_code=404, detail="Trash set not found")
+
+    suggestions = dict(review_state.get("suggestions") or {})
+    statuses = dict(review_state.get("statuses") or {})
+    suggestions.update(target.get("suggestions") or {})
+    statuses.update(target.get("statuses") or {})
+    review_state["suggestions"] = suggestions
+    review_state["statuses"] = statuses
+    review_state["trash_sets"] = remaining
+    review_summary = summarize_rule_suggestion_review(review_state)
+    return {
+        "ok": True,
+        "restored_count": target.get("count") or len(target.get("suggestions") or {}),
+        "review_summary": review_summary,
+        "trash_sets": _public_rule_suggestion_trash_sets(review_state),
+    }
 
 
 def _build_rule_suggestion_review_entry(payload: dict) -> dict:
@@ -1029,15 +1147,21 @@ def _prune_phantom_rule_suggestion_entry(review_state: dict, suggestion_id: str,
 def refresh_rule_suggestion_review(review_state: dict, suggestions: list[dict]) -> dict:
     existing_entries = review_state.get("suggestions") or {}
     statuses = review_state.get("statuses") or {}
+    trashed_ids = _rule_suggestion_trash_ids(review_state)
     next_entries = {}
 
     for suggestion in suggestions:
         suggestion_id = suggestion["id"]
+        if suggestion_id in trashed_ids:
+            continue
         existing_entry = existing_entries.get(suggestion_id)
         if isinstance(existing_entry, dict) and existing_entry.get("pending_override"):
             next_entries[suggestion_id] = existing_entry
             continue
-        next_entries[suggestion_id] = _build_rule_suggestion_review_entry(suggestion)
+        next_entry = _build_rule_suggestion_review_entry(suggestion)
+        if isinstance(existing_entry, dict) and existing_entry.get("review_action"):
+            next_entry["review_action"] = existing_entry.get("review_action")
+        next_entries[suggestion_id] = next_entry
 
     for suggestion_id, entry in existing_entries.items():
         status = (statuses.get(suggestion_id) or {}).get("status")
@@ -1564,6 +1688,7 @@ def _merge_review_state_suggestions(generated_suggestions: list[dict], review_st
             "rule_id": (review_statuses.get(suggestion_id) or {}).get("rule_id"),
             "created_rule_id": (review_statuses.get(suggestion_id) or {}).get("created_rule_id"),
             "accepted_prior_rows": list((review_statuses.get(suggestion_id) or {}).get("accepted_prior_rows") or []),
+            "review_action": (review_statuses.get(suggestion_id) or {}).get("review_action") or entry.get("review_action"),
             # Carried so the matching-transactions report can scope to this suggestion's own rows.
             "source_row_ids": list(entry.get("source_row_ids") or []),
         })
@@ -1612,11 +1737,14 @@ def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_own
                 "suggestions": [],
                 "suggestion_count": 0,
                 "review_summary": review_summary,
+                "trash_sets": _public_rule_suggestion_trash_sets(review_state),
                 "generated_at": review_state.get("generated_at"),
                 "should_persist": False,
             }
 
     suggestions, _ = _generate_rule_suggestions(conn, candidate_rows, selected_owner_ids)
+    trashed_ids = _rule_suggestion_trash_ids(review_state)
+    suggestions = [suggestion for suggestion in suggestions if suggestion["id"] not in trashed_ids]
 
     for suggestion in suggestions:
         status_entry = review_statuses.get(suggestion["id"]) or {}
@@ -1627,6 +1755,7 @@ def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_own
         suggestion["rule_id"] = status_entry.get("rule_id")
         suggestion["created_rule_id"] = status_entry.get("created_rule_id")
         suggestion["accepted_prior_rows"] = list(status_entry.get("accepted_prior_rows") or [])
+        suggestion["review_action"] = status_entry.get("review_action") or review_entry.get("review_action")
         suggestion["match_source_text"] = bool(review_entry.get("match_source_text"))
 
     review_summary = review_state.get("summary")
@@ -1653,6 +1782,7 @@ def _build_rule_suggestion_response(conn, rows, review_state: dict, selected_own
         "suggestions": suggestions,
         "suggestion_count": len(suggestions),
         "review_summary": review_summary,
+        "trash_sets": _public_rule_suggestion_trash_sets(review_state),
         "generated_at": review_state.get("generated_at"),
         "minimum_txn_count": threshold_meta["minimum_txn_count"],
         "distinct_month_count": threshold_meta["distinct_month_count"],
@@ -4084,7 +4214,8 @@ def update_batch_rule_suggestion_review(batch_id: str, body: BatchRuleSuggestion
         suggestion_entries.setdefault(body.suggestion_id, {})
         auto_discarded_suggestion_ids: list[str] = []
         old_entry = dict(suggestion_entries.get(body.suggestion_id) or {})
-        _remove_pending_derived_rule_suggestions(review_state, body.suggestion_id)
+        if status == "pending":
+            _remove_pending_derived_rule_suggestions(review_state, body.suggestion_id)
         suggestion_entries = dict(review_state.get("suggestions") or {})
         suggestion_entries.setdefault(body.suggestion_id, {})
 
@@ -4111,6 +4242,19 @@ def update_batch_rule_suggestion_review(batch_id: str, body: BatchRuleSuggestion
             suggestion_entries[body.suggestion_id]["clean_name_suggestion"] = body.clean_name_suggestion
         if body.match_source_text is not None or "match_source_text" in body.model_fields_set:
             suggestion_entries[body.suggestion_id]["match_source_text"] = bool(body.match_source_text)
+        if body.latest_txn_date is not None or "latest_txn_date" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["latest_txn_date"] = body.latest_txn_date
+        if body.txn_count is not None or "txn_count" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["txn_count"] = body.txn_count
+        if body.source_row_ids is not None or "source_row_ids" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["source_row_ids"] = sorted({
+                str(value) for value in (body.source_row_ids or []) if str(value).strip()
+            })
+        if body.review_action is not None or "review_action" in body.model_fields_set:
+            if isinstance(body.review_action, dict):
+                suggestion_entries[body.suggestion_id]["review_action"] = body.review_action
+            else:
+                suggestion_entries[body.suggestion_id].pop("review_action", None)
 
         statuses = dict(review_state.get("statuses") or {})
         synthetic_entries: list[dict] = []
@@ -4127,6 +4271,8 @@ def update_batch_rule_suggestion_review(batch_id: str, body: BatchRuleSuggestion
                 next_status["created_rule_id"] = body.created_rule_id
             if body.accepted_prior_rows is not None or "accepted_prior_rows" in body.model_fields_set:
                 next_status["accepted_prior_rows"] = list(body.accepted_prior_rows or [])
+            if body.review_action is not None or "review_action" in body.model_fields_set:
+                next_status["review_action"] = body.review_action if isinstance(body.review_action, dict) else None
             statuses[body.suggestion_id] = next_status
             review_state["statuses"] = statuses
             if status == "accepted":
@@ -4165,9 +4311,44 @@ def update_batch_rule_suggestion_review(batch_id: str, body: BatchRuleSuggestion
     return {
         "ok": True,
         "review_summary": review_summary,
+        "trash_sets": _public_rule_suggestion_trash_sets(review_state),
         "generated_at": review_state.get("generated_at"),
         "auto_discarded_suggestion_ids": auto_discarded_suggestion_ids,
     }
+
+
+@router.post("/batches/{batch_id}/rule-suggestions/clear")
+def clear_batch_rule_suggestions(batch_id: str, body: RuleSuggestionClearRequest):
+    with get_db() as conn:
+        batch = conn.execute(
+            "SELECT id, config_snapshot FROM import_batch WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+        snapshot = safe_json_dict(batch["config_snapshot"])
+        review_state = get_rule_suggestion_review_state(snapshot)
+        result = _clear_rule_suggestion_review_status(review_state, body.status, body.suggestion_ids)
+        snapshot[RULE_SUGGESTION_REVIEW_KEY] = review_state
+        save_batch_snapshot(conn, batch_id, snapshot)
+    return result
+
+
+@router.post("/batches/{batch_id}/rule-suggestions/trash/{trash_set_id}/restore")
+def restore_batch_rule_suggestion_trash_set(batch_id: str, trash_set_id: str):
+    with get_db() as conn:
+        batch = conn.execute(
+            "SELECT id, config_snapshot FROM import_batch WHERE id = ?",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+        snapshot = safe_json_dict(batch["config_snapshot"])
+        review_state = get_rule_suggestion_review_state(snapshot)
+        result = _restore_rule_suggestion_trash_set(review_state, trash_set_id)
+        snapshot[RULE_SUGGESTION_REVIEW_KEY] = review_state
+        save_batch_snapshot(conn, batch_id, snapshot)
+    return result
 
 
 @router.post("/profiles/{profile_id}/rule-suggestions/review")
@@ -4183,7 +4364,8 @@ def update_profile_rule_suggestion_review(profile_id: str, body: BatchRuleSugges
         suggestion_entries.setdefault(body.suggestion_id, {})
         auto_discarded_suggestion_ids: list[str] = []
         old_entry = dict(suggestion_entries.get(body.suggestion_id) or {})
-        _remove_pending_derived_rule_suggestions(review_state, body.suggestion_id)
+        if status == "pending":
+            _remove_pending_derived_rule_suggestions(review_state, body.suggestion_id)
         suggestion_entries = dict(review_state.get("suggestions") or {})
         suggestion_entries.setdefault(body.suggestion_id, {})
 
@@ -4210,6 +4392,19 @@ def update_profile_rule_suggestion_review(profile_id: str, body: BatchRuleSugges
             suggestion_entries[body.suggestion_id]["clean_name_suggestion"] = body.clean_name_suggestion
         if body.match_source_text is not None or "match_source_text" in body.model_fields_set:
             suggestion_entries[body.suggestion_id]["match_source_text"] = bool(body.match_source_text)
+        if body.latest_txn_date is not None or "latest_txn_date" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["latest_txn_date"] = body.latest_txn_date
+        if body.txn_count is not None or "txn_count" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["txn_count"] = body.txn_count
+        if body.source_row_ids is not None or "source_row_ids" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["source_row_ids"] = sorted({
+                str(value) for value in (body.source_row_ids or []) if str(value).strip()
+            })
+        if body.review_action is not None or "review_action" in body.model_fields_set:
+            if isinstance(body.review_action, dict):
+                suggestion_entries[body.suggestion_id]["review_action"] = body.review_action
+            else:
+                suggestion_entries[body.suggestion_id].pop("review_action", None)
 
         statuses = dict(review_state.get("statuses") or {})
         synthetic_entries: list[dict] = []
@@ -4226,6 +4421,8 @@ def update_profile_rule_suggestion_review(profile_id: str, body: BatchRuleSugges
                 next_status["created_rule_id"] = body.created_rule_id
             if body.accepted_prior_rows is not None or "accepted_prior_rows" in body.model_fields_set:
                 next_status["accepted_prior_rows"] = list(body.accepted_prior_rows or [])
+            if body.review_action is not None or "review_action" in body.model_fields_set:
+                next_status["review_action"] = body.review_action if isinstance(body.review_action, dict) else None
             statuses[body.suggestion_id] = next_status
             review_state["statuses"] = statuses
             if status == "accepted":
@@ -4264,9 +4461,32 @@ def update_profile_rule_suggestion_review(profile_id: str, body: BatchRuleSugges
     return {
         "ok": True,
         "review_summary": review_summary,
+        "trash_sets": _public_rule_suggestion_trash_sets(review_state),
         "generated_at": review_state.get("generated_at"),
         "auto_discarded_suggestion_ids": auto_discarded_suggestion_ids,
     }
+
+
+@router.post("/profiles/{profile_id}/rule-suggestions/clear")
+def clear_profile_rule_suggestions(profile_id: str, body: RuleSuggestionClearRequest):
+    with get_db() as conn:
+        column_map = _load_profile_column_map(conn, profile_id)
+        review_state = _get_profile_rule_suggestion_review_state(column_map)
+        result = _clear_rule_suggestion_review_status(review_state, body.status, body.suggestion_ids)
+        column_map[RULE_SUGGESTION_REVIEW_KEY] = review_state
+        _save_profile_column_map(conn, profile_id, column_map)
+    return result
+
+
+@router.post("/profiles/{profile_id}/rule-suggestions/trash/{trash_set_id}/restore")
+def restore_profile_rule_suggestion_trash_set(profile_id: str, trash_set_id: str):
+    with get_db() as conn:
+        column_map = _load_profile_column_map(conn, profile_id)
+        review_state = _get_profile_rule_suggestion_review_state(column_map)
+        result = _restore_rule_suggestion_trash_set(review_state, trash_set_id)
+        column_map[RULE_SUGGESTION_REVIEW_KEY] = review_state
+        _save_profile_column_map(conn, profile_id, column_map)
+    return result
 
 
 @router.get("/rule-suggestions")
@@ -4304,7 +4524,8 @@ def update_system_rule_suggestion_review(body: BatchRuleSuggestionReviewUpdateRe
         suggestion_entries.setdefault(body.suggestion_id, {})
         auto_discarded_suggestion_ids: list[str] = []
         old_entry = dict(suggestion_entries.get(body.suggestion_id) or {})
-        _remove_pending_derived_rule_suggestions(review_state, body.suggestion_id)
+        if status == "pending":
+            _remove_pending_derived_rule_suggestions(review_state, body.suggestion_id)
         suggestion_entries = dict(review_state.get("suggestions") or {})
         suggestion_entries.setdefault(body.suggestion_id, {})
 
@@ -4331,6 +4552,19 @@ def update_system_rule_suggestion_review(body: BatchRuleSuggestionReviewUpdateRe
             suggestion_entries[body.suggestion_id]["clean_name_suggestion"] = body.clean_name_suggestion
         if body.match_source_text is not None or "match_source_text" in body.model_fields_set:
             suggestion_entries[body.suggestion_id]["match_source_text"] = bool(body.match_source_text)
+        if body.latest_txn_date is not None or "latest_txn_date" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["latest_txn_date"] = body.latest_txn_date
+        if body.txn_count is not None or "txn_count" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["txn_count"] = body.txn_count
+        if body.source_row_ids is not None or "source_row_ids" in body.model_fields_set:
+            suggestion_entries[body.suggestion_id]["source_row_ids"] = sorted({
+                str(value) for value in (body.source_row_ids or []) if str(value).strip()
+            })
+        if body.review_action is not None or "review_action" in body.model_fields_set:
+            if isinstance(body.review_action, dict):
+                suggestion_entries[body.suggestion_id]["review_action"] = body.review_action
+            else:
+                suggestion_entries[body.suggestion_id].pop("review_action", None)
 
         statuses = dict(review_state.get("statuses") or {})
         synthetic_entries: list[dict] = []
@@ -4347,6 +4581,8 @@ def update_system_rule_suggestion_review(body: BatchRuleSuggestionReviewUpdateRe
                 next_status["created_rule_id"] = body.created_rule_id
             if body.accepted_prior_rows is not None or "accepted_prior_rows" in body.model_fields_set:
                 next_status["accepted_prior_rows"] = list(body.accepted_prior_rows or [])
+            if body.review_action is not None or "review_action" in body.model_fields_set:
+                next_status["review_action"] = body.review_action if isinstance(body.review_action, dict) else None
             statuses[body.suggestion_id] = next_status
             review_state["statuses"] = statuses
             if status == "accepted":
@@ -4384,9 +4620,28 @@ def update_system_rule_suggestion_review(body: BatchRuleSuggestionReviewUpdateRe
     return {
         "ok": True,
         "review_summary": review_summary,
+        "trash_sets": _public_rule_suggestion_trash_sets(review_state),
         "generated_at": review_state.get("generated_at"),
         "auto_discarded_suggestion_ids": auto_discarded_suggestion_ids,
     }
+
+
+@router.post("/rule-suggestions/clear")
+def clear_system_rule_suggestions(body: RuleSuggestionClearRequest):
+    with get_db() as conn:
+        review_state = _get_system_rule_suggestion_review_state(conn)
+        result = _clear_rule_suggestion_review_status(review_state, body.status, body.suggestion_ids)
+        _save_system_rule_suggestion_review_state(conn, review_state)
+    return result
+
+
+@router.post("/rule-suggestions/trash/{trash_set_id}/restore")
+def restore_system_rule_suggestion_trash_set(trash_set_id: str):
+    with get_db() as conn:
+        review_state = _get_system_rule_suggestion_review_state(conn)
+        result = _restore_rule_suggestion_trash_set(review_state, trash_set_id)
+        _save_system_rule_suggestion_review_state(conn, review_state)
+    return result
 
 
 @router.post("/batches/{batch_id}/rule-suggestions/refine-match")

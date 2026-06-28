@@ -22,6 +22,7 @@ export function RuleEditorModal({
   onSaveAccepted,
   onCloseWithDraft,
   onDiscard,
+  onTagCreated,
   // The single resolved source row when this suggestion is backed by exactly one — feeds RuleForm's
   // read-only "From the source file" panel. Null for multi-row suggestions (use the matching report).
   exampleTransaction = null,
@@ -91,7 +92,15 @@ export function RuleEditorModal({
   }
 
   async function handleCloseWithDraft() {
-    onCloseWithDraft(getCurrentDraftState().data)
+    if (working) return
+    setWorking(true)
+    setError('')
+    try {
+      await onCloseWithDraft(getCurrentDraftState().data)
+    } catch (err) {
+      setError(err.message || 'Unable to close this rule editor.')
+      setWorking(false)
+    }
   }
 
   async function handleAccept() {
@@ -155,6 +164,34 @@ export function RuleEditorModal({
         >
           Close
         </button>
+      )
+    }
+    if (!isAccepted && !matchOnly) {
+      return (
+        <>
+          <button
+            type="button"
+            onClick={handleCloseWithDraft}
+            disabled={working}
+            title="Close — your edits stay on the suggestion card; use the card's Save button when ready"
+            style={primaryHeaderButtonStyle}
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            onClick={handleAccept}
+            disabled={working || !draftState.canSave}
+            title="Create this rule now and move the suggestion to accepted"
+            style={{
+              ...quietHeaderButtonStyle,
+              cursor: working || !draftState.canSave ? 'not-allowed' : 'pointer',
+              opacity: working || !draftState.canSave ? 0.65 : 1,
+            }}
+          >
+            {working ? 'Saving…' : 'Save rule'}
+          </button>
+        </>
       )
     }
     const cancelAction = isAccepted ? onDiscard : handleCloseWithDraft
@@ -300,6 +337,7 @@ export function RuleEditorModal({
             hideFooter
             onDraftChange={setDraftState}
             onCategoriesChanged={onCategoriesChanged}
+            onTagCreated={onTagCreated}
             mode={matchOnly ? 'match-only' : 'full'}
             hideMatchCount={matchOnly}
           />

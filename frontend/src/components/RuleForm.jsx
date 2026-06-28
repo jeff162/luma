@@ -477,6 +477,7 @@ const RuleForm = forwardRef(function RuleForm({
   hideMatchCount = false,
   onDraftChange,
   onCategoriesChanged,
+  onTagCreated,
   mode = 'full',
 }, ref) {
   const getTransactionAmountState = () => {
@@ -585,6 +586,7 @@ const RuleForm = forwardRef(function RuleForm({
   }, [amtOpen, transactionDefaultsApplied, transactionDefaults, amtLow, amtHigh])
 
   useEffect(() => {
+    if (!tagsOpen) return undefined
     let cancelled = false
     api.getTags()
       .then(tags => {
@@ -594,7 +596,7 @@ const RuleForm = forwardRef(function RuleForm({
         if (!cancelled) setAvailableTags([])
       })
     return () => { cancelled = true }
-  }, [])
+  }, [tagsOpen])
 
   const selectedTags = availableTags.filter(tag => tagIds.includes(tag.id))
   const matchOnly = mode === 'match-only'
@@ -978,6 +980,7 @@ const RuleForm = forwardRef(function RuleForm({
                 setAvailableTags(current => (
                   current.some(tag => tag.id === created.id) ? current : [...current, created]
                 ))
+                onTagCreated?.(created)
               }}
               onClose={() => {}}
               positioning="relative"

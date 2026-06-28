@@ -27,13 +27,18 @@ export function ProgressPill({ label, value, tone = 'default', active = false, o
       gap: 6,
       padding: '6px 10px',
       borderRadius: 999,
-      border: `1px solid ${active ? `color-mix(in srgb, ${palette.border} 70%, white 14%)` : palette.border}`,
-      background: palette.background,
+      border: `1px solid ${active ? `color-mix(in srgb, ${palette.border} 82%, var(--text) 18%)` : palette.border}`,
+      background: active
+        ? `linear-gradient(180deg, color-mix(in srgb, ${palette.color} 18%, var(--surface2)), ${palette.background})`
+        : palette.background,
       color: palette.color,
       fontSize: 12,
-      fontWeight: 600,
-      boxShadow: active ? '0 8px 18px rgba(15, 23, 42, 0.14)' : 'none',
+      fontWeight: active ? 750 : 600,
+      boxShadow: active
+        ? `0 0 0 2px color-mix(in srgb, ${palette.border} 34%, transparent), 0 10px 22px rgba(15, 23, 42, 0.18), inset 0 1px 0 rgba(255,255,255,0.12)`
+        : 'none',
       opacity: disabled ? 0.5 : 1,
+      transform: active ? 'translateY(-1px)' : 'none',
     }}>
       {symbol ? (
         <span style={{
@@ -58,7 +63,7 @@ export function ProgressPill({ label, value, tone = 'default', active = false, o
         </span>
       ) : null}
       <span>{value}</span>
-      <span style={{ fontWeight: 500 }}>{label}</span>
+      <span style={{ fontWeight: active ? 700 : 500 }}>{label}</span>
     </span>
   )
   if (!onClick) return content
