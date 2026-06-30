@@ -31,7 +31,10 @@ const COLUMN_DEFS = {
   // effective/top-level account — identical for every row inside a merged-account report and so
   // surfaced only there (see AccountDetail), where it tells the merged children apart.
   sourceAccount: { key: 'sourceAccount', label: 'Account', defaultWidth: 150, minWidth: 110 },
-  amount: { key: 'amount', label: 'Amount', defaultWidth: 108, minWidth: 88, align: 'end' },
+  // A touch wider than the bare number needs, so the right-aligned amount leaves a bit of room to its
+  // left for the note/tag/excluded markers (which anchor against the amount's stable min-width slot —
+  // see TransactionAmountCell) instead of crowding into the neighbouring column.
+  amount: { key: 'amount', label: 'Amount', defaultWidth: 124, minWidth: 88, align: 'end' },
 }
 
 function getAvailableColumns({ showCategory, showAccount, showSourceAccount }) {
@@ -106,6 +109,11 @@ export default function TransactionListTable({
   showAccount = true,
   showSourceAccount = false,
   showCategory = true,
+  // When set, rows whose category (or its parent group) is excluded from totals get a quiet marker
+  // by the amount + a dimmed amount, so a list that sits next to a total which omits those rows
+  // explains the gap. Off by default: the plain Transactions/Categories ledgers show no totals, so
+  // there is nothing for the marker to reconcile against there.
+  markExcludedFromTotals = false,
   emptyMessage = 'No transactions found.',
   scrollRef = null,
   fillHeight = false,
@@ -224,6 +232,7 @@ export default function TransactionListTable({
         return (
           <TransactionAmountCell
             txn={txn}
+            showExcludedFromTotals={markExcludedFromTotals}
             onUpdateNote={(id, notes) => patchRows(id, { notes })}
             onUpdateTags={(id, tags) => patchRows(id, { tags })}
             onOpenDetail={onTransactionOpenDetail}

@@ -21,8 +21,15 @@ from fastapi import HTTPException
 
 from backend.db import control_database
 from backend.db.control_database import auth_required
-from backend.db.database import SHARED_OWNER_ID, _seed_default_categories, get_db, get_db_instance_id, init_db, reset_current_db_path, set_current_db_path
-from backend.routers.import_export.backup import RestoreRequest, build_backup_data, restore_backup
+from backend.db.database import CURRENT_VERSION, SHARED_OWNER_ID, _seed_default_categories, get_db, get_db_instance_id, init_db, reset_current_db_path, set_current_db_path
+from backend.routers.import_export.backup import (
+    CONTENT_HASH_FIELD,
+    RestoreRequest,
+    _verify_payload_content_hash,
+    build_backup_data,
+    restore_backup,
+)
+from backend.routers.import_export.backup import _zip_json_bytes, _load_json_or_zip_payload
 from backend.services.categorizer import seed_default_rules
 
 # Data-DB tables deliberately NOT in the regular backup (credentials/encryption config/schema meta).
@@ -171,15 +178,106 @@ class BackupRestoreTests(unittest.TestCase):
 
         self.assertEqual(self._counts(tables), before)
 
+    def test_restore_tolerates_since_removed_column(self):
+        # A backup taken before a column was dropped (the real case: category_rule.priority, removed
+        # once rule ordering became automatic) still carries that column in its payload. Restore must
+        # skip the column the live schema no longer has rather than failing with "no column named …".
+        self._seed_complete()
+        tables = self._user_data_tables()
+        before = self._counts(tables)
+
+        payload = self._export_payload()
+        self.assertTrue(payload["category_rules"], "fixture must include at least one rule")
+        for rule in payload["category_rules"]:
+            rule["priority"] = 5  # a column the current category_rule table does not define
+        payload.pop(CONTENT_HASH_FIELD, None)  # a backup old enough to carry priority predates the hash
+
+        with self._use_db_path():
+            restore_backup(RestoreRequest(data=payload))  # must not raise OperationalError
+
+        self.assertEqual(self._counts(tables), before)
+
     def test_restore_rejects_unsupported_version(self):
         with self._use_db_path():
             with self.assertRaises(HTTPException):
                 restore_backup(RestoreRequest(data={"version": 5, "owners": []}))
 
+    def test_backup_stamps_content_hash(self):
+        self._seed_complete()
+        payload = self._export_payload()
+        self.assertIn(CONTENT_HASH_FIELD, payload)
+        self.assertEqual(len(payload[CONTENT_HASH_FIELD]), 64)  # sha256 hex
+
+    def test_content_hash_survives_real_file_round_trip(self):
+        # The hash must be computed over a serialization that round-trips identically through the
+        # actual export → zip → json.loads path (float reprs, key order, unicode), or every restore
+        # would false-positive. Exercise that real path rather than hashing the in-memory dict twice.
+        self._seed_complete()
+        payload = self._export_payload()
+        reloaded = _load_json_or_zip_payload(
+            _zip_json_bytes("luma_backup.json", payload), "luma_backup.json.zip", "backup"
+        )
+        _verify_payload_content_hash(reloaded)  # must not raise
+        with self._use_db_path():
+            self.assertTrue(restore_backup(RestoreRequest(data=reloaded))["ok"])
+
+    def test_restore_rejects_tampered_payload(self):
+        # A content edit with the hash left intact is exactly the accidental-corruption case the hash
+        # exists to catch: restore must refuse before touching the target.
+        self._seed_complete()
+        tables = self._user_data_tables()
+        before = self._counts(tables)
+        payload = self._export_payload()
+        self.assertTrue(payload["owners"], "fixture must include an owner to tamper with")
+        payload["owners"][0]["name"] = payload["owners"][0]["name"] + " (tampered)"
+        with self._use_db_path():
+            with self.assertRaises(HTTPException) as ctx:
+                restore_backup(RestoreRequest(data=payload))
+        self.assertEqual(ctx.exception.status_code, 400)
+        # Refused before the wipe — the target is untouched.
+        self.assertEqual(self._counts(tables), before)
+
+    def test_backup_stamps_schema_version(self):
+        self._seed_complete()
+        payload = self._export_payload()
+        self.assertEqual(payload["schema_version"], CURRENT_VERSION)
+
+    def test_guard_blocks_backup_from_newer_schema(self):
+        # A backup made by a future build (higher schema level) can carry columns this build would
+        # silently drop on restore, so the guard must refuse it without force.
+        self._seed_complete()
+        payload = self._export_payload()
+        payload["schema_version"] = CURRENT_VERSION + 1
+        payload.pop(CONTENT_HASH_FIELD, None)  # not under test here; drop so the optional hash check no-ops
+        with self._use_db_path():
+            with self.assertRaises(HTTPException) as ctx:
+                restore_backup(RestoreRequest(data=payload))
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("newer_schema", ctx.exception.detail["reasons"])
+        # Force is the explicit escape hatch (the user accepts the lossy downgrade).
+        with self._use_db_path():
+            self.assertTrue(restore_backup(RestoreRequest(data=payload, force=True))["ok"])
+
+    def test_older_or_absent_schema_version_restores_without_force(self):
+        # An older backup (lower level) and a pre-schema_version backup (field absent) are both safe:
+        # columns this build has since added just take their defaults. Neither trips the guard.
+        self._seed_complete()
+        tables = self._user_data_tables()
+        before = self._counts(tables)
+        for mutate in (lambda p: p.update(schema_version=max(0, CURRENT_VERSION - 1)),
+                       lambda p: p.pop("schema_version", None)):
+            payload = self._export_payload()
+            mutate(payload)
+            payload.pop(CONTENT_HASH_FIELD, None)
+            with self._use_db_path():
+                restore_backup(RestoreRequest(data=payload))
+            self.assertEqual(self._counts(tables), before)
+
     def test_guard_blocks_foreign_backup_over_existing_data(self):
         self._seed_complete()
         payload = self._export_payload()
         payload["instance_id"] = "some-other-system"
+        payload.pop(CONTENT_HASH_FIELD, None)
         with self._use_db_path():
             with self.assertRaises(HTTPException) as ctx:
                 restore_backup(RestoreRequest(data=payload))
@@ -190,6 +288,7 @@ class BackupRestoreTests(unittest.TestCase):
         # No _seed_complete(): a fresh DB has no accounts/transactions, so a foreign backup may load.
         payload = self._export_payload()
         payload["instance_id"] = "some-other-system"
+        payload.pop(CONTENT_HASH_FIELD, None)
         with self._use_db_path():
             result = restore_backup(RestoreRequest(data=payload))
         self.assertTrue(result["ok"])
@@ -198,6 +297,7 @@ class BackupRestoreTests(unittest.TestCase):
         payload = self._export_payload()
         target_mode = "auth" if auth_required() else "local"
         payload["access_mode"] = "local" if target_mode == "auth" else "auth"
+        payload.pop(CONTENT_HASH_FIELD, None)
         with self._use_db_path():
             with self.assertRaises(HTTPException) as ctx:
                 restore_backup(RestoreRequest(data=payload))
@@ -208,6 +308,7 @@ class BackupRestoreTests(unittest.TestCase):
         self._seed_complete()
         payload = self._export_payload()
         payload["instance_id"] = "some-other-system"
+        payload.pop(CONTENT_HASH_FIELD, None)
         with self._use_db_path():
             result = restore_backup(RestoreRequest(data=payload, force=True))
         self.assertTrue(result["ok"])
@@ -219,6 +320,7 @@ class BackupRestoreTests(unittest.TestCase):
         self._seed_complete()
         payload = self._export_payload()
         payload["instance_id"] = "backup-origin-system"
+        payload.pop(CONTENT_HASH_FIELD, None)
         with self._use_db_path():
             restore_backup(RestoreRequest(data=payload, force=True))  # force: target had its own data
             with get_db() as conn:

@@ -23,6 +23,9 @@ function describeRestoreIncompatibility(detail) {
   if (reasons.includes('mode_mismatch')) {
     parts.push(`The backup was created in "${detail?.backup_mode || 'a different'}" access mode, but this system is running in "${detail?.target_mode || 'another'}" mode.`)
   }
+  if (reasons.includes('newer_schema')) {
+    parts.push(`This backup was made by a newer version of ${APP_NAME} (data format v${detail?.backup_schema_version ?? '?'}, this version reads v${detail?.target_schema_version ?? '?'}). Restoring it here may drop data this version can't represent — update ${APP_NAME} first if you can.`)
+  }
   return parts.join(' ') || 'This backup may not be compatible with the current system.'
 }
 

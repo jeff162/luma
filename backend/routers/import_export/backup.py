@@ -30,6 +30,7 @@ Depends only on `core` (and shared services); `core` never imports this module.
 """
 
 import csv
+import hashlib
 import io
 import json
 import os
@@ -46,7 +47,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from backend.db.database import get_db, get_db_instance_id
+from backend.db.database import CURRENT_VERSION, get_db, get_db_instance_id, get_db_version
 from backend.db.demo_data import is_demo_data_loaded
 from backend.db.control_database import auth_required
 from backend.time_utils import utcnow_iso
@@ -521,6 +522,42 @@ def export_transactions_csv(
         headers={"Content-Disposition": 'attachment; filename="luma_export.csv"'},
     )
 
+# Content integrity hash for the JSON backups. Embedded *in* the payload rather than added as a
+# sidecar ZIP member (the single-file ZIP contract in `_load_json_or_zip_payload` forbids a second
+# member) so it travels with both zipped and bare-`.json` uploads and rides into the encrypted inner
+# `payload.bin` for free. Restore recomputes it over the payload minus this field and refuses a
+# mismatch before the destructive wipe. The hash is computed over a canonical serialization
+# (sorted keys, compact separators, `default=str`) so it round-trips identically through the
+# export → file → `json.loads` → verify cycle. Encrypted backups are *additionally* protected by the
+# AES-256-GCM auth tag at decrypt time (a stronger, keyed check), so this hash is primarily the
+# integrity check for the plaintext path; it just comes along for the encrypted one at no cost.
+CONTENT_HASH_FIELD = "content_sha256"
+
+
+def _payload_content_hash(payload: dict) -> str:
+    material = {k: v for k, v in payload.items() if k != CONTENT_HASH_FIELD}
+    encoded = json.dumps(material, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _stamp_content_hash(payload: dict) -> dict:
+    payload[CONTENT_HASH_FIELD] = _payload_content_hash(payload)
+    return payload
+
+
+def _verify_payload_content_hash(payload: dict) -> None:
+    # Absent hash = a backup written before the field existed; there is nothing to check, and the
+    # restore proceeds (matching the additive treatment of `schema_version`).
+    claimed = payload.get(CONTENT_HASH_FIELD)
+    if not claimed:
+        return
+    if _payload_content_hash(payload) != claimed:
+        raise HTTPException(
+            status_code=400,
+            detail="This backup failed its integrity check (content hash mismatch) — the file is corrupted, truncated, or was edited after export.",
+        )
+
+
 def build_backup_data(conn) -> dict:
     """The full app-data backup payload (everything restore rebuilds). Extracted from the export
     endpoint so it can be exercised directly without unwrapping a StreamingResponse."""
@@ -528,8 +565,17 @@ def build_backup_data(conn) -> dict:
         q = query or f"SELECT * FROM {table} ORDER BY rowid"
         return [dict(r) for r in conn.execute(q).fetchall()]
 
-    return {
+    return _stamp_content_hash({
             "version":        7,
+            # Two independent version axes. `version` is the *payload format* (this JSON's shape),
+            # bumped by hand when the envelope changes; restore hard-rejects anything but the format
+            # it understands. `schema_version` is the *DB migration level* the data conforms to
+            # (`db_meta.version`), recorded so restore can tell an older backup (columns the schema has
+            # since added simply take their defaults) from one made by a newer build (which may carry
+            # columns/meaning this build can't represent — the restore guard refuses that downgrade
+            # unless forced). It is an additive field: older builds ignore it, and a backup written
+            # before it existed restores fine (absent → treated as "no newer-than-me claim").
+            "schema_version": get_db_version(conn),
             "exported_at":    utcnow_iso(),
             # System identity, so restore can tell "my own backup" from "a different system's", and
             # which access mode it came from. Used by the restore compatibility guard.
@@ -564,7 +610,7 @@ def build_backup_data(conn) -> dict:
             "account_pair_distinct": dump("account_pair_distinct"),
             # UI/layout preferences (page layouts, dashboard tag reports, …), keyed by scope_id.
             "ui_preferences": dump("ui_preference"),
-    }
+    })
 
 
 @router.get("/backup")
@@ -623,12 +669,12 @@ def export_credentials(request: Request, encrypted: bool = Query(False)):
         )
         item.pop("access_token_enc", None)
         exported_items.append(item)
-    payload = {
+    payload = _stamp_content_hash({
         "version":     1,
         "exported_at": utcnow_iso(),
         "warning":     "This file contains sensitive Plaid access tokens. Store securely.",
         "plaid_items": exported_items,
-    }
+    })
     if encrypted:
         if not recipients:
             raise HTTPException(status_code=400, detail="No enabled backup recipients are configured")
@@ -701,6 +747,9 @@ def restore_backup(body: RestoreRequest):
     d = body.data
     if d.get("version") != 7:
         raise HTTPException(status_code=400, detail="Unrecognized or unsupported backup version")
+    # Integrity check before anything destructive: a corrupted/truncated file must not get as far as
+    # wiping the target. No-op for older backups that predate the hash field.
+    _verify_payload_content_hash(d)
 
     # Demo data must be cleared first: a restore would replace it but leave the demo marker stale, and
     # mixing real data into a demo tenant breaks the "clear is always safe" contract. Refuse outright.
@@ -718,6 +767,7 @@ def restore_backup(body: RestoreRequest):
     if not body.force:
         backup_mode = d.get("access_mode")
         backup_instance = d.get("instance_id")
+        backup_schema = d.get("schema_version")
         target_mode = "auth" if auth_required() else "local"
         with get_db() as conn:
             target_instance = get_db_instance_id(conn)
@@ -727,12 +777,20 @@ def restore_backup(body: RestoreRequest):
             reasons.append("mode_mismatch")
         if has_data and backup_instance != target_instance:
             reasons.append("different_system")
+        # A backup from a *newer* schema than this build is the one direction that can lose data:
+        # restore drops columns this schema doesn't know (see insert_rows), so a column the newer
+        # build added with real content would vanish silently. Warn before that downgrade. The
+        # reverse — an older backup (or one with no schema_version) — is safe and never flagged.
+        if isinstance(backup_schema, int) and backup_schema > CURRENT_VERSION:
+            reasons.append("newer_schema")
         if reasons:
             raise HTTPException(status_code=409, detail={
                 "code": "restore_incompatible",
                 "reasons": sorted(set(reasons)),
                 "backup_mode": backup_mode,
                 "target_mode": target_mode,
+                "backup_schema_version": backup_schema,
+                "target_schema_version": CURRENT_VERSION,
             })
 
     owners = [dict(row) for row in d.get("owners", [])]
@@ -835,7 +893,14 @@ def restore_backup(body: RestoreRequest):
         def insert_rows(table, rows, exclude=()):
             if not rows:
                 return
-            sample = {k: v for k, v in rows[0].items() if k not in exclude}
+            # Restore must survive schema drift across versions: a backup taken before a column was
+            # dropped still carries that column in its payload (e.g. category_rule.priority, removed
+            # once rule ordering became automatic). Intersect the payload's keys with the columns the
+            # live table actually has so a since-removed column is skipped instead of failing the whole
+            # restore with "no column named …". The inverse — a backup predating a column the schema
+            # has since gained — already works: the column is simply absent and takes its default.
+            live_cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            sample = {k: v for k, v in rows[0].items() if k not in exclude and k in live_cols}
             cols = list(sample.keys())
             placeholders = ",".join("?" * len(cols))
             for row in rows:
@@ -919,6 +984,7 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
     d = body.data
     if d.get("version") != 1:
         raise HTTPException(status_code=400, detail="Unrecognized credentials backup version")
+    _verify_payload_content_hash(d)
     items = d.get("plaid_items", [])
     user = getattr(request.state, "user", None)
     with get_db() as conn:

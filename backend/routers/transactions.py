@@ -800,6 +800,7 @@ def list_transactions(
                 t.category_id,
                 c.name        AS category_name,
                 NULL          AS category_color,
+                COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) AS excluded_from_totals,
                 b.filename    AS import_batch_filename,
                 b.imported_at AS import_batch_imported_at,
                 o.name        AS owner_name,

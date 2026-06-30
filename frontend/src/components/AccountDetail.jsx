@@ -294,6 +294,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
                     onRowsChange={setLocalMonthTxns}
                     showAccount={false}
                     showSourceAccount={isMerged}
+                    markExcludedFromTotals
                     columnConfig={columnConfig}
                     onColumnConfigChange={setColumnConfig}
                     maxHeight={DETAIL_LIST_MAX_HEIGHT}
@@ -309,8 +310,13 @@ export default function AccountDetail({ account, categories = [], onClose, force
                     borderBottomLeftRadius: 8,
                     borderBottomRightRadius: 8,
                   }}>
-                    {selectedMonthRow?.count ? `${selectedMonthRow.count} matching · ` : ''}
+                    {selectedMonthRow?.count ? `${selectedMonthRow.count} in totals · ` : ''}
                     Total: {formatCurrency(selectedMonthRow?.total ?? localMonthTxns.reduce((s, t) => s + t.amount, 0))}
+                    {/* The total (and the chart above) omit excluded-from-totals rows like transfers; the
+                       rows stay listed and marked, so name the gap here rather than letting the count look wrong. */}
+                    {localMonthTxns.some(t => t.excluded_from_totals)
+                      ? ` · ${localMonthTxns.filter(t => t.excluded_from_totals).length} excluded`
+                      : ''}
                   </div>
                 </div>
               )}

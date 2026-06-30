@@ -9,7 +9,7 @@ import { formatDate } from '../lib/utils.js'
 import ImportBatchDetail from '../components/ImportBatchDetail.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
-import { AppConfirmDialog, Card, PageHeader, Spinner, EmptyState, Input, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, SelectAllCheckbox } from '../components/ui.jsx'
+import { AppConfirmDialog, Button, Card, PageHeader, Spinner, EmptyState, Input, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, SelectAllCheckbox } from '../components/ui.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
@@ -578,32 +578,24 @@ export default function Transactions() {
     return () => { cancelled = true }
   }, [menu?.txn?.id])
 
-  // Reflect a resolved category onto the page list. In "uncategorized only" mode a freshly
-  // categorized row should leave the list immediately instead of waiting for a refetch;
-  // otherwise it is patched in place. Shared by inline edits and by edits made inside an open
-  // transaction detail panel.
+  // Reflect a resolved category onto the page list in place — including in "uncategorized only" mode,
+  // where the freshly categorized row no longer matches the filter but is left visible (restyled with
+  // its new category) so a mis-tap stays correctable and the user can add a tag or note before moving
+  // on. The row is pruned only when the user re-queries with the Refresh button. Shared by inline edits
+  // and by edits made inside an open transaction detail panel.
   function reconcileCategorizedRow(txnId, cat) {
-    setData(prev => {
-      if (uncategorizedOnly) {
-        return {
-          ...prev,
-          total: prev.total - 1,
-          transactions: prev.transactions.filter(t => t.id !== txnId),
-        }
-      }
-      return {
-        ...prev,
-        transactions: prev.transactions.map(t =>
-          t.id === txnId ? {
-            ...t,
-            category_id: cat?.id ?? null,
-            category_name: cat?.name ?? null,
-            category_color: null,
-            category_overridden: 1,
-          } : t
-        ),
-      }
-    })
+    setData(prev => ({
+      ...prev,
+      transactions: prev.transactions.map(t =>
+        t.id === txnId ? {
+          ...t,
+          category_id: cat?.id ?? null,
+          category_name: cat?.name ?? null,
+          category_color: null,
+          category_overridden: 1,
+        } : t
+      ),
+    }))
   }
 
   function saveCategory(txnId, catId, catObj) {
@@ -991,6 +983,17 @@ export default function Transactions() {
             <FeatureExplainer topic="searching-transactions" placement="bottom-left" />
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* Edited rows are left in place so a mis-tap stays correctable (see reconcileCategorizedRow);
+              this re-queries on demand to drop rows that no longer match the active filter. */}
+            <Button
+              variant="ghost"
+              small
+              onClick={() => load({ append: false })}
+              disabled={initialLoading}
+              title="Re-query the list and drop transactions that no longer match"
+            >
+              ↻ Refresh
+            </Button>
             <button
               onClick={() => { setUncategorizedOnly(v => !v); isFirstLoad.current = true }}
               style={{

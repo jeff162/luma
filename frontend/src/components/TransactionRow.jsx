@@ -499,7 +499,7 @@ function TagStackChip({ tags, onClick }) {
   )
 }
 
-export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenDetail }) {
+export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenDetail, showExcludedFromTotals = false }) {
   const navigate = useNavigate()
   const unifiedDuplicatesViewer = useUnifiedDuplicatesViewer()
   const [showNote, setShowNote] = useState(false)
@@ -539,10 +539,18 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
 
   const useStack = visibleTags.length > TAG_INLINE_LIMIT
   const hasNote = !!txn.notes
+  // Surfaces that pair this list with a total which omits excluded-from-totals rows (the account
+  // activity panel) opt in via showExcludedFromTotals; the row then carries a quiet marker and a
+  // dimmed amount so the gap between the visible rows and the total reads as intentional.
+  const excludedFromTotals = showExcludedFromTotals && !!txn.excluded_from_totals
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, width: '100%', minWidth: 0 }}>
-      <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+      {/* Opaque, full-height background so when the strip overflows leftward onto a long neighbouring
+        column (e.g. a truncated account name) it cleanly *covers* that text instead of letting it show
+        through the gaps in the transparent glyphs — the same way one column cleanly hides another when
+        resized over it. paddingLeft keeps a small margin between the cut text and the first marker. */}
+      <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, alignSelf: 'stretch', background: 'var(--surface)', paddingLeft: 6 }}>
         {txn.suspect_duplicate_of ? (
           <Tooltip
             content={<span>Possible duplicate of another transaction. Click to review.</span>}
@@ -625,11 +633,28 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
             onClose={() => setShowTags(false)}
           />
         ) : null}
+        {excludedFromTotals ? (
+          <Tooltip
+            content={<span>Not counted in spending totals — its category is in a group excluded from totals (e.g. Transfers).</span>}
+            maxWidth={MAX_TAG_TOOLTIP_WIDTH}
+          >
+            <span
+              aria-label="Excluded from totals"
+              style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--muted)', fontSize: 13, cursor: 'default' }}
+            >
+              ⊘
+            </span>
+          </Tooltip>
+        ) : null}
       </div>
+      {/* The amount sits in a stable min-width slot so the marker strip to its left anchors at a
+        constant right edge instead of sliding around with the amount's magnitude — which is what made
+        the note/tag/⊘ markers fail to line up row-to-row. Markers grow leftward from that edge; a rare
+        5+ digit amount widens the slot and nudges them, but the common case lines up. */}
       <AmountDisplay
         amount={txn.amount}
         isPending={!!txn.is_pending}
-        style={{ display: 'flex', justifyContent: 'flex-end' }}
+        style={{ display: 'flex', justifyContent: 'flex-end', minWidth: 72, flexShrink: 0, ...(excludedFromTotals ? { opacity: 0.5 } : {}) }}
       />
       {onOpenDetail ? (
         <Tooltip content="Edit transaction…">
