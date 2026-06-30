@@ -400,7 +400,6 @@ function LocalPreferenceProfileScreen({
       title: 'Import a CSV file',
       summary: 'Load transactions from a bank, card, or spreadsheet export. The fastest way to start with your own data.',
       destination: '/import-export',
-      navState: { startFileImport: true },
     },
     {
       key: 'connect',

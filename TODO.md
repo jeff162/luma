@@ -173,20 +173,6 @@ mode or page.
 - Frontend: use a Sankey library or render directly with d3-sankey. Click
   on a flow to drill into the transactions on that path.
 
-### Dead `view='cash_flow'` branch on `/summary/monthly-trend`
-
-**Context.** The endpoint at `backend/routers/transactions.py` accepts
-`view='spending' | 'income' | 'cash_flow'`. After the Expenses/Income
-toggle replaced the broader cash-flow concept on the dashboard, no
-frontend caller passes `cash_flow` anymore.
-
-**Why deferred.** Harmless dead code; might be useful when the Sankey
-work lands.
-
-**Suggested approach when picked up.** Either delete the `cash_flow`
-branch (and adjust the default to `spending`) once it's clearly unused, or
-leave it and use it from the Sankey work — decide at that point.
-
 ### Trends-tab semantics audit when the tag-report selector lands there
 
 **Context.** The Trends tab's "Total per month" and "Annual totals" bar

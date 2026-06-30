@@ -58,11 +58,11 @@ export function UnifiedDuplicatesViewerProvider({ children }) {
   const reload = useCallback(async () => {
     const current = viewer
     if (!current?.batchId) return
-    const { batchId, title } = current
+    const { batchId, title, accountFilter } = current
     try {
       const result = await api.getBatchDuplicatesUnified(batchId)
       setViewer({
-        batchId, title, loading: false, error: '',
+        batchId, title, accountFilter: accountFilter || null, loading: false, error: '',
         entries: Array.isArray(result.entries) ? result.entries : [],
         hardRejectCount: Number(result.hard_reject_count || 0),
         softFlagCount: Number(result.soft_flag_count || 0),
@@ -78,16 +78,19 @@ export function UnifiedDuplicatesViewerProvider({ children }) {
     }
   }, [viewer])
 
-  const open = useCallback(async ({ batchId, title }) => {
+  // `accountFilter` ({ id, name }) scopes the report to one account's rows — used by the deep link
+  // from an empty account's detail panel so the user lands on exactly its skipped duplicates rather
+  // than scrolling the whole batch report.
+  const open = useCallback(async ({ batchId, title, accountFilter = null }) => {
     if (!batchId) return
     setViewer({
-      batchId, title, loading: true, error: '',
+      batchId, title, accountFilter, loading: true, error: '',
       entries: [], hardRejectCount: 0, softFlagCount: 0, ruleBreakdown: [], version: 0,
     })
     try {
       const result = await api.getBatchDuplicatesUnified(batchId)
       setViewer({
-        batchId, title, loading: false, error: '',
+        batchId, title, accountFilter, loading: false, error: '',
         entries: Array.isArray(result.entries) ? result.entries : [],
         hardRejectCount: Number(result.hard_reject_count || 0),
         softFlagCount: Number(result.soft_flag_count || 0),
@@ -96,11 +99,16 @@ export function UnifiedDuplicatesViewerProvider({ children }) {
       })
     } catch (err) {
       setViewer({
-        batchId, title, loading: false,
+        batchId, title, accountFilter, loading: false,
         error: err?.message || 'Could not load duplicate report.',
         entries: [], hardRejectCount: 0, softFlagCount: 0, ruleBreakdown: [], version: 0,
       })
     }
+  }, [])
+
+  // Clear the account scope without reloading — the dialog's "Show all" banner action.
+  const clearAccountFilter = useCallback(() => {
+    setViewer(prev => prev ? { ...prev, accountFilter: null } : prev)
   }, [])
 
   // ImportExport registers itself when mounted so drill-through can open a batch detail panel
@@ -156,8 +164,8 @@ export function UnifiedDuplicatesViewerProvider({ children }) {
   }, [])
 
   const value = useMemo(() => ({
-    viewer, open, close, reload, registerDrillThroughHandler, drillThrough, minimize, restore,
-  }), [viewer, open, close, reload, registerDrillThroughHandler, drillThrough, minimize, restore])
+    viewer, open, close, reload, registerDrillThroughHandler, drillThrough, minimize, restore, clearAccountFilter,
+  }), [viewer, open, close, reload, registerDrillThroughHandler, drillThrough, minimize, restore, clearAccountFilter])
 
   return (
     <UnifiedDuplicatesViewerContext.Provider value={value}>
@@ -171,7 +179,7 @@ export function UnifiedDuplicatesViewerProvider({ children }) {
 // the eager bundle; Suspense fallback is null because the dialog has its own loading state
 // and the chunk usually resolves before the user notices.
 export function UnifiedDuplicatesViewerRenderer() {
-  const { viewer, close, reload, drillThrough, minimize } = useUnifiedDuplicatesViewer()
+  const { viewer, close, reload, drillThrough, minimize, clearAccountFilter } = useUnifiedDuplicatesViewer()
   if (!viewer || viewer.minimized) return null
   return (
     <Suspense fallback={null}>
@@ -182,6 +190,8 @@ export function UnifiedDuplicatesViewerRenderer() {
         ruleBreakdown={viewer.ruleBreakdown}
         title={viewer.title}
         batchId={viewer.batchId}
+        accountFilter={viewer.accountFilter || null}
+        onClearAccountFilter={clearAccountFilter}
         loading={!!viewer.loading}
         error={viewer.error || ''}
         onClose={close}

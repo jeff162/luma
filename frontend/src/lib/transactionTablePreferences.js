@@ -9,13 +9,15 @@ const BASE_TRANSACTION_TABLE_COLUMNS = [
   { key: 'merchant', width: 260 },
   { key: 'category', width: 150 },
   { key: 'account', width: 140 },
+  { key: 'sourceAccount', width: 150 },
   { key: 'amount', width: 108 },
 ]
 
-function getExpectedColumns({ showCategory = true, showAccount = true }) {
+function getExpectedColumns({ showCategory = true, showAccount = true, showSourceAccount = false }) {
   return BASE_TRANSACTION_TABLE_COLUMNS.filter(column => (
     (column.key !== 'category' || showCategory) &&
-    (column.key !== 'account' || showAccount)
+    (column.key !== 'account' || showAccount) &&
+    (column.key !== 'sourceAccount' || showSourceAccount)
   ))
 }
 
@@ -51,15 +53,16 @@ export function useTransactionTableLayout({
   preferenceKey,
   showCategory = true,
   showAccount = true,
+  showSourceAccount = false,
 }) {
   const defaultColumns = useMemo(
-    () => buildTransactionTableDefaultColumnConfig({ showCategory, showAccount }),
-    [showAccount, showCategory],
+    () => buildTransactionTableDefaultColumnConfig({ showCategory, showAccount, showSourceAccount }),
+    [showAccount, showCategory, showSourceAccount],
   )
   const [stored, setStored] = useUserPreference(preferenceKey, null)
   const columns = useMemo(
-    () => normalizeTransactionTableColumnConfig(stored, { showCategory, showAccount }) || defaultColumns,
-    [stored, showCategory, showAccount, defaultColumns],
+    () => normalizeTransactionTableColumnConfig(stored, { showCategory, showAccount, showSourceAccount }) || defaultColumns,
+    [stored, showCategory, showAccount, showSourceAccount, defaultColumns],
   )
   return [columns, setStored]
 }

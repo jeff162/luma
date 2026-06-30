@@ -438,12 +438,17 @@ export function usePagedTransactions({ activeKey, loadPage }) {
   }
 }
 
-function YearTick({ x, y, payload }) {
+function YearTick({ x, y, payload, onSelect }) {
   if (!payload?.value) return null
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   const monthName = months[parseInt(payload.value.slice(5), 10) - 1] ?? ''
   return (
-    <g>
+    <g
+      onClick={onSelect ? () => onSelect(payload.value) : undefined}
+      style={onSelect ? { cursor: 'pointer' } : undefined}
+    >
+      {/* Transparent hit box so the whole tick cell — not just the glyphs — selects the month. */}
+      <rect x={x - 18} y={y} width={36} height={20} fill="transparent" />
       <text x={x} y={y + 12} textAnchor="middle" fill="var(--muted)" fontSize={10}>
         {monthName}
       </text>
@@ -539,9 +544,17 @@ export function DetailTrendChart({ trend, selectedMonth, onSelectMonth }) {
 
       <div style={{ height: 160, margin: needsNav ? '0 20px' : '0', position: 'relative' }}>
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={visible} margin={{ top: 28, right: 8, bottom: 8, left: 8 }} style={{ cursor: 'pointer' }}>
+          {/* Selecting a month happens at the chart level off the active category, so the whole vertical
+              column is a hit target — clicking the empty space above a tiny bar still selects its month.
+              The month tick below the axis is wired to the same handler for the same reason. */}
+          <BarChart
+            data={visible}
+            margin={{ top: 28, right: 8, bottom: 8, left: 8 }}
+            style={{ cursor: 'pointer' }}
+            onClick={state => { if (state?.activeLabel) onSelectMonth?.(state.activeLabel) }}
+          >
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-            <XAxis dataKey="month" tick={<YearTick data={visible} />} tickLine={false} axisLine={false} height={30} interval={0} minTickGap={0} />
+            <XAxis dataKey="month" tick={<YearTick data={visible} onSelect={onSelectMonth} />} tickLine={false} axisLine={false} height={30} interval={0} minTickGap={0} />
             <YAxis
               tickFormatter={formatSignedAxisTick}
               tick={{ fill: 'var(--muted)', fontSize: 10 }}
@@ -556,7 +569,6 @@ export function DetailTrendChart({ trend, selectedMonth, onSelectMonth }) {
                   key={i}
                   fill={entry.month === selectedMonth ? 'var(--accent2)' : 'var(--accent)'}
                   opacity={selectedMonth && entry.month !== selectedMonth ? 0.4 : 1}
-                  onClick={() => onSelectMonth?.(entry.month)}
                 />
               ))}
               <LabelList

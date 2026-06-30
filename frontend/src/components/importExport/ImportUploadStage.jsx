@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The upload-stage UI of the import flow: the data-source chooser (saved
-// profiles / "Skip" temporary draft / "+ New data source") and the CSV drop
-// zone, plus the inline rename of the selected source. Purely presentational —
-// all state and handlers live in ImportTab and are passed in as props; this
-// component only renders them and forwards the drop-zone / file-input refs.
+// The upload-stage UI of the import flow. By default it is a plain CSV drop zone: the dropped file's
+// header is matched to a saved data source automatically (handled in ImportTab), so the user does not
+// pick a source up front. The explicit data-source chooser (saved profiles / "Skip" temporary draft /
+// "+ New data source") is surfaced on demand — via "Choose a data source", "Change", or "Start over" —
+// and is what `chooserOpen` toggles. Purely presentational: all state and handlers live in ImportTab.
 
 import TransientTextInput from '../TransientTextInput.jsx'
 import { Spinner } from '../ui.jsx'
@@ -13,14 +13,15 @@ import { DataSourcePill } from './importPresentational.jsx'
 import { MANUAL_DATA_SOURCE_VALUE } from '../../lib/importExport/constants.js'
 
 export function ImportUploadStage({
-  uploadChoiceReady,
+  chooserOpen,
+  hasSelectedSource,
+  onOpenChooser,
+  onCloseChooser,
   uploadUsesManualDraft,
   uploadSelectionLabel,
-  isFirstRunSourceChoice,
   profiles,
   selectedUploadSource,
   selectUploadSource,
-  setSelectedUploadSource,
   editingSourceNameKey,
   getSourceNameEditKey,
   sourceNameDraft,
@@ -42,10 +43,11 @@ export function ImportUploadStage({
   demoLoaded = false,
 }) {
   const demoImportMessage = 'Imports are disabled while demo data is loaded — clear it from the banner above to import your own data.'
+  const dropEnabled = !chooserOpen && !demoLoaded
   return (
         <>
           <div style={{ width: '100%', display: 'grid', gap: 18 }}>
-            {uploadChoiceReady ? (
+            {!chooserOpen && hasSelectedSource ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>
                   Data source:{' '}
@@ -108,11 +110,7 @@ export function ImportUploadStage({
                 </div>
                 <button
                   type="button"
-                  onClick={() => {
-                    setSelectedUploadSource('')
-                    setShowUploadSourceCreate(false)
-                    setUploadSourceDraftName('')
-                  }}
+                  onClick={() => onOpenChooser?.()}
                   style={{
                     background: 'color-mix(in srgb, var(--surface2) 82%, var(--surface))',
                     border: '1px solid var(--border)',
@@ -133,28 +131,31 @@ export function ImportUploadStage({
               <div
                 ref={dropRef}
                 title={demoLoaded ? demoImportMessage : undefined}
-                onDragOver={e => { if (uploadChoiceReady && !demoLoaded) e.preventDefault() }}
-                onDrop={demoLoaded ? (e => e.preventDefault()) : handleDrop}
-                onClick={() => { if (uploadChoiceReady && !demoLoaded) fileInputRef.current?.click() }}
+                onDragOver={e => { if (dropEnabled) e.preventDefault() }}
+                onDrop={dropEnabled ? handleDrop : (e => e.preventDefault())}
+                onClick={() => { if (dropEnabled) fileInputRef.current?.click() }}
                 style={{
-                  border: `2px dashed ${uploadChoiceReady ? 'var(--border)' : 'color-mix(in srgb, var(--border) 78%, transparent)'}`,
+                  border: `2px dashed ${dropEnabled ? 'var(--border)' : 'color-mix(in srgb, var(--border) 78%, transparent)'}`,
                   borderRadius: 12,
                   padding: '48px 32px',
                   textAlign: 'center',
-                  cursor: demoLoaded ? 'not-allowed' : (uploadChoiceReady ? 'pointer' : 'default'),
-                  background: uploadChoiceReady ? 'var(--surface2)' : 'color-mix(in srgb, var(--surface2) 65%, var(--surface))',
+                  cursor: demoLoaded ? 'not-allowed' : (dropEnabled ? 'pointer' : 'default'),
+                  background: dropEnabled ? 'var(--surface2)' : 'color-mix(in srgb, var(--surface2) 65%, var(--surface))',
                   marginBottom: 24,
-                  opacity: (uploadChoiceReady && !demoLoaded) ? 1 : 0.72,
+                  opacity: dropEnabled ? 1 : 0.72,
                 }}
                 onMouseEnter={e => {
-                  if (uploadChoiceReady) e.currentTarget.style.borderColor = 'var(--accent)'
+                  if (dropEnabled) e.currentTarget.style.borderColor = 'var(--accent)'
                 }}
                 onMouseLeave={e => {
-                  e.currentTarget.style.borderColor = uploadChoiceReady ? 'var(--border)' : 'color-mix(in srgb, var(--border) 78%, transparent)'
+                  e.currentTarget.style.borderColor = dropEnabled ? 'var(--border)' : 'color-mix(in srgb, var(--border) 78%, transparent)'
                 }}
               >
-                {!uploadChoiceReady ? (
-                  <div style={{ display: 'grid', justifyItems: 'center', gap: 12, width: 'min(760px, 100%)', maxWidth: '100%', margin: '0 auto 28px', textAlign: 'center' }}>
+                {chooserOpen ? (
+                  <div
+                    onClick={e => e.stopPropagation()}
+                    style={{ display: 'grid', justifyItems: 'center', gap: 12, width: 'min(760px, 100%)', maxWidth: '100%', margin: '0 auto 28px', textAlign: 'center', cursor: 'default' }}
+                  >
                     <div style={{ display: 'grid', gap: 6, justifyItems: 'center' }}>
                       <div style={{
                         maxWidth: 620,
@@ -187,120 +188,106 @@ export function ImportUploadStage({
                       <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
                         Available choices
                       </div>
-                      {profiles.length > 0 ? (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'center' }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'center' }}>
+                        <DataSourcePill
+                          label="Skip"
+                          selected={uploadUsesManualDraft}
+                          onClick={() => selectUploadSource(MANUAL_DATA_SOURCE_VALUE, { persist: false })}
+                          title="Use a temporary draft instead of a saved data source"
+                          showMarker={false}
+                        />
+                        {profiles.map(profile => (
                           <DataSourcePill
-                            label="Skip"
-                            selected={uploadUsesManualDraft}
-                            onClick={() => selectUploadSource(MANUAL_DATA_SOURCE_VALUE, { persist: false })}
-                            title="Use a temporary draft instead of a saved data source"
-                            showMarker={false}
-                            emphasis={isFirstRunSourceChoice ? 'recommended' : 'normal'}
+                            key={profile.id}
+                            label={profile.name}
+                            selected={selectedUploadSource === profile.id}
+                            onClick={() => selectUploadSource(profile.id)}
+                            title="Use this saved data source"
                           />
-                          {profiles.map(profile => (
-                            <DataSourcePill
-                              key={profile.id}
-                              label={profile.name}
-                              selected={selectedUploadSource === profile.id}
-                              onClick={() => selectUploadSource(profile.id)}
-                              title="Use this saved data source"
+                        ))}
+                        {showUploadSourceCreate ? (
+                          <div style={{ display: 'inline-flex', alignItems: 'center' }}>
+                            <TransientTextInput
+                              value={uploadSourceDraftName}
+                              onChange={setUploadSourceDraftName}
+                              placeholder="Data source name"
+                              onCommit={createUploadDataSource}
+                              onCancel={() => {
+                                setShowUploadSourceCreate(false)
+                                setUploadSourceDraftName('')
+                              }}
+                              restoreOnEscape
+                              onBlurCommit={false}
+                              style={{
+                                minWidth: 190,
+                                background: 'var(--surface2)',
+                                color: 'var(--text)',
+                                border: '1px solid var(--accent)',
+                                borderRadius: 999,
+                                padding: '8px 14px',
+                                fontSize: 13,
+                                outline: 'none',
+                              }}
                             />
-                          ))}
-                          {showUploadSourceCreate ? (
-                            <div style={{ display: 'inline-flex', alignItems: 'center' }}>
-                              <TransientTextInput
-                                value={uploadSourceDraftName}
-                                onChange={setUploadSourceDraftName}
-                                placeholder="Data source name"
-                                onCommit={createUploadDataSource}
-                                onCancel={() => {
-                                  setShowUploadSourceCreate(false)
-                                  setUploadSourceDraftName('')
-                                }}
-                                restoreOnEscape
-                                onBlurCommit={false}
-                                style={{
-                                  minWidth: 190,
-                                  background: 'var(--surface2)',
-                                  color: 'var(--text)',
-                                  border: '1px solid var(--accent)',
-                                  borderRadius: 999,
-                                  padding: '8px 14px',
-                                  fontSize: 13,
-                                  outline: 'none',
-                                }}
-                              />
-                            </div>
-                          ) : (
-                            <DataSourcePill
-                              label="+ New data source"
-                              selected={false}
-                              onClick={() => setShowUploadSourceCreate(true)}
-                              title="Create a saved data source"
-                              showMarker={false}
-                              emphasis={isFirstRunSourceChoice ? 'secondary' : 'normal'}
-                            />
-                          )}
-                        </div>
-                      ) : (
-                        <div style={{ display: 'grid', justifyItems: 'center', gap: 12 }}>
-                          <div style={{ width: '100%', textAlign: 'center', fontSize: 13, color: 'var(--muted)' }}>
-                            {'<'}<span style={{ fontStyle: 'italic' }}>empty</span>{'>'}
                           </div>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, width: '100%', justifyContent: 'center' }}>
-                            <DataSourcePill
-                              label="Skip"
-                              selected={uploadUsesManualDraft}
-                              onClick={() => selectUploadSource(MANUAL_DATA_SOURCE_VALUE, { persist: false })}
-                              title="Use a temporary draft instead of a saved data source"
-                              showMarker={false}
-                              emphasis={isFirstRunSourceChoice ? 'recommended' : 'normal'}
-                            />
-                            {showUploadSourceCreate ? (
-                              <div style={{ display: 'inline-flex', alignItems: 'center' }}>
-                                <TransientTextInput
-                                  value={uploadSourceDraftName}
-                                  onChange={setUploadSourceDraftName}
-                                  placeholder="Data source name"
-                                  onCommit={createUploadDataSource}
-                                  onCancel={() => {
-                                    setShowUploadSourceCreate(false)
-                                    setUploadSourceDraftName('')
-                                  }}
-                                  restoreOnEscape
-                                  onBlurCommit={false}
-                                  style={{
-                                    minWidth: 190,
-                                    background: 'var(--surface2)',
-                                    color: 'var(--text)',
-                                    border: '1px solid var(--accent)',
-                                    borderRadius: 999,
-                                    padding: '8px 14px',
-                                    fontSize: 13,
-                                    outline: 'none',
-                                  }}
-                                />
-                              </div>
-                            ) : (
-                              <DataSourcePill
-                                label="+ New data source"
-                                selected={false}
-                                onClick={() => setShowUploadSourceCreate(true)}
-                                title="Create a saved data source"
-                                showMarker={false}
-                                emphasis={isFirstRunSourceChoice ? 'secondary' : 'normal'}
-                              />
-                            )}
-                          </div>
-                        </div>
-                      )}
+                        ) : (
+                          <DataSourcePill
+                            label="+ New data source"
+                            selected={false}
+                            onClick={() => setShowUploadSourceCreate(true)}
+                            title="Create a saved data source"
+                            showMarker={false}
+                          />
+                        )}
+                      </div>
+                      {onCloseChooser ? (
+                        <button
+                          type="button"
+                          onClick={() => onCloseChooser()}
+                          style={{
+                            justifySelf: 'center',
+                            background: 'none',
+                            border: 'none',
+                            padding: '2px 4px',
+                            fontSize: 12,
+                            color: 'var(--muted)',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Cancel — just drop a file
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 ) : null}
-                <div style={{ fontSize: 32, marginBottom: 12 }}>{uploadChoiceReady ? '📂' : '🧭'}</div>
+                <div style={{ fontSize: 32, marginBottom: 12 }}>{chooserOpen ? '🧭' : '📂'}</div>
                 <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>
-                  {demoLoaded ? 'Imports are disabled while demo data is loaded' : uploadChoiceReady ? 'Drop a CSV file here, or click to browse' : (profiles.length === 0 ? 'Create a data source or select skip to begin' : 'Choose a data source or select skip to begin')}
+                  {demoLoaded
+                    ? 'Imports are disabled while demo data is loaded'
+                    : chooserOpen
+                      ? (profiles.length === 0 ? 'Create a data source or select skip to begin' : 'Choose a data source or select skip to begin')
+                      : 'Drop a CSV file here, or click to browse'}
                 </div>
+                {!chooserOpen && !hasSelectedSource && !demoLoaded ? (
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                    The matching data source is detected automatically.{' '}
+                    <button
+                      type="button"
+                      onClick={e => { e.stopPropagation(); onOpenChooser?.() }}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        padding: 0,
+                        fontSize: 12,
+                        color: 'var(--accent2)',
+                        cursor: 'pointer',
+                        textDecoration: 'underline',
+                      }}
+                    >
+                      Choose a data source
+                    </button>
+                  </div>
+                ) : null}
                 <input
                   ref={fileInputRef}
                   id="csv-file-input"

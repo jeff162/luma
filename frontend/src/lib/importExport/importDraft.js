@@ -235,3 +235,15 @@ export function profileHeaderClearlyMismatches(profile, previewLike) {
   const previewHeader = String(previewLike?.header_fingerprint || '').trim()
   return !!profileHeader && !!previewHeader && profileHeader !== previewHeader
 }
+
+// Saved data sources whose header signature matches the dropped file. This is the basis for the
+// auto-detect upload flow: one match applies straight away, several let the user choose, none falls
+// back to a temporary draft. A profile with no stored fingerprint never auto-matches (we can't claim
+// it fits), and a file with no fingerprint matches nothing.
+export function findProfilesMatchingPreview(previewLike, profiles) {
+  const previewHeader = String(previewLike?.header_fingerprint || '').trim()
+  if (!previewHeader) return []
+  return (profiles || []).filter(
+    profile => String(profile?.header_fingerprint || '').trim() === previewHeader,
+  )
+}

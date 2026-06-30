@@ -237,6 +237,19 @@ def _append_effective_account_filter(clauses, params, *, account_id: Optional[st
         params.append(account_id)
 
 
+def _append_source_account_filter(clauses, params, *, source_account_ids: Optional[str]):
+    # Filters on the row's *original* (source) account — t.account_id directly — rather than the
+    # effective/top-level account the `account_ids` filter resolves through COALESCE(parent, id).
+    # This is what lets a merged-account report narrow to one underlying child account: every row in
+    # the report already shares the same effective (parent) account, so only the source distinguishes them.
+    if source_account_ids and isinstance(source_account_ids, str):
+        ids = [i.strip() for i in source_account_ids.split(',') if i.strip()]
+        if ids:
+            placeholders = ','.join('?' * len(ids))
+            clauses.append(f"t.account_id IN ({placeholders})")
+            params.extend(ids)
+
+
 def _append_tag_filter(clauses, params, *, tag_ids: Optional[str]):
     if not tag_ids or not isinstance(tag_ids, str):
         return
@@ -544,7 +557,7 @@ def _parse_quick_filter_amount(value: str) -> Optional[Decimal]:
 def _build_transaction_filter(
     *,
     month=None, date_start=None, date_end=None, import_batch_id=None,
-    account_id=None, account_ids=None, category_id=None, group_ids=None,
+    account_id=None, account_ids=None, source_account_ids=None, category_id=None, group_ids=None,
     category_ids=None, tag_ids=None, owner_ids=None, payees=None,
     direction=None, view=None, search=None, quick_filter=None, ids=None,
     include_trashed=False,
@@ -583,6 +596,7 @@ def _build_transaction_filter(
             clauses.append(f"t.id IN ({','.join('?' * len(id_list))})")
             params.extend(id_list)
     _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
+    _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
     if _append_uncategorized_filter(clauses, params, category_id=category_id):
         pass
     elif category_id and category_id.startswith("__group__"):
@@ -712,7 +726,8 @@ def list_transactions(
     sort_by:      Optional[str] = Query("date", description="date | merchant | category | account | amount"),
     sort_dir:     Optional[str] = Query("desc", description="asc | desc"),
     account_id:   Optional[str] = Query(None),
-    account_ids:  Optional[str] = Query(None, description="comma-separated account IDs"),
+    account_ids:  Optional[str] = Query(None, description="comma-separated account IDs (effective/top-level account)"),
+    source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
     category_id:  Optional[str] = Query(None),
     group_ids:    Optional[str] = Query(None, description="comma-separated group IDs"),
     category_ids: Optional[str] = Query(None, description="comma-separated category IDs"),
@@ -735,7 +750,8 @@ def list_transactions(
 
     clauses, params = _build_transaction_filter(
         month=month, date_start=date_start, date_end=date_end, import_batch_id=import_batch_id,
-        account_id=account_id, account_ids=account_ids, category_id=category_id, group_ids=group_ids,
+        account_id=account_id, account_ids=account_ids, source_account_ids=source_account_ids,
+        category_id=category_id, group_ids=group_ids,
         category_ids=category_ids, tag_ids=tag_ids, owner_ids=owner_ids, payees=payees,
         direction=direction, view=view, search=search, quick_filter=quick_filter, ids=ids,
         include_trashed=include_trashed,
@@ -1044,8 +1060,8 @@ def trash_transaction(txn_id: str):
 
 _BULK_FILTER_KEYS = {
     "month", "date_start", "date_end", "import_batch_id", "account_id", "account_ids",
-    "category_id", "group_ids", "category_ids", "tag_ids", "owner_ids", "payees",
-    "direction", "view", "search", "quick_filter",
+    "source_account_ids", "category_id", "group_ids", "category_ids", "tag_ids", "owner_ids",
+    "payees", "direction", "view", "search", "quick_filter",
 }
 
 
@@ -1472,6 +1488,7 @@ def monthly_trend(
     payee:       Optional[str] = Query(None),
     account_id:  Optional[str] = Query(None),
     account_ids: Optional[str] = Query(None),
+    source_account_ids: Optional[str] = Query(None, description="comma-separated source (original) account IDs — narrows a merged-account view to specific underlying accounts"),
     tag_ids:     Optional[str] = Query(None),
     owner_ids:   Optional[str] = Query(None),
     category_ids: Optional[str] = Query(None, description="comma-separated leaf category IDs"),
@@ -1517,6 +1534,13 @@ def monthly_trend(
         elif category_id:
             clauses.append("t.category_id = ?")
             params.append(category_id)
+        # Spending/income trends classify by category_type, so transactions in a *type-less* category
+        # (imported labels parked under `Unassigned`, not yet organized) do NOT appear in these trends —
+        # only uncategorized rows get a sign-based fallback. This is why such a trend can read lower than
+        # the headline total, which counts the Unassigned group via by-group's NET. Do NOT "fix" this by
+        # extending the sign fallback to type-less categorized rows: Unassigned is dominated by offsetting
+        # transfers (e.g. card payments) that net small per-group but gross up enormously per-transaction
+        # (measured ~12x). The real resolution is organizing/ typing the imported categories.
         elif view == "spending":
             clauses.append(
                 "(COALESCE(c.category_type, p.category_type) = 'expense' "
@@ -1540,6 +1564,7 @@ def monthly_trend(
             )
 
     _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
+    _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
     _append_tag_filter(clauses, params, tag_ids=tag_ids)
     _append_owner_filter(clauses, params, owner_ids=owner_ids)
     _append_group_filter(clauses, params, group_ids=group_ids)
@@ -1559,7 +1584,7 @@ def monthly_trend(
     anchor_latest = anchor == "latest" and not date_start and not date_end and not payee
 
     if (not date_start and not date_end and not payee and not account_id and not account_ids
-            and not anchor_latest):
+            and not source_account_ids and not anchor_latest):
         # The generic trends view stays bounded by a rolling window so dashboards do not turn into unbounded
         # all-history scans unless the caller explicitly asked for that.
         clauses.append("t.date >= date('now', ? || ' months')")

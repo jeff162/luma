@@ -30,6 +30,7 @@ from backend.db.database import SHARED_OWNER_NAME, SHARED_OWNER_ID, get_db
 from backend.json_utils import safe_json_dict
 from backend.time_utils import utcnow_iso
 from backend.services.duplicate_detection import (
+    account_skipped_duplicate_summary,
     clear_account_pair_distinct_for_merge,
     forget_account_pair_distinct,
     list_distinct_account_pairs,
@@ -502,6 +503,18 @@ def list_account_tags(account_id: str):
             (account_id,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# Explains an account with little/no visible activity: how many of its imported rows were skipped or
+# removed as duplicates of transactions already present, and on which accounts/source files those live.
+# The account-detail panel surfaces this and deep-links into the duplicate report scoped to the account.
+@router.get("/{account_id}/duplicate-summary")
+def get_account_duplicate_summary(account_id: str):
+    with get_db() as conn:
+        acc = conn.execute("SELECT id FROM account WHERE id = ?", (account_id,)).fetchone()
+        if not acc:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return account_skipped_duplicate_summary(conn, account_id)
 
 
 @router.put("/{account_id}/tags")

@@ -38,7 +38,6 @@ export const EXPORT_COLUMNS = [
 export const DEFAULT_EXPORT_COLS = ['date', 'merchant_name', 'amount', 'account', 'category']
 export const IMPORT_CONFIG_MAX_WIDTH = 'min(900px, 100%)'
 export const MANUAL_DATA_SOURCE_VALUE = '__skip_for_now__'
-export const LAST_IMPORT_DATA_SOURCE_PREF_KEY = 'import.lastDataSourceId'
 export const EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY = 'import.expandedDataSourceRows'
 export const DATA_SOURCE_MANAGER_POS_PREF_KEY = 'import.dataSourceManagerPos'
 export const DUPLICATE_ROWS_COLUMNS_PREF_KEY = 'ui.import.duplicateRows.columns'

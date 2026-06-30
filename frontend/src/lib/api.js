@@ -206,6 +206,7 @@ export const api = {
       ...(date_end ? { date_end } : {}),
       ...(opts.anchor ? { anchor: opts.anchor } : {}),
       ...csvParam('tag_ids', tag_ids),
+      ...csvParam('source_account_ids', opts.source_account_ids),
       ...(view ? { view } : {}),
       ...csvParam('owner_ids', owner_ids),
       ...summaryFilterParams(opts),
@@ -267,6 +268,9 @@ export const api = {
   getCategoryUsageSummary: () => request('/categories/usage-summary'),
   createCategory: (data) => request('/categories', { method: 'POST', body: JSON.stringify(data) }),
   getAccountTags: (id) => request(`/accounts/${id}/tags`),
+  // Explains an account with little/no activity: how many of its imported rows were skipped/removed
+  // as duplicates, and which accounts/source files the matched existing transactions live on.
+  getAccountDuplicateSummary: (id) => request(`/accounts/${id}/duplicate-summary`),
   setAccountTags: (id, tag_ids) =>
     request(`/accounts/${id}/tags`, { method: 'PUT', body: JSON.stringify({ tag_ids }) }),
   getInactiveCategories: () => request('/categories/inactive'),

@@ -114,6 +114,63 @@ export function DataSourceMismatchDialog({
   )
 }
 
+// The dropped file's header matches more than one saved data source, so we can't pick automatically;
+// the user chooses which to apply (or a temporary draft). Every listed profile is a genuine header
+// match, so they all carry the likely-match marker.
+export function MultipleSourceMatchDialog({
+  matches = [],
+  fileHeaderFingerprint = '',
+  onSelectProfile,
+  onSelectTemporaryDraft,
+  onCancel,
+}) {
+  if (!matches.length) return null
+  return (
+    <OverlayBackdrop zIndex={1200} tint="rgba(15, 23, 42, 0.38)">
+      <FloatingPanel style={{ width: 'min(560px, 100%)' }}>
+        <FloatingPanelHeader style={{ padding: '16px 20px' }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 600 }}>Which data source?</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+              This file matches more than one saved data source. Pick the one to use, or skip to use a temporary draft.
+            </div>
+          </div>
+        </FloatingPanelHeader>
+        <div style={{ padding: 20, display: 'grid', gap: 12 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'center' }}>
+            {matches.map(profile => (
+              <DataSourcePill
+                key={profile.id}
+                label={profile.name}
+                selected={false}
+                onClick={() => onSelectProfile?.(profile.id)}
+                title="Use this saved data source"
+                likelyMatch={
+                  !!fileHeaderFingerprint &&
+                  !!profile.header_fingerprint &&
+                  profile.header_fingerprint === fileHeaderFingerprint
+                }
+              />
+            ))}
+            <DataSourcePill
+              label="Skip"
+              selected={false}
+              onClick={onSelectTemporaryDraft}
+              title="Use a temporary draft for this file"
+              showMarker={false}
+            />
+          </div>
+        </div>
+        <DialogActions align="center">
+          <Button variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+        </DialogActions>
+      </FloatingPanel>
+    </OverlayBackdrop>
+  )
+}
+
 export function CompatibleBatchAttachDialog({ prompt, onConfirm, onCancel, attaching = false }) {
   if (!prompt) return null
   const batches = Array.isArray(prompt.batches) ? prompt.batches : []

@@ -27,15 +27,20 @@ const COLUMN_DEFS = {
   merchant: { key: 'merchant', label: 'Merchant', defaultWidth: 260, minWidth: 150 },
   category: { key: 'category', label: 'Category', defaultWidth: 150, minWidth: 110 },
   account: { key: 'account', label: 'Account', defaultWidth: 140, minWidth: 110 },
+  // The original (source) account a row came from. Distinct from `account`, which shows the
+  // effective/top-level account — identical for every row inside a merged-account report and so
+  // surfaced only there (see AccountDetail), where it tells the merged children apart.
+  sourceAccount: { key: 'sourceAccount', label: 'Account', defaultWidth: 150, minWidth: 110 },
   amount: { key: 'amount', label: 'Amount', defaultWidth: 108, minWidth: 88, align: 'end' },
 }
 
-function getAvailableColumns({ showCategory, showAccount }) {
+function getAvailableColumns({ showCategory, showAccount, showSourceAccount }) {
   return [
     COLUMN_DEFS.date,
     COLUMN_DEFS.merchant,
     ...(showCategory ? [COLUMN_DEFS.category] : []),
     ...(showAccount ? [COLUMN_DEFS.account] : []),
+    ...(showSourceAccount ? [COLUMN_DEFS.sourceAccount] : []),
     COLUMN_DEFS.amount,
   ]
 }
@@ -50,6 +55,7 @@ function compareRows(a, b, key, sign) {
   if (key === 'merchant') return sign * String(getTxnMerchantLabel(a) || '').localeCompare(String(getTxnMerchantLabel(b) || ''))
   if (key === 'category') return sign * String(a.category_name || '').localeCompare(String(b.category_name || ''))
   if (key === 'account') return sign * String(a.account_name || '').localeCompare(String(b.account_name || ''))
+  if (key === 'sourceAccount') return sign * String(a.source_account_raw_name || '').localeCompare(String(b.source_account_raw_name || ''))
   if (key === 'amount') return sign * ((Number(a.amount) || 0) - (Number(b.amount) || 0))
   return 0
 }
@@ -98,6 +104,7 @@ export default function TransactionListTable({
   getRowStyle,
   maxHeight = 420,
   showAccount = true,
+  showSourceAccount = false,
   showCategory = true,
   emptyMessage = 'No transactions found.',
   scrollRef = null,
@@ -135,7 +142,7 @@ export default function TransactionListTable({
     return [...rows].sort((a, b) => compareRows(a, b, sortState.key, sign))
   }, [rows, externallyControlled, sortState])
 
-  const availableColumns = getAvailableColumns({ showCategory, showAccount })
+  const availableColumns = getAvailableColumns({ showCategory, showAccount, showSourceAccount })
   const interactiveColumns = normalizeInteractiveColumns(columnConfig, availableColumns)
 
   function patchRows(txnId, patch) {
@@ -196,6 +203,21 @@ export default function TransactionListTable({
             }}
           >
             {txn.account_name}{txn.account_mask ? ` ···${txn.account_mask}` : ''}
+          </span>
+        )
+      case 'sourceAccount':
+        return (
+          <span
+            title={txn.source_account_raw_name || ''}
+            style={{
+              color: 'var(--muted)',
+              fontSize: 12,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {txn.source_account_raw_name || ''}
           </span>
         )
       case 'amount':

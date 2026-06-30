@@ -28,6 +28,7 @@ import {
 import { ImportErrorBoundary } from '../components/importExport/ImportErrorBoundary.jsx'
 import {
   DataSourceMismatchDialog,
+  MultipleSourceMatchDialog,
   CompatibleBatchAttachDialog,
   DuplicateImportConfirmDialog,
   PossibleAccountMatchChooserDialog,
@@ -55,6 +56,7 @@ import {
   doesDraftMatchPreview,
   getSuggestedDataSourceName,
   profileHeaderClearlyMismatches,
+  findProfilesMatchingPreview,
 } from '../lib/importExport/importDraft.js'
 import {
   summarizeImportOutcome,
@@ -81,7 +83,6 @@ import {
   DATE_FORMATS,
   IMPORT_CONFIG_MAX_WIDTH,
   MANUAL_DATA_SOURCE_VALUE,
-  LAST_IMPORT_DATA_SOURCE_PREF_KEY,
   EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY,
   DATA_SOURCE_MANAGER_POS_PREF_KEY,
   IMPORTED_CATEGORY_SCOPE_FILTERED,
@@ -135,7 +136,6 @@ function ImportTab() {
   const navigate = useNavigate()
   const { dbInstanceId, preferenceSubjectId } = useAppSession()
   const [defaultImportCategoryUsageMode] = useUserPreference(IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY, IMPORT_CATEGORY_USAGE_MODE_PER_SOURCE)
-  const [lastImportDataSourceId, setLastImportDataSourceId] = useUserPreference(LAST_IMPORT_DATA_SOURCE_PREF_KEY, '')
   const [expandedSourceRows, setExpandedSourceRows] = useUserPreference(EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY, {})
   const [savedDataSourceManagerPos, setSavedDataSourceManagerPos] = useUserPreference(DATA_SOURCE_MANAGER_POS_PREF_KEY, null)
   const [stage, setStage] = useState('upload')
@@ -151,8 +151,12 @@ function ImportTab() {
   const dropRef = useRef(null)
   const fileInputRef = useRef(null)
   const [selectedUploadSource, setSelectedUploadSource] = useState('')
-  const [uploadSourcesReady, setUploadSourcesReady] = useState(false)
-  const [startupUploadSourceApplied, setStartupUploadSourceApplied] = useState(false)
+  // The upload screen defaults to a plain drop zone that auto-detects the data source from the file.
+  // `sourceChooserOpen` surfaces the explicit data-source picker instead — opened from "Start over",
+  // the upload-screen "Choose a data source" link, or "Change". `pendingSourceMatchChoice` holds a
+  // previewed file that matched more than one saved source until the user picks which to use.
+  const [sourceChooserOpen, setSourceChooserOpen] = useState(false)
+  const [pendingSourceMatchChoice, setPendingSourceMatchChoice] = useState(null)
   const [showUploadSourceCreate, setShowUploadSourceCreate] = useState(false)
   const [uploadSourceDraftName, setUploadSourceDraftName] = useState('')
   const [creatingUploadSource, setCreatingUploadSource] = useState(false)
@@ -277,7 +281,6 @@ function ImportTab() {
       setAccounts(a)
       setCategories(c)
       setBatches(b)
-      setUploadSourcesReady(true)
     })
   }, [])
 
@@ -300,9 +303,7 @@ function ImportTab() {
     [profiles, selectedUploadSource]
   )
   const uploadUsesManualDraft = selectedUploadSource === MANUAL_DATA_SOURCE_VALUE
-  const uploadChoiceReady = !!selectedUploadSource
-  const showingInitialSourceChooser = !uploadChoiceReady
-  const isFirstRunSourceChoice = showingInitialSourceChooser && profiles.length === 0
+  const hasSelectedUploadSource = !!selectedUploadSource
   const uploadSelectionLabel = activeUploadProfile?.name || (uploadUsesManualDraft ? 'Temporary draft' : '')
   // The Group Imported Categories workspace is App-level now (ImportedCategoryWorkspaceContext); this
   // page only needs the opener and the count for its file-card button. The count comes from this page's
@@ -385,46 +386,24 @@ function ImportTab() {
     api.listBatches().then(setBatches).catch(() => {})
   }, [viewerVersion])
 
-  function selectUploadSource(nextSourceId, options = {}) {
-    const { persist = true } = options
+  // Choosing a source (explicitly from the picker, or resolved by auto-detect) settles the upload
+  // screen back to the drop zone with that source applied.
+  function selectUploadSource(nextSourceId) {
     setSelectedUploadSource(nextSourceId)
-    if (persist && nextSourceId && nextSourceId !== MANUAL_DATA_SOURCE_VALUE) {
-      setLastImportDataSourceId(nextSourceId).catch(() => { })
-    } else if (!persist || nextSourceId === MANUAL_DATA_SOURCE_VALUE || !nextSourceId) {
-      setLastImportDataSourceId('').catch(() => { })
-    }
+    setSourceChooserOpen(false)
   }
 
   function getSourceNameEditKey(location, profileId) {
     return `${location}:${profileId || ''}`
   }
 
-  useEffect(() => {
-    if (!uploadSourcesReady || startupUploadSourceApplied) return
-    if (lastImportDataSourceId && profiles.some(profile => profile.id === lastImportDataSourceId)) {
-      setSelectedUploadSource(lastImportDataSourceId)
-    } else {
-      if (lastImportDataSourceId) {
-        setLastImportDataSourceId('').catch(() => { })
-      }
-      // Arriving straight from the welcome "Import a CSV file" choice: skip the data-source chooser and
-      // land on the file-drop step (a temporary draft the user can save as a data source later).
-      if (location.state?.startFileImport) {
-        setSelectedUploadSource(MANUAL_DATA_SOURCE_VALUE)
-      }
-    }
-    setStartupUploadSourceApplied(true)
-  }, [uploadSourcesReady, startupUploadSourceApplied, lastImportDataSourceId, profiles, setLastImportDataSourceId, location.state])
-
+  // Drop a selected source that no longer exists (e.g. deleted in the data-source manager).
   useEffect(() => {
     if (!selectedUploadSource || selectedUploadSource === MANUAL_DATA_SOURCE_VALUE) return
     if (!profiles.some(profile => profile.id === selectedUploadSource)) {
       setSelectedUploadSource('')
-      if (lastImportDataSourceId === selectedUploadSource) {
-        setLastImportDataSourceId('').catch(() => { })
-      }
     }
-  }, [profiles, selectedUploadSource, lastImportDataSourceId, setLastImportDataSourceId])
+  }, [profiles, selectedUploadSource])
 
   function getDataSourceManagerDefaultPosition() {
     if (typeof window === 'undefined') return { x: 360, y: 180 }
@@ -1630,29 +1609,23 @@ function ImportTab() {
     queueMappingBaselineCapture()
   }
 
-  async function handleFile(file, options = {}) {
-    const { sourceIdOverride = selectedUploadSource } = options
-    if (!file || !sourceIdOverride) return
-    setLoading(true)
-    try {
-      resetImportMappingState()
-      setShowRaw(false)
-      setShowAdvanced(false)
-      const result = await api.previewCsv(file)
-      setPreview({ ...result, file }); setAccountMap({})
-      setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
-      setCategoryAssignments({})
-      const savedDraft = loadSavedImportDraft(result, dbInstanceId, preferenceSubjectId)
-      if (sourceIdOverride && sourceIdOverride !== MANUAL_DATA_SOURCE_VALUE) {
-        const applied = applyProfile(sourceIdOverride, { previewLike: result, mismatchContext: 'upload' })
-        if (applied === 'pending') {
-          return
-        }
-        if (applied !== true) {
-          setPreview(null)
-          return
-        }
-      } else if (savedDraft) {
+  // Apply a resolved data source to the already-previewed file and advance to the mapping stage.
+  // `effectiveSource` is a profile id, MANUAL_DATA_SOURCE_VALUE, or '' (treated as a temporary draft).
+  // Returns false when it could not settle — a profile mismatch opened the verification picker, or the
+  // profile vanished — so the caller leaves the user on the upload stage.
+  function proceedWithImport(effectiveSource, result) {
+    const savedDraft = loadSavedImportDraft(result, dbInstanceId, preferenceSubjectId)
+    if (effectiveSource && effectiveSource !== MANUAL_DATA_SOURCE_VALUE) {
+      selectUploadSource(effectiveSource)
+      const applied = applyProfile(effectiveSource, { previewLike: result, mismatchContext: 'upload' })
+      if (applied === 'pending') return false
+      if (applied !== true) {
+        setPreview(null)
+        return false
+      }
+    } else {
+      selectUploadSource(MANUAL_DATA_SOURCE_VALUE)
+      if (savedDraft) {
         setSelectedProfile('')
         setMappingSuggestions(getBlankMappingSuggestions())
         applySnapshot(savedDraft, result)
@@ -1679,13 +1652,45 @@ function ImportTab() {
         setColAccount(null)
         applyInferredMappingSuggestions(inferredMapping)
       }
-      // When the header is inferred below the first line, surface the skip-row
-      // controls immediately but leave the raw file viewer as an explicit review step.
-      if ((result.header_row_index ?? 0) > 0) {
-        setShowAdvanced(true)
+    }
+    // When the header is inferred below the first line, surface the skip-row
+    // controls immediately but leave the raw file viewer as an explicit review step.
+    if ((result.header_row_index ?? 0) > 0) {
+      setShowAdvanced(true)
+    }
+    queueMappingBaselineCapture()
+    setStage('mapping')
+    return true
+  }
+
+  // The upload flow is drop-first: a dropped file is previewed, then its header is matched against the
+  // saved data sources. One match applies straight away; several open a chooser; none falls back to a
+  // temporary draft. An explicit source (the data-source picker / Change) bypasses detection but still
+  // runs the mismatch verification inside proceedWithImport.
+  async function handleFile(file, options = {}) {
+    if (!file) return
+    const explicitSource = options.sourceIdOverride ?? selectedUploadSource
+    setLoading(true)
+    try {
+      resetImportMappingState()
+      setShowRaw(false)
+      setShowAdvanced(false)
+      const result = await api.previewCsv(file)
+      setPreview({ ...result, file }); setAccountMap({})
+      setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
+      setCategoryAssignments({})
+
+      let effectiveSource = explicitSource
+      if (!effectiveSource) {
+        const matches = findProfilesMatchingPreview(result, profiles)
+        if (matches.length > 1) {
+          // Ambiguous — hold the previewed file and let the user pick which source to apply.
+          setPendingSourceMatchChoice({ previewLike: result, matches })
+          return
+        }
+        effectiveSource = matches.length === 1 ? matches[0].id : MANUAL_DATA_SOURCE_VALUE
       }
-      queueMappingBaselineCapture()
-      setStage('mapping')
+      proceedWithImport(effectiveSource, result)
     } catch (e) {
       const msg = e?.message || e?.detail || 'Unable to parse CSV file.'
       setNoticeDialog({
@@ -1693,6 +1698,18 @@ function ImportTab() {
         description: msg,
       })
     } finally { setLoading(false) }
+  }
+
+  function handleSourceMatchChoice(sourceId) {
+    const pending = pendingSourceMatchChoice
+    setPendingSourceMatchChoice(null)
+    if (!pending) return
+    proceedWithImport(sourceId || MANUAL_DATA_SOURCE_VALUE, pending.previewLike)
+  }
+
+  function cancelSourceMatchChoice() {
+    setPendingSourceMatchChoice(null)
+    setPreview(null)
   }
 
   function handleProfileMismatchConfirm() {
@@ -1771,7 +1788,8 @@ function ImportTab() {
 
   function handleDrop(e) {
     e.preventDefault()
-    if (!uploadChoiceReady) return
+    // While the explicit data-source picker is open the user must choose a source first.
+    if (sourceChooserOpen) return
     handleFile(e.dataTransfer.files[0])
   }
 
@@ -2039,8 +2057,14 @@ function ImportTab() {
       setShowManualDraftSave(false)
       setManualDraftSaveName('')
       if (newProfileId) {
-        const shouldAdoptCurrentPreview = !selectedProfile && doesDraftMatchPreview(draftRecord, preview)
-        selectUploadSource(newProfileId)
+        // Adopt the new source as the active selection only while actively mapping the matching file
+        // (the "save current mapping as a data source" path). Saving from a completed import or the
+        // data-sources list must not preselect a source — the upload flow is drop-first and detects
+        // the source per file, so a leftover selection would wrongly default the next import.
+        const shouldAdoptCurrentPreview = stage === 'mapping' && !selectedProfile && doesDraftMatchPreview(draftRecord, preview)
+        if (activateAfterSave || shouldAdoptCurrentPreview) {
+          selectUploadSource(newProfileId)
+        }
         if (shouldAdoptCurrentPreview) {
           setSelectedProfile(newProfileId)
         }
@@ -2211,12 +2235,19 @@ function ImportTab() {
     setCategoryAssignments({})
     setImportedCategorySettings(getBlankImportedCategorySettings())
     setShowRaw(false); setShowAdvanced(false)
+    // Return to the drop-first auto-detect screen — no source carried over from the file just handled,
+    // so the next import detects its own source rather than defaulting to the previous one.
+    setSelectedUploadSource('')
+    setSourceChooserOpen(false)
+    setPendingSourceMatchChoice(null)
     resetImportMappingState()
   }
 
+  // "Start over" returns to the upload screen with the explicit data-source picker open (rather than
+  // the default auto-detect drop zone), since the user deliberately chose to reselect a source.
   function returnToUploadSourceChooser() {
     resetImport()
-    setSelectedUploadSource('')
+    setSourceChooserOpen(true)
     setShowUploadSourceCreate(false)
     setUploadSourceDraftName('')
   }
@@ -2750,14 +2781,15 @@ function ImportTab() {
       {stage === 'upload' && (
         <ImportUploadStage
           demoLoaded={demoLoaded}
-          uploadChoiceReady={uploadChoiceReady}
+          chooserOpen={sourceChooserOpen}
+          hasSelectedSource={hasSelectedUploadSource}
+          onOpenChooser={() => setSourceChooserOpen(true)}
+          onCloseChooser={() => setSourceChooserOpen(false)}
           uploadUsesManualDraft={uploadUsesManualDraft}
           uploadSelectionLabel={uploadSelectionLabel}
-          isFirstRunSourceChoice={isFirstRunSourceChoice}
           profiles={profiles}
           selectedUploadSource={selectedUploadSource}
           selectUploadSource={selectUploadSource}
-          setSelectedUploadSource={setSelectedUploadSource}
           editingSourceNameKey={editingSourceNameKey}
           getSourceNameEditKey={getSourceNameEditKey}
           sourceNameDraft={sourceNameDraft}
@@ -3956,6 +3988,16 @@ function ImportTab() {
           onConfirm={handleProfileMismatchConfirm}
           onCancel={handleProfileMismatchCancel}
           onChangeDataSource={handleProfileMismatchChangeDataSource}
+        />
+      ) : null}
+
+      {pendingSourceMatchChoice ? (
+        <MultipleSourceMatchDialog
+          matches={pendingSourceMatchChoice.matches}
+          fileHeaderFingerprint={pendingSourceMatchChoice.previewLike?.header_fingerprint || ''}
+          onSelectProfile={handleSourceMatchChoice}
+          onSelectTemporaryDraft={() => handleSourceMatchChoice(MANUAL_DATA_SOURCE_VALUE)}
+          onCancel={cancelSourceMatchChoice}
         />
       ) : null}
 

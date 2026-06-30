@@ -803,6 +803,129 @@ def _classify_soft_flag_reason(reason_key: str) -> tuple[str, str]:
     return _SOFT_FLAG_CLASSIFIERS.get((reason_key or "").strip(), ("other_soft", "low"))
 
 
+def _matched_existing_txn_ids(matched) -> list[str]:
+    """Pull the existing-transaction id(s) out of a stored `matched_transaction_json`, across the
+    rule shapes: exact-hash carries a top-level `id`; coverage carries `candidates: [{id, …}]` (and
+    sometimes a `covered` block). Used to resolve what an account's skipped rows matched against."""
+    ids: list[str] = []
+    if not isinstance(matched, dict):
+        return ids
+    if matched.get("id"):
+        ids.append(matched["id"])
+    covered = matched.get("covered")
+    if isinstance(covered, dict) and covered.get("id"):
+        ids.append(covered["id"])
+    for candidate in (matched.get("candidates") or []):
+        if isinstance(candidate, dict) and candidate.get("id"):
+            ids.append(candidate["id"])
+    return ids
+
+
+def account_skipped_duplicate_summary(conn: sqlite3.Connection, account_id: str) -> dict:
+    """Summarize transactions that belonged to `account_id` but never entered (or were trashed from)
+    the active ledger because they were duplicates — the explanation for an account that looks empty.
+
+    Two pools contribute: hard-rejected import rows (`import_batch_duplicate`, attributed via the
+    stored `txn_payload`'s `account_id`) and confirmed-duplicate rows (soft-flags accepted as real
+    duplicates, kept as trashed `txn` rows). Returns the skipped count, the distinct accounts and
+    source files the matched (existing) transactions live on, and the importing batch(es) — with a
+    `primary_batch_id` for a deep-link into the duplicate report scoped to this account.
+    """
+    import json
+
+    hard_reject_count = 0
+    confirmed_count = 0
+    batch_counts: dict[str, int] = {}
+    matched_ids: set[str] = set()
+
+    for row in conn.execute(
+        "SELECT batch_id, txn_payload_json, matched_transaction_json FROM import_batch_duplicate"
+    ).fetchall():
+        try:
+            payload = json.loads(row["txn_payload_json"]) if row["txn_payload_json"] else {}
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict) or payload.get("account_id") != account_id:
+            continue
+        hard_reject_count += 1
+        batch_counts[row["batch_id"]] = batch_counts.get(row["batch_id"], 0) + 1
+        try:
+            matched = json.loads(row["matched_transaction_json"]) if row["matched_transaction_json"] else {}
+        except Exception:
+            matched = {}
+        matched_ids.update(_matched_existing_txn_ids(matched))
+
+    for row in conn.execute(
+        """
+        SELECT import_batch_id, suspect_duplicate_of
+        FROM   txn
+        WHERE  account_id = ?
+          AND  trashed_at IS NOT NULL
+          AND  rejection_reason = 'duplicate_confirmed'
+        """,
+        (account_id,),
+    ).fetchall():
+        confirmed_count += 1
+        if row["import_batch_id"]:
+            batch_counts[row["import_batch_id"]] = batch_counts.get(row["import_batch_id"], 0) + 1
+        if row["suspect_duplicate_of"]:
+            matched_ids.add(row["suspect_duplicate_of"])
+
+    skipped_count = hard_reject_count + confirmed_count
+    if skipped_count == 0:
+        return {
+            "account_id": account_id,
+            "skipped_count": 0,
+            "hard_reject_count": 0,
+            "confirmed_count": 0,
+            "matched_accounts": [],
+            "matched_sources": [],
+            "batch_ids": [],
+            "primary_batch_id": None,
+            "primary_batch_filename": None,
+        }
+
+    matched_accounts: set[str] = set()
+    matched_sources: set[str] = set()
+    if matched_ids:
+        id_list = [mid for mid in matched_ids if mid]
+        placeholders = ",".join("?" * len(id_list))
+        for row in conn.execute(
+            f"""
+            SELECT COALESCE(NULLIF(p.display_name, ''), p.name, NULLIF(a.display_name, ''), a.name) AS account_label,
+                   b.filename AS filename
+            FROM   txn t
+            LEFT JOIN account a ON a.id = t.account_id
+            LEFT JOIN account p ON p.id = a.parent_account_id
+            LEFT JOIN import_batch b ON b.id = t.import_batch_id
+            WHERE  t.id IN ({placeholders})
+            """,
+            id_list,
+        ).fetchall():
+            if row["account_label"]:
+                matched_accounts.add(row["account_label"])
+            if row["filename"]:
+                matched_sources.add(row["filename"])
+
+    primary_batch_id = max(batch_counts, key=batch_counts.get) if batch_counts else None
+    primary_batch_filename = None
+    if primary_batch_id:
+        r = conn.execute("SELECT filename FROM import_batch WHERE id = ?", (primary_batch_id,)).fetchone()
+        primary_batch_filename = r["filename"] if r else None
+
+    return {
+        "account_id": account_id,
+        "skipped_count": skipped_count,
+        "hard_reject_count": hard_reject_count,
+        "confirmed_count": confirmed_count,
+        "matched_accounts": sorted(matched_accounts),
+        "matched_sources": sorted(matched_sources),
+        "batch_ids": sorted(batch_counts.keys()),
+        "primary_batch_id": primary_batch_id,
+        "primary_batch_filename": primary_batch_filename,
+    }
+
+
 def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> list[dict]:
     """Return the combined list of hard-reject and soft-flag dedupe entries for a single batch.
     Each entry has the same outer shape; `kind` distinguishes the two pools. Hard rejects carry
@@ -925,6 +1048,9 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
                 "amount": txn_payload.get("amount"),
                 "merchant": txn_payload.get("display_name") or txn_payload.get("merchant_name") or txn_payload.get("raw_name"),
                 "account_name": incoming_account,
+                # The account the row would have been imported into (resolved at import time). Lets the
+                # report be scoped to one account — e.g. opened from an empty account's detail panel.
+                "account_id": txn_payload.get("account_id"),
                 "csv_values": values if isinstance(values, dict) else {},
             },
             "matched": enriched_matched,
@@ -943,6 +1069,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             t1.date                     AS new_date,
             t1.amount                   AS new_amount,
             COALESCE(NULLIF(t1.display_name, ''), NULLIF(t1.merchant_name, ''), NULLIF(t1.raw_name, '')) AS new_merchant,
+            t1.account_id               AS new_account_id,
             a1.name                     AS new_account_name,
             COALESCE(NULLIF(a1p.display_name, ''), a1p.name) AS new_account_merged_into,
             t1.suspect_duplicate_reason AS reason_key,
@@ -986,6 +1113,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             "amount": row["new_amount"],
             "merchant": row["new_merchant"],
             "account_name": row["new_account_name"],
+            "account_id": row["new_account_id"],
             "account_merged_into": row["new_account_merged_into"],
         }
         matched = enrich_with_source({

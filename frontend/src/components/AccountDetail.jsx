@@ -10,6 +10,7 @@ import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
+import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 import {
   DETAIL_LIST_MAX_HEIGHT,
   getDetailMonthSectionHeight,
@@ -21,6 +22,29 @@ import {
 
 const ACCOUNT_DETAIL_TABLE_PREF_KEY = 'ui.accountDetail.transactions.columns'
 
+// Toggle pill for the merged-account source filter. Multi-select: "All" clears the set, each source
+// pill toggles its own account in/out.
+function SourcePill({ label, active, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+        borderRadius: 999,
+        padding: '2px 10px',
+        fontSize: 12,
+        cursor: 'pointer',
+        background: active ? 'var(--accent)' : 'var(--surface2)',
+        color: active ? '#fff' : 'var(--text)',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+    </button>
+  )
+}
+
 export default function AccountDetail({ account, categories = [], onClose, forceFloating = false, stackIndex = 0, initialPosition = null, isTopmost = true, dateStart = null, dateEnd = null }) {
   /*
    * This panel is mostly a thin account-specific wrapper around the shared detail-sheet chrome:
@@ -31,14 +55,46 @@ export default function AccountDetail({ account, categories = [], onClose, force
   const [trend, setTrend]           = useState([])
   const [selectedMonth, setSelectedMonth] = useState(null)
   const [trendLoading, setTrendLoading] = useState(true)
+  // A merged account's report spans every underlying (source) account; `mergeSources` lists them so the
+  // user can narrow the chart + list to specific originals. `sourceFilter` empty = all sources; otherwise
+  // the chosen source account ids drive both the trend and the transaction feed (server-side, so paging and
+  // bulk "select all matching" stay in scope). Only populated for a genuinely merged account.
+  const [mergeSources, setMergeSources] = useState([])
+  const [sourceFilter, setSourceFilter] = useState(() => new Set())
+  const isMerged = mergeSources.length > 0
+  const sourceCsv = sourceFilter.size ? Array.from(sourceFilter).join(',') : undefined
+
+  useEffect(() => {
+    let cancelled = false
+    setSourceFilter(new Set())
+    api.getAccounts({ include_children: true }).then(rows => {
+      if (cancelled) return
+      const all = rows || []
+      const children = all.filter(r => r.parent_account_id === account.id)
+      if (children.length === 0) {
+        setMergeSources([])
+        return
+      }
+      const parent = all.find(r => r.id === account.id)
+      // Use each account's own (original) name, not the inherited display name, so the merged children
+      // read as distinct sources.
+      setMergeSources([
+        ...(parent ? [{ id: parent.id, name: parent.name, mask: parent.mask }] : []),
+        ...children.map(c => ({ id: c.id, name: c.name, mask: c.mask })),
+      ])
+    }).catch(() => { if (!cancelled) setMergeSources([]) })
+    return () => { cancelled = true }
+  }, [account.id])
+
   const loadMonthPage = useCallback((month, offset, limit) => (
     api.getTransactions({
       account_ids: String(account.id),
+      ...(sourceCsv ? { source_account_ids: sourceCsv } : {}),
       month,
       limit,
       offset,
     })
-  ), [account.id])
+  ), [account.id, sourceCsv])
   const {
     rows: monthTxns,
     loading: txnLoading,
@@ -52,8 +108,31 @@ export default function AccountDetail({ account, categories = [], onClose, force
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
     preferenceKey: ACCOUNT_DETAIL_TABLE_PREF_KEY,
     showAccount: false,
+    showSourceAccount: isMerged,
   })
   const displayName = `${account.name}${account.mask ? ` ···${account.mask}` : ''}`
+
+  // Explains an account with little/no visible activity: how many of its imported rows were skipped or
+  // removed as duplicates of transactions already present elsewhere, with a deep-link into the duplicate
+  // report scoped to just this account's rows (which can be scattered across the report otherwise).
+  const duplicatesViewer = useUnifiedDuplicatesViewer()
+  const [duplicateSummary, setDuplicateSummary] = useState(null)
+  useEffect(() => {
+    let cancelled = false
+    api.getAccountDuplicateSummary(account.id)
+      .then(result => { if (!cancelled) setDuplicateSummary(result) })
+      .catch(() => { if (!cancelled) setDuplicateSummary(null) })
+    return () => { cancelled = true }
+  }, [account.id])
+
+  function openDuplicatesForAccount() {
+    if (!duplicateSummary?.primary_batch_id) return
+    duplicatesViewer.open({
+      batchId: duplicateSummary.primary_batch_id,
+      title: duplicateSummary.primary_batch_filename || displayName,
+      accountFilter: { id: account.id, name: displayName },
+    })
+  }
 
   useEffect(() => {
     setLocalMonthTxns(monthTxns)
@@ -77,12 +156,16 @@ export default function AccountDetail({ account, categories = [], onClose, force
     setTrendLoading(true)
     // Caller owns the date scope (Dashboard/Transactions pass the global filter; the Accounts page passes
     // nothing → full account history). Account scope already defaults to full history when unfiltered.
-    api.getMonthlyTrend(60, undefined, String(account.id), dateStart || undefined, dateEnd || undefined, undefined, 'spending').then(rows => {
+    // Use the cash-flow view (no category-type filter), not 'spending': an account's activity is ALL its
+    // money movement, including income/payments and transactions in not-yet-typed imported categories.
+    // A 'spending' trend would hide both, falsely reporting "no activity" for, e.g., an account whose
+    // imported rows all sit in type-less categories under Unassigned.
+    api.getMonthlyTrend(60, undefined, String(account.id), dateStart || undefined, dateEnd || undefined, undefined, 'cash_flow', undefined, sourceCsv ? { source_account_ids: sourceCsv } : undefined).then(rows => {
       setTrend(rows)
       setTrendLoading(false)
       if (rows.length > 0) setSelectedMonth(rows[rows.length - 1].month)
     })
-  }, [account.id, dateStart, dateEnd])
+  }, [account.id, dateStart, dateEnd, sourceCsv])
 
   const selectedMonthRow = trend.find(r => r.month === selectedMonth)
   const monthSectionHeight = getDetailMonthSectionHeight(trend)
@@ -93,7 +176,11 @@ export default function AccountDetail({ account, categories = [], onClose, force
     rows: localMonthTxns,
     setRows: setLocalMonthTxns,
     total: selectedMonthRow?.count || localMonthTxns.length,
-    filterParams: { month: selectedMonth, account_ids: String(account.id) },
+    filterParams: {
+      month: selectedMonth,
+      account_ids: String(account.id),
+      ...(sourceCsv ? { source_account_ids: sourceCsv } : {}),
+    },
     categories,
   })
 
@@ -128,6 +215,52 @@ export default function AccountDetail({ account, categories = [], onClose, force
             Monthly activity — {displayName}
           </div>
 
+          {duplicateSummary?.skipped_count > 0 && (
+            <div style={{
+              marginBottom: 12, padding: '10px 12px', borderRadius: 8,
+              border: '1px solid var(--border)',
+              background: 'color-mix(in srgb, var(--accent) 7%, var(--surface2))',
+              fontSize: 12, color: 'var(--text)', lineHeight: 1.5,
+            }}>
+              <strong>{duplicateSummary.skipped_count}</strong> imported transaction{duplicateSummary.skipped_count === 1 ? ' was' : 's were'} skipped as duplicates of transactions already present
+              {duplicateSummary.matched_accounts.length > 0 ? <> on <strong>{duplicateSummary.matched_accounts.join(', ')}</strong></> : null}
+              {duplicateSummary.matched_sources.length > 0 ? ` (from ${duplicateSummary.matched_sources.join(', ')})` : ''}
+              {'. '}
+              {duplicateSummary.primary_batch_id ? (
+                <button
+                  type="button"
+                  onClick={openDuplicatesForAccount}
+                  style={{
+                    background: 'none', border: 'none', padding: 0,
+                    color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline',
+                  }}
+                >
+                  View in duplicate report
+                </button>
+              ) : null}
+            </div>
+          )}
+
+          {isMerged && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 12 }}>
+              <span style={{ fontSize: 12, color: 'var(--muted)', marginRight: 2 }}>Account:</span>
+              <SourcePill label="All" active={sourceFilter.size === 0} onClick={() => setSourceFilter(new Set())} />
+              {mergeSources.map(src => (
+                <SourcePill
+                  key={src.id}
+                  label={`${src.name}${src.mask ? ` ···${src.mask}` : ''}`}
+                  active={sourceFilter.has(src.id)}
+                  onClick={() => setSourceFilter(prev => {
+                    const next = new Set(prev)
+                    if (next.has(src.id)) next.delete(src.id)
+                    else next.add(src.id)
+                    return next
+                  })}
+                />
+              ))}
+            </div>
+          )}
+
           {trendLoading ? <Spinner /> : trend.length === 0 ? (
             <div style={{ fontSize: 13, color: 'var(--muted)', padding: '16px 0' }}>
               No history found for this account.
@@ -160,6 +293,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
                     onTransactionOpenDetail={setPayeeDetail}
                     onRowsChange={setLocalMonthTxns}
                     showAccount={false}
+                    showSourceAccount={isMerged}
                     columnConfig={columnConfig}
                     onColumnConfigChange={setColumnConfig}
                     maxHeight={DETAIL_LIST_MAX_HEIGHT}

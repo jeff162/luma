@@ -65,7 +65,7 @@ export function ConflictSetCard({ members, onApply, onDefer, onOpenReport, onEdi
         : `${entry.rows} row${entry.rows === 1 ? '' : 's'} cleared`
     )).join(', ')
   })()
-  // Has the user retargeted any row off its imported category? With no winner, Discard still settles each
+  // Has the user re-targeted any row off its imported category? With no winner, Discard still settles each
   // row to its (possibly edited) target, so the label calls that out when there's an actual change to apply.
   const anyTargetEdited = members.some(
     m => String(m.target_category_id || '') !== String(m.imported_category_id || ''),

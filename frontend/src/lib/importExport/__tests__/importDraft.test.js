@@ -10,6 +10,7 @@ import {
   buildProfileBodyFromSnapshot,
   doesDraftMatchPreview,
   profileHeaderClearlyMismatches,
+  findProfilesMatchingPreview,
   getSuggestedDataSourceName,
 } from '../importDraft.js'
 import { IMPORTED_CATEGORY_SETTINGS_KEY } from '../constants.js'
@@ -107,6 +108,30 @@ describe('profileHeaderClearlyMismatches', () => {
     expect(profileHeaderClearlyMismatches({ header_fingerprint: 'a' }, { header_fingerprint: 'a' })).toBe(false)
     // Absent information is not a "clear" mismatch — don't reject the profile on missing data.
     expect(profileHeaderClearlyMismatches({}, { header_fingerprint: 'b' })).toBe(false)
+  })
+})
+
+describe('findProfilesMatchingPreview', () => {
+  const profiles = [
+    { id: 'a', name: 'A', header_fingerprint: 'fp1' },
+    { id: 'b', name: 'B', header_fingerprint: 'fp2' },
+    { id: 'c', name: 'C', header_fingerprint: 'fp1' },
+    { id: 'd', name: 'D (no fingerprint)', header_fingerprint: '' },
+  ]
+
+  it('returns every saved source whose header fingerprint matches the file', () => {
+    const matches = findProfilesMatchingPreview({ header_fingerprint: 'fp1' }, profiles)
+    expect(matches.map(p => p.id)).toEqual(['a', 'c'])
+  })
+
+  it('returns nothing when no source matches', () => {
+    expect(findProfilesMatchingPreview({ header_fingerprint: 'zzz' }, profiles)).toEqual([])
+  })
+
+  it('never matches on absent fingerprints (file or profile)', () => {
+    // A file with no fingerprint matches nothing, even a profile that also lacks one.
+    expect(findProfilesMatchingPreview({ header_fingerprint: '' }, profiles)).toEqual([])
+    expect(findProfilesMatchingPreview({}, profiles)).toEqual([])
   })
 })
 

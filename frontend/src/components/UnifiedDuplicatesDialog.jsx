@@ -96,6 +96,8 @@ export default function UnifiedDuplicatesDialog({
   ruleBreakdown = [],
   title = 'this import',
   batchId = '',
+  accountFilter = null,
+  onClearAccountFilter,
   loading = false,
   error = '',
   onClose,
@@ -199,21 +201,30 @@ export default function UnifiedDuplicatesDialog({
     return 3                                  // Rejected (settled, incl. acknowledged)
   }
 
+  // When opened from an account's detail panel, scope the whole report to that account's rows so the
+  // counts, filter chips, and list all reflect just what's relevant — the user lands on exactly the
+  // duplicates that explain their empty account instead of scrolling the full batch.
+  const scopedEntries = useMemo(() => (
+    accountFilter?.id
+      ? entries.filter(e => String(e.incoming?.account_id || '') === String(accountFilter.id))
+      : entries
+  ), [entries, accountFilter])
+
   const reviewKindBreakdown = useMemo(() => {
     const counts = { review: 0, matched_2d: 0, no_match: 0 }
-    for (const e of entries) {
+    for (const e of scopedEntries) {
       const k = reviewKindOf(e)
       if (k) counts[k] += 1
     }
     return counts
-  }, [entries])
+  }, [scopedEntries])
 
   const visibleEntries = useMemo(() => {
     const filtered = activeKindFilter
-      ? entries.filter(e => reviewKindOf(e) === activeKindFilter)
+      ? scopedEntries.filter(e => reviewKindOf(e) === activeKindFilter)
       : activeRuleFilter
-        ? entries.filter(e => (e.rule_key || '') === activeRuleFilter)
-        : entries
+        ? scopedEntries.filter(e => (e.rule_key || '') === activeRuleFilter)
+        : scopedEntries
     const dir = sortState.dir === 'asc' ? 1 : -1
     const getKey = (entry) => {
       switch (sortState.key) {
@@ -241,7 +252,7 @@ export default function UnifiedDuplicatesDialog({
       }
       return 0
     })
-  }, [entries, activeRuleFilter, activeKindFilter, sortState])
+  }, [scopedEntries, activeRuleFilter, activeKindFilter, sortState])
 
   const visibleIds = useMemo(() => new Set(visibleEntries.map(entryId)), [visibleEntries])
 
@@ -532,7 +543,9 @@ export default function UnifiedDuplicatesDialog({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
         <div style={{ fontWeight: 600, fontSize: 15 }}>Duplicate detection report — {title}</div>
         <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-          {entries.length} total · {hardRejectCount} rejected at import · {softFlagCount} flagged for review
+          {accountFilter?.id
+            ? `${scopedEntries.length} duplicate${scopedEntries.length === 1 ? '' : 's'} for ${accountFilter.name}`
+            : `${entries.length} total · ${hardRejectCount} rejected at import · ${softFlagCount} flagged for review`}
         </div>
       </div>
       {onReload ? (
@@ -579,6 +592,30 @@ export default function UnifiedDuplicatesDialog({
       isTopmost={isTopmost}
     >
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, margin: '-20px -24px', overflow: 'hidden' }}>
+        {accountFilter?.id ? (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+            padding: '8px 16px', borderBottom: '1px solid var(--border)',
+            background: 'color-mix(in srgb, var(--accent) 8%, var(--surface2))', fontSize: 12,
+          }}>
+            <span style={{ color: 'var(--muted)' }}>
+              Showing only duplicates for <strong style={{ color: 'var(--text)' }}>{accountFilter.name}</strong>.
+            </span>
+            {onClearAccountFilter ? (
+              <button
+                type="button"
+                onClick={onClearAccountFilter}
+                onMouseDown={e => e.stopPropagation()}
+                style={{
+                  background: 'none', border: 'none', padding: 0,
+                  color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline',
+                }}
+              >
+                Show all duplicates in this import
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <ContextualExplainer
           topic="duplicate-report"
           active={entries.length > 0}
@@ -598,7 +635,7 @@ export default function UnifiedDuplicatesDialog({
                 border: '1px solid var(--border)',
               }}
             >
-              All ({entries.length})
+              All ({scopedEntries.length})
             </button>
             {/* "Show:" and "All" stay fixed; only the rule + kind pills wrap, so wrapped rows line up
                 under the first rule pill (to the right of All) rather than under "Show:" or "All". */}
@@ -718,8 +755,10 @@ export default function UnifiedDuplicatesDialog({
               {error ? <div style={{ color: 'var(--danger)', marginBottom: 8 }}>{error}</div> : null}
               {actionError ? <div style={{ color: 'var(--danger)', marginBottom: 8 }}>{actionError}</div> : null}
               {!loading && !error && visibleEntries.length === 0 ? (
-                <EmptyState message={entries.length === 0
-                  ? "No duplicate decisions recorded for this import."
+                <EmptyState message={scopedEntries.length === 0
+                  ? (accountFilter?.id
+                    ? `No duplicate decisions recorded for ${accountFilter.name} in this import.`
+                    : "No duplicate decisions recorded for this import.")
                   : "No entries match the current filter."} />
               ) : null}
             </div>

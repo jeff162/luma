@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { notifyAccountsChanged } from '../App.jsx'
 import { Card, Button, Spinner, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog } from '../components/ui.jsx'
@@ -14,6 +14,7 @@ import TransientTextInput from '../components/TransientTextInput.jsx'
 import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
+import { useColumnPreference } from '../lib/useColumnPreference.js'
 
 const ACCOUNTS_SECTIONS_PREF_KEY = 'ui.accounts.sections'
 const ACCOUNTS_SECTIONS_STORAGE_KEY_PREFIX = 'luma.accounts.sections'
@@ -23,13 +24,48 @@ const ACCOUNTS_COLLAPSED_PREF_KEY = 'ui.accounts.collapsedGroups'
 const ACCOUNTS_COLLAPSED_STORAGE_KEY_PREFIX = 'luma.accounts.collapsedGroups'
 const ACCOUNTS_SORT_PREF_KEY = 'ui.accounts.sort'
 const ACCOUNTS_SORT_STORAGE_KEY_PREFIX = 'luma.accounts.sort'
-const ACCOUNT_ROW_COLUMNS = '22px minmax(0, 1.2fr) minmax(112px, 0.4fr) minmax(116px, 0.42fr) minmax(0, 0.95fr) 28px'
+const ACCOUNTS_COLUMNS_PREF_KEY = 'ui.accounts.columns'
+
+// Account-list column geometry. Name is the fluid filler (`minmax(0, 1fr)`) so the table always fits
+// its container with no horizontal scrollbar — resizing Type/Owner/Tags reflows Name. Only those three
+// carry a numeric (px) width and are user-resizable; the drag-handle and delete gutters stay fixed.
+// Widths/order persist via the shared useColumnPreference model. Order MUST match the header config and
+// the cell order rendered by AccountRow/DraftAccountRow.
+//
+// Why Name has no resize grip: a fluid (`fr`) column has no fixed edge to drag, so the grip convention
+// (right edge of each column) has nothing to grab — you widen Name indirectly by shrinking the others.
+// Now that the table lives on its own tab, if direct Name resizing is ever wanted, give Name a numeric
+// px width and let the table scroll horizontally when over-widened (the Transactions-ledger model);
+// that trades the always-fits guarantee for a draggable Name edge.
+const ACCOUNT_COLUMN_DEFAULTS = [
+  { key: 'drag', width: 22 },
+  { key: 'name', width: 'minmax(0, 1fr)' },
+  { key: 'type', width: 110, minWidth: 90 },
+  { key: 'owner', width: 116, minWidth: 96 },
+  { key: 'tags', width: 112, minWidth: 84 },
+  { key: 'actions', width: 28 },
+]
+const ACCOUNT_RESIZABLE_COLUMN_KEYS = new Set(['type', 'owner', 'tags'])
+
+// Numeric widths render as pixels; string widths (the Name filler) pass through so the column flexes.
+function buildAccountGridTemplate(columns) {
+  return columns
+    .map(column => (typeof column.width === 'number' ? `${column.width}px` : column.width))
+    .join(' ')
+}
+
 const ACCOUNT_ROW_CHILD_INDENT = 28
 const ACCOUNT_ROW_GAP = 10
 const ACCOUNT_ROW_PADDING = '3px 10px'
 const ACCOUNT_CONTROL_HEIGHT = 22
 const ACCOUNT_DETACH_DROP_ZONE_WIDTH = 84
-const ACCOUNTS_SECTION_BASE_WIDTH = 580
+// The account list is the only thing on its own tab now, so it isn't constrained to share a width with
+// the sparse Owners/Connections panels — give it modestly more room for long account names.
+const ACCOUNTS_SECTION_BASE_WIDTH = 720
+// In-page tabs (mirroring the Import/Export page). The active tab is session-scoped: it sticks while the
+// app is open but resets to Accounts next launch (a within-session convenience, not a durable preference).
+const ACCOUNT_TABS = [['accounts', 'Accounts'], ['owners', 'Owners'], ['connections', 'Connections']]
+const ACCOUNTS_TAB_STORAGE_KEY = 'luma.accounts.tab'
 const ACCOUNT_TYPE_ORDER = Object.fromEntries(ACCOUNT_TYPES.map((type, index) => [type.value, index]))
 const ACCOUNT_SORT_KEYS = ['name', 'type', 'owner']
 const DEFAULT_ACCOUNT_SORT_DIRECTIONS = { name: 'asc', type: 'asc', owner: 'asc' }
@@ -234,7 +270,48 @@ function OwnerFilterPill({ label, count, active, onClick }) {
   )
 }
 
-function SectionCard({ title, summary = '', headerCenter = null, expanded, onExpandedChange, disabled = false, width, children, style }) {
+// A section panel with an optional collapse toggle. On the tabbed Accounts page each section is the only
+// thing on its tab, so it is rendered `collapsible={false}`: a static header (no toggle) with the content
+// always shown. The collapsible form is retained for any other caller that still wants it.
+function SectionCard({ title, summary = '', headerCenter = null, expanded, onExpandedChange, collapsible = true, disabled = false, width, children, style }) {
+  const open = collapsible ? expanded : true
+  const headerInner = (
+    <>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+        {collapsible ? <span style={{ fontSize: 12, color: 'var(--muted)' }}>{open ? '−' : '+'}</span> : null}
+        <span style={{ fontSize: 14, fontWeight: 600 }}>{title}</span>
+      </span>
+      {headerCenter ? (
+        <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 1, minWidth: 0 }}>
+          {headerCenter}
+        </span>
+      ) : null}
+      {summary ? (
+        <span style={{
+          fontSize: 12,
+          color: 'var(--muted)',
+          whiteSpace: 'nowrap',
+          marginLeft: 'auto',
+        }}>
+          {summary}
+        </span>
+      ) : null}
+    </>
+  )
+  const headerStyle = {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: '4px 12px',
+    width: '100%',
+    background: 'none',
+    border: 'none',
+    padding: '12px 16px',
+    color: 'var(--text)',
+    textAlign: 'left',
+  }
+  // A header with neither a title nor summary nor headerCenter would just be empty chrome — skip it.
+  const hasHeader = collapsible || title || summary || headerCenter
   return (
     <Card style={{
       width: typeof width === 'number' ? `${width}px` : (width || 'fit-content'),
@@ -244,45 +321,17 @@ function SectionCard({ title, summary = '', headerCenter = null, expanded, onExp
       padding: 0,
       ...style,
     }}>
-      <button
-        type="button"
-        onClick={() => onExpandedChange?.(!expanded)}
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          gap: '4px 12px',
-          width: '100%',
-          background: 'none',
-          border: 'none',
-          padding: '12px 16px',
-          color: 'var(--text)',
-          cursor: 'pointer',
-          textAlign: 'left',
-        }}
-      >
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-          <span style={{ fontSize: 12, color: 'var(--muted)' }}>{expanded ? '−' : '+'}</span>
-          <span style={{ fontSize: 14, fontWeight: 600 }}>{title}</span>
-        </span>
-        {headerCenter ? (
-          <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 1, minWidth: 0 }}>
-            {headerCenter}
-          </span>
-        ) : null}
-        {summary ? (
-          <span style={{
-            fontSize: 12,
-            color: 'var(--muted)',
-            whiteSpace: 'nowrap',
-            marginLeft: 'auto',
-          }}>
-            {summary}
-          </span>
-        ) : null}
-      </button>
-      {expanded ? (
-        <div style={{ borderTop: '1px solid var(--border)' }}>
+      {hasHeader ? (
+        collapsible ? (
+          <button type="button" onClick={() => onExpandedChange?.(!open)} style={{ ...headerStyle, cursor: 'pointer' }}>
+            {headerInner}
+          </button>
+        ) : (
+          <div style={headerStyle}>{headerInner}</div>
+        )
+      ) : null}
+      {open ? (
+        <div style={hasHeader ? { borderTop: '1px solid var(--border)' } : undefined}>
           {children}
         </div>
       ) : null}
@@ -458,7 +507,7 @@ function PillSelect({ value, options, onChange, placeholder = '—', minOpenWidt
   )
 }
 
-function DraftAccountRow({ owners, onCreate, onCancel, creating }) {
+function DraftAccountRow({ owners, onCreate, onCancel, creating, gridTemplateColumns }) {
   const formId = 'draft-account-form'
   const [name, setName] = useState('')
   const [type, setType] = useState('depository')
@@ -504,7 +553,7 @@ function DraftAccountRow({ owners, onCreate, onCancel, creating }) {
       >
         <div style={{
           display: 'grid',
-          gridTemplateColumns: ACCOUNT_ROW_COLUMNS,
+          gridTemplateColumns,
           gap: ACCOUNT_ROW_GAP,
           alignItems: 'center',
           padding: ACCOUNT_ROW_PADDING,
@@ -637,7 +686,7 @@ function OwnerPill({ owner, editing, draft, onDraftChange, onStartEdit, onCommit
   )
 }
 
-function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onError = () => {}, disabled = false, width, expanded, onExpandedChange }) {
+function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onError = () => {}, disabled = false, width, expanded, onExpandedChange, collapsible = true }) {
   const visibleOwners = getPersonalOwners(owners)
   const ownersSummary = formatCountSummary(visibleOwners.length, 'owner')
   const [editingOwnerId, setEditingOwnerId] = useState(null)
@@ -710,11 +759,12 @@ function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onErro
       summary={ownersSummary}
       expanded={expanded}
       onExpandedChange={onExpandedChange}
+      collapsible={collapsible}
       disabled={disabled}
       width={width}
-      style={{
+      style={collapsible ? {
         marginTop: 12,
-      }}
+      } : undefined}
     >
       <div style={{ padding: '12px 16px 14px' }}>
         {visibleOwners.length > 0 ? (
@@ -949,6 +999,51 @@ function AccountTagsCell({
   const editable = !isChild
   const showControls = editable && editMode
 
+  // The picker floats beside the "+" via fixed positioning rather than dropping down over the
+  // column, so the tag column below stays uncovered and the user can open the next row's picker
+  // without first closing this one. It opens to the right of the button (clamped to the viewport),
+  // and clamps vertically so it never spills past the edge or gets clipped by the list's own scroll
+  // container the way an absolutely-positioned panel would on the bottom rows.
+  const addButtonRef = useRef(null)
+  const pickerRef = useRef(null)
+  const [pickerPos, setPickerPos] = useState(null)
+
+  useLayoutEffect(() => {
+    if (!(editable && pickerOpen)) {
+      setPickerPos(null)
+      return undefined
+    }
+    function place() {
+      const anchor = addButtonRef.current
+      if (!anchor) return
+      const rect = anchor.getBoundingClientRect()
+      const pad = 8
+      const gap = 6
+      const panelW = pickerRef.current?.offsetWidth || 252
+      const panelH = pickerRef.current?.offsetHeight || 320
+      let left = rect.right + gap
+      if (left + panelW > window.innerWidth - pad) {
+        left = Math.max(pad, window.innerWidth - panelW - pad)
+      }
+      let top = rect.top
+      if (top + panelH > window.innerHeight - pad) {
+        top = Math.max(pad, window.innerHeight - panelH - pad)
+      }
+      setPickerPos({ left, top })
+    }
+    place()
+    // Reposition as the panel grows (e.g. entering "+ New tag" create mode) and on scroll/resize.
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(place) : null
+    if (observer && pickerRef.current) observer.observe(pickerRef.current)
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [editable, pickerOpen])
+
   function toggleTag(tag, nextChecked) {
     const next = new Set(ownTagIds)
     if (nextChecked) next.add(tag.id)
@@ -976,6 +1071,7 @@ function AccountTagsCell({
       ))}
       {showControls ? (
         <button
+          ref={addButtonRef}
           type="button"
           onClick={() => onOpenPicker(account.id)}
           title="Add or remove tags"
@@ -988,13 +1084,25 @@ function AccountTagsCell({
         </button>
       ) : null}
       {editable && pickerOpen ? (
-        <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 300 }}>
+        <div
+          ref={pickerRef}
+          style={{
+            position: 'fixed',
+            left: pickerPos?.left ?? 0,
+            top: pickerPos?.top ?? 0,
+            zIndex: 520,
+            borderRadius: 10,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+            visibility: pickerPos ? 'visible' : 'hidden',
+          }}
+        >
           <TagPickerWithCreate
             allTags={allTags}
             selectedTagIds={new Set(ownTagIds)}
             onToggleTag={toggleTag}
             onTagCreated={onTagCreated}
             onClose={onClosePicker}
+            positioning="relative"
           />
         </div>
       ) : null}
@@ -1010,6 +1118,7 @@ function AccountRow({
   isCollapsed = false,
   onToggleCollapse,
   restrictedOwnerOptions = null,
+  gridTemplateColumns,
   owners,
   onSave,
   onRequestDelete,
@@ -1046,6 +1155,10 @@ function AccountRow({
   const ownerInputRef = useRef(null)
   const ownerAnchorRef = useRef(null)
   const ownerMenuRef = useRef(null)
+  // The name button's tooltip shows the edit hint normally, but the full account name when the label is
+  // ellipsized by a narrow column — measured on hover so it stays correct as the column/window resizes.
+  const nameTextRef = useRef(null)
+  const [nameHoverTitle, setNameHoverTitle] = useState('Click to edit name')
   const {
     editing: editingName,
     setEditing: setEditingName,
@@ -1217,7 +1330,7 @@ function AccountRow({
         onContextMenu={isChild ? undefined : (event => onAccountContextMenu(account.id, event))}
         style={{
           display: 'grid',
-          gridTemplateColumns: ACCOUNT_ROW_COLUMNS,
+          gridTemplateColumns,
           gap: ACCOUNT_ROW_GAP,
           alignItems: 'center',
           padding: ACCOUNT_ROW_PADDING,
@@ -1267,7 +1380,12 @@ function AccountRow({
                 if (interactionDisabled) return
                 beginEditingName(account.name || '')
               }}
-              title={interactionDisabled ? undefined : 'Click to edit name'}
+              onMouseEnter={() => {
+                if (interactionDisabled) return
+                const el = nameTextRef.current
+                setNameHoverTitle(el && el.scrollWidth > el.clientWidth ? account.name : 'Click to edit name')
+              }}
+              title={interactionDisabled ? undefined : nameHoverTitle}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -1283,7 +1401,7 @@ function AccountRow({
                 opacity: interactionDisabled ? 0.75 : 1,
               }}
             >
-              <span style={{
+              <span ref={nameTextRef} style={{
                 fontWeight: 500,
                 fontSize: 12,
                 lineHeight: `${ACCOUNT_CONTROL_HEIGHT}px`,
@@ -1664,6 +1782,67 @@ export default function Accounts() {
   const [accountsPanelWidth, setAccountsPanelWidth] = useState(ACCOUNTS_SECTION_BASE_WIDTH)
   const sectionPanelWidth = accountsPanelWidth
 
+  // Active in-page tab, session-scoped (sticks while the app is open, resets to Accounts next launch).
+  const [tab, setTabState] = useState(() => {
+    const stored = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(ACCOUNTS_TAB_STORAGE_KEY) : null
+    return ACCOUNT_TABS.some(([id]) => id === stored) ? stored : 'accounts'
+  })
+  function setTab(next) {
+    setTabState(next)
+    try { sessionStorage.setItem(ACCOUNTS_TAB_STORAGE_KEY, next) } catch { /* sessionStorage unavailable — non-fatal */ }
+  }
+
+  // Resizable account-list columns. Geometry/order persist through the shared preference model; the
+  // header (PillTableHeader), each AccountRow, and the draft-create row all render against the one
+  // template string so they stay aligned. During a drag we hold the live widths in component state for
+  // an immediate preview (the list is short, so per-frame re-render is fine) and commit once on mouse-up.
+  const [accountColumns, onAccountColumnsChange] = useColumnPreference(ACCOUNTS_COLUMNS_PREF_KEY, ACCOUNT_COLUMN_DEFAULTS)
+  const [liveAccountColumns, setLiveAccountColumns] = useState(null)
+  const columnResizeRef = useRef(null)
+  const liveAccountColumnsRef = useRef(null)
+  const effectiveAccountColumns = liveAccountColumns || accountColumns
+  const accountGridTemplate = useMemo(
+    () => buildAccountGridTemplate(effectiveAccountColumns),
+    [effectiveAccountColumns],
+  )
+
+  function startAccountColumnResize(event, key) {
+    if (!ACCOUNT_RESIZABLE_COLUMN_KEYS.has(key)) return
+    event.preventDefault()
+    event.stopPropagation()
+    columnResizeRef.current = { key, startX: event.clientX, startColumns: accountColumns.map(c => ({ ...c })) }
+  }
+
+  useEffect(() => {
+    function onMove(event) {
+      const state = columnResizeRef.current
+      if (!state) return
+      const next = state.startColumns.map(c => ({ ...c }))
+      const index = next.findIndex(c => c.key === state.key)
+      if (index === -1) return
+      const column = next[index]
+      const minWidth = Number(column.minWidth || 44)
+      const startWidth = Number(column.width || 0)
+      column.width = Math.max(minWidth, Math.min(640, startWidth + (event.clientX - state.startX)))
+      liveAccountColumnsRef.current = next
+      setLiveAccountColumns(next)
+    }
+    function onUp() {
+      if (!columnResizeRef.current) return
+      columnResizeRef.current = null
+      const committed = liveAccountColumnsRef.current
+      liveAccountColumnsRef.current = null
+      setLiveAccountColumns(null)
+      if (committed) onAccountColumnsChange(committed)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [onAccountColumnsChange])
+
   function showAsyncNotice(title, error) {
     setNoticeDialog({
       title,
@@ -1916,13 +2095,6 @@ export default function Accounts() {
     applyAccountSort(sortKey, sortDir)
     initialSortSeedRef.current = seed
   }, [applyAccountSort, dbInstanceId, loading, sortDir, sortKey, sortLoaded, userId])
-
-  function bindSection(sectionKey) {
-    return {
-      expanded: getSectionExpanded(sectionExpandedState, sectionKey),
-      onExpandedChange: value => setSectionExpandedState(prev => ({ ...prev, [sectionKey]: value })),
-    }
-  }
 
   useEffect(() => {
     if (!accountsPanelRef.current || typeof ResizeObserver === 'undefined') return
@@ -2366,16 +2538,6 @@ export default function Accounts() {
     ? `${formatCountSummary(rootAccounts.length, 'account')}${mergedChildCount ? `, ${formatCountSummary(mergedChildCount, 'merged account')}` : ''}`
     : 'No accounts'
   const dataSourcesSummary = hasPlaidConnected ? formatCountSummary(1, 'data provider') : 'No data providers'
-  const accountListExpanded = getSectionExpanded(sectionExpandedState, 'accountList')
-  const accountListSection = {
-    expanded: accountListExpanded,
-    onExpandedChange: value => {
-      setSectionExpandedState(prev => ({ ...prev, accountList: value }))
-      if (value && !accountListExpanded) applyAccountSort(sortKey, sortDir)
-    },
-  }
-  const dataSourcesSection = bindSection('dataSources')
-  const ownersSection = bindSection('accountOwners')
   const ownerWarning = ownerCount > 0 && unownedCount > 0 ? `${unownedCount} account${unownedCount > 1 ? 's' : ''} need${unownedCount === 1 ? 's' : ''} an owner assigned` : ''
   const renameOwnerName = ownerRenameDialog?.name || ''
 
@@ -2480,7 +2642,7 @@ export default function Accounts() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            marginBottom: showOwnerFilterRow ? 12 : 18,
+            marginBottom: 12,
             width: 'fit-content',
             maxWidth: '100%',
           }}>
@@ -2489,7 +2651,24 @@ export default function Accounts() {
               <h1 style={{ fontSize: 22, fontWeight: 600 }}>Accounts</h1>
             </div>
           </div>
-          {showOwnerFilterRow ? (
+          <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', marginBottom: (tab === 'accounts' && showOwnerFilterRow) ? 16 : 0 }}>
+            {ACCOUNT_TABS.map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setTab(id)}
+                style={{
+                  padding: '8px 24px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14,
+                  color: tab === id ? 'var(--text)' : 'var(--muted)',
+                  borderBottom: tab === id ? '2px solid var(--accent)' : '2px solid transparent',
+                  fontWeight: tab === id ? 500 : 400,
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {tab === 'accounts' && showOwnerFilterRow ? (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
               marginBottom: 18,
@@ -2514,6 +2693,8 @@ export default function Accounts() {
         </div>
 
         <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
+          {tab === 'accounts' && (
+          <>
           <div
             onContextMenu={e => {
               if (showCreateAccount) return
@@ -2555,8 +2736,8 @@ export default function Accounts() {
             <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start' }}>
               <div ref={accountsPanelRef} style={{ position: 'relative', width: 'fit-content', maxWidth: '100%' }}>
                 <SectionCard
-                  title="Account List"
                   summary={accountListSummary}
+                  collapsible={false}
                   headerCenter={ownerWarning ? (
                     <span style={{
                       display: 'inline-flex',
@@ -2574,8 +2755,6 @@ export default function Accounts() {
                       <span style={{ whiteSpace: 'nowrap' }}>{ownerWarning}</span>
                     </span>
                   ) : null}
-                  expanded={accountListSection.expanded}
-                  onExpandedChange={accountListSection.onExpandedChange}
                   width={sectionPanelWidth}
                   style={{ overflow: 'hidden', alignSelf: 'flex-start' }}
                 >
@@ -2617,7 +2796,7 @@ export default function Accounts() {
                               contentPadding: '0 9px',
                               leadingInset: 0,
                               trailingInset: 0,
-                              resizable: false,
+                              resizable: true,
                               draggable: false,
                               title: 'Click to sort accounts by type',
                             },
@@ -2629,14 +2808,14 @@ export default function Accounts() {
                               contentPadding: '0 9px',
                               leadingInset: 0,
                               trailingInset: 0,
-                              resizable: false,
+                              resizable: true,
                               draggable: false,
                               title: 'Click to sort accounts by owner',
                             },
                             {
                               key: 'tags',
                               sortable: false,
-                              resizable: false,
+                              resizable: true,
                               draggable: false,
                               cellPadding: 0,
                               contentPadding: '0 9px',
@@ -2660,9 +2839,10 @@ export default function Accounts() {
                             },
                             { key: 'actions', kind: 'spacer', cellPadding: 0 },
                           ]}
-                          gridTemplateColumns={ACCOUNT_ROW_COLUMNS}
+                          gridTemplateColumns={accountGridTemplate}
                           sortState={sortIndicatorActive ? { key: sortKey, dir: sortDir } : null}
                           onSort={toggleAccountSort}
+                          onStartResize={startAccountColumnResize}
                           style={{
                             gap: ACCOUNT_ROW_GAP,
                             padding: '6px 10px',
@@ -2764,6 +2944,7 @@ export default function Accounts() {
                             <div key={root.id}>
                               <AccountRow
                                 account={root}
+                                gridTemplateColumns={accountGridTemplate}
                                 hasChildren={children.length}
                                 isCollapsed={isCollapsed}
                                 onToggleCollapse={() => setCollapsedGroups(prev => {
@@ -2800,6 +2981,7 @@ export default function Accounts() {
                                 <AccountRow
                                   key={child.id}
                                   account={child}
+                                  gridTemplateColumns={accountGridTemplate}
                                   parentAccount={root}
                                   isLastChild={childIdx === children.length - 1}
                                   owners={owners}
@@ -2833,6 +3015,7 @@ export default function Accounts() {
                         {showCreateAccount && (
                           <DraftAccountRow
                             owners={owners}
+                            gridTemplateColumns={accountGridTemplate}
                             creating={creatingAccount}
                             onCreate={createAccount}
                             onCancel={() => setShowCreateAccount(false)}
@@ -2842,7 +3025,7 @@ export default function Accounts() {
                     </>
                   )}
                 </SectionCard>
-                {showCreateAccount && accountListSection.expanded && (
+                {showCreateAccount && (
                   <div
                     style={{
                       position: 'absolute',
@@ -2879,14 +3062,17 @@ export default function Accounts() {
                   </div>
                 )}
               </div>
-              <div style={{ width: '100%', display: accountListSection.expanded ? 'flex' : 'none', justifyContent: 'flex-end', marginTop: 6 }}>
+              <div style={{ width: '100%', display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
                 <Button small onClick={() => setShowCreateAccount(true)} disabled={showCreateAccount}>
                   +New account
                 </Button>
               </div>
             </div>
           )}
+          </>
+          )}
 
+          {tab === 'owners' && (
           <OwnersPanel
             owners={owners}
             onCreateOwner={createOwner}
@@ -2895,20 +3081,17 @@ export default function Accounts() {
             onError={showAsyncNotice}
             disabled={showCreateAccount}
             width={sectionPanelWidth}
-            expanded={ownersSection.expanded}
-            onExpandedChange={ownersSection.onExpandedChange}
+            collapsible={false}
           />
+          )}
 
+          {tab === 'connections' && (
           <SectionCard
             title="Data Source Connections"
             summary={dataSourcesSummary}
-            expanded={dataSourcesSection.expanded}
-            onExpandedChange={dataSourcesSection.onExpandedChange}
+            collapsible={false}
             disabled={showCreateAccount}
             width={sectionPanelWidth}
-            style={{
-              marginTop: 18,
-            }}
           >
             <div style={{ padding: '12px 16px 14px' }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
@@ -2944,6 +3127,7 @@ export default function Accounts() {
               )}
             </div>
           </SectionCard>
+          )}
 
           {detailAccounts.map((account, index) => (
             <AccountDetail

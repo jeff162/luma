@@ -16,6 +16,30 @@ export default function PillTableHeader({
   edgeWidth = 8,
   style,
 }) {
+  // The resize grip lives on a column's right edge. Shared by the plain and custom-render branches so a
+  // custom-rendered column (e.g. one with an action button in its header) is resizable like any other.
+  function resizeHandle(col) {
+    if (col.resizable === false || typeof onStartResize !== 'function') return null
+    return (
+      <button
+        type="button"
+        onMouseDown={event => onStartResize(event, col.key)}
+        title={col.resizeRightTitle || `Drag to resize ${col.label || col.key}`}
+        style={{
+          position: 'absolute',
+          right: 0,
+          top: 0,
+          bottom: 0,
+          width: edgeWidth,
+          border: 'none',
+          background: 'transparent',
+          padding: 0,
+          cursor: 'col-resize',
+        }}
+      />
+    )
+  }
+
   return (
     <div style={{
       display: 'grid',
@@ -50,6 +74,7 @@ export default function PillTableHeader({
                 minWidth: 0,
                 padding: col.cellPadding ?? '0 6px',
                 height: col.height ?? 20,
+                position: 'relative',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: col.align === 'end'
@@ -60,6 +85,7 @@ export default function PillTableHeader({
               }}
             >
               {col.render()}
+              {resizeHandle(col)}
             </div>
           )
         }
@@ -171,24 +197,7 @@ export default function PillTableHeader({
                 )}
               </button>
             </div>
-            {canResize ? (
-              <button
-                type="button"
-                onMouseDown={event => onStartResize(event, col.key)}
-                title={col.resizeRightTitle || `Drag to resize ${col.label}`}
-                style={{
-                  position: 'absolute',
-                  right: 0,
-                  top: 0,
-                  bottom: 0,
-                  width: edgeWidth,
-                  border: 'none',
-                  background: 'transparent',
-                  padding: 0,
-                  cursor: 'col-resize',
-                }}
-              />
-            ) : null}
+            {canResize ? resizeHandle(col) : null}
           </div>
         )
       })}
