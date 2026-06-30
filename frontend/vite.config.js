@@ -70,6 +70,29 @@ export default defineConfig(({ mode }) => {
     define: {
       __APP_VERSION__: JSON.stringify(env.VITE_APP_VERSION || packageJson.version || '0.2.0'),
     },
+    build: {
+      rollupOptions: {
+        output: {
+          // Isolate the heavy, slow-changing vendor libraries into their own long-cached chunks
+          // instead of letting them ride inside whichever app chunk happens to be their common
+          // ancestor. Recharts (+ its d3/victory dependency tree) is by far the largest dependency
+          // and is shared between the Dashboard and the detail-panel trend charts (via
+          // detailShared.jsx); pulling it out keeps the app-code chunks (detailShared, Dashboard)
+          // at their true size and lets the chart bundle stay cached across deploys that only touch
+          // app code. React is split the same way for the same reason.
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined
+            if (/[\\/]node_modules[\\/](recharts|d3-[^\\/]+|victory-vendor|internmap|decimal\.js-light|reduce-css-calc)[\\/]/.test(id)) {
+              return 'charts'
+            }
+            if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(id)) {
+              return 'react-vendor'
+            }
+            return undefined
+          },
+        },
+      },
+    },
     server: {
       host: '0.0.0.0',
       port: frontendPort,

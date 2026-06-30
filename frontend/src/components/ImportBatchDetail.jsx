@@ -28,6 +28,8 @@ import { txnMutations } from '../lib/txnMutations.js'
 import { formatMoneyMagnitude } from '../lib/moneyDisplay.js'
 import { Button, Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
+import TransactionDetail from './TransactionDetail.jsx'
+import CategoryDetail from './CategoryDetail.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
@@ -70,6 +72,8 @@ export default function ImportBatchDetail({
   const { pos, dragging, panelRef, onDragStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
   const [totalCount, setTotalCount] = useState(0)
   const [countLoading, setCountLoading] = useState(true)
+  const [payeeDetail, setPayeeDetail] = useState(null)
+  const [categoryDetail, setCategoryDetail] = useState(null)
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
     preferenceKey: IMPORT_BATCH_DETAIL_TABLE_PREF_KEY,
   })
@@ -190,6 +194,7 @@ export default function ImportBatchDetail({
   )
 
   return (
+    <>
     <DetailPanelShell
       pos={pos}
       dragging={dragging}
@@ -276,6 +281,12 @@ export default function ImportBatchDetail({
             categories={categories}
             {...bulk.tableProps}
             onCategorySave={handleCategorySave}
+            onCategoryOpenDetail={setCategoryDetail}
+            onTransactionOpenDetail={setPayeeDetail}
+            onTrashed={txnId => {
+              setTotalCount(prev => Math.max(0, prev - 1))
+              setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))
+            }}
             onAddCategory={onAddCategory}
             onRowsChange={setRows}
             columnConfig={columnConfig}
@@ -287,5 +298,32 @@ export default function ImportBatchDetail({
         )}
       </div>
     </DetailPanelShell>
+    {payeeDetail && (
+      <TransactionDetail
+        txn={payeeDetail}
+        categories={categories}
+        onClose={() => setPayeeDetail(null)}
+        onCategorized={(txnId, cat) => setRows(prev => prev.map(t => (
+          t.id === txnId
+            ? { ...t, category_id: cat?.id ?? null, category_name: cat?.name ?? null, category_color: null, category_overridden: 1 }
+            : t
+        )))}
+        onTrashed={txnId => { setRows(prev => prev.filter(t => t.id !== txnId)); setTotalCount(prev => Math.max(0, prev - 1)) }}
+        onNotesSaved={(txnId, notes) => setRows(prev => prev.map(t => (t.id === txnId ? { ...t, notes } : t)))}
+        onTagsChanged={(txnId, tags) => setRows(prev => prev.map(t => (t.id === txnId ? { ...t, tags } : t)))}
+        forceFloating
+        stackIndex={stackIndex + 1}
+      />
+    )}
+    {categoryDetail && (
+      <CategoryDetail
+        category={categoryDetail}
+        categories={categories}
+        onClose={() => setCategoryDetail(null)}
+        forceFloating
+        stackIndex={stackIndex + 1}
+      />
+    )}
+    </>
   )
 }

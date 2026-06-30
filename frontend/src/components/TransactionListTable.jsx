@@ -21,6 +21,7 @@ import { CategoryCell, MerchantCell, TransactionAmountCell, getTxnMerchantLabel 
 import PillGridTable from './PillGridTable.jsx'
 import { SelectAllCheckbox } from './ui.jsx'
 import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
+import { useTransactionRowActions, TransactionRowActionsChrome } from '../lib/useTransactionRowActions.jsx'
 
 const COLUMN_DEFS = {
   date: { key: 'date', label: 'Date', defaultWidth: 96, minWidth: 82 },
@@ -104,11 +105,22 @@ export default function TransactionListTable({
   onAddCategory,
   onRulePrompt,
   onRowsChange,
+  // Reconcile callbacks for the shared right-click row menu (owned by this table). The menu's
+  // "Edit transaction" routes through onTransactionOpenDetail; it appears only when that callback
+  // is supplied (and the table isn't in bulk-select mode). onTrashed lets a host adjust anything it
+  // tracks outside `rows` after a soft-delete (a total count, an open child panel); onRuleSaved
+  // fires after a rule is created/applied from the menu.
+  onTrashed = null,
+  onRuleSaved = null,
   getRowStyle,
   maxHeight = 420,
   showAccount = true,
   showSourceAccount = false,
   showCategory = true,
+  // The merchant ↗ (opens the merchant activity report) is self-referential on a list already scoped
+  // to one merchant — e.g. TransactionDetail's own payee activity — so that surface turns it off while
+  // keeping inline rename, the pencil, and the row menu.
+  showMerchantReport = true,
   // When set, rows whose category (or its parent group) is excluded from totals get a quiet marker
   // by the amount + a dimmed amount, so a list that sits next to a total which omits those rows
   // explains the gap. Off by default: the plain Transactions/Categories ledgers show no totals, so
@@ -142,6 +154,20 @@ export default function TransactionListTable({
     })
   }
   const onSort = externallyControlled ? externalOnSort : handleInternalSort
+
+  // Shared right-click row menu + its note / tag / trash / rule editors, so every list built on this
+  // table gets the same row actions as the Transactions ledger from one implementation. The host
+  // owns its rows, so reconcile flows back through onRowsChange / onTrashed.
+  const rowActions = useTransactionRowActions({
+    onOpenDetail: onTransactionOpenDetail,
+    reconcileRow: (txnId, patch) => patchRows(txnId, patch),
+    removeRow: txnId => { onRowsChange?.(prev => prev.filter(row => row.id !== txnId)); onTrashed?.(txnId) },
+    onRuleSaved,
+  })
+
+  // The menu's "Edit transaction" item needs somewhere to open the editor; without that callback
+  // there is no row menu. Bulk-select mode owns its own interaction, so suppress the menu there.
+  const rowMenuEnabled = !bulkActive && typeof onTransactionOpenDetail === 'function'
 
   // External sort means the parent has already ordered `rows`; only sort here when we own state.
   const visibleRows = useMemo(() => {
@@ -180,6 +206,7 @@ export default function TransactionListTable({
             txn={txn}
             onOpenDetail={onTransactionOpenDetail}
             onRename={(id, name) => patchRows(id, { display_name: name })}
+            showReport={showMerchantReport}
           />
         )
       case 'category':
@@ -247,6 +274,7 @@ export default function TransactionListTable({
     return visibleRows.map(txn => (
       <div
         key={txn.id}
+        onContextMenu={rowMenuEnabled ? e => rowActions.onContextMenu(e, txn) : undefined}
         style={{
           display: 'grid',
           gridTemplateColumns,
@@ -325,40 +353,43 @@ export default function TransactionListTable({
   }
 
   return (
-    // This wrapper is the scroll viewport: vertical scroll feeds the sticky header below,
-    // horizontal scroll feeds the wide grid. scrollRef lands here so caller-side infinite
-    // scroll hooks can attach to the same element the rows scroll inside. It is intentionally
-    // NOT a flex container — combining `display:flex,flex-direction:column` with `overflow:auto`
-    // and a height cap causes the block child to be flex-shrunk rather than allowed to overflow,
-    // which subtly changes the wrapper's measured size and throws off the floating detail
-    // panel's initial centered position.
-    <div
-      ref={scrollRef}
-      style={{
-        border: '1px solid var(--border)',
-        borderRadius: 10,
-        overflow: 'auto',
-        ...(fillHeight ? { flex: 1, minHeight: 0, height: '100%' } : { maxHeight }),
-      }}>
-      <PillGridTable
-        columns={pillColumns}
-        onColumnsChange={onColumnConfigChange
-          ? cols => onColumnConfigChange(cols.filter(col => col.key !== BULK_SELECT_COLUMN_KEY))
-          : undefined}
-        sortState={sortState}
-        onSort={onSort}
-        headerStyle={{
-          position: 'sticky',
-          top: 0,
-          background: 'var(--surface)',
-          zIndex: 2,
-        }}
-        renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
-          <div>
-            {renderRows(activeColumns, gridTemplateColumns)}
-          </div>
-        )}
-      />
-    </div>
+    <>
+      {/* This wrapper is the scroll viewport: vertical scroll feeds the sticky header below,
+        horizontal scroll feeds the wide grid. scrollRef lands here so caller-side infinite
+        scroll hooks can attach to the same element the rows scroll inside. It is intentionally
+        NOT a flex container — combining `display:flex,flex-direction:column` with `overflow:auto`
+        and a height cap causes the block child to be flex-shrunk rather than allowed to overflow,
+        which subtly changes the wrapper's measured size and throws off the floating detail
+        panel's initial centered position. */}
+      <div
+        ref={scrollRef}
+        style={{
+          border: '1px solid var(--border)',
+          borderRadius: 10,
+          overflow: 'auto',
+          ...(fillHeight ? { flex: 1, minHeight: 0, height: '100%' } : { maxHeight }),
+        }}>
+        <PillGridTable
+          columns={pillColumns}
+          onColumnsChange={onColumnConfigChange
+            ? cols => onColumnConfigChange(cols.filter(col => col.key !== BULK_SELECT_COLUMN_KEY))
+            : undefined}
+          sortState={sortState}
+          onSort={onSort}
+          headerStyle={{
+            position: 'sticky',
+            top: 0,
+            background: 'var(--surface)',
+            zIndex: 2,
+          }}
+          renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
+            <div>
+              {renderRows(activeColumns, gridTemplateColumns)}
+            </div>
+          )}
+        />
+      </div>
+      <TransactionRowActionsChrome controller={rowActions} />
+    </>
   )
 }

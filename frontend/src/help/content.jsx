@@ -67,7 +67,7 @@ export const HELP_TOPICS = [
     section: 'getting-started',
     title: `How ${APP_NAME} works`,
     surfaces: ['Getting started', 'Dashboard'],
-    summary: `${APP_NAME} is for two things: reports (mostly the dashboard) and searching the transaction history. Everything else -- accounts, owners, categories, tags, rules -- exist to make those two better.`,
+    summary: `${APP_NAME} is for two things: reports (mostly the dashboard) and searching the transaction history. Everything else -- accounts, owners, categories, tags, rules -- exist to make these two better.`,
     body: () => (
       <>
         <p>
@@ -84,7 +84,7 @@ export const HELP_TOPICS = [
         <p>
           All of the data remains local unless you move it somewhere else; {APP_NAME} never makes an outgoing
           connection unless specifically requested (eg. downloading
-          transactions from a data provider).
+          transactions from a data provider, store a backup on a cloud service).
         </p>
         <p>
           To get started:

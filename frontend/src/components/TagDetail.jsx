@@ -3,9 +3,12 @@
 
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import { formatCurrency } from '../lib/utils.js'
 import { Button, Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
+import TransactionDetail from './TransactionDetail.jsx'
+import CategoryDetail from './CategoryDetail.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import {
@@ -46,9 +49,25 @@ export default function TagDetail({
     useDetailPanelChrome(onClose, { forceFloating, stackIndex })
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(true)
+  const [payeeDetail, setPayeeDetail] = useState(null)
+  const [categoryDetail, setCategoryDetail] = useState(null)
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
     preferenceKey: TAG_DETAIL_TABLE_PREF_KEY,
   })
+
+  function saveCategory(txnId, catId, catObj) {
+    const cat = catObj || categories.find(c => c.id === catId)
+    setTransactions(prev => prev.map(t => (
+      t.id === txnId ? {
+        ...t,
+        category_id: catId,
+        category_name: cat?.name ?? null,
+        category_color: null,
+        category_overridden: 1,
+      } : t
+    )))
+    txnMutations.setCategory(txnId, catId)
+  }
 
   // The visible rows are a client-side exact-signature subset of an OR-match fetch, so no server filter
   // can re-resolve them — "select all" selects every loaded row by id ('loaded' strategy) rather than
@@ -113,6 +132,7 @@ export default function TagDetail({
   )
 
   return (
+    <>
     <DetailPanelShell
       pos={pos}
       size={size}
@@ -141,6 +161,10 @@ export default function TagDetail({
             rows={transactions}
             categories={categories}
             {...bulk.tableProps}
+            onCategorySave={saveCategory}
+            onCategoryOpenDetail={setCategoryDetail}
+            onTransactionOpenDetail={setPayeeDetail}
+            onTrashed={txnId => setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))}
             onRowsChange={setTransactions}
             columnConfig={columnConfig}
             onColumnConfigChange={setColumnConfig}
@@ -149,5 +173,36 @@ export default function TagDetail({
         </>
       )}
     </DetailPanelShell>
+    {payeeDetail && (
+      <TransactionDetail
+        txn={payeeDetail}
+        categories={categories}
+        onClose={() => setPayeeDetail(null)}
+        onCategorized={(txnId, cat) => setTransactions(prev => prev.map(t => (
+          t.id === txnId
+            ? { ...t, category_id: cat?.id ?? null, category_name: cat?.name ?? null, category_color: null, category_overridden: 1 }
+            : t
+        )))}
+        onTrashed={txnId => setTransactions(prev => prev.filter(t => t.id !== txnId))}
+        onNotesSaved={(txnId, notes) => setTransactions(prev => prev.map(t => (t.id === txnId ? { ...t, notes } : t)))}
+        onTagsChanged={(txnId, tags) => setTransactions(prev => prev.map(t => (t.id === txnId ? { ...t, tags } : t)))}
+        forceFloating
+        stackIndex={stackIndex + 1}
+        dateStart={dateStart}
+        dateEnd={dateEnd}
+      />
+    )}
+    {categoryDetail && (
+      <CategoryDetail
+        category={categoryDetail}
+        categories={categories}
+        onClose={() => setCategoryDetail(null)}
+        forceFloating
+        stackIndex={stackIndex + 1}
+        dateStart={dateStart}
+        dateEnd={dateEnd}
+      />
+    )}
+    </>
   )
 }

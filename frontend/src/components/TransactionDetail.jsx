@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations, reconcileRowsAfterRuleApply } from '../lib/txnMutations.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
-import { AppConfirmDialog, Spinner } from './ui.jsx'
+import { AppConfirmDialog, Button, Spinner } from './ui.jsx'
 import { CategoryCell, getTxnMerchantLabel } from './TransactionRow.jsx'
 import { OriginRow } from './OriginFields.jsx'
 import { getTxnOriginRows } from '../lib/importSourceFields.js'
@@ -14,6 +14,7 @@ import NoteEditor from './NoteEditor.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransactionListTable from './TransactionListTable.jsx'
+import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import { TagBadge } from './TagUi.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
@@ -53,6 +54,16 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
   const [tagsLoading, setTagsLoading] = useState(!providedAvailableTags)
   const [trashConfirmOpen, setTrashConfirmOpen] = useState(false)
   const [originExpanded, setOriginExpanded] = useState(false)
+  // A row's pencil / "Edit transaction" in the payee activity list opens that transaction's own editor
+  // as a child panel (same as the other detail panels host a child editor), so the merchant report can
+  // edit a specific row in full without losing its place.
+  const [childTxn, setChildTxn] = useState(null)
+
+  // The merchant `↗` opens this panel as a merchant *report* (activity only) via a payload marker; the
+  // pencil / "Edit transaction" opens it unmarked as the full editor. `showPayeeActivity` independently
+  // gates the bottom (the import rule-suggestions screen shows the editor with no activity).
+  const isMerchantReport = !!txn?._merchantReport
+  const showEditorCard = !isMerchantReport
 
   async function confirmTrash() {
     setTrashConfirmOpen(false)
@@ -213,6 +224,16 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
 
   const selectedMonthRow = trend.find(r => r.month === selectedMonth)
   const monthSectionHeight = getDetailMonthSectionHeight(trend)
+  // Bulk edit over the selected month's rows for this payee, matching the other activity reports.
+  // Scope is month + payee, so "select all matching" resolves the whole month server-side even when
+  // the list is paged.
+  const bulk = useBulkTransactionEditing({
+    rows: monthTxns,
+    setRows: setMonthTxns,
+    total: selectedMonthRow?.count || monthTxns.length,
+    filterParams: { month: selectedMonth, payees: payee },
+    categories: detailCategories,
+  })
   const visibleTags = Array.isArray(detailTxn.tags) ? detailTxn.tags : []
   const visibleTagIds = new Set(visibleTags.map(tag => tag.id))
   const originRows = getTxnOriginRows(detailTxn)
@@ -287,6 +308,7 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
         header={header}
         isTopmost={isTopmost}
       >
+          {showEditorCard ? (
           <div style={{
             display: 'grid',
             gap: 16,
@@ -405,6 +427,7 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
               </div>
             </div>
           </div>
+          ) : null}
 
           {showPayeeActivity ? (
           <>
@@ -430,15 +453,27 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                    <Button variant="ghost" small onClick={bulk.toggle}>
+                      {bulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
+                    </Button>
+                  </div>
+                  <BulkEditChrome controller={bulk} />
                   <TransactionListTable
                     rows={monthTxns}
                     categories={detailCategories}
+                    {...bulk.tableProps}
                     onCategorySave={handleOverrideCategory}
                     onAddCategory={handleAddCategory}
                     onRulePrompt={p => {
                       setRulePrompt(p)
                       externalRulePrompt?.(p)
                     }}
+                    onTransactionOpenDetail={setChildTxn}
+                    onTrashed={txnId => setChildTxn(prev => (prev && prev.id === txnId ? null : prev))}
+                    // Every row here is the same payee, so the merchant report ↗ would be self-referential;
+                    // the pencil + row menu (which edit a specific row) stay.
+                    showMerchantReport={false}
                     onRowsChange={setMonthTxns}
                     columnConfig={columnConfig}
                     onColumnConfigChange={setColumnConfig}
@@ -493,6 +528,21 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
             }
           }}
           onDismiss={() => setRulePrompt(null)}
+        />
+      )}
+      {childTxn && (
+        <TransactionDetail
+          txn={childTxn}
+          categories={detailCategories}
+          onClose={() => setChildTxn(null)}
+          onCategorized={(id, cat) => handleCatSaved(id, cat)}
+          onNotesSaved={(id, notes) => setMonthTxns(prev => prev.map(t => (t.id === id ? { ...t, notes } : t)))}
+          onTagsChanged={(id, tags) => setMonthTxns(prev => prev.map(t => (t.id === id ? { ...t, tags } : t)))}
+          onTrashed={id => setMonthTxns(prev => prev.filter(t => t.id !== id))}
+          forceFloating
+          stackIndex={stackIndex + 1}
+          dateStart={dateStart}
+          dateEnd={dateEnd}
         />
       )}
     </>

@@ -1650,14 +1650,11 @@ export default function Dashboard() {
   const tagModeFetchKey = activeTagReport
     ? `${activeTagReport.id}|${dashboardView}|${dateStart || ''}|${dateEnd || ''}|${accountId || ''}|${tagIds || ''}|${ownerIds || ''}|${accountIds || ''}|${groupIds || ''}|${categoryIds || ''}|${payees || ''}`
     : null
-  useEffect(() => {
-    if (mode !== 'single' || !activeTagReport) {
-      setTagModeTransactions([])
-      setTagModeLoading(false)
-      return
-    }
-    let cancelled = false
-    setTagModeLoading(true)
+  // The tag report's wedges are computed client-side from these rows, so an edit that changes a
+  // transaction's effective tags (recategorizing it into/out of a tagged category) only shows up
+  // once these are refetched. Extracted as a callback so both the scope-change effect below and the
+  // `luma:transactions-changed` handler can reload it — the same shape as loadSingleTotals.
+  const loadTagModeTransactions = useCallback(() => (
     api.getTransactions({
       ...(dateStart ? { date_start: dateStart } : {}),
       ...(dateEnd ? { date_end: dateEnd } : {}),
@@ -1667,9 +1664,19 @@ export default function Dashboard() {
       ...summaryFilters,
       view: dashboardView,
       limit: 1000,
-    }).then(resp => {
+    }).then(resp => resp?.transactions || [])
+  ), [dateStart, dateEnd, accountId, tagIds, ownerIds, summaryFilters, dashboardView])
+  useEffect(() => {
+    if (mode !== 'single' || !activeTagReport) {
+      setTagModeTransactions([])
+      setTagModeLoading(false)
+      return
+    }
+    let cancelled = false
+    setTagModeLoading(true)
+    loadTagModeTransactions().then(txns => {
       if (cancelled) return
-      setTagModeTransactions(resp?.transactions || [])
+      setTagModeTransactions(txns)
       setTagModeLoading(false)
     }).catch(() => {
       if (cancelled) return
@@ -1963,6 +1970,12 @@ export default function Dashboard() {
           api.getCategoryTotalsInGroup(null, selectedGroup.group_id, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters)
             .then(setCatRows)
         }
+        // The tag report is a separate data path from the group/category totals above, so refresh its
+        // underlying rows too — otherwise recategorizing a transaction out of a tagged category (e.g.
+        // from the TagDetail panel) leaves the wedges stale.
+        if (activeTagReport) {
+          loadTagModeTransactions().then(setTagModeTransactions).catch(() => {})
+        }
       } else if (mode === 'compare') {
         loadCompareTotals()
         if (cmpGroup?.group_id) {
@@ -1978,7 +1991,7 @@ export default function Dashboard() {
     }
     window.addEventListener('luma:transactions-changed', onTxnChange)
     return () => window.removeEventListener('luma:transactions-changed', onTxnChange)
-  }, [mode, loadSingleTotals, loadCompareTotals, loadTrendSeries, loadTrendGroups, selectedGroup, cmpGroup, periodA, periodB, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters])
+  }, [mode, loadSingleTotals, loadCompareTotals, loadTrendSeries, loadTrendGroups, selectedGroup, cmpGroup, periodA, periodB, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeTagReport, loadTagModeTransactions])
 
   useEffect(() => {
     api.getCategories().then(setCategories)
@@ -2602,6 +2615,7 @@ export default function Dashboard() {
                               onRulePrompt={setRulePrompt}
                               onRowsChange={setTxnData}
                               onTransactionOpenDetail={openTransactionDetail}
+                              onTrashed={txnId => { reconcileDetailEdit(txnId, null); setTxnDataTotal(prev => Math.max(0, prev - 1)) }}
                               showCategory={false}
                               columnConfig={categoryTxnColumns}
                               onColumnConfigChange={setCategoryTxnColumns}
@@ -2750,6 +2764,7 @@ export default function Dashboard() {
                     onRulePrompt={setRulePrompt}
                     onRowsChange={setGroupTxnData}
                     onTransactionOpenDetail={openTransactionDetail}
+                    onTrashed={txnId => { reconcileDetailEdit(txnId, null); setGroupTxnDataTotal(prev => Math.max(0, prev - 1)) }}
                     columnConfig={groupTxnColumns}
                     onColumnConfigChange={setGroupTxnColumns}
                     maxHeight={320}

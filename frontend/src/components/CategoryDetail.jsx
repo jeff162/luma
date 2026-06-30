@@ -7,6 +7,7 @@ import { txnMutations } from '../lib/txnMutations.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { Button, Spinner, Badge, CategoryMarker } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
+import TransactionDetail from './TransactionDetail.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import {
@@ -64,6 +65,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
   const monthSectionHeight = getDetailMonthSectionHeight(trend)
 
   const [localMonthTxns, setLocalMonthTxns] = useState([])
+  const [payeeDetail, setPayeeDetail] = useState(null)
 
   useEffect(() => {
     setLocalMonthTxns(monthTxns)
@@ -114,6 +116,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
   )
 
   return (
+    <>
     <DetailPanelShell
       pos={pos}
       size={size}
@@ -159,6 +162,8 @@ export default function CategoryDetail({ category, categories = [], onClose, for
                     categories={categories}
                     {...bulk.tableProps}
                     onCategorySave={saveCategory}
+                    onTransactionOpenDetail={setPayeeDetail}
+                    onTrashed={txnId => setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))}
                     onRowsChange={setLocalMonthTxns}
                     columnConfig={columnConfig}
                     onColumnConfigChange={setColumnConfig}
@@ -183,5 +188,25 @@ export default function CategoryDetail({ category, categories = [], onClose, for
             </div>
           )}
     </DetailPanelShell>
+    {payeeDetail && (
+      <TransactionDetail
+        txn={payeeDetail}
+        categories={categories}
+        onClose={() => setPayeeDetail(null)}
+        onCategorized={(txnId, cat) => setLocalMonthTxns(prev => prev.map(t => (
+          t.id === txnId
+            ? { ...t, category_id: cat?.id ?? null, category_name: cat?.name ?? null, category_color: null, category_overridden: 1 }
+            : t
+        )))}
+        onTrashed={txnId => setLocalMonthTxns(prev => prev.filter(t => t.id !== txnId))}
+        onNotesSaved={(txnId, notes) => setLocalMonthTxns(prev => prev.map(t => (t.id === txnId ? { ...t, notes } : t)))}
+        onTagsChanged={(txnId, tags) => setLocalMonthTxns(prev => prev.map(t => (t.id === txnId ? { ...t, tags } : t)))}
+        forceFloating
+        stackIndex={stackIndex + 1}
+        dateStart={dateStart}
+        dateEnd={dateEnd}
+      />
+    )}
+    </>
   )
 }

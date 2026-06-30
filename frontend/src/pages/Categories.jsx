@@ -2477,6 +2477,7 @@ export default function Categories() {
                       }}
                       onAddCategory={addMatchingCategory}
                       onRowsChange={setPagedMatchingTxns}
+                      onTrashed={() => setMatchingTxnsTotal(prev => Math.max(0, prev - 1))}
                       scrollRef={matchingTxnsListRef}
                       fillHeight={true}
                       columnConfig={matchingTxnColumns}

@@ -8,6 +8,7 @@ import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { Button, Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
+import CategoryDetail from './CategoryDetail.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
@@ -105,6 +106,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
   // origin/source info). It is hosted here rather than by the page, so it stacks via the shared panel
   // registry and closes with this account panel; edits made inside it reconcile back into the month list.
   const [payeeDetail, setPayeeDetail] = useState(null)
+  const [categoryDetail, setCategoryDetail] = useState(null)
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
     preferenceKey: ACCOUNT_DETAIL_TABLE_PREF_KEY,
     showAccount: false,
@@ -290,7 +292,9 @@ export default function AccountDetail({ account, categories = [], onClose, force
                     categories={categories}
                     {...bulk.tableProps}
                     onCategorySave={saveCategory}
+                    onCategoryOpenDetail={setCategoryDetail}
                     onTransactionOpenDetail={setPayeeDetail}
+                    onTrashed={txnId => setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))}
                     onRowsChange={setLocalMonthTxns}
                     showAccount={false}
                     showSourceAccount={isMerged}
@@ -336,6 +340,17 @@ export default function AccountDetail({ account, categories = [], onClose, force
         onTrashed={txnId => setLocalMonthTxns(prev => prev.filter(t => t.id !== txnId))}
         onNotesSaved={(txnId, notes) => setLocalMonthTxns(prev => prev.map(t => (t.id === txnId ? { ...t, notes } : t)))}
         onTagsChanged={(txnId, tags) => setLocalMonthTxns(prev => prev.map(t => (t.id === txnId ? { ...t, tags } : t)))}
+        forceFloating
+        stackIndex={stackIndex + 1}
+        dateStart={dateStart}
+        dateEnd={dateEnd}
+      />
+    )}
+    {categoryDetail && (
+      <CategoryDetail
+        category={categoryDetail}
+        categories={categories}
+        onClose={() => setCategoryDetail(null)}
         forceFloating
         stackIndex={stackIndex + 1}
         dateStart={dateStart}

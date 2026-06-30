@@ -4,6 +4,7 @@
 /* eslint-disable react-refresh/only-export-components -- shared transaction-cell components live alongside their tag/label helpers used across the app */
 
 import { useState, useRef, useEffect, useLayoutEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import CategoryDisplay from './CategoryDisplay.jsx'
@@ -201,7 +202,7 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTag
   )
 }
 
-export function MerchantCell({ txn, onOpenDetail, onRename }) {
+export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true }) {
   const [name, setName] = useState(getTxnMerchantLabel(txn))
   const labelRef = useRef(null)
   const [nameTruncated, setNameTruncated] = useState(false)
@@ -315,10 +316,16 @@ export function MerchantCell({ txn, onOpenDetail, onRename }) {
           {labelSpan}
         </Tooltip>
       ) : labelSpan}
-      {onOpenDetail && (
+      {onOpenDetail && showReport && (
         <Tooltip content="Open merchant spending report">
           <button
-            onClick={e => { e.stopPropagation(); onOpenDetail(txn) }}
+            // The merchant report and the transaction editor share one panel (TransactionDetail). The
+            // `↗` wants the merchant *report* (activity only), so it tags the open payload; the panel
+            // reads the marker and drops its single-transaction editor card. The pencil opens the same
+            // panel unmarked (full editor). Rides the open payload like the duplicate report's
+            // `batch._dateFilter`, so no host needs to plumb an extra prop. `showReport` is off where the
+            // arrow would be self-referential (a list already scoped to one merchant).
+            onClick={e => { e.stopPropagation(); onOpenDetail({ ...txn, _merchantReport: true }) }}
             aria-label="Open merchant spending report"
             style={{ ...detailButtonStyle, flexShrink: 0 }}
           >↗</button>
@@ -499,9 +506,57 @@ function TagStackChip({ tags, onClick }) {
   )
 }
 
+// The inline note/tag popovers anchor to a cell inside a transaction row, but the rows carry
+// `content-visibility: auto` (paint containment) which makes each row its own stacking context —
+// so an absolutely-positioned popover is trapped behind the rows that follow it. Portaling the
+// popover to <body> and positioning it `fixed` against the anchor's live rect escapes that trap
+// (the same approach CategoryPicker uses). Right-aligned to the anchor since the amount strip sits
+// at the right edge; flips above the anchor when there isn't room below.
+function RowPopoverPortal({ anchorRef, children }) {
+  const [layout, setLayout] = useState(null)
+
+  useLayoutEffect(() => {
+    const element = anchorRef.current
+    if (!element) return undefined
+
+    function update() {
+      const rect = element.getBoundingClientRect()
+      const gap = 4
+      const spaceBelow = window.innerHeight - rect.bottom
+      const openUp = spaceBelow < 300 && rect.top > spaceBelow
+      setLayout({
+        right: Math.max(8, window.innerWidth - rect.right),
+        ...(openUp
+          ? { bottom: Math.max(8, window.innerHeight - rect.top + gap) }
+          : { top: rect.bottom + gap }),
+        maxHeight: Math.max(160, (openUp ? rect.top : spaceBelow) - 12),
+      })
+    }
+
+    update()
+    // Capture-phase scroll catches the inner detail-panel/list scroll container, not just the window,
+    // so the popover tracks the row as the list scrolls.
+    window.addEventListener('scroll', update, true)
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update, true)
+      window.removeEventListener('resize', update)
+    }
+  }, [anchorRef])
+
+  if (!layout) return null
+  return createPortal(
+    <div style={{ position: 'fixed', zIndex: 1000, overflowY: 'auto', ...layout }}>
+      {children}
+    </div>,
+    document.body,
+  )
+}
+
 export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenDetail, showExcludedFromTotals = false }) {
   const navigate = useNavigate()
   const unifiedDuplicatesViewer = useUnifiedDuplicatesViewer()
+  const markerStripRef = useRef(null)
   const [showNote, setShowNote] = useState(false)
   const [showTags, setShowTags] = useState(false)
   // null sentinel = not fetched yet; an array (possibly empty) = fetched.
@@ -550,7 +605,7 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
         column (e.g. a truncated account name) it cleanly *covers* that text instead of letting it show
         through the gaps in the transparent glyphs — the same way one column cleanly hides another when
         resized over it. paddingLeft keeps a small margin between the cut text and the first marker. */}
-      <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, alignSelf: 'stretch', background: 'var(--surface)', paddingLeft: 6 }}>
+      <div ref={markerStripRef} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, alignSelf: 'stretch', background: 'var(--surface)', paddingLeft: 6 }}>
         {txn.suspect_duplicate_of ? (
           <Tooltip
             content={<span>Possible duplicate of another transaction. Click to review.</span>}
@@ -616,22 +671,28 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
           ))
         )}
         {showNote ? (
-          <NotePopover
-            txn={txn}
-            onSave={handleNoteSave}
-            onClose={() => setShowNote(false)}
-          />
+          <RowPopoverPortal anchorRef={markerStripRef}>
+            <NotePopover
+              txn={txn}
+              positioning="relative"
+              onSave={handleNoteSave}
+              onClose={() => setShowNote(false)}
+            />
+          </RowPopoverPortal>
         ) : null}
         {showTags ? (
-          <TagPickerWithCreate
-            allTags={availableTags || []}
-            selectedTagIds={visibleTagIds}
-            inheritedTagIds={inheritedTagIds}
-            loading={availableTags === null}
-            onToggleTag={handleToggleTag}
-            onTagCreated={tag => setAvailableTags(prev => (prev || []).some(t => t.id === tag.id) ? prev : [...(prev || []), tag])}
-            onClose={() => setShowTags(false)}
-          />
+          <RowPopoverPortal anchorRef={markerStripRef}>
+            <TagPickerWithCreate
+              allTags={availableTags || []}
+              selectedTagIds={visibleTagIds}
+              inheritedTagIds={inheritedTagIds}
+              loading={availableTags === null}
+              positioning="relative"
+              onToggleTag={handleToggleTag}
+              onTagCreated={tag => setAvailableTags(prev => (prev || []).some(t => t.id === tag.id) ? prev : [...(prev || []), tag])}
+              onClose={() => setShowTags(false)}
+            />
+          </RowPopoverPortal>
         ) : null}
         {excludedFromTotals ? (
           <Tooltip

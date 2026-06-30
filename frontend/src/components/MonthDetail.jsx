@@ -3,9 +3,12 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
+import { txnMutations } from '../lib/txnMutations.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { Button, Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
+import TransactionDetail from './TransactionDetail.jsx'
+import CategoryDetail from './CategoryDetail.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import {
@@ -39,6 +42,8 @@ export default function MonthDetail({
   const [transactions, setTransactions] = useState([])
   const [txnTotal, setTxnTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [payeeDetail, setPayeeDetail] = useState(null)
+  const [categoryDetail, setCategoryDetail] = useState(null)
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
     preferenceKey: MONTH_DETAIL_TABLE_PREF_KEY,
   })
@@ -77,6 +82,20 @@ export default function MonthDetail({
     return () => { cancelled = true }
   }, [bulkFilterParams])
 
+  function saveCategory(txnId, catId, catObj) {
+    const cat = catObj || categories.find(c => c.id === catId)
+    setTransactions(prev => prev.map(t => (
+      t.id === txnId ? {
+        ...t,
+        category_id: catId,
+        category_name: cat?.name ?? null,
+        category_color: null,
+        category_overridden: 1,
+      } : t
+    )))
+    txnMutations.setCategory(txnId, catId)
+  }
+
   const viewLabel = view === 'income' ? 'Income' : 'Spending'
   const total = transactions.reduce((s, t) => {
     const amount = Number(t.amount) || 0
@@ -95,6 +114,7 @@ export default function MonthDetail({
   )
 
   return (
+    <>
     <DetailPanelShell
       pos={pos}
       size={size}
@@ -123,6 +143,13 @@ export default function MonthDetail({
             rows={transactions}
             categories={categories}
             {...bulk.tableProps}
+            onCategorySave={saveCategory}
+            onCategoryOpenDetail={setCategoryDetail}
+            onTransactionOpenDetail={setPayeeDetail}
+            onTrashed={txnId => {
+              setTxnTotal(prev => Math.max(0, prev - 1))
+              setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))
+            }}
             onRowsChange={setTransactions}
             columnConfig={columnConfig}
             onColumnConfigChange={setColumnConfig}
@@ -131,5 +158,32 @@ export default function MonthDetail({
         </>
       )}
     </DetailPanelShell>
+    {payeeDetail && (
+      <TransactionDetail
+        txn={payeeDetail}
+        categories={categories}
+        onClose={() => setPayeeDetail(null)}
+        onCategorized={(txnId, cat) => setTransactions(prev => prev.map(t => (
+          t.id === txnId
+            ? { ...t, category_id: cat?.id ?? null, category_name: cat?.name ?? null, category_color: null, category_overridden: 1 }
+            : t
+        )))}
+        onTrashed={txnId => { setTransactions(prev => prev.filter(t => t.id !== txnId)); setTxnTotal(prev => Math.max(0, prev - 1)) }}
+        onNotesSaved={(txnId, notes) => setTransactions(prev => prev.map(t => (t.id === txnId ? { ...t, notes } : t)))}
+        onTagsChanged={(txnId, tags) => setTransactions(prev => prev.map(t => (t.id === txnId ? { ...t, tags } : t)))}
+        forceFloating
+        stackIndex={stackIndex + 1}
+      />
+    )}
+    {categoryDetail && (
+      <CategoryDetail
+        category={categoryDetail}
+        categories={categories}
+        onClose={() => setCategoryDetail(null)}
+        forceFloating
+        stackIndex={stackIndex + 1}
+      />
+    )}
+    </>
   )
 }

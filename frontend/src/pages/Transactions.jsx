@@ -9,14 +9,13 @@ import { formatDate } from '../lib/utils.js'
 import ImportBatchDetail from '../components/ImportBatchDetail.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
-import { AppConfirmDialog, Button, Card, PageHeader, Spinner, EmptyState, Input, OverlayBackdrop, FloatingPanel, FloatingPanelHeader, SelectAllCheckbox } from '../components/ui.jsx'
+import { Button, Card, PageHeader, Spinner, EmptyState, Input, SelectAllCheckbox } from '../components/ui.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
-import { MerchantCell, CategoryCell, ContextMenu, useContextMenu, NotePopover, TransactionAmountCell, getTxnMerchantLabel, getTxnImportSourceLabel } from '../components/TransactionRow.jsx'
-import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
+import { MerchantCell, CategoryCell, TransactionAmountCell, getTxnMerchantLabel, getTxnImportSourceLabel } from '../components/TransactionRow.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
-import RuleForm from '../components/RuleForm.jsx'
+import { useTransactionRowActions, TransactionRowActionsChrome } from '../lib/useTransactionRowActions.jsx'
 import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
@@ -146,185 +145,6 @@ function escapeCsvClipboardCell(value) {
   return text
 }
 
-function RuleActionModal({ state, onClose, onSaved }) {
-  const [categories, setCategories] = useState([])
-  const [owners, setOwners] = useState([])
-  const [accounts, setAccounts] = useState([])
-  const [rule, setRule] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  // A save that collided with another rule on the same matcher, awaiting confirm to merge.
-  const [pendingMerge, setPendingMerge] = useState(null)
-
-  useEffect(() => {
-    if (!state) return
-    let cancelled = false
-    async function loadModalData() {
-      try {
-        const [cats, own, acc, rules] = await Promise.all([
-          api.getCategories(),
-          api.getOwners(),
-          api.getAccounts(),
-          state.mode === 'edit' ? api.getRules() : Promise.resolve([]),
-        ])
-        if (cancelled) return
-        setCategories(cats)
-        setOwners(own)
-        setAccounts(acc)
-        setRule(state.mode === 'edit' ? rules.find(item => item.id === state.ruleId) || null : null)
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    loadModalData()
-    return () => { cancelled = true }
-  }, [state])
-
-  if (!state) return null
-
-  const conflictMessage = 'Another rule already matches this merchant and scope but assigns a different category. Edit that rule instead, or narrow this one’s scope.'
-
-  async function handleSave(data) {
-    const { applyToExisting, ...ruleData } = data
-    setError('')
-    if (state.mode === 'edit') {
-      // An edit can make this rule collide with another. Default update only classifies; merging
-      // folds this rule into the other and removes this one, so we ask first.
-      const updated = await api.updateRule(state.ruleId, ruleData)
-      if (updated?.status === 'conflict') {
-        setError(conflictMessage)
-        return
-      }
-      if (updated?.status === 'mergeable' || updated?.status === 'duplicate') {
-        setPendingMerge({ ruleData, applyToExisting, existingRuleId: updated.existing_rule_id, fromEdit: true, editedRuleId: state.ruleId })
-        return
-      }
-      if (applyToExisting) await txnMutations.applyRule(state.ruleId)
-      onSaved?.({ applyToExisting, mode: 'edit', ruleId: state.ruleId })
-      onClose()
-      return
-    }
-
-    // Default create only classifies a same-matcher collision (it doesn't write): a conflict is
-    // surfaced so the user edits that rule instead; a mergeable save asks before folding in; a
-    // duplicate already exists, so we resolve to it.
-    const created = await api.createRule(ruleData)
-    if (created?.status === 'conflict') {
-      setError(conflictMessage)
-      return
-    }
-    if (created?.status === 'mergeable') {
-      setPendingMerge({ ruleData, applyToExisting, existingRuleId: created.existing_rule_id })
-      return
-    }
-    if (applyToExisting && created?.id) {
-      await txnMutations.applyRule(created.id)
-    }
-    onSaved?.({ applyToExisting, mode: 'create', ruleId: created?.id })
-    onClose()
-  }
-
-  async function confirmMerge() {
-    const { ruleData, applyToExisting, existingRuleId, fromEdit, editedRuleId } = pendingMerge
-    if (fromEdit) {
-      await api.updateRule(editedRuleId, ruleData, { onExisting: 'merge' })
-    } else {
-      await api.createRule(ruleData, { onExisting: 'merge' })
-    }
-    if (applyToExisting && existingRuleId) {
-      await txnMutations.applyRule(existingRuleId)
-    }
-    setPendingMerge(null)
-    onSaved?.({ applyToExisting, mode: fromEdit ? 'edit' : 'create', ruleId: existingRuleId })
-    onClose()
-  }
-
-  const initialValues = state.mode === 'edit'
-    ? (rule ? {
-      keyword: rule.keyword,
-      amount_min: rule.amount_min ?? null,
-      amount_max: rule.amount_max ?? null,
-      debit_credit: rule.debit_credit || 'both',
-      owner_id: rule.owner_id || '',
-      account_id: rule.account_id || '',
-      catId: rule.category_id,
-      cleanName: rule.clean_name || '',
-      tagIds: rule.tag_ids || [],
-    } : null)
-    : {
-      keyword: (state.keywordSource || '').toLowerCase().trim(),
-      cleanName: '',
-      catId: state.categoryId || '',
-      tagIds: [],
-    }
-
-  return (
-    <OverlayBackdrop zIndex={950} tint="rgba(10, 15, 26, 0.32)">
-      <FloatingPanel style={{ width: 640, maxWidth: '94vw', maxHeight: '90vh' }}>
-        <FloatingPanelHeader style={{ padding: '14px 20px' }}>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>
-            {state.mode === 'edit' ? 'Edit matching rule' : 'Create rule'}
-          </div>
-          <button onClick={onClose} style={{
-            background: 'none', border: 'none', color: 'var(--muted)',
-            cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: 2,
-          }}>×</button>
-        </FloatingPanelHeader>
-        <div style={{ maxHeight: 'calc(90vh - 56px)', overflowY: 'auto' }}>
-          {loading || !initialValues ? (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
-              {state.mode === 'edit' ? 'Loading rule…' : 'Loading…'}
-            </div>
-          ) : (
-            <>
-              {error ? (
-                <div style={{
-                  margin: '12px 20px 0', padding: '10px 12px', borderRadius: 8,
-                  border: '1px solid var(--danger)', background: 'color-mix(in srgb, var(--danger) 10%, transparent)',
-                  color: 'var(--danger)', fontSize: 13, lineHeight: 1.5,
-                }}>
-                  {error}
-                </div>
-              ) : null}
-              {pendingMerge ? (
-                <div style={{
-                  margin: '12px 20px 0', padding: '10px 12px', borderRadius: 8,
-                  border: '1px solid var(--border)', background: 'var(--surface2)',
-                  fontSize: 13, lineHeight: 1.5, display: 'flex', flexDirection: 'column', gap: 8,
-                }}>
-                  <span>{pendingMerge.fromEdit
-                    ? 'This edit makes the rule match another rule. Fold your changes into it? This rule will then be removed.'
-                    : 'A rule already matches this merchant and scope. Add your changes to it instead of creating a second rule?'}</span>
-                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                    <button onClick={() => setPendingMerge(null)} style={{
-                      background: 'none', border: '1px solid var(--border)', borderRadius: 6,
-                      padding: '5px 12px', fontSize: 13, cursor: 'pointer', color: 'var(--text)',
-                    }}>Cancel</button>
-                    <button onClick={confirmMerge} style={{
-                      background: 'var(--accent)', border: 'none', borderRadius: 6,
-                      padding: '5px 12px', fontSize: 13, cursor: 'pointer', color: '#fff',
-                    }}>Add to existing rule</button>
-                  </div>
-                </div>
-              ) : null}
-              <RuleForm
-                initialValues={initialValues}
-                categories={categories}
-                owners={owners}
-                accounts={accounts}
-                onSave={handleSave}
-                onCancel={onClose}
-                saveLabel={state.mode === 'edit' ? 'Save changes' : 'Save rule'}
-                transactionData={state.mode === 'create' ? state.transactionData : null}
-              />
-            </>
-          )}
-        </div>
-      </FloatingPanel>
-    </OverlayBackdrop>
-  )
-}
-
 export default function Transactions() {
   const initialSessionStateRef = useRef(loadTransactionsSessionState())
   const { filters } = useFilters()
@@ -336,19 +156,30 @@ export default function Transactions() {
   const [detailPanels, setDetailPanels] = useState([])
   const [batchDetailPanels, setBatchDetailPanels] = useState([])
   const [editId, setEditId] = useState(null)
-  const { menu, onContextMenu, close: closeMenu } = useContextMenu()
   const [categoryHeaderMenu, setCategoryHeaderMenu] = useState(null)
-  const [noteTarget, setNoteTarget] = useState(null)
-  const [tagTarget, setTagTarget] = useState(null)
-  const [pendingTrash, setPendingTrash] = useState(null)
-  // null sentinel = not fetched yet, mirroring TransactionAmountCell. Cached at the
-  // page level so reopening the modal for a different row doesn't refetch.
-  const [tagModalAllTags, setTagModalAllTags] = useState(null)
   const [rulePrompt, setRulePrompt] = useState(null)
   const [quickFilter, setQuickFilter] = useState(() => initialSessionStateRef.current?.quickFilter || '')
   const [debouncedQuickFilter, setDebouncedQuickFilter] = useState(() => initialSessionStateRef.current?.quickFilter?.trim() || '')
-  const [contextRuleMatch, setContextRuleMatch] = useState({ txnId: null, loading: false, ruleId: null })
-  const [ruleModalState, setRuleModalState] = useState(null)
+  // Right-click row menu + its note/tag/trash/rule editors — the same shared controller the report
+  // lists use via TransactionListTable, so the ledger and the reports never fork this interaction.
+  // The ledger owns its paginated list, so reconcile flows back here: note/tag patch the row in
+  // place, trash drops it (decrementing the total) and closes any open detail panel for that row.
+  const rowActions = useTransactionRowActions({
+    onOpenDetail: txn => openDetailPanel('txn', txn),
+    reconcileRow: (txnId, patch) => setData(prev => ({
+      ...prev,
+      transactions: prev.transactions.map(t => (t.id === txnId ? { ...t, ...patch } : t)),
+    })),
+    removeRow: txnId => {
+      setData(prev => ({
+        ...prev,
+        transactions: prev.transactions.filter(t => t.id !== txnId),
+        total: Math.max(0, (prev.total || 0) - 1),
+      }))
+      setDetailPanels(prev => prev.filter(panel => !(panel.type === 'txn' && panel.item?.id === txnId)))
+    },
+    onRuleSaved: ({ applyToExisting }) => { if (applyToExisting) { isFirstLoad.current = true; load() } },
+  })
   const isFirstLoad = useRef(true)
   const listScrollRef = useRef(null)
   const categoryHeaderMenuRef = useRef(null)
@@ -559,25 +390,6 @@ export default function Transactions() {
     maybeLoadMore()
   }, [data.transactions.length, maybeLoadMore])
 
-  useEffect(() => {
-    if (!menu?.txn?.id) {
-      setContextRuleMatch({ txnId: null, loading: false, ruleId: null })
-      return
-    }
-    let cancelled = false
-    setContextRuleMatch({ txnId: menu.txn.id, loading: true, ruleId: null })
-    api.getMatchingRuleForTransaction(menu.txn.id)
-      .then(result => {
-        if (cancelled) return
-        setContextRuleMatch({ txnId: menu.txn.id, loading: false, ruleId: result.rule_id || null })
-      })
-      .catch(() => {
-        if (cancelled) return
-        setContextRuleMatch({ txnId: menu.txn.id, loading: false, ruleId: null })
-      })
-    return () => { cancelled = true }
-  }, [menu?.txn?.id])
-
   // Reflect a resolved category onto the page list in place — including in "uncategorized only" mode,
   // where the freshly categorized row no longer matches the filter but is left visible (restyled with
   // its new category) so a mis-tap stays correctable and the user can add a tag or note before moving
@@ -629,25 +441,6 @@ export default function Transactions() {
     }))
   }
 
-  async function confirmTrashTransaction() {
-    if (!pendingTrash) return
-    const target = pendingTrash
-    setPendingTrash(null)
-    try {
-      await txnMutations.trashTransaction(target.id)
-      // Drop the row from local state so the list updates without a full refetch. The total count
-      // is decremented to keep the "N transactions" label honest.
-      setData(prev => ({
-        ...prev,
-        transactions: prev.transactions.filter(t => t.id !== target.id),
-        total: Math.max(0, (prev.total || 0) - 1),
-      }))
-      setDetailPanels(prev => prev.filter(panel => !(panel.type === 'txn' && panel.item?.id === target.id)))
-    } catch (err) {
-      console.error('Failed to send transaction to trash', err)
-    }
-  }
-
   function updateTags(txnId, tags) {
     setData(prev => ({
       ...prev,
@@ -655,22 +448,6 @@ export default function Transactions() {
         t.id === txnId ? { ...t, tags } : t
       ),
     }))
-    setTagTarget(prev => (prev && prev.id === txnId ? { ...prev, tags } : prev))
-  }
-
-  useEffect(() => {
-    if (!tagTarget || tagModalAllTags !== null) return
-    let cancelled = false
-    api.getTags()
-      .then(tags => { if (!cancelled) setTagModalAllTags(Array.isArray(tags) ? tags : []) })
-      .catch(() => { if (!cancelled) setTagModalAllTags([]) })
-    return () => { cancelled = true }
-  }, [tagTarget, tagModalAllTags])
-
-  async function toggleTagFromModal(tag, present) {
-    if (!tagTarget) return
-    const result = await api.updateTransactionTag(tagTarget.id, tag.id, present)
-    updateTags(tagTarget.id, result.tags || [])
   }
 
   function addCategory(cat) {
@@ -927,27 +704,6 @@ export default function Transactions() {
     }
   }
 
-  function openRuleFromTransaction(txn) {
-    if (contextRuleMatch.loading && contextRuleMatch.txnId === txn.id) return
-    const matchedRuleId = contextRuleMatch.txnId === txn.id ? contextRuleMatch.ruleId : null
-    const merchantName = getTxnMerchantLabel(txn)
-    const keywordSource = txn.merchant_name || txn.raw_name || merchantName
-    closeMenu()
-    if (matchedRuleId) {
-      setRuleModalState({ mode: 'edit', ruleId: matchedRuleId, txnId: txn.id })
-      return
-    }
-    setRuleModalState({
-      mode: 'create',
-      txnId: txn.id,
-      categoryId: txn.category_id || '',
-      keywordSource,
-      // Pass the whole row so the rule editor can show its captured source text (raw + evidence
-      // fields like "Original Statement"); only `amount` and the origin fields are read.
-      transactionData: { ...txn },
-    })
-  }
-
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '24px 24px 0', flexShrink: 0 }}>
@@ -1059,7 +815,7 @@ export default function Transactions() {
                       <div
                         key={txn.id}
                         data-txn-copy-row={txn.id}
-                        onContextMenu={e => onContextMenu(e, txn)}
+                        onContextMenu={e => rowActions.onContextMenu(e, txn)}
                         style={{
                           display: 'grid',
                           gridTemplateColumns,
@@ -1108,24 +864,7 @@ export default function Transactions() {
           </div>
         </Card>
 
-        {menu && (
-          <ContextMenu
-            menu={menu}
-            onClose={closeMenu}
-            onOpenDetail={txn => { openDetailPanel('txn', txn); closeMenu() }}
-            onEditNote={txn => { setNoteTarget(txn); closeMenu() }}
-            onEditTags={txn => { setTagTarget(txn); closeMenu() }}
-            onTrash={txn => { setPendingTrash(txn); closeMenu() }}
-            onOpenRule={openRuleFromTransaction}
-            ruleActionLabel={
-              contextRuleMatch.loading
-                ? '⚙ Loading rule…'
-                : contextRuleMatch.ruleId
-                  ? '⚙ Open matching rule'
-                  : '⚙ Create rule'
-            }
-          />
-        )}
+        <TransactionRowActionsChrome controller={rowActions} />
 
         {categoryHeaderMenu && (
           <div
@@ -1165,65 +904,6 @@ export default function Transactions() {
             >
               {showSourceInCategorySlot ? 'Switch to category' : 'Switch to source'}
             </button>
-          </div>
-        )}
-
-        {noteTarget && (
-          <div style={{
-            position: 'fixed', inset: 0, zIndex: 400,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(0,0,0,0.3)',
-          }} onClick={() => setNoteTarget(null)}>
-            <div onClick={e => e.stopPropagation()}>
-              <NotePopover
-                txn={noteTarget}
-                positioning="relative"
-                onSave={async val => {
-                  await api.updateNotes(noteTarget.id, val)
-                  updateNote(noteTarget.id, val)
-                  setNoteTarget(null)
-                }}
-                onClose={() => setNoteTarget(null)}
-              />
-            </div>
-          </div>
-        )}
-
-        {pendingTrash && (
-          <AppConfirmDialog
-            title="Send transaction to trash?"
-            description={`Send "${getTxnMerchantLabel(pendingTrash)}" (${pendingTrash.date}) to the trash? You can restore it later from Settings → Trash.`}
-            confirmLabel="Send to trash"
-            confirmVariant="danger"
-            borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
-            onConfirm={confirmTrashTransaction}
-            onCancel={() => setPendingTrash(null)}
-            width="min(520px, 100%)"
-          />
-        )}
-
-        {tagTarget && (
-          <div style={{
-            position: 'fixed', inset: 0, zIndex: 400,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(0,0,0,0.3)',
-          }} onClick={() => setTagTarget(null)}>
-            <div onClick={e => e.stopPropagation()}>
-              <TagPickerWithCreate
-                allTags={tagModalAllTags || []}
-                selectedTagIds={new Set((tagTarget.tags || []).map(t => t.id))}
-                inheritedTagIds={new Set(
-                  (tagTarget.tags || [])
-                    .filter(t => t.source && t.source !== 'direct')
-                    .map(t => t.id),
-                )}
-                loading={tagModalAllTags === null}
-                positioning="relative"
-                onToggleTag={toggleTagFromModal}
-                onTagCreated={tag => setTagModalAllTags(prev => (prev || []).some(t => t.id === tag.id) ? prev : [...(prev || []), tag])}
-                onClose={() => setTagTarget(null)}
-              />
-            </div>
           </div>
         )}
 
@@ -1312,20 +992,6 @@ export default function Transactions() {
           />
         )}
 
-        {ruleModalState && (
-          <RuleActionModal
-            state={ruleModalState}
-            onClose={() => setRuleModalState(null)}
-            onSaved={({ applyToExisting }) => {
-              // Rule application runs through txnMutations.applyRule, which already refreshed the
-              // Tasks count; here we just reload the visible list.
-              if (applyToExisting) {
-                isFirstLoad.current = true
-                load()
-              }
-            }}
-          />
-        )}
       </div>
     </div>
   )
