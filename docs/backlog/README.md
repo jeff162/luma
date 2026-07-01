@@ -20,6 +20,10 @@ These were surfaced from session memory and reconciled against the code on 2026-
 - [import-rule-suggestion-review-extraction.md](import-rule-suggestion-review-extraction.md) — the one
   remaining piece of the import/export refactor: in-component JSX extraction from the large
   `ImportRuleSuggestionReview` component into prop-driven seams.
+- [list-virtualization.md](list-virtualization.md) — **scale/perf, deferred.** Render-window the large
+  lists (duplicate-rows dialog first, then `TransactionListTable` / the ledger) so DOM node count is
+  bounded by the viewport, not the dataset. Built into the shared table shells; preserves sticky pill
+  header, column-pref grid template, and select-all-matching bulk edit.
 
 ## Related (already tracked elsewhere)
 

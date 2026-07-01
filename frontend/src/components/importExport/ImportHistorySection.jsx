@@ -52,6 +52,7 @@ export function ImportHistorySection({
   buildBatchImportedCategoryChoices,
   openBatchImportedCategorySettings,
   openBatchDetail,
+  markBatchReviewed,
   handleUndoClick,
   openRejectedRowsViewer,
   openUnifiedDuplicatesViewer,
@@ -130,6 +131,11 @@ export function ImportHistorySection({
           {dataSourceRows.some(row => row.kind === 'manual' || row.kind === 'unknown') ? (
             <div style={{ marginBottom: 12 }}>
               <ContextualExplainer topic="unknown-data-source" active />
+            </div>
+          ) : null}
+          {dataSourceRows.some(row => row.batches?.some(b => Number(b.needs_review_count || 0) > 0)) ? (
+            <div style={{ marginBottom: 12 }}>
+              <ContextualExplainer topic="reviewing-transactions" active />
             </div>
           ) : null}
           <Card style={{ padding: 0, overflow: 'hidden', width: '100%' }}>
@@ -453,8 +459,14 @@ export function ImportHistorySection({
                                     ) : null}
                                   </div>
                                 </div>
-                                {(b.accounts?.length > 0 || summary.rejectedCount > 0 || summary.dedupedCount > 0) && (
-                                  <div style={{ padding: '4px 16px 10px 58px', borderBottom: '1px solid color-mix(in srgb, var(--border) 80%, transparent)', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                                {(b.accounts?.length > 0 || summary.rejectedCount > 0 || summary.dedupedCount > 0 || Number(b.needs_review_count || 0) > 0) && (
+                                  <div style={{ padding: '4px 16px 10px 58px', borderBottom: '1px solid color-mix(in srgb, var(--border) 80%, transparent)' }}>
+                                    {/* Descriptive account chips (how many rows came from each account) wrap on
+                                        their own row; the clickable action pills are split out into the labeled
+                                        outline below so they live in one consistent place instead of flowing in
+                                        amongst the account chips. */}
+                                    {b.accounts?.length > 0 ? (
+                                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                                     {b.accounts.map((a, i) => {
                                       const count = Number(a.row_count || 0)
                                       const csvLabel = a.csv_value || a.account_name || ''
@@ -499,6 +511,15 @@ export function ImportHistorySection({
                                         </span>
                                       )
                                     })}
+                                      </div>
+                                    ) : null}
+                                    {(summary.rejectedCount > 0 || (summary.dedupedCount + Number(b.suspect_duplicate_count || 0)) > 0 || Number(b.needs_review_count || 0) > 0) ? (
+                                      <div style={{
+                                        marginTop: b.accounts?.length > 0 ? 8 : 0,
+                                        display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                                        border: '1px dashed color-mix(in srgb, var(--border) 80%, transparent)',
+                                        borderRadius: 10, padding: '6px 10px',
+                                      }}>
                                     {summary.rejectedCount > 0 ? (
                                       <button
                                         type="button"
@@ -569,6 +590,41 @@ export function ImportHistorySection({
                                         </button>
                                       )
                                     })()}
+                                    {Number(b.needs_review_count || 0) > 0 ? (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() => openBatchDetail(b)}
+                                          title="Review the transactions imported from this file"
+                                          style={{
+                                            display: 'inline-flex', alignItems: 'center', gap: 4,
+                                            fontSize: 11, padding: '2px 7px', borderRadius: 99,
+                                            background: 'color-mix(in srgb, var(--review-marker-color) 14%, var(--surface2))',
+                                            color: 'var(--review-marker-color)',
+                                            border: '1px solid color-mix(in srgb, var(--review-marker-color) 50%, var(--border))',
+                                            cursor: 'pointer', fontWeight: 600,
+                                          }}
+                                        >
+                                          <span>{b.needs_review_count} to review</span>
+                                          <span style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => markBatchReviewed(b.id)}
+                                          title="Mark every transaction in this file reviewed"
+                                          style={{
+                                            display: 'inline-flex', alignItems: 'center', gap: 4,
+                                            fontSize: 11, padding: '2px 7px', borderRadius: 99,
+                                            background: 'var(--surface2)', color: 'var(--muted)',
+                                            border: '1px solid var(--border)', cursor: 'pointer',
+                                          }}
+                                        >
+                                          ✓ Mark all reviewed
+                                        </button>
+                                      </>
+                                    ) : null}
+                                      </div>
+                                    ) : null}
                                   </div>
                                 )}
                               </div>

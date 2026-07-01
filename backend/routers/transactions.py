@@ -98,7 +98,7 @@ class BulkSelection(BaseModel):
 
 
 class BulkAction(BaseModel):
-    type: str                                   # set_category | add_tags | remove_tags | set_notes | set_merchant | set_date | trash
+    type: str                                   # set_category | add_tags | remove_tags | set_notes | set_merchant | set_date | mark_reviewed | trash
     category_id: Optional[str] = None
     tag_ids: Optional[list[str]] = None
     notes: Optional[str] = None
@@ -560,7 +560,7 @@ def _build_transaction_filter(
     account_id=None, account_ids=None, source_account_ids=None, category_id=None, group_ids=None,
     category_ids=None, tag_ids=None, owner_ids=None, payees=None,
     direction=None, view=None, search=None, quick_filter=None, ids=None,
-    include_trashed=False,
+    needs_review=None, include_trashed=False,
 ):
     # Single source of truth for the transaction-list WHERE clause, shared by the list feed and the
     # bulk endpoint so "select all matching the current filter" resolves the exact set the user sees.
@@ -714,6 +714,12 @@ def _build_transaction_filter(
             clause, clause_params = quick_filter_clause
             clauses.append(clause)
             params.extend(clause_params)
+    # "Needs review" is its own axis, independent of categorization: a rule-categorized row can still
+    # need a look, and a reviewed row can be deliberately uncategorized. The `is True` mirrors the
+    # isinstance guards above so a direct (non-HTTP) call with an unset Query default (a truthy
+    # FieldInfo) doesn't trip the clause.
+    if needs_review is True:
+        clauses.append("t.needs_review = 1")
     return clauses, params
 
 
@@ -739,6 +745,7 @@ def list_transactions(
     search:       Optional[str] = Query(None),
     quick_filter: Optional[str] = Query(None),
     ids:          Optional[str] = Query(None, description="comma-separated transaction IDs — re-fetch a specific set of rows"),
+    needs_review: bool          = Query(False, description="Only rows still flagged as needing review (freshly imported/synced, not yet looked over)."),
     include_trashed: bool       = Query(False, description="Include rows in the trash. Off by default — the trash view sets this explicitly."),
     limit:        int           = Query(200, le=1000),
     offset:       int           = Query(0),
@@ -754,7 +761,7 @@ def list_transactions(
         category_id=category_id, group_ids=group_ids,
         category_ids=category_ids, tag_ids=tag_ids, owner_ids=owner_ids, payees=payees,
         direction=direction, view=view, search=search, quick_filter=quick_filter, ids=ids,
-        include_trashed=include_trashed,
+        needs_review=needs_review, include_trashed=include_trashed,
     )
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
@@ -806,7 +813,8 @@ def list_transactions(
                 o.name        AS owner_name,
                 o.color       AS owner_color,
                 t.suspect_duplicate_of,
-                t.suspect_duplicate_reason
+                t.suspect_duplicate_reason,
+                t.needs_review
             FROM   txn t
             JOIN   account  a ON a.id = t.account_id
             LEFT JOIN account  p ON p.id = a.parent_account_id
@@ -864,7 +872,8 @@ def override_category(txn_id: str, body: CategoryOverride):
         conn.execute(
             """
             UPDATE txn
-            SET category_id = ?, category_overridden = 1, category_source = 'manual', notes = ?
+            SET category_id = ?, category_overridden = 1, category_source = 'manual', notes = ?,
+                needs_review = 0
             WHERE id = ?
             """,
             (body.category_id, body.notes, txn_id),
@@ -959,7 +968,9 @@ def set_rejected_suggestion_disposition(body: RejectedSuggestionDisposition):
                 for change_chunk in _chunk([row["id"] for row in changing]):
                     change_placeholders = ",".join("?" * len(change_chunk))
                     conn.execute(
-                        f"UPDATE txn SET category_id = ?, category_overridden = 1, category_source = 'manual' "
+                        # Re-pointing to a different category is a manual edit, so it also reviews the row.
+                        f"UPDATE txn SET category_id = ?, category_overridden = 1, category_source = 'manual', "
+                        f"needs_review = 0 "
                         f"WHERE id IN ({change_placeholders})",
                         [keep_category_id, *change_chunk],
                     )
@@ -1118,7 +1129,9 @@ def _apply_bulk_action(conn, ids: list[str], action: BulkAction):
         for chunk in _chunk(ids):
             placeholders = ",".join("?" * len(chunk))
             conn.execute(
-                f"UPDATE txn SET category_id = ?, category_overridden = 1, category_source = 'manual' "
+                # A manual category edit counts as reviewing the row, so it clears needs_review.
+                f"UPDATE txn SET category_id = ?, category_overridden = 1, category_source = 'manual', "
+                f"needs_review = 0 "
                 f"WHERE id IN ({placeholders})",
                 [action.category_id, *chunk],
             )
@@ -1147,6 +1160,15 @@ def _apply_bulk_action(conn, ids: list[str], action: BulkAction):
         for chunk in _chunk(ids):
             placeholders = ",".join("?" * len(chunk))
             conn.execute(f"UPDATE txn SET date = ? WHERE id IN ({placeholders})", [date, *chunk])
+    elif kind == "mark_reviewed":
+        # Explicit "looked, it's fine as-is" — the catch-all clear for rows a manual category edit
+        # didn't already clear. Powers both the single-row action and "clear the whole filtered pool".
+        for chunk in _chunk(ids):
+            placeholders = ",".join("?" * len(chunk))
+            conn.execute(
+                f"UPDATE txn SET needs_review = 0 WHERE id IN ({placeholders})",
+                chunk,
+            )
     elif kind == "trash":
         for chunk in _chunk(ids):
             placeholders = ",".join("?" * len(chunk))

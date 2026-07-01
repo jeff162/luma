@@ -110,6 +110,17 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
     }
   }
 
+  async function markReviewed(target) {
+    if (!target) return
+    try {
+      await txnMutations.markReviewed(target.id)
+      // The row lingers in place (per the linger pattern); patching the flag clears its marker.
+      reconcileRow?.(target.id, { needs_review: 0 })
+    } catch (err) {
+      console.error('Failed to mark transaction reviewed', err)
+    }
+  }
+
   const ruleActionLabel = contextRuleMatch.loading
     ? '⚙ Loading rule…'
     : contextRuleMatch.ruleId
@@ -135,6 +146,7 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
     handleNoteSave,
     toggleTagFromModal,
     confirmTrash,
+    markReviewed,
     onOpenDetail,
     onRuleSaved,
   }
@@ -147,7 +159,7 @@ export function TransactionRowActionsChrome({ controller }) {
     noteTarget, tagTarget, pendingTrash,
     tagModalAllTags, setTagModalAllTags,
     ruleModalState, setRuleModalState,
-    ruleActionLabel, openRuleFromMenu, handleNoteSave, toggleTagFromModal, confirmTrash,
+    ruleActionLabel, openRuleFromMenu, handleNoteSave, toggleTagFromModal, confirmTrash, markReviewed,
     onRuleSaved,
   } = controller
 
@@ -160,6 +172,7 @@ export function TransactionRowActionsChrome({ controller }) {
           onOpenDetail={txn => { onOpenDetail?.(txn); closeMenu() }}
           onEditNote={txn => { setNoteTarget(txn); closeMenu() }}
           onEditTags={txn => { setTagTarget(txn); closeMenu() }}
+          onMarkReviewed={txn => { markReviewed(txn); closeMenu() }}
           onTrash={txn => { setPendingTrash(txn); closeMenu() }}
           onOpenRule={openRuleFromMenu}
           ruleActionLabel={ruleActionLabel}

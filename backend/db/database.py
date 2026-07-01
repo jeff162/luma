@@ -97,10 +97,10 @@ def get_db(db_path: str | None = None):
 #
 # The migration chain was *reset* at the Luma rebrand: the historical v1..v32 migrations were dropped
 # (there is no in-place upgrade path off a pre-rebrand database — those come across via backup/restore)
-# and the baseline is `1`. The runner and registry below are intentionally retained so the next schema
-# change registers `@migration(2)` and bumps `CURRENT_VERSION`; there are simply no migrations yet.
+# and the baseline is `1`. Post-rebrand migrations register from v2 upward: v2 adds
+# `category_rule.match_source_text`, v3 adds `txn.needs_review`.
 
-CURRENT_VERSION = 2
+CURRENT_VERSION = 3
 
 MIGRATIONS = {}
 
@@ -118,6 +118,15 @@ def _add_rule_match_source_text(conn):
     # (description + extra evidence fields). Existing rules default to 0 (name-only), preserving
     # behavior. Fresh installs get the column from the baseline CREATE TABLE above.
     conn.execute("ALTER TABLE category_rule ADD COLUMN match_source_text INTEGER NOT NULL DEFAULT 0")
+
+
+@migration(3)
+def _add_txn_needs_review(conn):
+    # Per-transaction "needs review" flag: freshly imported/synced rows start at 1 so the user can look
+    # them over; existing rows default to 0 (out of the review pool). Fresh installs get the column from
+    # the baseline CREATE TABLE; its partial index is (re)created in init_db just after migrations, where
+    # the column is guaranteed to exist on both fresh and migrated databases.
+    conn.execute("ALTER TABLE txn ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0")
 
 
 def get_db_version(conn) -> int:
@@ -147,8 +156,8 @@ def set_db_version(conn, version: int):
 def run_migrations(conn):
     # Advance an existing database to `CURRENT_VERSION` by applying each registered migration newer than
     # its recorded version, in order, stamping the version as it goes. Fresh installs never reach here —
-    # they are created at the current schema and stamped directly (see init_db). `MIGRATIONS` is empty
-    # today (reset at the Luma rebrand), so this is a no-op until the next schema change registers one.
+    # they are created at the current schema and stamped directly (see init_db). The chain was reset at
+    # the Luma rebrand (baseline 1); post-rebrand migrations register from v2 upward.
     current = get_db_version(conn)
     if current >= CURRENT_VERSION:
         return
@@ -339,7 +348,12 @@ def init_db(db_path: str | None = None):
                 suspect_duplicate_reason TEXT,
                 suspect_resolved_at      TEXT,
                 rejection_reason         TEXT,
-                dedupe_resolved_by       TEXT
+                dedupe_resolved_by       TEXT,
+                -- 1 = freshly imported/synced and not yet looked over. A user convenience for
+                -- reviewing newly arrived transactions; cleared by a manual category edit or an
+                -- explicit "mark reviewed". Default 0 keeps existing and hand-created rows out of
+                -- the review pool. Not a tag: review is workflow lifecycle, not a reporting label.
+                needs_review             INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS tag (
@@ -509,9 +523,17 @@ def init_db(db_path: str | None = None):
             log_info(f"[db] created new database at schema version {CURRENT_VERSION}")
         else:
             # Advance an existing database in place. init_db's schema is all `CREATE TABLE IF NOT
-            # EXISTS`, so structural changes belong in registered migrations, which run here. With the
-            # chain currently empty this is a no-op, but it is the hook every future migration runs through.
+            # EXISTS`, so structural changes belong in registered migrations, which run here.
             run_migrations(conn)
+        # Partial index over just the small set of still-unreviewed rows (the filter/count always
+        # selects needs_review = 1). It lives here rather than in the schema script above because on a
+        # pre-v3 database the column is only added by migration v3 (run_migrations, just above); creating
+        # it inside the CREATE TABLE script would reference a not-yet-existing column. By this point the
+        # column exists in both paths — fresh (baseline CREATE TABLE) and migrated — so IF NOT EXISTS is
+        # safe for both.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_txn_needs_review ON txn(needs_review) WHERE needs_review = 1"
+        )
         ensure_shared_owner(conn)
 
 

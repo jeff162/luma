@@ -107,8 +107,8 @@ def run_sync(days: int = 30, request: Request = None):
                     """
                     INSERT INTO txn
                         (id, plaid_transaction_id, account_id, owner_id, category_id,
-                         amount, merchant_name, display_name, raw_name, date, is_pending)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                         amount, merchant_name, display_name, raw_name, date, is_pending, needs_review)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,1)
                     """,
                     (
                         txn_id,

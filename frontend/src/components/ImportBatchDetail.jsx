@@ -69,7 +69,7 @@ export default function ImportBatchDetail({
     const handle = setTimeout(() => setDebouncedFilter(filterInput.trim()), 250)
     return () => clearTimeout(handle)
   }, [filterInput])
-  const { pos, dragging, panelRef, onDragStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
+  const { pos, panelRef, onDragStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
   const [totalCount, setTotalCount] = useState(0)
   const [countLoading, setCountLoading] = useState(true)
   const [payeeDetail, setPayeeDetail] = useState(null)
@@ -197,7 +197,6 @@ export default function ImportBatchDetail({
     <>
     <DetailPanelShell
       pos={pos}
-      dragging={dragging}
       panelRef={panelRef}
       onDragStart={onDragStart}
       onClose={onClose}

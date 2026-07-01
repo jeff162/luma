@@ -230,6 +230,11 @@ export default function Transactions() {
   const [uncategorizedOnly, setUncategorizedOnly] = useState(
     () => new URLSearchParams(location.search).get('uncategorized') === '1'
   )
+  // "Needs review only" is an independent axis from uncategorized (a rule-categorized row can still
+  // need review). Deep-linkable so the import "review this file" nudge can route straight to it.
+  const [needsReviewOnly, setNeedsReviewOnly] = useState(
+    () => new URLSearchParams(location.search).get('needs_review') === '1'
+  )
 
   // Bulk edit. The filter params below mirror the list fetch exactly so "select all matching" resolves
   // the same rows server-side. The ledger is the paginated source of truth, so Apply re-fetches (via
@@ -254,8 +259,9 @@ export default function Transactions() {
       payees: payeeSel.length ? payeeSel.join('|') : undefined,
       owner_ids: ownerSel.length ? ownerSel.join(',') : undefined,
       quick_filter: debouncedQuickFilter || undefined,
+      needs_review: needsReviewOnly ? true : undefined,
     }
-  }, [filters, uncategorizedOnly, debouncedQuickFilter])
+  }, [filters, uncategorizedOnly, needsReviewOnly, debouncedQuickFilter])
 
 
   useEffect(() => {
@@ -300,6 +306,7 @@ export default function Transactions() {
       payeeSel,
       ownerSel,
       uncategorizedOnly,
+      needsReviewOnly,
       dateStart: filters.date?.start || '',
       dateEnd: filters.date?.end || '',
       quickFilter: debouncedQuickFilter,
@@ -326,6 +333,7 @@ export default function Transactions() {
       payees: payeeSel.length ? payeeSel.join('|') : undefined,
       owner_ids: ownerSel.length ? ownerSel.join(',') : undefined,
       quick_filter: debouncedQuickFilter || undefined,
+      needs_review: needsReviewOnly || undefined,
       sort_by: sortState.key,
       sort_dir: sortState.dir,
       limit: pageSize,
@@ -351,7 +359,7 @@ export default function Transactions() {
     setInitialLoading(false)
     setLoadingMore(false)
     isFirstLoad.current = false
-  }, [filters, uncategorizedOnly, debouncedQuickFilter, sortState])
+  }, [filters, uncategorizedOnly, needsReviewOnly, debouncedQuickFilter, sortState])
 
   useEffect(() => {
     isFirstLoad.current = true
@@ -764,6 +772,22 @@ export default function Transactions() {
             >
               {uncategorizedOnly ? '✕ Uncategorized only' : 'Uncategorized only'}
             </button>
+            <button
+              onClick={() => { setNeedsReviewOnly(v => !v); isFirstLoad.current = true }}
+              title="Show only transactions still flagged as needing review"
+              style={{
+                padding: '4px 11px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
+                border: `1px solid ${needsReviewOnly ? 'var(--review-marker-color)' : 'var(--border)'}`,
+                background: needsReviewOnly
+                  ? 'color-mix(in srgb, var(--review-marker-color) 14%, var(--surface2))'
+                  : 'var(--surface2)',
+                color: needsReviewOnly ? 'var(--review-marker-color)' : 'var(--muted)',
+                fontWeight: needsReviewOnly ? 500 : 400,
+              }}
+            >
+              {needsReviewOnly ? '✕ Needs review' : 'Needs review'}
+            </button>
+            <FeatureExplainer topic="reviewing-transactions" placement="bottom-left" />
             <button
               onClick={bulk.toggle}
               style={{

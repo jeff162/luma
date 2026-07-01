@@ -222,6 +222,12 @@ function ImportTab() {
   const [demoLoaded, setDemoLoaded] = useState(false)
   const [demoLoadable, setDemoLoadable] = useState(false)
   const [loadingDemo, setLoadingDemo] = useState(false)
+  // Re-evaluate when the tenant's blank-slate status can have changed, not just on mount: `loadable`
+  // means an untouched tenant (no data rows AND no configured source/connection — see is_demo_loadable),
+  // so importing the first file, saving a data source, or undoing the last batch flips it. Keying off
+  // both batches and saved-source counts re-fetches at those moments, so the "Load demo data" offer
+  // disappears the moment the user engages instead of lingering until a reload. A connection added on
+  // another page is picked up when this page remounts on navigation.
   useEffect(() => {
     let cancelled = false
     api.getDemoDataStatus().then(r => {
@@ -230,7 +236,7 @@ function ImportTab() {
       setDemoLoadable(!!r?.loadable)
     }).catch(() => {})
     return () => { cancelled = true }
-  }, [])
+  }, [batches.length, profiles.length])
 
   async function loadDemoFromImport() {
     setLoadingDemo(true)
@@ -2224,6 +2230,25 @@ function ImportTab() {
     setProfiles(updated)
   }
 
+  // Returning to the upload stage re-renders the drop zone at the top of the page, but the scroll
+  // position stays wherever the triggering control was (e.g. the "Import another file" button down by
+  // the result card with several file cards open above it), leaving the picker off-screen. When a reset
+  // is meant to put the user back at the picker, arm this so the effect below scrolls it into view once
+  // the upload stage has mounted.
+  const uploadStageRef = useRef(null)
+  const scrollToUploadOnMount = useRef(false)
+  useEffect(() => {
+    if (stage === 'upload' && scrollToUploadOnMount.current) {
+      scrollToUploadOnMount.current = false
+      uploadStageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [stage])
+
+  function importAnotherFile() {
+    scrollToUploadOnMount.current = true
+    resetImport()
+  }
+
   function resetImport() {
     setStage('upload'); setPreview(null); setImportResult(null)
     setAccountMap({})
@@ -2346,6 +2371,23 @@ function ImportTab() {
       setBatches(await api.listBatches())
       setNoticeDialog({
         title: 'Could not update that import',
+        description: error?.message || 'Please try again.',
+      })
+    }
+  }
+
+  async function markBatchReviewed(batchId) {
+    // Optimistically zero the card's count, then confirm against the server.
+    setBatches(prev => prev.map(batch => (
+      batch.id === batchId ? { ...batch, needs_review_count: 0 } : batch
+    )))
+    try {
+      await api.markBatchReviewed(batchId)
+      setBatches(await api.listBatches())
+    } catch (error) {
+      setBatches(await api.listBatches())
+      setNoticeDialog({
+        title: 'Could not mark that import reviewed',
         description: error?.message || 'Please try again.',
       })
     }
@@ -2779,6 +2821,7 @@ function ImportTab() {
       ) : null}
 
       {stage === 'upload' && (
+        <div ref={uploadStageRef}>
         <ImportUploadStage
           demoLoaded={demoLoaded}
           chooserOpen={sourceChooserOpen}
@@ -2809,6 +2852,7 @@ function ImportTab() {
           handleFile={handleFile}
           loading={loading}
         />
+        </div>
       )}
 
       {stage === 'mapping' && preview && (
@@ -3844,7 +3888,7 @@ function ImportTab() {
                 Undo import
               </Button>
             ) : null}
-            <Button onClick={resetImport}>Import another file</Button>
+            <Button onClick={importAnotherFile}>Import another file</Button>
           </div>
         </Card>
       )}
@@ -3892,6 +3936,7 @@ function ImportTab() {
           buildBatchImportedCategoryChoices={buildBatchImportedCategoryChoices}
           openBatchImportedCategorySettings={openBatchImportedCategorySettings}
           openBatchDetail={openBatchDetail}
+          markBatchReviewed={markBatchReviewed}
           handleUndoClick={handleUndoClick}
           openRejectedRowsViewer={openRejectedRowsViewer}
           openUnifiedDuplicatesViewer={openUnifiedDuplicatesViewer}

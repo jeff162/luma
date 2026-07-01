@@ -597,7 +597,7 @@ def build_backup_data(conn) -> dict:
                                    "SELECT id, plaid_transaction_id, account_id, owner_id, "
                                    "category_id, amount, merchant_name, display_name, raw_name, date, "
                                    "is_pending, category_overridden, category_source, imported_category, notes, content_hash, "
-                                   "import_evidence_json, "
+                                   "import_evidence_json, needs_review, "
                                    "import_batch_id FROM txn ORDER BY date DESC"),
             # Tag system: the tag definitions plus every attachment surface (transaction, category/
             # group, account, rule). Without these a restore silently dropped all tagging.

@@ -119,6 +119,8 @@ export function useBulkTransactionEditing({
               return { ...txn, display_name: action.merchant }
             case 'set_date':
               return { ...txn, date: action.date }
+            case 'mark_reviewed':
+              return { ...txn, needs_review: 0 }
             case 'add_tags': {
               const present = new Set((txn.tags || []).map(tag => tag.id))
               const additions = action.tag_ids
@@ -209,6 +211,7 @@ export function BulkEditChrome({ controller, barStyle }) {
           </span>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
             <Button small onClick={() => setShowPanel(true)} disabled={selectedCount === 0}>Edit…</Button>
+            <Button small variant="ghost" onClick={() => runActions([{ type: 'mark_reviewed' }])} disabled={selectedCount === 0 || applying}>Mark reviewed</Button>
             <Button small variant="ghost" onClick={() => setPendingTrash(true)} disabled={selectedCount === 0}>Move to trash</Button>
             {selectedCount > 0 ? (
               <Button small variant="ghost" onClick={() => selection.clear()}>Clear</Button>

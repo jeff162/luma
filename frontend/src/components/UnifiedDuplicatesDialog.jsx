@@ -31,7 +31,7 @@
 //   shared pattern across tables, the right move is to extend PillGridTable's header to accept
 //   custom node labels and migrate this dialog at the same time as the others.
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { Button, Spinner, EmptyState, SelectAllCheckbox } from './ui.jsx'
@@ -83,10 +83,15 @@ function reviewKindOf(entry) {
   return null
 }
 
+// One shared formatter instead of `Number.prototype.toLocaleString(undefined, opts)` per call:
+// constructing the locale/options resolution on every call dominated render time on large batches
+// (thousands of rows × two amounts each re-resolved the format). Intl.NumberFormat caches that work.
+const AMOUNT_FORMAT = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
 function formatAmount(value) {
   const num = Number(value)
   if (!Number.isFinite(num)) return ''
-  return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return AMOUNT_FORMAT.format(num)
 }
 
 export default function UnifiedDuplicatesDialog({
@@ -143,26 +148,23 @@ export default function UnifiedDuplicatesDialog({
     } : null
     return { initialPosition: scaledPos, initialSize: scaledSize }
   }, [savedPanel])
-  const { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating: true, stackIndex, initialPosition, initialSize })
-
-  // Commit on drag/resize end (false-from-true transition): the hook only updates React
-  // state on mouseup so this fires once per gesture, not per intermediate frame. Snapshot
-  // the current viewport size alongside so the next restore can scale proportionally.
-  const wasDragging = useRef(false)
-  const wasResizing = useRef(false)
-  useEffect(() => {
-    const dragEnded = wasDragging.current && !dragging
-    const resizeEnded = wasResizing.current && !resizing
-    wasDragging.current = dragging
-    wasResizing.current = resizing
-    if ((dragEnded || resizeEnded) && (pos || size)) {
+  // Persist geometry once per completed drag/resize gesture (the hook fires onGestureEnd with the
+  // final pos/size, not on plain header clicks and not per intermediate frame). Snapshot the current
+  // viewport size alongside so the next restore can scale proportionally.
+  const { pos, size, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, {
+    forceFloating: true,
+    stackIndex,
+    initialPosition,
+    initialSize,
+    onGestureEnd: ({ pos: gPos, size: gSize }) => {
+      if (!gPos && !gSize) return
       setSavedPanel({
-        pos: pos || null,
-        size: size || null,
+        pos: gPos || null,
+        size: gSize || null,
         viewport: { width: window.innerWidth, height: window.innerHeight },
       })
-    }
-  }, [dragging, resizing, pos, size, setSavedPanel])
+    },
+  })
 
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [activeRuleFilter, setActiveRuleFilter] = useState(null)
@@ -582,8 +584,6 @@ export default function UnifiedDuplicatesDialog({
     <DetailPanelShell
       pos={pos}
       size={size}
-      dragging={dragging}
-      resizing={resizing}
       panelRef={panelRef}
       onDragStart={onDragStart}
       onResizeStart={onResizeStart}

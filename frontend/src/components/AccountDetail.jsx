@@ -19,6 +19,7 @@ import {
   DetailTrendChart,
   useDetailPanelChrome,
   usePagedMonthTransactions,
+  usePanelReveal,
 } from './detailShared.jsx'
 
 const ACCOUNT_DETAIL_TABLE_PREF_KEY = 'ui.accountDetail.transactions.columns'
@@ -52,7 +53,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
    * the chart picks the month, and the month list stays locally editable so inline category changes
    * feel immediate without disturbing the selected slice of history.
    */
-  const { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex, initialPosition })
+  const { pos, size, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex, initialPosition })
   const [trend, setTrend]           = useState([])
   const [selectedMonth, setSelectedMonth] = useState(null)
   const [trendLoading, setTrendLoading] = useState(true)
@@ -62,6 +63,11 @@ export default function AccountDetail({ account, categories = [], onClose, force
   // bulk "select all matching" stay in scope). Only populated for a genuinely merged account.
   const [mergeSources, setMergeSources] = useState([])
   const [sourceFilter, setSourceFilter] = useState(() => new Set())
+  // The panel's body reflows as its two opening fetches land (the monthly trend fills the chart and
+  // reveals the month section; the accounts fetch may add merged-source pills). Rather than let the
+  // user watch it grow and reposition, it's held invisible until both first fetches are in and the
+  // panel's geometry has gone quiet (see usePanelReveal), then fades in fully formed.
+  const [accountsSettled, setAccountsSettled] = useState(false)
   const isMerged = mergeSources.length > 0
   const sourceCsv = sourceFilter.size ? Array.from(sourceFilter).join(',') : undefined
 
@@ -70,6 +76,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
     setSourceFilter(new Set())
     api.getAccounts({ include_children: true }).then(rows => {
       if (cancelled) return
+      setAccountsSettled(true)
       const all = rows || []
       const children = all.filter(r => r.parent_account_id === account.id)
       if (children.length === 0) {
@@ -83,7 +90,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
         ...(parent ? [{ id: parent.id, name: parent.name, mask: parent.mask }] : []),
         ...children.map(c => ({ id: c.id, name: c.name, mask: c.mask })),
       ])
-    }).catch(() => { if (!cancelled) setMergeSources([]) })
+    }).catch(() => { if (!cancelled) { setAccountsSettled(true); setMergeSources([]) } })
     return () => { cancelled = true }
   }, [account.id])
 
@@ -169,6 +176,8 @@ export default function AccountDetail({ account, categories = [], onClose, force
     })
   }, [account.id, dateStart, dateEnd, sourceCsv])
 
+  const revealed = usePanelReveal(panelRef, accountsSettled && !trendLoading)
+
   const selectedMonthRow = trend.find(r => r.month === selectedMonth)
   const monthSectionHeight = getDetailMonthSectionHeight(trend)
 
@@ -204,8 +213,7 @@ export default function AccountDetail({ account, categories = [], onClose, force
     <DetailPanelShell
       pos={pos}
       size={size}
-      dragging={dragging}
-      resizing={resizing}
+      revealed={revealed}
       panelRef={panelRef}
       onDragStart={onDragStart}
       onResizeStart={onResizeStart}

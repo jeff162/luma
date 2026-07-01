@@ -147,7 +147,7 @@ export function useContextMenu() {
   return { menu, onContextMenu, close }
 }
 
-export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTags, onOpenRule, onTrash, ruleActionLabel = 'Rule…' }) {
+export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTags, onOpenRule, onMarkReviewed, onTrash, ruleActionLabel = 'Rule…' }) {
   const ref = useRef(null)
   useDismissibleLayer({
     open: !!menu,
@@ -192,6 +192,7 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTag
       )}
       {menu.txn.notes && item('Remove note', () => onEditNote(menu.txn, true), true)}
       {onEditTags ? item('🏷 Tags…', () => onEditTags(menu.txn)) : null}
+      {onMarkReviewed && menu.txn.needs_review ? item('✓ Mark reviewed', () => onMarkReviewed(menu.txn)) : null}
       {onTrash ? (
         <>
           <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
@@ -231,28 +232,25 @@ export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [txn.display_name, txn.merchant_name, txn.raw_name, editing])
 
-  useLayoutEffect(() => {
+  // Detect whether the merchant name is ellipsized (drives whether the origin-hover tooltip is
+  // attached). This runs once per row in a *post-paint* effect rather than useLayoutEffect, and
+  // deliberately does NOT install a per-row ResizeObserver: in a long ledger that was thousands of
+  // observers each firing an initial + per-layout-change callback — a measured perf hotspot (forced
+  // reflow storm). As a plain read-only effect with no DOM writes between rows, the browser serves
+  // every row's measurement from one layout flush instead of one per row mid-commit. The trade-off is
+  // truncation no longer auto-updates on a column/viewport resize; remeasureTruncation() on hover
+  // (below) restores correctness exactly when the tooltip would be shown.
+  function remeasureTruncation() {
+    const element = labelRef.current
+    if (element && !editing) setNameTruncated(element.scrollWidth > element.clientWidth + 1)
+  }
+  useEffect(() => {
     if (editing) {
       setNameTruncated(false)
-      return undefined
+      return
     }
-    const element = labelRef.current
-    if (!element) return undefined
-
-    function updateTruncation() {
-      setNameTruncated(element.scrollWidth > element.clientWidth + 1)
-    }
-
-    updateTruncation()
-
-    if (typeof ResizeObserver === 'function') {
-      const observer = new ResizeObserver(() => updateTruncation())
-      observer.observe(element)
-      return () => observer.disconnect()
-    }
-
-    window.addEventListener('resize', updateTruncation)
-    return () => window.removeEventListener('resize', updateTruncation)
+    remeasureTruncation()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing, name, onOpenDetail, renamed])
 
   if (editing) {
@@ -281,6 +279,7 @@ export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true })
   const labelSpan = (
     <span
       ref={labelRef}
+      onMouseEnter={remeasureTruncation}
       onClick={e => {
         e.stopPropagation()
         beginEdit(name)
@@ -606,6 +605,19 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
         through the gaps in the transparent glyphs — the same way one column cleanly hides another when
         resized over it. paddingLeft keeps a small margin between the cut text and the first marker. */}
       <div ref={markerStripRef} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, alignSelf: 'stretch', background: 'var(--surface)', paddingLeft: 6 }}>
+        {txn.needs_review ? (
+          <Tooltip
+            content={<span>Needs review — recently imported and not yet looked over. Clears when you edit its category or mark it reviewed.</span>}
+            maxWidth={MAX_TAG_TOOLTIP_WIDTH}
+          >
+            <span
+              aria-label="Needs review"
+              style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--review-marker-color)', fontSize: 13, fontWeight: 700, cursor: 'default' }}
+            >
+              R
+            </span>
+          </Tooltip>
+        ) : null}
         {txn.suspect_duplicate_of ? (
           <Tooltip
             content={<span>Possible duplicate of another transaction. Click to review.</span>}

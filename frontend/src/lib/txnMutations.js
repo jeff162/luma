@@ -88,6 +88,17 @@ export const txnMutations = {
     return result
   },
 
+  // Clear the needs-review flag on a single row. Reuses the bulk endpoint (there is no per-row
+  // review endpoint) with a one-id selection.
+  async markReviewed(txnId) {
+    const result = await api.bulkUpdateTransactions(
+      { mode: 'ids', ids: [txnId] },
+      [{ type: 'mark_reviewed' }],
+    )
+    notifyTransactionsChanged()
+    return result
+  },
+
   async trashTransaction(txnId) {
     const result = await api.trashTransaction(txnId)
     notifyTransactionsChanged()

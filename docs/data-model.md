@@ -106,6 +106,7 @@ Important conventions:
 
 - **check-number enrichment** is the one exception that *derives* rather than stores: a paper-check row (`merchant\_name`/description reads as the whole word "check"/"cheque", not "CHECKCARD") whose file carries a separate check-number column gets that number folded into `merchant\_name`/`display\_name` as `"Check #<n>"` (only when not already present). It is applied to the merchant/display fields only — `raw\_name` (the literal source text) and `content\_hash` (dedupe) are left untouched — so a lone "Check" line becomes recognizable without storing the check-number column or perturbing duplicate detection
 
+- `needs_review = 1` flags a freshly imported or synced row the user hasn't looked over yet — a per-transaction convenience for reviewing newly arrived transactions, surfaced as a subtle amber `R` marker in the row strip plus a "Needs review" filter/toggle on the Transactions page. It is **set on every import/sync insert** (the CSV `_insert_imported_transaction` path and the Plaid sync insert); existing and hand-created rows default to `0` and stay out of the review pool. It is **its own axis, independent of categorization** — a rule-categorized row can still need review, and a reviewed row can be deliberately uncategorized. It clears two ways: a **manual category edit** (`override_category`, bulk `set_category`, the rejected-suggestion manual re-point — the same actions that write `category_source = 'manual'`) clears it implicitly, and an explicit **mark reviewed** (the `mark_reviewed` bulk action / row-menu action, or the per-batch sweep) clears it for "looked, it's fine as-is." Automatic categorization (rule, import, the conflict-screen `imported-category` recategorize, `cleared`) deliberately does **not** clear it. This is deliberately a column, not a tag: review is workflow lifecycle, not a reporting label, mirroring `suspect_duplicate_*` and the advisory-reject `reviewed_at`. Historical-backfill floods are handled by bulk mark-reviewed (select-all-matching) and a per-CSV-batch "Mark all reviewed" (`POST /import-export/batches/{id}/mark-reviewed`), which is why there is no import-time default-review choice yet. Data-source syncs have no per-set record to offer the equivalent per-file sweep — giving them CSV-batch parity (per-fetch records) is deferred
 - pending transactions are visible in lists but usually excluded from summary totals
 
 - `trashed_at != NULL` means the row is soft-deleted; every read path (the raw list, the summary endpoints, the dashboard, the import-card counts) filters it out, but the record stays in `txn` until the user empties the transaction trash from Settings, mirroring the account-trash pattern. The Settings → Trash view and the empty-trash operation are the one exception to "all trashed rows": both deliberately exclude confirmed-duplicate rows (`rejection_reason='duplicate_confirmed'` — see below), so the manual Trash only ever surfaces user-deleted transactions and emptying it cannot destroy a dedupe decision's restore path
@@ -399,20 +400,30 @@ The `/preferences` API (`auth.py`) is the single facade: it resolves the scope i
 ## Schema evolution
 
 Fresh installs are created directly in the current schema by `init_db` and stamped at
-`CURRENT_VERSION`. The incremental migration chain (v1..v32) that upgraded pre-existing databases
-in place was removed at the Luma rebrand break point, and `CURRENT_VERSION` was reset to `1` as the
-new baseline. There is currently **no in-place migration path**: the supported way to bring data off
-an older database is backup + restore into a fresh install (see the backup envelope note above), not
-migration.
+`CURRENT_VERSION`. The historical incremental migration chain (v1..v32) that upgraded pre-rebrand
+databases was dropped at the Luma rebrand break point and the baseline reset to `1`; there is no
+in-place upgrade path *off a pre-rebrand database* (those come across via backup + restore into a
+fresh install — see the backup envelope note above).
 
-If the schema changes from here:
+Post-rebrand, the **migration runner is active**: `run_migrations` advances an existing database to
+`CURRENT_VERSION` by applying each registered `@migration(version)` newer than the DB's recorded
+`db_meta.version`, in order. Fresh installs skip the runner — they are created at the full current
+schema and stamped directly. Registered migrations so far: **v2** adds `category_rule.match_source_text`,
+**v3** adds `txn.needs_review` (`CURRENT_VERSION = 3`).
+
+When the schema changes from here:
 
 - update `init_db` in `backend/db/database.py` so fresh databases are created directly in the new
-  shape
+  shape (add the column to the baseline `CREATE TABLE`)
 
-- for the first change that must upgrade *existing* databases in place, reintroduce a migration
-  runner starting from this `1` baseline (bump `CURRENT_VERSION`, add the migration, keep it
-  idempotent when practical) — until then, fresh-install schema is the only schema that exists
+- register a `@migration(N)` that brings an existing database to the same shape (idempotent
+  `ALTER TABLE … ADD COLUMN …` etc.) and bump `CURRENT_VERSION` to `N`
+
+- a structural object that *references* the new column (e.g. an index over it) must **not** live in
+  `init_db`'s `CREATE TABLE`/`executescript` block — on a pre-`N` database the column doesn't exist
+  yet when that script runs (it is all `CREATE TABLE IF NOT EXISTS`, so the column is added only later
+  by `run_migrations`). Create such objects after the fresh/migrate branch in `init_db`, where the
+  column is guaranteed present on both paths. `idx_txn_needs_review` is the worked example.
 
 ## Reporting assumptions
 

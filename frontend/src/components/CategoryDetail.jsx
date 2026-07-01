@@ -17,6 +17,7 @@ import {
   DetailTrendChart,
   useDetailPanelChrome,
   usePagedMonthTransactions,
+  usePanelReveal,
 } from './detailShared.jsx'
 
 const CATEGORY_DETAIL_TABLE_PREF_KEY = 'ui.categoryDetail.transactions.columns'
@@ -27,10 +28,13 @@ export default function CategoryDetail({ category, categories = [], onClose, for
    * treats that month's rows as a small editable working set so in-place recategorization does not
    * force the user back through the drill path.
    */
-  const { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
+  const { pos, size, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
   const [trend, setTrend]           = useState([])
   const [selectedMonth, setSelectedMonth] = useState(null)
   const [trendLoading, setTrendLoading] = useState(true)
+  // Hold the panel invisible until its geometry settles, so it fades in fully formed rather than
+  // visibly growing as the chart and list land (see usePanelReveal).
+  const revealed = usePanelReveal(panelRef, !trendLoading)
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
     preferenceKey: CATEGORY_DETAIL_TABLE_PREF_KEY,
   })
@@ -120,8 +124,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
     <DetailPanelShell
       pos={pos}
       size={size}
-      dragging={dragging}
-      resizing={resizing}
+      revealed={revealed}
       panelRef={panelRef}
       onDragStart={onDragStart}
       onResizeStart={onResizeStart}

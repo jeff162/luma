@@ -792,6 +792,50 @@ export const HELP_TOPICS = [
     ),
   },
   {
+    id: 'reviewing-transactions',
+    section: 'importing',
+    title: 'Reviewing newly imported transactions',
+    surfaces: ['Transactions (Needs review)', 'Import / Export (file card)'],
+    summary: 'New transactions arrive flagged needs review so they can be looked over before being trusted. The R marker, the Needs review filter, and Mark reviewed work through them. A whole imported file clears at once with Mark all reviewed.',
+    body: () => (
+      <>
+        <p>
+          New transactions usually come in together -- a CSV, a series of CSV files, or a data connection.
+          Some get categorized automatically by rules along the way. It is worth looking the new ones over
+          before trusting them, to catch any mistakes. And now and then a transaction that matched a rule is
+          really an exception that belongs in a different category. So every imported or synced transaction
+          starts out flagged <strong>needs review</strong>, with a small <strong>R</strong> marker in its row.
+        </p>
+        <p>
+          The flag is separate from whether a transaction is categorized. A rule-categorized transaction can
+          still be worth a look. A reviewed transaction can be left uncategorized on purpose. So <strong>needs
+          review</strong> and <strong>uncategorized</strong> are two different filters.
+        </p>
+        <p>The flag clears two ways:</p>
+        <ul>
+          <li>Editing the transaction’s category clears it. Correcting the category counts as reviewing it.</li>
+          <li>
+            <strong>Mark reviewed</strong> clears it without changing anything else. That covers the common
+            case where the category is already right and the transaction just needed a glance. It is on the
+            row’s right-click menu and in the bulk-edit bar, so a whole selection can be cleared at once.
+          </li>
+        </ul>
+        <p>
+          On the Transactions page, the <strong>Needs review</strong> filter narrows the list to the flagged
+          transactions, the same way the uncategorized filter does. Sorting that list by amount deals with the
+          largest transactions first.
+        </p>
+        <p>
+          A long historical import flags a lot of transactions at once, and reviewing all of it is usually not
+          worth the trouble. Each imported file’s card on the Import / Export page shows a <strong>to
+          review</strong> count and a <strong>Mark all reviewed</strong> button that clears the whole file in
+          one click. A data connection has no per-file card yet. Its transactions are cleared with
+          the <strong>Needs review</strong> filter and a bulk <strong>Mark reviewed</strong> instead.
+        </p>
+      </>
+    ),
+  },
+  {
     id: 'generate-rules',
     section: 'importing',
     title: 'Generating rules from transactions in an imported file',

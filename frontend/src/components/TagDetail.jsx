@@ -15,6 +15,7 @@ import {
   DETAIL_LIST_MAX_HEIGHT,
   DetailPanelShell,
   useDetailPanelChrome,
+  usePanelReveal,
 } from './detailShared.jsx'
 
 const TAG_DETAIL_TABLE_PREF_KEY = 'ui.tagDetail.transactions.columns'
@@ -45,10 +46,13 @@ export default function TagDetail({
   stackIndex = 0,
   isTopmost = true,
 }) {
-  const { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart } =
+  const { pos, size, panelRef, onDragStart, onResizeStart } =
     useDetailPanelChrome(onClose, { forceFloating, stackIndex })
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(true)
+  // Hold the panel invisible until its geometry settles, so it fades in fully formed rather than
+  // visibly growing as its content lands (see usePanelReveal).
+  const revealed = usePanelReveal(panelRef, !loading)
   const [payeeDetail, setPayeeDetail] = useState(null)
   const [categoryDetail, setCategoryDetail] = useState(null)
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
@@ -136,8 +140,7 @@ export default function TagDetail({
     <DetailPanelShell
       pos={pos}
       size={size}
-      dragging={dragging}
-      resizing={resizing}
+      revealed={revealed}
       panelRef={panelRef}
       onDragStart={onDragStart}
       onResizeStart={onResizeStart}

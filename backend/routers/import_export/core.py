@@ -740,8 +740,8 @@ def _insert_imported_transaction(conn, batch_id: str, payload: dict) -> str:
     conn.execute("""
         INSERT INTO txn
           (id, account_id, owner_id, category_id, amount, merchant_name,
-           display_name, raw_name, date, is_pending, content_hash, import_evidence_json, import_batch_id, imported_category, notes, category_overridden, category_source)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           display_name, raw_name, date, is_pending, content_hash, import_evidence_json, import_batch_id, imported_category, notes, category_overridden, category_source, needs_review)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
     """, (
         txn_id,
         payload.get("account_id"),
@@ -3768,6 +3768,20 @@ def mark_batch_duplicates_reviewed(batch_id: str, body: BatchDuplicateReviewRequ
     return {"updated": cursor.rowcount or 0, "reviewed": body.reviewed}
 
 
+@router.post("/batches/{batch_id}/mark-reviewed")
+def mark_batch_reviewed(batch_id: str):
+    """Clear the needs-review flag on every still-flagged transaction in this batch — the one-click
+    "I've looked these over (or don't need to)" for a whole imported file. This is the CSV counterpart
+    to bulk Mark reviewed on the Transactions filter; it exists because batches already track which
+    rows belong to a file, which data-source syncs don't yet have."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE txn SET needs_review = 0 WHERE import_batch_id = ? AND needs_review = 1",
+            (batch_id,),
+        )
+    return {"updated": cursor.rowcount or 0}
+
+
 @router.post("/batches/{batch_id}/duplicates/import")
 def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
     with get_db() as conn:
@@ -3960,6 +3974,13 @@ def list_batches():
                   AND  suspect_duplicate_of IS NOT NULL
                   AND  suspect_resolved_at  IS NULL
                   AND  trashed_at           IS NULL
+            """, (b["id"],)).fetchone()["n"] or 0)
+            d["needs_review_count"] = int(conn.execute("""
+                SELECT COUNT(*) AS n
+                FROM   txn
+                WHERE  import_batch_id = ?
+                  AND  needs_review = 1
+                  AND  trashed_at    IS NULL
             """, (b["id"],)).fetchone()["n"] or 0)
             result.append(d)
         return result

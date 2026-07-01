@@ -156,6 +156,23 @@ class DemoDataTests(unittest.TestCase):
         # Second load must not duplicate anything.
         self.assertEqual(txns_after, first["transactions"])
 
+    def test_saved_data_source_suppresses_loadable(self):
+        # A fresh tenant (only the seeded category skeleton) is a blank slate.
+        with self._conn() as conn:
+            self.assertTrue(is_demo_loadable(conn))
+            # Saving a data source is engagement even before any file is imported.
+            conn.execute("INSERT INTO csv_import_profile (id, name) VALUES ('p1', 'My Bank')")
+        with self._conn() as conn:
+            self.assertFalse(is_demo_loadable(conn))
+
+    def test_linked_connection_suppresses_loadable(self):
+        with self._conn() as conn:
+            self.assertTrue(is_demo_loadable(conn))
+            # A linked connection counts even before any transactions have synced.
+            conn.execute("INSERT INTO plaid_item (item_id) VALUES ('item-1')")
+        with self._conn() as conn:
+            self.assertFalse(is_demo_loadable(conn))
+
 
 if __name__ == "__main__":
     unittest.main()

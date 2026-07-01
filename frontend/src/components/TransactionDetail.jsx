@@ -25,6 +25,7 @@ import {
   DetailTrendChart,
   useDetailPanelChrome,
   usePagedMonthTransactions,
+  usePanelReveal,
 } from './detailShared.jsx'
 
 const inputStyle = {
@@ -42,7 +43,7 @@ const TRANSACTION_DETAIL_TABLE_PREF_KEY = 'ui.transactionDetail.transactions.col
 export default function TransactionDetail({ txn, categories, onClose, onTrashed, onCategorized, onNotesSaved, onTagsChanged, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true, dateStart = null, dateEnd = null, showPayeeActivity = true, availableTags: providedAvailableTags = null }) {
   // Date scope is the caller's call: Dashboard/Transactions pass their global filter; pages without a
   // filter bar pass nothing, in which case the payee trend defaults to the merchant's full history.
-  const { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
+  const { pos, size, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
   const [trend, setTrend]               = useState([])
   const [displayName, setDisplayName]   = useState(getTxnMerchantLabel(txn))
   const [selectedMonth, setSelectedMonth] = useState(null)
@@ -52,6 +53,9 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
   const [detailTxn, setDetailTxn] = useState(txn)
   const [availableTags, setAvailableTags] = useState(providedAvailableTags || [])
   const [tagsLoading, setTagsLoading] = useState(!providedAvailableTags)
+  // Hold the panel invisible until its geometry settles, so it fades in fully formed rather than
+  // visibly growing as the payee trend and tags land (see usePanelReveal).
+  const revealed = usePanelReveal(panelRef, !trendLoading && !tagsLoading)
   const [trashConfirmOpen, setTrashConfirmOpen] = useState(false)
   const [originExpanded, setOriginExpanded] = useState(false)
   // A row's pencil / "Edit transaction" in the payee activity list opens that transaction's own editor
@@ -299,8 +303,7 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
       <DetailPanelShell
         pos={pos}
         size={size}
-        dragging={dragging}
-        resizing={resizing}
+        revealed={revealed}
         panelRef={panelRef}
         onDragStart={onDragStart}
         onResizeStart={onResizeStart}

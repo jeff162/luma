@@ -97,6 +97,11 @@ export function useDetailPanelChrome(onClose, options = {}) {
     stackIndex = 0,
     initialPosition = null,
     initialSize = null,
+    // Called once when a drag or resize gesture ends (not on a plain header click), with the final
+    // { pos, size }. Lets a caller persist panel geometry without subscribing to a per-gesture
+    // `dragging`/`resizing` flag — subscribing to that flag would re-render the caller (and its
+    // large body) twice on every header click. See the drag note below.
+    onGestureEnd = null,
   } = options
   // When the caller passes a saved position (e.g., restoring a minimized dialog), seed `pos`
   // synchronously so the first paint is already at the correct location. Otherwise the panel
@@ -115,12 +120,23 @@ export function useDetailPanelChrome(onClose, options = {}) {
   // room to drag it around. Without this the panel falls back to a max-height that nearly fills
   // the viewport, which leaves zero vertical drag range (clampPanelPosition locks Y to topGutter).
   const [size, setSize] = useState(initialSize)
-  const [dragging, setDragging] = useState(false)
-  const [resizing, setResizing] = useState(false)
   const panelRef = useRef(null)
   const dragOffset = useRef({ x: 0, y: 0 })
   const resizeStart = useRef({ x: 0, y: 0, left: 0, top: 0, width: 0, height: 0, dir: 'se' })
   const hasDragged = useRef(false)
+  // Teardown for the window listeners + cursor cosmetics of an in-flight gesture. Held in a ref so
+  // the unmount effect can end a gesture cleanly if the panel closes while a drag/resize is live.
+  const gestureCleanup = useRef(null)
+
+  // Gesture cosmetics go straight to the DOM instead of React state so that starting or ending a
+  // drag/resize does NOT re-render this hook's consumer. The consumer owns the panel body (often a
+  // large list), and a state toggle here re-rendered every row twice per header click. userSelect:none
+  // stops the drag from selecting header/body text; the grabbing cursor goes on <body> so it wins over
+  // the header's own cursor without threading a ref down to it.
+  function setGestureCosmetics(active, grabCursor = false) {
+    if (panelRef.current) panelRef.current.style.userSelect = active ? 'none' : ''
+    if (grabCursor) document.body.style.cursor = active ? 'grabbing' : ''
+  }
 
   function clampSize(next) {
     if (!next) return null
@@ -132,6 +148,13 @@ export function useDetailPanelChrome(onClose, options = {}) {
     }
   }
 
+  // Direct-DOM drag: each mousemove writes `left`/`top` on panelRef (rAF-batched) instead of driving
+  // React state, so mid-drag never reconciles the (potentially huge) panel body. We keep the whole
+  // gesture — start, move, and end — off React state; the only state write is the single setPos on
+  // release so later renders read an up-to-date position. This is why a plain click on a header
+  // control (e.g. the × close button) costs zero re-renders: no movement, no setPos. For dialogs with
+  // large bodies (the duplicate-detection report renders thousands of rows) a per-gesture state toggle
+  // used to re-render every row twice per click on the header.
   function onDragStart(e) {
     if (!panelRef.current) return
     const rect = panelRef.current.getBoundingClientRect()
@@ -140,8 +163,53 @@ export function useDetailPanelChrome(onClose, options = {}) {
       y: e.clientY - (pos ? pos.y : rect.top),
     }
     hasDragged.current = false
-    setDragging(true)
     e.preventDefault()
+
+    let pendingFrame = null
+    let lastEvent = null
+    let lastWritten = null
+    function applyFrame() {
+      pendingFrame = null
+      if (!lastEvent || !panelRef.current) return
+      const r = panelRef.current.getBoundingClientRect()
+      const next = clampPanelPosition({
+        x: lastEvent.clientX - dragOffset.current.x,
+        y: lastEvent.clientY - dragOffset.current.y,
+      }, r)
+      panelRef.current.style.left = `${next.x}px`
+      panelRef.current.style.top  = `${next.y}px`
+      lastWritten = next
+    }
+    function onMove(ev) {
+      if (!hasDragged.current) {
+        if (!pos && panelRef.current) {
+          const r = panelRef.current.getBoundingClientRect()
+          setPos({ x: r.left, y: r.top })
+          dragOffset.current = { x: ev.clientX - r.left, y: ev.clientY - r.top }
+        }
+        hasDragged.current = true
+      }
+      lastEvent = { clientX: ev.clientX, clientY: ev.clientY }
+      if (!pendingFrame) pendingFrame = requestAnimationFrame(applyFrame)
+    }
+    function teardown() {
+      if (pendingFrame) { cancelAnimationFrame(pendingFrame); pendingFrame = null }
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      setGestureCosmetics(false, true)
+      gestureCleanup.current = null
+    }
+    function onUp() {
+      if (pendingFrame) { cancelAnimationFrame(pendingFrame); applyFrame() }
+      teardown()
+      if (lastWritten) setPos(lastWritten)
+      // Only a real move persists geometry; a plain click (no drag) leaves the saved position alone.
+      if (hasDragged.current) onGestureEnd?.({ pos: lastWritten || pos, size })
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    setGestureCosmetics(true, true)
+    gestureCleanup.current = teardown
   }
 
   // Resize converts the panel into floating mode (matching drag) so size and
@@ -158,11 +226,55 @@ export function useDetailPanelChrome(onClose, options = {}) {
       width: rect.width, height: rect.height,
       dir,
     }
+    // Resize does drive React state each frame (unlike drag) because width/height changes must reflow
+    // the body — there's no direct-DOM shortcut. But the start/stop of the gesture stays off state so
+    // it doesn't add two extra full re-renders bracketing the resize.
+    let seededPos = pos
     if (!size) setSize({ width: rect.width, height: rect.height })
-    if (!pos) setPos({ x: rect.left, y: rect.top })
-    setResizing(true)
+    if (!pos) { seededPos = { x: rect.left, y: rect.top }; setPos(seededPos) }
     e.preventDefault()
     e.stopPropagation()
+
+    let lastGeom = { pos: seededPos, size: size || { width: rect.width, height: rect.height } }
+    function onMove(ev) {
+      const { x, y, left, top, width, height, dir: d } = resizeStart.current
+      const dx = ev.clientX - x
+      const dy = ev.clientY - y
+      let nextWidth = width
+      let nextHeight = height
+      if (d.includes('e')) nextWidth = width + dx
+      if (d.includes('w')) nextWidth = width - dx
+      if (d.includes('s')) nextHeight = height + dy
+      if (d.includes('n')) nextHeight = height - dy
+      const clamped = clampSize({ width: nextWidth, height: nextHeight })
+      setSize(clamped)
+      lastGeom = { ...lastGeom, size: clamped }
+      // West/north edges grow the panel toward the origin, so move left/top by however much the
+      // clamped size actually changed — that keeps the opposite (east/south) edge pinned in place.
+      // Clamp against the *new* size (not the panel's stale pre-resize rect) so a horizontal/vertical
+      // viewport clamp doesn't drag the anchored edge off its mark.
+      if (d.includes('w') || d.includes('n')) {
+        const nextLeft = d.includes('w') ? left + (width - clamped.width) : left
+        const nextTop = d.includes('n') ? top + (height - clamped.height) : top
+        const nextPos = clampPanelPosition({ x: nextLeft, y: nextTop }, clamped)
+        setPos(nextPos)
+        lastGeom = { ...lastGeom, pos: nextPos }
+      }
+    }
+    function teardown() {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      setGestureCosmetics(false)
+      gestureCleanup.current = null
+    }
+    function onUp() {
+      teardown()
+      onGestureEnd?.(lastGeom)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    setGestureCosmetics(true)
+    gestureCleanup.current = teardown
   }
 
   useEffect(() => {
@@ -176,97 +288,9 @@ export function useDetailPanelChrome(onClose, options = {}) {
     setPos(clampPanelPosition(getDefaultPanelPosition(rect, stackIndex), rect))
   }, [forceFloating, initialPosition, pos, stackIndex])
 
-  useEffect(() => {
-    if (!dragging) return
-    // Direct-DOM drag: writing `left`/`top` via panelRef on each mousemove (batched through
-    // requestAnimationFrame) skips React reconciliation entirely while the user is dragging.
-    // For dialogs with large bodies (the duplicate-detection report renders hundreds of table
-    // rows), per-mousemove `setState`-driven re-renders were noticeably sluggish — every frame
-    // walked the whole subtree even though the only thing changing was the panel position.
-    // We commit the final position to React state on mouseup so subsequent renders read the
-    // up-to-date pos. Trade-off: an outside re-render in mid-drag would briefly snap the panel
-    // back to the last committed pos until the next mousemove. No call site currently triggers
-    // such renders during drag, and the next mousemove corrects the position immediately.
-    let pendingFrame = null
-    let lastEvent = null
-    let lastWritten = null
-    function applyFrame() {
-      pendingFrame = null
-      if (!lastEvent || !panelRef.current) return
-      const rect = panelRef.current.getBoundingClientRect()
-      const next = clampPanelPosition({
-        x: lastEvent.clientX - dragOffset.current.x,
-        y: lastEvent.clientY - dragOffset.current.y,
-      }, rect)
-      panelRef.current.style.left = `${next.x}px`
-      panelRef.current.style.top  = `${next.y}px`
-      lastWritten = next
-    }
-    function onMove(e) {
-      if (!hasDragged.current) {
-        if (!pos && panelRef.current) {
-          const rect = panelRef.current.getBoundingClientRect()
-          setPos({ x: rect.left, y: rect.top })
-          dragOffset.current = {
-            x: e.clientX - rect.left,
-            y: e.clientY - rect.top,
-          }
-        }
-        hasDragged.current = true
-      }
-      lastEvent = { clientX: e.clientX, clientY: e.clientY }
-      if (!pendingFrame) pendingFrame = requestAnimationFrame(applyFrame)
-    }
-    function onUp() {
-      if (pendingFrame) {
-        cancelAnimationFrame(pendingFrame)
-        pendingFrame = null
-        applyFrame()
-      }
-      if (lastWritten) setPos(lastWritten)
-      setDragging(false)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => {
-      if (pendingFrame) cancelAnimationFrame(pendingFrame)
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-  }, [dragging, pos])
-
-  useEffect(() => {
-    if (!resizing) return
-    function onMove(e) {
-      const { x, y, left, top, width, height, dir } = resizeStart.current
-      const dx = e.clientX - x
-      const dy = e.clientY - y
-      let nextWidth = width
-      let nextHeight = height
-      if (dir.includes('e')) nextWidth = width + dx
-      if (dir.includes('w')) nextWidth = width - dx
-      if (dir.includes('s')) nextHeight = height + dy
-      if (dir.includes('n')) nextHeight = height - dy
-      const clamped = clampSize({ width: nextWidth, height: nextHeight })
-      setSize(clamped)
-      // West/north edges grow the panel toward the origin, so move left/top by however much the
-      // clamped size actually changed — that keeps the opposite (east/south) edge pinned in place.
-      // Clamp against the *new* size (not the panel's stale pre-resize rect) so a horizontal/vertical
-      // viewport clamp doesn't drag the anchored edge off its mark.
-      if (dir.includes('w') || dir.includes('n')) {
-        const nextLeft = dir.includes('w') ? left + (width - clamped.width) : left
-        const nextTop = dir.includes('n') ? top + (height - clamped.height) : top
-        setPos(clampPanelPosition({ x: nextLeft, y: nextTop }, clamped))
-      }
-    }
-    function onUp() { setResizing(false) }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-  }, [resizing])
+  // If the panel unmounts while a drag/resize is still in flight (rare — e.g. an Escape-to-close
+  // bound elsewhere fires mid-gesture), tear down the live window listeners and restore body cursor.
+  useEffect(() => () => { gestureCleanup.current?.() }, [])
 
   useEffect(() => {
     function handleResize() {
@@ -289,7 +313,35 @@ export function useDetailPanelChrome(onClose, options = {}) {
     return () => observer.disconnect()
   }, [panelRef])
 
-  return { pos, size, dragging, resizing, panelRef, onDragStart, onResizeStart }
+  return { pos, size, panelRef, onDragStart, onResizeStart }
+}
+
+// Gates a detail panel's reveal on its geometry going quiet, returning a `revealed` flag for
+// DetailPanelShell. These panels reflow in stages as they open — a spinner gives way to a chart, the
+// chart does a second measure/draw pass, a month list lands, and a grown panel trips the shell's
+// position clamp. Revealing on a data-loaded flag alone still shows some of that settling, so once the
+// caller's primary data is in (`dataReady`) we watch `panelRef` with a ResizeObserver and reveal only
+// after it has held a stable size briefly. A hard cap guarantees a slow/never-quiet body still appears.
+// `revealed` latches true, so later in-place updates (source/date changes) never re-hide the panel.
+// Hold the panel at opacity 0 (DetailPanelShell does) rather than unmounting it so it lays out and
+// measures while hidden — that's what lets this settle before the first visible frame.
+export function usePanelReveal(panelRef, dataReady) {
+  const [revealed, setRevealed] = useState(false)
+  useEffect(() => {
+    if (revealed || !dataReady) return undefined
+    const el = panelRef.current
+    if (!el) return undefined
+    const SETTLE_MS = 90
+    const HARD_CAP_MS = 1200
+    let settleTimer
+    const arm = () => { clearTimeout(settleTimer); settleTimer = setTimeout(() => setRevealed(true), SETTLE_MS) }
+    const observer = new ResizeObserver(arm)
+    observer.observe(el)
+    arm() // in case the size is already stable and no further resize fires
+    const cap = setTimeout(() => setRevealed(true), HARD_CAP_MS)
+    return () => { observer.disconnect(); clearTimeout(settleTimer); clearTimeout(cap) }
+  }, [revealed, dataReady, panelRef])
+  return revealed
 }
 
 // Defensive append for paged lists: drop any incoming row whose id is already present so a stray
@@ -650,8 +702,6 @@ const PANEL_RESIZE_HANDLES = [
 export function DetailPanelShell({
   pos,
   size,
-  dragging,
-  resizing = false,
   panelRef,
   onDragStart,
   onResizeStart,
@@ -659,6 +709,12 @@ export function DetailPanelShell({
   header,
   children,
   isTopmost = true,
+  // When false, the panel is laid out and measured but held invisible (opacity 0, non-interactive).
+  // A caller whose body reflows as async content loads (chart → month list) uses this to reveal the
+  // panel only once it has settled at its final size, so it fades in fully formed instead of visibly
+  // growing/repositioning. We hold it at opacity 0 — not display:none — precisely so it DOES lay out
+  // while hidden (the position clamp settles and Recharts can measure its container before reveal).
+  revealed = true,
 }) {
   const stack = usePanelStackSlot()
   const effectiveIsTopmost = stack.isTopmost && isTopmost
@@ -702,6 +758,8 @@ export function DetailPanelShell({
       padding: pos ? 0 : `${DETAIL_TOP_PADDING} 16px 16px`,
       pointerEvents: pos ? 'none' : 'auto',
       overflowY: 'auto',
+      opacity: revealed ? 1 : 0,
+      transition: 'opacity 140ms ease',
     }}>
       <div
         ref={panelRef}
@@ -720,8 +778,12 @@ export function DetailPanelShell({
               : '85vh'),
           display: 'flex',
           flexDirection: 'column',
-          pointerEvents: 'auto',
-          userSelect: dragging || resizing ? 'none' : 'auto',
+          // 'auto' re-enables interaction inside the pointer-transparent floating backdrop; while the
+          // panel is still held invisible (revealed=false) keep it non-interactive so a click can't
+          // land on it before it fades in.
+          pointerEvents: revealed ? 'auto' : 'none',
+          // userSelect during a gesture is toggled imperatively by useDetailPanelChrome (direct DOM)
+          // so a drag/resize never re-renders this panel; left unset here it defaults to selectable.
           zIndex: stack.zIndex,
           ...panelSurfaceStyle,
         }}
@@ -732,7 +794,9 @@ export function DetailPanelShell({
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             padding: '16px 24px', borderBottom: '1px solid var(--border)', flexShrink: 0,
             background: getFloatingPanelHeaderBackground(effectiveIsTopmost),
-            cursor: dragging ? 'grabbing' : 'grab',
+            // Grab affordance at rest; the grabbing cursor during an active drag is applied to <body>
+            // by useDetailPanelChrome so it wins panel-wide without re-rendering.
+            cursor: 'grab',
           }}
         >
           <div style={{ flex: 1 }}>{header}</div>
