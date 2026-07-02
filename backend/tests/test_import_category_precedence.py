@@ -69,8 +69,9 @@ class ImportCategoryPrecedenceTests(unittest.IsolatedAsyncioTestCase):
                 )
         return account_id
 
-    def _add_rule(self, category_name, keyword):
-        """Create a top-level group + leaf named category_name with a rule keyword -> that leaf."""
+    def _add_rule(self, category_name, keyword, clean_name=None):
+        """Create a top-level group + leaf named category_name with a rule keyword -> that leaf. An
+        optional clean_name gives the rule a rename action."""
         group_id = str(uuid.uuid4())
         leaf_id = str(uuid.uuid4())
         with self._use_db_path():
@@ -84,8 +85,8 @@ class ImportCategoryPrecedenceTests(unittest.IsolatedAsyncioTestCase):
                     (leaf_id, group_id, category_name),
                 )
                 conn.execute(
-                    "INSERT INTO category_rule (id, category_id, keyword) VALUES (?, ?, ?)",
-                    (str(uuid.uuid4()), leaf_id, keyword),
+                    "INSERT INTO category_rule (id, category_id, keyword, clean_name) VALUES (?, ?, ?, ?)",
+                    (str(uuid.uuid4()), leaf_id, keyword, clean_name),
                 )
         return leaf_id
 
@@ -189,6 +190,32 @@ class ImportCategoryPrecedenceTests(unittest.IsolatedAsyncioTestCase):
         names = self._unassigned_leaf_names()
         self.assertIn("Gadgets", names)
         self.assertNotIn("Restaurants", names)
+
+
+    async def test_rule_clean_name_is_applied_as_display_name_at_import(self):
+        # A rule's rename action (clean_name) must be applied at import — like sync and recategorize do —
+        # not just its category/tags. display_name becomes the canonical name while merchant_name keeps the
+        # raw description. Regression for the CSV path silently dropping clean_name, which left rule-renamed
+        # payees grouping by their raw description in recurring detection and reports.
+        account_id = self._insert_account("Checking")
+        self._add_rule("RuleCat", "zzqx", clean_name="Canonical Coffee")
+
+        await self._run_import(
+            "\n".join([
+                "Date,Description,Account,Amount,Category",
+                "2026-01-02,ZZQX MERCHANT 001,Checking,4.50,Restaurants",
+            ]),
+            {"Checking": account_id},
+        )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                row = dict(conn.execute(
+                    "SELECT merchant_name, display_name, raw_name FROM txn WHERE raw_name = ?",
+                    ("ZZQX MERCHANT 001",),
+                ).fetchone())
+        self.assertEqual(row["display_name"], "Canonical Coffee")    # rename applied at import
+        self.assertEqual(row["merchant_name"], "ZZQX MERCHANT 001")  # raw description kept on merchant_name
 
 
 if __name__ == "__main__":

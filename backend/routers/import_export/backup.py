@@ -12,7 +12,8 @@ otherwise independent of the import-run workflow:
   (everything in the data DB except credentials) that can round-trip the database: owners,
   accounts, categories, rules, merchant renames, import profiles/batches/history, transactions,
   the whole tag system (`tag` + every attachment: `txn_tag`/`category_tag`/`account_tag`/`rule_tag`),
-  the account-pair distinct assertions, and UI/layout preferences (`ui_preference`). Restore wipes
+  the account-pair distinct assertions, recurring series (`recurring_series` + the `txn` membership
+  link), and UI/layout preferences (`ui_preference`). Restore wipes
   and rebuilds in FK-safe order. The payload is stamped with the source `instance_id` +
   `access_mode`; restore's compatibility guard uses these to refuse a silent cross-system/cross-mode
   wipe (409 unless `force`) while still allowing an empty target or a same-instance self-restore.
@@ -597,8 +598,13 @@ def build_backup_data(conn) -> dict:
                                    "SELECT id, plaid_transaction_id, account_id, owner_id, "
                                    "category_id, amount, merchant_name, display_name, raw_name, date, "
                                    "is_pending, category_overridden, category_source, imported_category, notes, content_hash, "
-                                   "import_evidence_json, needs_review, "
+                                   "import_evidence_json, needs_review, recurring_series_id, "
                                    "import_batch_id FROM txn ORDER BY date DESC"),
+            # Detected/curated recurring series (see recurring_series table). txn.recurring_series_id
+            # above is the membership link back into these; recurring_membership_override carries the
+            # user's per-transaction pin/exclude corrections that survive scans.
+            "recurring_series": dump("recurring_series"),
+            "recurring_membership_overrides": dump("recurring_membership_override"),
             # Tag system: the tag definitions plus every attachment surface (transaction, category/
             # group, account, rule). Without these a restore silently dropped all tagging.
             "tags":           dump("tag"),
@@ -726,7 +732,12 @@ def _wipe_user_data_tables(conn):
     conn.execute("DELETE FROM account_pair_distinct")
     conn.execute("DELETE FROM ui_preference")
     conn.execute("DELETE FROM tag")
+    # Membership overrides reference both txn and recurring_series, so clear them before either.
+    conn.execute("DELETE FROM recurring_membership_override")
     conn.execute("DELETE FROM txn")
+    # After txn (which references recurring_series via recurring_series_id), before category/account
+    # (which recurring_series references).
+    conn.execute("DELETE FROM recurring_series")
     conn.execute("DELETE FROM import_batch_duplicate")
     conn.execute("DELETE FROM import_batch_account")
     conn.execute("DELETE FROM import_batch")
@@ -811,6 +822,8 @@ def restore_backup(body: RestoreRequest):
     rule_tags = [dict(row) for row in d.get("rule_tags", [])]
     account_pair_distinct = [dict(row) for row in d.get("account_pair_distinct", [])]
     ui_preferences = [dict(row) for row in d.get("ui_preferences", [])]
+    recurring_series = [dict(row) for row in d.get("recurring_series", [])]
+    recurring_membership_overrides = [dict(row) for row in d.get("recurring_membership_overrides", [])]
 
     owner_ids = {row.get("id") for row in owners if row.get("id")}
     account_ids = {row.get("id") for row in accounts if row.get("id")}
@@ -847,9 +860,16 @@ def restore_backup(body: RestoreRequest):
         if row.get("category_id") in category_ids
     ]
 
+    # Recurring series reference category/account (both nullable, ON DELETE SET NULL). Normalize broken
+    # FKs to NULL, then drop txn membership links pointing at a series that didn't survive.
+    normalize_nullable_fk(recurring_series, "category_id", category_ids)
+    normalize_nullable_fk(recurring_series, "account_id", account_ids)
+    recurring_series_ids = {row.get("id") for row in recurring_series if row.get("id")}
+
     normalize_nullable_fk(transactions, "owner_id", owner_ids)
     normalize_nullable_fk(transactions, "category_id", category_ids)
     normalize_nullable_fk(transactions, "import_batch_id", import_batch_ids)
+    normalize_nullable_fk(transactions, "recurring_series_id", recurring_series_ids)
     transactions = [
         row for row in transactions
         if row.get("account_id") in account_ids
@@ -878,6 +898,11 @@ def restore_backup(body: RestoreRequest):
     account_pair_distinct = [
         r for r in account_pair_distinct
         if r.get("account_id_low") in account_ids and r.get("account_id_high") in account_ids
+    ]
+    # A pin/exclude override is meaningful only if both its transaction and its series survived.
+    recurring_membership_overrides = [
+        r for r in recurring_membership_overrides
+        if r.get("txn_id") in txn_ids and r.get("series_id") in recurring_series_ids
     ]
 
     with get_db() as conn:
@@ -927,7 +952,11 @@ def restore_backup(body: RestoreRequest):
         insert_rows("import_batch_account", import_batch_accounts)
         insert_rows("import_batch_duplicate", import_batch_duplicates)
         insert_rows("import_workflow_state", import_workflow_states)
+        # After category/account (its parents), before txn (which links to it via recurring_series_id).
+        insert_rows("recurring_series", recurring_series)
         insert_rows("txn",          transactions)
+        # After both txn and recurring_series (it references each).
+        insert_rows("recurring_membership_override", recurring_membership_overrides)
         insert_rows("txn_tag",      txn_tags)
         # No data-DB foreign keys (scope_id is a loose reference to a control-DB user/profile), so
         # ui_preferences restore verbatim.
@@ -969,6 +998,8 @@ def restore_backup(body: RestoreRequest):
             "rule_tags": len(rule_tags),
             "account_pair_distinct": len(account_pair_distinct),
             "ui_preferences": len(ui_preferences),
+            "recurring_series": len(recurring_series),
+            "recurring_membership_overrides": len(recurring_membership_overrides),
         },
     }
 

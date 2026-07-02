@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations, reconcileRowsAfterRuleApply } from '../lib/txnMutations.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { AppConfirmDialog, Button, Spinner } from './ui.jsx'
+import RuleActionModal from './RuleActionModal.jsx'
 import { CategoryCell, getTxnMerchantLabel } from './TransactionRow.jsx'
 import { OriginRow } from './OriginFields.jsx'
 import { getTxnOriginRows } from '../lib/importSourceFields.js'
@@ -43,6 +45,7 @@ const TRANSACTION_DETAIL_TABLE_PREF_KEY = 'ui.transactionDetail.transactions.col
 export default function TransactionDetail({ txn, categories, onClose, onTrashed, onCategorized, onNotesSaved, onTagsChanged, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true, dateStart = null, dateEnd = null, showPayeeActivity = true, availableTags: providedAvailableTags = null }) {
   // Date scope is the caller's call: Dashboard/Transactions pass their global filter; pages without a
   // filter bar pass nothing, in which case the payee trend defaults to the merchant's full history.
+  const navigate = useNavigate()
   const { pos, size, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
   const [trend, setTrend]               = useState([])
   const [displayName, setDisplayName]   = useState(getTxnMerchantLabel(txn))
@@ -58,6 +61,9 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
   const revealed = usePanelReveal(panelRef, !trendLoading && !tagsLoading)
   const [trashConfirmOpen, setTrashConfirmOpen] = useState(false)
   const [originExpanded, setOriginExpanded] = useState(false)
+  // The editor's general rule affordance (create, or open the rule that already matches this row) — the
+  // editor lacked one, forcing users through the category→toast path to author a rule.
+  const [ruleModalState, setRuleModalState] = useState(null)
   // A row's pencil / "Edit transaction" in the payee activity list opens that transaction's own editor
   // as a child panel (same as the other detail panels host a child editor), so the merchant report can
   // edit a specific row in full without losing its place.
@@ -82,6 +88,24 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
     preferenceKey: TRANSACTION_DETAIL_TABLE_PREF_KEY,
   })
+
+  // Open the rule editor for this transaction: edit the rule that already matches it, else create one
+  // seeded from its merchant/category. (Recurring is a checkbox inside that same editor.)
+  async function openRuleEditor() {
+    try {
+      const res = await api.getMatchingRuleForTransaction(detailTxn.id)
+      if (res?.rule_id) {
+        setRuleModalState({ mode: 'edit', ruleId: res.rule_id, txnId: detailTxn.id })
+        return
+      }
+    } catch { /* fall through to create */ }
+    const merchantName = getTxnMerchantLabel(detailTxn)
+    setRuleModalState({
+      mode: 'create', txnId: detailTxn.id, categoryId: detailTxn.category_id || '',
+      keywordSource: detailTxn.merchant_name || detailTxn.raw_name || merchantName,
+      transactionData: { ...detailTxn },
+    })
+  }
 
   const payee    = getTxnMerchantLabel(detailTxn)
   useEffect(() => {
@@ -321,6 +345,36 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
             background: 'var(--surface2)',
             marginBottom: 18,
           }}>
+            {/* Editor toolbar: recurring membership status (links to its card on the Recurring page) on
+                the left, and a general Rule affordance on the right — one button, since recurring lives
+                inside the same rule editor. */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, minHeight: 24 }}>
+              <div style={{ minWidth: 0 }}>
+                {detailTxn.recurring_series_id ? (
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/recurring?series=${detailTxn.recurring_series_id}`)}
+                    title="View this recurring series"
+                    style={{
+                      background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                      color: 'var(--accent2)', fontSize: 12.5, fontWeight: 600,
+                      display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: '100%',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    ↻ Part of {detailTxn.recurring_series_name || 'a recurring series'}
+                  </button>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                onClick={openRuleEditor}
+                style={{
+                  background: 'none', border: '1px solid var(--border)', borderRadius: 6,
+                  color: 'var(--muted)', cursor: 'pointer', fontSize: 12, padding: '3px 10px', flexShrink: 0,
+                }}
+              >⚙ Rule…</button>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
@@ -546,6 +600,13 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
           stackIndex={stackIndex + 1}
           dateStart={dateStart}
           dateEnd={dateEnd}
+        />
+      )}
+      {ruleModalState && (
+        <RuleActionModal
+          state={ruleModalState}
+          onClose={() => setRuleModalState(null)}
+          onSaved={() => setRuleModalState(null)}
         />
       )}
     </>

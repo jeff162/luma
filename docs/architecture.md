@@ -125,6 +125,8 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 
 - **Behavior:** rules are ordered automatically by specificity; rules can assign categories, scope amount rules to debits or credits, rename merchants, and add transaction tags; manually overridden transaction categories are preserved, while per-transaction tag edits override only that row's rule-derived tag presence
 
+- **Applying a match (shared, per action):** every path that runs rules — CSV import, Plaid sync, and `recategorize_all` (plus its preview count) — matches once via `categorize_transaction`, then applies the result through shared apply points rather than re-deriving it each place: tags via `sync_rule_tags_for_transaction`, and the scalar actions (the merchant rename today, a rule-set note tomorrow) via `rule_scalar_effects`. Category *source* policy stays site-specific (import has mapping/file-label fallbacks; recategorize preserves a `cleared` marker). Keeping each action in one place is what stops sites drifting — the CSV import path had silently dropped the rename before this was centralized — and makes a new scalar rule action a one-place change
+
 - **Starter set (opt-in):** the built-in categories and rules are not seeded at tenant creation — only the group skeleton is. The starter leaves and rules are added on demand via `POST /categories/generate-starter` (`GET /categories/starter-rules` exposes the rule catalog for the approve-before-add picker), which backs the onboarding steps, the Categories/Rules-page actions, and the demo loader. See `data-model.md` (Categories → seeding model, Rules → how rules come into being) for the rationale.
 
 ### Transaction tags
@@ -136,6 +138,50 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 - **Behavior:** tags are lightweight labels separate from categories. A transaction's effective tags are the additive union of direct tags (rule + manual via `txn_tag`), tags on its leaf category, tags on the leaf category's parent group (both via `category_tag`), and tags on its **effective (top-level) account** via `account_tag` (`COALESCE(parent_account_id, account_id)`, so a parent's tags reach its children while a merged child's own tags stay dormant until detached). Rules contribute a union of tag assignments across all matching rules, and transactions keep a per-tag manual override state for the *direct* layer; inherited (account-, category-, and group-level) tags are not overridable per-transaction at present. Both the live-tag computation (`services/transaction_tags.py`) and the `tag_ids` filter (`_append_tag_filter`) are single shared chokepoints, so all four sources reach list and reporting uniformly
 
 - **Reporting:** the dashboard's "Spending by …" picker offers built-in `group` / `category` partitions plus user-saved tag reports built on the multi-tag breakdown; combination wedges represent transactions matching multiple selected tags, and an `Other / Untagged` wedge holds the remainder
+
+### Recurring series
+
+- **Backend:** `backend/services/recurring_detection.py` (detection) + `backend/routers/recurring.py` (API)
+
+- **Frontend:** `frontend/src/pages/Recurring.jsx` (route `/recurring`, nav "Recurring")
+
+- **Storage:** `recurring_series` (+ `rule_id` for rule-backed series) + the `txn.recurring_series_id`
+  membership link + `recurring_membership_override` (per-transaction pin/exclude corrections)
+
+- **Handles:** detection of recurring obligations (subscriptions, bills, taxes) and their curation. A
+  **scan** is idempotent — it rewrites auto-detected+unconfirmed series while preserving the user's
+  confirmed, manual, and suppressed ones (see `data-model.md` → Recurring series for the detection key,
+  the timing-over-frequency scoring, and the curation gates). The scan runs both **on demand**
+  (`POST /recurring/scan` from the page) and **automatically**, at two scopes:
+  - **Scoped** (`scan_imported_payees`) — the ingest paths (a completed CSV import or Plaid sync)
+    reprocess only the payees the batch touched, so a freshly imported/synced charge is matched (and a
+    new series among those payees detected) immediately, without re-scanning the whole ledger. Correct
+    because detection groups by payee and `reconcile_series` never disturbs out-of-scope rows; a scoped
+    pass deliberately does **not** stamp the watermark (it can't see cross-payee/normalization effects).
+  - **Full catch-up** (`POST /recurring/auto-scan`, gated by a `db_meta` watermark) — app load runs a
+    global scan only when one is due: never scanned (a fresh or migrated pre-recurring database) or stale
+    (older than the daily interval). This is the safety net for what a scoped pass can't see, and the
+    home of the payee-key re-derivation repair.
+
+  The scan is one function (`scan_and_store`) with an optional `payee_keys` scope; scoped and full share
+  the whole pipeline. Anomaly/forecast signals (missed/duplicated/off-amount charge) are the deferred
+  payoff and hang off the scoped path (`scan_imported_payees`, which knows exactly which payees changed).
+
+- **User-driven series are rule-backed.** Rather than force a rename so the derived key groups a
+  varying-name payee, a rule flagged `is_recurring` owns a `source='rule'` series whose membership is the
+  rule's matches (shared predicate `categorizer.rule_matches_row`). Entry points reuse the rule editor:
+  the shared row menu's "Mark as recurring…" and the transaction editor's Rule button both open
+  `RuleActionModal` (with a "Recurring series" checkbox), and the editor shows a status row linking to the
+  series' `/recurring` card. Pin/exclude corrections (`recurring_membership_override`,
+  `POST /recurring/{id}/membership`) survive scans; rule-backed series are reconciled over the full window
+  even on a scoped pass. See `data-model.md` → Recurring series for the membership/override/lifecycle rules.
+
+- **Drill-down:** clicking a series' charge count opens its member transactions in a docked bottom
+  panel that renders the shared `TransactionListTable` (pill header, shared row cells + row menu), not a
+  bespoke list — members are fetched via the transactions endpoint's `recurring_series_id` filter, so
+  the drill-down looks and edits like every other transaction list (see `ui-patterns.md` → per-row
+  editing). Editing a member (recategorize, trash) only affects membership on the next scan; the series
+  record itself is user-owned and persists.
 
 ### Import / export
 

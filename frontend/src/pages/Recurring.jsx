@@ -1,0 +1,883 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey Orlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+/*
+ * Recurring series review. An on-demand Scan runs detection (services/recurring_detection.py) and
+ * rebuilds the auto-detected series; the user then curates: Confirm accepts a detection, Suppress
+ * rejects it as "not recurring" (and stops it being re-proposed), and the cadence picker corrects a
+ * misjudged rhythm. "Add manually" declares a series the detector missed, seeded from a transaction.
+ *
+ * Confirm/suppress/edit all mark a series user-owned so the next Scan preserves the decision — the
+ * page's whole job is turning the detector's guesses into a curated list.
+ */
+
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { api } from '../lib/api.js'
+import RuleActionModal from '../components/RuleActionModal.jsx'
+import {
+  PageHeader, Spinner, Button, Select, Input, EmptyState, AppDialog, getFloatingPanelSurfaceStyle,
+} from '../components/ui.jsx'
+import TransactionListTable from '../components/TransactionListTable.jsx'
+import TransactionDetail from '../components/TransactionDetail.jsx'
+import TransientTextInput from '../components/TransientTextInput.jsx'
+import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { txnMutations } from '../lib/txnMutations.js'
+import { useDismissibleLayer } from '../lib/uiInteractions.js'
+import { formatCurrency, formatDate } from '../lib/utils.js'
+import { getTransactionAmountColor } from '../lib/moneyDisplay.js'
+
+const CADENCE_LABELS = {
+  weekly: 'Weekly',
+  biweekly: 'Every 2 weeks',
+  monthly: 'Monthly',
+  quarterly: 'Quarterly',
+  semiannual: 'Every 6 months',
+  annual: 'Annually',
+}
+const CADENCE_OPTIONS = Object.entries(CADENCE_LABELS).map(([value, label]) => ({ value, label }))
+
+// Disposition actions that change how a series is characterized — pressing one collapses an open
+// drill-down (the user has decided). A cadence edit is deliberately excluded (a tweak, not a decision).
+const CHARACTERIZATION_ACTIONS = new Set(['confirm', 'suppress', 'end', 'restore', 'delete'])
+
+const STATUS_META = {
+  suppressed: { label: 'Suppressed', color: 'var(--muted)' },
+  ended: { label: 'Ended', color: 'var(--muted)' },
+  manual: { label: 'Manual', color: 'var(--accent2)' },
+  confirmed: { label: 'Confirmed', color: 'var(--success, #16a34a)' },
+  detected: { label: 'Suggested', color: 'var(--warning)' },
+}
+
+function statusKey(series) {
+  if (series.status === 'suppressed') return 'suppressed'
+  if (series.status === 'ended') return 'ended'
+  if (series.source === 'manual') return 'manual'
+  if (series.confirmed) return 'confirmed'
+  return 'detected'
+}
+
+const CATEGORY_ORDER = ['suggested', 'confirmed', 'ended', 'suppressed']
+const CATEGORY_LABELS = { suggested: 'Suggested', confirmed: 'Confirmed', ended: 'Ended', suppressed: 'Suppressed' }
+
+// Which filter section a series belongs to. Coarser than the badge's statusKey: a manual series and a
+// confirmed auto-detection both live under "confirmed".
+function seriesCategory(series) {
+  const key = statusKey(series)
+  if (key === 'detected') return 'suggested'
+  if (key === 'manual') return 'confirmed'
+  return key  // confirmed | ended | suppressed
+}
+
+const SORT_OPTIONS = [{ value: 'name', label: 'A–Z' }, { value: 'next_due', label: 'Next due' }]
+const DEFAULT_FILTERS = ['suggested', 'confirmed', 'ended']
+
+// Status is the primary sort key (the sections); this is the secondary key within each section.
+function seriesComparator(sortOrder) {
+  const byName = (a, b) => String(a.display_name || '').localeCompare(String(b.display_name || ''))
+  if (sortOrder === 'next_due') {
+    return (a, b) => {
+      const ad = a.next_due_date || '', bd = b.next_due_date || ''
+      if (ad && bd) return ad.localeCompare(bd) || byName(a, b)  // soonest first; nulls sort last
+      if (ad) return -1
+      if (bd) return 1
+      return byName(a, b)
+    }
+  }
+  return byName
+}
+
+// A frozen view snapshot: per-category counts plus the ordered, grouped card layout (section ids in
+// CATEGORY_ORDER). Recomputed only on deliberate re-sort triggers (load, scan, filter/sort change) — NOT
+// on an in-place status change from a card action, so acting on a card never makes it jump until the
+// next natural refresh. Within a section, money-movement series still cluster after the bills (keeping a
+// transfer's two legs adjacent); the chosen order sorts within each of those two groups.
+function orderBucket(items, sortOrder) {
+  const cmp = seriesComparator(sortOrder)
+  const bills = items.filter(s => !s.money_movement).sort(cmp)
+  const movement = items.filter(s => s.money_movement).sort(cmp)
+  return [...bills, ...movement].map(s => s.id)
+}
+
+function buildLayout(list, selected, sortOrder) {
+  const counts = { suggested: 0, confirmed: 0, ended: 0, suppressed: 0 }
+  const buckets = { suggested: [], confirmed: [], ended: [], suppressed: [] }
+  for (const s of list) {
+    const cat = seriesCategory(s)
+    counts[cat] += 1
+    buckets[cat].push(s)
+  }
+  const sections = CATEGORY_ORDER
+    .filter(cat => selected.has(cat) && buckets[cat].length > 0)
+    .map(cat => ({ key: cat, label: CATEGORY_LABELS[cat], count: buckets[cat].length, ids: orderBucket(buckets[cat], sortOrder) }))
+  return { counts, sections }
+}
+
+// The "Not recurring" split button on detected cards: the main action rejects the detection, and a
+// caret opens the alternative "Mark canceled" (ended) for a series that was real but has stopped.
+function NotRecurringSplit({ onSuppress, onEnd }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useDismissibleLayer({ open, onClose: () => setOpen(false), refs: [ref] })
+  const seg = {
+    background: 'var(--surface2)', color: 'var(--text)', border: 'none', cursor: 'pointer',
+    fontSize: 12, fontWeight: 500, padding: '4px 10px', lineHeight: 1.5,
+  }
+  const edge = '1px solid color-mix(in srgb, var(--border) 80%, transparent)'
+  return (
+    <span ref={ref} style={{ position: 'relative', display: 'inline-flex' }}>
+      <span style={{ display: 'inline-flex', borderRadius: 6, overflow: 'hidden', border: edge }}>
+        <button style={seg} onClick={onSuppress}>Not recurring</button>
+        <button
+          aria-label="More options"
+          onClick={() => setOpen(o => !o)}
+          style={{ ...seg, padding: '4px 6px', borderLeft: edge, fontSize: 9 }}
+        >
+          ▾
+        </button>
+      </span>
+      {open && (
+        <div style={{ ...getFloatingPanelSurfaceStyle({ radius: 8 }), position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 20, padding: 4, minWidth: 150 }}>
+          <button
+            onClick={() => { setOpen(false); onEnd() }}
+            style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: 'var(--text)', padding: '6px 10px', borderRadius: 6 }}
+          >
+            Mark canceled
+          </button>
+        </div>
+      )}
+    </span>
+  )
+}
+
+function StatusBadge({ series }) {
+  const meta = STATUS_META[statusKey(series)]
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600, color: meta.color }}>
+      <span style={{ width: 7, height: 7, borderRadius: '50%', background: meta.color, flexShrink: 0 }} />
+      {meta.label}
+    </span>
+  )
+}
+
+function AmountDisplay({ series }) {
+  const direction = (series.expected_amount ?? 0) >= 0 ? 'out' : 'in'
+  const variable = series.amount_min != null && series.amount_max != null
+    && Math.abs(series.amount_max - series.amount_min) > 0.005
+  return (
+    <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: '-0.01em', color: getTransactionAmountColor(series.expected_amount) }}>
+      {variable ? '~' : ''}{formatCurrency(series.expected_amount)}
+      <span style={{ color: 'var(--muted)', fontWeight: 500, marginLeft: 5, fontSize: 12 }}>{direction}</span>
+    </span>
+  )
+}
+
+// Quiet, flat card-action button sized to sit alongside the cadence select rather than dominate the
+// card. Local (not the shared Button) because the shared ghost variant carries a drop shadow that can't
+// be toned down per-instance (the variant style wins over a passed style).
+function CardActionButton({ children, onClick, variant = 'default', title }) {
+  const edge = '1px solid color-mix(in srgb, var(--border) 80%, transparent)'
+  const looks = {
+    default: { background: 'var(--surface2)', color: 'var(--text)', border: edge },
+    primary: { background: 'var(--accent)', color: '#fff', border: '1px solid var(--accent)' },
+    danger: { background: 'var(--surface2)', color: 'var(--danger)', border: edge },
+  }
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{ fontSize: 12, fontWeight: 500, padding: '4px 11px', borderRadius: 6, cursor: 'pointer', lineHeight: 1.5, ...looks[variant] }}
+    >
+      {children}
+    </button>
+  )
+}
+
+function SeriesCard({ series, onAction, onOpenReport, onEditRule, active }) {
+  const ruleBacked = series.source === 'rule' && series.rule_id
+  const [hover, setHover] = useState(false)
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState(series.display_name || '')
+  const startRename = () => { setNameDraft(series.display_name || ''); setEditingName(true) }
+  const commitName = () => {
+    const v = (nameDraft || '').trim()
+    setEditingName(false)
+    if (v && v !== series.display_name) onAction('rename', series, v)
+  }
+  const suppressed = series.status === 'suppressed'
+  const ended = series.status === 'ended'
+  const dormant = suppressed || ended
+  const detected = series.source !== 'manual' && !series.confirmed && !suppressed && !ended
+  const accent = STATUS_META[statusKey(series)].color
+  const canOpen = series.occurrence_count > 0
+  const variable = series.amount_min != null && series.amount_max != null
+    && Math.abs(series.amount_max - series.amount_min) > 0.005
+
+  return (
+    <div
+      data-series-id={series.id}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        position: 'relative',
+        borderRadius: 14,
+        border: `1px solid ${active ? 'color-mix(in srgb, var(--accent) 45%, var(--border))' : 'color-mix(in srgb, var(--border) 80%, transparent)'}`,
+        background: 'var(--surface)',
+        padding: '15px 18px 15px 20px',
+        marginBottom: 10,
+        opacity: dormant ? 0.72 : 1,
+        boxShadow: active
+          ? '0 6px 22px rgba(0,0,0,0.12)'
+          : hover ? '0 5px 18px rgba(0,0,0,0.09)' : '0 1px 2px rgba(0,0,0,0.04)',
+        transform: hover && !active ? 'translateY(-1px)' : 'none',
+        transition: 'box-shadow 0.16s, transform 0.16s, border-color 0.16s',
+        // No overflow:hidden — it would clip the "Not recurring" caret menu. The hover transform makes
+        // this card a stacking context, so lift it above later cards while hovered so an open menu
+        // (and the card's own shadow) render over the following card instead of behind it.
+        zIndex: hover ? 30 : undefined,
+      }}
+    >
+      {/* Soft status accent along the left edge — a hint of color without a boxy chip. Inset past the
+          14px corner radius so its square ends stay clear of the card's rounded corners. */}
+      <span style={{ position: 'absolute', left: 0, top: 14, bottom: 14, width: 3, borderRadius: 3, background: `color-mix(in srgb, ${accent} 60%, transparent)` }} />
+
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5, minWidth: 0 }}>
+            {editingName ? (
+              <TransientTextInput
+                value={nameDraft}
+                onChange={setNameDraft}
+                onCommit={commitName}
+                onCancel={() => setEditingName(false)}
+                restoreOnEscape
+                aria-label="Series name"
+                style={{
+                  fontSize: 15, fontWeight: 650, padding: '2px 6px', borderRadius: 6, minWidth: 200,
+                  border: '1px solid var(--border)', background: 'var(--surface2)', color: 'var(--text)',
+                }}
+              />
+            ) : (
+              <>
+                <span style={{ fontSize: 15.5, fontWeight: 650 }}>{series.display_name}</span>
+                <button
+                  onClick={startRename}
+                  aria-label="Rename series"
+                  title="Rename"
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: 0, fontSize: 12, lineHeight: 1, opacity: hover ? 0.7 : 0, transition: 'opacity 0.15s' }}
+                >
+                  ✎
+                </button>
+              </>
+            )}
+            <StatusBadge series={series} />
+            {series.money_movement && (
+              <span
+                title="Money movement — a transfer or card payment, excluded from spending totals"
+                style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: 3 }}
+              >
+                ⊘ money movement
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 12.5, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+            <span>{series.category_name || 'Uncategorized'}</span>
+            {ruleBacked ? <><span style={{ opacity: 0.5 }}>·</span><span title="Membership is defined by a rule — edit the rule to change which transactions belong">rule-based</span></> : null}
+            {series.account_name ? <><span style={{ opacity: 0.5 }}>·</span><span>{series.account_name}</span></> : null}
+            <span style={{ opacity: 0.5 }}>·</span>
+            {canOpen ? (
+              <button
+                onClick={() => onOpenReport(series)}
+                style={{
+                  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                  fontSize: 12.5, fontWeight: 600, color: 'var(--accent2)', textDecoration: active ? 'underline' : 'none',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.textDecoration = 'underline' }}
+                onMouseLeave={e => { e.currentTarget.style.textDecoration = active ? 'underline' : 'none' }}
+              >
+                {series.occurrence_count} charge{series.occurrence_count === 1 ? '' : 's'}
+              </button>
+            ) : (
+              <span>{series.occurrence_count} charges</span>
+            )}
+            {detected && series.confidence != null ? (
+              <><span style={{ opacity: 0.5 }}>·</span><span>{Math.round(series.confidence * 100)}% match</span></>
+            ) : null}
+          </div>
+        </div>
+        <div style={{ flex: '0 0 auto', textAlign: 'right' }}>
+          <AmountDisplay series={series} />
+          <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 3 }}>
+            {CADENCE_LABELS[series.cadence] || series.cadence}
+            {series.next_due_date ? <span style={{ opacity: 0.85 }}> · next ~{formatDate(series.next_due_date)}</span> : null}
+          </div>
+          {variable ? (
+            <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>
+              {formatCurrency(series.amount_min)}–{formatCurrency(series.amount_max)}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, marginTop: 13, paddingTop: 12,
+        borderTop: '1px solid color-mix(in srgb, var(--border) 60%, transparent)', flexWrap: 'wrap',
+      }}>
+        {dormant ? (
+          <>
+            {ended && series.next_due_date ? (
+              <span style={{ fontSize: 12, color: 'var(--muted)' }}>Kept for history · resumes if it recurs again</span>
+            ) : null}
+            <span style={{ flex: 1 }} />
+            <CardActionButton onClick={() => onAction('restore', series)}>{ended ? 'Reactivate' : 'Restore'}</CardActionButton>
+            <CardActionButton variant="danger" onClick={() => onAction('delete', series)}>Delete</CardActionButton>
+          </>
+        ) : (
+          <>
+            <span style={{ fontSize: 12.5, color: 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+              Cadence
+              <Select
+                value={series.cadence}
+                onChange={(v) => onAction('cadence', series, v)}
+                options={CADENCE_OPTIONS}
+                style={{
+                  minWidth: 112, padding: '3px 6px', fontSize: 12, borderRadius: 6,
+                  border: '1px solid color-mix(in srgb, var(--border) 70%, transparent)',
+                }}
+                aria-label="Cadence"
+              />
+            </span>
+            <span style={{ flex: 1 }} />
+            {detected ? (
+              <>
+                <NotRecurringSplit
+                  onSuppress={() => onAction('suppress', series)}
+                  onEnd={() => onAction('end', series)}
+                />
+                <CardActionButton variant="primary" onClick={() => onAction('confirm', series)}>Confirm</CardActionButton>
+              </>
+            ) : (
+              <>
+                {ruleBacked ? <CardActionButton onClick={() => onEditRule(series)}>Edit rule</CardActionButton> : null}
+                <CardActionButton onClick={() => onAction('suppress', series)}>Not recurring</CardActionButton>
+                <CardActionButton onClick={() => onAction('end', series)}>Mark ended</CardActionButton>
+                <CardActionButton variant="danger" onClick={() => onAction('delete', series)}>Delete</CardActionButton>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// The drill-down uses the shared TransactionListTable (pill header, shared row cells + row menu), so it
+// looks and edits exactly like every other transaction list in the app rather than being a one-off.
+function ReportPanel({ series, rows, categories, loading, onClose, onCategorySave, onRowsChange, onOpenTxnDetail, onTrashed }) {
+  return (
+    <div style={{
+      flex: '0 0 46%', minHeight: 0, display: 'flex', flexDirection: 'column',
+      borderTop: '1px solid var(--border)', background: 'var(--surface2)',
+    }}>
+      <div style={{
+        flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 12, padding: '12px 32px', borderBottom: '1px solid var(--border)',
+      }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {series.display_name}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+            {loading ? 'Loading…' : `${rows.length} matching transaction${rows.length === 1 ? '' : 's'}`}
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          aria-label="Close matching transactions"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 20, lineHeight: 1, padding: 4 }}
+        >
+          ×
+        </button>
+      </div>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 32px 20px' }}>
+        {loading && rows.length === 0 ? (
+          <Spinner />
+        ) : (
+          <TransactionListTable
+            rows={rows}
+            categories={categories}
+            fillHeight
+            onCategorySave={onCategorySave}
+            onTransactionOpenDetail={onOpenTxnDetail}
+            onRowsChange={onRowsChange}
+            onTrashed={onTrashed}
+            showMerchantReport={false}
+            emptyMessage="No linked transactions. Run a scan to (re)link matches."
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ManualAddDialog({ onClose, onCreated }) {
+  const [term, setTerm] = useState('')
+  const [results, setResults] = useState([])
+  const [searching, setSearching] = useState(false)
+  const [searchedTerm, setSearchedTerm] = useState('')  // the term the current results reflect ('' = no search has run)
+  const [selected, setSelected] = useState(null)
+  const [cadence, setCadence] = useState('monthly')
+  const [saving, setSaving] = useState(false)
+  const reqRef = useRef(0)
+
+  // Search as the user types (debounced) so there's no hidden "press Search" step — the previous panel
+  // showed "No matching transactions" the instant a character was typed, before any search had run, which
+  // read as broken. A per-request token guards against a slow earlier response landing after a newer one.
+  useEffect(() => {
+    const q = term.trim()
+    if (!q) { setResults([]); setSearchedTerm(''); setSearching(false); return undefined }
+    setSearching(true)
+    const token = ++reqRef.current
+    const handle = setTimeout(() => {
+      api.getTransactions({ search: q, limit: 20 })
+        .then(r => { if (token === reqRef.current) { setResults(r.transactions || []); setSearchedTerm(q); setSearching(false) } })
+        .catch(() => { if (token === reqRef.current) { setResults([]); setSearchedTerm(q); setSearching(false) } })
+    }, 250)
+    return () => clearTimeout(handle)
+  }, [term])
+
+  async function create() {
+    if (!selected) return
+    setSaving(true)
+    try {
+      await api.createRecurring({ transaction_id: selected.id, cadence })
+      onCreated()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const trimmed = term.trim()
+  // "Still resolving" covers both the in-flight fetch and the debounce gap before it (term typed but the
+  // results don't yet reflect it), so the zero-results message can never flash while a search is pending.
+  const resolving = searching || (trimmed && searchedTerm !== trimmed)
+  const anchorLabel = selected ? (selected.display_name || selected.merchant_name || selected.raw_name) : null
+
+  return (
+    <AppDialog
+      title="Add a recurring series"
+      onClose={onClose}
+      width="min(520px, 100%)"
+      actions={
+        <>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" disabled={!selected || saving} onClick={create}>
+            {saving ? 'Adding…' : 'Add series'}
+          </Button>
+        </>
+      }
+    >
+      <div style={{ padding: '4px 2px' }}>
+        <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>
+          Pick one transaction as the <b style={{ color: 'var(--text)' }}>anchor</b> — its payee, category,
+          and amount seed the series, and every matching transaction is linked immediately. Then choose how
+          often it recurs.
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <Input
+            value={term}
+            onChange={setTerm}
+            placeholder="Search by payee…"
+            style={{ width: '100%' }}
+            autoFocus
+          />
+        </div>
+        <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
+          {resolving ? (
+            <div style={{ padding: 16 }}><Spinner /></div>
+          ) : results.length === 0 ? (
+            <div style={{ padding: 16, fontSize: 13, color: 'var(--muted)' }}>
+              {trimmed ? `No transactions match "${trimmed}".` : 'Type a payee name to find an anchor transaction.'}
+            </div>
+          ) : results.map(txn => {
+            const isSel = selected?.id === txn.id
+            const name = txn.display_name || txn.merchant_name || txn.raw_name
+            return (
+              <div
+                key={txn.id}
+                onClick={() => setSelected(txn)}
+                style={{
+                  padding: '9px 12px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between',
+                  gap: 12, borderBottom: '1px solid var(--border)',
+                  background: isSel ? 'color-mix(in srgb, var(--accent) 12%, var(--surface))' : 'transparent',
+                }}
+              >
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <span>{txn.category_name || 'Uncategorized'}</span>
+                    {txn.recurring_series_id ? (
+                      <span style={{ color: 'var(--accent2)' }} title="Already part of a recurring series">· ↻ already in a series</span>
+                    ) : null}
+                  </div>
+                </div>
+                <span style={{ color: 'var(--muted)', fontSize: 12.5, flexShrink: 0, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {formatDate(txn.date)}<br />{formatCurrency(txn.amount)}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+        {selected ? (
+          <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 12 }}>
+            New series from <b style={{ color: 'var(--text)' }}>{anchorLabel}</b>
+            {' · '}{selected.category_name || 'Uncategorized'}
+            {' · '}{formatCurrency(selected.amount)}
+          </div>
+        ) : null}
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, fontSize: 13 }}>
+          Recurs
+          <Select value={cadence} onChange={setCadence} options={CADENCE_OPTIONS} style={{ minWidth: 150 }} aria-label="Recurrence cadence" />
+        </span>
+      </div>
+    </AppDialog>
+  )
+}
+
+function FilterPill({ label, count, on, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 7, padding: '4px 12px', borderRadius: 99,
+        cursor: 'pointer', fontSize: 12.5, fontWeight: 600,
+        border: `1px solid ${on ? 'color-mix(in srgb, var(--accent) 45%, var(--border))' : 'var(--border)'}`,
+        background: on ? 'color-mix(in srgb, var(--accent) 12%, var(--surface))' : 'var(--surface)',
+        color: on ? 'var(--accent2)' : 'var(--muted)',
+        opacity: on ? 1 : 0.75,
+      }}
+    >
+      {label}
+      <span style={{
+        fontSize: 11, fontWeight: 700, minWidth: 16, textAlign: 'center', padding: '0 5px', borderRadius: 99,
+        background: on ? 'color-mix(in srgb, var(--accent) 20%, var(--surface))' : 'var(--surface2)',
+        color: on ? 'var(--accent2)' : 'var(--muted)',
+      }}>
+        {count}
+      </span>
+    </button>
+  )
+}
+
+// Secondary-sort toggle (status stays the primary key). Small segmented control near the pills.
+function SortToggle({ value, onChange }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
+      Sort
+      <span style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 99, overflow: 'hidden' }}>
+        {SORT_OPTIONS.map((opt, i) => {
+          const on = value === opt.value
+          return (
+            <button
+              key={opt.value}
+              onClick={() => onChange(opt.value)}
+              style={{
+                fontSize: 12, fontWeight: 600, padding: '3px 10px', cursor: 'pointer', border: 'none',
+                borderLeft: i === 0 ? 'none' : '1px solid var(--border)',
+                background: on ? 'color-mix(in srgb, var(--accent) 14%, var(--surface))' : 'transparent',
+                color: on ? 'var(--accent2)' : 'var(--muted)',
+              }}
+            >
+              {opt.label}
+            </button>
+          )
+        })}
+      </span>
+    </span>
+  )
+}
+
+export default function Recurring() {
+  const [allSeries, setAllSeries] = useState(null)  // full data; updated in place on card actions
+  // Filter selection and sort order are per-user preferences (remembered across sessions).
+  const [filterList, setFilterList] = useUserPreference('ui.recurring.filters', DEFAULT_FILTERS)
+  const [sortOrder, setSortOrder] = useUserPreference('ui.recurring.sort', 'name')
+  const [search, setSearch] = useState('')  // transient, not persisted
+  const selected = useMemo(
+    () => new Set(Array.isArray(filterList) ? filterList : DEFAULT_FILTERS),
+    [filterList],
+  )
+  const [layout, setLayout] = useState(null)        // frozen snapshot: { counts, sections } (see buildLayout)
+  const [scanning, setScanning] = useState(false)
+  const [scanSummary, setScanSummary] = useState(null)
+  const [adding, setAdding] = useState(false)
+  const [categories, setCategories] = useState([])
+  // The bottom drill-down: which series' transactions are shown, and their rows.
+  const [report, setReport] = useState(null)  // { series, rows, loading } | null
+  const [payeeDetail, setPayeeDetail] = useState(null)  // txn opened in the shared TransactionDetail panel
+  const [ruleModal, setRuleModal] = useState(null)  // { mode:'edit', ruleId } for a rule-backed series
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  useEffect(() => { api.getCategories().then(setCategories).catch(() => {}) }, [])
+
+  // Update just the drill-down's rows in place (reconcile after an inline edit / row-menu action).
+  const setReportRows = useCallback((updater) => {
+    setReport(prev => (prev ? { ...prev, rows: typeof updater === 'function' ? updater(prev.rows) : updater } : prev))
+  }, [])
+
+  const applyCategoryToRow = useCallback((txnId, catId, catName) => {
+    setReportRows(prev => prev.map(t => (t.id === txnId
+      ? { ...t, category_id: catId ?? null, category_name: catName ?? null, category_color: null, category_overridden: 1 }
+      : t)))
+  }, [setReportRows])
+
+  const saveCategory = useCallback((txnId, catId, catObj) => {
+    const cat = catObj || categories.find(c => c.id === catId)
+    applyCategoryToRow(txnId, catId, cat?.name ?? null)
+    txnMutations.setCategory(txnId, catId)
+  }, [categories, applyCategoryToRow])
+
+  // load/scan/filter-toggle rebuild the layout snapshot; in-place card updates deliberately do not. The
+  // ref lets load() rebuild with the current selection without taking `selected` as a dep (which would
+  // re-run the mount effect on every filter change).
+  const selectedRef = useRef(selected); selectedRef.current = selected
+  const sortRef = useRef(sortOrder); sortRef.current = sortOrder
+  const allSeriesRef = useRef(allSeries); allSeriesRef.current = allSeries
+
+  const load = useCallback(() =>
+    api.getRecurringSeries(true).then(r => {
+      const list = r.series || []
+      setAllSeries(list)
+      setLayout(buildLayout(list, selectedRef.current, sortRef.current))
+    }), [])
+
+  useEffect(() => { load() }, [load])
+
+  // Rebuild the frozen layout when the filter or sort changes (deliberate re-sorts — this also picks up
+  // the persisted values once preferences finish loading). Keyed on selection/sort, NOT allSeries, so an
+  // in-place card update never triggers a re-sort. Reads current data via a ref.
+  useEffect(() => {
+    if (allSeriesRef.current) setLayout(buildLayout(allSeriesRef.current, selected, sortOrder))
+  }, [selected, sortOrder])
+
+  function togglePill(cat) {
+    const next = new Set(selected)
+    if (next.has(cat)) next.delete(cat); else next.add(cat)
+    setFilterList([...next])  // persist; the effect above rebuilds the layout
+  }
+
+  const openReport = useCallback((s) => {
+    // Clicking the charge count of the already-open series closes the drill-down (toggle); clicking a
+    // different card switches to it. Members come from the shared transactions endpoint (full rows), so
+    // the drill-down renders and edits exactly like every other transaction list.
+    if (report && report.series.id === s.id) { setReport(null); return }
+    setReport({ series: s, rows: [], loading: true })
+    api.getTransactions({ recurring_series_id: s.id, limit: 500 })
+      .then(r => setReport(prev => (prev && prev.series.id === s.id ? { series: s, rows: r.transactions || [], loading: false } : prev)))
+      .catch(() => setReport(prev => (prev && prev.series.id === s.id ? { ...prev, loading: false } : prev)))
+  }, [report])
+
+  // When the drill-down opens (or switches series) the list area shrinks, which can hide the card that
+  // was clicked. Scroll it back into view with block:'nearest' so the list shifts up by the minimum
+  // needed — the clicked card stays visible just above the report, even for the last few rows.
+  const listRef = useRef(null)
+  const openId = report?.series.id || null
+  useEffect(() => {
+    if (!openId) return
+    const node = listRef.current?.querySelector(`[data-series-id="${openId}"]`)
+    if (node) requestAnimationFrame(() => node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }))
+  }, [openId])
+
+  // Landing from a transaction's "Part of <series>" link (?series=<id>): open that series' drill-down
+  // once, then strip the param so closing it doesn't re-trigger.
+  const landedRef = useRef(null)
+  useEffect(() => {
+    const wanted = searchParams.get('series')
+    if (!wanted || !allSeries || landedRef.current === wanted) return
+    const s = allSeries.find(x => x.id === wanted)
+    if (!s) return
+    landedRef.current = wanted
+    openReport(s)
+    const next = new URLSearchParams(searchParams); next.delete('series')
+    setSearchParams(next, { replace: true })
+  }, [allSeries, searchParams, openReport, setSearchParams])
+
+  async function scan() {
+    setScanning(true)
+    setScanSummary(null)
+    try {
+      const summary = await api.scanRecurring()
+      await load()  // a scan is a deliberate re-sort
+      setScanSummary(summary)
+      if (report) openReport(report.series)  // membership may have shifted
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  // Card actions update just the acted-on series in place (no re-sort), so a recategorized card stays
+  // put until the next load/scan/filter change. Delete removes it; that's a removal, not a reorder.
+  async function handleAction(kind, s, value) {
+    let updated
+    if (kind === 'confirm') updated = await api.confirmRecurring(s.id)
+    else if (kind === 'suppress') {
+      // Suppressing a rule-backed series unchecks its rule and removes it outright (the backend returns
+      // {deleted:true}); a derived series just flips to suppressed and is returned serialized.
+      const res = await api.suppressRecurring(s.id)
+      if (res && res.deleted) setAllSeries(prev => (prev || []).filter(x => x.id !== s.id))
+      else updated = res
+    }
+    else if (kind === 'end') updated = await api.endRecurring(s.id)
+    else if (kind === 'restore') updated = await api.restoreRecurring(s.id)
+    else if (kind === 'cadence') updated = await api.updateRecurring(s.id, { cadence: value })
+    else if (kind === 'rename') updated = await api.updateRecurring(s.id, { display_name: value })
+    else if (kind === 'delete') {
+      await api.deleteRecurring(s.id)
+      setAllSeries(prev => (prev || []).filter(x => x.id !== s.id))
+    }
+    if (updated) setAllSeries(prev => (prev || []).map(x => (x.id === updated.id ? updated : x)))
+    // A characterization change means the user is done inspecting → collapse the drill-down. A cadence
+    // tweak is not a characterization change, so it leaves the report open.
+    if (CHARACTERIZATION_ACTIONS.has(kind)) setReport(null)
+  }
+
+  const byId = new Map((allSeries || []).map(s => [s.id, s]))
+  // Search is a live display filter over the frozen layout — it narrows which cards show (and hides
+  // now-empty sections) without reordering, so cards never jump while typing.
+  const term = search.trim().toLowerCase()
+  const matchesSearch = (s) => !term
+    || [s.display_name, s.category_name, s.account_name].some(v => String(v || '').toLowerCase().includes(term))
+  const visibleSections = (layout?.sections || [])
+    .map(sec => ({ ...sec, visibleIds: sec.ids.filter(id => { const s = byId.get(id); return s && matchesSearch(s) }) }))
+    .filter(sec => sec.visibleIds.length > 0)
+  const showHeaders = visibleSections.length > 1
+
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div style={{ padding: '32px 32px 0', maxWidth: 860, width: '100%', margin: '0 auto', flexShrink: 0 }}>
+        <PageHeader title="Recurring Transactions">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Button variant="ghost" onClick={() => load()} title="Reload the list">Refresh</Button>
+            <Button variant="ghost" onClick={() => setAdding(true)}>Add manually</Button>
+            <Button variant="primary" onClick={scan} disabled={scanning}>
+              {scanning ? 'Scanning…' : 'Scan for recurring'}
+            </Button>
+          </div>
+        </PageHeader>
+        <div style={{ fontSize: 12.5, color: 'var(--muted)', margin: '4px 0 10px' }}>
+          {scanSummary
+            ? `Scan complete — ${scanSummary.inserted} new, ${scanSummary.preserved} kept${scanSummary.resumed ? `, ${scanSummary.resumed} resumed` : ''}.`
+            : 'Detects subscriptions, bills, and taxes that recur on a schedule. Confirm the ones that look right; mark the rest "not recurring."'}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {CATEGORY_ORDER.map(cat => (
+              <FilterPill
+                key={cat}
+                label={CATEGORY_LABELS[cat]}
+                count={layout?.counts?.[cat] ?? 0}
+                on={selected.has(cat)}
+                onClick={() => togglePill(cat)}
+              />
+            ))}
+          </div>
+          <SortToggle value={sortOrder} onChange={setSortOrder} />
+        </div>
+        <div style={{ marginBottom: 8 }}>
+          <Input
+            value={search}
+            onChange={setSearch}
+            placeholder="Search merchant, category, or account…"
+            aria-label="Search recurring series"
+            style={{ maxWidth: 340, padding: '5px 10px', fontSize: 13 }}
+          />
+        </div>
+      </div>
+
+      {/* Split: the series list stays visible above while the drill-down opens below. */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <div ref={listRef} style={{ flex: report ? '1 1 54%' : '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '4px 32px 24px' }}>
+          <div style={{ maxWidth: 860, margin: '0 auto' }}>
+            {allSeries === null ? (
+              <Spinner />
+            ) : allSeries.length === 0 ? (
+              <EmptyState message='No recurring series yet. Click "Scan for recurring" to detect them from your transactions.' />
+            ) : visibleSections.length === 0 ? (
+              <EmptyState message={term ? 'No series match your search.' : 'No series match the selected filters.'} />
+            ) : (
+              visibleSections.map(section => (
+                <div key={section.key}>
+                  {showHeaders && (
+                    <div style={{
+                      fontSize: 11.5, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase',
+                      color: 'var(--muted)', margin: '16px 2px 8px',
+                    }}>
+                      {section.label} <span style={{ opacity: 0.7 }}>({section.visibleIds.length})</span>
+                    </div>
+                  )}
+                  {section.visibleIds.map(id => {
+                    const s = byId.get(id)
+                    return s ? (
+                      <SeriesCard
+                        key={id}
+                        series={s}
+                        onAction={handleAction}
+                        onOpenReport={openReport}
+                        onEditRule={(series) => setRuleModal({ mode: 'edit', ruleId: series.rule_id })}
+                        active={report?.series.id === id}
+                      />
+                    ) : null
+                  })}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {report && (
+          <ReportPanel
+            series={report.series}
+            rows={report.rows}
+            categories={categories}
+            loading={report.loading}
+            onClose={() => setReport(null)}
+            onCategorySave={saveCategory}
+            onRowsChange={setReportRows}
+            onOpenTxnDetail={setPayeeDetail}
+            onTrashed={txnId => setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))}
+          />
+        )}
+      </div>
+
+      {adding && (
+        <ManualAddDialog
+          onClose={() => setAdding(false)}
+          onCreated={() => { setAdding(false); load() }}
+        />
+      )}
+
+      {ruleModal && (
+        <RuleActionModal
+          state={ruleModal}
+          onClose={() => setRuleModal(null)}
+          // Editing the rule can change the series' membership/cadence/name, so reload the list.
+          onSaved={() => { setRuleModal(null); load() }}
+        />
+      )}
+
+      {payeeDetail && (
+        <TransactionDetail
+          txn={payeeDetail}
+          categories={categories}
+          onClose={() => setPayeeDetail(null)}
+          onCategorized={(txnId, cat) => applyCategoryToRow(txnId, cat?.id ?? null, cat?.name ?? null)}
+          onTrashed={txnId => setReportRows(prev => prev.filter(t => t.id !== txnId))}
+          onNotesSaved={(txnId, notes) => setReportRows(prev => prev.map(t => (t.id === txnId ? { ...t, notes } : t)))}
+          onTagsChanged={(txnId, tags) => setReportRows(prev => prev.map(t => (t.id === txnId ? { ...t, tags } : t)))}
+          forceFloating
+          stackIndex={1}
+        />
+      )}
+    </div>
+  )
+}

@@ -64,6 +64,12 @@ const sectionHeadStyle = {
   marginBottom: 12,
 }
 
+// Cadence choices for a rule-backed recurring series (mirrors the Recurring page labels).
+const RULE_CADENCE_OPTIONS = [
+  ['weekly', 'Weekly'], ['biweekly', 'Every 2 weeks'], ['monthly', 'Monthly'],
+  ['quarterly', 'Quarterly'], ['semiannual', 'Every 6 months'], ['annual', 'Annually'],
+]
+
 export function amountConditionSummary(low, lowOp, high, highOp, side) {
   const parts = []
   if (side && side !== 'both') parts.push(side === 'debit' ? 'debit' : 'credit')
@@ -527,6 +533,9 @@ const RuleForm = forwardRef(function RuleForm({
   // Opt-in: also match the keyword against the row's captured import source text (description + extra
   // evidence fields like "Original Statement"), not just the merchant/raw/display name.
   const [matchSourceText, setMatchSourceText] = useState(!!(initialValues.matchSourceText ?? initialValues.match_source_text ?? false))
+  // Rule-backed recurring series: the rule's matches become a recurring series (cadence seeds its rhythm).
+  const [isRecurring, setIsRecurring] = useState(!!(initialValues.isRecurring ?? initialValues.is_recurring ?? false))
+  const [cadence, setCadence] = useState(initialValues.cadence ?? 'monthly')
 
   const [kwOpen, setKwOpen] = useState(!!initialValues.keyword)
   const [amtOpen, setAmtOpen] = useState(!!(initialAmount.amtLow != null || initialAmount.amtHigh != null || initialAmount.amtSide !== 'both'))
@@ -600,7 +609,7 @@ const RuleForm = forwardRef(function RuleForm({
 
   const selectedTags = availableTags.filter(tag => tagIds.includes(tag.id))
   const matchOnly = mode === 'match-only'
-  const hasAction = Boolean(catId || cleanName.trim() || tagIds.length > 0)
+  const hasAction = Boolean(catId || cleanName.trim() || tagIds.length > 0 || isRecurring)
   const canSave = matchOnly ? keyword.trim().length > 0 : (keyword.trim().length > 0 && hasAction)
 
   useEffect(() => {
@@ -662,13 +671,15 @@ const RuleForm = forwardRef(function RuleForm({
     account_id: accountId || null,
     tag_ids: tagIds,
     match_source_text: matchSourceText,
+    is_recurring: isRecurring,
+    cadence: isRecurring ? cadence : null,
     clear_amount_min: amtLow === null,
     clear_amount_max: amtHigh === null,
     clear_clean_name: !cleanName.trim(),
     clear_owner: !ownerId,
     clear_account: !accountId,
     applyToExisting,
-  }), [keyword, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, tagIds, matchSourceText, applyToExisting])
+  }), [keyword, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, tagIds, matchSourceText, isRecurring, cadence, applyToExisting])
 
   const getDraftState = useCallback(() => ({
     data: buildDraftPayload(),
@@ -989,6 +1000,41 @@ const RuleForm = forwardRef(function RuleForm({
               Matching transactions will gain these tags without replacing tags from other matching rules.
             </div>
           </ConditionChip>
+
+          {/* Rule-backed recurring series: the rule's matches become one series on the Recurring page,
+              which is how a subscription/bill whose payee is spelled several ways gets tracked without
+              renaming every variant. is_recurring counts as an action on its own. */}
+          <div>
+            <SectionEyebrow style={{ letterSpacing: '0.03em', marginBottom: 6 }}>
+              Recurring Series
+            </SectionEyebrow>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={isRecurring}
+                onChange={e => setIsRecurring(e.target.checked)}
+                style={{ marginTop: 2, accentColor: 'var(--accent)', cursor: 'pointer' }}
+              />
+              <span style={{ fontSize: 12, lineHeight: 1.35 }}>
+                Track this rule&rsquo;s matches as a recurring series
+                <span style={{ display: 'block', fontSize: 11, color: 'var(--muted)' }}>
+                  Every transaction the rule matches becomes a member of one series on the Recurring page.
+                </span>
+              </span>
+            </label>
+            {isRecurring ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 12 }}>
+                <span style={{ color: 'var(--muted)' }}>Recurs</span>
+                <select
+                  value={cadence}
+                  onChange={e => setCadence(e.target.value)}
+                  style={{ ...getFormControlStyle({ size: 'md', clickable: true }) }}
+                >
+                  {RULE_CADENCE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
       )}

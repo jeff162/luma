@@ -71,6 +71,34 @@ def _amount_rule_matches(amount: float, amount_min, amount_max, debit_credit: st
     return _amount_matches(abs(amount), amount_min, amount_max)
 
 
+def rule_matches_row(rule, row) -> bool:
+    """Does `rule` match transaction `row`? The one shared predicate behind rule apply
+    (rules._apply_rule_to_existing) and rule-backed recurring-series membership
+    (recurring_detection.reconcile_series), so "which rows a rule owns" has a single definition.
+
+    Both args are dict-like. `rule` provides keyword/owner_id/account_id/amount_min/amount_max/
+    debit_credit/match_source_text; `row` provides display_name/merchant_name/raw_name/amount/owner_id/
+    effective_account_id and (for match_source_text rules) import_evidence_json. A row whose SELECT omits
+    import_evidence_json simply can't match on source text, which is safe.
+    """
+    if rule["owner_id"] is not None and rule["owner_id"] != row["owner_id"]:
+        return False
+    if rule["account_id"] is not None and rule["account_id"] != row["effective_account_id"]:
+        return False
+    text = " ".join(filter(None, [row["display_name"], row["merchant_name"], row["raw_name"]])).lower()
+    keyword = rule["keyword"].lower()
+    matched = bool(text) and keyword in text
+    if not matched and rule["match_source_text"]:
+        try:
+            source_text = source_match_text_from_json(row["import_evidence_json"])
+        except (KeyError, IndexError):
+            source_text = ""
+        matched = bool(source_text) and keyword in source_text
+    if not matched:
+        return False
+    return _amount_rule_matches(row["amount"], rule["amount_min"], rule["amount_max"], rule["debit_credit"])
+
+
 def _resolve_effective_account_id(
     conn: sqlite3.Connection,
     account_id: str | None,
@@ -199,6 +227,21 @@ def categorize_transaction(
     }
 
 
+def rule_scalar_effects(result, *, fallback_name: str) -> dict:
+    """The transaction fields a matched rule sets through its *scalar* actions, in one place. Today that
+    is only the rename: ``display_name`` = the rule's clean_name if it set one, else ``fallback_name``
+    (the row's existing/raw name). Every rule-apply site consumes this identically — CSV import, Plaid
+    sync, ``recategorize_all``, and its preview count — so the derivation can't drift between them (the
+    CSV path once silently dropped clean_name; that class of bug ends here), and a future scalar action
+    such as a rule-set note is added *here* rather than at each site. ``result`` may be the dict
+    ``categorize_transaction`` returns, a bare category_id from its legacy shape, or ``None`` when no
+    categorization ran — the latter two carry no rename and yield just the fallback. Category assignment
+    and tags stay out of this: category_source policy differs per site, and tags already have their own
+    shared apply (``sync_rule_tags_for_transaction``)."""
+    clean_name = result.get("clean_name") if isinstance(result, dict) else None
+    return {"display_name": clean_name or fallback_name}
+
+
 def recategorize_all(conn: sqlite3.Connection) -> int:
     # Retroactive recategorization is intentionally opt-in and skips manual overrides,
     # so user edits remain the final authority even after rules evolve.
@@ -240,9 +283,7 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
         )
         cat_id = result["category_id"] if isinstance(result, dict) else result
         matched_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
-        display_name = (
-            result.get("clean_name") if isinstance(result, dict) else None
-        ) or txn["merchant_name"] or txn["raw_name"]
+        display_name = rule_scalar_effects(result, fallback_name=txn["merchant_name"] or txn["raw_name"])["display_name"]
         category_changed = cat_id != txn["category_id"]
         display_name_changed = display_name != (txn["display_name"] or txn["merchant_name"] or txn["raw_name"])
         tags_changed = would_sync_rule_tags_change(conn, txn["id"], matched_tag_ids, existing_rows=tag_rows_by_txn.get(txn["id"], {}))
@@ -303,9 +344,7 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
         )
         cat_id = result["category_id"] if isinstance(result, dict) else result
         matched_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
-        display_name = (
-            result.get("clean_name") if isinstance(result, dict) else None
-        ) or txn["merchant_name"] or txn["raw_name"]
+        display_name = rule_scalar_effects(result, fallback_name=txn["merchant_name"] or txn["raw_name"])["display_name"]
         display_name_changed = display_name != (txn["display_name"] or txn["merchant_name"] or txn["raw_name"])
         if (
             cat_id != txn["category_id"]

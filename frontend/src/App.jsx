@@ -96,6 +96,7 @@ const NAV_LINKS = [
   ['/categories', 'Categories'],
   ['/rules', 'Rules'],
   ['/accounts', 'Accounts'],
+  ['/recurring', 'Recurring'],
   ['/import-export', 'Import / Export'],
   ['/tasks', 'Tasks'],
   ['/settings', 'Settings'],
@@ -114,6 +115,7 @@ const loadSettingsPage = () => import('./pages/Settings.jsx')
 const loadImportExportPage = () => import('./pages/ImportExport.jsx')
 const loadImportRuleSuggestionsPage = () => import('./pages/ImportRuleSuggestions.jsx')
 const loadTasksPage = () => import('./pages/Tasks.jsx')
+const loadRecurringPage = () => import('./pages/Recurring.jsx')
 const loadHelpPage = () => import('./pages/Help.jsx')
 const Dashboard = lazy(loadDashboardPage)
 const Transactions = lazy(loadTransactionsPage)
@@ -124,6 +126,7 @@ const Settings = lazy(loadSettingsPage)
 const ImportExport = lazy(loadImportExportPage)
 const ImportRuleSuggestions = lazy(loadImportRuleSuggestionsPage)
 const Tasks = lazy(loadTasksPage)
+const Recurring = lazy(loadRecurringPage)
 const Help = lazy(loadHelpPage)
 const ROUTE_PREFETCHERS = [
   loadDashboardPage,
@@ -923,6 +926,7 @@ export default function App() {
   const [bootPreferences, setBootPreferences] = useState(null)
   const [bootPreferenceSubjectId, setBootPreferenceSubjectId] = useState('')
   const navProfileMenuRef = useRef(null)
+  const recurringAutoScanScopeRef = useRef(null)
   const savedStartupRouteRef = useRef('')
   const savedStartupRouteSubjectRef = useRef('')
   const preferenceSubjectId = authEnabled
@@ -1117,6 +1121,19 @@ export default function App() {
     // never re-runs after the local profile loads on cold start, so the nav badge stays at 0
     // even when /tasks itself is showing pending items.
   }, [authEnabled, currentUser, runtimeConfig, activeLocalProfile, location.pathname])
+
+  // Recurring-detection catch-up: once the data scope is active, ask the backend to scan if one is due
+  // (never scanned — e.g. a database migrated from a pre-recurring schema — or stale). The backend gates
+  // on a watermark, so this is a cheap no-op when a recent import/sync already scanned. Keyed to the
+  // active scope (not navigation) so it fires once per session, and again after a profile switch.
+  useEffect(() => {
+    if (runtimeConfig && runtimeConfig.ok === false) return
+    if (authEnabled && !currentUser) return
+    if (!authEnabled && !activeLocalProfile) return
+    if (!preferenceSubjectId || recurringAutoScanScopeRef.current === preferenceSubjectId) return
+    recurringAutoScanScopeRef.current = preferenceSubjectId
+    api.autoScanRecurring().catch(() => { })
+  }, [authEnabled, currentUser, runtimeConfig, activeLocalProfile, preferenceSubjectId])
 
   useEffect(() => {
     if (!startupRouteApplied) return
@@ -1721,6 +1738,7 @@ export default function App() {
                             <Route path="/import-export/profiles/:profileId/rule-suggestions" element={<ImportRuleSuggestions />} />
                             <Route path="/import-export" element={<ImportExport />} />
                             <Route path="/tasks" element={<Tasks />} />
+                            <Route path="/recurring" element={<Recurring />} />
                             <Route path="/settings" element={<Settings />} />
                             <Route path="/help" element={<Help />} />
                             <Route path="/help/:topic" element={<Help />} />

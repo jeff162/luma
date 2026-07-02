@@ -94,6 +94,8 @@ A key input to that dial: the user does not review most of the code directly and
 
 - Do not refactor purely for abstraction. Shared code should be introduced when it clearly reduces drift, repeated bug fixes, or inconsistent behavior.
 
+- Build efficiency in up front, where it is *also* the simpler design. Prefer the more efficient approach from the start rather than treating performance as a later pass — not as license for premature micro-optimization, but because the efficient design and the elegant one usually coincide: the version that avoids redundant work tends to have fewer moving parts, and fewer moving parts is more maintainable and less error-prone. When an efficiency concern points toward a cleaner structure — one shared core fed different-sized inputs, an index that removes a scan, a single pass replacing two — that alignment is a positive signal to act on, and it is not the "purely for abstraction" case above. The guard still applies in the other direction: when efficiency would *add* complexity for a payoff you cannot yet measure, defer it and note it (the recurring per-import matching hook in `docs/backlog/recurring-detection.md` is exactly this — the enabling refactor was worth doing because it also removed duplication; wiring the scoped fast path waits for a measured need).
+
 - When a bug appears in one copy of a repeated interaction, treat that as a signal to check whether the behavior should be shared more centrally.
 
 ## Naming And Brand Hygiene

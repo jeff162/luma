@@ -12,10 +12,60 @@ from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 from typing import Literal, Optional
 from backend.db.database import get_db
-from backend.services.categorizer import _amount_rule_matches, source_match_text_from_json
+from backend.services.categorizer import _amount_rule_matches, rule_matches_row, source_match_text_from_json
+from backend.services.recurring_detection import CADENCES, link_series_members, _normalize_payee
 from backend.services.transaction_tags import sync_rule_tags_for_transaction, would_sync_rule_tags_change, get_visible_transaction_tag_map
 
 router = APIRouter()
+
+# Cadence name -> period in whole days, for seeding a rule-backed series (mirrors recurring.py).
+_CADENCE_DAYS = {name: int(round(days)) for name, days in CADENCES}
+
+
+def _drop_recurring_series_for_rule(conn, rule_id: str) -> None:
+    """Remove any recurring series backed by this rule (unlink its members and its override rows first, so
+    nothing dangles). Used when a rule's recurring flag is cleared, the rule is deleted, or an edit merges
+    the rule away."""
+    for s in conn.execute("SELECT id FROM recurring_series WHERE rule_id = ?", (rule_id,)).fetchall():
+        conn.execute("UPDATE txn SET recurring_series_id = NULL WHERE recurring_series_id = ?", (s["id"],))
+        conn.execute("DELETE FROM recurring_membership_override WHERE series_id = ?", (s["id"],))
+        conn.execute("DELETE FROM recurring_series WHERE id = ?", (s["id"],))
+
+
+def _ensure_recurring_series(conn, rule_id: str, cadence: str | None) -> str:
+    """Create (or refresh) the recurring series a rule with is_recurring=1 owns. The series is source='rule'
+    and user-owned (confirmed), so scans preserve it; its membership is the rule's matches, filled right
+    away via link_series_members so the card shows its charges immediately. `cadence` sets the initial
+    rhythm on create and updates it on a later save; the series' amount band / next_due derive from the
+    matched rows."""
+    existing = conn.execute("SELECT id, cadence FROM recurring_series WHERE rule_id = ?", (rule_id,)).fetchone()
+    cadence = cadence or (existing["cadence"] if existing else "monthly")
+    if cadence not in _CADENCE_DAYS:
+        cadence = "monthly"
+    period_days = _CADENCE_DAYS[cadence]
+    if existing is None:
+        rule = conn.execute(
+            "SELECT keyword, clean_name, category_id, account_id FROM category_rule WHERE id = ?", (rule_id,)
+        ).fetchone()
+        display_name = ((rule["clean_name"] or rule["keyword"] or "Recurring") if rule else "Recurring").strip()
+        series_id = str(uuid.uuid4())
+        conn.execute(
+            """INSERT INTO recurring_series
+                 (id, payee_key, display_name, category_id, account_id, cadence, period_days,
+                  occurrence_count, confidence, status, source, rule_id, confirmed, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1.0, 'active', 'rule', ?, 1, datetime('now'))""",
+            (series_id, _normalize_payee(display_name) or display_name.lower(), display_name,
+             rule["category_id"] if rule else None, rule["account_id"] if rule else None,
+             cadence, period_days, rule_id),
+        )
+    else:
+        series_id = existing["id"]
+        conn.execute(
+            "UPDATE recurring_series SET cadence = ?, period_days = ?, updated_at = datetime('now') WHERE id = ?",
+            (cadence, period_days, series_id),
+        )
+    link_series_members(conn, series_id)
+    return series_id
 
 
 def _load_rule_tag_map(conn, rule_ids: list[str]) -> dict[str, list[dict]]:
@@ -110,23 +160,9 @@ def _find_matching_rule(conn, txn):
 
 
 def _rule_matches_txn(rule, txn) -> bool:
-    if rule["owner_id"] is not None and rule["owner_id"] != txn["owner_id"]:
-        return False
-    if rule["account_id"] is not None and rule["account_id"] != txn["effective_account_id"]:
-        return False
-    text = " ".join(filter(None, [
-        txn["display_name"],
-        txn["merchant_name"],
-        txn["raw_name"],
-    ])).lower()
-    keyword = rule["keyword"].lower()
-    matched = bool(text) and keyword in text
-    if not matched and rule["match_source_text"]:
-        source_text = _txn_source_match_text(txn)
-        matched = bool(source_text) and keyword in source_text
-    if not matched:
-        return False
-    return _amount_rule_matches(txn["amount"], rule["amount_min"], rule["amount_max"], rule["debit_credit"])
+    # Thin wrapper over the shared service predicate so rule apply and rule-backed recurring membership
+    # can never diverge on "which rows a rule owns". `txn` here carries import_evidence_json when present.
+    return rule_matches_row(rule, txn)
 
 
 def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False, txn_ids: Optional[list[str]] = None, capture_prior: Optional[list] = None) -> list[str]:
@@ -335,6 +371,10 @@ class RuleCreate(BaseModel):
     account_id:  Optional[str]   = None
     tag_ids:     list[str]       = []
     match_source_text: bool      = False
+    # Declare this rule a recurring series: its matches become members of a source='rule' series (cadence
+    # seeds the rhythm). is_recurring counts as a valid rule action on its own (track-recurrence-only rule).
+    is_recurring: bool           = False
+    cadence:     Optional[str]   = None
 
 
 class RuleUpdate(BaseModel):
@@ -348,6 +388,8 @@ class RuleUpdate(BaseModel):
     account_id:  Optional[str]   = None
     tag_ids:     Optional[list[str]] = None
     match_source_text: Optional[bool] = None
+    is_recurring:     Optional[bool] = None
+    cadence:          Optional[str] = None
     clear_amount_min: bool = False
     clear_amount_max: bool = False
     clear_clean_name: bool = False
@@ -369,6 +411,8 @@ def list_rules(search: Optional[str] = Query(None)):
                 cr.owner_id,
                 cr.account_id,
                 cr.match_source_text,
+                cr.is_recurring,
+                (SELECT rs.cadence FROM recurring_series rs WHERE rs.rule_id = cr.id) AS recurring_cadence,
                 c.name  AS category_name,
                 NULL    AS category_color,
                 p.name  AS parent_name,
@@ -504,8 +548,8 @@ def create_rule(body: RuleCreate, on_existing: Literal["reject", "merge"] = "rej
     is created normally. `status` in the response is 'created' | 'merged' | 'duplicate' | 'mergeable'
     | 'conflict'.
     """
-    if not body.category_id and not (body.clean_name or "").strip() and not body.tag_ids:
-        raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, or tag")
+    if not body.category_id and not (body.clean_name or "").strip() and not body.tag_ids and not body.is_recurring:
+        raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, tag, or recurring")
     keyword = body.keyword.lower().strip()
     with get_db() as conn:
         existing = _existing_rule_for_matcher(conn, keyword, body)
@@ -518,11 +562,16 @@ def create_rule(body: RuleCreate, on_existing: Literal["reject", "merge"] = "rej
                 existing, existing_tag_ids,
                 category_id=body.category_id, clean_name=body.clean_name, tag_ids=body.tag_ids,
             )
-            if on_existing == "merge" and relation in ("mergeable", "duplicate"):
+            # Turning an existing matcher recurring is always an additive, non-conflicting action, so a save
+            # that only adds is_recurring should merge rather than be reported as a bare duplicate.
+            if on_existing == "merge" and (relation in ("mergeable", "duplicate") or body.is_recurring):
                 _merge_actions_into_rule(
                     conn, existing,
                     category_id=body.category_id, clean_name=body.clean_name, tag_ids=body.tag_ids,
                 )
+                if body.is_recurring:
+                    conn.execute("UPDATE category_rule SET is_recurring = 1 WHERE id = ?", (existing["id"],))
+                    _ensure_recurring_series(conn, existing["id"], body.cadence)
                 return {"id": existing["id"], "status": "merged", "relation": relation}
             return {
                 "id": existing["id"],
@@ -534,17 +583,19 @@ def create_rule(body: RuleCreate, on_existing: Literal["reject", "merge"] = "rej
         rid = str(uuid.uuid4())
         conn.execute(
             """INSERT INTO category_rule
-               (id, category_id, keyword, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, match_source_text)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+               (id, category_id, keyword, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, match_source_text, is_recurring)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (rid, body.category_id, keyword,
              body.amount_min, body.amount_max, body.debit_credit, body.clean_name, body.owner_id, body.account_id,
-             int(bool(body.match_source_text))),
+             int(bool(body.match_source_text)), int(bool(body.is_recurring))),
         )
         for tag_id in body.tag_ids:
             conn.execute(
                 "INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)",
                 (rid, tag_id),
             )
+        if body.is_recurring:
+            _ensure_recurring_series(conn, rid, body.cadence)
     return {"id": rid, "status": "created", **body.model_dump()}
 
 
@@ -578,7 +629,7 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
     with get_db() as conn:
         current = conn.execute(
             """SELECT id, keyword, category_id, clean_name, owner_id, account_id,
-                      amount_min, amount_max, debit_credit, match_source_text
+                      amount_min, amount_max, debit_credit, match_source_text, is_recurring
                FROM category_rule WHERE id = ?""",
             (rule_id,),
         ).fetchone()
@@ -619,6 +670,9 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
                     conn, other,
                     category_id=resulting["category_id"], clean_name=resulting["clean_name"], tag_ids=resulting_tag_ids,
                 )
+                # The edited rule is about to be deleted; drop any recurring series it backed so it doesn't
+                # dangle at a now-gone rule (the surviving rule keeps its own recurring status, if any).
+                _drop_recurring_series_for_rule(conn, rule_id)
                 conn.execute("DELETE FROM rule_tag WHERE rule_id = ?", (rule_id,))
                 conn.execute("DELETE FROM category_rule WHERE id = ?", (rule_id,))
                 return {"id": other["id"], "status": "merged", "relation": relation, "deleted_rule_id": rule_id}
@@ -640,6 +694,7 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
         if body.owner_id    is not None: fields.append("owner_id = ?");    params.append(body.owner_id)
         if body.account_id  is not None: fields.append("account_id = ?");  params.append(body.account_id)
         if body.match_source_text is not None: fields.append("match_source_text = ?"); params.append(int(bool(body.match_source_text)))
+        if body.is_recurring is not None: fields.append("is_recurring = ?"); params.append(int(bool(body.is_recurring)))
         if body.clear_amount_min:        fields.append("amount_min = NULL")
         if body.clear_amount_max:        fields.append("amount_max = NULL")
         if body.clear_clean_name:        fields.append("clean_name = NULL")
@@ -658,15 +713,23 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
                     (rule_id, tag_id),
                 )
         post = conn.execute(
-            "SELECT category_id, clean_name FROM category_rule WHERE id = ?",
+            "SELECT category_id, clean_name, is_recurring FROM category_rule WHERE id = ?",
             (rule_id,),
         ).fetchone()
         post_tag_ids = [
             row["tag_id"]
             for row in conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (rule_id,)).fetchall()
         ]
-        if post and post["category_id"] is None and not (post["clean_name"] or "").strip() and not post_tag_ids:
-            raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, or tag")
+        if post and post["category_id"] is None and not (post["clean_name"] or "").strip() and not post_tag_ids and not post["is_recurring"]:
+            raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, tag, or recurring")
+        # Reconcile the rule's recurring series with the post-edit state: create/refresh it when the rule is
+        # (now or still) recurring — picking up a cadence change or a matcher edit that shifts membership —
+        # and drop it when the flag was turned off. Skipped entirely when the edit never touched recurring
+        # and the rule isn't recurring, so ordinary rule edits pay nothing.
+        if post and post["is_recurring"]:
+            _ensure_recurring_series(conn, rule_id, body.cadence)
+        elif body.is_recurring is False:
+            _drop_recurring_series_for_rule(conn, rule_id)
     return {"ok": True, "status": "updated"}
 
 
@@ -702,5 +765,8 @@ def apply_rule_to_transactions(rule_id: str, body: ApplyToTransactionsBody):
 @router.delete("/{rule_id}")
 def delete_rule(rule_id: str):
     with get_db() as conn:
+        # A rule-backed recurring series has no matcher without its rule, so deleting the rule removes it
+        # (and unlinks its members) rather than leaving an orphan on the Recurring page.
+        _drop_recurring_series_for_rule(conn, rule_id)
         conn.execute("DELETE FROM category_rule WHERE id = ?", (rule_id,))
     return {"ok": True}

@@ -56,6 +56,8 @@ TABLE_TO_SECTION = {
     "rule_tag": "rule_tags",
     "account_pair_distinct": "account_pair_distinct",
     "ui_preference": "ui_preferences",
+    "recurring_series": "recurring_series",
+    "recurring_membership_override": "recurring_membership_overrides",
 }
 
 
@@ -133,6 +135,21 @@ class BackupRestoreTests(unittest.TestCase):
                 )
                 conn.execute("INSERT INTO merchant_rename (id, raw_pattern, clean_name) VALUES (?, 'amzn mktp', 'Amazon')", (str(uuid.uuid4()),))
                 conn.execute("INSERT INTO import_workflow_state (key, payload_json) VALUES ('imported_category_settings', '{}')")
+
+                # A recurring series + the txn membership link, so the round trip covers both the
+                # recurring_series table and txn.recurring_series_id (a txn→recurring_series FK).
+                series = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO recurring_series (id, payee_key, display_name, category_id, account_id, cadence, period_days, expected_amount, amount_min, amount_max, last_txn_date, next_due_date, occurrence_count, confidence, status, source, confirmed) "
+                    "VALUES (?, 'm', 'M', ?, ?, 'monthly', 30, 10.0, 10.0, 10.0, '2026-04-15', '2026-05-15', 3, 0.9, 'active', 'auto', 1)",
+                    (series, leaf, a2),
+                )
+                conn.execute("UPDATE txn SET recurring_series_id = ? WHERE id = ?", (series, txn))
+                # A per-transaction membership override, so the round trip covers the pin/exclude table.
+                conn.execute(
+                    "INSERT INTO recurring_membership_override (txn_id, series_id, state) VALUES (?, ?, 'pinned')",
+                    (txn, series),
+                )
 
     def _user_data_tables(self) -> set[str]:
         with self._use_db_path():

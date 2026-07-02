@@ -43,6 +43,7 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Req
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from backend.app_logging import log_warning
 from backend.db.database import SHARED_OWNER_ID, get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.db.demo_data import is_demo_data_loaded
 from backend.db.control_database import auth_required, get_local_preference_profile
@@ -54,8 +55,10 @@ from backend.services.categorizer import (
     extract_source_match_text,
     load_categorization_rules,
     load_rule_tags_by_id,
+    rule_scalar_effects,
     source_match_text_from_json,
 )
+from backend.services.recurring_detection import payee_keys_for_ids, scan_imported_payees
 from backend.services.duplicate_detection import (
     DedupeContext,
     are_distinct_checks,
@@ -2702,7 +2705,26 @@ async def run_import(
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError:
         text = content.decode("latin-1")
-    return run_import_core(text, cfg, filename=file.filename or cfg.get("filename", "upload.csv"))
+    result = run_import_core(text, cfg, filename=file.filename or cfg.get("filename", "upload.csv"))
+
+    # A completed import is new data, so refresh recurring detection now instead of waiting for a manual
+    # scan. Use the cheap scoped path: reprocess only the payees this batch touched, not the whole ledger
+    # (the daily app-load catch-up is the global safety net). Triggered here, not in run_import_core,
+    # because the core also runs inside the demo loader's own transaction; the user-import path is where a
+    # scan belongs. A detection hiccup must never fail an import that already committed, hence the guard.
+    if result.get("imported") and result.get("batch_id"):
+        try:
+            with get_db() as conn:
+                ids = [
+                    r["id"] for r in conn.execute(
+                        "SELECT id FROM txn WHERE import_batch_id = ?", (result["batch_id"],)
+                    ).fetchall()
+                ]
+                scan_imported_payees(conn, payee_keys_for_ids(conn, ids))
+        except Exception as e:
+            log_warning(f"[import] recurring auto-scan failed: {e}")
+
+    return result
 
 
 def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=None) -> dict:
@@ -3411,6 +3433,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             category_source = None
             category_overridden = 0
             rule_tag_ids = []
+            rule_result = None
             if raw_imported_category:
                 mapped_category_id = category_assignments_cfg.get(raw_imported_category)
                 if mapped_category_id:
@@ -3418,7 +3441,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                     category_source = "manual"
                     category_overridden = 1
             if apply_cat and not cat_id:
-                result = categorize_transaction(
+                rule_result = categorize_transaction(
                     raw_desc, raw_desc, raw_desc, amount, conn,
                     owner_id=acc["owner_id"],
                     account_id=acc["id"],
@@ -3426,8 +3449,8 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                     rule_tags_by_id=rule_tags_by_id,
                     source_text=extract_source_match_text(import_evidence),
                 )
-                rule_cat_id = result["category_id"] if isinstance(result, dict) else result
-                rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
+                rule_cat_id = rule_result["category_id"] if isinstance(rule_result, dict) else rule_result
+                rule_tag_ids = rule_result.get("tag_ids", []) if isinstance(rule_result, dict) else []
                 if rule_cat_id:
                     cat_id = rule_cat_id
                     category_source = "rule"
@@ -3451,7 +3474,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                 "category_id": cat_id,
                 "amount": amount,
                 "merchant_name": display_desc,
-                "display_name": display_desc,
+                "display_name": rule_scalar_effects(rule_result, fallback_name=display_desc)["display_name"],
                 "raw_name": raw_desc,
                 "date": parsed_date,
                 "is_pending": 1 if is_pending else 0,

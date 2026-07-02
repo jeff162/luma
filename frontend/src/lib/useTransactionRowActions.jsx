@@ -19,6 +19,7 @@
  */
 
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from './api.js'
 import { txnMutations } from './txnMutations.js'
 import { useContextMenu, ContextMenu, NotePopover, getTxnMerchantLabel } from '../components/TransactionRow.jsx'
@@ -28,6 +29,7 @@ import { AppConfirmDialog } from '../components/ui.jsx'
 
 export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow, onRuleSaved } = {}) {
   const { menu, onContextMenu, close: closeMenu } = useContextMenu()
+  const navigate = useNavigate()
   const [noteTarget, setNoteTarget] = useState(null)
   const [tagTarget, setTagTarget] = useState(null)
   const [pendingTrash, setPendingTrash] = useState(null)
@@ -121,6 +123,38 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
     }
   }
 
+  // "Mark as recurring" routes through the rule editor (recurring series are rule-backed): an existing
+  // rule-backed member edits that rule; a non-rule detected member jumps to its card on the Recurring
+  // page; a not-yet-recurring row opens the rule editor pre-checked to declare a recurring rule from it.
+  function markRecurringFromMenu(txn) {
+    closeMenu()
+    if (txn.recurring_rule_id) {
+      setRuleModalState({ mode: 'edit', ruleId: txn.recurring_rule_id, txnId: txn.id })
+      return
+    }
+    if (txn.recurring_series_id) {
+      navigate(`/recurring?series=${txn.recurring_series_id}`)
+      return
+    }
+    const merchantName = getTxnMerchantLabel(txn)
+    const keywordSource = txn.merchant_name || txn.raw_name || merchantName
+    setRuleModalState({
+      mode: 'create', txnId: txn.id, categoryId: txn.category_id || '',
+      keywordSource, transactionData: { ...txn }, recurringDefault: true,
+    })
+  }
+
+  async function removeFromRecurring(txn) {
+    if (!txn?.recurring_series_id) return
+    try {
+      await api.setRecurringMembership(txn.recurring_series_id, txn.id, 'excluded')
+      // The row lingers; clearing the membership fields drops its ↻ marker.
+      reconcileRow?.(txn.id, { recurring_series_id: null, recurring_series_name: null, recurring_rule_id: null })
+    } catch (err) {
+      console.error('Failed to remove transaction from recurring series', err)
+    }
+  }
+
   const ruleActionLabel = contextRuleMatch.loading
     ? '⚙ Loading rule…'
     : contextRuleMatch.ruleId
@@ -143,6 +177,8 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
     setRuleModalState,
     ruleActionLabel,
     openRuleFromMenu,
+    markRecurringFromMenu,
+    removeFromRecurring,
     handleNoteSave,
     toggleTagFromModal,
     confirmTrash,
@@ -159,7 +195,8 @@ export function TransactionRowActionsChrome({ controller }) {
     noteTarget, tagTarget, pendingTrash,
     tagModalAllTags, setTagModalAllTags,
     ruleModalState, setRuleModalState,
-    ruleActionLabel, openRuleFromMenu, handleNoteSave, toggleTagFromModal, confirmTrash, markReviewed,
+    ruleActionLabel, openRuleFromMenu, markRecurringFromMenu, removeFromRecurring,
+    handleNoteSave, toggleTagFromModal, confirmTrash, markReviewed,
     onRuleSaved,
   } = controller
 
@@ -175,6 +212,8 @@ export function TransactionRowActionsChrome({ controller }) {
           onMarkReviewed={txn => { markReviewed(txn); closeMenu() }}
           onTrash={txn => { setPendingTrash(txn); closeMenu() }}
           onOpenRule={openRuleFromMenu}
+          onMarkRecurring={markRecurringFromMenu}
+          onRemoveFromRecurring={txn => { removeFromRecurring(txn); closeMenu() }}
           ruleActionLabel={ruleActionLabel}
         />
       ) : null}

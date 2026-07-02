@@ -98,9 +98,12 @@ def get_db(db_path: str | None = None):
 # The migration chain was *reset* at the Luma rebrand: the historical v1..v32 migrations were dropped
 # (there is no in-place upgrade path off a pre-rebrand database — those come across via backup/restore)
 # and the baseline is `1`. Post-rebrand migrations register from v2 upward: v2 adds
-# `category_rule.match_source_text`, v3 adds `txn.needs_review`.
+# `category_rule.match_source_text`, v3 adds `txn.needs_review`, v4 adds `txn.recurring_series_id`
+# (the recurring_series table itself is created by init_db's CREATE TABLE IF NOT EXISTS script), v5 adds
+# rule-backed recurring series (`category_rule.is_recurring` + `recurring_series.rule_id`; the
+# `recurring_membership_override` table is created by the same CREATE TABLE IF NOT EXISTS script).
 
-CURRENT_VERSION = 3
+CURRENT_VERSION = 5
 
 MIGRATIONS = {}
 
@@ -127,6 +130,31 @@ def _add_txn_needs_review(conn):
     # the baseline CREATE TABLE; its partial index is (re)created in init_db just after migrations, where
     # the column is guaranteed to exist on both fresh and migrated databases.
     conn.execute("ALTER TABLE txn ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0")
+
+
+@migration(4)
+def _add_recurring_series(conn):
+    # Recurring-series support. The recurring_series table itself is created by init_db's
+    # `CREATE TABLE IF NOT EXISTS` script (which runs on both fresh and migrated databases before this
+    # migration), so this migration only adds the txn membership column that an existing txn table lacks.
+    # Default NULL so existing rows belong to no series until the next detector scan; its partial index
+    # is (re)created in init_db just after migrations, where the column is guaranteed to exist.
+    # ON DELETE SET NULL matches the fresh-install baseline CREATE TABLE, so a series can be deleted while
+    # it still has linked rows on both paths. (Databases migrated before this action was added carry a
+    # NO ACTION FK instead; delete_series unlinks members first so it works there regardless.)
+    conn.execute("ALTER TABLE txn ADD COLUMN recurring_series_id TEXT REFERENCES recurring_series(id) ON DELETE SET NULL")
+
+
+@migration(5)
+def _add_rule_backed_recurring(conn):
+    # Rule-backed recurring series: a rule flagged is_recurring owns a recurring_series whose membership
+    # is the rule's matches (spanning payee-name variants the derived payee_key key can't). Both columns
+    # are added here in one migration; fresh installs get them from the baseline CREATE TABLEs. The new
+    # recurring_membership_override table (pin/exclude corrections) is created by init_db's CREATE TABLE
+    # IF NOT EXISTS script on both paths, so it needs no ALTER here.
+    # rule_id ON DELETE SET NULL matches the fresh baseline; delete_rule drops the linked series explicitly.
+    conn.execute("ALTER TABLE category_rule ADD COLUMN is_recurring INTEGER NOT NULL DEFAULT 0")
+    conn.execute("ALTER TABLE recurring_series ADD COLUMN rule_id TEXT REFERENCES category_rule(id) ON DELETE SET NULL")
 
 
 def get_db_version(conn) -> int:
@@ -293,7 +321,10 @@ def init_db(db_path: str | None = None):
                 -- 1 = also match the rule's keyword against the row's captured import source text
                 -- (description + extra evidence fields like "Original Statement"), not just the
                 -- merchant/raw/display name. Opt-in per rule; part of the rule's matcher identity.
-                match_source_text INTEGER NOT NULL DEFAULT 0
+                match_source_text INTEGER NOT NULL DEFAULT 0,
+                -- 1 = this rule declares a recurring series: its matches are members of the
+                -- recurring_series row that points back here via rule_id (see recurring_series).
+                is_recurring INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS owner (
@@ -353,7 +384,11 @@ def init_db(db_path: str | None = None):
                 -- reviewing newly arrived transactions; cleared by a manual category edit or an
                 -- explicit "mark reviewed". Default 0 keeps existing and hand-created rows out of
                 -- the review pool. Not a tag: review is workflow lifecycle, not a reporting label.
-                needs_review             INTEGER NOT NULL DEFAULT 0
+                needs_review             INTEGER NOT NULL DEFAULT 0,
+                -- Membership link to a detected/confirmed recurring series (see recurring_series).
+                -- NULL = not part of any recurring series. Recomputed by the recurring detector on
+                -- each scan; a match cache, not user-authored.
+                recurring_series_id      TEXT REFERENCES recurring_series(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS tag (
@@ -512,6 +547,52 @@ def init_db(db_path: str | None = None):
                 key          TEXT PRIMARY KEY,
                 payload_json TEXT NOT NULL DEFAULT '{}'
             );
+
+            -- Recurring transaction series: an ongoing obligation (subscription, bill, tax) whose
+            -- charges recur on a cadence. Detected on demand by services/recurring_detection.py and
+            -- curated by the user. Identity for the detector is (payee_key, category_id, account_id):
+            -- one payee can host several series distinguished by category (e.g. a town billing
+            -- property tax quarterly, excise annually, water monthly). `status`/`source`/`confirmed`
+            -- record user curation: auto+unconfirmed rows are the detector's to rewrite each scan,
+            -- while manual, confirmed, and suppressed rows are user-owned and never overwritten or
+            -- re-proposed. amount_min/max/expected describe the observed amount band (a booster and a
+            -- forecast hint, not a matching gate — variable bills still recur on schedule).
+            CREATE TABLE IF NOT EXISTS recurring_series (
+                id                TEXT PRIMARY KEY,
+                payee_key         TEXT NOT NULL,
+                display_name      TEXT,
+                category_id       TEXT REFERENCES category(id) ON DELETE SET NULL,
+                account_id        TEXT REFERENCES account(id) ON DELETE SET NULL,
+                cadence           TEXT NOT NULL,
+                period_days       INTEGER NOT NULL,
+                expected_amount   REAL,
+                amount_min        REAL,
+                amount_max        REAL,
+                last_txn_date     TEXT,
+                next_due_date     TEXT,
+                occurrence_count  INTEGER NOT NULL DEFAULT 0,
+                confidence        REAL NOT NULL DEFAULT 0,
+                status            TEXT NOT NULL DEFAULT 'active',
+                -- 'auto' (detector), 'manual' (anchor-created), or 'rule' (rule-backed: membership is
+                -- the linked rule's matches rather than the derived payee_key key).
+                source            TEXT NOT NULL DEFAULT 'auto',
+                -- Set only for source='rule' series: the category_rule whose matches are this series'
+                -- members. ON DELETE SET NULL as a safety net; delete_rule drops the series explicitly.
+                rule_id           TEXT REFERENCES category_rule(id) ON DELETE SET NULL,
+                confirmed         INTEGER NOT NULL DEFAULT 0,
+                created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at        TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_recurring_series_payee ON recurring_series(payee_key);
+            -- Surgical, scan-durable membership corrections layered over the derived/rule matcher:
+            -- 'pinned' forces a row into a series it wouldn't otherwise match; 'excluded' keeps a
+            -- matched row out. Reconcile applies these every scan so they survive a rebuild.
+            CREATE TABLE IF NOT EXISTS recurring_membership_override (
+                txn_id     TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+                series_id  TEXT NOT NULL REFERENCES recurring_series(id) ON DELETE CASCADE,
+                state      TEXT NOT NULL,
+                PRIMARY KEY (txn_id, series_id)
+            );
         """)
         init_merchant_renames(conn)
 
@@ -533,6 +614,17 @@ def init_db(db_path: str | None = None):
         # safe for both.
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_txn_needs_review ON txn(needs_review) WHERE needs_review = 1"
+        )
+        # Same deferral as idx_txn_needs_review: txn.recurring_series_id only exists after migration v4
+        # on a pre-v4 database, so its partial index is created here (after the migrate branch) where the
+        # column is present on both fresh and migrated paths.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_txn_recurring ON txn(recurring_series_id) WHERE recurring_series_id IS NOT NULL"
+        )
+        # A transaction can be pinned to at most one series (membership is exclusive). Excludes are not
+        # constrained — a row can be excluded from more than one candidate series.
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_recurring_override_pin ON recurring_membership_override(txn_id) WHERE state = 'pinned'"
         )
         ensure_shared_owner(conn)
 

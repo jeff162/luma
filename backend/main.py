@@ -34,7 +34,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from backend.db.control_database import auth_required, get_local_mode_user, get_user_by_id, init_control_db
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
-from backend.routers import accounts, auth, categories, import_export, owners, plaid, rules, sync, tags, tasks, transactions
+from backend.routers import accounts, auth, categories, import_export, owners, plaid, recurring, rules, sync, tags, tasks, transactions
 from backend.runtime_config import APP_NAME, runtime_config_status
 
 
@@ -150,6 +150,7 @@ app.include_router(owners.router,       prefix="/api/owners",        tags=["owne
 app.include_router(tags.router,         prefix="/api/tags",          tags=["tags"])
 app.include_router(import_export.router, prefix="/api/import-export", tags=["import-export"])
 app.include_router(tasks.router,         prefix="/api/tasks",         tags=["tasks"])
+app.include_router(recurring.router,     prefix="/api/recurring",     tags=["recurring"])
 
 
 @app.get("/api/health")

@@ -147,7 +147,7 @@ export function useContextMenu() {
   return { menu, onContextMenu, close }
 }
 
-export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTags, onOpenRule, onMarkReviewed, onTrash, ruleActionLabel = 'Rule…' }) {
+export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTags, onOpenRule, onMarkRecurring, onRemoveFromRecurring, onMarkReviewed, onTrash, ruleActionLabel = 'Rule…' }) {
   const ref = useRef(null)
   useDismissibleLayer({
     open: !!menu,
@@ -185,6 +185,15 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTag
     >
       {item('✎ Edit transaction…', () => onOpenDetail(menu.txn))}
       {item(ruleActionLabel, () => onOpenRule(menu.txn))}
+      {onMarkRecurring ? item(
+        menu.txn.recurring_series_id
+          ? (menu.txn.recurring_rule_id ? '↻ Edit recurring rule…' : '↻ View recurring series')
+          : '↻ Mark as recurring…',
+        () => onMarkRecurring(menu.txn),
+      ) : null}
+      {onRemoveFromRecurring && menu.txn.recurring_series_id
+        ? item('↻ Remove from recurring series', () => onRemoveFromRecurring(menu.txn))
+        : null}
       <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
       {item(
         menu.txn.notes ? '📝 Edit note' : '📝 Add note',
@@ -615,6 +624,19 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
               style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--review-marker-color)', fontSize: 13, fontWeight: 700, cursor: 'default' }}
             >
               R
+            </span>
+          </Tooltip>
+        ) : null}
+        {txn.recurring_series_id ? (
+          <Tooltip
+            content={<span>Part of a recurring series.</span>}
+            maxWidth={MAX_TAG_TOOLTIP_WIDTH}
+          >
+            <span
+              aria-label="Part of a recurring series"
+              style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--accent2)', fontSize: 13, cursor: 'default' }}
+            >
+              ↻
             </span>
           </Tooltip>
         ) : null}

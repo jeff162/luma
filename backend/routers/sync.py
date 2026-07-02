@@ -22,7 +22,9 @@ from backend.services.categorizer import (
     load_rule_tags_by_id,
     preview_recategorize_count,
     recategorize_all,
+    rule_scalar_effects,
 )
+from backend.services.recurring_detection import payee_keys_for_ids, run_auto_scan, scan_imported_payees
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
 
 router = APIRouter()
@@ -32,6 +34,7 @@ router = APIRouter()
 def run_sync(days: int = 30, request: Request = None):
     start_date = date.today() - timedelta(days=days)
     added = updated = skipped = 0
+    touched_ids: list[str] = []  # rows this sync added or advanced — the scope for the recurring rescan
 
     with get_db() as conn:
         conn.execute(
@@ -85,6 +88,7 @@ def run_sync(days: int = 30, request: Request = None):
                             (existing["id"],),
                         )
                         updated += 1
+                        touched_ids.append(existing["id"])
                     else:
                         skipped += 1
                     continue
@@ -98,9 +102,9 @@ def run_sync(days: int = 30, request: Request = None):
                 )
                 cat_id       = result["category_id"] if isinstance(result, dict) else result
                 rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
-                display_name = (
-                    result.get("clean_name") if isinstance(result, dict) else None
-                ) or t["merchant_name"] or t["raw_name"]
+                display_name = rule_scalar_effects(
+                    result, fallback_name=t["merchant_name"] or t["raw_name"]
+                )["display_name"]
                 txn_id = str(uuid.uuid4())
 
                 conn.execute(
@@ -126,6 +130,18 @@ def run_sync(days: int = 30, request: Request = None):
                 )
                 sync_rule_tags_for_transaction(conn, txn_id, rule_tag_ids)
                 added += 1
+                touched_ids.append(txn_id)
+
+    # New/advanced rows change the recurring picture, so refresh detection now rather than waiting for a
+    # manual scan. Cheap scoped path: reprocess only the payees this sync touched, not the whole ledger
+    # (the daily app-load catch-up is the global safety net). Runs after the sync transaction commits, in
+    # its own connection, and never lets a detection hiccup fail the sync itself.
+    if touched_ids:
+        try:
+            with get_db() as conn:
+                scan_imported_payees(conn, payee_keys_for_ids(conn, touched_ids))
+        except Exception as e:
+            log_warning(f"[sync] recurring auto-scan failed: {e}")
 
     return {"added": added, "updated": updated, "skipped": skipped}
 
@@ -134,6 +150,17 @@ def run_sync(days: int = 30, request: Request = None):
 def recategorize():
     with get_db() as conn:
         n = recategorize_all(conn)
+    # Recategorization can move categories and rename payees (clean_name) across the whole ledger, both of
+    # which reshape recurring grouping. It is also the one path that renames *existing* series members —
+    # the case the scoped import/sync passes deliberately leave to a full rebuild (they skip payee-key
+    # re-derivation). So run a FULL scan here, not a scoped one: it re-detects and re-derives keys. Guarded
+    # so a detection hiccup never fails the recategorize that already committed.
+    if n:
+        try:
+            with get_db() as conn:
+                run_auto_scan(conn)
+        except Exception as e:
+            log_warning(f"[recategorize] recurring auto-scan failed: {e}")
     return {"updated": n}
 
 

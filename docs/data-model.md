@@ -278,6 +278,160 @@ Tag-aware filtering and aggregation matches a transaction if its effective tags 
 
 - category/rename still come from the first matching rule that provides that action, while direct tags are the union of all matching rules
 
+## Recurring series
+
+A **recurring series** (`recurring_series`) is an ongoing obligation whose charges recur on a cadence —
+a subscription, a bill, a periodic tax. It is modeled as a first-class record rather than a per-
+transaction flag or a tag, because recurrence carries structure a boolean can't: a cadence
+(`weekly`/`biweekly`/`monthly`/`quarterly`/`semiannual`/`annual` + a canonical `period_days`), an
+expected amount band (`expected_amount`/`amount_min`/`amount_max`), a projected `next_due_date`, and a
+lifecycle. Transactions link to their series through the nullable `txn.recurring_series_id` — a match
+cache the detector maintains, not a user-authored field.
+
+Detection lives in `backend/services/recurring_detection.py`; the API is `backend/routers/recurring.py`.
+Key invariants:
+
+- **The grouping/detection key is (payee, category, sign), not payee alone.** One payee can host
+  several series distinguished by category — a town billing property tax quarterly, excise annually,
+  and water monthly. Category is the strong discriminator; within a group, amount clustering is a
+  fallback that separates same-category series (a fixed-price subscription buried in a noisy merchant,
+  or two same-category bills at different price points), and a fallback cluster must be **amount-tight**
+  (low amount CV) so a coincidental subset of noise can't masquerade as a series.
+
+- **The "payee" is the user-facing name, resolved `display_name`-first** (matching the ledger's
+  `getTxnMerchantLabel`), then normalized (lower-case, punctuation→spaces, trailing store-number and
+  domain-ending tokens like `.org`/`.com` dropped). Because rule `clean_name`s and user renames land in
+  `display_name`, this makes the user's naming *drive* grouping: unifying a vendor's spelling (via a
+  rename/rule) automatically groups its variants, and the `Vendor: Subtype` convention naturally splits
+  a payee's distinct bills into separate series. `recurring_series.payee_key` is stored but **derived,
+  not authoritative** — re-derived from the current members' names on every scan, so a normalization
+  change (or an edited series name) can never strand a series with a stale key. It is derived from the
+  *members*, not the editable label, so renaming a series never breaks its matching.
+
+- **The series' display label is chosen by precedence, and is user-editable.** From its members:
+  (1) a rule-authored name (`category_source = 'rule'` → the rule's `clean_name`), else (2) the most
+  common name that still appears recently (a stale legacy spelling doesn't beat the current one), else
+  (3) the most recent member's name. The user can rename a series inline; the edit persists (it marks
+  the series user-owned, so a later scan won't overwrite it) and does not affect matching.
+
+- **A transaction belongs to at most one series, and `occurrence_count` equals the linked-row count.**
+  A scan assigns membership exclusively: user-owned series are processed in priority order (active
+  before ended, account-scoped before account-agnostic, then higher confidence), each claiming only
+  rows not already claimed, and its stats are written from exactly the rows it owns — so the card's
+  count can never diverge from its drill-down. Two overlapping series (e.g. an account-agnostic and an
+  account-scoped one for the same payee) are prevented at the source: an auto candidate is skipped when
+  a user-owned series already covers it — **same payee + category with an overlapping account scope,
+  where a NULL (account-agnostic) scope covers every account.** (Pre-existing user-confirmed duplicates
+  still coexist until the user deletes one; the exclusivity rule just keeps their counts honest.)
+
+- **Timing regularity is the primary signal, not frequency.** A high-volume but irregular payee
+  (Amazon, Venmo, PayPal) scores itself out via gap-variance with no name blocklist, while a low-
+  volume-but-regular payee (an annual tax) survives. **Amount is a confidence booster and a forecast
+  hint, never a matching gate** — a variable-amount utility bill still recurs on schedule.
+
+- **A series holds at most one charge per occurrence date.** When several charges share a date, only
+  the one whose amount is closest to the series' typical amount is a member; the rest are dropped from
+  it (never summed into the occurrence). This is what keeps an annual tax filing that lands on the same
+  day as a quarterly estimate from being folded into the quarterly series and inflating its amount.
+  Detection claims series iteratively — a series takes one charge per date, then leftover same-date
+  charges are re-examined and can coalesce into their own series (e.g. the annuals form an annual
+  series) rather than contaminating the first. The same one-per-date selection governs membership when a
+  confirmed/manual series is re-matched on a later scan, so the outlier can't creep back in.
+
+- **`source`/`confirmed`/`status` record curation and gate the idempotent rescan.** A scan
+  (`POST /recurring/scan`) is re-runnable: it rewrites `source='auto'` + `confirmed=0` +
+  `status='active'` series wholesale, while **manual** (`source='manual'`), **confirmed**
+  (`confirmed=1`), and **suppressed** (`status='suppressed'`) series are user-owned — never overwritten,
+  and a candidate matching a user-owned identity `(payee_key, category_id, account_id)` is **not
+  re-proposed**. A suppressed series owns no transactions but persists so detection won't resurface it
+  ("this is not recurring"). Confirm/suppress/edit/manual-create/pin/exclude are all the actions that make
+  a series user-owned. Membership (`txn.recurring_series_id`) is recomputed for every surviving series on
+  each scan.
+
+- **Rule-backed series (`source='rule'`) are the user-driven answer to varying payee names.** The derived
+  `(payee, category, sign)` key is right for the *auto* detector but too rigid when a human declares a
+  series a bank spells several ways (`NYTIMES.COM` vs. `NYTimes NY TIMES …4637`) — those normalize to
+  different keys and would never group. So a **rule** gains an `is_recurring` flag; when set it owns a
+  `recurring_series` row (`source='rule'`, `rule_id` FK, `confirmed=1`) whose **membership is the rule's
+  matches** — the same shared predicate (`categorizer.rule_matches_row`) that rule *apply* uses, so
+  "which rows the rule owns" has one definition. This is the deliberate exception to "unify the name to
+  unify the series": edit the rule (keyword/scope/amount condition) to change membership. The rule is
+  created/toggled through the shared rule editor's "Recurring series" checkbox (a cadence seeds the
+  rhythm); `is_recurring` counts as a valid rule action on its own (a track-recurrence-only rule with no
+  category). A rule-backed series is reconciled against the **full** window even on a scoped import scan
+  (its members can span payees a scoped pool omits — the whole point), so a newly imported matching row
+  attaches right away without stamping membership through every insert path. The transaction payload
+  carries `recurring_series_name`/`recurring_rule_id` (a `LEFT JOIN`) so a row's `↻` marker and the
+  editor's status row read membership directly, and the row menu's "Mark as recurring…" routes into the
+  rule editor rather than a separate dialog.
+
+- **`recurring_membership_override` is a surgical, scan-durable pin/exclude layered over the matcher.**
+  Membership is a rebuilt cache, so a one-off correction (`state='pinned'` forces a row in even when it
+  wouldn't match; `state='excluded'` keeps a matched row out) can't live in `txn.recurring_series_id` —
+  it lives in its own `(txn_id, series_id, state)` table that `reconcile_series` re-applies every scan.
+  A pin is exclusive (a partial unique index enforces one pinned series per transaction) and **wins a
+  contested occurrence date** in the one-per-date selection; an exclude is subtracted before it. Setting
+  either **confirms the series** (like edit/confirm) so an auto series isn't deleted and re-minted with a
+  fresh id out from under the override. Stats derive from the effective (override-adjusted) set, so
+  `occurrence_count` still equals the linked-row count. Surfaced as the row menu's "Remove from recurring
+  series" (`POST /recurring/{id}/membership`).
+
+- **Rule↔series lifecycle coupling.** For a `source='rule'` series the "recurring" checkbox lives on the
+  rule, so the destructive series actions reconcile the two: **suppress** and **delete** clear the rule's
+  `is_recurring` and drop the series (and delete the rule outright if clearing the flag leaves it
+  actionless), while **end** deliberately keeps the flag live and freezes `next_due` so a resubscribe can
+  still resume it — end means "stopped", not "not recurring". Deleting the rule (or an edit that merges it
+  away) drops its backing series; unchecking `is_recurring` on the rule drops the series while keeping the
+  rule if it still has another action.
+
+- **The scan also runs automatically, at two scopes, gated so it never does redundant heavy work.**
+  `scan_and_store` takes an optional `payee_keys` scope, so the same pipeline serves both:
+  - *Scoped* (`scan_imported_payees`, `payee_keys` set) — a completed CSV import or Plaid sync reprocesses
+    only the payees the batch touched, matching new charges into existing series and detecting new series
+    among those payees immediately, while every other payee's series and membership are left exactly as
+    they are. Correct because detection groups by payee and reconcile never disturbs out-of-scope rows.
+    A scoped pass **does not** stamp the watermark and **skips** the payee-key re-derivation (both are
+    global concerns it can't do), so it trusts stored keys.
+  - *Full* (`run_auto_scan`, `payee_keys=None`) — app load fires a catch-up (`POST /recurring/auto-scan`
+    → `maybe_auto_scan`) that runs a global scan only when *due*: never scanned or older than a ~daily
+    interval. It is the safety net for the cross-payee and normalization effects a scoped pass can't see.
+    A **recategorize** (`POST /sync/recategorize`) also triggers a full scan directly, because it can
+    rename payees (`clean_name`) and move categories across the whole ledger — and it is the one path that
+    renames *existing* series members, exactly the case a scoped pass leaves to a full rebuild.
+
+  "Last scanned" is a single data-DB-level watermark in `db_meta` (`recurring_last_scan_at`), not a
+  per-user `ui_preference`: one data DB has one set of series, so in multi-user mode the first client to
+  load triggers the catch-up and the rest skip. An absent watermark reads as "never scanned," so a
+  database migrated from a pre-recurring schema populates its series on first load. Scoped passes never
+  touch the watermark, so they give immediacy between the daily global rebuilds without suppressing them.
+
+- **`ended` is distinct from `suppressed`, and deliberately so.** Suppressed means *the detector was
+  wrong* (not a real series) and durably blocks re-proposal. **Ended** (`status='ended'`, set by
+  `POST /recurring/{id}/end`) means *the detector was right but the series has stopped* — a canceled
+  subscription. An ended series keeps its transactions linked (history) and is excluded from forecasts,
+  but is **not** blocked from re-detection: its `next_due_date` is **frozen** while ended, and a rescan
+  **reactivates** it (`ended → active`) if a charge lands on/after that frozen date — a resubscribe. So
+  a resumed subscription revives the same record rather than spawning a duplicate. (Reactivate also
+  happens manually via the same `restore` path suppressed series use.) The auto-*end* trigger — a
+  missed expected charge — is deferred with the rest of the anomaly signals; today ended is set by the
+  user (a button on a confirmed series, or the "Not recurring" split control's "Mark canceled" on a
+  detected one).
+
+- **Money-movement series are classified, not hidden.** A series whose category (or its parent group)
+  is `exclude_from_totals` — a transfer or a credit-card payment — is *money movement*, not spending or
+  income. Rather than dropping these from detection, the series is flagged (derived at read time from
+  the category, no stored column) so the UI marks it and clusters money-movement series together (sorted
+  by category, so the two legs of one transfer sit adjacent). This keeps a recurring CC payment from
+  masquerading as a bill while still surfacing genuine recurring transfers. A formal two-sided "transfer
+  set" (pairing the debit and credit legs into one record, à la import conflict sets) is deferred — the
+  same-category adjacency sort covers the common case, and pairing can't span an untracked external
+  account anyway.
+
+This is the same "algorithm proposes, user disposes" idiom as import rule suggestions, and the same
+"the rule is the cache" split as the parked online-categorizer note: detection is the expensive
+bounded-window pass, while matching a new transaction to an existing series is a cheap keyed lookup.
+Per-import matching and anomaly/forecast signals (missed charge, price change, upcoming) are deferred.
+
 ## Import batches and profiles
 
 CSV import creates supporting records for workflow and recovery:
@@ -377,7 +531,8 @@ Backup/restore deals with two different classes of data:
 
 Those are intentionally separated so normal backups can stay safer and simpler.
 
-The regular backup (payload **version 7**) covers the full **data-DB** state so a restore reproduces the working app, not just the ledger: owners, accounts, categories/groups, rules, merchant renames, import profiles/batches/history, transactions, the entire **tag system** (`tag` plus every attachment — `txn_tag`, `category_tag`, `account_tag`, `rule_tag`), the `account_pair_distinct` assertions, and **UI/layout preferences** (`ui_preference` — see below). Restore is destructive — it wipes and rebuilds in foreign-key-safe order (tag definitions before any attachment; attachments after their other parent), and drops any attachment whose endpoints didn't survive the restore. Older payload versions are no longer accepted.
+The regular backup (payload **version 7**) covers the full **data-DB** state so a restore reproduces the working app, not just the ledger: owners, accounts, categories/groups, rules, merchant renames, import profiles/batches/history, transactions, the entire **tag system** (`tag` plus every attachment — `txn_tag`, `category_tag`, `account_tag`, `rule_tag`), the `account_pair_distinct` assertions, the **recurring series** (`recurring_series` plus the
+`txn.recurring_series_id` membership link), and **UI/layout preferences** (`ui_preference` — see below). Restore is destructive — it wipes and rebuilds in foreign-key-safe order (tag definitions before any attachment; attachments after their other parent), and drops any attachment whose endpoints didn't survive the restore. Older payload versions are no longer accepted.
 
 **Two version axes, and why restore tolerates schema drift.** The payload carries `version` (the JSON *envelope format*, bumped by hand — restore hard-rejects anything but the format it understands) and, independently, `schema_version` (the *DB migration level* `db_meta.version` the data conformed to when exported). They move on different cadences: a schema change bumps `CURRENT_VERSION` without touching the envelope shape. Restore rebuilds each table by inserting only the payload columns the *live* table still has (`insert_rows` intersects the row's keys with `PRAGMA table_info`), so it survives schema evolution in both safe directions: a column the schema has since **added** is simply absent and takes its default (e.g. `category_rule.match_source_text`), and a column since **dropped** is skipped rather than failing the whole restore with "no column named …" (the real case: `category_rule.priority`, removed once rule ordering became automatic, which a pre-removal backup still carries). The accounts and transactions dumps additionally use curated column lists rather than `SELECT *`, so they never carry an incidental/legacy column in the first place; the `SELECT *` tables (categories, rules, tags, …) rely on the restore-side filtering. The one direction restore can *not* make safe is a **downgrade** — a backup whose `schema_version` is newer than this build — because a column the newer build added with real content would be dropped silently; the compatibility guard refuses that (see below). Restore does **not** replay data-transform migrations over restored rows (it loads the old values straight into the current schema); that is harmless while migrations are purely additive, but a future migration that *rewrites* existing data would need restore to bridge old payloads — a deferred concern noted here so it isn't rediscovered the hard way.
 
@@ -409,7 +564,9 @@ Post-rebrand, the **migration runner is active**: `run_migrations` advances an e
 `CURRENT_VERSION` by applying each registered `@migration(version)` newer than the DB's recorded
 `db_meta.version`, in order. Fresh installs skip the runner — they are created at the full current
 schema and stamped directly. Registered migrations so far: **v2** adds `category_rule.match_source_text`,
-**v3** adds `txn.needs_review` (`CURRENT_VERSION = 3`).
+**v3** adds `txn.needs_review`, **v4** adds `txn.recurring_series_id` (the `recurring_series` table
+itself is created by `init_db`'s `CREATE TABLE IF NOT EXISTS` script, which runs on both fresh and
+migrated databases, so only the new *column* needs an `ALTER`) (`CURRENT_VERSION = 4`).
 
 When the schema changes from here:
 

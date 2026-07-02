@@ -357,6 +357,25 @@ export const api = {
   getRecategorizePreview: () => request('/sync/recategorize-preview'),
 
   getTasks:    () => request('/tasks'),
+
+  // Recurring series: detection is an on-demand scan; the rest curate the recurring_series records.
+  getRecurringSeries: (includeSuppressed = false) =>
+    request(`/recurring${includeSuppressed ? '?include_suppressed=true' : ''}`),
+  scanRecurring:      (windowMonths = 25) => request(`/recurring/scan?window_months=${windowMonths}`, { method: 'POST' }),
+  // App-load catch-up: the backend scans only if one is due (never scanned / stale), so this is a cheap
+  // no-op when a recent import or sync already refreshed detection. Safe to call once per session.
+  autoScanRecurring:  () => request('/recurring/auto-scan', { method: 'POST' }),
+  confirmRecurring:   (id) => request(`/recurring/${id}/confirm`, { method: 'POST' }),
+  suppressRecurring:  (id) => request(`/recurring/${id}/suppress`, { method: 'POST' }),
+  endRecurring:       (id) => request(`/recurring/${id}/end`, { method: 'POST' }),
+  restoreRecurring:   (id) => request(`/recurring/${id}/restore`, { method: 'POST' }),
+  updateRecurring:    (id, data) => request(`/recurring/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  createRecurring:    (data) => request('/recurring', { method: 'POST', body: JSON.stringify(data) }),
+  deleteRecurring:    (id) => request(`/recurring/${id}`, { method: 'DELETE' }),
+  // Pin/exclude/clear one transaction's membership in a series (a scan-durable override).
+  setRecurringMembership: (id, transaction_id, state) =>
+    request(`/recurring/${id}/membership`, { method: 'POST', body: JSON.stringify({ transaction_id, state }) }),
+
   getOwners:   () => request('/owners'),
   createOwner: (data) => request('/owners', { method: 'POST', body: JSON.stringify(data) }),
   updateOwner: (id, data) => request(`/owners/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),

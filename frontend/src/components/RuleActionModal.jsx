@@ -86,6 +86,14 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
       setPendingMerge({ ruleData, applyToExisting, existingRuleId: created.existing_rule_id })
       return
     }
+    // A rule with this exact matcher already exists (nothing to add category-wise), but turning it
+    // recurring is purely additive — apply it to that rule so "Mark as recurring" isn't a silent no-op.
+    if (created?.status === 'duplicate' && ruleData.is_recurring) {
+      await api.createRule(ruleData, { onExisting: 'merge' })
+      onSaved?.({ applyToExisting, mode: 'create', ruleId: created.existing_rule_id })
+      onClose()
+      return
+    }
     if (applyToExisting && created?.id) {
       await txnMutations.applyRule(created.id)
     }
@@ -119,12 +127,17 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
       catId: rule.category_id,
       cleanName: rule.clean_name || '',
       tagIds: rule.tag_ids || [],
+      is_recurring: !!rule.is_recurring,
+      cadence: rule.recurring_cadence || 'monthly',
     } : null)
     : {
       keyword: (state.keywordSource || '').toLowerCase().trim(),
       cleanName: '',
       catId: state.categoryId || '',
       tagIds: [],
+      // Opened via "Mark as recurring…": pre-check the recurring box so the action is one step.
+      is_recurring: !!state.recurringDefault,
+      cadence: 'monthly',
     }
 
   return (
@@ -132,7 +145,9 @@ export default function RuleActionModal({ state, onClose, onSaved }) {
       <FloatingPanel style={{ width: 640, maxWidth: '94vw', maxHeight: '90vh' }}>
         <FloatingPanelHeader style={{ padding: '14px 20px' }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>
-            {state.mode === 'edit' ? 'Edit matching rule' : 'Create rule'}
+            {state.mode === 'edit'
+              ? (rule?.is_recurring ? 'Edit recurring rule' : 'Edit matching rule')
+              : (state.recurringDefault ? 'Mark as recurring' : 'Create rule')}
           </div>
           <button onClick={onClose} style={{
             background: 'none', border: 'none', color: 'var(--muted)',
