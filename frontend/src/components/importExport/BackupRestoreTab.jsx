@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // The Backup / Restore tab of the Import / Export page: generate plain or
 // RSA-encrypted data and Plaid-credential backups, and restore from a backup

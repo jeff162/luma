@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 /* eslint-disable react-refresh/only-export-components -- the recategorize hook and its button/banner are one small control kit shared by Rules and the rule-suggestions page */
 

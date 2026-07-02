@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Small confirmation/choice dialogs for the import flow, each driven entirely by
 // props from ImportTab:

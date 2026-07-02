@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // The "Rule editor" modal for the import rule-suggestion review: wraps the shared RuleForm in an
 // overlay, holds the draft/working/error state for one suggestion, and exposes Accept / Save /

@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-# SPDX-License-Identifier: GPL-3.0-or-later
-
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package.json .

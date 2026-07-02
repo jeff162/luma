@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Shared preference keys for the help/hints system, so the explainer, the Help-page manage control,
 // and the first-run welcome toggle all read and write the same values.

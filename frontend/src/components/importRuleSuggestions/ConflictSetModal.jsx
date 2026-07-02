@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Overlay listing the conflict sections for one merchant (conflicting category assignments). It is
 // pure layout: the parent passes the grouped `sections` and a `renderSuggestionCard` callback so the

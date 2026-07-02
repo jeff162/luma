@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-# SPDX-License-Identifier: GPL-3.0-or-later
-
 """
 Quick-filter parsing for the transaction list (shared by the Transactions page and the import
 file-ledger drawer). Pure functions — no DB. Covers the date jumps (year / month / day) and amount

@@ -1,6 +1,3 @@
-<!-- SPDX-FileCopyrightText: 2026 Jeffrey Orlin -->
-<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-
 # Changelog
 
 All notable changes to Luma are documented here.

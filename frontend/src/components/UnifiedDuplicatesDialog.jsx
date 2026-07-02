@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Unified view of duplicate detections for one import batch. Combines hard-reject entries
 // (which never landed in the ledger) and soft-flag entries (which landed in the ledger with

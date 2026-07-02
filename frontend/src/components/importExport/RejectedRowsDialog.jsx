@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Read-only viewer for rows an import dropped because they had a zero amount or
 // failed validation against the chosen column mappings. Renders the saved CSV

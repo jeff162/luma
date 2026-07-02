@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 /* eslint-disable react-refresh/only-export-components -- DetailPanelShell + chart components + paging hooks + sizing helpers live together as the detail-panel kit */
 

@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
@@ -1989,8 +1989,8 @@ function AboutSection({ dbInstanceId }) {
           />
           <AboutRow
             label="License"
-            value="GNU GPL v3.0 or later"
-            help="SPDX identifier: GPL-3.0-or-later."
+            value="GNU AGPL v3.0 or later"
+            help="SPDX identifier: AGPL-3.0-or-later."
           />
           <AboutRow
             label="Instance ID"

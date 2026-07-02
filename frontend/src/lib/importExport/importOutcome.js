@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Pure normalizers for an import's outcome counts. `summarizeImportOutcome`
 // reconciles the several shapes the backend uses for a finished import (the live

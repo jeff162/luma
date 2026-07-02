@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-# SPDX-License-Identifier: GPL-3.0-or-later
-
 """
 Opt-in `match_source_text` rules categorize on a row's captured import source text (the description +
 extra evidence fields like "Original Statement"), not just the merchant/raw/display name.

@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
 Sync is the reconciliation path between Plaid's transaction stream and local state.

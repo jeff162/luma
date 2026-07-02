@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 /* eslint-disable react-refresh/only-export-components -- the controller hook and its companion chrome component are one cohesive unit by design */
 

@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Error boundary around the import form. The mapping/preview UI does a lot of
 // derived computation off freshly parsed CSV state; this catches a render-time

@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
 Surfaces the nag list shown on the Tasks page and as a badge count on the nav. Each task is

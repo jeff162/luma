@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Modal viewer for the rows an import skipped as possible duplicates, with the
 // ability to re-import a selection. It is the reference implementation for the

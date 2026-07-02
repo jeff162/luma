@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Shared column-geometry preference for PillGridTable-hosted tables. Persists the user's column order
 // and widths through the per-user preference model, and merges a saved config over freshly-computed

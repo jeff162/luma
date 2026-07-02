@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // The single seam for the import-source detail we capture per transaction. It turns a transaction
 // row into an ordered list of populated "origin" fields, resolving each value from either a

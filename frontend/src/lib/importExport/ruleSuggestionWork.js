@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // System-wide rule-suggestion work, derived from the batch list. Only imports the user marked to use
 // their categories (`use_imported_categories`) AND that actually carry categories (`has_imported_categories`)

@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Small prop-driven presentational pieces for the import rule-suggestion review surface, extracted
 // from ImportRuleSuggestionReview.jsx: the progress-summary pill, the status badge, the action

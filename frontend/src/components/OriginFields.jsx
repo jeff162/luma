@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Shared rendering of import-source "origin" rows (see lib/importSourceFields.js). One place to draw
 // a `{ label, value, suffix, note }` row so the transaction detail panel's Origin block and the

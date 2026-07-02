@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // The upload-stage UI of the import flow. By default it is a plain CSV drop zone: the dropped file's
 // header is matched to a saved data source automatically (handled in ImportTab), so the user does not

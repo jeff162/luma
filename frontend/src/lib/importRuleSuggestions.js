@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Pure helpers for the import rule-suggestion review surface (no JSX/hooks): sort-order persistence
 // keys + normalization, the status palette/symbol used by progress pills and suggestion badges, the

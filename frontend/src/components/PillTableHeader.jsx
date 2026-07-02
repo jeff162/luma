@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Pill table headers keep sort, move, and resize on one shared surface.
 // Resize belongs to the column on the left of a divider so dragging it changes

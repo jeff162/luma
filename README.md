@@ -285,6 +285,6 @@ For implementation details, see inline comments in the codebase, which document 
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later).
+This project is licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).
 
 See the [LICENSE](https://chatgpt.com/c/LICENSE) file for full details.

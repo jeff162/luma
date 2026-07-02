@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-# SPDX-License-Identifier: GPL-3.0-or-later
-
 """
 Direct unit tests for `evaluate_duplicate`, the per-row dedupe rule evaluator in
 `backend/services/duplicate_detection.py`.

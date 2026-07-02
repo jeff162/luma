@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // The Export tab of the Import / Export page: pick columns and a filter scope,
 // then download a CSV. Export deliberately runs its own FilterProvider rather

@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Pure helpers for import-draft persistence and the snapshot/profile-body shapes
 // it round-trips through. Two layers coexist (see ui-patterns.md "Import mapping

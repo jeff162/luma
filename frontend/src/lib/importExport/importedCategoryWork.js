@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Pending "Group Imported Categories" work, derived from the live category list + the workspace draft.
 // The workspace only acts on still-pending imported labels — Unassigned leaves with import_pending = 1

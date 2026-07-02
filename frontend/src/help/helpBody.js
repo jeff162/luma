@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Topic bodies are authored as raw <p>/<ol>/<h4>; normalize the browser-default margins/indent so
 // the spacing reads consistently wherever a body is rendered — both the standalone /help page and
