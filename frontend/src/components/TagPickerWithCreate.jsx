@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { TagGlyph, TAG_COLOR_PALETTE } from './TagUi.jsx'
+import { addTagToCache } from '../lib/useTags.js'
 
 /*
  * Shared tag picker used wherever the user can attach tags — transaction rows,
@@ -74,6 +75,9 @@ export default function TagPickerWithCreate({
     try {
       const created = await api.createTag({ name: trimmedName, color: createColor })
       if (created?.id) {
+        // Inline create is the one chokepoint for new tags, so fold it into the shared cache here —
+        // every useTags() consumer (bulk edit, rule editor, …) then shows it without its own handler.
+        addTagToCache(created)
         onTagCreated?.(created)
         // Auto-select the newly created tag so users do not have to click again.
         onToggleTag?.(created, true)

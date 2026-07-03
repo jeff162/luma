@@ -26,8 +26,9 @@
  * truth is a paginated re-fetch passes `onReload` instead.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { api } from './api.js'
+import { useTags } from './useTags.js'
 import { useTransactionSelection } from './useTransactionSelection.js'
 import BulkEditPanel from '../components/BulkEditPanel.jsx'
 import { AppConfirmDialog, AppNoticeDialog, Button } from '../components/ui.jsx'
@@ -52,16 +53,10 @@ export function useBulkTransactionEditing({
   const selection = useTransactionSelection()
 
   // The in-place reconcile needs tag metadata (name/color) to render freshly-added chips. Hosts that
-  // already hold the tag list pass it; for those that don't, fetch lazily once the user actually enters
-  // bulk mode so panels don't pay a tags request just for being opened.
-  const [fetchedTags, setFetchedTags] = useState([])
-  useEffect(() => {
-    if (!bulkMode || availableTags.length || fetchedTags.length) return
-    let cancelled = false
-    api.getTags().then(rows => { if (!cancelled) setFetchedTags(Array.isArray(rows) ? rows : []) }).catch(() => {})
-    return () => { cancelled = true }
-  }, [bulkMode, availableTags.length, fetchedTags.length])
-  const effectiveTags = availableTags.length ? availableTags : fetchedTags
+  // already hold the tag list pass it; for those that don't, fall back to the shared tag cache
+  // (loaded once app-wide, see useTags) rather than each list issuing its own tags request.
+  const { tags: sharedTags } = useTags()
+  const effectiveTags = availableTags.length ? availableTags : sharedTags
 
   const loadedIds = useMemo(() => rows.map(getRowId), [rows, getRowId])
 

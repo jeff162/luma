@@ -21,6 +21,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from './api.js'
+import { useTags } from './useTags.js'
 import { txnMutations } from './txnMutations.js'
 import { useContextMenu, ContextMenu, NotePopover, getTxnMerchantLabel } from '../components/TransactionRow.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
@@ -34,8 +35,8 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
   const [noteTarget, setNoteTarget] = useState(null)
   const [tagTarget, setTagTarget] = useState(null)
   const [pendingTrash, setPendingTrash] = useState(null)
-  // null sentinel = tags not fetched yet; fetched lazily when the tag modal first opens.
-  const [tagModalAllTags, setTagModalAllTags] = useState(null)
+  // Shared tag list for the row's Tags modal (loaded once app-wide; see useTags).
+  const { tags: tagModalAllTags, loading: tagsLoading, addTag: addTagToCache } = useTags()
   const [contextRuleMatch, setContextRuleMatch] = useState({ txnId: null, loading: false, ruleId: null })
   const [ruleModalState, setRuleModalState] = useState(null)
   // Pre-removal membership snapshot backing the "Removed from recurring series · Undo" toast.
@@ -57,14 +58,6 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
     return () => { cancelled = true }
   }, [menu?.txn?.id])
 
-  useEffect(() => {
-    if (!tagTarget || tagModalAllTags !== null) return undefined
-    let cancelled = false
-    api.getTags()
-      .then(tags => { if (!cancelled) setTagModalAllTags(Array.isArray(tags) ? tags : []) })
-      .catch(() => { if (!cancelled) setTagModalAllTags([]) })
-    return () => { cancelled = true }
-  }, [tagTarget, tagModalAllTags])
 
   function openRuleFromMenu(txn) {
     if (contextRuleMatch.loading && contextRuleMatch.txnId === txn.id) return
@@ -231,7 +224,8 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
     pendingTrash,
     setPendingTrash,
     tagModalAllTags,
-    setTagModalAllTags,
+    tagsLoading,
+    addTagToCache,
     ruleModalState,
     setRuleModalState,
     ruleActionLabel,
@@ -256,7 +250,7 @@ export function TransactionRowActionsChrome({ controller }) {
     menu, closeMenu, onOpenDetail,
     setNoteTarget, setTagTarget, setPendingTrash,
     noteTarget, tagTarget, pendingTrash,
-    tagModalAllTags, setTagModalAllTags,
+    tagModalAllTags, tagsLoading, addTagToCache,
     ruleModalState, setRuleModalState,
     ruleActionLabel, openRuleFromMenu, markRecurringFromMenu, removeFromRecurring, restoreToRecurring,
     recurringUndo, setRecurringUndo, undoRemoveFromRecurring,
@@ -318,7 +312,7 @@ export function TransactionRowActionsChrome({ controller }) {
         >
           <div onClick={e => e.stopPropagation()}>
             <TagPickerWithCreate
-              allTags={tagModalAllTags || []}
+              allTags={tagModalAllTags}
               selectedTagIds={new Set((tagTarget.tags || []).map(t => t.id))}
               inheritedTagIds={new Set(
                 (tagTarget.tags || [])
@@ -326,10 +320,10 @@ export function TransactionRowActionsChrome({ controller }) {
                   .map(t => t.id),
               )}
               blockedTagIds={new Set((tagTarget.blocked_tags || []).map(t => t.id))}
-              loading={tagModalAllTags === null}
+              loading={tagsLoading}
               positioning="relative"
               onToggleTag={toggleTagFromModal}
-              onTagCreated={tag => setTagModalAllTags(prev => (prev || []).some(t => t.id === tag.id) ? prev : [...(prev || []), tag])}
+              onTagCreated={addTagToCache}
               onClose={() => setTagTarget(null)}
             />
           </div>

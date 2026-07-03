@@ -32,6 +32,10 @@ These were surfaced from session memory and reconciled against the code on 2026-
   button treatments (shared `Button` + bespoke one-offs that have drifted) and settle on one shared set
   of sizes/variants, then migrate the one-offs. Central decision is solid-vs-soft-tint primary and the
   ghost drop shadow, not just pixel size.
+- [refactor-audits.md](refactor-audits.md) — **recurring process.** Periodically hunt duplication /
+  shotgun-surgery smells (structural tools + a judgment pass), fix the safe ones. Records the first
+  run's shipped items (`getFormControlStyle` in Dashboard, `TransactionListToolbar`, `useTags()`), the
+  deferred candidates (row-patch util, the four drill panels), and the next scope (**backend audit**).
 
 ## Related (already tracked elsewhere)
 

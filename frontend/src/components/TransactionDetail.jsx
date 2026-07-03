@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler } from '../lib/txnMutations.js'
 import { formatCurrency } from '../lib/utils.js'
-import { AppConfirmDialog, Button, Spinner } from './ui.jsx'
+import { AppConfirmDialog, Spinner } from './ui.jsx'
 import RuleActionModal from './RuleActionModal.jsx'
 import { CategoryCell, getTxnMerchantLabel } from './TransactionRow.jsx'
 import { OriginRow } from './OriginFields.jsx'
@@ -17,6 +17,7 @@ import RuleSuggestionToast from './RuleSuggestionToast.jsx'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransactionListTable from './TransactionListTable.jsx'
 import CopyTransactionsButton from './CopyTransactionsButton.jsx'
+import TransactionListToolbar from './TransactionListToolbar.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import { TagBadge } from './TagUi.jsx'
@@ -559,12 +560,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginBottom: 8 }}>
-                    <CopyTransactionsButton rows={monthTxns} title={`${range.label} · ${payee}`} tooltip="Copy the transactions shown" />
-                    <Button variant="ghost" small onClick={bulk.toggle}>
-                      {bulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
-                    </Button>
-                  </div>
+                  <TransactionListToolbar rows={monthTxns} title={`${range.label} · ${payee}`} bulk={bulk} />
                   <BulkEditChrome controller={bulk} />
                   <TransactionListTable
                     rows={monthTxns}

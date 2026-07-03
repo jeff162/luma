@@ -16,6 +16,7 @@ import {
   getFormControlStyle,
 } from './ui.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
+import { useTags } from '../lib/useTags.js'
 import PillGridTable from './PillGridTable.jsx'
 import { CategoryCell, MerchantCell, TransactionAmountCell } from './TransactionRow.jsx'
 import { formatDate } from '../lib/utils.js'
@@ -553,7 +554,7 @@ const RuleForm = forwardRef(function RuleForm({
   const [renameExpanded, setRenameExpanded] = useState(!!initialValues.cleanName)
   const [tagIds, setTagIds] = useState(initialValues.tagIds ?? initialValues.tag_ids ?? [])
   const [tagsOpen, setTagsOpen] = useState(!!((initialValues.tagIds ?? initialValues.tag_ids ?? []).length))
-  const [availableTags, setAvailableTags] = useState([])
+  const { tags: availableTags, addTag } = useTags()
 
   const [, setMatchCount] = useState(0)
   const [applyToExisting, setApplyToExisting] = useState(false)
@@ -599,18 +600,6 @@ const RuleForm = forwardRef(function RuleForm({
     }
   }, [amtOpen, transactionDefaultsApplied, transactionDefaults, amtLow, amtHigh])
 
-  useEffect(() => {
-    if (!tagsOpen) return undefined
-    let cancelled = false
-    api.getTags()
-      .then(tags => {
-        if (!cancelled) setAvailableTags(tags)
-      })
-      .catch(() => {
-        if (!cancelled) setAvailableTags([])
-      })
-    return () => { cancelled = true }
-  }, [tagsOpen])
 
   const selectedTags = availableTags.filter(tag => tagIds.includes(tag.id))
   const matchOnly = mode === 'match-only'
@@ -1000,9 +989,7 @@ const RuleForm = forwardRef(function RuleForm({
                 ))
               }}
               onTagCreated={created => {
-                setAvailableTags(current => (
-                  current.some(tag => tag.id === created.id) ? current : [...current, created]
-                ))
+                addTag(created)
                 onTagCreated?.(created)
               }}
               onClose={() => {}}

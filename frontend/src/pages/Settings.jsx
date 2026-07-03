@@ -14,6 +14,7 @@ import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { THEME_PREF_KEY, THEME_SYSTEM, THEME_CHOICES, THEME_LABELS } from '../lib/theme.js'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { TagGlyph, TAG_COLOR_PALETTE } from '../components/TagUi.jsx'
+import { invalidateTags } from '../lib/useTags.js'
 
 const SETTINGS_SECTIONS_PREF_KEY = 'ui.settings.stickySections'
 // Stable default so the preference value keeps a constant identity when nothing is saved yet.
@@ -1212,6 +1213,7 @@ function TransactionTagsSection() {
       const created = await api.createTag(form)
       setTags(prev => [...prev, created].sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name)))
       setForm({ name: '', color: form.color })
+      invalidateTags()  // keep the shared tag-picker cache (useTags) in step with this management edit
     } catch (err) {
       setError(err.message || 'Failed to create tag')
     } finally {
@@ -1224,6 +1226,7 @@ function TransactionTagsSection() {
       const updated = await api.updateTag(tagId, payload)
       setTags(prev => prev.map(tag => tag.id === tagId ? updated : tag))
       setError('')
+      invalidateTags()
     } catch (err) {
       setError(err.message || 'Failed to update tag')
       throw err
@@ -1236,6 +1239,7 @@ function TransactionTagsSection() {
       await api.deleteTag(tag.id)
       setTags(prev => prev.filter(item => item.id !== tag.id))
       setError('')
+      invalidateTags()
     } catch (err) {
       setError(err.message || 'Failed to delete tag')
     }

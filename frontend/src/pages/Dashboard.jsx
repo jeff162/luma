@@ -22,14 +22,16 @@ import {
   formatSignedAxisTick,
   formatSignedMoneyAmount,
 } from '../lib/moneyDisplay.js'
-import { AppDialog, Button, Card, Input, PageHeader, Select, Spinner, EmptyState, CategoryMarker } from '../components/ui.jsx'
+import { AppDialog, Button, Card, Input, PageHeader, Select, Spinner, EmptyState, CategoryMarker, getFormControlStyle } from '../components/ui.jsx'
 import { TagGlyph } from '../components/TagUi.jsx'
 import { format, subMonths } from 'date-fns'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import CopyTransactionsButton from '../components/CopyTransactionsButton.jsx'
+import TransactionListToolbar from '../components/TransactionListToolbar.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import { useUserPreference, useDeferredPreference } from '../lib/UserPreferencesContext.jsx'
+import { useTags } from '../lib/useTags.js'
 
 const DASHBOARD_CATEGORY_TXN_TABLE_PREF_KEY = 'ui.dashboard.categoryTransactions.columns'
 const DASHBOARD_GROUP_TXN_TABLE_PREF_KEY = 'ui.dashboard.groupTransactions.columns'
@@ -443,6 +445,12 @@ function presetToPeriod(preset) {
 }
 
 const RECENT_MONTHS = lastNMonths(24).map(m => ({ value: m, label: monthLabel(m) }))
+
+// The period/compare/drill dropdowns share the app's form-control styling (components/ui.jsx). MD keeps
+// its slightly rounder radius (8 vs the helper's 6) so the look is unchanged; SM is the compact
+// month-range select that stretches to fill its row.
+const DASH_SELECT_MD = { ...getFormControlStyle({ size: 'md', clickable: true }), borderRadius: 8 }
+const DASH_SELECT_SM = { ...getFormControlStyle({ size: 'sm', clickable: true }), flex: 1 }
 
 async function fetchPeriodGroupTotals(period, accountId, tagIds, ownerIds, filters) {
   const months = periodMonths(period)
@@ -912,11 +920,7 @@ function PeriodPicker({ label, onChange }) {
       <select
         value={preset}
         onChange={e => applyPreset(e.target.value)}
-        style={{
-          background: 'var(--surface2)', color: 'var(--text)',
-          border: '1px solid var(--border)', borderRadius: 8,
-          padding: '7px 10px', fontSize: 13, cursor: 'pointer',
-        }}
+        style={DASH_SELECT_MD}
       >
         {PRESET_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
@@ -925,11 +929,7 @@ function PeriodPicker({ label, onChange }) {
           <select
             value={customStart}
             onChange={e => setCustomStart(e.target.value)}
-            style={{
-              flex: 1, background: 'var(--surface2)', color: 'var(--text)',
-              border: '1px solid var(--border)', borderRadius: 6,
-              padding: '5px 8px', fontSize: 12, cursor: 'pointer',
-            }}
+            style={DASH_SELECT_SM}
           >
             {RECENT_MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
@@ -937,11 +937,7 @@ function PeriodPicker({ label, onChange }) {
           <select
             value={customEnd}
             onChange={e => setCustomEnd(e.target.value)}
-            style={{
-              flex: 1, background: 'var(--surface2)', color: 'var(--text)',
-              border: '1px solid var(--border)', borderRadius: 6,
-              padding: '5px 8px', fontSize: 12, cursor: 'pointer',
-            }}
+            style={DASH_SELECT_SM}
           >
             {RECENT_MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
@@ -972,11 +968,7 @@ function PriorPeriodPicker({ label, aPeriod, mode, customStart, customEnd, onMod
       <select
         value={mode}
         onChange={e => onModeChange(e.target.value)}
-        style={{
-          background: 'var(--surface2)', color: 'var(--text)',
-          border: '1px solid var(--border)', borderRadius: 8,
-          padding: '7px 10px', fontSize: 13, cursor: 'pointer',
-        }}
+        style={DASH_SELECT_MD}
       >
         {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
@@ -985,11 +977,7 @@ function PriorPeriodPicker({ label, aPeriod, mode, customStart, customEnd, onMod
           <select
             value={customStart}
             onChange={e => onCustomStartChange(e.target.value)}
-            style={{
-              flex: 1, background: 'var(--surface2)', color: 'var(--text)',
-              border: '1px solid var(--border)', borderRadius: 6,
-              padding: '5px 8px', fontSize: 12, cursor: 'pointer',
-            }}
+            style={DASH_SELECT_SM}
           >
             {RECENT_MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
@@ -997,11 +985,7 @@ function PriorPeriodPicker({ label, aPeriod, mode, customStart, customEnd, onMod
           <select
             value={customEnd}
             onChange={e => onCustomEndChange(e.target.value)}
-            style={{
-              flex: 1, background: 'var(--surface2)', color: 'var(--text)',
-              border: '1px solid var(--border)', borderRadius: 6,
-              padding: '5px 8px', fontSize: 12, cursor: 'pointer',
-            }}
+            style={DASH_SELECT_SM}
           >
             {RECENT_MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
@@ -1309,11 +1293,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
         <select
           value={effectiveYear}
           onChange={e => onYearChange(e.target.value)}
-          style={{
-            background: 'var(--surface2)', color: 'var(--text)',
-            border: '1px solid var(--border)', borderRadius: 8,
-            padding: '7px 10px', fontSize: 13, cursor: 'pointer',
-          }}
+          style={DASH_SELECT_MD}
         >
           {yearOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
@@ -1324,11 +1304,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
             const g = groups.find(x => x.group_id === e.target.value)
             if (g) onDrillGroup({ series_id: g.group_id, series_name: g.group_name, series_color: g.group_color })
           }}
-          style={{
-            background: 'var(--surface2)', color: 'var(--text)',
-            border: '1px solid var(--border)', borderRadius: 8,
-            padding: '7px 10px', fontSize: 13, cursor: 'pointer',
-          }}
+          style={DASH_SELECT_MD}
         >
           {groupOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
@@ -1568,7 +1544,7 @@ export default function Dashboard() {
   // disappears when the user switches to anything else and never persists.
   const [transientTagReport, setTransientTagReport] = useState(null)
   const [dashboardView, setDashboardView] = useUserPreference(DASHBOARD_VIEW_PREF_KEY, 'spending')
-  const [availableTags, setAvailableTags] = useState([])
+  const { tags: availableTags } = useTags()
   const [tagBuilderOpen, setTagBuilderOpen] = useState(false)
   const [tagModeTransactions, setTagModeTransactions] = useState([])
   const [tagModeLoading, setTagModeLoading] = useState(false)
@@ -1581,9 +1557,6 @@ export default function Dashboard() {
   const [otherDrillDepth, setOtherDrillDepth] = useState(0)
   const viewIsIncome = dashboardView === 'income'
 
-  useEffect(() => {
-    api.getTags().then(rows => setAvailableTags(Array.isArray(rows) ? rows : [])).catch(() => setAvailableTags([]))
-  }, [])
 
   useEffect(() => {
     setShowAllSpendingRows(false)
@@ -2592,12 +2565,7 @@ export default function Dashboard() {
                       <Card style={{ padding: 0, overflow: 'hidden' }}>
                         {txnData.length === 0 ? <EmptyState message="No transactions" /> : (
                           <>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, padding: '8px 12px 0' }}>
-                              <CopyTransactionsButton rows={txnData} title={selectedCat.category_name} tooltip="Copy the transactions shown" />
-                              <Button variant="ghost" small onClick={selectedCatBulk.toggle}>
-                                {selectedCatBulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
-                              </Button>
-                            </div>
+                            <TransactionListToolbar rows={txnData} title={selectedCat.category_name} bulk={selectedCatBulk} style={{ marginBottom: 0, padding: '8px 12px 0' }} />
                             <div style={{ padding: '0 12px' }}>
                               <BulkEditChrome controller={selectedCatBulk} />
                             </div>

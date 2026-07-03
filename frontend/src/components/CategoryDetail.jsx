@@ -5,10 +5,10 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations, makeRowReconciler } from '../lib/txnMutations.js'
 import { formatCurrency } from '../lib/utils.js'
-import { Button, Spinner, Badge, CategoryMarker } from './ui.jsx'
+import { Spinner, Badge, CategoryMarker } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
-import CopyTransactionsButton from './CopyTransactionsButton.jsx'
+import TransactionListToolbar from './TransactionListToolbar.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import {
@@ -176,12 +176,7 @@ export default function CategoryDetail({ category, categories = [], onClose, for
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginBottom: 8 }}>
-                    <CopyTransactionsButton rows={localMonthTxns} title={`${range.label} · ${category.name}`} tooltip="Copy the transactions shown" />
-                    <Button variant="ghost" small onClick={bulk.toggle}>
-                      {bulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
-                    </Button>
-                  </div>
+                  <TransactionListToolbar rows={localMonthTxns} title={`${range.label} · ${category.name}`} bulk={bulk} />
                   <BulkEditChrome controller={bulk} />
                   <TransactionListTable
                     rows={localMonthTxns}

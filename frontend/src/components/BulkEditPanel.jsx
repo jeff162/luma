@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { AppDialog, Button, getFormControlStyle } from './ui.jsx'
 import CategoryPicker from './CategoryPicker.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
-import { api } from '../lib/api.js'
+import { useTags } from '../lib/useTags.js'
 
 /*
  * Bulk edit form for a selection of transactions. Each field has an enable checkbox so an Apply only
@@ -57,7 +57,7 @@ function TagChips({ tags, selected, onToggle, tone }) {
 }
 
 export default function BulkEditPanel({ count, categories = [], onApply, onCancel, applying = false }) {
-  const [allTags, setAllTags] = useState([])
+  const { tags: allTags, addTag } = useTags()
   const [setCategory, setSetCategory] = useState(false)
   const [categoryId, setCategoryId] = useState(null)
   const [doAddTags, setDoAddTags] = useState(false)
@@ -71,11 +71,6 @@ export default function BulkEditPanel({ count, categories = [], onApply, onCance
   const [setDate, setSetDate] = useState(false)
   const [dateValue, setDateValue] = useState('')
 
-  useEffect(() => {
-    let cancelled = false
-    api.getTags().then(rows => { if (!cancelled) setAllTags(rows || []) }).catch(() => {})
-    return () => { cancelled = true }
-  }, [])
 
   function toggleIn(setter) {
     return id => setter(prev => {
@@ -140,9 +135,7 @@ export default function BulkEditPanel({ count, categories = [], onApply, onCance
             else next.delete(tag.id)
             return next
           })}
-          onTagCreated={created => setAllTags(prev => (
-            prev.some(tag => tag.id === created.id) ? prev : [...prev, created]
-          ))}
+          onTagCreated={addTag}
           onClose={() => {}}
           positioning="relative"
         />
