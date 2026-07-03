@@ -23,7 +23,7 @@ import TransactionDetail from '../components/TransactionDetail.jsx'
 import { getTxnMerchantLabel } from '../components/TransactionRow.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
-import { txnMutations } from '../lib/txnMutations.js'
+import { txnMutations, makeRowReconciler } from '../lib/txnMutations.js'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { getTransactionAmountColor } from '../lib/moneyDisplay.js'
@@ -928,10 +928,7 @@ export default function Recurring() {
           txn={payeeDetail}
           categories={categories}
           onClose={() => setPayeeDetail(null)}
-          onCategorized={(txnId, cat) => applyCategoryToRow(txnId, cat?.id ?? null, cat?.name ?? null)}
-          onTrashed={txnId => setReportRows(prev => prev.filter(t => t.id !== txnId))}
-          onNotesSaved={(txnId, notes) => setReportRows(prev => prev.map(t => (t.id === txnId ? { ...t, notes } : t)))}
-          onTagsChanged={(txnId, tags) => setReportRows(prev => prev.map(t => (t.id === txnId ? { ...t, tags } : t)))}
+          onReconcile={makeRowReconciler(setReportRows)}
           forceFloating
           stackIndex={1}
         />

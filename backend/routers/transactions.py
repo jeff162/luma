@@ -20,6 +20,7 @@ import re
 from backend.db.database import get_db
 from backend.services.transaction_tags import (
     VISIBLE_TXN_TAG_SQL,
+    get_blocked_transaction_tag_map,
     get_visible_transaction_tag_map,
     list_visible_transaction_tags,
     set_manual_transaction_tag,
@@ -259,36 +260,37 @@ def _append_tag_filter(clauses, params, *, tag_ids: Optional[str]):
     placeholders = ",".join("?" * len(ids))
     # A transaction "has" a tag through any of four paths: direct (txn_tag with rule/manual
     # visibility), inherited from its leaf category, inherited from the leaf category's parent
-    # group, or inherited from its effective (top-level) account. The filter accepts a match
-    # through any path so tag-based reporting picks up tags applied at the most natural level.
+    # group, or inherited from its effective (top-level) account. Those paths are unioned into the
+    # transaction's *effective* tag ids, then matched against the requested set. The match is
+    # per-tag block-aware: a tag the user hid on this row (manual_state = -1) does not count, but a
+    # block on one requested tag never hides a match through a different requested tag. This mirrors
+    # the visible-tag computation (services/transaction_tags.py) so list and reporting stay in step.
     clauses.append(
         f"""
-        (
-            EXISTS (
-                SELECT 1
+        EXISTS (
+            SELECT 1
+            FROM (
+                SELECT tt.tag_id AS tag_id
                 FROM txn_tag tt
-                WHERE tt.txn_id = t.id
-                  AND tt.tag_id IN ({placeholders})
-                  AND {VISIBLE_TXN_TAG_SQL}
-            )
-            OR EXISTS (
-                SELECT 1
+                WHERE tt.txn_id = t.id AND {VISIBLE_TXN_TAG_SQL}
+                UNION
+                SELECT ct.tag_id
                 FROM category_tag ct
                 JOIN category cc ON cc.id = t.category_id
-                WHERE ct.tag_id IN ({placeholders})
-                  AND (ct.category_id = cc.id OR ct.category_id = cc.parent_id)
-            )
-            OR EXISTS (
-                SELECT 1
+                WHERE ct.category_id = cc.id OR ct.category_id = cc.parent_id
+                UNION
+                SELECT atag.tag_id
                 FROM account_tag atag
-                WHERE atag.tag_id IN ({placeholders})
-                  AND atag.account_id = {EFFECTIVE_ACCOUNT_ID_SQL}
-            )
+                WHERE atag.account_id = {EFFECTIVE_ACCOUNT_ID_SQL}
+            ) eff
+            WHERE eff.tag_id IN ({placeholders})
+              AND NOT EXISTS (
+                  SELECT 1 FROM txn_tag b
+                  WHERE b.txn_id = t.id AND b.tag_id = eff.tag_id AND b.manual_state = -1
+              )
         )
         """
     )
-    params.extend(ids)
-    params.extend(ids)
     params.extend(ids)
 
 
@@ -859,9 +861,13 @@ def list_transactions(
             params + [limit, offset],
         ).fetchall()
         transactions = [dict(r) for r in rows]
-        tag_map = get_visible_transaction_tag_map(conn, [txn["id"] for txn in transactions]) if rows else {}
+        txn_ids = [txn["id"] for txn in transactions]
+        tag_map = get_visible_transaction_tag_map(conn, txn_ids) if rows else {}
+        blocked_map = get_blocked_transaction_tag_map(conn, txn_ids) if rows else {}
         for txn in transactions:
             txn["tags"] = tag_map.get(txn["id"], [])
+            # Tags the user hid on this row (inherited/rule opt-out); the picker offers them for restore.
+            txn["blocked_tags"] = blocked_map.get(txn["id"], [])
 
     return {
         "total": total,
@@ -1069,7 +1075,8 @@ def update_transaction_tag(txn_id: str, body: TransactionTagUpdate):
             raise HTTPException(status_code=404, detail="Tag not found")
         set_manual_transaction_tag(conn, txn_id, body.tag_id, present=body.present)
         tags = list_visible_transaction_tags(conn, txn_id)
-    return {"tags": tags}
+        blocked_tags = get_blocked_transaction_tag_map(conn, [txn_id]).get(txn_id, [])
+    return {"tags": tags, "blocked_tags": blocked_tags}
 
 
 @router.patch("/{txn_id}/uncategorize")

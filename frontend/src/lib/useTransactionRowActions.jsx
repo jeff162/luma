@@ -98,8 +98,10 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
     if (!tagTarget) return
     const targetId = tagTarget.id
     const result = await api.updateTransactionTag(targetId, tag.id, present)
-    reconcileRow?.(targetId, { tags: result.tags || [] })
-    setTagTarget(prev => (prev && prev.id === targetId ? { ...prev, tags: result.tags || [] } : prev))
+    reconcileRow?.(targetId, { tags: result.tags || [], blocked_tags: result.blocked_tags || [] })
+    setTagTarget(prev => (prev && prev.id === targetId
+      ? { ...prev, tags: result.tags || [], blocked_tags: result.blocked_tags || [] }
+      : prev))
   }
 
   async function confirmTrash() {
@@ -323,6 +325,7 @@ export function TransactionRowActionsChrome({ controller }) {
                   .filter(t => t.source && t.source !== 'direct')
                   .map(t => t.id),
               )}
+              blockedTagIds={new Set((tagTarget.blocked_tags || []).map(t => t.id))}
               loading={tagModalAllTags === null}
               positioning="relative"
               onToggleTag={toggleTagFromModal}

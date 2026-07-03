@@ -435,10 +435,18 @@ export default function Transactions() {
     txnMutations.setCategory(txnId, catId)
   }
 
-  // A transaction detail panel persisted its own override through txnMutations (which already
-  // invalidated the derived counts); just reconcile the page list, no second request needed.
-  function handlePanelCategorized(txnId, cat) {
-    reconcileCategorizedRow(txnId, cat)
+  // Single reconcile callback for a TransactionDetail panel: it persisted through txnMutations (which
+  // already invalidated the derived counts), so just merge its patch into the page list — or drop the
+  // row and decrement the total when the panel reports a trash (patch === null). The ledger lives in
+  // nested state (`{ transactions, total }`), so this can't use the flat makeRowReconciler helper.
+  function reconcilePanelEdit(txnId, patch) {
+    setData(prev => ({
+      ...prev,
+      transactions: patch === null
+        ? prev.transactions.filter(t => t.id !== txnId)
+        : prev.transactions.map(t => (t.id === txnId ? { ...t, ...patch } : t)),
+      ...(patch === null ? { total: Math.max(0, (prev.total || 0) - 1) } : {}),
+    }))
   }
 
   function updateNote(txnId, notes) {
@@ -450,11 +458,15 @@ export default function Transactions() {
     }))
   }
 
-  function updateTags(txnId, tags) {
+  // `blockedTags` arrives from the row tag picker (inherited/rule opt-out); it's absent when called
+  // from TransactionDetail's onTagsChanged, so only patch it through when supplied.
+  function updateTags(txnId, tags, blockedTags) {
     setData(prev => ({
       ...prev,
       transactions: prev.transactions.map(t =>
-        t.id === txnId ? { ...t, tags } : t
+        t.id === txnId
+          ? { ...t, tags, ...(blockedTags !== undefined ? { blocked_tags: blockedTags } : {}) }
+          : t
       ),
     }))
   }
@@ -947,14 +959,7 @@ export default function Transactions() {
                 onClose={() => closeDetailPanel('txn', panel.item.id)}
                 dateStart={filters.date?.start || undefined}
                 dateEnd={filters.date?.end || undefined}
-                onCategorized={handlePanelCategorized}
-                onNotesSaved={updateNote}
-                onTagsChanged={updateTags}
-                onTrashed={txnId => setData(prev => ({
-                  ...prev,
-                  transactions: prev.transactions.filter(t => t.id !== txnId),
-                  total: Math.max(0, (prev.total || 0) - 1),
-                }))}
+                onReconcile={reconcilePanelEdit}
               />
             )
           }

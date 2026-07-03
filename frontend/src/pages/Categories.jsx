@@ -19,7 +19,7 @@ import { useAppSession } from '../lib/AppSessionContext.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
-import { txnMutations, reconcileRowsAfterRuleApply } from '../lib/txnMutations.js'
+import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler } from '../lib/txnMutations.js'
 import { usePagedTransactions } from '../components/detailShared.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import { TagGlyph } from '../components/TagUi.jsx'
@@ -2507,34 +2507,12 @@ export default function Categories() {
               stackIndex={index}
               isTopmost={index === detailPanels.length - 1}
               onClose={() => closeDetailPanel('txn', panel.item.id)}
-              onCategorized={(txnId, cat) => {
-                // The panel saved through txnMutations, which already invalidated the counts;
-                // just reconcile the local row in place (see saveMatchingTxnCategory: categorized
-                // rows linger until the user prunes the list with Refresh).
-                setPagedMatchingTxns(prev => prev.map(txn =>
-                  txn.id === txnId ? {
-                    ...txn,
-                    category_id: cat?.id ?? null,
-                    category_name: cat?.name ?? null,
-                    category_color: null,
-                    category_overridden: 1,
-                  } : txn
-                ))
-              }}
-              onNotesSaved={(txnId, notes) => {
-                setPagedMatchingTxns(prev => prev.map(txn =>
-                  txn.id === txnId ? { ...txn, notes } : txn
-                ))
-              }}
-              onTagsChanged={(txnId, tags) => {
-                setPagedMatchingTxns(prev => prev.map(txn =>
-                  txn.id === txnId ? { ...txn, tags } : txn
-                ))
-              }}
-              onTrashed={txnId => {
-                setPagedMatchingTxns(prev => prev.filter(txn => txn.id !== txnId))
-                setMatchingTxnsTotal(prev => Math.max(0, prev - 1))
-              }}
+              // Edits saved through txnMutations already invalidated the counts; just reconcile the
+              // local row in place (categorized rows linger until the user prunes with Refresh — see
+              // saveMatchingTxnCategory). A trash drops the row and decrements the matching total.
+              onReconcile={makeRowReconciler(setPagedMatchingTxns, {
+                onRemoved: () => setMatchingTxnsTotal(prev => Math.max(0, prev - 1)),
+              })}
             />
           )
         }

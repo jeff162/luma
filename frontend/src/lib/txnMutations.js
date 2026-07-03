@@ -127,3 +127,21 @@ export async function reconcileRowsAfterRuleApply(rows, affectedIds, setRows) {
   const fresh = new Map((resp?.transactions || []).map(row => [row.id, row]))
   setRows(prev => prev.map(row => fresh.get(row.id) ?? row))
 }
+
+// Build the reconcile callback a detail panel (TransactionDetail) hands its host: it receives one
+// `(txnId, patch)` where `patch` is the changed fields to merge, or `null` when the row was trashed
+// and should drop. Panels compute the patch (category/notes/tags/…) so a host wires one prop and
+// stays ignorant of which fields exist — adding a new reconciled field never touches the host again.
+// `onRemoved` lets a host that tracks a separate count decrement it on trash. Hosts whose rows live
+// in nested state (e.g. `{ transactions, total }`) or that need edit-specific side effects pass their
+// own `(txnId, patch)` function of the same shape instead of using this builder.
+export function makeRowReconciler(setRows, { onRemoved } = {}) {
+  return (txnId, patch) => {
+    if (patch === null) {
+      setRows(prev => prev.filter(row => row.id !== txnId))
+      onRemoved?.(txnId)
+      return
+    }
+    setRows(prev => prev.map(row => (row.id === txnId ? { ...row, ...patch } : row)))
+  }
+}

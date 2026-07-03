@@ -24,7 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
-import { txnMutations } from '../lib/txnMutations.js'
+import { txnMutations, makeRowReconciler } from '../lib/txnMutations.js'
 import { formatMoneyMagnitude } from '../lib/moneyDisplay.js'
 import { Button, Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
@@ -302,14 +302,7 @@ export default function ImportBatchDetail({
         txn={payeeDetail}
         categories={categories}
         onClose={() => setPayeeDetail(null)}
-        onCategorized={(txnId, cat) => setRows(prev => prev.map(t => (
-          t.id === txnId
-            ? { ...t, category_id: cat?.id ?? null, category_name: cat?.name ?? null, category_color: null, category_overridden: 1 }
-            : t
-        )))}
-        onTrashed={txnId => { setRows(prev => prev.filter(t => t.id !== txnId)); setTotalCount(prev => Math.max(0, prev - 1)) }}
-        onNotesSaved={(txnId, notes) => setRows(prev => prev.map(t => (t.id === txnId ? { ...t, notes } : t)))}
-        onTagsChanged={(txnId, tags) => setRows(prev => prev.map(t => (t.id === txnId ? { ...t, tags } : t)))}
+        onReconcile={makeRowReconciler(setRows, { onRemoved: () => setTotalCount(prev => Math.max(0, prev - 1)) })}
         forceFloating
         stackIndex={stackIndex + 1}
       />

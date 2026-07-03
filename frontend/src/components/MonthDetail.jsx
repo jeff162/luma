@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
-import { txnMutations } from '../lib/txnMutations.js'
+import { txnMutations, makeRowReconciler } from '../lib/txnMutations.js'
 import { formatCurrency, monthLabel } from '../lib/utils.js'
 import { Button, Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
@@ -168,14 +168,7 @@ export default function MonthDetail({
         txn={payeeDetail}
         categories={categories}
         onClose={() => setPayeeDetail(null)}
-        onCategorized={(txnId, cat) => setTransactions(prev => prev.map(t => (
-          t.id === txnId
-            ? { ...t, category_id: cat?.id ?? null, category_name: cat?.name ?? null, category_color: null, category_overridden: 1 }
-            : t
-        )))}
-        onTrashed={txnId => { setTransactions(prev => prev.filter(t => t.id !== txnId)); setTxnTotal(prev => Math.max(0, prev - 1)) }}
-        onNotesSaved={(txnId, notes) => setTransactions(prev => prev.map(t => (t.id === txnId ? { ...t, notes } : t)))}
-        onTagsChanged={(txnId, tags) => setTransactions(prev => prev.map(t => (t.id === txnId ? { ...t, tags } : t)))}
+        onReconcile={makeRowReconciler(setTransactions, { onRemoved: () => setTxnTotal(prev => Math.max(0, prev - 1)) })}
         forceFloating
         stackIndex={stackIndex + 1}
       />

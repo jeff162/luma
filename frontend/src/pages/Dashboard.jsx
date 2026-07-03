@@ -2874,15 +2874,7 @@ export default function Dashboard() {
           stackIndex={index}
           isTopmost={index === detailTxns.length - 1 && detailMonths.length === 0}
           onClose={() => closeTransactionDetail(txn.id)}
-          onCategorized={(txnId, cat) => reconcileDetailEdit(txnId, {
-            category_id: cat?.id ?? null,
-            category_name: cat?.name ?? null,
-            category_color: null,
-            category_overridden: 1,
-          })}
-          onNotesSaved={(txnId, notes) => reconcileDetailEdit(txnId, { notes })}
-          onTagsChanged={(txnId, tags) => reconcileDetailEdit(txnId, { tags })}
-          onTrashed={txnId => reconcileDetailEdit(txnId, null)}
+          onReconcile={reconcileDetailEdit}
           dateStart={dateStart || undefined}
           dateEnd={dateEnd || undefined}
         />

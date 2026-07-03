@@ -1076,9 +1076,18 @@ function EditableRecipientLabel({ recipient, onCommit }) {
   )
 }
 
-function TagColorPalette({ value, onChange }) {
+// `compact` shrinks the swatches and tightens the gap so the full 18-color palette fits on a single
+// row in the narrow per-tag palette column (the tag list); the add-tag form spans the card width and
+// keeps the roomier default targets.
+function TagColorPalette({ value, onChange, compact = false, align = 'flex-start' }) {
+  const swatch = compact ? 22 : 28
+  const glyph = compact ? 12 : 14
+  const gap = compact ? 4 : 6
+  // `align='flex-end'` (used by the tag list) pins the palette to the right of its column so every
+  // row's swatches line up in shared columns regardless of label width, and leaves the grid gap
+  // before the delete button. A long label still shrinks the column and wraps the swatches.
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap, justifyContent: align }}>
       {TAG_COLOR_PALETTE.map(color => {
         const selected = value === color
         return (
@@ -1088,8 +1097,8 @@ function TagColorPalette({ value, onChange }) {
             onClick={() => onChange(color)}
             title={color}
             style={{
-              width: 28,
-              height: 28,
+              width: swatch,
+              height: swatch,
               borderRadius: 999,
               border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
               background: selected
@@ -1102,7 +1111,7 @@ function TagColorPalette({ value, onChange }) {
               padding: 0,
             }}
           >
-            <TagGlyph color={color} size={14} />
+            <TagGlyph color={color} size={glyph} />
           </button>
         )
       })}
@@ -1294,10 +1303,10 @@ function TransactionTagsSection() {
                 // nothing; the palette column takes the remaining width and wraps to
                 // additional rows (flexWrap) rather than expanding over the label.
                 display: 'grid',
-                gridTemplateColumns: 'minmax(140px, max-content) minmax(0, 1fr) auto',
+                gridTemplateColumns: 'minmax(130px, max-content) minmax(0, 1fr) auto',
                 gap: 12,
                 alignItems: 'center',
-                padding: '12px 16px',
+                padding: '8px 16px',
                 borderBottom: '1px solid var(--border)',
               }}
             >
@@ -1308,6 +1317,8 @@ function TransactionTagsSection() {
               <TagColorPalette
                 value={tag.color}
                 onChange={color => handleUpdateTag(tag.id, { color })}
+                compact
+                align="flex-end"
               />
               <button
                 type="button"
@@ -2011,11 +2022,12 @@ function AboutSection({ dbInstanceId }) {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 18 }}>
+        {/* alignItems:start keeps each column top-aligned; without it a short cell (Version — no help
+            caption) stretches to the tallest cell's height and its value drifts to the middle. */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 18, alignItems: 'start' }}>
           <AboutRow
             label="Version"
             value={`v${APP_VERSION}`}
-            help="X"
           />
           <AboutRow
             label="License"

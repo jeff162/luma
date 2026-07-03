@@ -8,6 +8,11 @@ Tags have two independent sources of truth:
 - rule_present means the current rule set would apply the tag
 - manual_state lets the user force a tag present or absent on one transaction
 
+manual_state is a three-state override: +1 force-on, 0 neutral (follow rule_present), -1 block. A
+block (-1) is authoritative across *every* source — direct, category, group, and account — so it also
+serves as the per-transaction opt-out for inherited tags, suppressing a tag the user unchecked on one
+row without touching the category/account it comes from.
+
 This keeps retroactive rule reruns deterministic without taking manual add/remove
 control away from the user.
 """
@@ -125,6 +130,19 @@ def get_visible_transaction_tag_map(
             "_sort": row["sort_order"] or 0,
         }
 
+    # A per-transaction block (manual_state = -1) suppresses the tag no matter which source contributed
+    # it. Applied last, so it also removes an inherited copy that direct-visibility never overwrote (a
+    # blocked row is not in direct_rows). This is the inherited-tag opt-out; see set_manual_transaction_tag.
+    for row in conn.execute(
+        f"""
+        SELECT txn_id, tag_id
+        FROM txn_tag
+        WHERE txn_id IN ({placeholders}) AND manual_state = -1
+        """,
+        txn_ids,
+    ).fetchall():
+        merged[row["txn_id"]].pop(row["tag_id"], None)
+
     tag_map: dict[str, list[dict]] = {}
     for txn_id, bucket in merged.items():
         sorted_tags = sorted(
@@ -140,6 +158,66 @@ def get_visible_transaction_tag_map(
 
 def list_visible_transaction_tags(conn: sqlite3.Connection, txn_id: str) -> list[dict]:
     return get_visible_transaction_tag_map(conn, [txn_id]).get(txn_id, [])
+
+
+def get_blocked_transaction_tag_map(
+    conn: sqlite3.Connection,
+    txn_ids: Iterable[str],
+) -> dict[str, list[dict]]:
+    """Tags the user has explicitly hidden on a transaction (manual_state = -1). These are excluded
+    from the visible map above; the tag picker surfaces them separately so a hidden inherited/rule tag
+    can be restored. Block rows only ever exist for tags that would otherwise show (see
+    set_manual_transaction_tag), so every entry here is a genuine 'hidden here' the UI can re-enable."""
+    txn_ids = [str(txn_id) for txn_id in txn_ids if txn_id]
+    if not txn_ids:
+        return {}
+    placeholders = ",".join("?" for _ in txn_ids)
+    blocked: dict[str, list[dict]] = {txn_id: [] for txn_id in txn_ids}
+    for row in conn.execute(
+        f"""
+        SELECT tt.txn_id, g.id, g.name, g.color, g.sort_order
+        FROM txn_tag tt
+        JOIN tag g ON g.id = tt.tag_id
+        WHERE tt.txn_id IN ({placeholders}) AND tt.manual_state = -1
+        ORDER BY g.sort_order, LOWER(g.name), g.name, g.id
+        """,
+        txn_ids,
+    ).fetchall():
+        blocked[row["txn_id"]].append(
+            {"id": row["id"], "name": row["name"], "color": row["color"]}
+        )
+    return blocked
+
+
+def _tag_is_inherited(conn: sqlite3.Connection, txn_id: str, tag_id: str) -> bool:
+    """Whether the tag reaches this transaction through its leaf category, that category's parent
+    group, or its effective (top-level) account — i.e. any non-direct source. Mirrors the inherited/
+    account joins in get_visible_transaction_tag_map so the toggle can tell 'block an inherited tag'
+    (leave a suppression row) from 'remove a purely manual add' (delete the row)."""
+    row = conn.execute(
+        f"""
+        SELECT 1
+        FROM txn t
+        WHERE t.id = ?
+          AND (
+            EXISTS (
+                SELECT 1
+                FROM category_tag ct
+                JOIN category cc ON cc.id = t.category_id
+                WHERE ct.tag_id = ?
+                  AND (ct.category_id = cc.id OR ct.category_id = cc.parent_id)
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM account_tag atag
+                WHERE atag.tag_id = ?
+                  AND atag.account_id = {_EFFECTIVE_ACCOUNT_ID_SQL}
+            )
+          )
+        """,
+        (txn_id, tag_id, tag_id),
+    ).fetchone()
+    return row is not None
 
 
 def _get_txn_tag_rows(conn: sqlite3.Connection, txn_id: str) -> list[sqlite3.Row]:
@@ -268,45 +346,43 @@ def set_manual_transaction_tag(
         """,
         (txn_id, tag_id),
     ).fetchone()
+    ruled = bool(row and row["rule_present"])
+    # Whether the tag reaches this transaction via a source the user can't remove here (rule or
+    # inheritance). Inheritance is only queried when it can change the outcome — turning a tag off, or
+    # unblocking one — not on the common "add a fresh tag" path.
+    inherited = _tag_is_inherited(conn, txn_id, tag_id) if (not present or (row and row["manual_state"] == -1)) else False
+
+    def _write(manual_state: int) -> None:
+        if row:
+            if row["manual_state"] != manual_state:
+                conn.execute(
+                    "UPDATE txn_tag SET manual_state = ? WHERE txn_id = ? AND tag_id = ?",
+                    (manual_state, txn_id, tag_id),
+                )
+        else:
+            conn.execute(
+                "INSERT INTO txn_tag (txn_id, tag_id, rule_present, manual_state) VALUES (?, ?, 0, ?)",
+                (txn_id, tag_id, manual_state),
+            )
+
+    def _delete() -> None:
+        if row:
+            conn.execute("DELETE FROM txn_tag WHERE txn_id = ? AND tag_id = ?", (txn_id, tag_id))
 
     if present:
-        if row:
-            next_manual_state = 0 if row["rule_present"] else 1
-            if next_manual_state == row["manual_state"]:
-                return
-            conn.execute(
-                """
-                UPDATE txn_tag
-                SET manual_state = ?
-                WHERE txn_id = ? AND tag_id = ?
-                """,
-                (next_manual_state, txn_id, tag_id),
-            )
-            return
-        conn.execute(
-            """
-            INSERT INTO txn_tag (txn_id, tag_id, rule_present, manual_state)
-            VALUES (?, ?, 0, 1)
-            """,
-            (txn_id, tag_id),
-        )
+        # Show / unblock. A ruled tag returns to neutral (follows the rule); a purely inherited tag needs
+        # no direct row at all; anything else is a manual force-on.
+        if ruled:
+            _write(0)
+        elif inherited:
+            _delete()
+        else:
+            _write(1)
         return
 
-    if not row:
-        return
-    if row["rule_present"]:
-        if row["manual_state"] == -1:
-            return
-        conn.execute(
-            """
-            UPDATE txn_tag
-            SET manual_state = -1
-            WHERE txn_id = ? AND tag_id = ?
-            """,
-            (txn_id, tag_id),
-        )
-        return
-    conn.execute(
-        "DELETE FROM txn_tag WHERE txn_id = ? AND tag_id = ?",
-        (txn_id, tag_id),
-    )
+    # Hide / block. If the tag would otherwise show via rule or inheritance, leave a suppression row so
+    # it stays hidden on this transaction; a purely manual add just goes away ("no opinion").
+    if ruled or inherited:
+        _write(-1)
+    else:
+        _delete()

@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { txnMutations, reconcileRowsAfterRuleApply } from '../lib/txnMutations.js'
+import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler } from '../lib/txnMutations.js'
 import { formatCurrency } from '../lib/utils.js'
 import { AppConfirmDialog, Button, Spinner } from './ui.jsx'
 import RuleActionModal from './RuleActionModal.jsx'
@@ -47,7 +47,11 @@ const TRANSACTION_DETAIL_TABLE_PREF_KEY = 'ui.transactionDetail.transactions.col
  * locally editable, but it can also branch straight into rule creation when a manual recategorization looks
  * like the start of a repeatable pattern.
  */
-export default function TransactionDetail({ txn, categories, onClose, onTrashed, onCategorized, onNotesSaved, onTagsChanged, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true, dateStart = null, dateEnd = null, showPayeeActivity = true, availableTags: providedAvailableTags = null }) {
+// `onReconcile(txnId, patch | null)` is the single host-reconcile callback: the panel emits the
+// changed fields to merge into the host's row (category / notes / tags), or `null` when the row was
+// trashed. Hosts wire it once (usually via makeRowReconciler) and never need to change when a new
+// reconciled field is added here. See lib/txnMutations.js.
+export default function TransactionDetail({ txn, categories, onClose, onReconcile, onRulePrompt: externalRulePrompt, forceFloating = false, stackIndex = 0, isTopmost = true, dateStart = null, dateEnd = null, showPayeeActivity = true, availableTags: providedAvailableTags = null }) {
   // Date scope is the caller's call: Dashboard/Transactions pass their global filter; pages without a
   // filter bar pass nothing, in which case the payee trend defaults to the merchant's full history.
   const navigate = useNavigate()
@@ -84,7 +88,7 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
     setTrashConfirmOpen(false)
     try {
       await txnMutations.trashTransaction(txn.id)
-      onTrashed?.(txn.id)
+      onReconcile?.(txn.id, null)
       onClose?.()
     } catch (err) {
       console.error('Failed to send transaction to trash', err)
@@ -219,7 +223,12 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
     // Notify the host (e.g. the Transactions list) so it can reconcile the row that was
     // categorized from inside this panel — otherwise the change only lives in the panel's
     // local state and the page behind it stays stale.
-    onCategorized?.(txnId, resolvedCat || null)
+    onReconcile?.(txnId, {
+      category_id: resolvedCat?.id ?? null,
+      category_name: resolvedCat?.name ?? null,
+      category_color: null,
+      category_overridden: 1,
+    })
   }
 
   const {
@@ -251,15 +260,15 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
   async function handleSaveNote(nextNotes) {
     await api.updateNotes(detailTxn.id, nextNotes)
     patchDetailTxn({ notes: nextNotes })
-    onNotesSaved?.(detailTxn.id, nextNotes)
+    onReconcile?.(detailTxn.id, { notes: nextNotes })
   }
 
   async function handleToggleTag(tag, present) {
     const result = await api.updateTransactionTag(detailTxn.id, tag.id, present)
-    patchDetailTxn({ tags: result.tags || [] })
+    patchDetailTxn({ tags: result.tags || [], blocked_tags: result.blocked_tags || [] })
     // Reconcile the host's row too, otherwise the tag persists to the DB but the surface behind the
-    // panel keeps reading its stale copy and shows no tag marker (same contract as onCategorized/onNotesSaved).
-    onTagsChanged?.(detailTxn.id, result.tags || [])
+    // panel keeps reading its stale copy and shows no tag marker.
+    onReconcile?.(detailTxn.id, { tags: result.tags || [], blocked_tags: result.blocked_tags || [] })
   }
 
   // Reserve the full 7-row list height for the wider (year/all-time) ranges, whose lists scroll at
@@ -277,6 +286,8 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
   })
   const visibleTags = Array.isArray(detailTxn.tags) ? detailTxn.tags : []
   const visibleTagIds = new Set(visibleTags.map(tag => tag.id))
+  const inheritedTagIds = new Set(visibleTags.filter(tag => tag.source && tag.source !== 'direct').map(tag => tag.id))
+  const blockedTagIds = new Set((Array.isArray(detailTxn.blocked_tags) ? detailTxn.blocked_tags : []).map(tag => tag.id))
   const originRows = getTxnOriginRows(detailTxn)
   const header = (
     <>
@@ -337,9 +348,15 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
         </div>
       )}
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
-        Activity history{dateStart || dateEnd
-          ? ` · ${dateStart ? dateStart.slice(0, 7) : ''}${dateStart && dateEnd ? ' – ' : ''}${dateEnd ? dateEnd.slice(0, 7) : ''}`
-          : ' · all time'}
+        {/* The panel doubles as the single-transaction editor (opened via the pencil) and the
+            merchant activity report (opened via the ↗). The subtitle names whichever the user asked
+            for so the editor doesn't misleadingly read as a report; the date range only qualifies the
+            activity scope, so it stays on the report label. */}
+        {showEditorCard
+          ? 'Edit transaction'
+          : `Activity history${dateStart || dateEnd
+              ? ` · ${dateStart ? dateStart.slice(0, 7) : ''}${dateStart && dateEnd ? ' – ' : ''}${dateEnd ? dateEnd.slice(0, 7) : ''}`
+              : ' · all time'}`}
       </div>
     </>
   )
@@ -462,6 +479,8 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
               <TagPickerWithCreate
                 allTags={availableTags}
                 selectedTagIds={visibleTagIds}
+                inheritedTagIds={inheritedTagIds}
+                blockedTagIds={blockedTagIds}
                 onToggleTag={(tag, present) => handleToggleTag(tag, present)}
                 onTagCreated={created => setAvailableTags(prev => (
                   prev.some(tag => tag.id === created.id) ? prev : [...prev, created]
@@ -623,10 +642,7 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
           txn={childTxn}
           categories={detailCategories}
           onClose={() => setChildTxn(null)}
-          onCategorized={(id, cat) => handleCatSaved(id, cat)}
-          onNotesSaved={(id, notes) => setMonthTxns(prev => prev.map(t => (t.id === id ? { ...t, notes } : t)))}
-          onTagsChanged={(id, tags) => setMonthTxns(prev => prev.map(t => (t.id === id ? { ...t, tags } : t)))}
-          onTrashed={id => setMonthTxns(prev => prev.filter(t => t.id !== id))}
+          onReconcile={makeRowReconciler(setMonthTxns)}
           forceFloating
           stackIndex={stackIndex + 1}
           dateStart={dateStart}

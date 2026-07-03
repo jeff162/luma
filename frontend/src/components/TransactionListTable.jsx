@@ -276,7 +276,7 @@ export default function TransactionListTable({
             txn={txn}
             showExcludedFromTotals={markExcludedFromTotals}
             onUpdateNote={(id, notes) => patchRows(id, { notes })}
-            onUpdateTags={(id, tags) => patchRows(id, { tags })}
+            onUpdateTags={(id, tags, blockedTags) => patchRows(id, { tags, blocked_tags: blockedTags })}
             onOpenDetail={onTransactionOpenDetail}
           />
         )

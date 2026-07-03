@@ -335,8 +335,11 @@ export const HELP_TOPICS = [
           can be on a group and on individual transactions.
         </p>
         <p>
-          Inherited tags can’t be removed from a single transaction today. To opt one out,
-          re-tag at the level the inheritance comes from.
+          To hide an inherited tag on a single transaction, uncheck it in that transaction’s tag
+          picker (the row’s tag popover or the transaction editor). It stays on every other
+          transaction that inherits it, and a strike-through <em>hidden here</em> entry in the picker
+          re-checks to restore it. Removing the tag from the category or group instead drops it from
+          every transaction under that level.
         </p>
         <p>
           See also: <HelpLink to="/help/categories-tags">Tagging categories and groups</HelpLink>{' '}

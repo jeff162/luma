@@ -585,6 +585,9 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
   const inheritedTagIds = new Set(
     visibleTags.filter(tag => tag.source && tag.source !== 'direct').map(tag => tag.id),
   )
+  // Tags the user hid on just this transaction (inherited/rule opt-out). Passing the set — even when
+  // empty — puts the picker in transaction mode, where inherited tags can be unchecked to hide them.
+  const blockedTagIds = new Set((Array.isArray(txn.blocked_tags) ? txn.blocked_tags : []).map(tag => tag.id))
 
   useEffect(() => {
     if (!showTags || availableTags !== null) return
@@ -602,7 +605,7 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
 
   async function handleToggleTag(tag, present) {
     const result = await api.updateTransactionTag(txn.id, tag.id, present)
-    onUpdateTags?.(txn.id, result.tags || [])
+    onUpdateTags?.(txn.id, result.tags || [], result.blocked_tags || [])
   }
 
   const useStack = visibleTags.length > TAG_INLINE_LIMIT
@@ -725,6 +728,7 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
               allTags={availableTags || []}
               selectedTagIds={visibleTagIds}
               inheritedTagIds={inheritedTagIds}
+              blockedTagIds={blockedTagIds}
               loading={availableTags === null}
               positioning="relative"
               onToggleTag={handleToggleTag}

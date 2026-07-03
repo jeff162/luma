@@ -2859,10 +2859,8 @@ export default function ImportRuleSuggestionReview({
             availableTags={tags}
             showPayeeActivity={false}
             onClose={() => setPayeeDetail(null)}
-            onCategorized={() => reloadMatchViewer()}
-            onTrashed={() => { reloadMatchViewer(); setPayeeDetail(null) }}
-            onNotesSaved={() => reloadMatchViewer()}
-            onTagsChanged={() => reloadMatchViewer()}
+            // Any edit invalidates the matcher preview; a trash also closes the panel.
+            onReconcile={(txnId, patch) => { reloadMatchViewer(); if (patch === null) setPayeeDetail(null) }}
           />
         </div>
       ) : null}

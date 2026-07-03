@@ -21,6 +21,11 @@ export default function TagPickerWithCreate({
   allTags,
   selectedTagIds,
   inheritedTagIds = null,
+  // Tags the user has hidden on this transaction (inherited/rule opt-out). Render unchecked with a
+  // "hidden here" affordance; re-checking restores them. Only the transaction pickers pass this — the
+  // Categories/Rules pickers (which attach tags to a category/account, where the concept has no
+  // meaning) omit it. When set, inherited tags also become uncheckable (unchecking blocks them).
+  blockedTagIds = null,
   onToggleTag,
   onTagCreated,
   onClose,
@@ -116,31 +121,51 @@ export default function TagPickerWithCreate({
           {sortedTags.map(tag => {
             const checked = selectedTagIds.has(tag.id)
             const inherited = !!inheritedTagIds && inheritedTagIds.has(tag.id)
+            // In a transaction context (blockedTagIds supplied) inherited tags can be unchecked to
+            // hide them on just this row, and hidden ones re-checked to restore. Outside it (Categories/
+            // Rules pickers) inherited tags stay read-only — unchecking there would be meaningless.
+            const blockable = !!blockedTagIds
+            const blocked = blockable && blockedTagIds.has(tag.id)
+            const readOnly = inherited && !blockable
+            const title = blocked
+              ? 'Hidden on this transaction — check to restore'
+              : inherited
+                ? (blockable
+                  ? 'Inherited — uncheck to hide on just this transaction'
+                  : 'Inherited from category — manage on the Categories page')
+                : undefined
             return (
               <label
                 key={tag.id}
-                title={inherited ? 'Inherited from category — manage on the Categories page' : undefined}
+                title={title}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8,
-                  cursor: inherited ? 'default' : 'pointer',
+                  cursor: readOnly ? 'default' : 'pointer',
                   padding: '6px 2px', fontSize: 13,
-                  opacity: inherited ? 0.7 : 1,
+                  opacity: readOnly ? 0.7 : 1,
                 }}
               >
                 <input
                   type="checkbox"
                   checked={checked}
-                  disabled={inherited}
+                  disabled={readOnly}
                   onChange={() => {
-                    if (inherited) return
+                    if (readOnly) return
                     onToggleTag?.(tag, !checked)
                   }}
                 />
-                <TagGlyph color={tag.color} size={13} outline={inherited} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <TagGlyph color={tag.color} size={13} outline={inherited || blocked} />
+                <span style={{
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  ...(blocked ? { textDecoration: 'line-through', color: 'var(--muted)' } : {}),
+                }}>
                   {tag.name}
                 </span>
-                {inherited ? (
+                {blocked ? (
+                  <span style={{ fontSize: 10, color: 'var(--muted)', fontStyle: 'italic' }}>
+                    hidden here
+                  </span>
+                ) : inherited ? (
                   <span style={{ fontSize: 10, color: 'var(--muted)', fontStyle: 'italic' }}>
                     inherited
                   </span>

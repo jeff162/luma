@@ -18,7 +18,11 @@ from backend.db.database import SHARED_OWNER_ID, _seed_default_categories, get_d
 from backend.routers.rules import _apply_rule_to_existing, create_rule, RuleCreate
 from backend.routers.transactions import list_transactions, spending_by_group
 from backend.services.categorizer import preview_recategorize_count, recategorize_all
-from backend.services.transaction_tags import list_visible_transaction_tags, set_manual_transaction_tag
+from backend.services.transaction_tags import (
+    get_blocked_transaction_tag_map,
+    list_visible_transaction_tags,
+    set_manual_transaction_tag,
+)
 
 
 class TransactionTagsTests(unittest.TestCase):
@@ -248,6 +252,167 @@ class TransactionTagsTests(unittest.TestCase):
         with self._use_db_path():
             result = create_rule(RuleCreate(keyword="rent", tag_ids=[tag_id]))
         self.assertTrue(result["id"])
+
+    # --- Per-transaction override (opt-out) of inherited tags ---------------------------------------
+    #
+    # An inherited tag (category/group/account) can be hidden on one transaction via the universal
+    # manual_state = -1 block, without retagging the source. These cover the two shared chokepoints
+    # (display + filter) and the toggle state machine.
+
+    def _attach_category_tag(self, category_id: str, tag_id: str) -> None:
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO category_tag (category_id, tag_id) VALUES (?, ?)",
+                    (category_id, tag_id),
+                )
+
+    def _attach_account_tag(self, account_id: str, tag_id: str) -> None:
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO account_tag (account_id, tag_id) VALUES (?, ?)",
+                    (account_id, tag_id),
+                )
+
+    def _set_txn_category(self, txn_id: str, category_id: str) -> None:
+        # Mark it overridden so a recategorize pass leaves the category (and thus its inherited tag)
+        # in place, mirroring a manual category assignment.
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET category_id = ?, category_overridden = 1 WHERE id = ?",
+                    (category_id, txn_id),
+                )
+
+    def _txn_tag_row(self, conn, txn_id: str, tag_id: str):
+        return conn.execute(
+            "SELECT rule_present, manual_state FROM txn_tag WHERE txn_id = ? AND tag_id = ?",
+            (txn_id, tag_id),
+        ).fetchone()
+
+    def test_block_inherited_category_tag_hides_only_that_transaction(self):
+        account_id = self._insert_account("Primary Checking")
+        groceries_id = self._insert_expense_leaf("Groceries")
+        essential_tag_id = self._insert_tag("Essential", "#22c55e")
+        self._attach_category_tag(groceries_id, essential_tag_id)
+        txn_a = self._insert_transaction(account_id=account_id, merchant_name="Store A")
+        txn_b = self._insert_transaction(account_id=account_id, merchant_name="Store B")
+        self._set_txn_category(txn_a, groceries_id)
+        self._set_txn_category(txn_b, groceries_id)
+
+        with self._use_db_path():
+            with get_db() as conn:
+                # Both inherit the tag to start (source = category).
+                self.assertEqual([t["id"] for t in list_visible_transaction_tags(conn, txn_a)], [essential_tag_id])
+                self.assertEqual(list_visible_transaction_tags(conn, txn_a)[0]["source"], "category")
+
+                # Block on A only.
+                set_manual_transaction_tag(conn, txn_a, essential_tag_id, present=False)
+                self.assertEqual(list_visible_transaction_tags(conn, txn_a), [])
+                self.assertEqual(
+                    [t["id"] for t in get_blocked_transaction_tag_map(conn, [txn_a]).get(txn_a, [])],
+                    [essential_tag_id],
+                )
+                # Sibling B is untouched.
+                self.assertEqual([t["id"] for t in list_visible_transaction_tags(conn, txn_b)], [essential_tag_id])
+                # A block leaves a -1 row.
+                self.assertEqual(self._txn_tag_row(conn, txn_a, essential_tag_id)["manual_state"], -1)
+
+                # Re-check restores it and drops the row (pure inheritance needs no direct row).
+                set_manual_transaction_tag(conn, txn_a, essential_tag_id, present=True)
+                self.assertEqual([t["id"] for t in list_visible_transaction_tags(conn, txn_a)], [essential_tag_id])
+                self.assertIsNone(self._txn_tag_row(conn, txn_a, essential_tag_id))
+                self.assertEqual(get_blocked_transaction_tag_map(conn, [txn_a]).get(txn_a, []), [])
+
+    def test_block_inherited_account_tag(self):
+        account_id = self._insert_account("Primary Checking")
+        travel_tag_id = self._insert_tag("Travel", "#3b82f6")
+        self._attach_account_tag(account_id, travel_tag_id)
+        txn_id = self._insert_transaction(account_id=account_id, merchant_name="Airline")
+
+        with self._use_db_path():
+            with get_db() as conn:
+                self.assertEqual(list_visible_transaction_tags(conn, txn_id)[0]["source"], "account")
+                set_manual_transaction_tag(conn, txn_id, travel_tag_id, present=False)
+                self.assertEqual(list_visible_transaction_tags(conn, txn_id), [])
+                self.assertEqual(
+                    [t["id"] for t in get_blocked_transaction_tag_map(conn, [txn_id]).get(txn_id, [])],
+                    [travel_tag_id],
+                )
+
+    def test_block_excludes_from_filter_and_reporting_per_tag(self):
+        account_id = self._insert_account("Primary Checking")
+        groceries_id = self._insert_expense_leaf("Groceries")
+        group_id = None
+        with self._use_db_path():
+            with get_db() as conn:
+                group_id = conn.execute(
+                    "SELECT parent_id FROM category WHERE id = ?", (groceries_id,)
+                ).fetchone()["parent_id"]
+        essential_tag_id = self._insert_tag("Essential", "#22c55e")
+        other_tag_id = self._insert_tag("Other", "#a855f7")
+        self._attach_category_tag(groceries_id, essential_tag_id)
+        txn_a = self._insert_transaction(account_id=account_id, merchant_name="Store A", amount=30.0)
+        txn_b = self._insert_transaction(account_id=account_id, merchant_name="Store B", amount=12.0)
+        self._set_txn_category(txn_a, groceries_id)
+        self._set_txn_category(txn_b, groceries_id)
+
+        with self._use_db_path():
+            with get_db() as conn:
+                # A also carries a direct 'Other' tag, and blocks the inherited 'Essential'.
+                set_manual_transaction_tag(conn, txn_a, other_tag_id, present=True)
+                set_manual_transaction_tag(conn, txn_a, essential_tag_id, present=False)
+
+            def _ledger(tag_ids):
+                return list_transactions(
+                    month=None, date_start=None, date_end=None, import_batch_id=None,
+                    sort_by="date", sort_dir="desc", account_id=None, account_ids=None,
+                    category_id=None, group_ids=None, category_ids=None, tag_ids=tag_ids,
+                    owner_ids=None, payees=None, direction=None, search=None, quick_filter=None,
+                    limit=200, offset=0,
+                )
+
+            # Filtering by the blocked tag excludes A but keeps sibling B.
+            essential_only = _ledger(essential_tag_id)
+            self.assertEqual([t["id"] for t in essential_only["transactions"]], [txn_b])
+
+            # Reporting agrees: the Essential total counts only B's amount.
+            grouped = spending_by_group(
+                month="2026-04", date_start=None, date_end=None, account_id=None,
+                account_ids=None, tag_ids=essential_tag_id, owner_ids=None, category_owner_ids=None,
+            )
+            self.assertEqual(len(grouped), 1)
+            self.assertEqual(grouped[0]["group_id"], group_id)
+            self.assertEqual(grouped[0]["total"], 12.0)
+
+            # A block on one requested tag never hides a match through another: filtering [Essential,
+            # Other] still returns A (via its direct Other) and B (via Essential).
+            both = _ledger(f"{essential_tag_id},{other_tag_id}")
+            self.assertEqual({t["id"] for t in both["transactions"]}, {txn_a, txn_b})
+
+    def test_inherited_block_survives_rule_rerun_and_manual_add_still_deletes(self):
+        account_id = self._insert_account("Primary Checking")
+        groceries_id = self._insert_expense_leaf("Groceries")
+        essential_tag_id = self._insert_tag("Essential", "#22c55e")
+        manual_tag_id = self._insert_tag("Budget Watch", "#f97316")
+        self._attach_category_tag(groceries_id, essential_tag_id)
+        txn_id = self._insert_transaction(account_id=account_id, merchant_name="Store A")
+        self._set_txn_category(txn_id, groceries_id)
+
+        with self._use_db_path():
+            with get_db() as conn:
+                # Inherited block persists across a full recategorize pass (it's rule-independent).
+                set_manual_transaction_tag(conn, txn_id, essential_tag_id, present=False)
+                self.assertEqual(recategorize_all(conn), 0)
+                self.assertEqual(self._txn_tag_row(conn, txn_id, essential_tag_id)["manual_state"], -1)
+                self.assertEqual(list_visible_transaction_tags(conn, txn_id), [])
+
+                # A purely manual add that is then removed leaves no row (unchanged "no opinion" path).
+                set_manual_transaction_tag(conn, txn_id, manual_tag_id, present=True)
+                self.assertEqual(self._txn_tag_row(conn, txn_id, manual_tag_id)["manual_state"], 1)
+                set_manual_transaction_tag(conn, txn_id, manual_tag_id, present=False)
+                self.assertIsNone(self._txn_tag_row(conn, txn_id, manual_tag_id))
 
 
 if __name__ == "__main__":
