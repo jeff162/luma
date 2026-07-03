@@ -54,7 +54,7 @@ function getAvailableColumns({ showCategory, showAccount, showSourceAccount }) {
 // drill-down tables, AccountDetail, TagDetail) all get sort for free without each having to
 // reimplement the comparator. Numeric/date columns default to "biggest first"; text columns
 // to ascending, matching the pattern the Transactions page already uses.
-function compareRows(a, b, key, sign) {
+function comparePrimary(a, b, key, sign) {
   if (key === 'date') return sign * String(a.date || '').localeCompare(String(b.date || ''))
   if (key === 'merchant') return sign * String(getTxnMerchantLabel(a) || '').localeCompare(String(getTxnMerchantLabel(b) || ''))
   if (key === 'category') return sign * String(a.category_name || '').localeCompare(String(b.category_name || ''))
@@ -62,6 +62,21 @@ function compareRows(a, b, key, sign) {
   if (key === 'sourceAccount') return sign * String(a.source_account_raw_name || '').localeCompare(String(b.source_account_raw_name || ''))
   if (key === 'amount') return sign * ((Number(a.amount) || 0) - (Number(b.amount) || 0))
   return 0
+}
+
+// When the primary key ties, fall back to date DESC then id DESC, so rows within a group read
+// newest-first and the order is fully deterministic — mirroring the server-side ledger's explicit
+// `ORDER BY <key>, t.date DESC, t.id DESC`. The tiebreaker direction is fixed to desc regardless of the
+// primary column's direction (the ledger does the same). Sorting by `date` already resolves its own
+// ties via the id fallback below.
+function compareRows(a, b, key, sign) {
+  const primary = comparePrimary(a, b, key, sign)
+  if (primary !== 0) return primary
+  if (key !== 'date') {
+    const byDate = String(b.date || '').localeCompare(String(a.date || ''))
+    if (byDate !== 0) return byDate
+  }
+  return String(b.id || '').localeCompare(String(a.id || ''))
 }
 
 function getInitialSortDirection(key) {

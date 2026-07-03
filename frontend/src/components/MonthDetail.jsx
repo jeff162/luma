@@ -9,6 +9,7 @@ import { Button, Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
 import CategoryDetail from './CategoryDetail.jsx'
+import CopyTransactionsButton from './CopyTransactionsButton.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import {
@@ -136,7 +137,8 @@ export default function MonthDetail({
         <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
       ) : (
         <>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginBottom: 8 }}>
+            <CopyTransactionsButton rows={transactions} title={`${monthLabel(month)} · ${viewLabel}`} tooltip="Copy the transactions shown" />
             <Button variant="ghost" small onClick={bulk.toggle}>
               {bulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
             </Button>

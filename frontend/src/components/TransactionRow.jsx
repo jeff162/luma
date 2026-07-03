@@ -16,7 +16,7 @@ import AmountDisplay from './AmountDisplay.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
 import { Tooltip } from './ui.jsx'
 import { MerchantOriginHoverCard } from './OriginFields.jsx'
-import { hasMerchantOriginDetail } from '../lib/importSourceFields.js'
+import { hasFileOriginDetail } from '../lib/importSourceFields.js'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 
 /*
@@ -313,9 +313,10 @@ export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true })
     </span>
   )
   // Hover the merchant name to reveal the captured import-source detail (full name when truncated,
-  // raw source text, "Original Statement"-style extras, the source file). Only attach the hover when
-  // there is something to show beyond the visible name. See lib/importSourceFields.js.
-  const showOriginHover = nameTruncated || hasMerchantOriginDetail(txn)
+  // raw source text, "Original Statement"-style extras, the source file, the file's imported category
+  // and source account). Only attach the hover when there is something to show beyond the visible name.
+  // See lib/importSourceFields.js.
+  const showOriginHover = nameTruncated || hasFileOriginDetail(txn)
 
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0, maxWidth: '100%' }}>

@@ -997,7 +997,10 @@ function AccountTagsCell({
   const displayTagIds = isChild ? inheritedTagIds : ownTagIds
   const pills = displayTagIds.map(id => tagsById.get(id)).filter(Boolean)
   const editable = !isChild
-  const showControls = editable && editMode
+  // The "+" add-tag control shows in page-wide edit mode, and also for a single row whose picker was
+  // opened on its own (via the row's right-click "Edit tags…") — the picker anchors its floating
+  // position to this button, so the row needs it rendered even when edit mode is off.
+  const showControls = editable && (editMode || pickerOpen)
 
   // The picker floats beside the "+" via fixed positioning rather than dropping down over the
   // column, so the tag column below stays uncovered and the user can open the next row's picker
@@ -2910,6 +2913,10 @@ export default function Accounts() {
                           >
                             {listContextMenu.accountId ? (
                               <button type="button" onClick={() => {
+                                // Open just this row's picker without toggling the page-wide edit
+                                // mode: the row renders its own "+" anchor while its picker is open
+                                // (see showControls), so dismissing the picker leaves no lingering
+                                // "Done" state to clear.
                                 setTagPickerAccountId(listContextMenu.accountId)
                                 setListContextMenu(null)
                               }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>

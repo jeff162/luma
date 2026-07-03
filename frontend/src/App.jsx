@@ -25,6 +25,7 @@ import {
   MinimizedImportedCategoryWorkspaceNavItem,
 } from './contexts/ImportedCategoryWorkspaceContext.jsx'
 import { PanelStackProvider } from './contexts/PanelStackContext.jsx'
+import { TransactionShareProvider } from './contexts/TransactionShareContext.jsx'
 import { useDismissibleLayer } from './lib/uiInteractions.js'
 import { AppConfirmDialog, Toggle } from './components/ui.jsx'
 import TransientTextInput from './components/TransientTextInput.jsx'
@@ -1520,6 +1521,7 @@ export default function App() {
         >
           <FilterProvider initialDate={pastTwelveMonthsRange()}>
             <PanelStackProvider>
+              <TransactionShareProvider>
               <UnifiedDuplicatesViewerProvider>
                 <ImportedCategoryWorkspaceProvider>
                   <ThemeController />
@@ -1789,6 +1791,7 @@ export default function App() {
                   )}
                 </ImportedCategoryWorkspaceProvider>
               </UnifiedDuplicatesViewerProvider>
+              </TransactionShareProvider>
             </PanelStackProvider>
           </FilterProvider>
         </UserPreferencesProvider>

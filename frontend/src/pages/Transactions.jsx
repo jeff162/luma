@@ -22,6 +22,7 @@ import { useFilters } from '../lib/FilterContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
+import CopyTransactionsButton from '../components/CopyTransactionsButton.jsx'
 
 const COLUMN_DEFS = [
   { key: 'date', label: 'Date', defaultWidth: 100, minWidth: 70 },
@@ -789,6 +790,7 @@ export default function Transactions() {
               {needsReviewOnly ? '✕ Needs review' : 'Needs review'}
             </button>
             <FeatureExplainer topic="reviewing-transactions" placement="bottom-left" />
+            <CopyTransactionsButton rows={data.transactions} title="Transactions" tooltip="Copy the transactions shown" />
             <button
               onClick={bulk.toggle}
               style={{

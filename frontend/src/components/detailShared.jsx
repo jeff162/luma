@@ -354,69 +354,103 @@ function mergeUniqueById(prev, next) {
   return added.length ? [...prev, ...added] : prev
 }
 
-export function usePagedMonthTransactions({ selectedMonth, loadPage }) {
-  const [rows, setRows] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [offset, setOffset] = useState(0)
-  const [hasMore, setHasMore] = useState(false)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const listRef = useRef(null)
-  // Synchronous re-entry guard — `loadingMore` state flips async, so two scroll events in one tick can
-  // both fetch the same offset and append a page twice (duplicate React keys). See usePagedTransactions.
-  const loadingMoreRef = useRef(false)
+// The detail panels drill from a monthly trend chart into a scoped transaction list. By default the
+// list shows the one month whose bar is selected, but the user can widen it to the selected bar's
+// calendar year or the whole charted span via DetailRangeControl. These helpers turn (mode, anchor
+// month, trend) into the concrete pieces every consumer needs — the fetch params, a stable cache key,
+// the section label, and the count/total — so month/year/all-time behaves identically across the three
+// panels (merchant, category, account).
+export const DETAIL_RANGE_OPTIONS = [
+  { value: 'month', label: 'Month' },
+  { value: 'year', label: 'Year' },
+  { value: 'all', label: 'All time' },
+]
 
-  useEffect(() => {
-    if (!selectedMonth) return
-    let cancelled = false
-    setLoading(true)
-    setOffset(0)
-    loadPage(selectedMonth, 0, DETAIL_PAGE_SIZE).then(result => {
-      if (cancelled) return
-      const nextRows = result?.transactions || []
-      const total = result?.total || 0
-      setRows(nextRows)
-      setOffset(nextRows.length)
-      setHasMore(nextRows.length < total)
-      setLoading(false)
-    }).catch(() => {
-      if (cancelled) return
-      setRows([])
-      setOffset(0)
-      setHasMore(false)
-      setLoading(false)
-    })
-    return () => { cancelled = true }
-  }, [selectedMonth, loadPage])
+// A stable identity for the current window, used both as the paged-fetch cache key and (crucially) to
+// memoize the range so clicking a *different bar within the same window* — any bar in all-time mode, a
+// same-year bar in year mode — does not churn the fetch and reload identical rows. In month mode the
+// anchor month IS the window, so it varies per click as expected.
+export function detailRangeStableKey(mode, selectedMonth) {
+  if (mode === 'all') return 'all'
+  if (mode === 'year') return selectedMonth ? selectedMonth.slice(0, 4) : ''
+  return selectedMonth || ''
+}
 
-  useEffect(() => {
-    if (!selectedMonth || !listRef.current) return
-    function onScroll() {
-      const el = listRef.current
-      if (!el || loadingMoreRef.current || loading || !hasMore) return
-      if (el.scrollHeight - el.scrollTop - el.clientHeight > 240) return
-      loadingMoreRef.current = true
-      setLoadingMore(true)
-      loadPage(selectedMonth, offset, DETAIL_PAGE_SIZE).then(result => {
-        const nextRows = result?.transactions || []
-        const total = result?.total || 0
-        setRows(prev => mergeUniqueById(prev, nextRows))
-        setOffset(prev => prev + nextRows.length)
-        setHasMore(offset + nextRows.length < total)
-      }).finally(() => { loadingMoreRef.current = false; setLoadingMore(false) })
-    }
-    const el = listRef.current
-    el.addEventListener('scroll', onScroll)
-    onScroll()
-    return () => el.removeEventListener('scroll', onScroll)
-  }, [selectedMonth, offset, hasMore, loading, loadingMore, loadPage])
-
-  return {
-    rows,
-    setRows,
-    loading,
-    loadingMore,
-    listRef,
+// The window a given mode resolves to, derived from the anchor month and the charted trend:
+//   month → the anchor's calendar month
+//   year  → the anchor's calendar year
+//   all   → the full span the chart is showing (its first..last month), so the list, the footer
+//           count/total (summed from the same trend rows), and the chart always agree — even where the
+//           trend itself is capped (category 36mo / account 60mo) below the account's true history.
+// Month-end upper bounds use `${month}-31`: transaction dates compare lexically, so it includes every
+// day of that month without needing the real last day.
+export function computeDetailRange(mode, selectedMonth, trend) {
+  const rows = Array.isArray(trend) ? trend : []
+  let params
+  let windowRows
+  let label
+  if (mode === 'all') {
+    const first = rows[0]?.month
+    const last = rows[rows.length - 1]?.month
+    params = (first && last) ? { date_start: `${first}-01`, date_end: `${last}-31` } : {}
+    windowRows = rows
+    label = 'All time'
+  } else if (mode === 'year') {
+    const yr = selectedMonth ? selectedMonth.slice(0, 4) : ''
+    params = yr ? { date_start: `${yr}-01-01`, date_end: `${yr}-12-31` } : {}
+    windowRows = rows.filter(r => (r.month || '').slice(0, 4) === yr)
+    label = yr
+  } else {
+    params = selectedMonth ? { month: selectedMonth } : {}
+    windowRows = rows.filter(r => r.month === selectedMonth)
+    label = selectedMonth ? monthLabel(selectedMonth) : ''
   }
+  const count = windowRows.reduce((sum, r) => sum + (Number(r?.count) || 0), 0)
+  const total = windowRows.reduce((sum, r) => sum + (Number(r?.total) || 0), 0)
+  return { params, count, total, label }
+}
+
+// Which chart bars read as "in the current window", so the highlight tracks the range choice: the one
+// selected month, every bar in the selected year, or every bar in all-time mode.
+export function detailRangeActiveMonth(mode, selectedMonth) {
+  if (mode === 'all') return () => true
+  if (mode === 'year') {
+    const yr = selectedMonth ? selectedMonth.slice(0, 4) : ''
+    return month => (month || '').slice(0, 4) === yr
+  }
+  return month => month === selectedMonth
+}
+
+// Segmented Month · Year · All time control for the transaction-list header. The clicked bar stays the
+// anchor in every mode; this only changes how wide a window around it the list shows.
+export function DetailRangeControl({ mode, onChange }) {
+  return (
+    <div
+      role="group"
+      aria-label="Transaction range"
+      style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 999, overflow: 'hidden' }}
+    >
+      {DETAIL_RANGE_OPTIONS.map(opt => {
+        const active = opt.value === mode
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            aria-pressed={active}
+            style={{
+              border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 11px', lineHeight: 1.4,
+              background: active ? 'var(--accent)' : 'transparent',
+              color: active ? '#fff' : 'var(--muted)',
+              fontWeight: active ? 600 : 500,
+            }}
+          >
+            {opt.label}
+          </button>
+        )
+      })}
+    </div>
+  )
 }
 
 export function usePagedTransactions({ activeKey, loadPage }) {
@@ -522,7 +556,12 @@ function CustomTooltip({ active, payload, label }) {
   )
 }
 
-export function DetailTrendChart({ trend, selectedMonth, onSelectMonth }) {
+// `isMonthActive(month)` optionally generalizes the highlight from a single selected month to a whole
+// window (a year, or all bars in all-time mode); it defaults to just the selected month so callers that
+// don't pass it keep the original single-bar behavior.
+export function DetailTrendChart({ trend, selectedMonth, onSelectMonth, isMonthActive = null }) {
+  const monthActive = isMonthActive || (month => month === selectedMonth)
+  const dimNonActive = !!selectedMonth || !!isMonthActive
   const [windowEnd, setWindowEnd] = useState(null)
 
   useEffect(() => {
@@ -619,8 +658,8 @@ export function DetailTrendChart({ trend, selectedMonth, onSelectMonth }) {
               {visible.map((entry, i) => (
                 <Cell
                   key={i}
-                  fill={entry.month === selectedMonth ? 'var(--accent2)' : 'var(--accent)'}
-                  opacity={selectedMonth && entry.month !== selectedMonth ? 0.4 : 1}
+                  fill={monthActive(entry.month) ? 'var(--accent2)' : 'var(--accent)'}
+                  opacity={dimNonActive && !monthActive(entry.month) ? 0.4 : 1}
                 />
               ))}
               <LabelList

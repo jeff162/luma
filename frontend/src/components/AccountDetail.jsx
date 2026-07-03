@@ -1,13 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import { formatCurrency, monthLabel } from '../lib/utils.js'
+import { formatCurrency } from '../lib/utils.js'
 import { Button, Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
+import CopyTransactionsButton from './CopyTransactionsButton.jsx'
 import CategoryDetail from './CategoryDetail.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
@@ -17,8 +18,12 @@ import {
   getDetailMonthSectionHeight,
   DetailPanelShell,
   DetailTrendChart,
+  DetailRangeControl,
+  computeDetailRange,
+  detailRangeStableKey,
+  detailRangeActiveMonth,
   useDetailPanelChrome,
-  usePagedMonthTransactions,
+  usePagedTransactions,
   usePanelReveal,
 } from './detailShared.jsx'
 
@@ -94,20 +99,32 @@ export default function AccountDetail({ account, categories = [], onClose, force
     return () => { cancelled = true }
   }, [account.id])
 
-  const loadMonthPage = useCallback((month, offset, limit) => (
+  // The list defaults to the selected month but can widen to that bar's year or the whole charted span
+  // (DetailRangeControl); `range` derives the fetch window + count/total and `rangeKey` keeps the fetch
+  // stable so re-clicking a bar inside the same window doesn't reload identical rows.
+  const [rangeMode, setRangeMode] = useState('month')
+  const rangeKey = detailRangeStableKey(rangeMode, selectedMonth)
+  const range = useMemo(
+    () => computeDetailRange(rangeMode, selectedMonth, trend),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rangeKey subsumes selectedMonth; recomputing on every anchor click would refetch identical rows in year/all-time mode
+    [rangeMode, rangeKey, trend],
+  )
+  const anchorReady = rangeMode === 'all' ? trend.length > 0 : !!selectedMonth
+  const activeKey = anchorReady ? `acct:${account.id}|${sourceCsv || 'all'}|${rangeMode}|${rangeKey}` : null
+  const loadPage = useCallback((offset, limit) => (
     api.getTransactions({
       account_ids: String(account.id),
       ...(sourceCsv ? { source_account_ids: sourceCsv } : {}),
-      month,
+      ...range.params,
       limit,
       offset,
     })
-  ), [account.id, sourceCsv])
+  ), [account.id, sourceCsv, range])
   const {
     rows: monthTxns,
     loading: txnLoading,
     listRef,
-  } = usePagedMonthTransactions({ selectedMonth, loadPage: loadMonthPage })
+  } = usePagedTransactions({ activeKey, loadPage })
   const [localMonthTxns, setLocalMonthTxns] = useState([])
   // The row's merchant ↗ opens the payee detail as a child panel (so it surfaces the per-transaction
   // origin/source info). It is hosted here rather than by the page, so it stacks via the shared panel
@@ -178,17 +195,19 @@ export default function AccountDetail({ account, categories = [], onClose, force
 
   const revealed = usePanelReveal(panelRef, accountsSettled && !trendLoading)
 
-  const selectedMonthRow = trend.find(r => r.month === selectedMonth)
-  const monthSectionHeight = getDetailMonthSectionHeight(trend)
+  // Reserve the full 7-row list height for year/all-time (their lists scroll at DETAIL_LIST_MAX_HEIGHT
+  // regardless of any one month's count); month mode sizes to its busiest bar.
+  const monthSectionHeight = getDetailMonthSectionHeight(rangeMode === 'month' ? trend : [{ count: 999 }])
 
-  // Bulk edit over the selected month's rows for this account. Scope is month + account, so "select all
-  // matching" resolves the full month even when the list is paged; the count comes from the trend row.
+  // Bulk edit over the current window's rows for this account. The filter mirrors the list fetch (window
+  // params + account + any source-account narrowing) so "select all matching" resolves the whole window
+  // even when the list is paged; the count comes from the same trend sum.
   const bulk = useBulkTransactionEditing({
     rows: localMonthTxns,
     setRows: setLocalMonthTxns,
-    total: selectedMonthRow?.count || localMonthTxns.length,
+    total: range.count || localMonthTxns.length,
     filterParams: {
-      month: selectedMonth,
+      ...range.params,
       account_ids: String(account.id),
       ...(sourceCsv ? { source_account_ids: sourceCsv } : {}),
     },
@@ -276,20 +295,29 @@ export default function AccountDetail({ account, categories = [], onClose, force
               No history found for this account.
             </div>
           ) : (
-            <DetailTrendChart trend={trend} selectedMonth={selectedMonth} onSelectMonth={setSelectedMonth} />
+            <DetailTrendChart
+              trend={trend}
+              selectedMonth={selectedMonth}
+              onSelectMonth={setSelectedMonth}
+              isMonthActive={detailRangeActiveMonth(rangeMode, selectedMonth)}
+            />
           )}
 
-          {selectedMonth && (
+          {anchorReady && (
             <div style={{ marginTop: 24, height: monthSectionHeight }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
-                {monthLabel(selectedMonth)} · {displayName}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>
+                  {range.label} · {displayName}
+                </div>
+                <DetailRangeControl mode={rangeMode} onChange={setRangeMode} />
               </div>
 
               {txnLoading && monthTxns.length === 0 ? <Spinner /> : monthTxns.length === 0 ? (
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginBottom: 8 }}>
+                    <CopyTransactionsButton rows={localMonthTxns} title={`${range.label} · ${displayName}`} tooltip="Copy the transactions shown" />
                     <Button variant="ghost" small onClick={bulk.toggle}>
                       {bulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
                     </Button>
@@ -322,8 +350,8 @@ export default function AccountDetail({ account, categories = [], onClose, force
                     borderBottomLeftRadius: 8,
                     borderBottomRightRadius: 8,
                   }}>
-                    {selectedMonthRow?.count ? `${selectedMonthRow.count} in totals · ` : ''}
-                    Total: {formatCurrency(selectedMonthRow?.total ?? localMonthTxns.reduce((s, t) => s + t.amount, 0))}
+                    {range.count ? `${range.count} in totals · ` : ''}
+                    Total: {formatCurrency(range.count ? range.total : localMonthTxns.reduce((s, t) => s + t.amount, 0))}
                     {/* The total (and the chart above) omit excluded-from-totals rows like transfers; the
                        rows stay listed and marked, so name the gap here rather than letting the count look wrong. */}
                     {localMonthTxns.some(t => t.excluded_from_totals)

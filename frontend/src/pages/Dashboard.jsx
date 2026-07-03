@@ -26,6 +26,7 @@ import { AppDialog, Button, Card, Input, PageHeader, Select, Spinner, EmptyState
 import { TagGlyph } from '../components/TagUi.jsx'
 import { format, subMonths } from 'date-fns'
 import TransactionListTable from '../components/TransactionListTable.jsx'
+import CopyTransactionsButton from '../components/CopyTransactionsButton.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import { useUserPreference, useDeferredPreference } from '../lib/UserPreferencesContext.jsx'
@@ -2591,7 +2592,8 @@ export default function Dashboard() {
                       <Card style={{ padding: 0, overflow: 'hidden' }}>
                         {txnData.length === 0 ? <EmptyState message="No transactions" /> : (
                           <>
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 12px 0' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, padding: '8px 12px 0' }}>
+                              <CopyTransactionsButton rows={txnData} title={selectedCat.category_name} tooltip="Copy the transactions shown" />
                               <Button variant="ghost" small onClick={selectedCatBulk.toggle}>
                                 {selectedCatBulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
                               </Button>
@@ -2739,7 +2741,8 @@ export default function Dashboard() {
                         Click a category above to filter
                       </span>
                     </span>
-                    <div style={{ marginLeft: 'auto' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
+                      <CopyTransactionsButton rows={groupTxnData} title={selectedGroup.group_name} tooltip="Copy the transactions shown" />
                       <Button variant="ghost" small onClick={selectedGroupBulk.toggle}>
                         {selectedGroupBulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
                       </Button>

@@ -52,6 +52,20 @@ export default function Help() {
   // The index and topic views share one persistent scroll container, so its scrollTop carries over
   // between them. Reset to the top whenever a topic is shown (and on topic→topic cross-links).
   const scrollRef = useRef(null)
+  // The sticky topic index overlaps the top of the scroll area, so section headings jumped to via the
+  // pills must clear it. Measure its live height (it changes as the pills rewrap on resize) and offset
+  // each section's scroll-margin by it, rather than guessing a fixed value.
+  const indexRef = useRef(null)
+  const [indexHeight, setIndexHeight] = useState(0)
+  useLayoutEffect(() => {
+    const el = indexRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const measure = () => setIndexHeight(el.offsetHeight)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [entry])
   useLayoutEffect(() => {
     if (entry && scrollRef.current) scrollRef.current.scrollTop = 0
   }, [entry, topic])
@@ -190,7 +204,19 @@ export default function Help() {
           edge) better than a viewport-clamped DOM tooltip would here. The look-and-feel mismatch is
           an accepted trade for that. See docs/ui-patterns.md on native vs. custom tooltips.
         */}
-        <div style={{ marginBottom: 22 }}>
+        {/* The index pins to the top of the scroll container so the section jump-nav stays reachable
+            while the topic cards scroll beneath it. It carries an opaque page-background fill and a
+            bottom divider so cards passing under it never show through. */}
+        <div ref={indexRef} style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 5,
+          background: 'var(--bg)',
+          marginBottom: 22,
+          paddingTop: 8,
+          paddingBottom: 12,
+          borderBottom: '1px solid var(--border)',
+        }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>
             Topic index
           </div>
@@ -219,7 +245,7 @@ export default function Help() {
           const topics = HELP_TOPICS.filter(t => t.section === section.key)
           if (!topics.length) return null
           return (
-            <div key={section.key} id={`help-section-${section.key}`} style={{ marginBottom: 28, scrollMarginTop: 16 }}>
+            <div key={section.key} id={`help-section-${section.key}`} style={{ marginBottom: 28, scrollMarginTop: indexHeight + 12 }}>
               <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, color: 'var(--text)', marginBottom: 10 }}>
                 {section.label}
               </div>

@@ -5,7 +5,7 @@
 // a `{ label, value, suffix, note }` row so the transaction detail panel's Origin block and the
 // merchant origin hover stay identical.
 
-import { getTxnMerchantOriginRows } from '../lib/importSourceFields.js'
+import { getTxnFileOriginRows } from '../lib/importSourceFields.js'
 
 const mutedStyle = { color: 'var(--muted)' }
 
@@ -31,10 +31,12 @@ export function OriginFieldList({ rows, gap = 6, fontSize = 12 }) {
 }
 
 // Hover-card content for a merchant label: the full visible merchant name (so a truncated cell still
-// reveals it) followed by the source text / file rows the visible name doesn't already convey.
+// reveals it) followed by the from-the-file origin rows — the same set the edit panel's "Show more"
+// reveals (raw text, source description/extras, source file, imported category, source account), so the
+// captured detail is readable on hover without opening the transaction. See getTxnFileOriginRows.
 export function MerchantOriginHoverCard({ txn, onPin = null }) {
   const merchant = txn.display_name || txn.merchant_name || txn.raw_name || '—'
-  const rows = getTxnMerchantOriginRows(txn)
+  const rows = getTxnFileOriginRows(txn)
   return (
     <div style={{ display: 'grid', gap: 6, maxWidth: 360 }}>
       <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 10 }}>

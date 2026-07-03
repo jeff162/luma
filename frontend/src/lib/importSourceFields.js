@@ -117,9 +117,11 @@ export function getTxnOriginRows(txn) {
   return rows
 }
 
-// The subset relevant to a merchant-name hover: the source free text the visible merchant doesn't
-// show, plus the originating file. The visible-merchant title is rendered separately by the hover,
-// and placeholder dashes (no raw text, not from an import) are dropped so the card stays meaningful.
+// The subset relevant to a rule's source text: the free text the visible merchant doesn't show, plus
+// the originating file. Used by the rule-building surfaces (the RuleForm source panel, the
+// matching-transactions report), which care about the text a rule matches on, not how a row was
+// categorized. The visible-merchant title is rendered separately, and placeholder dashes (no raw text,
+// not from an import) are dropped so the card stays meaningful.
 export function getTxnMerchantOriginRows(txn) {
   return getTxnOriginRows(txn).filter(row => {
     if (row.key === 'visible_merchant' || row.note) return false
@@ -129,8 +131,28 @@ export function getTxnMerchantOriginRows(txn) {
   })
 }
 
-// Whether a merchant hover card would carry anything beyond the visible name — used to decide whether
-// to attach the hover at all (a bare, untruncated, non-imported name needs no popover).
+// The from-the-file facts for the transaction-row merchant hover: every populated origin row EXCEPT the
+// visible-merchant title (the hover renders it as the heading) and the *derived* categorization
+// provenance — the "Categorized by" line and the cleared-category note, which describe how the row was
+// categorized rather than what the file carried and stay on the edit panel's Origin block. This is
+// deliberately broader than getTxnMerchantOriginRows: it also surfaces the imported category and source
+// account label, so the hover shows everything "Show more" does without a trip to the edit page.
+export function getTxnFileOriginRows(txn) {
+  return getTxnOriginRows(txn).filter(row => {
+    if (row.key === 'visible_merchant' || row.key === 'categorized_by' || row.note) return false
+    const value = String(row.value || '').trim()
+    return value && value !== '—' && !value.startsWith('—')
+  })
+}
+
+// Whether a row carries any rule-relevant source text/file detail (rule surfaces' has-check for the
+// getTxnMerchantOriginRows subset).
 export function hasMerchantOriginDetail(txn) {
   return getTxnMerchantOriginRows(txn).length > 0
+}
+
+// Whether a merchant hover card would carry any from-the-file detail beyond the visible name — used to
+// decide whether to attach the hover at all (a bare, untruncated, non-imported name needs no popover).
+export function hasFileOriginDetail(txn) {
+  return getTxnFileOriginRows(txn).length > 0
 }

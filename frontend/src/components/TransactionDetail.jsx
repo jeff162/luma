@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations, reconcileRowsAfterRuleApply } from '../lib/txnMutations.js'
-import { formatCurrency, monthLabel } from '../lib/utils.js'
+import { formatCurrency } from '../lib/utils.js'
 import { AppConfirmDialog, Button, Spinner } from './ui.jsx'
 import RuleActionModal from './RuleActionModal.jsx'
 import { CategoryCell, getTxnMerchantLabel } from './TransactionRow.jsx'
@@ -16,6 +16,7 @@ import NoteEditor from './NoteEditor.jsx'
 import RuleSuggestionToast from './RuleSuggestionToast.jsx'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransactionListTable from './TransactionListTable.jsx'
+import CopyTransactionsButton from './CopyTransactionsButton.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
 import { TagBadge } from './TagUi.jsx'
@@ -25,8 +26,12 @@ import {
   getDetailMonthSectionHeight,
   DetailPanelShell,
   DetailTrendChart,
+  DetailRangeControl,
+  computeDetailRange,
+  detailRangeStableKey,
+  detailRangeActiveMonth,
   useDetailPanelChrome,
-  usePagedMonthTransactions,
+  usePagedTransactions,
   usePanelReveal,
 } from './detailShared.jsx'
 
@@ -114,20 +119,27 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
   useEffect(() => {
     setDetailTxn(txn)
   }, [txn])
-  const loadMonthPage = useCallback((month, offset, limit) => (
-    api.getTransactions({
-      month,
-      payees: payee,
-      limit,
-      offset,
-    })
-  ), [payee])
+  // The transaction list defaults to the selected month but can widen to that bar's year or the whole
+  // charted span (DetailRangeControl). `range` derives the fetch window + count/total; `rangeKey` keeps
+  // the memo/fetch stable so re-clicking a bar inside the same window doesn't reload identical rows.
+  const [rangeMode, setRangeMode] = useState('month')
+  const rangeKey = detailRangeStableKey(rangeMode, selectedMonth)
+  const range = useMemo(
+    () => computeDetailRange(rangeMode, selectedMonth, trend),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rangeKey subsumes selectedMonth; recomputing on every anchor click would refetch identical rows in year/all-time mode
+    [rangeMode, rangeKey, trend],
+  )
+  const anchorReady = rangeMode === 'all' ? trend.length > 0 : !!selectedMonth
+  const activeKey = anchorReady ? `${payee}|${rangeMode}|${rangeKey}` : null
+  const loadPage = useCallback((offset, limit) => (
+    api.getTransactions({ ...range.params, payees: payee, limit, offset })
+  ), [range, payee])
   const {
     rows: monthTxns,
     setRows: setMonthTxns,
     loading: txnLoading,
     listRef,
-  } = usePagedMonthTransactions({ selectedMonth, loadPage: loadMonthPage })
+  } = usePagedTransactions({ activeKey, loadPage })
 
   useEffect(() => {
     // When the caller already has the tag list (e.g. a host that loaded it), use it and skip the fetch
@@ -250,16 +262,17 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
     onTagsChanged?.(detailTxn.id, result.tags || [])
   }
 
-  const selectedMonthRow = trend.find(r => r.month === selectedMonth)
-  const monthSectionHeight = getDetailMonthSectionHeight(trend)
-  // Bulk edit over the selected month's rows for this payee, matching the other activity reports.
-  // Scope is month + payee, so "select all matching" resolves the whole month server-side even when
-  // the list is paged.
+  // Reserve the full 7-row list height for the wider (year/all-time) ranges, whose lists scroll at
+  // DETAIL_LIST_MAX_HEIGHT regardless of any single month's count; month mode sizes to its busiest bar.
+  const monthSectionHeight = getDetailMonthSectionHeight(rangeMode === 'month' ? trend : [{ count: 999 }])
+  // Bulk edit over the current window's rows for this payee, matching the other activity reports. The
+  // filter mirrors the list fetch (window params + payee) so "select all matching" resolves the whole
+  // window server-side even when the list is paged; the count comes from the same trend sum.
   const bulk = useBulkTransactionEditing({
     rows: monthTxns,
     setRows: setMonthTxns,
-    total: selectedMonthRow?.count || monthTxns.length,
-    filterParams: { month: selectedMonth, payees: payee },
+    total: range.count || monthTxns.length,
+    filterParams: { ...range.params, payees: payee },
     categories: detailCategories,
   })
   const visibleTags = Array.isArray(detailTxn.tags) ? detailTxn.tags : []
@@ -304,14 +317,23 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
               cursor: 'pointer', fontSize: 13, padding: '2px 4px',
             }}
           >✎</button>
-          <button
-            onClick={() => setTrashConfirmOpen(true)}
-            title="Send transaction to trash"
-            style={{
-              background: 'none', border: 'none', color: 'var(--muted)',
-              cursor: 'pointer', fontSize: 13, padding: '2px 4px', marginLeft: 'auto',
-            }}
-          >🗑</button>
+          {/* Copy + trash target the single entry-point transaction, so they only belong in editor mode.
+              In the merchant-activity report there is no one "this transaction" (the entry row may not
+              even be in the visible window), so both would be ambiguous — the report offers a list-level
+              copy instead, and rows keep their own trash via the row menu and Bulk Edit. */}
+          {showEditorCard && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' }}>
+              <CopyTransactionsButton txn={detailTxn} title="Copy transaction" />
+              <button
+                onClick={() => setTrashConfirmOpen(true)}
+                title="Send transaction to trash"
+                style={{
+                  background: 'none', border: 'none', color: 'var(--muted)',
+                  cursor: 'pointer', fontSize: 13, padding: '2px 4px',
+                }}
+              >🗑</button>
+            </div>
+          )}
         </div>
       )}
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
@@ -497,20 +519,29 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
               No history found for this payee.
             </div>
           ) : (
-            <DetailTrendChart trend={trend} selectedMonth={selectedMonth} onSelectMonth={setSelectedMonth} />
+            <DetailTrendChart
+              trend={trend}
+              selectedMonth={selectedMonth}
+              onSelectMonth={setSelectedMonth}
+              isMonthActive={detailRangeActiveMonth(rangeMode, selectedMonth)}
+            />
           )}
 
-          {selectedMonth && (
+          {anchorReady && (
             <div style={{ marginTop: 24, height: monthSectionHeight }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
-                {monthLabel(selectedMonth)} · {payee}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>
+                  {range.label} · {payee}
+                </div>
+                <DetailRangeControl mode={rangeMode} onChange={setRangeMode} />
               </div>
 
               {txnLoading && monthTxns.length === 0 ? <Spinner /> : monthTxns.length === 0 ? (
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
               ) : (
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginBottom: 8 }}>
+                    <CopyTransactionsButton rows={monthTxns} title={`${range.label} · ${payee}`} tooltip="Copy the transactions shown" />
                     <Button variant="ghost" small onClick={bulk.toggle}>
                       {bulk.bulkMode ? '✕ Done' : 'Bulk Edit'}
                     </Button>
@@ -552,8 +583,8 @@ export default function TransactionDetail({ txn, categories, onClose, onTrashed,
                     borderBottomLeftRadius: 8,
                     borderBottomRightRadius: 8,
                   }}>
-                    {selectedMonthRow?.count ? `${selectedMonthRow.count} matching · ` : ''}
-                    Total: {formatCurrency(selectedMonthRow?.total ?? monthTxns.reduce((s, t) => s + t.amount, 0))}
+                    {range.count ? `${range.count} matching · ` : ''}
+                    Total: {formatCurrency(range.count ? range.total : monthTxns.reduce((s, t) => s + t.amount, 0))}
                   </div>
                 </div>
               )}
