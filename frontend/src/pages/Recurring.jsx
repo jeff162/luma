@@ -20,6 +20,7 @@ import {
 } from '../components/ui.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
+import { getTxnMerchantLabel } from '../components/TransactionRow.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { txnMutations } from '../lib/txnMutations.js'
@@ -371,9 +372,48 @@ function SeriesCard({ series, onAction, onOpenReport, onEditRule, active }) {
   )
 }
 
+// A collapsed list of transactions the user removed from this series (an 'excluded' override). It is the
+// durable counterpart to the removal toast: a mistake noticed later is recoverable here, each with an
+// "Add back" that clears the override so the row re-matches and rejoins on the next scan.
+function RemovedSection({ excluded, onAddBack }) {
+  const [open, setOpen] = useState(false)
+  if (!excluded || excluded.length === 0) return null
+  return (
+    <div style={{ flexShrink: 0, borderTop: '1px solid var(--border)', marginTop: 8, paddingTop: 8 }}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 12, fontWeight: 600, padding: '2px 0', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+      >
+        <span style={{ fontSize: 9 }}>{open ? '▾' : '▸'}</span>
+        {excluded.length} removed from this series
+      </button>
+      {open ? (
+        <div style={{ maxHeight: 168, overflowY: 'auto', marginTop: 6 }}>
+          {excluded.map(txn => (
+            <div key={txn.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '6px 2px', borderBottom: '1px solid color-mix(in srgb, var(--border) 60%, transparent)' }}>
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
+                {getTxnMerchantLabel(txn)}
+              </span>
+              <span style={{ color: 'var(--muted)', fontSize: 12, flexShrink: 0 }}>
+                {formatDate(txn.date)} · {formatCurrency(txn.amount)}
+              </span>
+              <button
+                onClick={() => onAddBack(txn)}
+                style={{ flexShrink: 0, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, fontWeight: 500, padding: '3px 10px' }}
+              >
+                Add back
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 // The drill-down uses the shared TransactionListTable (pill header, shared row cells + row menu), so it
 // looks and edits exactly like every other transaction list in the app rather than being a one-off.
-function ReportPanel({ series, rows, categories, loading, onClose, onCategorySave, onRowsChange, onOpenTxnDetail, onTrashed }) {
+function ReportPanel({ series, rows, excluded, categories, loading, onClose, onCategorySave, onRowsChange, onOpenTxnDetail, onTrashed, onAddBack }) {
   return (
     <div style={{
       flex: '0 0 46%', minHeight: 0, display: 'flex', flexDirection: 'column',
@@ -415,6 +455,7 @@ function ReportPanel({ series, rows, categories, loading, onClose, onCategorySav
             emptyMessage="No linked transactions. Run a scan to (re)link matches."
           />
         )}
+        <RemovedSection excluded={excluded} onAddBack={onAddBack} />
       </div>
     </div>
   )
@@ -672,10 +713,24 @@ export default function Recurring() {
     // different card switches to it. Members come from the shared transactions endpoint (full rows), so
     // the drill-down renders and edits exactly like every other transaction list.
     if (report && report.series.id === s.id) { setReport(null); return }
-    setReport({ series: s, rows: [], loading: true })
-    api.getTransactions({ recurring_series_id: s.id, limit: 500 })
-      .then(r => setReport(prev => (prev && prev.series.id === s.id ? { series: s, rows: r.transactions || [], loading: false } : prev)))
+    setReport({ series: s, rows: [], excluded: [], loading: true })
+    Promise.all([
+      api.getTransactions({ recurring_series_id: s.id, limit: 500 }),
+      api.getTransactions({ recurring_excluded_series_id: s.id, limit: 500 }),
+    ])
+      .then(([members, removed]) => setReport(prev => (prev && prev.series.id === s.id
+        ? { series: s, rows: members.transactions || [], excluded: removed.transactions || [], loading: false }
+        : prev)))
       .catch(() => setReport(prev => (prev && prev.series.id === s.id ? { ...prev, loading: false } : prev)))
+  }, [report])
+
+  // Undo a removal from inside the drill-down (the durable path for a mistake noticed after the toast is
+  // gone): clear the exclude override, then move the row from the removed list back into members in place.
+  const addBackToSeries = useCallback((txn) => {
+    setReport(prev => (prev
+      ? { ...prev, rows: [txn, ...prev.rows], excluded: (prev.excluded || []).filter(t => t.id !== txn.id) }
+      : prev))
+    api.setRecurringMembership(report?.series.id, txn.id, 'clear').catch(() => {})
   }, [report])
 
   // When the drill-down opens (or switches series) the list area shrinks, which can hide the card that
@@ -839,6 +894,7 @@ export default function Recurring() {
           <ReportPanel
             series={report.series}
             rows={report.rows}
+            excluded={report.excluded}
             categories={categories}
             loading={report.loading}
             onClose={() => setReport(null)}
@@ -846,6 +902,7 @@ export default function Recurring() {
             onRowsChange={setReportRows}
             onOpenTxnDetail={setPayeeDetail}
             onTrashed={txnId => setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))}
+            onAddBack={addBackToSeries}
           />
         )}
       </div>

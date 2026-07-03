@@ -570,6 +570,34 @@ class RecurringDetectionTests(unittest.TestCase):
         self.assertIsNotNone(series)
         self.assertEqual(series["source"], "rule")
 
+    def test_excluded_filter_returns_only_removed_rows(self):
+        # The drill-down's "N removed" list reads through this filter, so a removed row must be reachable
+        # to be added back.
+        self._add_series(payee="Netflix", category="Streaming", count=6, period_days=30, amount=15.99)
+        self._scan()
+        nf = next(s for s in self._series() if s["display_name"] == "Netflix")
+        victim = next(iter(self._members(nf["id"])))
+        from backend.routers.recurring import set_membership, MembershipOverride
+        from backend.routers.transactions import list_transactions
+        with self._use_db_path():
+            set_membership(nf["id"], MembershipOverride(transaction_id=victim, state="excluded"))
+            result = list_transactions(
+                month=None, date_start=None, date_end=None, import_batch_id=None,
+                sort_by="date", sort_dir="desc", account_id=None, account_ids=None,
+                source_account_ids=None, category_id=None, group_ids=None, category_ids=None,
+                tag_ids=None, owner_ids=None, payees=None, direction=None, view=None,
+                search=None, quick_filter=None, ids=None,
+                recurring_excluded_series_id=nf["id"],
+                needs_review=False, include_trashed=False, limit=200, offset=0,
+            )
+        self.assertEqual([r["id"] for r in result["transactions"]], [victim])
+        # The row also carries the excluded-series id/name, which is what lets its right-click menu offer a
+        # targeted "Restore to recurring series".
+        row = result["transactions"][0]
+        self.assertEqual(row["recurring_excluded_series_id"], nf["id"])
+        self.assertEqual(row["recurring_excluded_series_name"], "Netflix")
+        self.assertIsNone(row["recurring_series_id"])  # excluded → not a current member
+
     def test_delete_rule_removes_backed_series(self):
         self._add_txn(payee="Hulu", category="Streaming", amount=8.0, d=date.today().isoformat())
         rule_id = self._create_recurring_rule("hulu")

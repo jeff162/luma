@@ -561,6 +561,7 @@ def _build_transaction_filter(
     category_ids=None, tag_ids=None, owner_ids=None, payees=None,
     direction=None, view=None, search=None, quick_filter=None, ids=None,
     needs_review=None, include_trashed=False, recurring_series_id=None,
+    recurring_excluded_series_id=None,
 ):
     # Single source of truth for the transaction-list WHERE clause, shared by the list feed and the
     # bulk endpoint so "select all matching the current filter" resolves the exact set the user sees.
@@ -591,6 +592,13 @@ def _build_transaction_filter(
     if recurring_series_id and isinstance(recurring_series_id, str):
         clauses.append("t.recurring_series_id = ?")
         params.append(recurring_series_id)
+    # Rows the user explicitly removed from a series (an 'excluded' override) — for the "N removed" list
+    # in that series' drill-down, so a mistaken removal is recoverable there and not just via the toast.
+    if recurring_excluded_series_id and isinstance(recurring_excluded_series_id, str):
+        clauses.append(
+            "t.id IN (SELECT txn_id FROM recurring_membership_override WHERE series_id = ? AND state = 'excluded')"
+        )
+        params.append(recurring_excluded_series_id)
     # Explicit id set, used to re-fetch a specific group of rows by id (e.g. reconciling exactly the rows a
     # rule just recategorized back into an in-place list). Comma-separated to match the other multi filters;
     # the isinstance check mirrors the other multi-filters so a direct (non-HTTP) call with an unset Query
@@ -751,6 +759,7 @@ def list_transactions(
     quick_filter: Optional[str] = Query(None),
     ids:          Optional[str] = Query(None, description="comma-separated transaction IDs — re-fetch a specific set of rows"),
     recurring_series_id: Optional[str] = Query(None, description="Only rows linked to this recurring series (its members)."),
+    recurring_excluded_series_id: Optional[str] = Query(None, description="Only rows the user removed from this series (an 'excluded' override)."),
     needs_review: bool          = Query(False, description="Only rows still flagged as needing review (freshly imported/synced, not yet looked over)."),
     include_trashed: bool       = Query(False, description="Include rows in the trash. Off by default — the trash view sets this explicitly."),
     limit:        int           = Query(200, le=1000),
@@ -768,6 +777,7 @@ def list_transactions(
         category_ids=category_ids, tag_ids=tag_ids, owner_ids=owner_ids, payees=payees,
         direction=direction, view=view, search=search, quick_filter=quick_filter, ids=ids,
         needs_review=needs_review, include_trashed=include_trashed, recurring_series_id=recurring_series_id,
+        recurring_excluded_series_id=recurring_excluded_series_id,
     )
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
@@ -823,7 +833,12 @@ def list_transactions(
                 t.needs_review,
                 t.recurring_series_id,
                 rs.display_name AS recurring_series_name,
-                rs.rule_id      AS recurring_rule_id
+                rs.rule_id      AS recurring_rule_id,
+                -- The series (if any) this row was manually removed from, so the row menu can offer a
+                -- targeted "Restore to recurring series". Grouped subquery → one row per txn (no fan-out);
+                -- MIN picks a stable one in the rare multi-exclude case.
+                rex.series_id    AS recurring_excluded_series_id,
+                rxs.display_name AS recurring_excluded_series_name
             FROM   txn t
             JOIN   account  a ON a.id = t.account_id
             LEFT JOIN account  p ON p.id = a.parent_account_id
@@ -831,6 +846,11 @@ def list_transactions(
             LEFT JOIN category pc ON pc.id = c.parent_id
             LEFT JOIN import_batch b ON b.id = t.import_batch_id
             LEFT JOIN recurring_series rs ON rs.id = t.recurring_series_id
+            LEFT JOIN (
+                SELECT txn_id, MIN(series_id) AS series_id
+                FROM   recurring_membership_override WHERE state = 'excluded' GROUP BY txn_id
+            ) rex ON rex.txn_id = t.id
+            LEFT JOIN recurring_series rxs ON rxs.id = rex.series_id
             LEFT JOIN owner    o ON o.id = t.owner_id
             {where}
             ORDER BY {order_by}

@@ -147,7 +147,7 @@ export function useContextMenu() {
   return { menu, onContextMenu, close }
 }
 
-export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTags, onOpenRule, onMarkRecurring, onRemoveFromRecurring, onMarkReviewed, onTrash, ruleActionLabel = 'Rule…' }) {
+export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTags, onOpenRule, onMarkRecurring, onRemoveFromRecurring, onRestoreRecurring, onMarkReviewed, onTrash, ruleActionLabel = 'Rule…' }) {
   const ref = useRef(null)
   useDismissibleLayer({
     open: !!menu,
@@ -185,12 +185,16 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTag
     >
       {item('✎ Edit transaction…', () => onOpenDetail(menu.txn))}
       {item(ruleActionLabel, () => onOpenRule(menu.txn))}
-      {onMarkRecurring ? item(
-        menu.txn.recurring_series_id
-          ? (menu.txn.recurring_rule_id ? '↻ Edit recurring rule…' : '↻ View recurring series')
-          : '↻ Mark as recurring…',
-        () => onMarkRecurring(menu.txn),
-      ) : null}
+      {/* Recurring: a member edits/views its series; a row the user previously removed offers a targeted
+          restore back into that same series; otherwise "Mark as recurring…" (which starts a new one). */}
+      {onRestoreRecurring && !menu.txn.recurring_series_id && menu.txn.recurring_excluded_series_id
+        ? item('↻ Restore to recurring series', () => onRestoreRecurring(menu.txn))
+        : (onMarkRecurring ? item(
+          menu.txn.recurring_series_id
+            ? (menu.txn.recurring_rule_id ? '↻ Edit recurring rule…' : '↻ View recurring series')
+            : '↻ Mark as recurring…',
+          () => onMarkRecurring(menu.txn),
+        ) : null)}
       {onRemoveFromRecurring && menu.txn.recurring_series_id
         ? item('↻ Remove from recurring series', () => onRemoveFromRecurring(menu.txn))
         : null}

@@ -25,6 +25,7 @@ import { txnMutations } from './txnMutations.js'
 import { useContextMenu, ContextMenu, NotePopover, getTxnMerchantLabel } from '../components/TransactionRow.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import RuleActionModal from '../components/RuleActionModal.jsx'
+import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
 import { AppConfirmDialog } from '../components/ui.jsx'
 
 export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow, onRuleSaved } = {}) {
@@ -37,6 +38,8 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
   const [tagModalAllTags, setTagModalAllTags] = useState(null)
   const [contextRuleMatch, setContextRuleMatch] = useState({ txnId: null, loading: false, ruleId: null })
   const [ruleModalState, setRuleModalState] = useState(null)
+  // Pre-removal membership snapshot backing the "Removed from recurring series · Undo" toast.
+  const [recurringUndo, setRecurringUndo] = useState(null)
 
   // Look up whether an existing rule already matches the right-clicked transaction, so the menu can
   // offer "Open matching rule" instead of "Create rule". The menu only opens when the host attaches
@@ -146,12 +149,66 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
 
   async function removeFromRecurring(txn) {
     if (!txn?.recurring_series_id) return
+    // Snapshot the membership so the toast can restore it (the exclude override is what removal writes).
+    const snapshot = {
+      txnId: txn.id,
+      seriesId: txn.recurring_series_id,
+      seriesName: txn.recurring_series_name || null,
+      ruleId: txn.recurring_rule_id || null,
+    }
     try {
       await api.setRecurringMembership(txn.recurring_series_id, txn.id, 'excluded')
-      // The row lingers; clearing the membership fields drops its ↻ marker.
-      reconcileRow?.(txn.id, { recurring_series_id: null, recurring_series_name: null, recurring_rule_id: null })
+      // The row lingers; clear the membership fields (drops its ↻ marker) and record which series it was
+      // removed from, so its menu immediately offers "Restore to recurring series" (not just the toast).
+      reconcileRow?.(txn.id, {
+        recurring_series_id: null, recurring_series_name: null, recurring_rule_id: null,
+        recurring_excluded_series_id: txn.recurring_series_id,
+        recurring_excluded_series_name: txn.recurring_series_name || null,
+      })
+      setRecurringUndo(snapshot)
     } catch (err) {
       console.error('Failed to remove transaction from recurring series', err)
+    }
+  }
+
+  // Right-click restore of a row the user previously removed: clear the exclude on the series it was
+  // removed from (carried on the row as recurring_excluded_series_id) so it re-matches and rejoins.
+  async function restoreToRecurring(txn) {
+    const seriesId = txn?.recurring_excluded_series_id
+    if (!seriesId) return
+    closeMenu()
+    try {
+      await api.setRecurringMembership(seriesId, txn.id, 'clear')
+      reconcileRow?.(txn.id, {
+        recurring_series_id: seriesId,
+        recurring_series_name: txn.recurring_excluded_series_name || null,
+        // rule_id is unknown here; the ↻ marker still shows, and a refetch/scan fills the exact link.
+        recurring_rule_id: null,
+        recurring_excluded_series_id: null,
+        recurring_excluded_series_name: null,
+      })
+    } catch (err) {
+      console.error('Failed to restore transaction to recurring series', err)
+    }
+  }
+
+  // Undo a removal: clear the exclude override so the row re-matches and rejoins (link_series_members
+  // runs server-side), then restore its marker optimistically.
+  async function undoRemoveFromRecurring() {
+    const snap = recurringUndo
+    if (!snap) return
+    setRecurringUndo(null)
+    try {
+      await api.setRecurringMembership(snap.seriesId, snap.txnId, 'clear')
+      reconcileRow?.(snap.txnId, {
+        recurring_series_id: snap.seriesId,
+        recurring_series_name: snap.seriesName,
+        recurring_rule_id: snap.ruleId,
+        recurring_excluded_series_id: null,
+        recurring_excluded_series_name: null,
+      })
+    } catch (err) {
+      console.error('Failed to restore transaction to recurring series', err)
     }
   }
 
@@ -179,6 +236,10 @@ export function useTransactionRowActions({ onOpenDetail, reconcileRow, removeRow
     openRuleFromMenu,
     markRecurringFromMenu,
     removeFromRecurring,
+    restoreToRecurring,
+    recurringUndo,
+    setRecurringUndo,
+    undoRemoveFromRecurring,
     handleNoteSave,
     toggleTagFromModal,
     confirmTrash,
@@ -195,7 +256,8 @@ export function TransactionRowActionsChrome({ controller }) {
     noteTarget, tagTarget, pendingTrash,
     tagModalAllTags, setTagModalAllTags,
     ruleModalState, setRuleModalState,
-    ruleActionLabel, openRuleFromMenu, markRecurringFromMenu, removeFromRecurring,
+    ruleActionLabel, openRuleFromMenu, markRecurringFromMenu, removeFromRecurring, restoreToRecurring,
+    recurringUndo, setRecurringUndo, undoRemoveFromRecurring,
     handleNoteSave, toggleTagFromModal, confirmTrash, markReviewed,
     onRuleSaved,
   } = controller
@@ -214,6 +276,7 @@ export function TransactionRowActionsChrome({ controller }) {
           onOpenRule={openRuleFromMenu}
           onMarkRecurring={markRecurringFromMenu}
           onRemoveFromRecurring={txn => { removeFromRecurring(txn); closeMenu() }}
+          onRestoreRecurring={restoreToRecurring}
           ruleActionLabel={ruleActionLabel}
         />
       ) : null}
@@ -286,6 +349,16 @@ export function TransactionRowActionsChrome({ controller }) {
           state={ruleModalState}
           onClose={() => setRuleModalState(null)}
           onSaved={info => { setRuleModalState(null); onRuleSaved?.(info) }}
+        />
+      ) : null}
+      {recurringUndo ? (
+        <UndoToast
+          title="Removed from recurring series"
+          description={recurringUndo.seriesName
+            ? `“${recurringUndo.seriesName}” won't count this transaction. It stays out across future scans.`
+            : "This transaction won't count toward the series across future scans."}
+          onUndo={undoRemoveFromRecurring}
+          onDismiss={() => setRecurringUndo(null)}
         />
       ) : null}
     </>

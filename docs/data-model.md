@@ -374,7 +374,12 @@ Key invariants:
   either **confirms the series** (like edit/confirm) so an auto series isn't deleted and re-minted with a
   fresh id out from under the override. Stats derive from the effective (override-adjusted) set, so
   `occurrence_count` still equals the linked-row count. Surfaced as the row menu's "Remove from recurring
-  series" (`POST /recurring/{id}/membership`).
+  series" (`POST /recurring/{id}/membership`). A removal is recoverable three ways: an immediate **Undo**
+  toast (clears the override right away); the removed row's own right-click menu, which offers **Restore
+  to recurring series** because the transaction payload carries the `recurring_excluded_series_id`/name it
+  was removed from; and — to browse all of a series' removals — the series drill-down's **"N removed"**
+  list (rows read via the transactions filter `recurring_excluded_series_id`), each with an **Add back**.
+  All three resolve to `state='clear'`, after which the row re-matches and rejoins.
 
 - **Rule↔series lifecycle coupling.** For a `source='rule'` series the "recurring" checkbox lives on the
   rule, so the destructive series actions reconcile the two: **suppress** and **delete** clear the rule's
