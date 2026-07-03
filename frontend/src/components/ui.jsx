@@ -229,9 +229,10 @@ export function InsetPanel({ children, style, as: Tag = 'div', ...rest }) {
   )
 }
 
-export function FormLabel({ children, style }) {
+export function FormLabel({ children, style, ...rest }) {
   return (
     <label
+      {...rest}
       style={{
         fontSize: 11,
         color: 'var(--muted)',

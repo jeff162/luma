@@ -29,6 +29,8 @@ export default function ImportColumnMappingSection({
       tone = 'muted',
       placeholder = '',
       after = null,
+      inputId = '',
+      inputName = '',
     } = field
 
     const content = allHeaders.length > 0 ? (
@@ -43,14 +45,17 @@ export default function ImportColumnMappingSection({
         required={required}
         hint={hint}
         tone={tone}
+        triggerId={inputId}
       />
     ) : (
       <div>
-        <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
+        <label htmlFor={inputId || undefined} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
           {label}
           {required ? ' *' : ''}
         </label>
         <input
+          id={inputId || undefined}
+          name={inputName || undefined}
           value={value}
           onChange={event => onChange(event.target.value)}
           placeholder={placeholder}

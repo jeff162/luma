@@ -725,6 +725,7 @@ export default function Transactions() {
               value={quickFilter}
               onChange={setQuickFilter}
               placeholder="Quick filter…"
+              aria-label="Quick filter transactions"
               title="Quick filter matches date, merchant, category, account, or amount. Prefix with a field name to restrict the match, e.g. merchant:transfer."
               style={{ width: 180 }}
             />

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../lib/api.js'
 import { Badge, Button, CategoryMarker, SectionEyebrow, getFormControlStyle } from './ui.jsx'
@@ -59,6 +59,7 @@ function renderHighlightedCategoryName(name, query) {
 }
 
 function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSave, onCreateGroup, onCancel }) {
+  const fieldIdBase = useId()
   const [name, setName] = useState(defaultName)
   const [groupId, setGroupId] = useState(defaultGroupId ?? '')
   const [newGroupName, setNewGroupName] = useState('')
@@ -138,6 +139,9 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <TransientTextInput
                 ref={groupNameInputRef}
+                id={`${fieldIdBase}-new-group`}
+                name="category-picker-new-group-name"
+                aria-label="New group name"
                 value={newGroupName}
                 onChange={nextValue => {
                   if (error) setError('')
@@ -189,7 +193,13 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
             </div>
           </>
         ) : (
-          <select value={groupId} onChange={e => setGroupId(e.target.value)} style={{ ...getFormControlStyle({ size: 'sm', clickable: true }) }}>
+          <select
+            name="category-picker-group"
+            aria-label="Choose category group"
+            value={groupId}
+            onChange={e => setGroupId(e.target.value)}
+            style={{ ...getFormControlStyle({ size: 'sm', clickable: true }) }}
+          >
             <option value="">Group name...</option>
             {groups.map(g => <option key={g.id} value={g.id}>{g.category_type === 'income' ? 'Income' : 'Expense'} • {g.name}</option>)}
             <option value="__new_group__">New group...</option>
@@ -197,7 +207,13 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
         )
       ) : null}
       {mode === 'group' && (
-        <select value={categoryType} onChange={e => setCategoryType(e.target.value)} style={{ ...getFormControlStyle({ size: 'sm', clickable: true }) }}>
+        <select
+          name="category-picker-type"
+          aria-label="Choose category type"
+          value={categoryType}
+          onChange={e => setCategoryType(e.target.value)}
+          style={{ ...getFormControlStyle({ size: 'sm', clickable: true }) }}
+        >
           <option value="expense">Expense</option>
           <option value="income">Income</option>
         </select>
@@ -205,6 +221,9 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
       {!creatingNewGroup ? (
         <TransientTextInput
           ref={inputRef}
+          id={`${fieldIdBase}-name`}
+          name="category-picker-new-name"
+          aria-label={mode === 'group' ? 'New group name' : 'New category name'}
           value={name}
           onChange={nextValue => {
             if (error) setError('')
@@ -259,6 +278,7 @@ export default function CategoryPicker({
   // The dropdown is portaled to <body>; raise this above any modal it's used inside (AppDialog is 1200).
   panelZIndex = 1100,
 }) {
+  const pickerId = useId()
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(null)
   const [query, setQuery] = useState(initialQuery || '')
@@ -561,6 +581,9 @@ export default function CategoryPicker({
         {open ? (
           <input
             ref={inputRef}
+            id={`${pickerId}-search`}
+            name="category-picker-search"
+            aria-label="Search categories"
             value={query}
             onFocus={() => {
               if (!open) openPicker()

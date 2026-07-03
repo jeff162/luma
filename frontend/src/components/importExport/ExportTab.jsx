@@ -60,11 +60,21 @@ function ExportTabContent() {
       <Card>
         <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14 }}>Select columns to include:</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 16 }}>
-          {EXPORT_COLUMNS.map(col => (
-            <label key={col.key} style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer', fontSize: 13 }}>
-              <input type="checkbox" checked={selectedCols.has(col.key)} onChange={() => toggleCol(col.key)} />{col.label}
-            </label>
-          ))}
+          {EXPORT_COLUMNS.map(col => {
+            const inputId = `export-column-${col.key}`
+            return (
+              <label key={col.key} htmlFor={inputId} style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer', fontSize: 13 }}>
+                <input
+                  id={inputId}
+                  name={`export-column-${col.key}`}
+                  type="checkbox"
+                  checked={selectedCols.has(col.key)}
+                  onChange={() => toggleCol(col.key)}
+                />
+                {col.label}
+              </label>
+            )
+          })}
         </div>
         <div style={{ display: 'grid', gap: 8, justifyItems: 'start' }}>
           <Button onClick={downloadCsv} disabled={selectedCols.size === 0}>Generate File</Button>

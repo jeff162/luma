@@ -254,6 +254,8 @@ export function BackupRestoreTab() {
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <input
               type="file"
+              name="restore-data-backup-file"
+              aria-label="Choose data backup file to restore"
               accept=".json,.zip,application/json,application/zip"
               disabled={demoLoaded}
               title={demoLoaded ? demoRestoreMessage : undefined}
@@ -306,9 +308,17 @@ export function BackupRestoreTab() {
               )}
               {restoreInspection.encrypted && (
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <input type="file" onChange={e => setPrivateKeyFile(e.target.files[0])} style={{ fontSize: 13 }} />
+                  <input
+                    type="file"
+                    name="restore-private-key-file"
+                    aria-label="Choose private key file for encrypted backup"
+                    onChange={e => setPrivateKeyFile(e.target.files[0])}
+                    style={{ fontSize: 13 }}
+                  />
                   <input
                     type="password"
+                    name="restore-private-key-passphrase"
+                    aria-label="Private key passphrase"
                     value={privateKeyPassphrase}
                     onChange={e => setPrivateKeyPassphrase(e.target.value)}
                     placeholder="Private key passphrase (optional)"
@@ -340,7 +350,14 @@ export function BackupRestoreTab() {
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Restore Plaid credentials</div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            <input type="file" accept=".json,.zip,application/json,application/zip" onChange={e => setCredsFile(e.target.files[0])} style={{ fontSize: 13 }} />
+            <input
+              type="file"
+              name="restore-credentials-backup-file"
+              aria-label="Choose credentials backup file to restore"
+              accept=".json,.zip,application/json,application/zip"
+              onChange={e => setCredsFile(e.target.files[0])}
+              style={{ fontSize: 13 }}
+            />
             <Button variant="ghost" disabled={!credsFile || restoring} onClick={() => requestRestore('credentials')}>
               {restoring ? 'Restoring…' : 'Restore credentials'}
             </Button>

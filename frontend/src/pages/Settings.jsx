@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useId } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { APP_NAME, APP_VERSION } from '../lib/appConfig.js'
@@ -30,6 +30,7 @@ function clearBrowserStoredState() {
 }
 
 function UserAdminSection({ passwordPolicy }) {
+  const fieldIdBase = useId()
   const [viewer, setViewer] = useState(null)
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
@@ -199,20 +200,20 @@ function UserAdminSection({ passwordPolicy }) {
 
         <form onSubmit={handleCreate} style={{ padding: 16, borderBottom: '1px solid var(--border)', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 120px auto', gap: 10, alignItems: 'end' }}>
           <div>
-            <FormLabel style={{ marginBottom: 4 }}>Username</FormLabel>
-            <input value={form.username} onChange={e => setForm(prev => ({ ...prev, username: e.target.value }))} style={inputStyle} />
+            <FormLabel htmlFor={`${fieldIdBase}-create-username`} style={{ marginBottom: 4 }}>Username</FormLabel>
+            <input id={`${fieldIdBase}-create-username`} name="settings-create-user-username" value={form.username} onChange={e => setForm(prev => ({ ...prev, username: e.target.value }))} style={inputStyle} />
           </div>
           <div>
-            <FormLabel style={{ marginBottom: 4 }}>Display name</FormLabel>
-            <input value={form.display_name} onChange={e => setForm(prev => ({ ...prev, display_name: e.target.value }))} style={inputStyle} />
+            <FormLabel htmlFor={`${fieldIdBase}-create-display-name`} style={{ marginBottom: 4 }}>Display name</FormLabel>
+            <input id={`${fieldIdBase}-create-display-name`} name="settings-create-user-display-name" value={form.display_name} onChange={e => setForm(prev => ({ ...prev, display_name: e.target.value }))} style={inputStyle} />
           </div>
           <div>
-            <FormLabel style={{ marginBottom: 4 }}>Password</FormLabel>
-            <input type="password" value={form.password} onChange={e => setForm(prev => ({ ...prev, password: e.target.value }))} style={inputStyle} />
+            <FormLabel htmlFor={`${fieldIdBase}-create-password`} style={{ marginBottom: 4 }}>Password</FormLabel>
+            <input id={`${fieldIdBase}-create-password`} name="settings-create-user-password" type="password" value={form.password} onChange={e => setForm(prev => ({ ...prev, password: e.target.value }))} style={inputStyle} />
           </div>
           <div>
-            <FormLabel style={{ marginBottom: 4 }}>Role</FormLabel>
-            <select value={form.role} onChange={e => setForm(prev => ({ ...prev, role: e.target.value }))} style={{ ...inputStyle, cursor: 'pointer' }}>
+            <FormLabel htmlFor={`${fieldIdBase}-create-role`} style={{ marginBottom: 4 }}>Role</FormLabel>
+            <select id={`${fieldIdBase}-create-role`} name="settings-create-user-role" value={form.role} onChange={e => setForm(prev => ({ ...prev, role: e.target.value }))} style={{ ...inputStyle, cursor: 'pointer' }}>
               <option value="member">Member</option>
               <option value="admin">Admin</option>
             </select>
@@ -250,27 +251,27 @@ function UserAdminSection({ passwordPolicy }) {
             >
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 120px 120px', gap: 10 }}>
                 <div>
-                  <FormLabel style={{ marginBottom: 4 }}>Username</FormLabel>
-                  <input value={editForm.username} onChange={e => setEditForm(prev => ({ ...prev, username: e.target.value }))} style={inputStyle} />
+                  <FormLabel htmlFor={`${fieldIdBase}-edit-${user.id}-username`} style={{ marginBottom: 4 }}>Username</FormLabel>
+                  <input id={`${fieldIdBase}-edit-${user.id}-username`} name={`settings-edit-user-${user.id}-username`} value={editForm.username} onChange={e => setEditForm(prev => ({ ...prev, username: e.target.value }))} style={inputStyle} />
                 </div>
                 <div>
-                  <FormLabel style={{ marginBottom: 4 }}>Display name</FormLabel>
-                  <input value={editForm.display_name} onChange={e => setEditForm(prev => ({ ...prev, display_name: e.target.value }))} style={inputStyle} />
+                  <FormLabel htmlFor={`${fieldIdBase}-edit-${user.id}-display-name`} style={{ marginBottom: 4 }}>Display name</FormLabel>
+                  <input id={`${fieldIdBase}-edit-${user.id}-display-name`} name={`settings-edit-user-${user.id}-display-name`} value={editForm.display_name} onChange={e => setEditForm(prev => ({ ...prev, display_name: e.target.value }))} style={inputStyle} />
                 </div>
                 <div>
-                  <FormLabel style={{ marginBottom: 4 }}>New password</FormLabel>
-                  <input type="password" value={editForm.password} onChange={e => setEditForm(prev => ({ ...prev, password: e.target.value }))} placeholder="Leave blank to keep current" style={inputStyle} />
+                  <FormLabel htmlFor={`${fieldIdBase}-edit-${user.id}-password`} style={{ marginBottom: 4 }}>New password</FormLabel>
+                  <input id={`${fieldIdBase}-edit-${user.id}-password`} name={`settings-edit-user-${user.id}-password`} type="password" value={editForm.password} onChange={e => setEditForm(prev => ({ ...prev, password: e.target.value }))} placeholder="Leave blank to keep current" style={inputStyle} />
                 </div>
                 <div>
-                  <FormLabel style={{ marginBottom: 4 }}>Role</FormLabel>
-                  <select value={editForm.role} onChange={e => setEditForm(prev => ({ ...prev, role: e.target.value }))} style={{ ...inputStyle, cursor: 'pointer' }}>
+                  <FormLabel htmlFor={`${fieldIdBase}-edit-${user.id}-role`} style={{ marginBottom: 4 }}>Role</FormLabel>
+                  <select id={`${fieldIdBase}-edit-${user.id}-role`} name={`settings-edit-user-${user.id}-role`} value={editForm.role} onChange={e => setEditForm(prev => ({ ...prev, role: e.target.value }))} style={{ ...inputStyle, cursor: 'pointer' }}>
                     <option value="member">Member</option>
                     <option value="admin">Admin</option>
                   </select>
                 </div>
                 <div>
-                  <FormLabel style={{ marginBottom: 4 }}>Status</FormLabel>
-                  <select value={editForm.status} onChange={e => setEditForm(prev => ({ ...prev, status: e.target.value }))} style={{ ...inputStyle, cursor: 'pointer' }}>
+                  <FormLabel htmlFor={`${fieldIdBase}-edit-${user.id}-status`} style={{ marginBottom: 4 }}>Status</FormLabel>
+                  <select id={`${fieldIdBase}-edit-${user.id}-status`} name={`settings-edit-user-${user.id}-status`} value={editForm.status} onChange={e => setEditForm(prev => ({ ...prev, status: e.target.value }))} style={{ ...inputStyle, cursor: 'pointer' }}>
                     <option value="active">Active</option>
                     <option value="disabled">Disabled</option>
                   </select>
@@ -328,6 +329,7 @@ function UserAdminSection({ passwordPolicy }) {
 }
 
 function AccountSecuritySection() {
+  const fieldIdBase = useId()
   const [currentUser, setCurrentUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [setup, setSetup] = useState(null)
@@ -448,22 +450,25 @@ function AccountSecuritySection() {
             Add this secret to your authenticator app, then enter the current 6-digit code to confirm.
           </div>
           <div>
-            <FormLabel style={{ marginBottom: 4 }}>Manual setup key</FormLabel>
+            <div style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Manual setup key</div>
             <div style={{ fontFamily: 'monospace', fontSize: 14, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, wordBreak: 'break-all' }}>
               {setup.secret}
             </div>
           </div>
           <div>
-            <FormLabel style={{ marginBottom: 4 }}>Provisioning URI</FormLabel>
+            <div style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Provisioning URI</div>
             <div style={{ fontFamily: 'monospace', fontSize: 11, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, wordBreak: 'break-all' }}>
               {setup.otpauth_uri}
             </div>
           </div>
           <input
+            id={`${fieldIdBase}-setup-code`}
+            name="settings-2fa-setup-code"
             value={setupCode}
             onChange={e => setSetupCode(e.target.value)}
             placeholder="Enter 6-digit code"
             inputMode="numeric"
+            aria-label="Authenticator app setup code"
             style={inputStyle}
           />
           <div style={{ display: 'flex', gap: 8 }}>
@@ -484,10 +489,13 @@ function AccountSecuritySection() {
               Enter a current authenticator code to disable 2FA for this account.
             </div>
             <input
+              id={`${fieldIdBase}-disable-code`}
+              name="settings-2fa-disable-code"
               value={disableCode}
               onChange={e => setDisableCode(e.target.value)}
               placeholder="Enter 6-digit code"
               inputMode="numeric"
+              aria-label="Authenticator code to disable 2FA"
               style={inputStyle}
             />
             <div>
@@ -502,10 +510,13 @@ function AccountSecuritySection() {
               Regenerate your recovery codes. This invalidates the current set immediately.
             </div>
             <input
+              id={`${fieldIdBase}-regen-code`}
+              name="settings-2fa-regenerate-code"
               value={regenCode}
               onChange={e => setRegenCode(e.target.value)}
               placeholder="Enter current 6-digit code"
               inputMode="numeric"
+              aria-label="Authenticator code to regenerate recovery codes"
               style={inputStyle}
             />
             <div>
@@ -778,6 +789,7 @@ function StickySection({ title, description, actions, children, defaultCollapsed
 }
 
 function BackupRecipientsSection() {
+  const fieldIdBase = useId()
   const [recipients, setRecipients] = useState([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
@@ -886,9 +898,12 @@ function BackupRecipientsSection() {
         </div>
         <form onSubmit={handleCreate} style={{ display: 'grid', gap: 10, padding: 16, borderBottom: '1px solid var(--border)' }}>
           <input
+            id={`${fieldIdBase}-recipient-label`}
+            name="settings-backup-recipient-label"
             value={form.label}
             onChange={e => setForm(prev => ({ ...prev, label: e.target.value }))}
             placeholder="Recipient label (e.g. email)"
+            aria-label="Backup recipient label"
             style={inputStyle}
           />
           <input
@@ -924,11 +939,14 @@ function BackupRecipientsSection() {
             </div>
           ) : (
             <textarea
+              id={`${fieldIdBase}-recipient-public-key`}
+              name="settings-backup-recipient-public-key"
               value={form.public_key}
               onChange={e => setForm(prev => ({ ...prev, public_key: e.target.value }))}
               rows={5}
               onDragOver={e => e.preventDefault()}
               onDrop={handlePublicKeyDrop}
+              aria-label="Backup recipient public key"
               style={{
                 ...inputStyle,
                 minHeight: 120,
@@ -967,12 +985,12 @@ function BackupRecipientsSection() {
                     }
                   }}
                 />
-                <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'monospace', lineHeight: 1.2, wordBreak: 'break-all', minWidth: 0 }}>
+              <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'monospace', lineHeight: 1.2, wordBreak: 'break-all', minWidth: 0 }}>
                   {recipient.fingerprint}
                 </div>
               </div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>
-                <input type="checkbox" checked={!!recipient.enabled} onChange={() => toggleRecipient(recipient)} />
+                <input name={`settings-backup-recipient-enabled-${recipient.id}`} type="checkbox" checked={!!recipient.enabled} onChange={() => toggleRecipient(recipient)} />
                 Enabled
               </label>
               <button
@@ -1152,6 +1170,7 @@ function EditableTagName({ tag, onCommit }) {
 }
 
 function TransactionTagsSection() {
+  const fieldIdBase = useId()
   const [tags, setTags] = useState([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
@@ -1234,13 +1253,16 @@ function TransactionTagsSection() {
         </div>
         <form onSubmit={handleCreate} style={{ display: 'grid', gap: 12, padding: 16, borderBottom: '1px solid var(--border)' }}>
           <input
+            id={`${fieldIdBase}-tag-name`}
+            name="settings-new-tag-name"
             value={form.name}
             onChange={event => setForm(prev => ({ ...prev, name: event.target.value }))}
             placeholder="Tag name"
+            aria-label="Tag name"
             style={{ ...getFormControlStyle({ size: 'md', surface: 'base' }), width: '100%' }}
           />
           <div style={{ display: 'grid', gap: 8 }}>
-            <FormLabel>Color</FormLabel>
+            <div style={{ fontSize: 11, color: 'var(--muted)', display: 'block' }}>Color</div>
             <TagColorPalette
               value={form.color}
               onChange={color => setForm(prev => ({ ...prev, color }))}
@@ -1313,6 +1335,7 @@ function TransactionTagsSection() {
 }
 
 function EnvironmentSection({ authEnabled, currentUser }) {
+  const fieldIdBase = useId()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -1401,8 +1424,10 @@ function EnvironmentSection({ authEnabled, currentUser }) {
             <SectionEyebrow style={{ fontSize: 13, fontWeight: 600, textTransform: 'none', letterSpacing: '0.03em' }}>Plaid credentials</SectionEyebrow>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 160px', gap: 10 }}>
               <div>
-                <FormLabel style={{ marginBottom: 4 }}>Plaid client ID</FormLabel>
+                <FormLabel htmlFor={`${fieldIdBase}-plaid-client-id`} style={{ marginBottom: 4 }}>Plaid client ID</FormLabel>
                 <input
+                  id={`${fieldIdBase}-plaid-client-id`}
+                  name="settings-plaid-client-id"
                   value={settings.plaid_client_id}
                   onChange={e => setSettings(prev => ({ ...prev, plaid_client_id: e.target.value }))}
                   placeholder="Optional"
@@ -1410,8 +1435,10 @@ function EnvironmentSection({ authEnabled, currentUser }) {
                 />
               </div>
               <div>
-                <FormLabel style={{ marginBottom: 4 }}>Plaid secret</FormLabel>
+                <FormLabel htmlFor={`${fieldIdBase}-plaid-secret`} style={{ marginBottom: 4 }}>Plaid secret</FormLabel>
                 <input
+                  id={`${fieldIdBase}-plaid-secret`}
+                  name="settings-plaid-secret"
                   type="password"
                   value={settings.plaid_secret}
                   onChange={e => setSettings(prev => ({ ...prev, plaid_secret: e.target.value }))}
@@ -1420,8 +1447,10 @@ function EnvironmentSection({ authEnabled, currentUser }) {
                 />
               </div>
               <div>
-                <FormLabel style={{ marginBottom: 4 }}>Plaid environment</FormLabel>
+                <FormLabel htmlFor={`${fieldIdBase}-plaid-environment`} style={{ marginBottom: 4 }}>Plaid environment</FormLabel>
                 <select
+                  id={`${fieldIdBase}-plaid-environment`}
+                  name="settings-plaid-environment"
                   value={settings.plaid_env}
                   onChange={e => setSettings(prev => ({ ...prev, plaid_env: e.target.value }))}
                   style={{ ...inputStyle, cursor: 'pointer' }}
@@ -1438,6 +1467,7 @@ function EnvironmentSection({ authEnabled, currentUser }) {
             <SectionEyebrow style={{ fontSize: 13, fontWeight: 600, textTransform: 'none', letterSpacing: '0.03em' }}>Backend/Frontend console logging</SectionEyebrow>
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
               <input
+                name="settings-enable-log-files"
                 type="checkbox"
                 checked={settings.luma_use_log_files}
                 onChange={e => setSettings(prev => ({ ...prev, luma_use_log_files: e.target.checked }))}

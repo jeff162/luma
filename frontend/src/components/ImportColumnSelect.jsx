@@ -19,6 +19,7 @@ export default function ImportColumnSelect({
   required = false,
   hint = '',
   tone = 'muted',
+  triggerId = '',
 }) {
   const borderColor = required && !value ? 'var(--danger)' : 'var(--border)'
   const hintColor = tone === 'danger' ? 'var(--danger)' : 'var(--muted)'
@@ -110,15 +111,17 @@ export default function ImportColumnSelect({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>
+      <div id={triggerId ? `${triggerId}-label` : undefined} style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>
         {label}{required && <span style={{ color: 'var(--danger)' }}> *</span>}
-      </label>
+      </div>
       <div ref={wrapRef} style={{ position: 'relative' }}>
         <button
+          id={triggerId || undefined}
           type="button"
           onClick={() => setOpen(v => !v)}
           aria-haspopup="listbox"
           aria-expanded={open}
+          aria-labelledby={triggerId ? `${triggerId}-label` : undefined}
           style={triggerStyle}
         >
           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

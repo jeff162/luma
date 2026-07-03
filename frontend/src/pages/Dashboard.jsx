@@ -743,6 +743,7 @@ function TagReportBuilder({ availableTags, onClose, onDisplay, onSave }) {
             value={name}
             onChange={setName}
             placeholder="e.g. Essentials, Per-owner"
+            aria-label="Tag report name"
           />
         </AppDialog>
       )}
@@ -879,7 +880,7 @@ function RenameTagReportDialog({ initialName, onCancel, onSave }) {
         </>
       }
     >
-      <Input value={name} onChange={setName} placeholder="Report name" />
+      <Input value={name} onChange={setName} placeholder="Report name" aria-label="Tag report name" />
     </AppDialog>
   )
 }
@@ -2432,6 +2433,7 @@ export default function Dashboard() {
                               value={activeSpendingViewBy}
                               onChange={handleSpendingViewByChange}
                               options={spendingViewByOptions}
+                              aria-label={viewIsIncome ? 'Choose dashboard income breakdown' : 'Choose dashboard spending breakdown'}
                             />
                             <FeatureExplainer topic="dashboard-tag-reports" placement="bottom-left" />
                             {activeTagReport && activeTagReport.id !== '__transient__' && (

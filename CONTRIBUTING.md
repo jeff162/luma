@@ -79,9 +79,16 @@ Playwright is available for local UI verification from `frontend/`:
 ```bash
 cd frontend
 npm run ui:test
+npm run ui:test:a11y
+npm run ui:test:all
 npm run ui:test -- --headed
 npm run ui:codegen
 ```
+
+`npm run ui:test` is the routine UI regression lane and skips the opt-in
+browser accessibility audits. Run `npm run ui:test:a11y` when you want the
+focused form-label/id sweep, or `npm run ui:test:all` to run both lanes
+together.
 
 The Playwright config reads the frontend dev-server port from the repo-root
 `.env` via `FRONTEND_PORT`. If needed, `PLAYWRIGHT_BASE_URL` can override the

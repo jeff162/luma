@@ -404,23 +404,23 @@ function ProfileForm({
           <label htmlFor={`${fid}-name`} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
             Data source name *
           </label>
-          <input id={`${fid}-name`} value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Main Checking" style={inputStyle} />
+          <input id={`${fid}-name`} name="data-source-name" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Main Checking" style={inputStyle} />
         </div>
         <div>
           <label htmlFor={`${fid}-pattern`} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
             Filename pattern (auto-detect)
           </label>
-          <input id={`${fid}-pattern`} value={filePattern} onChange={e => setFilePattern(e.target.value)} placeholder="e.g. statement" style={inputStyle} />
+          <input id={`${fid}-pattern`} name="data-source-filename-pattern" value={filePattern} onChange={e => setFilePattern(e.target.value)} placeholder="e.g. statement" style={inputStyle} />
         </div>
         <div>
           <label htmlFor={`${fid}-header`} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
             Header fingerprint (auto-detect)
           </label>
-          <input id={`${fid}-header`} value={headerFp} onChange={e => setHeaderFp(e.target.value)} placeholder="Paste header row from CSV" style={inputStyle} />
+          <input id={`${fid}-header`} name="data-source-header-fingerprint" value={headerFp} onChange={e => setHeaderFp(e.target.value)} placeholder="Paste header row from CSV" style={inputStyle} />
         </div>
         <div>
           <label htmlFor={`${fid}-dateformat`} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Date format</label>
-          <select id={`${fid}-dateformat`} value={dateFormat} onChange={e => setDateFormat(e.target.value)} style={selStyle}>
+          <select id={`${fid}-dateformat`} name="data-source-date-format" value={dateFormat} onChange={e => setDateFormat(e.target.value)} style={selStyle}>
             {DATE_FORMATS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
           </select>
         </div>
@@ -429,7 +429,7 @@ function ProfileForm({
             Amount convention
             <FeatureExplainer topic="amount-conventions" placement="bottom-left" />
           </label>
-          <select id={`${fid}-amtconv`} value={amtConv} onChange={e => setAmtConv(e.target.value)} style={selStyle}>
+          <select id={`${fid}-amtconv`} name="data-source-amount-convention" value={amtConv} onChange={e => setAmtConv(e.target.value)} style={selStyle}>
             {AMOUNT_CONVENTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
           </select>
         </div>
@@ -456,6 +456,7 @@ function ProfileForm({
             required: true,
             hint: columnAnalysis.dateCandidates.length > 0 && !colDate ? formatLikelyMatchLabel(columnAnalysis.dateCandidates.length) : '',
             placeholder: 'e.g. Transaction Date',
+            inputId: `${fid}-mapping-date`,
           },
           amtConv === 'two_column'
             ? {
@@ -476,6 +477,7 @@ function ProfileForm({
                 required: true,
                 hint: columnAnalysis.debitCandidates.length > 0 && !colDebit ? formatLikelyMatchLabel(columnAnalysis.debitCandidates.length) : '',
                 placeholder: 'e.g. Debit',
+                inputId: `${fid}-mapping-debit`,
               }
             : {
                 key: 'amount',
@@ -495,6 +497,7 @@ function ProfileForm({
                 required: true,
                 hint: columnAnalysis.amountCandidates.length > 0 && !colAmount ? formatLikelyMatchLabel(columnAnalysis.amountCandidates.length) : '',
                 placeholder: 'e.g. Amount',
+                inputId: `${fid}-mapping-amount`,
               },
           {
             key: 'pending',
@@ -513,6 +516,7 @@ function ProfileForm({
             },
             hint: columnAnalysis.pendingCandidates.length > 0 && !colPending ? formatLikelyMatchLabel(columnAnalysis.pendingCandidates.length) : '',
             placeholder: 'e.g. Pending',
+            inputId: `${fid}-mapping-pending`,
           },
           amtConv === 'two_column'
             ? {
@@ -533,6 +537,7 @@ function ProfileForm({
                 required: true,
                 hint: columnAnalysis.creditCandidates.length > 0 && !colCredit ? formatLikelyMatchLabel(columnAnalysis.creditCandidates.length) : '',
                 placeholder: 'e.g. Credit',
+                inputId: `${fid}-mapping-credit`,
               }
             : null,
           amtConv === 'single_unsigned'
@@ -553,6 +558,7 @@ function ProfileForm({
                 },
                 hint: columnAnalysis.directionCandidates.length > 0 && !colDir ? formatLikelyMatchLabel(columnAnalysis.directionCandidates.length) : '',
                 placeholder: 'e.g. Type',
+                inputId: `${fid}-mapping-direction`,
               }
             : null,
           {
@@ -573,6 +579,7 @@ function ProfileForm({
             required: true,
             hint: columnAnalysis.merchantCandidates.length > 0 && !colDesc ? formatLikelyMatchLabel(columnAnalysis.merchantCandidates.length) : '',
             placeholder: 'e.g. Description',
+            inputId: `${fid}-mapping-description`,
           },
           {
             key: 'category',
@@ -591,6 +598,7 @@ function ProfileForm({
             },
             hint: columnAnalysis.categoryCandidates.length > 0 && !colCategory ? formatLikelyMatchLabel(columnAnalysis.categoryCandidates.length) : '',
             placeholder: 'e.g. Category',
+            inputId: `${fid}-mapping-category`,
           },
           {
             key: 'notes',
@@ -608,6 +616,8 @@ function ProfileForm({
               setColNotes(nextValue)
             },
             placeholder: 'optional',
+            inputId: `${fid}-mapping-notes`,
+            inputName: 'data-source-notes-column',
           },
         ]}
         accountField={{
@@ -642,11 +652,11 @@ function ProfileForm({
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-          <input type="checkbox" checked={applyCat} onChange={e => setApplyCat(e.target.checked)} />
+          <input name="profile-apply-categorization-rules" type="checkbox" checked={applyCat} onChange={e => setApplyCat(e.target.checked)} />
           Apply categorization rules by default
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-          <input type="checkbox" checked={useImportedCategories} onChange={e => setUseImportedCategories(e.target.checked)} />
+          <input name="profile-use-imported-categories" type="checkbox" checked={useImportedCategories} onChange={e => setUseImportedCategories(e.target.checked)} />
           Trusted imports from this data source can apply their existing categories, add missing categories under Unassigned, and suggest rules
         </label>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>

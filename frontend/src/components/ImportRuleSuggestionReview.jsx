@@ -1798,6 +1798,7 @@ export default function ImportRuleSuggestionReview({
           <input
             ref={merchantFilterInputRef}
             type="text"
+            name="rule-suggestions-merchant-filter"
             value={merchantFilterText}
             onChange={event => setMerchantFilterText(event.target.value)}
             onKeyDown={event => {
@@ -1817,6 +1818,7 @@ export default function ImportRuleSuggestionReview({
             }}
             disabled={bulkMode}
             placeholder="merchant name"
+            aria-label="Filter rule suggestions by merchant name"
             style={{
               width: '100%',
               background: 'none',

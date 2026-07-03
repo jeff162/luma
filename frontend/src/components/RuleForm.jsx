@@ -3,7 +3,7 @@
 
 /* eslint-disable react-refresh/only-export-components -- RuleForm + amountConditionSummary helper used to describe a rule's amount clause in the rules list */
 
-import { forwardRef, useCallback, useMemo, useState, useEffect, useImperativeHandle, useLayoutEffect, useRef } from 'react'
+import { forwardRef, useCallback, useMemo, useState, useEffect, useImperativeHandle, useLayoutEffect, useRef, useId } from 'react'
 import { api } from '../lib/api.js'
 import CategoryPicker from './CategoryPicker.jsx'
 import {
@@ -95,10 +95,12 @@ function getCategoryDisplayLabel(categories, categoryId) {
   return group?.name ? `${group.name}: ${selected.name}` : selected.name
 }
 
-function NumberInput({ value, onChange, placeholder, width = 88 }) {
+function NumberInput({ value, onChange, placeholder, width = 88, name = '', ariaLabel = '' }) {
   return (
     <input
       type="number" min="0" step="0.01"
+      name={name || undefined}
+      aria-label={ariaLabel || undefined}
       value={value ?? ''}
       onChange={e => onChange(e.target.value === '' ? null : parseFloat(e.target.value))}
       placeholder={placeholder}
@@ -110,9 +112,11 @@ function NumberInput({ value, onChange, placeholder, width = 88 }) {
   )
 }
 
-function OpSelect({ value, onChange, options }) {
+function OpSelect({ value, onChange, options, name = '', ariaLabel = '' }) {
   return (
     <select
+      name={name || undefined}
+      aria-label={ariaLabel || undefined}
       value={value}
       onChange={e => onChange(e.target.value)}
       style={{
@@ -183,7 +187,7 @@ function AmountCondition({ low, lowOp, high, highOp, side, onChange }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 12, color: 'var(--muted)', minWidth: 68 }}>Amount =</span>
           <span style={{ fontSize: 13, color: 'var(--muted)' }}>$</span>
-          <NumberInput value={low} onChange={setEquals} placeholder="0.00" />
+          <NumberInput value={low} onChange={setEquals} placeholder="0.00" name="rule-amount-equals" ariaLabel="Rule amount equals" />
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -191,9 +195,9 @@ function AmountCondition({ low, lowOp, high, highOp, side, onChange }) {
             <span style={{ fontSize: 12, color: 'var(--muted)', minWidth: 68 }}>
               {low != null ? 'Lower' : <span style={{ opacity: 0.5 }}>Lower</span>}
             </span>
-            <OpSelect value={lowOp ?? '>='} onChange={setLowOp} options={['>=', '>']} />
+            <OpSelect value={lowOp ?? '>='} onChange={setLowOp} options={['>=', '>']} name="rule-amount-lower-operator" ariaLabel="Rule lower amount operator" />
             <span style={{ fontSize: 13, color: 'var(--muted)' }}>$</span>
-            <NumberInput value={low} onChange={setLow} placeholder="no lower limit" width={110} />
+            <NumberInput value={low} onChange={setLow} placeholder="no lower limit" width={110} name="rule-amount-lower-bound" ariaLabel="Rule lower amount" />
             {low != null && (
               <button onClick={() => setLow(null)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px' }}>×</button>
             )}
@@ -203,9 +207,9 @@ function AmountCondition({ low, lowOp, high, highOp, side, onChange }) {
             <span style={{ fontSize: 12, color: 'var(--muted)', minWidth: 68 }}>
               {high != null ? 'Upper' : <span style={{ opacity: 0.5 }}>Upper</span>}
             </span>
-            <OpSelect value={highOp ?? '<='} onChange={setHighOp} options={['<=', '<']} />
+            <OpSelect value={highOp ?? '<='} onChange={setHighOp} options={['<=', '<']} name="rule-amount-upper-operator" ariaLabel="Rule upper amount operator" />
             <span style={{ fontSize: 13, color: 'var(--muted)' }}>$</span>
-            <NumberInput value={high} onChange={setHigh} placeholder="no upper limit" width={110} />
+            <NumberInput value={high} onChange={setHigh} placeholder="no upper limit" width={110} name="rule-amount-upper-bound" ariaLabel="Rule upper amount" />
             {high != null && (
               <button onClick={() => setHigh(null)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px' }}>×</button>
             )}
@@ -486,6 +490,7 @@ const RuleForm = forwardRef(function RuleForm({
   onTagCreated,
   mode = 'full',
 }, ref) {
+  const fieldIdBase = useId()
   const getTransactionAmountState = () => {
     if (!transactionData || transactionData.amount == null) return null
     const absAmount = Math.abs(transactionData.amount)
@@ -837,6 +842,9 @@ const RuleForm = forwardRef(function RuleForm({
             triggerRef={keywordConditionTriggerRef}
           >
             <input
+              id={`${fieldIdBase}-keyword`}
+              name="rule-keyword"
+              aria-label="Rule merchant keyword"
               autoFocus={kwOpen && !initialValues.keyword}
               value={keyword}
               onFocus={captureKeywordEditState}
@@ -854,6 +862,7 @@ const RuleForm = forwardRef(function RuleForm({
             <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 9, cursor: 'pointer' }}>
               <input
                 type="checkbox"
+                name="rule-match-source-text"
                 checked={matchSourceText}
                 onChange={e => setMatchSourceText(e.target.checked)}
                 style={{ marginTop: 2, accentColor: 'var(--accent)', cursor: 'pointer' }}
@@ -890,7 +899,7 @@ const RuleForm = forwardRef(function RuleForm({
               onActivate={() => setOwnOpen(true)}
               onClear={() => { setOwnerId(''); setOwnOpen(false) }}
             >
-              <select value={ownerId} onChange={e => setOwnerId(e.target.value)} style={{ width: '100%', ...getFormControlStyle({ size: 'md', clickable: true }) }}>
+              <select name="rule-owner" aria-label="Rule owner" value={ownerId} onChange={e => setOwnerId(e.target.value)} style={{ width: '100%', ...getFormControlStyle({ size: 'md', clickable: true }) }}>
                 <option value="">— Select owner —</option>
                 {owners.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
               </select>
@@ -906,7 +915,7 @@ const RuleForm = forwardRef(function RuleForm({
               onActivate={() => setAccOpen(true)}
               onClear={() => { setAccountId(''); setAccOpen(false) }}
             >
-              <select value={accountId} onChange={e => setAccountId(e.target.value)} style={{ width: '100%', ...getFormControlStyle({ size: 'md', clickable: true }) }}>
+              <select name="rule-account" aria-label="Rule account" value={accountId} onChange={e => setAccountId(e.target.value)} style={{ width: '100%', ...getFormControlStyle({ size: 'md', clickable: true }) }}>
                 <option value="">— Select account —</option>
                 {accounts.map(a => <option key={a.id} value={a.id}>{a.name}{a.mask ? ` ···${a.mask}` : ''}</option>)}
               </select>
@@ -946,6 +955,9 @@ const RuleForm = forwardRef(function RuleForm({
           >
             <input
               ref={renameInputRef}
+              id={`${fieldIdBase}-rename`}
+              name="rule-clean-merchant-name"
+              aria-label="Rename merchant to"
               value={cleanName}
               onFocus={captureRenameEditState}
               onChange={e => setCleanName(e.target.value)}
@@ -1011,6 +1023,7 @@ const RuleForm = forwardRef(function RuleForm({
             <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
               <input
                 type="checkbox"
+                name="rule-is-recurring"
                 checked={isRecurring}
                 onChange={e => setIsRecurring(e.target.checked)}
                 style={{ marginTop: 2, accentColor: 'var(--accent)', cursor: 'pointer' }}
@@ -1026,6 +1039,8 @@ const RuleForm = forwardRef(function RuleForm({
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 12 }}>
                 <span style={{ color: 'var(--muted)' }}>Recurs</span>
                 <select
+                  name="rule-recurring-cadence"
+                  aria-label="Recurring cadence"
                   value={cadence}
                   onChange={e => setCadence(e.target.value)}
                   style={{ ...getFormControlStyle({ size: 'md', clickable: true }) }}
@@ -1089,7 +1104,7 @@ const RuleForm = forwardRef(function RuleForm({
                 cursor: changeCount > 0 ? 'pointer' : 'default',
                 userSelect: 'none',
               }}>
-                <input type="checkbox" checked={applyToExisting} onChange={e => setApplyToExisting(e.target.checked)}
+                <input name="rule-apply-to-existing" type="checkbox" checked={applyToExisting} onChange={e => setApplyToExisting(e.target.checked)}
                   disabled={changeCount === 0}
                   style={{ width: 15, height: 15, accentColor: 'var(--accent)', cursor: changeCount > 0 ? 'pointer' : 'default' }} />
                 Apply this rule now to

@@ -3042,7 +3042,7 @@ function ImportTab() {
               }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
                   Date format
-                  <select value={dateFormat} onChange={e => { setDateFormatLocked(true); setDateFormat(e.target.value) }} style={{
+                  <select name="import-date-format" value={dateFormat} onChange={e => { setDateFormatLocked(true); setDateFormat(e.target.value) }} style={{
                     background: 'var(--surface)', color: 'var(--text)',
                     border: '1px solid var(--border)', borderRadius: 6,
                     padding: '3px 6px', fontSize: 12, cursor: 'pointer',
@@ -3052,7 +3052,7 @@ function ImportTab() {
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
                   Amount format
-                  <select value={amtConv} onChange={e => setAmtConv(e.target.value)} style={{
+                  <select name="import-amount-format" value={amtConv} onChange={e => setAmtConv(e.target.value)} style={{
                     background: 'var(--surface)', color: 'var(--text)',
                     border: '1px solid var(--border)', borderRadius: 6,
                     padding: '3px 6px', fontSize: 12, cursor: 'pointer',
@@ -3063,7 +3063,7 @@ function ImportTab() {
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
                   Skip
-                  <input type="number" min={0} max={10} value={displayedSkipRows}
+                  <input name="import-skip-header-rows" type="number" min={0} max={10} value={displayedSkipRows}
                     onChange={e => {
                       const next = parseInt(e.target.value) || 0
                       setSkipRows(Math.max(0, next - detectedHeaderOffset))
@@ -3514,6 +3514,7 @@ function ImportTab() {
                         <span style={{ fontSize: 11, color: 'var(--muted)' }}>—</span>
                       ) : (
                         <input
+                          name={`account-skip-${csvVal}`}
                           type="checkbox"
                           checked={!!m.skip}
                           onChange={e => update({ skip: e.target.checked })}
@@ -3559,7 +3560,7 @@ function ImportTab() {
 
           <div style={{ display: 'grid', gap: 8, width: IMPORT_CONFIG_MAX_WIDTH }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
-              <input type="checkbox" checked={applyCat} onChange={e => setApplyCat(e.target.checked)} />
+              <input name="apply-categorization-rules" type="checkbox" checked={applyCat} onChange={e => setApplyCat(e.target.checked)} />
               Apply categorization rules on import
             </label>
             <div style={{ display: 'grid', gap: 3 }}>
@@ -3579,6 +3580,7 @@ function ImportTab() {
                 title={colCategory ? '' : 'Choose a category column before categories present in the data can be used'}
               >
                 <input
+                  name="use-imported-categories"
                   type="checkbox"
                   checked={useImportedCategories && !!colCategory}
                   disabled={!colCategory}

@@ -488,6 +488,7 @@ function ManualAddDialog({ onClose, onCreated }) {
             value={term}
             onChange={setTerm}
             placeholder="Search by payee…"
+            aria-label="Search transactions by payee"
             style={{ width: '100%' }}
             autoFocus
           />

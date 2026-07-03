@@ -119,11 +119,23 @@ function DatePickerPopover({ onClose }) {
         <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', marginBottom: 6,
           textTransform: 'uppercase', letterSpacing: '0.05em' }}>Custom range</div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <input type="date" value={customStart} onChange={e => setCustomStart(e.target.value)}
-            style={{ flex: 1, minWidth: 0, ...inputStyle, padding: '5px 7px' }} />
+          <input
+            type="date"
+            name="filter-date-start"
+            aria-label="Filter start date"
+            value={customStart}
+            onChange={e => setCustomStart(e.target.value)}
+            style={{ flex: 1, minWidth: 0, ...inputStyle, padding: '5px 7px' }}
+          />
           <span style={{ color: 'var(--muted)', fontSize: 12 }}>→</span>
-          <input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)}
-            style={{ flex: 1, minWidth: 0, ...inputStyle, padding: '5px 7px' }} />
+          <input
+            type="date"
+            name="filter-date-end"
+            aria-label="Filter end date"
+            value={customEnd}
+            onChange={e => setCustomEnd(e.target.value)}
+            style={{ flex: 1, minWidth: 0, ...inputStyle, padding: '5px 7px' }}
+          />
           <button onClick={applyCustom} style={{
             background: 'var(--accent)', color: '#fff',
             border: 'none', borderRadius: 6, padding: '5px 11px', fontSize: 12, fontWeight: 500,
@@ -427,9 +439,11 @@ function FilterPopover({ onClose }) {
           <div style={{ padding: '8px 12px' }}>
             <input
               autoFocus
+              name="filter-payee-search"
               value={payeeSearch}
               onChange={e => setPayeeSearch(e.target.value)}
               placeholder="Search payee name…"
+              aria-label="Search payee name"
               style={{ ...inputStyle, width: '100%', marginBottom: 8 }}
             />
             {payeeSuggestions.map(s => (
