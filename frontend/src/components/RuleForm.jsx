@@ -23,6 +23,7 @@ import { formatDate } from '../lib/utils.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { OriginFieldList } from './OriginFields.jsx'
 import { getTxnMerchantOriginRows } from '../lib/importSourceFields.js'
+import FeatureExplainer from '../help/FeatureExplainer.jsx'
 
 const RULE_PREVIEW_COLUMNS_PREF_KEY = 'ui.rules.affectedTransactions.columns'
 
@@ -1004,9 +1005,12 @@ const RuleForm = forwardRef(function RuleForm({
               which is how a subscription/bill whose payee is spelled several ways gets tracked without
               renaming every variant. is_recurring counts as an action on its own. */}
           <div>
-            <SectionEyebrow style={{ letterSpacing: '0.03em', marginBottom: 6 }}>
-              Recurring Series
-            </SectionEyebrow>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+              <SectionEyebrow style={{ letterSpacing: '0.03em', marginBottom: 0 }}>
+                Recurring Series
+              </SectionEyebrow>
+              <FeatureExplainer topic="recurring-transactions" placement="bottom-left" />
+            </div>
             <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
               <input
                 type="checkbox"

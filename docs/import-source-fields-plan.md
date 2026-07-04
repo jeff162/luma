@@ -1,7 +1,7 @@
 # Import Source Fields — Surfacing & Reuse Plan
 
-> **Status: living plan / roadmap, not system-of-record.** This describes work that is partly
-> unbuilt. As phases land, fold the durable "what it is and why" into `data-model.md` /
+> **Status: living plan / roadmap, not system-of-record.** This describes work that is only partly
+> built. As phases land, fold the durable "what it is and why" into `data-model.md` /
 > `ui-patterns.md` and trim this file to the still-pending parts.
 
 ## Goal
@@ -75,7 +75,7 @@ first-class column **or** a path into the evidence object, plus capability flags
 **dynamic-aware**: the `extra_text_fields` bag expands into rows whose label is the file's own
 header, so source-specific columns (like "Original Statement") appear without being hardcoded.
 
-```
+```py
 field = {
   key,                 // stable id
   label,               // display label (for evidence extras, the file's header)

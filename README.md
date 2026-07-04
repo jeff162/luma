@@ -2,9 +2,9 @@
 
 > Your financial data, without the friction.
 
-Luma is a personal finance tool that helps you import your data, categorize it, and keep it organized with minimal friction.
+Luma is a personal finance tool that helps you collect your financial transaction data, categorize it, and keep it organized with minimal friction.
 
-Start with a CSV export or connect an account, clean up your categories, define rules for common transactions, and let Luma apply them as new data comes in.
+Start with a CSV export or connect an account, clean up the categories, define rules for common transactions, and review new transactions to verify they got categorized correctly.
 
 You stay in control — Luma makes it easy to review what changed, spot anything that looks off, and adjust when needed.
 
@@ -12,51 +12,53 @@ Less repetition. Fewer manual fixes. Clear, usable financial data.
 
 ## Why Luma?
 
-Most personal finance tools follow the same basic model: import data, categorize transactions, define rules, and review the results.
+Many personal finance tools follow the same basic model: import data, categorize transactions, define rules, and review the results.
 
-The difference is how much friction that introduces.
+The difference is how much friction they introduces.
 
 Luma is designed to reduce that friction:
 
 - Getting data in is quick and flexible (CSV or connected accounts)
 
-- Categorizing and fixing transactions happens directly where the data is
+- Categorizing and curating transactions happens directly where the data is
 
-- Rules are easy to create and adjust as you go
+- Rules are easy to create and adjust on the fly
 
-- Reviewing your data is straightforward — no digging through menus or workflows
+- Reviewing the data is straightforward — no digging through menus or workflows
 
-You still do the same core tasks — Luma just makes them easier to do and easier to maintain over time.
+The core tasks are the same -- Luma just makes them easier to do and easier to keep the data clean over time.
 
 ## What does Luma do?
 
-Luma helps you turn raw financial data into something organized and usable.
+Luma help turn raw financial data into something organized and usable.
 
-You can:
+The application can:
 
 - import transactions from CSV or connected accounts
 
-- categorize and organize your data across accounts and owners
+- categorize and organize data across accounts and owners
 
-- define rules to handle recurring transactions
+- spot recurring charges — subscriptions, bills, taxes — automatically
 
-- review and maintain your data as new transactions come in
+- review and maintain transaction data as new transaction data is added
 
 - analyze spending with dashboards and drill-down views
 
-All core functionality runs locally on your machine. External integrations are optional.
+All core functionality runs locally. External integrations are optional, Luma never makes an outgoing request unless explicitly requested (eg. fetch new data, save a backup).
 
 ## Getting started: what to expect
 
-The first time you open Luma you give yourself a name and then **bring in some data** — import a CSV export, connect a data source, or load the bundled demo dataset to explore. That first import is what brings the rest of the app to life; nothing else needs to be set up first.
+The first time Luma opens a local user needs to be created and the welcome menu offers several options to get started. Either load the demo data to explore the application or load your own data either from a csv or connect a data source. The first import is what brings the rest of the app to life; other than the user name, nothing needs to be configured before loading transaction data.
 
-Two things drive everything else: **reports** (mostly the dashboard) and **searching** your transaction history. Accounts, owners, categories, tags, and rules all exist to make those two better, and you can adopt each one when it earns a place in your reports:
+Two things drive everything else: **reports** (mostly the dashboard) and **searching** the transaction history. Accounts, owners, categories, tags, and rules all exist to make those two better, and they can be used or not depending on whether they are helpful:
 
 - **Categories** group transactions for reporting — start from a common starter set or build your own.
 
-- **Tags** are cross-cutting labels (e.g. *Essential Expenses*, *Kids*) that span accounts, owners, and categories, on income and expenses alike.
+- **Tags** are cross-cutting labels (e.g. *Essential Expenses*, *Kids*, *Personal Spending*) that span accounts, owners, and categories, for generating custom reports.
 
-- **Rules** apply categories and tags to new transactions automatically as they arrive — you approve them before they take effect, and they are easy to change later.
+- **Rules** have a set of matching criteria to select the set of transactions they apply to and a set of actions they take when they apply. The actions include setting the merchant name, assigning a category or a tag and indicating whether the transaction is part of a recurring series.
+
+- **Recurring** tries to detect transactions that repeat on a schedule — subscriptions, bills, taxes, paycheck. Rules can also indicate something is a recurring series if for some reason it was not detected automatically.
 
 The same overview is available any time inside the app under **Help → How Luma works**.
 
@@ -68,17 +70,15 @@ Luma is a good fit for people who:
 
 - are migrating from another tool or starting fresh
 
-- prefer tools that don’t require constant manual upkeep
-
 - want control over their data without sacrificing usability
 
 - track personal or household finances in one place
 
-It may not be ideal for:
+Luma does not:
 
-- fully managed cloud services
+- have any kind of support for budgeting
 
-- mobile-first apps with zero setup
+- Interact with investment accounts other than to fetch money movement transactions.
 
 ## Philosophy
 
@@ -86,29 +86,29 @@ Luma is built on a few core principles:
 
 - Financial tools should reduce effort, not create it
 
-- Categorization should improve over time, not repeat work
+- The curation process should improve over time,
 
-- Data should remain under user control
+- Data must remain under user control
 
 - Interfaces should support natural workflows
 
-- Users should be able to act directly where their data lives
+- Users should be able to correct data wherever they can see it
 
-- Changes should be reversible and rarely destructive
+- Changes should be reversible. They are only rarely destructive.
 
-- Overlapping data should be safe to import — duplicates are detected, not feared
+- Strong Duplicate detection across imports so adding data is not something to be feared and doesn't require any pre-planning.
 
 ## Privacy
 
-Luma is local-first by design, and your data stays with you:
+Luma is local-first by design, a the data stays locally:
 
-- **Your data lives on your machine** — everything is kept in a local SQLite database, not in the cloud.
+- **The data lives on your machine** — everything is kept in a local SQLite database.
 
-- **No tracking** — Luma has no analytics, telemetry, or "phone home," and doesn't report on how you use it.
+- **No tracking** — Luma has no analytics, telemetry, or "phone home," and doesn't report on how it is used.
 
-- **Connections happen only when you ask** — the app reaches the network only for actions you initiate, such as syncing transactions from a data source you've connected through Plaid. Connect nothing, and Luma makes no outbound connections at all.
+- **Connections happen only when the user asks** — the app reaches the network only for user driven actions, such as syncing transactions from a connected data source. The only other type of network connection Luma might make is to access a network drive to load a CSV file or write a backup, assuming that is what the user specified.
 
-- **Backups stay local** — exports are saved as files on your machine (optionally encrypted), never uploaded to a service.
+- **Backups stay local** — exports are saved wherever the user wishes and can be encrypted if desired with a user supplied key.
 
 You decide what comes in, what stays, and what leaves. Luma is built to organize your financial data, not to collect it.
 
@@ -122,7 +122,9 @@ Luma focuses on making common tasks easy and reducing the effort required to mai
 
 - **Categorize transactions:** assign categories and organize data across accounts and owners
 
-- **Define rules:** automatically apply categories to recurring transactions
+- **Define rules:** automatically apply categories, renames, and tags to matching transactions as they arrive
+
+- **Track recurring charges:** find subscriptions, bills, and taxes that repeat on a schedule, and declare one the detector misses with a rule
 
 - **Track and analyze:** view spending by category, compare periods, and drill into details
 
@@ -199,7 +201,7 @@ Windows Task Scheduler or run inside a Linux environment.
 ### Quick start
 
 ```bash
-git clone https://github.com/your-username/luma.git
+git clone https://github.com/jeff162/luma.git
 cd luma
 ```
 

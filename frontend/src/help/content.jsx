@@ -55,6 +55,11 @@ export const HELP_SECTIONS = [
     blurb: 'Two ways to organize transactions for reports -- a category tree and cross-cutting tags.',
   },
   {
+    key: 'recurring',
+    label: 'Recurring transactions',
+    blurb: 'Charges that repeat on a schedule -- what the scan finds on its own, and how to declare one it cannot see.',
+  },
+  {
     key: 'reports',
     label: 'Reports & search',
     blurb: 'Getting answers back out: dashboard breakdowns and searching the history.',
@@ -72,9 +77,9 @@ export const HELP_TOPICS = [
       <>
         <p>
           Two features sit at the center of {APP_NAME}: <strong>reports</strong> (mostly through the
-          dashboard) and <strong>searching</strong> the transaction history. All of the other features --
-          accounts, owners, categories, tags, and rules -- exist to make those two better, and
-          can be used or not as fits your use case.
+          dashboard) and <strong>searching</strong> the transaction history. Accounts, owners, categories,
+          tags, and rules all exist to make those two better, and they can be used or not depending on
+          whether they are helpful.
         </p>
         <p>
           A handful of deliberate design choices shape how {APP_NAME} behaves and how it is best
@@ -192,14 +197,17 @@ export const HELP_TOPICS = [
             </p>
           </li>
           <li>
-            <strong>Tags.</strong> Cross-cutting labels used to identify transactions belonging to some
-            interesting group across owner, account, and category --
-            think <em>Essential Expenses</em> or <em>Kids</em> -- and apply to income and expenses
-            alike. See <HelpLink to="/help/tags">how tags work</HelpLink>.
+            <strong>Tags.</strong> Tags are used to create spending reports that are not otherwise
+            available on the dashboard. These are labels used to identify transactions belonging to some
+            interesting group across owner, account, and category such
+            as <em>Essential Expenses</em> or <em>Kids</em>.
+            See <HelpLink to="/help/tags">how tags work</HelpLink>.
           </li>
           <li>
-            <strong>Rules.</strong> How categories and tags get applied to new transactions as they
-            arrive (and how merchant names get normalized). More on this below but if categories are
+            <strong>Rules.</strong> Rules have a set of matching criteria to select the set of
+            transactions they apply to and a set of actions they take when they apply. The
+            actions include setting the merchant name, assigning a category or a tag and indicating
+            whether the transaction is part of a recurring series. More on this below but if categories are
             important, this is how they are maintained on incoming data. A little bit of time up front
             spent building rules makes the review process of new transactions fairly quick and painless.
           </li>
@@ -211,7 +219,7 @@ export const HELP_TOPICS = [
         </ol>
         <h4>How rules come into being</h4>
         <p>
-          There are two main ways rules get created:
+          There are three main ways rules get created:
           <ol>
             <li>
               If data comes from another tool where the transactions have already been carefully categorized, indicate
@@ -226,6 +234,10 @@ export const HELP_TOPICS = [
               transactions, and save it. From then on it runs automatically against newly imported data
               (Categorizing imported data can be controlled when importing a file and there is
               a <em>run categorization</em> button to trigger a pass on demand).
+            </li>
+            <li>
+              When a transaction is marked as part of a recurring series the way that happens is through the
+              Rules editor so the Rules editor is launched filled out with whatever information is available.
             </li>
           </ol>
         </p>
@@ -317,8 +329,8 @@ export const HELP_TOPICS = [
           expense belongs to in a household, business vs personal, vacation buckets, and so on.
         </p>
         <p>
-          A tag can be attached at three levels, and a transaction’s <strong>effective
-            tags</strong> are the additive union of all three:
+          A tag can be attached at four levels, and a transaction’s <strong>effective
+            tags</strong> are the additive union of all four:
         </p>
         <ul>
           <li><strong>Direct (transaction-level)</strong> &mdash; added by a matching rule, or by
@@ -327,6 +339,10 @@ export const HELP_TOPICS = [
             to every transaction in that category.</li>
           <li><strong>Group-level</strong> &mdash; a tag attached to a category group propagates to
             every transaction in any of the group’s leaves.</li>
+          <li><strong>Account-level</strong> &mdash; a tag attached to an account (on the Accounts
+            page) propagates to every transaction in that account. For a merged account the top-level
+            account’s tags carry to its child accounts’ transactions, while a merged child’s own tags
+            stay dormant until it is detached.</li>
         </ul>
         <p>
           Pick the level that matches the intent. A tag like <em>Bills</em> probably belongs on a
@@ -338,8 +354,8 @@ export const HELP_TOPICS = [
           To hide an inherited tag on a single transaction, uncheck it in that transaction’s tag
           picker (the row’s tag popover or the transaction editor). It stays on every other
           transaction that inherits it, and a strike-through <em>hidden here</em> entry in the picker
-          re-checks to restore it. Removing the tag from the category or group instead drops it from
-          every transaction under that level.
+          re-checks to restore it. Removing the tag from the category, group, or account instead drops
+          it from every transaction under that level.
         </p>
         <p>
           See also: <HelpLink to="/help/categories-tags">Tagging categories and groups</HelpLink>{' '}
@@ -812,7 +828,7 @@ export const HELP_TOPICS = [
         <p>
           The flag is separate from whether a transaction is categorized. A rule-categorized transaction can
           still be worth a look. A reviewed transaction can be left uncategorized on purpose. So <strong>needs
-          review</strong> and <strong>uncategorized</strong> are two different filters.
+            review</strong> and <strong>uncategorized</strong> are two different filters.
         </p>
         <p>The flag clears two ways:</p>
         <ul>
@@ -831,7 +847,7 @@ export const HELP_TOPICS = [
         <p>
           A long historical import flags a lot of transactions at once, and reviewing all of it is usually not
           worth the trouble. Each imported file’s card on the Import / Export page shows a <strong>to
-          review</strong> count and a <strong>Mark all reviewed</strong> button that clears the whole file in
+            review</strong> count and a <strong>Mark all reviewed</strong> button that clears the whole file in
           one click. A data connection has no per-file card yet. Its transactions are cleared with
           the <strong>Needs review</strong> filter and a bulk <strong>Mark reviewed</strong> instead.
         </p>
@@ -932,6 +948,98 @@ export const HELP_TOPICS = [
         <p>
           See also:{' '}
           <HelpLink to="/help/parts-of-luma">how rules come into being</HelpLink>.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'recurring-transactions',
+    section: 'recurring',
+    title: 'Recurring transactions',
+    surfaces: ['Recurring', 'Rules (recurring series)', 'Transactions (row menu)'],
+    summary: 'A recurring series tracks a charge that repeats on a schedule. Many are found automatically by looking for similar looking transactions on a fixed schedule.Recurring transactions the scan misses can be identified by creating a Rule. Per-transaction overrides exist for the exceptions.',
+    body: () => (
+      <>
+        <p>
+          A <strong>recurring series</strong> is a transaction that repeats on a schedule -- a subscription, a
+          bill, a paycheck. {APP_NAME} keeps each one as its own record, so it can track the cadence,
+          the usual amount, and when the next occurrence is due.
+        </p>
+
+        <h4>Found automatically</h4>
+        <p>
+          A <strong>scan</strong> looks across recent history for transactions which arrive on a regular rhythm.
+          The signal is <em>regularity of timing</em>, not frequency. A punctual once-a-year tax is
+          recognized; a busy merchant paid at random is not. The scan runs on
+          its own after an import, and can be run on demand from the Recurring page.
+        </p>
+        <p>
+          Amount is a hint, not a gate. A utility bill that changes every month still qualifies, because
+          it arrives on a schedule. Charges are grouped by payee <em>and</em> category, so one biller
+          with several obligations -- a town charging property tax quarterly and water monthly -- becomes
+          individual series rather than one muddled one.
+        </p>
+        <p>
+          A newly found series is a <strong>suggestion</strong> for review. Confirm the ones that are correct; mark the
+          rest <em>not recurring</em> and they will not be proposed again.
+        </p>
+
+        <h4>When the scan cannot see it</h4>
+        <p>
+          The scan groups by the payee name on the statement. Sometimes merchant names come in with different
+          variations and the scan cannot determine that it is a single payee. While it is useful for reporting
+          to create rules that generate a single name for a payee, rules can also indicate that the
+          matching transactions for a series. Turn on this flag and every transaction the rule matches
+          becomes a member of one series. A rule matches by keyword -- with optional amount and scope -- so
+          it gathers all the spellings at once, and later charges attach themselves as they arrive. To
+          change which transactions belong, edit the rule. It is unusual but if all of the transactions
+          for a series cannot be captured by a single rule, having multiple rules to generate a single
+          merchant name will surface the series.
+        </p>
+        <p>
+          A one-off that does not warrant a rule can still be added by hand from the Recurring page.
+        </p>
+
+        <h4>Which transactions belong</h4>
+        <p>
+          Membership is <strong>recomputed on every scan</strong>: it is a cache of what currently matches,
+          not a hand-kept list. Two per-transaction corrections outlast that rebuild.
+        </p>
+        <ul>
+          <li>
+            <strong>Remove from the series</strong> -- for a charge the scan swept in by mistake. It stays
+            out across future scans. A removal is reversible: undo it from the prompt, from the removed
+            transaction’s own right-click menu (<em>Restore to recurring series</em>), or from
+            the <em>removed</em> list inside the series.
+          </li>
+          <li>
+            <strong>Add a transaction</strong> -- pins a specific charge into the series even if it would
+            not match on its own.
+          </li>
+        </ul>
+        <p>
+          A transaction carries a small ↻ marker while it belongs to a series, and its editor links through
+          to that series. Right-clicking a transaction offers <em>Mark as recurring</em>, <em>Remove</em>,
+          or <em>Restore</em>, whichever fits.
+        </p>
+
+        <h4>Ended is not the same as not recurring</h4>
+        <p>The two look alike and behave differently.</p>
+        <ul>
+          <li>
+            <strong>Ended</strong> is a real series that has stopped -- a canceled subscription. It is kept
+            as history and left out of what is coming up, but it is not blocked. If a matching charge turns
+            up again, the same series resumes instead of a duplicate being created.
+          </li>
+          <li>
+            <strong>Not recurring</strong> sets a mistaken detection aside for good. It will not be
+            suggested again.
+          </li>
+        </ul>
+        <p>
+          See also:{' '}
+          <HelpLink to="/help/parts-of-luma">how rules come into being</HelpLink> and{' '}
+          <HelpLink to="/help/re-categorizing">what changes a transaction’s category</HelpLink>.
         </p>
       </>
     ),

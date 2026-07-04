@@ -53,6 +53,16 @@ instruction and fix the drift rather than silently choosing the looser version.
   shape unless there is a clear reason to diverge. Do not use shared components as a workaround
   surface for a single page's problem.
 
+- When work spans several near-identical surfaces, build the shared piece first. Repeated
+  near-identical plan or todo steps ("wire X on A / B / C / D / E") are themselves the signal to
+  extract — a second hand-copy is a pause, a third is a stop. Do not paste the same block across
+  surfaces and leave a later consolidation pass to clean it up. Rejecting one specific sharing
+  approach does not settle whether it should be shared; reconsider a simpler extraction.
+
+- When adding a field to a shared callback or prop contract, thread it through every callsite for
+  one uniform shape, even if several are near-identical one-liners. Surface a partial rollout only
+  when finishing carries real risk or added complexity, not merely more edits.
+
 - Keep user-facing wording generic and impersonal. Avoid brand-specific flavor text unless the
   brand is the technical fact, and avoid pronoun-heavy help copy where a cleaner impersonal phrasing
   will do.
@@ -61,6 +71,14 @@ instruction and fix the drift rather than silently choosing the looser version.
 
 - Test by value, not by reflex. Invest in recurrence-prone bugs, invariants, contracts, and
   cross-component behavior; do not assume every local fix needs a dedicated test.
+
+- Derive a feature's test list from intent and the domain model, not only from the code as written —
+  code-only tests ratify the implementation and stay blind to a behavior that was never coded. Use
+  both sources: intent/spec for behavior completeness, code structure for the contracts a refactor
+  must not silently break. Where a dimension is enumerable, add a fail-on-omission guard.
+
+- To neutralize an optional/additive field in a test payload, drop it rather than reconstructing a
+  valid value — reconstructing couples the test to that field's internals for no benefit.
 
 - When a test is worth writing, make the fixture worthy of the claim. Round-trip, backup,
   serialization, and migration tests should use complete realistic data and include omission guards

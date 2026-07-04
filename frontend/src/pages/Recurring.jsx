@@ -21,6 +21,7 @@ import {
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import { getTxnMerchantLabel } from '../components/TransactionRow.jsx'
+import ContextualExplainer from '../help/ContextualExplainer.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { txnMutations, makeRowReconciler } from '../lib/txnMutations.js'
@@ -824,6 +825,9 @@ export default function Recurring() {
           {scanSummary
             ? `Scan complete — ${scanSummary.inserted} new, ${scanSummary.preserved} kept${scanSummary.resumed ? `, ${scanSummary.resumed} resumed` : ''}.`
             : 'Detects subscriptions, bills, and taxes that recur on a schedule. Confirm the ones that look right; mark the rest "not recurring."'}
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <ContextualExplainer topic="recurring-transactions" active={allSeries !== null} tipKey="recurring-intro" placement="bottom-left" />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>

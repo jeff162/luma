@@ -30,6 +30,11 @@ branch state from the injected snapshot.
 - `AGENTS.md` — conventions, commenting style, doc-consistency rules
 - `docs/collaboration-notes.md` — decision principles & agent working habits (get it right
   the first time; reuse shared components; reference implementations)
+- `docs/agent-profile.md` — distilled cross-session agent habits & operational footguns
+  (the shared replacement for private agent memory: collaboration defaults, investigation,
+  verification)
 - `docs/architecture.md` — structure, data flow, cross-subsystem contracts
 - `docs/data-model.md` — field semantics & invariants (what each field may and may not mean)
 - `docs/ui-patterns.md` — shared UI behavior & interaction models
+- `docs/shared-components.md` — the "what shared component do I use for X?" index; **consult before
+  building any UI element** (reuse is the default; a one-off needs justification)

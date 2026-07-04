@@ -12,6 +12,20 @@ than narrate obvious code.
 
 ---
 
+## Contents
+
+* [Core Principles](#core-principles)
+* [Two Levels of Comments](#two-levels-of-comments)
+* [Backend vs Frontend Guidance](#backend-vs-frontend-guidance)
+* [When to Add Comments](#when-to-add-comments)
+* [When NOT to Add Comments](#when-not-to-add-comments)
+* [Style Guidelines](#style-guidelines)
+* [Placement Rules](#placement-rules)
+* [Examples](#examples)
+* [Summary](#summary)
+
+---
+
 ## Core Principles
 
 * Comments explain **intent and design**, not implementation details
