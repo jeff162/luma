@@ -33,10 +33,18 @@ python -m venv venv
 venv\Scripts\activate    # Windows
 source venv/bin/activate # Unix-like shells
 pip install -r requirements.txt
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ```bash
+scripts\start_luma[.sh] #start the frontend and backend 
+  
+  
+  # - or start them individually with:
+#backend
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+#and
+
 # frontend
 cd frontend
 npm install

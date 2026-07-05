@@ -5,6 +5,8 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import {
   analyzeImportColumns,
+  computeEvidenceColumnOptions,
+  defaultEvidenceColumns,
   DEFAULT_IMPORT_DATE_FORMAT,
   formatLikelyMatchLabel,
   inferImportFileCharacteristicsFromPreview,
@@ -19,6 +21,7 @@ import {
 } from '../lib/appConfig.js'
 import { Card, Button, Spinner, getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground, OverlayBackdrop, FloatingPanel, AppNoticeDialog } from './ui.jsx'
 import ImportColumnMappingSection from './ImportColumnMappingSection.jsx'
+import ImportEvidenceColumnsSection from './ImportEvidenceColumnsSection.jsx'
 import TransientTextInput from './TransientTextInput.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 
@@ -108,6 +111,7 @@ function ProfileForm({
   const [amtConv, setAmtConv] = useState(profile?.amount_convention || 'single_signed')
   const [skipRows] = useState(profile?.skip_rows ?? 0)
   const [applyCat, setApplyCat] = useState(profile?.apply_categorization !== false)
+  const [enrichFromSource, setEnrichFromSource] = useState(!!profile?.enrich_from_source)
   const [useImportedCategories, setUseImportedCategories] = useState(
     profile?.use_imported_categories != null
       ? !!profile.use_imported_categories
@@ -128,6 +132,8 @@ function ProfileForm({
   const [colNotes, setColNotes] = useState(cm.notes || '')
   const [colPending, setColPending] = useState(cm.pending || '')
   const [colAccount, setColAccount] = useState(cm.account || '')
+  // Capture picks (headers), or null = derive the default set. Seeded from the saved profile.
+  const [evidenceColumns, setEvidenceColumns] = useState(Array.isArray(cm.evidence_columns) ? cm.evidence_columns : null)
   const [mappingSuggestions, setMappingSuggestions] = useState(getBlankSuggestedColumns())
   const [sampleFile, setSampleFile] = useState(null)
 
@@ -143,6 +149,19 @@ function ProfileForm({
     () => analyzeImportColumns(samplePreview, skipRowsValue),
     [samplePreview, skipRowsValue],
   )
+  const mappedHeaders = useMemo(
+    () => [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount].filter(Boolean),
+    [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount],
+  )
+  const evidenceColumnOptions = useMemo(
+    () => computeEvidenceColumnOptions(samplePreview, mappedHeaders, skipRowsValue),
+    [samplePreview, mappedHeaders, skipRowsValue],
+  )
+  const resolvedEvidenceColumns = useMemo(() => {
+    const optionHeaders = new Set(evidenceColumnOptions.map(option => option.header))
+    const base = evidenceColumns == null ? defaultEvidenceColumns(evidenceColumnOptions) : evidenceColumns
+    return base.filter(header => optionHeaders.has(header))
+  }, [evidenceColumns, evidenceColumnOptions])
   const canSave = !!(
     name.trim() &&
     colDate.trim() &&
@@ -256,6 +275,11 @@ function ProfileForm({
       ...(colCategory ? { category: colCategory } : {}),
       ...(colNotes ? { notes: colNotes } : {}),
       ...(colAccount ? { account: colAccount } : {}),
+      // With a sample loaded we can resolve the capture set; without one we can't recompute it, so
+      // carry the profile's saved picks forward rather than clobbering them with an empty (no-preview) set.
+      ...(samplePreview
+        ? { evidence_columns: resolvedEvidenceColumns }
+        : (Array.isArray(cm.evidence_columns) ? { evidence_columns: cm.evidence_columns } : {})),
       ...(existingImportedCategorySettings ? { imported_category_settings: existingImportedCategorySettings } : {}),
     }
     onSave(
@@ -269,6 +293,7 @@ function ProfileForm({
         date_format: dateFormat, amount_convention: amtConv,
         skip_rows: parseInt(skipRows) || 0,
         apply_categorization: applyCat,
+        enrich_from_source: enrichFromSource,
         use_imported_categories: useImportedCategories,
         notes: notes.trim() || null,
       },
@@ -304,10 +329,15 @@ function ProfileForm({
         background: floating ? getFloatingPanelHeaderBackground(true) : 'transparent',
         cursor: floating && onHeaderMouseDown ? headerCursor : 'default',
         userSelect: floating && onHeaderMouseDown ? 'none' : 'auto',
+        // Stick to the top of the scrolling panel so the title + close stay reachable when a loaded
+        // template grows the body past the viewport.
+        position: floating ? 'sticky' : undefined,
+        top: floating ? 0 : undefined,
+        zIndex: floating ? 3 : undefined,
       }}
         onMouseDown={floating ? onHeaderMouseDown : undefined}
       >
-        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--muted)' }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--muted)', flex: 1, minWidth: 0 }}>
           <div
             style={{
               display: 'flex',
@@ -319,6 +349,16 @@ function ProfileForm({
             {isNew ? 'Add new data source' : `Edit: ${profile.name}`}
           </div>
         </div>
+        {floating && onCancel ? (
+          <button
+            type="button"
+            aria-label="Close"
+            title="Close (same as Cancel)"
+            onMouseDown={e => e.stopPropagation()}
+            onClick={onCancel}
+            style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}
+          >×</button>
+        ) : null}
       </div>
 
       <div style={{
@@ -460,45 +500,45 @@ function ProfileForm({
           },
           amtConv === 'two_column'
             ? {
-                key: 'debit',
-                label: 'Debit column',
-                headers: columnAnalysis.debitCandidates,
-                allHeaders: sampleHeaders,
-                value: colDebit,
-                onChange: nextValue => {
-                  if (nextValue) clearMappingSuggestion('debit')
-                  setColDebit(nextValue)
-                },
-                suggestedValue: mappingSuggestions.debit,
-                onAcceptSuggestion: nextValue => {
-                  clearMappingSuggestion('debit')
-                  setColDebit(nextValue)
-                },
-                required: true,
-                hint: columnAnalysis.debitCandidates.length > 0 && !colDebit ? formatLikelyMatchLabel(columnAnalysis.debitCandidates.length) : '',
-                placeholder: 'e.g. Debit',
-                inputId: `${fid}-mapping-debit`,
-              }
-            : {
-                key: 'amount',
-                label: 'Amount column',
-                headers: columnAnalysis.amountCandidates,
-                allHeaders: sampleHeaders,
-                value: colAmount,
-                onChange: nextValue => {
-                  if (nextValue) clearMappingSuggestion('amount')
-                  setColAmount(nextValue)
-                },
-                suggestedValue: mappingSuggestions.amount,
-                onAcceptSuggestion: nextValue => {
-                  clearMappingSuggestion('amount')
-                  setColAmount(nextValue)
-                },
-                required: true,
-                hint: columnAnalysis.amountCandidates.length > 0 && !colAmount ? formatLikelyMatchLabel(columnAnalysis.amountCandidates.length) : '',
-                placeholder: 'e.g. Amount',
-                inputId: `${fid}-mapping-amount`,
+              key: 'debit',
+              label: 'Debit column',
+              headers: columnAnalysis.debitCandidates,
+              allHeaders: sampleHeaders,
+              value: colDebit,
+              onChange: nextValue => {
+                if (nextValue) clearMappingSuggestion('debit')
+                setColDebit(nextValue)
               },
+              suggestedValue: mappingSuggestions.debit,
+              onAcceptSuggestion: nextValue => {
+                clearMappingSuggestion('debit')
+                setColDebit(nextValue)
+              },
+              required: true,
+              hint: columnAnalysis.debitCandidates.length > 0 && !colDebit ? formatLikelyMatchLabel(columnAnalysis.debitCandidates.length) : '',
+              placeholder: 'e.g. Debit',
+              inputId: `${fid}-mapping-debit`,
+            }
+            : {
+              key: 'amount',
+              label: 'Amount column',
+              headers: columnAnalysis.amountCandidates,
+              allHeaders: sampleHeaders,
+              value: colAmount,
+              onChange: nextValue => {
+                if (nextValue) clearMappingSuggestion('amount')
+                setColAmount(nextValue)
+              },
+              suggestedValue: mappingSuggestions.amount,
+              onAcceptSuggestion: nextValue => {
+                clearMappingSuggestion('amount')
+                setColAmount(nextValue)
+              },
+              required: true,
+              hint: columnAnalysis.amountCandidates.length > 0 && !colAmount ? formatLikelyMatchLabel(columnAnalysis.amountCandidates.length) : '',
+              placeholder: 'e.g. Amount',
+              inputId: `${fid}-mapping-amount`,
+            },
           {
             key: 'pending',
             label: 'Pending column',
@@ -520,46 +560,46 @@ function ProfileForm({
           },
           amtConv === 'two_column'
             ? {
-                key: 'credit',
-                label: 'Credit column',
-                headers: columnAnalysis.creditCandidates,
-                allHeaders: sampleHeaders,
-                value: colCredit,
-                onChange: nextValue => {
-                  if (nextValue) clearMappingSuggestion('credit')
-                  setColCredit(nextValue)
-                },
-                suggestedValue: mappingSuggestions.credit,
-                onAcceptSuggestion: nextValue => {
-                  clearMappingSuggestion('credit')
-                  setColCredit(nextValue)
-                },
-                required: true,
-                hint: columnAnalysis.creditCandidates.length > 0 && !colCredit ? formatLikelyMatchLabel(columnAnalysis.creditCandidates.length) : '',
-                placeholder: 'e.g. Credit',
-                inputId: `${fid}-mapping-credit`,
-              }
+              key: 'credit',
+              label: 'Credit column',
+              headers: columnAnalysis.creditCandidates,
+              allHeaders: sampleHeaders,
+              value: colCredit,
+              onChange: nextValue => {
+                if (nextValue) clearMappingSuggestion('credit')
+                setColCredit(nextValue)
+              },
+              suggestedValue: mappingSuggestions.credit,
+              onAcceptSuggestion: nextValue => {
+                clearMappingSuggestion('credit')
+                setColCredit(nextValue)
+              },
+              required: true,
+              hint: columnAnalysis.creditCandidates.length > 0 && !colCredit ? formatLikelyMatchLabel(columnAnalysis.creditCandidates.length) : '',
+              placeholder: 'e.g. Credit',
+              inputId: `${fid}-mapping-credit`,
+            }
             : null,
           amtConv === 'single_unsigned'
             ? {
-                key: 'direction',
-                label: 'Direction column',
-                headers: columnAnalysis.directionCandidates,
-                allHeaders: sampleHeaders,
-                value: colDir,
-                onChange: nextValue => {
-                  if (nextValue) clearMappingSuggestion('direction')
-                  setColDir(nextValue)
-                },
-                suggestedValue: mappingSuggestions.direction,
-                onAcceptSuggestion: nextValue => {
-                  clearMappingSuggestion('direction')
-                  setColDir(nextValue)
-                },
-                hint: columnAnalysis.directionCandidates.length > 0 && !colDir ? formatLikelyMatchLabel(columnAnalysis.directionCandidates.length) : '',
-                placeholder: 'e.g. Type',
-                inputId: `${fid}-mapping-direction`,
-              }
+              key: 'direction',
+              label: 'Direction column',
+              headers: columnAnalysis.directionCandidates,
+              allHeaders: sampleHeaders,
+              value: colDir,
+              onChange: nextValue => {
+                if (nextValue) clearMappingSuggestion('direction')
+                setColDir(nextValue)
+              },
+              suggestedValue: mappingSuggestions.direction,
+              onAcceptSuggestion: nextValue => {
+                clearMappingSuggestion('direction')
+                setColDir(nextValue)
+              },
+              hint: columnAnalysis.directionCandidates.length > 0 && !colDir ? formatLikelyMatchLabel(columnAnalysis.directionCandidates.length) : '',
+              placeholder: 'e.g. Type',
+              inputId: `${fid}-mapping-direction`,
+            }
             : null,
           {
             key: 'description',
@@ -650,21 +690,56 @@ function ProfileForm({
         }}
       />
 
+      <ImportEvidenceColumnsSection
+        options={evidenceColumnOptions}
+        checked={resolvedEvidenceColumns}
+        onChange={setEvidenceColumns}
+      />
+
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
           <input name="profile-apply-categorization-rules" type="checkbox" checked={applyCat} onChange={e => setApplyCat(e.target.checked)} />
           Apply categorization rules by default
         </label>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+          <input name="profile-enrich-from-source" type="checkbox" checked={enrichFromSource} onChange={e => setEnrichFromSource(e.target.checked)} style={{ marginTop: 2 }} />
+          <span>
+            Enrich existing transactions from this source
+            <span style={{ display: 'block', fontSize: 11, color: 'var(--muted)' }}>
+              When an import matches a transaction already in your ledger, add any extra detail it carries (memos, item titles) to that transaction. Best for sources whose detail is richer than your other imports.
+            </span>
+          </span>
+        </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
           <input name="profile-use-imported-categories" type="checkbox" checked={useImportedCategories} onChange={e => setUseImportedCategories(e.target.checked)} />
-          Trusted imports from this data source can apply their existing categories, add missing categories under Unassigned, and suggest rules
+          <span>
+            Imports from this data source have been categorized
+            <span style={{ display: 'block', fontSize: 11, color: 'var(--muted)' }}>
+              Missing categories are added to the system and suggestions for rules are built from the categorization patterns.
+            </span>
+          </span>
         </label>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <Button small onClick={handleSave} disabled={!canSave}>
-            {isNew ? 'Create data source' : 'Save changes'}
-          </Button>
-          <Button small variant="ghost" onClick={onCancel}>Cancel</Button>
-        </div>
+      </div>
+
+      <div style={{
+        display: 'flex',
+        justifyContent: 'flex-end',
+        gap: 8,
+        // Stick to the bottom of the scrolling panel so Save/Cancel stay visible when a loaded template
+        // grows the body; bleeds to the panel edges to match the header.
+        position: floating ? 'sticky' : undefined,
+        bottom: floating ? 0 : undefined,
+        margin: floating ? '4px -18px -18px' : '4px 0 0',
+        padding: floating ? '12px 18px' : '10px 0 0',
+        borderTop: floating ? '1px solid color-mix(in srgb, var(--accent) 18%, var(--border))' : '1px solid var(--border)',
+        background: floating ? getFloatingPanelHeaderBackground(true) : 'transparent',
+        borderRadius: floating ? '0 0 18px 18px' : 0,
+        zIndex: floating ? 3 : undefined,
+      }}>
+        <Button small onClick={handleSave} disabled={!canSave}>
+          {isNew ? 'Create data source' : 'Save changes'}
+        </Button>
+        <Button small variant="ghost" onClick={onCancel}>Cancel</Button>
       </div>
     </div>
   )
@@ -714,7 +789,9 @@ export default function ImportProfilesManager({
     const desiredX = rect
       ? rect.left + Math.max(36, Math.round((rect.width - (size.width || ADD_PANEL_WIDTH)) / 2))
       : Math.round((window.innerWidth - (size.width || ADD_PANEL_WIDTH)) / 2)
-    const desiredY = Math.max(72, Math.round(window.innerHeight * 0.28))
+    // Open near the top so there's room to grow downward when a template file is loaded (the mapping +
+    // capture sections appear); the panel caps its height to the viewport and scrolls internally.
+    const desiredY = Math.max(48, Math.round(window.innerHeight * 0.07))
     return clampFormPanelPosition({ x: desiredX, y: desiredY }, size)
   }, [])
 
@@ -921,7 +998,9 @@ export default function ImportProfilesManager({
             onClick={event => event.stopPropagation()}
             style={{
               width: `min(${ADD_PANEL_WIDTH}px, calc(100vw - 96px))`,
-              maxHeight: 'calc(100vh - 72px)',
+              // Cap the height relative to where the panel actually sits, so growing after a template is
+              // loaded scrolls inside the panel instead of pushing the footer off the bottom of the screen.
+              maxHeight: `calc(100vh - ${(formPanelPos || getDefaultFormPanelPosition()).y}px - 24px)`,
               overflow: 'auto',
               position: 'fixed',
               left: (formPanelPos || getDefaultFormPanelPosition()).x,
@@ -974,12 +1053,12 @@ export default function ImportProfilesManager({
           {profiles.map(profile => (
             <div key={profile.id}>
               <div
-                  style={{
-                    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 170px 170px 100px',
-                    padding: '10px 16px', alignItems: 'center', fontSize: 13,
-                    borderBottom: '1px solid var(--border)',
-                  }}
-                >
+                style={{
+                  display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 170px 170px 100px',
+                  padding: '10px 16px', alignItems: 'center', fontSize: 13,
+                  borderBottom: '1px solid var(--border)',
+                }}
+              >
                 {(() => {
                   const stats = profileImportStats.get(profile.id) || { fileCount: 0, rowCount: 0, lastUsed: '' }
                   return (

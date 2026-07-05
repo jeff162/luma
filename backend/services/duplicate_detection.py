@@ -926,6 +926,14 @@ def account_skipped_duplicate_summary(conn: sqlite3.Connection, account_id: str)
     }
 
 
+def _safe_json_list(raw) -> list:
+    try:
+        value = json.loads(raw) if raw else []
+        return value if isinstance(value, list) else []
+    except (ValueError, TypeError):
+        return []
+
+
 def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> list[dict]:
     """Return the combined list of hard-reject and soft-flag dedupe entries for a single batch.
     Each entry has the same outer shape; `kind` distinguishes the two pools. Hard rejects carry
@@ -967,7 +975,8 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
     # Hard rejects (never made it into the ledger).
     for row in conn.execute(
         """
-        SELECT row_number, reason, values_json, matched_transaction_json, txn_payload_json, reviewed_at
+        SELECT row_number, reason, values_json, matched_transaction_json, txn_payload_json, reviewed_at,
+               enriched_at, enriched_delta_json
         FROM   import_batch_duplicate
         WHERE  batch_id = ?
         ORDER  BY row_number
@@ -1042,6 +1051,10 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             "reason_text": row["reason"] or "",
             "reviewed": reviewed,
             "review_substate": review_substate,
+            # Enrich-on-duplicate: whether this row's incoming detail was folded into its matched
+            # transaction, and what was added — so the report can show the state and offer undo.
+            "enriched": bool(row["enriched_at"]),
+            "enriched_detail": _safe_json_list(row["enriched_delta_json"]) if row["enriched_at"] else [],
             "incoming": {
                 "row_number": row["row_number"],
                 "date": txn_payload.get("date"),

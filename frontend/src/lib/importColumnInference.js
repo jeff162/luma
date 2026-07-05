@@ -190,6 +190,174 @@ export function formatLikelyMatchLabel(count) {
   return `${count} likely ${count === 1 ? 'match' : 'matches'}`
 }
 
+// Header keywords that mark a column as descriptive free text worth capturing into import evidence —
+// the visible, adjustable mirror of the backend IMPORT_EVIDENCE_HEADER_KEYWORDS zero-effort default.
+// Keep in sync with backend/routers/import_export/core.py.
+const IMPORT_EVIDENCE_HEADER_KEYWORDS = [
+  'original statement', 'statement', 'memo', 'details', 'detail', 'reference', 'ref', 'payee',
+  'merchant', 'description', 'note', 'narrative', 'particulars', 'remittance', 'comment', 'purpose',
+  'counterparty', 'beneficiary', 'originator',
+]
+
+export function headerMatchesEvidenceKeyword(header) {
+  const normalized = String(header || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!normalized) return false
+  return IMPORT_EVIDENCE_HEADER_KEYWORDS.some(keyword => normalized.includes(keyword))
+}
+
+// The shape we infer for an unmapped column, which drives its default capture state and the label the
+// user sees. Only free text is descriptive detail worth capturing by default; categorical vocabularies
+// (transaction type/status/currency) are offered but off by default — in practice they're low value and
+// noisy as suggestions. Number/date/time belong to mapping; identifiers and empties add no recognition
+// value. The descriptive-vs-categorical split still mirrors the backend cardinality classifier (which
+// uses it to gate the duplicate matcher), but the *default capture* decision is intentionally narrower.
+export const EVIDENCE_COLUMN_SHAPE = {
+  EMPTY: 'empty',
+  NUMBER: 'number',
+  DATE: 'date',
+  IDENTIFIER: 'identifier',
+  CATEGORICAL: 'categorical',
+  FREE_TEXT: 'free_text',
+}
+
+const EVIDENCE_CATEGORICAL_MAX_DISTINCT = 12
+const EVIDENCE_CATEGORICAL_MAX_DISTINCT_RATIO = 0.5
+const EVIDENCE_CATEGORICAL_MIN_REPEATS = 2
+const EVIDENCE_IDENTIFIER_MIN_DISTINCT_RATIO = 0.9
+// A categorical column is worth auto-suggesting only when its vocabulary actually classifies
+// transactions. A near-constant column (Currency = 1 value, Status/TimeZone = 2) carries almost no
+// per-row information; a real vocabulary (a PayPal "Type" with ~9 kinds) does. The distinct count is
+// the signal — 4+ distinct values is a genuine vocabulary, binary/ternary flags are not.
+const EVIDENCE_INFORMATIVE_CATEGORICAL_MIN_DISTINCT = 4
+
+function looksLikeCodeSample(value) {
+  const sample = String(value || '').trim()
+  if (!sample || /\s/.test(sample)) return false
+  return /\d/.test(sample) || (sample.length >= 10 && /^[A-Za-z0-9._-]+$/.test(sample))
+}
+
+function looksLikeTimeOfDaySample(value) {
+  return /^\d{1,2}:\d{2}(:\d{2})?(\.\d+)?\s*([AaPp][Mm])?$/.test(String(value || '').trim())
+}
+
+function looksLikeTemporalSample(value) {
+  return getDateCandidatesFromSample(value).length > 0 || looksLikeTimeOfDaySample(value)
+}
+
+/*
+ * Classify a column from whole-file cardinality stats: `nonemptyCount` (rows with a value),
+ * `distinctCount` (distinct values across the whole file), and `values` (a representative set of the
+ * actual value strings, for numeric/date/time/code sniffing). Preferring file-wide stats over a small
+ * row sample is what lets a *sparse* descriptive column (e.g. PayPal "Item Title", populated in a
+ * handful of rows) be recognized instead of read as empty.
+ */
+export function classifyEvidenceColumnShapeFromStats({ nonemptyCount = 0, distinctCount = 0, values = [] } = {}) {
+  const n = nonemptyCount
+  if (!n) return EVIDENCE_COLUMN_SHAPE.EMPTY
+  const d = Math.max(distinctCount, 1)
+  const sample = (values || []).map(value => String(value ?? '').trim()).filter(Boolean)
+  if (sample.length) {
+    if (sample.filter(looksLikeAmountSample).length / sample.length >= 0.7) return EVIDENCE_COLUMN_SHAPE.NUMBER
+    if (sample.filter(looksLikeTemporalSample).length / sample.length >= 0.7) return EVIDENCE_COLUMN_SHAPE.DATE
+  }
+  if (d <= EVIDENCE_CATEGORICAL_MAX_DISTINCT && (n - d) >= EVIDENCE_CATEGORICAL_MIN_REPEATS && (d / n) <= EVIDENCE_CATEGORICAL_MAX_DISTINCT_RATIO) {
+    return EVIDENCE_COLUMN_SHAPE.CATEGORICAL
+  }
+  if ((d / n) >= EVIDENCE_IDENTIFIER_MIN_DISTINCT_RATIO && sample.length && sample.filter(looksLikeCodeSample).length / sample.length >= 0.6) {
+    return EVIDENCE_COLUMN_SHAPE.IDENTIFIER
+  }
+  return EVIDENCE_COLUMN_SHAPE.FREE_TEXT
+}
+
+export function classifyEvidenceColumnShape(samples) {
+  const nonempty = (samples || []).map(value => String(value ?? '').trim()).filter(Boolean)
+  const distinct = new Set(nonempty.map(value => value.toLowerCase()))
+  return classifyEvidenceColumnShapeFromStats({ nonemptyCount: nonempty.length, distinctCount: distinct.size, values: nonempty })
+}
+
+// Whole-file cardinality for a column from the preview payload's per-column stats (computed over every
+// row server-side), or null when unavailable so the caller falls back to the row sample. `total_count`
+// is the true distinct count even when the displayed value list is capped.
+function evidenceColumnStatsFromPreview(preview, header) {
+  const counts = preview?.column_value_counts?.[header]
+  const meta = preview?.column_distinct_meta?.[header]
+  if (!counts || !meta) return null
+  const values = Object.keys(counts)
+  const nonemptyCount = Object.values(counts).reduce((sum, count) => sum + (Number(count) || 0), 0)
+  const distinctCount = Number.isFinite(meta.total_count) ? meta.total_count : values.length
+  // nonempty can only be under-counted if the value list was capped, and such a column is high-
+  // cardinality anyway; keep nonempty >= distinct so the ratios stay well-defined.
+  return { nonemptyCount: Math.max(nonemptyCount, distinctCount), distinctCount, values }
+}
+
+// Column cardinality from whichever source is best: the preview's whole-file stats (preferred, so a
+// sparse column isn't judged on the first 10 rows) or the row sample as a fallback.
+function evidenceColumnStats(preview, header, columnSamples) {
+  const fromPreview = evidenceColumnStatsFromPreview(preview, header)
+  if (fromPreview) return fromPreview
+  const nonempty = columnSamples[header] || []
+  const distinct = new Set(nonempty.map(value => value.toLowerCase()))
+  return { nonemptyCount: nonempty.length, distinctCount: distinct.size, values: nonempty }
+}
+
+// Capture-value rank for ordering the panel (lower = higher value = shown first). This is our value
+// judgment made explicit: descriptive free text first, then a real (informative) categorical vocabulary
+// or a keyword-headed column, then near-constant categoricals, identifiers, numbers, dates, and finally
+// empties. Columns of equal rank keep file order (the sort is stable).
+function evidenceOptionSortRank(option) {
+  if (option.shape === EVIDENCE_COLUMN_SHAPE.FREE_TEXT) return 0
+  if (option.keyword) return 1
+  if (option.shape === EVIDENCE_COLUMN_SHAPE.CATEGORICAL && option.distinctCount >= EVIDENCE_INFORMATIVE_CATEGORICAL_MIN_DISTINCT) return 1
+  if (option.shape === EVIDENCE_COLUMN_SHAPE.CATEGORICAL) return 2
+  if (option.shape === EVIDENCE_COLUMN_SHAPE.IDENTIFIER) return 3
+  if (option.shape === EVIDENCE_COLUMN_SHAPE.NUMBER) return 4
+  if (option.shape === EVIDENCE_COLUMN_SHAPE.DATE) return 5
+  return 6
+}
+
+/*
+ * The capture-panel options: every file column NOT already mapped to a transaction field, with its
+ * inferred shape, distinct-value count, whether its header is a descriptive keyword, and whether it is
+ * checked by default. Default = keyword-matched OR free text OR an *informative* categorical (a real
+ * vocabulary, distinct >= EVIDENCE_INFORMATIVE_CATEGORICAL_MIN_DISTINCT — e.g. a PayPal "Type") — the
+ * intelligent prefill that surfaces useful detail without a hard-coded keyword, while leaving low-value
+ * near-constant categoricals (Status/Currency/TimeZone), identifiers, and numbers offered-but-unchecked.
+ * Ordered highest capture value first (see evidenceOptionSortRank) so useful columns aren't buried.
+ * Classification prefers the preview's whole-file stats and falls back to the row sample. `mappedHeaders`
+ * is the set/array of headers consumed by the current column mapping.
+ */
+export function computeEvidenceColumnOptions(preview, mappedHeaders = [], skipRows = 0) {
+  if (!preview?.headers?.length) return []
+  const mapped = new Set(
+    (Array.isArray(mappedHeaders) ? mappedHeaders : [...mappedHeaders])
+      .map(header => String(header || '').trim())
+      .filter(Boolean),
+  )
+  const columnSamples = buildColumnSamples(preview, skipRows)
+  return preview.headers
+    .map(header => String(header || '').trim())
+    .filter(header => header && !mapped.has(header))
+    .map(header => {
+      const stats = evidenceColumnStats(preview, header, columnSamples)
+      const shape = classifyEvidenceColumnShapeFromStats(stats)
+      const keyword = headerMatchesEvidenceKeyword(header)
+      const informativeCategorical = shape === EVIDENCE_COLUMN_SHAPE.CATEGORICAL
+        && stats.distinctCount >= EVIDENCE_INFORMATIVE_CATEGORICAL_MIN_DISTINCT
+      return {
+        header,
+        shape,
+        keyword,
+        distinctCount: stats.distinctCount,
+        defaultChecked: keyword || shape === EVIDENCE_COLUMN_SHAPE.FREE_TEXT || informativeCategorical,
+      }
+    })
+    .sort((a, b) => evidenceOptionSortRank(a) - evidenceOptionSortRank(b))
+}
+
+export function defaultEvidenceColumns(options) {
+  return (options || []).filter(option => option.defaultChecked).map(option => option.header)
+}
+
 function buildColumnSamples(preview, skipRows = 0) {
   if (!preview?.headers?.length || !preview?.rows?.length) return {}
   const rows = preview.rows.slice(skipRows)

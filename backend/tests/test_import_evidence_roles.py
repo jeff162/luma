@@ -1,0 +1,221 @@
+"""
+Evidence-column roles: which unmapped columns get captured as import evidence, and how each is
+classified so the fuzzy duplicate text-matcher stays clean.
+
+A captured column is one of two shapes:
+  * descriptive free text (memos, item titles, counterparty names) — high cardinality; an exact/near
+    match between two rows is meaningful, so it may feed the duplicate text-matcher.
+  * categorical vocabulary (transaction type, status, currency) — a small repeated set; two unrelated
+    rows share the identical value, so it must NOT feed the matcher (it would manufacture duplicates),
+    though it still feeds the hover, rules, and enrich.
+
+The role is inferred from the column's cardinality across the file and stamped on each captured field;
+_collect_duplicate_match_texts consumes only descriptive fields. Columns are captured from the keyword
+auto-detect (capped) plus the user's explicit `evidence_columns` picks (honored over the cap).
+"""
+
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+import uuid
+from contextlib import contextmanager
+from pathlib import Path
+
+from backend.db.database import (
+    SHARED_OWNER_ID,
+    get_db,
+    init_db,
+    reset_current_db_path,
+    set_current_db_path,
+)
+from backend.routers.import_export import run_import
+from backend.routers.import_export.core import (
+    EVIDENCE_ROLE_CATEGORICAL,
+    EVIDENCE_ROLE_DESCRIPTIVE,
+    MAX_IMPORT_EVIDENCE_TEXT_FIELDS,
+    ColumnMap,
+    _build_evidence_column_plan,
+    _classify_evidence_column_role,
+    _collect_duplicate_match_texts,
+)
+
+
+class ClassifyEvidenceColumnRoleTests(unittest.TestCase):
+    def test_low_cardinality_repeated_column_is_categorical(self):
+        # PayPal "Type" shape: many rows, few heavily-repeated values.
+        values = (["Bank Deposit to PP Account"] * 13) + (["General Withdrawal"] * 13) + (["Mobile Payment"] * 32)
+        self.assertEqual(_classify_evidence_column_role(values), EVIDENCE_ROLE_CATEGORICAL)
+
+    def test_all_distinct_column_is_descriptive(self):
+        # PayPal "Item Title" shape: every populated value distinct.
+        values = [f"Order item {n}" for n in range(9)]
+        self.assertEqual(_classify_evidence_column_role(values), EVIDENCE_ROLE_DESCRIPTIVE)
+
+    def test_moderate_cardinality_column_is_descriptive(self):
+        # "Name" shape: 16 distinct across 28 nonempty — above the categorical distinct ceiling.
+        values = [f"Person {n}" for n in range(16)] + [f"Person {n}" for n in range(12)]
+        self.assertEqual(len(values), 28)
+        self.assertEqual(_classify_evidence_column_role(values), EVIDENCE_ROLE_DESCRIPTIVE)
+
+    def test_tiny_sample_defaults_to_descriptive(self):
+        # Two distinct in three rows barely repeats; too little signal to call it a vocabulary.
+        self.assertEqual(_classify_evidence_column_role(["A", "A", "B"]), EVIDENCE_ROLE_DESCRIPTIVE)
+
+    def test_empty_column_is_descriptive(self):
+        self.assertEqual(_classify_evidence_column_role(["", "", ""]), EVIDENCE_ROLE_DESCRIPTIVE)
+
+
+class BuildEvidenceColumnPlanTests(unittest.TestCase):
+    def _col(self, **kw):
+        base = {"date": "Date", "description": "Description", "amount": "Amount"}
+        base.update(kw)
+        return ColumnMap(**base)
+
+    def test_keyword_columns_auto_captured_when_no_explicit_list(self):
+        # evidence_columns is None (legacy/API path) -> zero-effort keyword auto-detect.
+        headers = ["Date", "Description", "Amount", "Memo", "Notes"]
+        rows = [{"Memo": "streaming", "Notes": "cancel soon"}]
+        plan = _build_evidence_column_plan(rows, headers, self._col())
+        self.assertEqual({h for h, _ in plan}, {"Memo", "Notes"})
+
+    def test_explicit_list_is_authoritative(self):
+        # An explicit list captures exactly its columns and nothing else — a keyword column left off
+        # the list (the user unchecked it) is not captured.
+        headers = ["Date", "Description", "Amount", "Memo", "Item Title"]
+        rows = [{"Memo": "streaming", "Item Title": "Pats tix"}]
+        plan = _build_evidence_column_plan(rows, headers, self._col(evidence_columns=["Item Title"]))
+        captured = {h for h, _ in plan}
+        self.assertEqual(captured, {"Item Title"})
+        self.assertNotIn("Memo", captured, "an unchecked keyword column must not sneak back in")
+
+    def test_empty_explicit_list_captures_nothing(self):
+        # The user unchecked everything -> capture nothing (distinct from None, which auto-detects).
+        headers = ["Date", "Description", "Amount", "Memo", "Notes"]
+        rows = [{"Memo": "x", "Notes": "y"}]
+        self.assertEqual(_build_evidence_column_plan(rows, headers, self._col(evidence_columns=[])), [])
+
+    def test_explicit_list_is_not_capped(self):
+        # Explicit picks are the user's resolved choice, so the keyword cap doesn't apply.
+        picks = ["Memo", "Notes", "Narrative", "Particulars", "Remittance", "Reference", "Payee"]
+        headers = ["Date", "Description", "Amount", *picks]
+        rows = [{h: f"val {h}" for h in picks}]
+        plan = _build_evidence_column_plan(rows, headers, self._col(evidence_columns=picks))
+        self.assertEqual(len(plan), len(picks))
+        self.assertGreater(len(plan), MAX_IMPORT_EVIDENCE_TEXT_FIELDS)
+
+    def test_reserved_headers_never_captured(self):
+        headers = ["Date", "Description", "Amount", "Notes"]
+        # Even if the user names a mapped column, it isn't duplicated into evidence.
+        plan = _build_evidence_column_plan([{"Notes": "x"}], headers, self._col(notes="Notes", evidence_columns=["Notes", "Amount"]))
+        self.assertEqual(plan, [])
+
+    def test_explicit_categorical_pick_gets_categorical_role(self):
+        headers = ["Date", "Description", "Amount", "Type"]
+        rows = [{"Type": v} for v in (["Deposit"] * 4 + ["Withdrawal"] * 4)]
+        plan = dict(_build_evidence_column_plan(rows, headers, self._col(evidence_columns=["Type"])))
+        self.assertEqual(plan.get("Type"), EVIDENCE_ROLE_CATEGORICAL)
+
+
+class CollectDuplicateMatchTextsTests(unittest.TestCase):
+    def test_categorical_field_excluded_descriptive_and_unmarked_included(self):
+        evidence = {
+            "description": {"header": "Name", "value": "Clinton Moon"},
+            "extra_text_fields": [
+                {"header": "Item Title", "value": "Pats tix"},                       # descriptive (unmarked)
+                {"header": "Memo", "value": "gift", "role": "descriptive"},           # explicit descriptive
+                {"header": "Type", "value": "Bank Deposit", "role": "categorical"},   # excluded
+            ],
+        }
+        texts = _collect_duplicate_match_texts(
+            merchant_name="Clinton Moon", display_name="Clinton Moon", raw_name=None, import_evidence=evidence
+        )
+        self.assertIn("Pats tix", texts)
+        self.assertIn("gift", texts)
+        self.assertNotIn("Bank Deposit", texts)
+
+
+class FakeUploadFile:
+    def __init__(self, filename, content):
+        self.filename = filename
+        self._content = content.encode("utf-8")
+
+    async def read(self):
+        return self._content
+
+
+class ExplicitCaptureEndToEndTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tempdir.name) / "evidence-roles.db"
+        init_db(str(self.db_path))
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    @contextmanager
+    def _use_db_path(self):
+        token = set_current_db_path(str(self.db_path))
+        try:
+            yield
+        finally:
+            reset_current_db_path(token)
+
+    def _insert_account(self, name):
+        account_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO account
+                      (id, plaid_account_id, plaid_item_id, name, display_name, type, subtype, mask, owner_id, parent_account_id, trashed_at)
+                    VALUES (?, ?, ?, ?, ?, 'checking', 'checking', '1234', ?, NULL, NULL)
+                    """,
+                    (account_id, f"test_{account_id}", "fixture_import", name, name, SHARED_OWNER_ID),
+                )
+        return account_id
+
+    async def _run_import(self, csv_text, account_map, evidence_columns=None):
+        column_map = {"date": "Date", "description": "Name", "account": "Account", "amount": "Amount"}
+        if evidence_columns is not None:
+            column_map["evidence_columns"] = evidence_columns
+        config = {
+            "filename": "fixture.csv",
+            "account_map": account_map,
+            "column_map": column_map,
+            "date_format": "%Y-%m-%d",
+            "amount_convention": "single_signed",
+            "apply_categorization": False,
+        }
+        with self._use_db_path():
+            return await run_import(file=FakeUploadFile("fixture.csv", csv_text), config=json.dumps(config))
+
+    def _all_evidence(self):
+        with self._use_db_path():
+            with get_db() as conn:
+                rows = conn.execute("SELECT import_evidence_json FROM txn").fetchall()
+        return [json.loads(r["import_evidence_json"]) for r in rows if r["import_evidence_json"]]
+
+    async def test_explicit_pick_captured_and_categorical_role_stamped(self):
+        account_id = self._insert_account("Checking")
+        # A descriptive "Item Title" (all distinct) and a categorical "Type" (repeated) are both picked.
+        lines = ["Date,Name,Account,Amount,Type,Item Title"]
+        for n in range(6):
+            kind = "Bank Deposit" if n % 2 == 0 else "General Withdrawal"
+            lines.append(f"2026-01-0{n + 1},Party {n},Checking,{10 + n}.00,{kind},Item {n}")
+        await self._run_import("\n".join(lines), {"Checking": account_id}, evidence_columns=["Type", "Item Title"])
+
+        evidences = self._all_evidence()
+        self.assertEqual(len(evidences), 6)
+        for evidence in evidences:
+            fields = {f["header"]: f for f in evidence.get("extra_text_fields", [])}
+            self.assertIn("Item Title", fields)
+            self.assertIn("Type", fields)
+            # Descriptive stays unmarked (lean shape); categorical is stamped so the matcher skips it.
+            self.assertNotIn("role", fields["Item Title"])
+            self.assertEqual(fields["Type"].get("role"), EVIDENCE_ROLE_CATEGORICAL)
+
+
+if __name__ == "__main__":
+    unittest.main()

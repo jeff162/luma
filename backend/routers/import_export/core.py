@@ -68,6 +68,7 @@ from backend.services.duplicate_detection import (
     promote_in_group_suspects_to_confirmed,
 )
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
+from backend.services.import_enrichment import enrich_duplicate_row, undo_duplicate_enrichment, reverse_batch_enrichments
 
 router = APIRouter()
 
@@ -155,6 +156,9 @@ class ColumnMap(BaseModel):
     category:     Optional[str] = None
     notes:        Optional[str] = None
     account:      Optional[str] = None
+    # Headers the user explicitly picked to capture into import evidence beyond the keyword auto-detect
+    # (e.g. PayPal "Item Title"). Honored over MAX_IMPORT_EVIDENCE_TEXT_FIELDS; each is role-classified.
+    evidence_columns: Optional[list[str]] = None
 
 class ImportRunRequest(BaseModel):
     profile_id:           Optional[str] = None
@@ -168,6 +172,7 @@ class ImportRunRequest(BaseModel):
     column_map:           ColumnMap
     skip_rows:            int = 0
     apply_categorization: bool = True
+    enrich_from_source:   bool = False
     replace_batch_id:     Optional[str] = None
     rows:                 list[dict]
 
@@ -368,6 +373,12 @@ class BatchDuplicateReviewRequest(BaseModel):
     reviewed: bool = True
 
 
+class BatchDuplicateEnrichRequest(BaseModel):
+    # Fold the incoming detail of these duplicate rows into the existing transaction each matched
+    # (enrich-on-duplicate), or undo that. Identified by CSV row_number within the batch.
+    row_numbers: list[int]
+
+
 def make_hash(date_str: str, amount: float, description: str) -> str:
     raw = f"{date_str.strip()}|{amount:.2f}|{description.strip().lower()}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
@@ -446,14 +457,8 @@ def _header_matches_import_evidence_keyword(header: str) -> bool:
     return any(keyword in normalized for keyword in IMPORT_EVIDENCE_HEADER_KEYWORDS)
 
 
-def _build_import_evidence(row: dict, headers: list[str], col: ColumnMap, csv_value: str, raw_desc: str) -> Optional[dict]:
-    evidence: dict[str, object] = {}
-    if col.account and csv_value:
-        evidence["account"] = {"header": col.account, "value": csv_value}
-    if col.description and raw_desc:
-        evidence["description"] = {"header": col.description, "value": raw_desc}
-
-    reserved_headers = {
+def _import_evidence_reserved_headers(col: ColumnMap) -> set[str]:
+    return {
         str(header or "").strip()
         for header in (
             col.date,
@@ -469,22 +474,103 @@ def _build_import_evidence(row: dict, headers: list[str], col: ColumnMap, csv_va
         )
         if str(header or "").strip()
     }
+
+
+# An extra evidence column is one of two shapes, and the fuzzy duplicate text-matcher must treat them
+# differently. A *descriptive* column (memos, item titles, counterparty names) is high-cardinality free
+# text — an exact/near match between two rows is meaningful, so it may feed the matcher. A *categorical*
+# column (transaction type, status, currency) draws from a small repeated vocabulary — two unrelated
+# rows routinely share the identical value, so feeding it to the matcher manufactures spurious
+# duplicates. We infer the role from the column's cardinality across the whole file and stamp it on each
+# captured field; _collect_duplicate_match_texts then consumes only descriptive fields. A field with no
+# role (legacy evidence pre-dating this, and every descriptive field, which we leave unstamped to keep
+# the stored shape lean) is treated as descriptive.
+EVIDENCE_ROLE_DESCRIPTIVE = "descriptive"
+EVIDENCE_ROLE_CATEGORICAL = "categorical"
+# Categorical = a bounded vocabulary: few distinct values in absolute terms, genuinely repeated, and
+# covering only a small fraction of the rows. Tiny samples never trip this (n - d stays below the
+# repeat floor), so they default to descriptive.
+CATEGORICAL_MAX_DISTINCT = 12
+CATEGORICAL_MAX_DISTINCT_RATIO = 0.5
+CATEGORICAL_MIN_REPEATS = 2
+
+
+def _classify_evidence_column_role(values: list[str]) -> str:
+    nonempty = [value for value in values if value]
+    distinct = {value.casefold() for value in nonempty}
+    n, d = len(nonempty), len(distinct)
+    if d and d <= CATEGORICAL_MAX_DISTINCT and (n - d) >= CATEGORICAL_MIN_REPEATS and (d / n) <= CATEGORICAL_MAX_DISTINCT_RATIO:
+        return EVIDENCE_ROLE_CATEGORICAL
+    return EVIDENCE_ROLE_DESCRIPTIVE
+
+
+def _build_evidence_column_plan(data_rows: list[dict], headers: list[str], col: ColumnMap) -> list[tuple[str, str]]:
+    """Decide which non-mapped columns to capture into import evidence and each one's role.
+
+    Role is inferred from the column's cardinality across the file so the duplicate text-matcher can
+    later ignore categorical columns. Reserved (mapped) headers never appear. Returns ordered
+    (header, role) pairs; the per-row builder walks this and pulls each row's value.
+
+    `col.evidence_columns` is authoritative when provided: the import UI seeds its capture checkboxes
+    from the keyword auto-detect, so the list it sends is the user's resolved choice (including any
+    keyword default they unchecked). We capture exactly those, uncapped — the user asked for them. When
+    it is None (a saved profile with no capture config, or an API caller), we fall back to the zero-
+    effort keyword auto-detect, capped so an unmapped file can't flood evidence.
+    """
+    reserved = _import_evidence_reserved_headers(col)
+
+    def column_role(header: str) -> str:
+        return _classify_evidence_column_role([str(row.get(header, "") or "").strip() for row in data_rows])
+
+    plan: list[tuple[str, str]] = []
+    used: set[str] = set()
+
+    if col.evidence_columns is not None:
+        explicit = set(_normalize_string_list(col.evidence_columns))
+        for header in headers:
+            name = str(header or "").strip()
+            if not name or name in reserved or name in used or name not in explicit:
+                continue
+            plan.append((name, column_role(name)))
+            used.add(name)
+        return plan
+
+    keyword_added = 0
+    for header in headers:
+        if keyword_added >= MAX_IMPORT_EVIDENCE_TEXT_FIELDS:
+            break
+        name = str(header or "").strip()
+        if not name or name in reserved or name in used or not _header_matches_import_evidence_keyword(name):
+            continue
+        plan.append((name, column_role(name)))
+        used.add(name)
+        keyword_added += 1
+    return plan
+
+
+def _build_import_evidence(row: dict, col: ColumnMap, csv_value: str, raw_desc: str, evidence_plan: list[tuple[str, str]]) -> Optional[dict]:
+    evidence: dict[str, object] = {}
+    if col.account and csv_value:
+        evidence["account"] = {"header": col.account, "value": csv_value}
+    if col.description and raw_desc:
+        evidence["description"] = {"header": col.description, "value": raw_desc}
+
     # Don't keep a second copy of text we already show: a column whose value equals the description
     # or the account label (e.g. a file carrying both "Merchant" and an unedited "Original Merchant")
     # is skipped, and extras dedupe against each other below.
     seen_values = {value.casefold() for value in (raw_desc, csv_value) if value}
     extra_text_fields: list[dict[str, str]] = []
-    for header in headers:
-        header_name = str(header or "").strip()
-        if not header_name or header_name in reserved_headers or not _header_matches_import_evidence_keyword(header_name):
-            continue
-        value = str(row.get(header_name, "") or "").strip()
+    for header, role in evidence_plan:
+        value = str(row.get(header, "") or "").strip()
         if not value or value.casefold() in seen_values:
             continue
-        extra_text_fields.append({"header": header_name, "value": value})
+        field: dict[str, str] = {"header": header, "value": value}
+        # Only categorical is stamped; descriptive stays unmarked (lean shape, and the matcher's
+        # default-descriptive read keeps legacy evidence behaving unchanged).
+        if role == EVIDENCE_ROLE_CATEGORICAL:
+            field["role"] = role
+        extra_text_fields.append(field)
         seen_values.add(value.casefold())
-        if len(extra_text_fields) >= MAX_IMPORT_EVIDENCE_TEXT_FIELDS:
-            break
     if extra_text_fields:
         evidence["extra_text_fields"] = extra_text_fields
     return evidence or None
@@ -545,7 +631,10 @@ def _collect_duplicate_match_texts(*, merchant_name: Optional[str], display_name
         if isinstance(description, dict):
             add_text(description.get("value"))
         for field in import_evidence.get("extra_text_fields") or []:
-            if isinstance(field, dict):
+            # Categorical fields (bounded vocabularies like transaction type/status) are excluded: two
+            # unrelated rows share the identical value, which would manufacture spurious text matches.
+            # Missing role == descriptive, so legacy evidence and every descriptive field still feed in.
+            if isinstance(field, dict) and str(field.get("role") or "").strip().lower() != EVIDENCE_ROLE_CATEGORICAL:
                 add_text(field.get("value"))
     return texts
 
@@ -743,8 +832,8 @@ def _insert_imported_transaction(conn, batch_id: str, payload: dict) -> str:
     conn.execute("""
         INSERT INTO txn
           (id, account_id, owner_id, category_id, amount, merchant_name,
-           display_name, raw_name, date, is_pending, content_hash, import_evidence_json, import_batch_id, imported_category, notes, category_overridden, category_source, needs_review)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+           display_name, raw_name, date, is_pending, content_hash, import_evidence_json, import_batch_id, imported_category, notes, category_overridden, category_source, display_name_source, needs_review)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
     """, (
         txn_id,
         payload.get("account_id"),
@@ -763,6 +852,7 @@ def _insert_imported_transaction(conn, batch_id: str, payload: dict) -> str:
         payload.get("notes"),
         int(payload.get("category_overridden") or 0),
         payload.get("category_source"),
+        payload.get("display_name_source") or "import",
     ))
     return txn_id
 
@@ -2761,11 +2851,13 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         category    = cm_dict.get("category"),
         notes       = cm_dict.get("notes"),
         account     = cm_dict.get("account"),
+        evidence_columns = cm_dict.get("evidence_columns"),
     )
 
     date_format       = cfg.get("date_format", "%m/%d/%Y")
     amount_convention = cfg.get("amount_convention", "single_signed")
     apply_cat         = bool(cfg.get("apply_categorization", True))
+    enrich_from_source = bool(cfg.get("enrich_from_source", False))
     use_imported_categories = bool(cfg.get("use_imported_categories", False))
     imported_category_settings = _get_imported_category_settings(cfg)
     account_id        = cfg.get("account_id") or None
@@ -3198,6 +3290,9 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                     terminal_day_candidates_by_scope_day.setdefault((scope_id, row["date"]), []).append(candidate)
 
         if replace_batch_id:
+            # Reverse any enrichments the batch being replaced applied to existing rows before its
+            # duplicate records (which hold the deltas) are superseded.
+            reverse_batch_enrichments(conn, replace_batch_id)
             conn.execute("DELETE FROM txn WHERE import_batch_id = ?", (replace_batch_id,))
             conn.execute("UPDATE import_batch SET status = 'undone' WHERE id = ?", (replace_batch_id,))
 
@@ -3217,6 +3312,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             "amount_convention":   amount_convention,
             "skip_rows":           skip_rows,
             "apply_categorization":apply_cat,
+            "enrich_from_source":  enrich_from_source,
             "use_imported_categories": use_imported_categories,
             IMPORTED_CATEGORY_SETTINGS_KEY: imported_category_settings,
             "account_id":          account_id,
@@ -3319,6 +3415,9 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         # Rules are stable across an import; load once so the per-row matcher below doesn't re-query them.
         rules = load_categorization_rules(conn)
         rule_tags_by_id = load_rule_tags_by_id(conn)
+        # Which columns to capture as evidence, and each one's role, is a file-level decision (roles come
+        # from cardinality across the whole file) — compute once, then apply per row.
+        evidence_plan = _build_evidence_column_plan(data_rows, headers, col)
         for i, row in enumerate(data_rows):
             row_num = header_row_index + skip_rows + i + 2
             skip_account_row = False
@@ -3400,7 +3499,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             notes_val    = str(row.get(col.notes, "")).strip() if col.notes else None
             is_pending = parse_pending_flag(row, col)
             content_hash = make_hash(parsed_date, amount, raw_desc)
-            import_evidence = _build_import_evidence(row, headers, col, csv_val, raw_desc)
+            import_evidence = _build_import_evidence(row, col, csv_val, raw_desc, evidence_plan)
             batch_account_stat = batch_account_stats.setdefault(
                 csv_val,
                 {"account_id": acc["id"], "count": 0, "coverage_dates": set()},
@@ -3468,13 +3567,16 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                         category_source = "import"
                         category_overridden = 1
 
+            name_effects = rule_scalar_effects(rule_result, fallback_name=display_desc)
             txn_payload = {
                 "account_id": acc["id"],
                 "owner_id": acc["owner_id"],
                 "category_id": cat_id,
                 "amount": amount,
                 "merchant_name": display_desc,
-                "display_name": rule_scalar_effects(rule_result, fallback_name=display_desc)["display_name"],
+                "display_name": name_effects["display_name"],
+                # 'rule' when a rule's clean_name authored the name, else 'import' (the file's own name).
+                "display_name_source": "rule" if name_effects["renamed_by_rule"] else "import",
                 "raw_name": raw_desc,
                 "date": parsed_date,
                 "is_pending": 1 if is_pending else 0,
@@ -3578,8 +3680,10 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             "rejected_headers": headers,
             "rejected_rows": rejected_rows,
             "duplicate_headers": headers,
+            "enriched_count": 0,
         }
 
+        enriched_count = 0
         # If nothing was imported, remove the batch record entirely —
         # a zero-row import shouldn't appear in Recent imports
         if imported == 0 and deduped == 0:
@@ -3587,6 +3691,15 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             batch_id = None
         else:
             _save_batch_duplicate_rows(conn, batch_id, duplicate_rows)
+            # Per-source auto-enrich: for a trusted source, fold each hard-rejected duplicate's novel
+            # detail into the existing row it matched — silently, but reported. Only unambiguous rows are
+            # touched and only a non-empty delta counts (so a re-import of the same file is a no-op).
+            if enrich_from_source and duplicate_rows:
+                auto_enriched, _auto_skipped = _enrich_duplicate_rows(
+                    conn, batch_id, [int(entry.get("row") or 0) for entry in duplicate_rows]
+                )
+                enriched_count = len(auto_enriched)
+            import_summary["enriched_count"] = enriched_count
             config_snapshot[IMPORT_SUMMARY_KEY] = import_summary
             save_batch_snapshot(conn, batch_id, config_snapshot)
             for csv_val, info in batch_account_stats.items():
@@ -3651,6 +3764,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         "rejected_count":       zero_amount_count + validation_error_count,
         "rejected_rows":        rejected_rows,
         "duplicate_count":      deduped,
+        "enriched_count":       enriched_count,
         "import_summary":       import_summary,
         "new_accounts_created": len(created_account_ids),
         "new_accounts_without_owner": sum(
@@ -3789,6 +3903,73 @@ def mark_batch_duplicates_reviewed(batch_id: str, body: BatchDuplicateReviewRequ
             [batch_id, *row_numbers],
         )
     return {"updated": cursor.rowcount or 0, "reviewed": body.reviewed}
+
+
+def _duplicate_match_txn_id(matched: dict) -> tuple[Optional[str], Optional[str]]:
+    """The single existing transaction a duplicate matched, if unambiguous. Handles both shapes: a
+    coverage reject carries `candidates` (enrichable only when exactly one), a terminal/exact reject
+    carries the matched transaction directly. Returns (txn_id, None) or (None, skip_reason)."""
+    candidates = matched.get("candidates")
+    if isinstance(candidates, list):
+        if len(candidates) == 1 and (candidates[0] or {}).get("id"):
+            return candidates[0]["id"], None
+        return None, ("ambiguous match" if candidates else "no matched transaction")
+    if matched.get("id"):
+        return matched["id"], None
+    return None, "no matched transaction"
+
+
+def _enrich_duplicate_rows(conn, batch_id: str, row_numbers: list[int]) -> tuple[list[dict], list[dict]]:
+    """Fold each given duplicate row's incoming detail into the existing transaction it matched. Only
+    unambiguous rows are touched — a row with exactly one matched candidate; rows with no match (nothing
+    to enrich) or several (the user must pick) are reported as skipped. Additive and reversible: it only
+    appends novel detail to the existing row's evidence (see `import_enrichment`), recorded per row for
+    undo. Shared by the manual endpoint and the per-source auto-enrich in the import path."""
+    enriched, skipped = [], []
+    for row_number in row_numbers:
+        dup = conn.execute(
+            "SELECT matched_transaction_json, enriched_at FROM import_batch_duplicate WHERE batch_id = ? AND row_number = ?",
+            (batch_id, row_number),
+        ).fetchone()
+        if dup is None:
+            skipped.append({"row": row_number, "reason": "not found"})
+            continue
+        if dup["enriched_at"]:
+            skipped.append({"row": row_number, "reason": "already enriched"})
+            continue
+        txn_id, skip_reason = _duplicate_match_txn_id(safe_json_dict(dup["matched_transaction_json"]))
+        if not txn_id:
+            skipped.append({"row": row_number, "reason": skip_reason})
+            continue
+        delta = enrich_duplicate_row(conn, batch_id, row_number, txn_id)
+        if delta:
+            enriched.append({"row": row_number, "txn_id": txn_id, "added": delta})
+        else:
+            skipped.append({"row": row_number, "reason": "no new detail"})
+    return enriched, skipped
+
+
+@router.post("/batches/{batch_id}/duplicates/enrich")
+def enrich_batch_duplicates(batch_id: str, body: BatchDuplicateEnrichRequest):
+    """Fold the given duplicate rows' incoming detail into the transactions they matched (manual action
+    from the duplicate report). Returns what was folded in and what was skipped and why."""
+    row_numbers = [int(n) for n in (body.row_numbers or [])]
+    with get_db() as conn:
+        enriched, skipped = _enrich_duplicate_rows(conn, batch_id, row_numbers)
+    return {"enriched": enriched, "skipped": skipped}
+
+
+@router.post("/batches/{batch_id}/duplicates/enrich/undo")
+def undo_batch_duplicate_enrichment_endpoint(batch_id: str, body: BatchDuplicateEnrichRequest):
+    """Reverse a prior enrich on the given duplicate rows — remove exactly the detail that was folded in
+    and clear the enriched marker."""
+    row_numbers = [int(n) for n in (body.row_numbers or [])]
+    undone = 0
+    with get_db() as conn:
+        for row_number in row_numbers:
+            if undo_duplicate_enrichment(conn, batch_id, row_number):
+                undone += 1
+    return {"undone": undone}
 
 
 @router.post("/batches/{batch_id}/mark-reviewed")
@@ -5073,6 +5254,11 @@ def undo_batch(batch_id: str, force: bool = Query(False)):
                     "detail": "Some transactions were manually edited after import",
                     "edited_transactions": [dict(r) for r in edited],
                 })
+
+        # Reverse any enrichments this batch applied to existing rows *before* deleting its duplicate
+        # records below — those records hold the delta needed to undo the change to the pre-existing
+        # (non-batch) target rows, which otherwise would be orphaned and un-reversible.
+        reverse_batch_enrichments(conn, batch_id)
 
         conn.execute("DELETE FROM txn WHERE import_batch_id = ?", (batch_id,))
 

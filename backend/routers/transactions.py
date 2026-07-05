@@ -1050,7 +1050,7 @@ def update_merchant(txn_id: str, body: dict):
         raise HTTPException(status_code=400, detail="merchant_name required")
     with get_db() as conn:
         conn.execute(
-            "UPDATE txn SET display_name = ? WHERE id = ?",
+            "UPDATE txn SET display_name = ?, display_name_source = 'manual' WHERE id = ?",
             (name, txn_id),
         )
     return {"ok": True}
@@ -1189,7 +1189,10 @@ def _apply_bulk_action(conn, ids: list[str], action: BulkAction):
             raise HTTPException(status_code=400, detail="merchant is required for set_merchant")
         for chunk in _chunk(ids):
             placeholders = ",".join("?" * len(chunk))
-            conn.execute(f"UPDATE txn SET display_name = ? WHERE id IN ({placeholders})", [name, *chunk])
+            conn.execute(
+                f"UPDATE txn SET display_name = ?, display_name_source = 'manual' WHERE id IN ({placeholders})",
+                [name, *chunk],
+            )
     elif kind == "set_date":
         date = (action.date or "").strip()
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):

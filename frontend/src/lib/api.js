@@ -533,6 +533,11 @@ export const api = {
     request(`/import-export/batches/${id}/duplicates/import`, { method: 'POST', body: JSON.stringify(payload) }),
   markBatchDuplicatesReviewed: (id, rowNumbers, reviewed = true) =>
     request(`/import-export/batches/${id}/duplicates/mark-reviewed`, { method: 'POST', body: JSON.stringify({ row_numbers: rowNumbers, reviewed }) }),
+  // Enrich-on-duplicate: fold each row's incoming detail into the transaction it matched, or undo that.
+  enrichBatchDuplicates: (id, rowNumbers) =>
+    request(`/import-export/batches/${id}/duplicates/enrich`, { method: 'POST', body: JSON.stringify({ row_numbers: rowNumbers }) }),
+  undoBatchDuplicateEnrichment: (id, rowNumbers) =>
+    request(`/import-export/batches/${id}/duplicates/enrich/undo`, { method: 'POST', body: JSON.stringify({ row_numbers: rowNumbers }) }),
   // Clear needs_review on every still-flagged transaction in this file — the one-click "looked these
   // over (or don't need to)" for a whole import. Returns { updated }.
   markBatchReviewed: (id) =>

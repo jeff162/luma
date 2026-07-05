@@ -38,6 +38,7 @@ export function summarizeImportOutcome(source) {
   ) || 0
   const skippedCount = Number(rawSummary?.skipped_count ?? source.skipped ?? source.skipped_count) || 0
   const dedupedCount = Number(rawSummary?.deduped_count ?? source.deduped ?? source.deduped_count) || 0
+  const enrichedCount = Number(rawSummary?.enriched_count ?? source.enriched_count) || 0
   const accountSkippedCount = Number(rawSummary?.account_skipped_count ?? source.account_skipped) || 0
   const zeroAmountCount = Number(rawSummary?.zero_amount_count ?? source.zero_amount_count) || 0
   const validationErrorCount = Number(rawSummary?.validation_error_count ?? source.validation_error_count) || 0
@@ -77,6 +78,7 @@ export function summarizeImportOutcome(source) {
     importedCount,
     skippedCount,
     dedupedCount,
+    enrichedCount,
     accountSkippedCount,
     zeroAmountCount,
     validationErrorCount,

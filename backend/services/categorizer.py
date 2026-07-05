@@ -237,9 +237,13 @@ def rule_scalar_effects(result, *, fallback_name: str) -> dict:
     ``categorize_transaction`` returns, a bare category_id from its legacy shape, or ``None`` when no
     categorization ran — the latter two carry no rename and yield just the fallback. Category assignment
     and tags stay out of this: category_source policy differs per site, and tags already have their own
-    shared apply (``sync_rule_tags_for_transaction``)."""
+    shared apply (``sync_rule_tags_for_transaction``).
+
+    ``renamed_by_rule`` reports whether the name came from a rule's clean_name (vs. the fallback) so a
+    caller can stamp ``display_name_source`` consistently — ``'rule'`` when the rule authored the name,
+    otherwise leave the existing provenance untouched (the fallback is not a rename)."""
     clean_name = result.get("clean_name") if isinstance(result, dict) else None
-    return {"display_name": clean_name or fallback_name}
+    return {"display_name": clean_name or fallback_name, "renamed_by_rule": bool(clean_name)}
 
 
 def recategorize_all(conn: sqlite3.Connection) -> int:
@@ -257,6 +261,7 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
                t.category_id,
                t.category_source,
+               t.display_name_source,
                t.import_evidence_json
            FROM   txn t
            JOIN   account a ON a.id = t.account_id
@@ -283,9 +288,16 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
         )
         cat_id = result["category_id"] if isinstance(result, dict) else result
         matched_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
-        display_name = rule_scalar_effects(result, fallback_name=txn["merchant_name"] or txn["raw_name"])["display_name"]
+        name_effects = rule_scalar_effects(result, fallback_name=txn["merchant_name"] or txn["raw_name"])
+        # A manual rename is protected here, just as a manual *category* is (this is the pass that must
+        # never undo a deliberate choice): a rule may still recategorize the row, but its clean_name
+        # never overwrites a user-authored name. The explicit full-force rule apply remains the one path
+        # that can. A fallback name (no rule clean_name) is not a rename either, so it never restamps.
+        apply_rule_name = name_effects["renamed_by_rule"] and txn["display_name_source"] != "manual"
+        current_name = txn["display_name"] or txn["merchant_name"] or txn["raw_name"]
+        display_name = name_effects["display_name"] if apply_rule_name else current_name
         category_changed = cat_id != txn["category_id"]
-        display_name_changed = display_name != (txn["display_name"] or txn["merchant_name"] or txn["raw_name"])
+        display_name_changed = display_name != current_name
         tags_changed = would_sync_rule_tags_change(conn, txn["id"], matched_tag_ids, existing_rows=tag_rows_by_txn.get(txn["id"], {}))
         if category_changed or display_name_changed:
             # When a rule assigns a category the row becomes rule-owned; when none does it falls back to
@@ -293,9 +305,13 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
             # rename/tag-only rule match can clean its name without silently dropping the marker (which
             # would re-expose it to the trust-flag re-grab). See set_rejected_suggestion_disposition.
             next_source = "rule" if cat_id else ("cleared" if txn["category_source"] == "cleared" else None)
+            set_parts = ["category_id = ?", "display_name = ?", "category_source = ?"]
+            params = [cat_id, display_name, next_source]
+            if apply_rule_name:
+                set_parts.append("display_name_source = 'rule'")
             conn.execute(
-                "UPDATE txn SET category_id = ?, display_name = ?, category_source = ? WHERE id = ?",
-                (cat_id, display_name, next_source, txn["id"]),
+                f"UPDATE txn SET {', '.join(set_parts)} WHERE id = ?",
+                (*params, txn["id"]),
             )
         if sync_rule_tags_for_transaction(conn, txn["id"], matched_tag_ids):
             tags_changed = True
@@ -320,6 +336,7 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
                t.account_id,
                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
                t.category_id,
+               t.display_name_source,
                t.import_evidence_json
            FROM   txn t
            JOIN   account a ON a.id = t.account_id
@@ -344,8 +361,11 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
         )
         cat_id = result["category_id"] if isinstance(result, dict) else result
         matched_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
-        display_name = rule_scalar_effects(result, fallback_name=txn["merchant_name"] or txn["raw_name"])["display_name"]
-        display_name_changed = display_name != (txn["display_name"] or txn["merchant_name"] or txn["raw_name"])
+        name_effects = rule_scalar_effects(result, fallback_name=txn["merchant_name"] or txn["raw_name"])
+        # Mirror recategorize_all's manual-name protection so the count matches what the pass would do.
+        apply_rule_name = name_effects["renamed_by_rule"] and txn["display_name_source"] != "manual"
+        current_name = txn["display_name"] or txn["merchant_name"] or txn["raw_name"]
+        display_name_changed = apply_rule_name and name_effects["display_name"] != current_name
         if (
             cat_id != txn["category_id"]
             or display_name_changed

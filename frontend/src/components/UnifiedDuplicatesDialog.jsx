@@ -33,6 +33,7 @@
 
 import { useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
+import { formatTransactionAmount } from '../lib/moneyDisplay.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { Button, Spinner, EmptyState, SelectAllCheckbox } from './ui.jsx'
 import {
@@ -83,15 +84,13 @@ function reviewKindOf(entry) {
   return null
 }
 
-// One shared formatter instead of `Number.prototype.toLocaleString(undefined, opts)` per call:
-// constructing the locale/options resolution on every call dominated render time on large batches
-// (thousands of rows × two amounts each re-resolved the format). Intl.NumberFormat caches that work.
-const AMOUNT_FORMAT = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-
+// Amounts arrive in the app's stored convention (spending positive). Render them through the shared
+// transaction formatter so sign and currency match the ledger and every other surface — a deposit reads
+// as +$, a spend as -$ — instead of the raw stored number, which is inverted from how the UI reads money.
+// (formatTransactionAmount reuses a module-level Intl.NumberFormat, so the large-batch caching still holds.)
 function formatAmount(value) {
-  const num = Number(value)
-  if (!Number.isFinite(num)) return ''
-  return AMOUNT_FORMAT.format(num)
+  if (!Number.isFinite(Number(value))) return ''
+  return formatTransactionAmount(value)
 }
 
 export default function UnifiedDuplicatesDialog({
@@ -176,6 +175,16 @@ export default function UnifiedDuplicatesDialog({
 
   const entryId = (entry) => `${entry.kind}:${entry.incoming?.txn_id || entry.incoming?.row_number || ''}`
 
+  // A duplicate can enrich its match when exactly one existing transaction is unambiguously matched —
+  // a coverage reject with a single candidate, or a terminal/exact reject matched to one row directly.
+  // Mirrors the backend's `_duplicate_match_txn_id`.
+  function enrichTargetExists(entry) {
+    const matched = entry.matched
+    if (!matched || typeof matched !== 'object') return false
+    if (Array.isArray(matched.candidates)) return matched.candidates.length === 1
+    return !!matched.id
+  }
+
   function actionsFor(entry) {
     if (entry.kind === 'soft_flag') return { keep: true, reject: true, replace: true }
     if (entry.kind === 'hard_reject' && entry.incoming?.txn_id) return { restore: true }
@@ -186,6 +195,9 @@ export default function UnifiedDuplicatesDialog({
       const actions = { import_anyway: true }
       if (entry.review_substate) actions.mark_reviewed = true
       else if (entry.reviewed && entry.matched?.covered) actions.unreview = true
+      // Enrich: fold this rejected row's incoming detail into the transaction it matched (or undo).
+      if (entry.enriched) actions.unenrich = true
+      else if (enrichTargetExists(entry)) actions.enrich = true
       return actions
     }
     return {}
@@ -259,7 +271,7 @@ export default function UnifiedDuplicatesDialog({
   const visibleIds = useMemo(() => new Set(visibleEntries.map(entryId)), [visibleEntries])
 
   const selectionSummary = useMemo(() => {
-    const summary = { total: 0, keep: 0, reject: 0, replace: 0, restore: 0, import_anyway: 0, mark_reviewed: 0, unreview: 0 }
+    const summary = { total: 0, keep: 0, reject: 0, replace: 0, restore: 0, import_anyway: 0, mark_reviewed: 0, unreview: 0, enrich: 0, unenrich: 0 }
     for (const entry of visibleEntries) {
       if (!selectedIds.has(entryId(entry))) continue
       summary.total += 1
@@ -271,6 +283,8 @@ export default function UnifiedDuplicatesDialog({
       if (a.import_anyway) summary.import_anyway += 1
       if (a.mark_reviewed) summary.mark_reviewed += 1
       if (a.unreview) summary.unreview += 1
+      if (a.enrich) summary.enrich += 1
+      if (a.unenrich) summary.unenrich += 1
     }
     return summary
   }, [visibleEntries, selectedIds])
@@ -315,6 +329,12 @@ export default function UnifiedDuplicatesDialog({
         // Acknowledgment is one row-number-set call rather than N requests.
         const rows = selected.map(e => e.incoming.row_number).filter(n => n != null)
         if (rows.length) await api.markBatchDuplicatesReviewed(batchId, rows, action === 'mark_reviewed')
+      } else if (action === 'enrich' || action === 'unenrich') {
+        const rows = selected.map(e => e.incoming.row_number).filter(n => n != null)
+        if (rows.length) {
+          if (action === 'enrich') await api.enrichBatchDuplicates(batchId, rows)
+          else await api.undoBatchDuplicateEnrichment(batchId, rows)
+        }
       } else {
         const tasks = selected.map(entry => {
           if (action === 'keep')          return api.resolveSuspectDuplicate(entry.incoming.txn_id, 'keep')
@@ -346,6 +366,8 @@ export default function UnifiedDuplicatesDialog({
       else if (action === 'import_anyway') await api.importBatchDuplicates(batchId, { row_numbers: [entry.incoming.row_number] })
       else if (action === 'mark_reviewed') await api.markBatchDuplicatesReviewed(batchId, [entry.incoming.row_number], true)
       else if (action === 'unreview')      await api.markBatchDuplicatesReviewed(batchId, [entry.incoming.row_number], false)
+      else if (action === 'enrich')        await api.enrichBatchDuplicates(batchId, [entry.incoming.row_number])
+      else if (action === 'unenrich')      await api.undoBatchDuplicateEnrichment(batchId, [entry.incoming.row_number])
       if (typeof onReload === 'function') await onReload()
     } catch (err) {
       setActionError(err?.message || 'Action failed')
@@ -427,8 +449,18 @@ export default function UnifiedDuplicatesDialog({
     const mergedInto = side.account_merged_into && side.account_merged_into !== acct
       ? side.account_merged_into
       : null
+    // Hard-reject rows carry the full raw source row in `csv_values`. Funding legs and transfers have no
+    // merchant, so date + amount alone can't identify them; expose every non-empty source cell on hover
+    // (Type, memo, the raw *signed* amount as it appears in the file, etc.) so the row is recognizable
+    // without leaving the report. Absent for in-ledger soft-flag rows, which already show a real merchant.
+    const rawDetail = side.csv_values && typeof side.csv_values === 'object'
+      ? Object.entries(side.csv_values)
+          .filter(([, value]) => String(value ?? '').trim() !== '')
+          .map(([key, value]) => `${key}: ${value}`)
+          .join('\n')
+      : ''
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 1, lineHeight: 1.3 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 1, lineHeight: 1.3 }} title={rawDetail || undefined}>
         <div>
           <span style={{ fontVariantNumeric: 'tabular-nums' }}>{side.date || ''}</span>
           {' · '}
@@ -735,6 +767,16 @@ export default function UnifiedDuplicatesDialog({
             <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk || selectionSummary.import_anyway === 0} onClick={() => runBulk('import_anyway')}>
               Import anyway ({selectionSummary.import_anyway})
             </Button>
+            {selectionSummary.enrich > 0 ? (
+              <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk} onClick={() => runBulk('enrich')} title="Fold each selected row's extra detail into the transaction it matched — additive and reversible.">
+                Enrich existing ({selectionSummary.enrich})
+              </Button>
+            ) : null}
+            {selectionSummary.unenrich > 0 ? (
+              <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk} onClick={() => runBulk('unenrich')}>
+                Undo enrich ({selectionSummary.unenrich})
+              </Button>
+            ) : null}
             <Button style={COMPACT_ACTION_BTN_STYLE} variant="ghost" disabled={pendingBulk || selectionSummary.restore === 0} onClick={() => runBulk('restore')}>
               Restore ({selectionSummary.restore})
             </Button>
@@ -805,6 +847,7 @@ export default function UnifiedDuplicatesDialog({
                       </td>
                       <td style={{ padding: '6px 8px', color: (isSoft || isAdvisoryReview) ? 'var(--warning)' : 'var(--muted)', fontWeight: (isSoft || isAdvisoryReview) ? 600 : 400, whiteSpace: 'nowrap' }}>
                         {isSoft ? 'Review' : isConfirmedSoftFlag ? 'Resolved' : isAdvisoryReview ? 'Rejected · review' : isAcknowledged ? 'Reviewed' : 'Rejected'}
+                        {entry.enriched ? <div style={{ fontSize: 10, color: 'var(--success)', fontWeight: 600, marginTop: 2 }} title="This row's detail was folded into the transaction it matched.">✓ enriched</div> : null}
                       </td>
                       <td style={{ padding: '6px 8px' }}>{ruleBadge(entry)}</td>
                       <td style={{ padding: '6px 8px' }}>{partyBlock(entry.incoming)}</td>
@@ -817,6 +860,8 @@ export default function UnifiedDuplicatesDialog({
                           {a.restore ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'restore')}>Restore</Button> : null}
                           {a.mark_reviewed ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'mark_reviewed')} title="Already rejected — acknowledge it as reviewed so it leaves the needs-attention list. Does not import it.">Mark reviewed</Button> : null}
                           {a.import_anyway ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'import_anyway')}>Import anyway</Button> : null}
+                          {a.enrich ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'enrich')} title="Fold this row's extra detail (memo, counterparty, item title…) into the existing transaction it matched. Additive — nothing already there is overwritten — and reversible. Skips a row that adds nothing new.">Enrich existing</Button> : null}
+                          {a.unenrich ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'unenrich')} title="Remove the detail this row folded into the matched transaction.">Undo enrich</Button> : null}
                           {a.unreview ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'unreview')} title="Move this back to the needs-review list.">Un-review</Button> : null}
                         </div>
                       </td>

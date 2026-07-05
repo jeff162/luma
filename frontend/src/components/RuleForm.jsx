@@ -149,11 +149,11 @@ function SegButton({ active, onClick, children }) {
 
 function AmountCondition({ low, lowOp, high, highOp, side, onChange }) {
   const isEquals = low != null && high != null && low === high
-  function setLow(v)      { onChange({ low: v, lowOp, high, highOp, side }) }
-  function setLowOp(op)   { onChange({ low, lowOp: op, high, highOp, side }) }
-  function setHigh(v)     { onChange({ low, lowOp, high: v, highOp, side }) }
-  function setHighOp(op)  { onChange({ low, lowOp, high, highOp: op, side }) }
-  function setSide(s)     { onChange({ low, lowOp, high, highOp, side: s }) }
+  function setLow(v) { onChange({ low: v, lowOp, high, highOp, side }) }
+  function setLowOp(op) { onChange({ low, lowOp: op, high, highOp, side }) }
+  function setHigh(v) { onChange({ low, lowOp, high: v, highOp, side }) }
+  function setHighOp(op) { onChange({ low, lowOp, high, highOp: op, side }) }
+  function setSide(s) { onChange({ low, lowOp, high, highOp, side: s }) }
 
   function setEquals(v) { onChange({ low: v, lowOp: '>=', high: v, highOp: '<=', side }) }
 
@@ -288,7 +288,7 @@ function RulePreviewDetail({ transactions, categories, onClose }) {
 
   function handleColumnsChange(nextColumns) {
     setColumns(nextColumns)
-    setSavedColumns(nextColumns.map(col => ({ key: col.key, width: col.width }))).catch(() => {})
+    setSavedColumns(nextColumns.map(col => ({ key: col.key, width: col.width }))).catch(() => { })
   }
 
   function renderCell(columnKey, txn) {
@@ -452,7 +452,7 @@ function MatchCountInline({ keyword, amtLow, amtHigh, amtSide, ownerId, accountI
       }
     }, 600)
     return () => clearTimeout(debounceRef.current)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keyword, amtLow, amtHigh, amtSide, ownerId, accountId, matchSourceText, canSearch])
 
   if (!canSearch) return null
@@ -917,132 +917,132 @@ const RuleForm = forwardRef(function RuleForm({
 
       {matchOnly ? null : (
         <div style={{ padding: '16px 20px', borderBottom: '2px solid var(--border)' }}>
-        <div style={sectionHeadStyle}>Then These Actions Apply…</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div>
-            <SectionEyebrow style={{ letterSpacing: '0.03em', marginBottom: 6 }}>
-              Assign Category
-            </SectionEyebrow>
-            <div style={{ display: 'flex' }}>
-              <CategoryPicker
-                value={catId}
-                categories={categories}
-                onChange={setCatId}
-                onCategoryCreated={() => onCategoriesChanged?.()}
-                clearable
+          <div style={sectionHeadStyle}>Then These Actions Apply…</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div>
+              <SectionEyebrow style={{ letterSpacing: '0.03em', marginBottom: 6 }}>
+                Assign Category
+              </SectionEyebrow>
+              <div style={{ display: 'flex' }}>
+                <CategoryPicker
+                  value={catId}
+                  categories={categories}
+                  onChange={setCatId}
+                  onCategoryCreated={() => onCategoriesChanged?.()}
+                  clearable
+                />
+              </div>
+            </div>
+            <ConditionChip
+              label="Rename Merchant To"
+              summary={renameOpen && cleanName.trim() ? cleanName : null}
+              active={renameOpen}
+              expanded={renameExpanded}
+              onActivate={openRenameEditor}
+              onClear={() => { setCleanName(''); setRenameOpen(false); setRenameExpanded(false) }}
+              containerRef={renameConditionRef}
+              triggerRef={renameConditionTriggerRef}
+            >
+              <input
+                ref={renameInputRef}
+                id={`${fieldIdBase}-rename`}
+                name="rule-clean-merchant-name"
+                aria-label="Rename merchant to"
+                value={cleanName}
+                onFocus={captureRenameEditState}
+                onChange={e => setCleanName(e.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') {
+                    event.stopPropagation()
+                    event.preventDefault()
+                    commitRenameEditor()
+                    return
+                  }
+                  if (event.key === 'Escape') {
+                    event.stopPropagation()
+                    event.preventDefault()
+                    cancelRenameEdit(event.currentTarget, renameConditionRef, true)
+                  }
+                }}
+                placeholder="Clean display name, e.g. Whole Foods"
+                style={{ width: '100%', boxSizing: 'border-box', ...getFormControlStyle({ size: 'md' }) }}
               />
-            </div>
-          </div>
-          <ConditionChip
-            label="Rename Merchant To"
-            summary={renameOpen && cleanName.trim() ? cleanName : null}
-            active={renameOpen}
-            expanded={renameExpanded}
-            onActivate={openRenameEditor}
-            onClear={() => { setCleanName(''); setRenameOpen(false); setRenameExpanded(false) }}
-            containerRef={renameConditionRef}
-            triggerRef={renameConditionTriggerRef}
-          >
-            <input
-              ref={renameInputRef}
-              id={`${fieldIdBase}-rename`}
-              name="rule-clean-merchant-name"
-              aria-label="Rename merchant to"
-              value={cleanName}
-              onFocus={captureRenameEditState}
-              onChange={e => setCleanName(e.target.value)}
-              onKeyDown={event => {
-                if (event.key === 'Enter') {
-                  event.stopPropagation()
-                  event.preventDefault()
-                  commitRenameEditor()
-                  return
-                }
-                if (event.key === 'Escape') {
-                  event.stopPropagation()
-                  event.preventDefault()
-                  cancelRenameEdit(event.currentTarget, renameConditionRef, true)
-                }
-              }}
-              placeholder="Clean display name, e.g. Whole Foods"
-              style={{ width: '100%', boxSizing: 'border-box', ...getFormControlStyle({ size: 'md' }) }}
-            />
-            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>Sets the display name when this rule fires on future transactions</div>
-          </ConditionChip>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>Sets the display name when this rule fires on future transactions</div>
+            </ConditionChip>
 
-          <ConditionChip
-            label="Add Tags"
-            summary={tagIds.length ? selectedTags.map(tag => tag.name).join(', ') : null}
-            active={tagsOpen}
-            onActivate={() => setTagsOpen(true)}
-            onClear={() => { setTagIds([]); setTagsOpen(false) }}
-          >
-            {/* Shared picker: existing tags as checkboxes plus an inline "+ New tag" so the user
+            <ConditionChip
+              label="Add Tags"
+              summary={tagIds.length ? selectedTags.map(tag => tag.name).join(', ') : null}
+              active={tagsOpen}
+              onActivate={() => setTagsOpen(true)}
+              onClear={() => { setTagIds([]); setTagsOpen(false) }}
+            >
+              {/* Shared picker: existing tags as checkboxes plus an inline "+ New tag" so the user
                 doesn't have to leave the rule editor to invent a tag. Rendered inline (relative). */}
-            <TagPickerWithCreate
-              allTags={availableTags}
-              selectedTagIds={new Set(tagIds)}
-              onToggleTag={(tag, present) => {
-                setTagIds(current => (
-                  present
-                    ? (current.includes(tag.id) ? current : [...current, tag.id])
-                    : current.filter(id => id !== tag.id)
-                ))
-              }}
-              onTagCreated={created => {
-                addTag(created)
-                onTagCreated?.(created)
-              }}
-              onClose={() => {}}
-              positioning="relative"
-            />
-            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>
-              Matching transactions will gain these tags without replacing tags from other matching rules.
-            </div>
-          </ConditionChip>
+              <TagPickerWithCreate
+                allTags={availableTags}
+                selectedTagIds={new Set(tagIds)}
+                onToggleTag={(tag, present) => {
+                  setTagIds(current => (
+                    present
+                      ? (current.includes(tag.id) ? current : [...current, tag.id])
+                      : current.filter(id => id !== tag.id)
+                  ))
+                }}
+                onTagCreated={created => {
+                  addTag(created)
+                  onTagCreated?.(created)
+                }}
+                onClose={() => { }}
+                positioning="relative"
+              />
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>
+                Matching transactions will gain these tags without replacing tags from other matching rules.
+              </div>
+            </ConditionChip>
 
-          {/* Rule-backed recurring series: the rule's matches become one series on the Recurring page,
+            {/* Rule-backed recurring series: the rule's matches become one series on the Recurring page,
               which is how a subscription/bill whose payee is spelled several ways gets tracked without
               renaming every variant. is_recurring counts as an action on its own. */}
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-              <SectionEyebrow style={{ letterSpacing: '0.03em', marginBottom: 0 }}>
-                Recurring Series
-              </SectionEyebrow>
-              <FeatureExplainer topic="recurring-transactions" placement="bottom-left" />
-            </div>
-            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                name="rule-is-recurring"
-                checked={isRecurring}
-                onChange={e => setIsRecurring(e.target.checked)}
-                style={{ marginTop: 2, accentColor: 'var(--accent)', cursor: 'pointer' }}
-              />
-              <span style={{ fontSize: 12, lineHeight: 1.35 }}>
-                Track this rule&rsquo;s matches as a recurring series
-                <span style={{ display: 'block', fontSize: 11, color: 'var(--muted)' }}>
-                  Every transaction the rule matches becomes a member of one series on the Recurring page.
-                </span>
-              </span>
-            </label>
-            {isRecurring ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 12 }}>
-                <span style={{ color: 'var(--muted)' }}>Recurs</span>
-                <select
-                  name="rule-recurring-cadence"
-                  aria-label="Recurring cadence"
-                  value={cadence}
-                  onChange={e => setCadence(e.target.value)}
-                  style={{ ...getFormControlStyle({ size: 'md', clickable: true }) }}
-                >
-                  {RULE_CADENCE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <SectionEyebrow style={{ letterSpacing: '0.03em', marginBottom: 0 }}>
+                  Recurring Series
+                </SectionEyebrow>
+                <FeatureExplainer topic="recurring-transactions" placement="bottom-left" />
               </div>
-            ) : null}
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  name="rule-is-recurring"
+                  checked={isRecurring}
+                  onChange={e => setIsRecurring(e.target.checked)}
+                  style={{ marginTop: 2, accentColor: 'var(--accent)', cursor: 'pointer' }}
+                />
+                <span style={{ fontSize: 12, lineHeight: 1.35 }}>
+                  Track this rule&rsquo;s matching transactions as a recurring series
+                  <span style={{ display: 'block', fontSize: 11, color: 'var(--muted)' }}>
+                    Create a series on the Recurring page out of the matching transactions.
+                  </span>
+                </span>
+              </label>
+              {isRecurring ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 12 }}>
+                  <span style={{ color: 'var(--muted)' }}>Recurs</span>
+                  <select
+                    name="rule-recurring-cadence"
+                    aria-label="Recurring cadence"
+                    value={cadence}
+                    onChange={e => setCadence(e.target.value)}
+                    style={{ ...getFormControlStyle({ size: 'md', clickable: true }) }}
+                  >
+                    {RULE_CADENCE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
-      </div>
       )}
 
       {/* Read-only readout of the rule being built — the edits live in the sections above. Always

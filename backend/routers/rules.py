@@ -244,7 +244,11 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
                 set_parts.extend(["category_id = ?", "category_overridden = 0", "category_source = 'rule'"])
                 params.append(rule["category_id"])
             if rule["clean_name"]:
+                # This apply is the explicit "let the rule own these rows" path (the preserve-manual
+                # variant filters manual rows out upstream), so the rule's clean_name authors the name
+                # and stamps its provenance 'rule'.
                 set_parts.append("display_name = ?")
+                set_parts.append("display_name_source = 'rule'")
                 params.append(rule["clean_name"])
             params.append(txn["id"])
             conn.execute(

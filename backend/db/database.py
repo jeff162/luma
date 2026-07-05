@@ -103,7 +103,7 @@ def get_db(db_path: str | None = None):
 # rule-backed recurring series (`category_rule.is_recurring` + `recurring_series.rule_id`; the
 # `recurring_membership_override` table is created by the same CREATE TABLE IF NOT EXISTS script).
 
-CURRENT_VERSION = 5
+CURRENT_VERSION = 8
 
 MIGRATIONS = {}
 
@@ -157,6 +157,86 @@ def _add_rule_backed_recurring(conn):
     conn.execute("ALTER TABLE recurring_series ADD COLUMN rule_id TEXT REFERENCES category_rule(id) ON DELETE SET NULL")
 
 
+@migration(6)
+def _add_txn_display_name_source(conn):
+    # Give display_name the provenance category_source already carries, so a rename can be attributed
+    # (manual / rule / import / enrichment) and a deliberate manual rename protected from later rules
+    # and reconciliation. Fresh installs get the column from the baseline CREATE TABLE.
+    conn.execute("ALTER TABLE txn ADD COLUMN display_name_source TEXT")
+    _backfill_display_name_source(conn)
+
+
+def _backfill_display_name_source(conn):
+    # `txn` stores no per-row rule_id (rule linkage exists only for recurring series/tags), so a name's
+    # provenance has to be re-derived. Per row, in order: (1) a *currently-matching* rule whose
+    # clean_name equals the row's display_name → 'rule' (a rule owns the name; a later re-apply may
+    # refresh it); (2) else display_name differs from both merchant_name and raw_name → 'manual' (a
+    # deliberate rename, protected forever); (3) else → 'import'. This attributes the name to a rule
+    # where one is responsible and otherwise protects deliberate renames — more precise than a bare
+    # "differs from raw" guess. Rows with no display_name are left NULL (no name to attribute).
+    #
+    # Reuses the live categorizer so step (1) matches exactly what an actual rule apply would do (no
+    # drift). Imported lazily to keep database.py free of a service-layer import cycle; the pass is
+    # one-time (only when advancing past v6) and mirrors recategorize_all's shape.
+    from backend.services.categorizer import (
+        categorize_transaction,
+        load_categorization_rules,
+        source_match_text_from_json,
+    )
+
+    rows = conn.execute(
+        """SELECT t.id, t.merchant_name, t.display_name, t.raw_name, t.amount, t.owner_id,
+                  t.account_id, COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
+                  t.import_evidence_json
+           FROM   txn t
+           JOIN   account a ON a.id = t.account_id"""
+    ).fetchall()
+    rules = load_categorization_rules(conn)
+    needs_source_text = any(rule["match_source_text"] for rule in rules)
+
+    def _norm(value):
+        return (value or "").strip()
+
+    for row in rows:
+        display_name = row["display_name"]
+        if not _norm(display_name):
+            continue  # no name to attribute; leave source NULL
+        source_text = source_match_text_from_json(row["import_evidence_json"]) if needs_source_text else None
+        result = categorize_transaction(
+            row["merchant_name"], row["raw_name"], row["display_name"], row["amount"], conn,
+            owner_id=row["owner_id"], account_id=row["account_id"],
+            effective_account_id=row["effective_account_id"], rules=rules, source_text=source_text,
+        )
+        rule_clean = result.get("clean_name") if isinstance(result, dict) else None
+        if _norm(rule_clean) and _norm(rule_clean) == _norm(display_name):
+            source = "rule"
+        elif _norm(display_name) != _norm(row["merchant_name"]) and _norm(display_name) != _norm(row["raw_name"]):
+            source = "manual"
+        else:
+            source = "import"
+        conn.execute("UPDATE txn SET display_name_source = ? WHERE id = ?", (source, row["id"]))
+
+
+@migration(7)
+def _add_import_batch_duplicate_enrichment(conn):
+    # Enrich-on-duplicate: when an import row matches an existing transaction, its novel detail can be
+    # folded into that row's import_evidence. These columns record the outcome on the duplicate report
+    # so it can be surfaced and reversed: enriched_txn_id (the row that received detail),
+    # enriched_delta_json (exactly what was added, for a clean undo), enriched_at. Fresh installs get
+    # them from the baseline CREATE TABLE.
+    conn.execute("ALTER TABLE import_batch_duplicate ADD COLUMN enriched_txn_id TEXT")
+    conn.execute("ALTER TABLE import_batch_duplicate ADD COLUMN enriched_delta_json TEXT")
+    conn.execute("ALTER TABLE import_batch_duplicate ADD COLUMN enriched_at TEXT")
+
+
+@migration(8)
+def _add_import_profile_enrich_from_source(conn):
+    # Per-source auto-enrich opt-in: when set on a data source, importing from it folds each hard-rejected
+    # duplicate's novel detail into the existing transaction it matched (silently, but reported and
+    # reversible). Off by default. Fresh installs get the column from the baseline CREATE TABLE.
+    conn.execute("ALTER TABLE csv_import_profile ADD COLUMN enrich_from_source INTEGER NOT NULL DEFAULT 0")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -188,6 +268,7 @@ def run_migrations(conn):
     # the Luma rebrand (baseline 1); post-rebrand migrations register from v2 upward.
     current = get_db_version(conn)
     if current >= CURRENT_VERSION:
+        log_info(f"[db] database is at version {current}")
         return
     for version in sorted(MIGRATIONS):
         if version > current:
@@ -219,7 +300,7 @@ def get_tenant_workflow_state(conn, key: str) -> dict:
     """Read a shared (tenant-wide, not per-user) state blob from `import_workflow_state`. This is the
     one place app-wide *data state* lives that is neither a transaction-graph row nor a per-user
     preference — e.g. the demo marker, the category-workspace draft, and the dashboard tag-report
-    catalog. Returns {} when absent or unparseable."""
+    catalog. Returns {} when absent or un-parseable."""
     row = conn.execute(
         "SELECT payload_json FROM import_workflow_state WHERE key = ?", (key,)
     ).fetchone()
@@ -368,6 +449,12 @@ def init_db(db_path: str | None = None):
                 is_pending           INTEGER NOT NULL DEFAULT 0,
                 category_overridden  INTEGER NOT NULL DEFAULT 0,
                 category_source      TEXT,
+                -- Provenance of display_name, mirroring category_source: 'manual' (a deliberate
+                -- rename — protected forever, never overwritten by rules/enrichment), 'rule' (a rule's
+                -- clean_name owns the name), 'import' (the imported/synced name), 'enrichment' (a
+                -- reconciliation source filled it). NULL = unknown/legacy, treated as non-manual
+                -- (can be enriched). This gives display_name the provenance category_source already has.
+                display_name_source  TEXT,
                 imported_category    TEXT,
                 notes                TEXT,
                 owner_id             TEXT REFERENCES owner(id) ON DELETE SET NULL,
@@ -487,6 +574,7 @@ def init_db(db_path: str | None = None):
                 amount_convention    TEXT NOT NULL DEFAULT 'single_signed',
                 skip_rows            INTEGER NOT NULL DEFAULT 0,
                 apply_categorization INTEGER NOT NULL DEFAULT 1,
+                enrich_from_source   INTEGER NOT NULL DEFAULT 0,
                 use_imported_categories INTEGER NOT NULL DEFAULT 0,
                 notes                TEXT,
                 created_at           TEXT NOT NULL DEFAULT (datetime('now'))
@@ -529,6 +617,11 @@ def init_db(db_path: str | None = None):
                 matched_transaction_json  TEXT,
                 txn_payload_json          TEXT,
                 reviewed_at               TEXT,
+                -- Enrich-on-duplicate outcome (see migration 7): the existing row this duplicate's novel
+                -- detail was folded into, exactly what was added (for undo), and when. NULL = not enriched.
+                enriched_txn_id           TEXT,
+                enriched_delta_json       TEXT,
+                enriched_at               TEXT,
                 PRIMARY KEY (batch_id, row_number)
             );
             CREATE INDEX IF NOT EXISTS idx_import_batch_duplicate_batch ON import_batch_duplicate(batch_id);
@@ -606,7 +699,7 @@ def init_db(db_path: str | None = None):
             # Advance an existing database in place. init_db's schema is all `CREATE TABLE IF NOT
             # EXISTS`, so structural changes belong in registered migrations, which run here.
             run_migrations(conn)
-        # Partial index over just the small set of still-unreviewed rows (the filter/count always
+        # Partial index over just the small set of still-un-reviewed rows (the filter/count always
         # selects needs_review = 1). It lives here rather than in the schema script above because on a
         # pre-v3 database the column is only added by migration v3 (run_migrations, just above); creating
         # it inside the CREATE TABLE script would reference a not-yet-existing column. By this point the

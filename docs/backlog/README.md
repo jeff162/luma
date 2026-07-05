@@ -5,11 +5,15 @@ written so it can be picked up cold. This is a living list: when an item ships, 
 "what it is and why" into the main docs (`architecture.md` / `data-model.md` / `ui-patterns.md`) and
 delete the backlog file.
 
-These were surfaced from session memory and reconciled against the code on 2026-06-24, so the
-"already done" notes below reflect the tree at that point.
-
 ## Items
 
+- [paypal-amazon-enrichment.md](paypal-amazon-enrichment.md) — **active working design (not parked).**
+  Collapsed from a bespoke reconciliation source to something small and general: **PayPal is an ordinary
+  import** (an account like any card; transfers stay categorization), and the one new capability is a
+  **general feature — enrich an existing transaction with a later import's novel detail** at the dedup
+  layer (a manual resolution-screen action + an opt-in per-source auto-enrich). `display_name_source`
+  (the manual-rename guard it relies on) has **landed**. Amazon is deferred and, when scoped, is built on
+  the same enrich feature (it is genuinely a merchant enriching existing card rows, unlike PayPal).
 - [online-categorizer.md](online-categorizer.md) — **parked design.** An opt-in online (LLM) merchant
   categorizer for cold-start, plus deterministic merchant-name cleaning at rule-build time. Both
   terminate in the existing rule store ("the rule is the cache"). Adjacent to the rules work — worth

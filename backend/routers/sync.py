@@ -102,17 +102,20 @@ def run_sync(days: int = 30, request: Request = None):
                 )
                 cat_id       = result["category_id"] if isinstance(result, dict) else result
                 rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
-                display_name = rule_scalar_effects(
+                name_effects = rule_scalar_effects(
                     result, fallback_name=t["merchant_name"] or t["raw_name"]
-                )["display_name"]
+                )
+                display_name = name_effects["display_name"]
+                # 'rule' when a rule authored the name, else 'import' (the synced source name).
+                display_name_source = "rule" if name_effects["renamed_by_rule"] else "import"
                 txn_id = str(uuid.uuid4())
 
                 conn.execute(
                     """
                     INSERT INTO txn
                         (id, plaid_transaction_id, account_id, owner_id, category_id,
-                         amount, merchant_name, display_name, raw_name, date, is_pending, needs_review)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,1)
+                         amount, merchant_name, display_name, raw_name, date, is_pending, display_name_source, needs_review)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)
                     """,
                     (
                         txn_id,
@@ -126,6 +129,7 @@ def run_sync(days: int = 30, request: Request = None):
                         t["raw_name"],
                         t["date"],
                         1 if t["is_pending"] else 0,
+                        display_name_source,
                     ),
                 )
                 sync_rule_tags_for_transaction(conn, txn_id, rule_tag_ids)

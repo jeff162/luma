@@ -65,11 +65,14 @@ import {
 import { countPendingRuleSuggestions, hasRuleSuggestionWork } from '../lib/importExport/ruleSuggestionWork.js'
 import {
   analyzeImportColumns,
+  computeEvidenceColumnOptions,
+  defaultEvidenceColumns,
   formatLikelyMatchLabel,
   inferFilenamePattern,
   inferImportFileCharacteristicsFromPreview,
   inferUnambiguousImportMappingFromPreview,
 } from '../lib/importColumnInference.js'
+import ImportEvidenceColumnsSection from '../components/ImportEvidenceColumnsSection.jsx'
 import { formatTransactionAmount, getTransactionAmountColor } from '../lib/moneyDisplay.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
@@ -190,6 +193,9 @@ function ImportTab() {
   const [amtConv, setAmtConv] = useState('single_signed')
   const [skipRows, setSkipRows] = useState(0)
   const [applyCat, setApplyCat] = useState(true)
+  // Per-source auto-enrich opt-in (default off): fold a trusted source's detail into existing rows it
+  // duplicates. Mirrors applyCat's plumbing (snapshot, run config, profile save/load, reset).
+  const [enrichFromSource, setEnrichFromSource] = useState(false)
   const [useImportedCategories, setUseImportedCategories] = useState(getDefaultImportedCategoryUsageEnabled(defaultImportCategoryUsageMode))
   const [importedCategorySettings, setImportedCategorySettings] = useState(getBlankImportedCategorySettings())
   const [showImportedCategorySettings, setShowImportedCategorySettings] = useState(false)
@@ -204,6 +210,14 @@ function ImportTab() {
   const [colNotes, setColNotes] = useState(null)
   const [colPending, setColPending] = useState(null)
   const [colAccount, setColAccount] = useState(null)
+  // The user's resolved capture picks (headers), or null = "not yet resolved" → derive the default set
+  // (keyword/shape-matched unmapped columns). getColumnMap sends the resolved list as evidence_columns.
+  const [evidenceColumns, setEvidenceColumns] = useState(null)
+  // Raw-file viewer "load more": the preview only carries the first 20 lines, so we read the rest from
+  // the held File on demand and reveal a doubling window (20 → 40 → 80 …). null = not yet read in full.
+  const [rawViewerAllLines, setRawViewerAllLines] = useState(null)
+  const [rawViewerCount, setRawViewerCount] = useState(0)
+  const [rawViewerLoadingMore, setRawViewerLoadingMore] = useState(false)
   const [mappingSuggestions, setMappingSuggestions] = useState(getBlankMappingSuggestions())
   const [singleAccountNew, setSingleAccountNew] = useState({ enabled: false, name: '', type: 'depository' })
   const [accountMap, setAccountMap] = useState({})
@@ -234,7 +248,7 @@ function ImportTab() {
       if (cancelled) return
       setDemoLoaded(!!r?.loaded)
       setDemoLoadable(!!r?.loadable)
-    }).catch(() => {})
+    }).catch(() => { })
     return () => { cancelled = true }
   }, [batches.length, profiles.length])
 
@@ -298,7 +312,7 @@ function ImportTab() {
   // own categories copy when it does so the file-card counts and category mapping stay current.
   useEffect(() => {
     function onCategoriesChanged() {
-      api.getCategories().then(setCategories).catch(() => {})
+      api.getCategories().then(setCategories).catch(() => { })
     }
     window.addEventListener('luma:categories-changed', onCategoriesChanged)
     return () => window.removeEventListener('luma:categories-changed', onCategoriesChanged)
@@ -389,7 +403,7 @@ function ImportTab() {
   const viewerVersion = unifiedDuplicatesViewer.viewer?.version || 0
   useEffect(() => {
     if (viewerVersion === 0) return
-    api.listBatches().then(setBatches).catch(() => {})
+    api.listBatches().then(setBatches).catch(() => { })
   }, [viewerVersion])
 
   // Choosing a source (explicitly from the picker, or resolved by auto-detect) settles the upload
@@ -711,6 +725,23 @@ function ImportTab() {
   }, [profiles, batches, manualDraftRecord])
 
   const columnAnalysis = useMemo(() => analyzeImportColumns(preview, skipRows), [preview, skipRows])
+
+  // The capture panel: unmapped columns with an inferred shape + default. `resolvedEvidenceColumns` is
+  // what actually gets captured — the user's explicit picks, or the derived default when untouched —
+  // filtered to columns still present and unmapped so a stale pick can't leak through.
+  const mappedHeaders = useMemo(
+    () => [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount].filter(Boolean),
+    [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount],
+  )
+  const evidenceColumnOptions = useMemo(
+    () => computeEvidenceColumnOptions(preview, mappedHeaders, skipRows),
+    [preview, mappedHeaders, skipRows],
+  )
+  const resolvedEvidenceColumns = useMemo(() => {
+    const optionHeaders = new Set(evidenceColumnOptions.map(option => option.header))
+    const base = evidenceColumns == null ? defaultEvidenceColumns(evidenceColumnOptions) : evidenceColumns
+    return base.filter(header => optionHeaders.has(header))
+  }, [evidenceColumns, evidenceColumnOptions])
 
   const selectedDateAnalysis = colDate ? columnAnalysis.dateAnalysisByHeader[colDate] : null
   const selectedAmountAnalysis = colAmount ? columnAnalysis.amountAnalysisByHeader[colAmount] : null
@@ -1066,11 +1097,25 @@ function ImportTab() {
   const displayedSkipRows = skipRows + detectedHeaderOffset
   const showTrailingDataWarning = !!importResult?.trailing_non_transaction_suspected
   const showInvalidDataWarning = !!importResult?.invalid_rows_suspected
+  // Default mode shows the raw file from the top and supports "load more"; the tail/invalid modes are
+  // targeted windows, so they keep their fixed line sets.
+  const isDefaultRawMode = !showTrailingDataWarning && !showInvalidDataWarning
+  const defaultRawLines = rawViewerAllLines
+    ? rawViewerAllLines.slice(0, rawViewerCount || rawViewerAllLines.length)
+    : preview?.raw_lines
   const rawViewerLines = showTrailingDataWarning
     ? (preview?.raw_tail_lines?.length ? preview.raw_tail_lines : preview?.raw_lines)
     : showInvalidDataWarning
       ? (importResult?.invalid_row_context_lines?.length ? importResult.invalid_row_context_lines : preview?.raw_lines)
-      : preview?.raw_lines
+      : defaultRawLines
+  // The footer is present whenever the file carries more than the preview's lines (stable through the
+  // whole load sequence, so it never vanishes mid-interaction); the button is active only while more
+  // remains, otherwise the footer shows "All lines shown".
+  const rawViewerSupportsLoadMore = isDefaultRawMode && !!preview?.file
+    && (preview?.total_rows || 0) > (preview?.raw_lines?.length || 0)
+  const rawViewerCanLoadMore = rawViewerAllLines
+    ? rawViewerCount < rawViewerAllLines.length
+    : true
   const rawViewerOffset = showTrailingDataWarning && preview?.raw_tail_lines?.length
     ? (preview.raw_tail_start_line ?? 0)
     : showInvalidDataWarning
@@ -1086,6 +1131,34 @@ function ImportTab() {
     : showInvalidDataWarning
       ? (importResult?.invalid_rows_message || 'There appears to be invalid data in the file. Please verify the highlighted rows.')
       : null
+
+  // Reset the raw-viewer "load more" window whenever the previewed file changes.
+  useEffect(() => {
+    setRawViewerAllLines(null)
+    setRawViewerCount(preview?.raw_lines?.length || 0)
+    setRawViewerLoadingMore(false)
+  }, [preview?.file_content_hash, preview?.raw_lines?.length])
+
+  async function loadMoreRawLines() {
+    let all = rawViewerAllLines
+    if (!all) {
+      if (!preview?.file) return
+      setRawViewerLoadingMore(true)
+      try {
+        const text = await preview.file.text()
+        all = text.split(/\r\n|\r|\n/)
+        // Drop a single trailing empty element from a final newline so the count matches the file.
+        if (all.length && all[all.length - 1] === '') all = all.slice(0, -1)
+        setRawViewerAllLines(all)
+      } catch {
+        setRawViewerLoadingMore(false)
+        return
+      }
+      setRawViewerLoadingMore(false)
+    }
+    const base = rawViewerCount || preview?.raw_lines?.length || all.length
+    setRawViewerCount(Math.min(all.length, Math.max(base, 1) * 2))
+  }
 
   const buildImportSnapshot = useCallback(() => {
     // getColumnMap is a hoisted function declaration so it stays callable from
@@ -1107,6 +1180,7 @@ function ImportTab() {
         amount_convention: amtConv,
         skip_rows: skipRows,
         apply_categorization: applyCat,
+        enrich_from_source: enrichFromSource,
         use_imported_categories: useImportedCategories && !!colCategory,
         imported_category_scope_mode: normalizeImportedCategorySettings(importedCategorySettings).scope_mode,
         imported_category_owner_ids: normalizeImportedCategorySettings(importedCategorySettings).owner_ids,
@@ -1123,6 +1197,7 @@ function ImportTab() {
       amount_convention: amtConv,
       skip_rows: skipRows,
       apply_categorization: applyCat,
+      enrich_from_source: enrichFromSource,
       use_imported_categories: useImportedCategories && !!colCategory,
       imported_category_scope_mode: normalizedImportedCategorySettings.scope_mode,
       imported_category_owner_ids: normalizedImportedCategorySettings.owner_ids,
@@ -1137,8 +1212,9 @@ function ImportTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     accountMap, accountId, dateFormat, amtConv, skipRows,
-    applyCat, useImportedCategories, importedCategorySettings, singleAccountNew,
+    applyCat, enrichFromSource, useImportedCategories, importedCategorySettings, singleAccountNew,
     colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount,
+    resolvedEvidenceColumns,
   ])
 
   function buildCurrentManualDraftRecord(previewLike = preview) {
@@ -1338,6 +1414,7 @@ function ImportTab() {
     setAmtConv(inferredCharacteristics.amountConvention || 'single_signed')
     setSkipRows(0)
     setApplyCat(true)
+    setEnrichFromSource(false)
     setUseImportedCategories(getDefaultImportedCategoryUsageEnabled(defaultImportCategoryUsageMode))
     setImportedCategorySettings(getBlankImportedCategorySettings())
     setColDate(null)
@@ -1350,6 +1427,7 @@ function ImportTab() {
     setColNotes(null)
     setColPending(null)
     setColAccount(null)
+    setEvidenceColumns(null)
     applyInferredMappingSuggestions(inferredMapping)
     setAccountMap({})
     setCategoryAssignments({})
@@ -1371,6 +1449,7 @@ function ImportTab() {
     setAmtConv('single_signed')
     setSkipRows(0)
     setApplyCat(true)
+    setEnrichFromSource(false)
     setUseImportedCategories(getDefaultImportedCategoryUsageEnabled(defaultImportCategoryUsageMode))
     setImportedCategorySettings(getBlankImportedCategorySettings())
     setColDate(null)
@@ -1383,6 +1462,7 @@ function ImportTab() {
     setColNotes(null)
     setColPending(null)
     setColAccount(null)
+    setEvidenceColumns(null)
     setMappingSuggestions(getBlankMappingSuggestions())
     setAccountMap({})
     setCategoryAssignments({})
@@ -1409,6 +1489,7 @@ function ImportTab() {
     setDateFormatLocked(true)
     setAmtConv(p.amount_convention || 'single_signed'); setSkipRows(p.skip_rows || 0)
     setApplyCat(!!p.apply_categorization)
+    setEnrichFromSource(!!p.enrich_from_source)
     setUseImportedCategories(!!p.use_imported_categories)
     setImportedCategorySettings(extractImportedCategorySettings(p))
     setColDate(cm.date || null); setColAmount(cm.amount || null); setColDebit(cm.debit || null)
@@ -1437,6 +1518,9 @@ function ImportTab() {
     const newColAccount = cm.account || null
     setAccountMap({})
     setColAccount(newColAccount)
+    // A saved list restores the user's picks; its absence keeps null so the default set is derived
+    // (matching the backend, where a profile without evidence_columns falls back to keyword auto-detect).
+    setEvidenceColumns(Array.isArray(cm.evidence_columns) ? cm.evidence_columns : null)
 
     // Validate each stored account ID against the live accounts list — the account
     // may have been deleted since the profile was last saved. Fall back to name-match,
@@ -1504,11 +1588,13 @@ function ImportTab() {
       : null
     setDateFormat(snap.date_format || '%m/%d/%Y'); setDateFormatLocked(true); setAmtConv(snap.amount_convention || 'single_signed')
     setSkipRows(snap.skip_rows || 0); setApplyCat(snap.apply_categorization !== false)
+    setEnrichFromSource(!!snap.enrich_from_source)
     setUseImportedCategories(!!snap.use_imported_categories)
     setImportedCategorySettings(extractImportedCategorySettings(snap))
     setColDate(cm.date || null); setColAmount(cm.amount || null); setColDebit(cm.debit || null)
     setColCredit(cm.credit || null); setColDir(cm.direction || null)
     setColDesc(cm.description || null); setColCategory(cm.category || null); setColNotes(cm.notes || null); setColPending(cm.pending || null); setColAccount(cm.account || null)
+    setEvidenceColumns(Array.isArray(cm.evidence_columns) ? cm.evidence_columns : null)
     setMappingSuggestions(buildProfileMappingSuggestions(previewLike, {
       skipRowsValue: snap.skip_rows || 0,
       amountConvention: snap.amount_convention || 'single_signed',
@@ -1656,6 +1742,7 @@ function ImportTab() {
         setColNotes(null)
         setColPending(null)
         setColAccount(null)
+        setEvidenceColumns(null)
         applyInferredMappingSuggestions(inferredMapping)
       }
     }
@@ -1803,6 +1890,9 @@ function ImportTab() {
     return {
       date: colDate, amount: colAmount, debit: colDebit, credit: colCredit,
       direction: colDir, description: colDesc, category: colCategory, notes: colNotes, pending: colPending, account: colAccount,
+      // Authoritative capture set (see backend _build_evidence_column_plan): exactly these columns are
+      // kept as import evidence. Resolved from the user's picks or the derived default.
+      evidence_columns: resolvedEvidenceColumns,
     }
   }
 
@@ -1970,6 +2060,7 @@ function ImportTab() {
         column_map: columnMap,
         skip_rows: skipRows,
         apply_categorization: applyCat,
+        enrich_from_source: enrichFromSource,
         use_imported_categories: useImportedCategories && !!colCategory,
         imported_category_scope_mode: normalizedImportedCategorySettings.scope_mode,
         imported_category_owner_ids: normalizedImportedCategorySettings.owner_ids,
@@ -2216,6 +2307,7 @@ function ImportTab() {
       amount_convention: amtConv,
       skip_rows: skipRows,
       apply_categorization: applyCat,
+      enrich_from_source: enrichFromSource,
       use_imported_categories: useImportedCategories && !!colCategory,
       imported_category_scope_mode: normalizeImportedCategorySettings(importedCategorySettings).scope_mode,
       imported_category_owner_ids: normalizeImportedCategorySettings(importedCategorySettings).owner_ids,
@@ -2747,6 +2839,9 @@ function ImportTab() {
           title={rawViewerTitle}
           note={rawViewerNote}
           onClose={() => setShowRaw(false)}
+          onLoadMore={rawViewerSupportsLoadMore ? loadMoreRawLines : null}
+          canLoadMore={rawViewerCanLoadMore}
+          loadingMore={rawViewerLoadingMore}
         />
       )}
 
@@ -2822,36 +2917,36 @@ function ImportTab() {
 
       {stage === 'upload' && (
         <div ref={uploadStageRef}>
-        <ImportUploadStage
-          demoLoaded={demoLoaded}
-          chooserOpen={sourceChooserOpen}
-          hasSelectedSource={hasSelectedUploadSource}
-          onOpenChooser={() => setSourceChooserOpen(true)}
-          onCloseChooser={() => setSourceChooserOpen(false)}
-          uploadUsesManualDraft={uploadUsesManualDraft}
-          uploadSelectionLabel={uploadSelectionLabel}
-          profiles={profiles}
-          selectedUploadSource={selectedUploadSource}
-          selectUploadSource={selectUploadSource}
-          editingSourceNameKey={editingSourceNameKey}
-          getSourceNameEditKey={getSourceNameEditKey}
-          sourceNameDraft={sourceNameDraft}
-          setSourceNameDraft={setSourceNameDraft}
-          saveSourceName={saveSourceName}
-          setEditingSourceNameKey={setEditingSourceNameKey}
-          setEditingSourceDescriptionId={setEditingSourceDescriptionId}
-          setSourceDescriptionDraft={setSourceDescriptionDraft}
-          showUploadSourceCreate={showUploadSourceCreate}
-          setShowUploadSourceCreate={setShowUploadSourceCreate}
-          uploadSourceDraftName={uploadSourceDraftName}
-          setUploadSourceDraftName={setUploadSourceDraftName}
-          createUploadDataSource={createUploadDataSource}
-          dropRef={dropRef}
-          fileInputRef={fileInputRef}
-          handleDrop={handleDrop}
-          handleFile={handleFile}
-          loading={loading}
-        />
+          <ImportUploadStage
+            demoLoaded={demoLoaded}
+            chooserOpen={sourceChooserOpen}
+            hasSelectedSource={hasSelectedUploadSource}
+            onOpenChooser={() => setSourceChooserOpen(true)}
+            onCloseChooser={() => setSourceChooserOpen(false)}
+            uploadUsesManualDraft={uploadUsesManualDraft}
+            uploadSelectionLabel={uploadSelectionLabel}
+            profiles={profiles}
+            selectedUploadSource={selectedUploadSource}
+            selectUploadSource={selectUploadSource}
+            editingSourceNameKey={editingSourceNameKey}
+            getSourceNameEditKey={getSourceNameEditKey}
+            sourceNameDraft={sourceNameDraft}
+            setSourceNameDraft={setSourceNameDraft}
+            saveSourceName={saveSourceName}
+            setEditingSourceNameKey={setEditingSourceNameKey}
+            setEditingSourceDescriptionId={setEditingSourceDescriptionId}
+            setSourceDescriptionDraft={setSourceDescriptionDraft}
+            showUploadSourceCreate={showUploadSourceCreate}
+            setShowUploadSourceCreate={setShowUploadSourceCreate}
+            uploadSourceDraftName={uploadSourceDraftName}
+            setUploadSourceDraftName={setUploadSourceDraftName}
+            createUploadDataSource={createUploadDataSource}
+            dropRef={dropRef}
+            fileInputRef={fileInputRef}
+            handleDrop={handleDrop}
+            handleFile={handleFile}
+            loading={loading}
+          />
         </div>
       )}
 
@@ -3221,6 +3316,11 @@ function ImportTab() {
                 },
               }}
             />
+            <ImportEvidenceColumnsSection
+              options={evidenceColumnOptions}
+              checked={resolvedEvidenceColumns}
+              onChange={setEvidenceColumns}
+            />
             {!colAccount && singleAccountNew.enabled && (
               <div style={{
                 marginTop: -7, marginBottom: 14, marginLeft: 42, padding: '8px 10px',
@@ -3563,6 +3663,17 @@ function ImportTab() {
               <input name="apply-categorization-rules" type="checkbox" checked={applyCat} onChange={e => setApplyCat(e.target.checked)} />
               Apply categorization rules on import
             </label>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', fontSize: 13 }}>
+              <input name="enrich-from-source" type="checkbox" checked={enrichFromSource} onChange={e => setEnrichFromSource(e.target.checked)} style={{ marginTop: 2 }} />
+              <span>
+                Enrich existing transactions from this source
+                <span style={{ display: 'block', fontSize: 11, color: 'var(--muted)' }}>
+                  For existing transactions matched as duplicates, this indicates that additional details from this
+                  source (memos, item titles) should be added to the transactions where they can be
+                  used for building rules and other purposes. Enable for sources with rich detail.
+                </span>
+              </span>
+            </label>
             <div style={{ display: 'grid', gap: 3 }}>
               <label
                 style={{
@@ -3683,6 +3794,9 @@ function ImportTab() {
                   note={rawViewerNote}
                   embedded
                   embeddedHeight={300}
+                  onLoadMore={rawViewerSupportsLoadMore ? loadMoreRawLines : null}
+                  canLoadMore={rawViewerCanLoadMore}
+                  loadingMore={rawViewerLoadingMore}
                 />
               ) : null}
               <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
@@ -3795,6 +3909,11 @@ function ImportTab() {
                     {' '}matched existing transactions and were not imported automatically.
                   </div>
                 ) : null}
+                {summary.enrichedCount > 0 ? (
+                  <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
+                    {summary.enrichedCount} existing transaction{summary.enrichedCount === 1 ? '' : 's'} enriched with detail from this source.
+                  </div>
+                ) : null}
                 {summary.skippedCount > 0 ? (
                   <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
                     {summary.skippedCount} rows not imported
@@ -3840,7 +3959,7 @@ function ImportTab() {
                     setAddingStarterCats(true)
                     try {
                       await api.generateStarterSet({ include_leaves: true })
-                      await api.getCategories().then(setCategories).catch(() => {})
+                      await api.getCategories().then(setCategories).catch(() => { })
                       setStarterPromptDismissed(true)
                     } catch {
                       // Leave the prompt up so the user can retry.
@@ -3899,7 +4018,7 @@ function ImportTab() {
         <StarterRulesDialog
           onClose={() => setShowStarterRules(false)}
           onAdded={() => {
-            api.getCategories().then(setCategories).catch(() => {})
+            api.getCategories().then(setCategories).catch(() => { })
             setStarterPromptDismissed(true)
           }}
         />

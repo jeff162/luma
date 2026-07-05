@@ -49,6 +49,7 @@ class ProfileCreate(BaseModel):
     amount_convention:    str = "single_signed"
     skip_rows:            int = 0
     apply_categorization: bool = True
+    enrich_from_source:   bool = False
     use_imported_categories: bool = False
     imported_category_scope_mode: str = IMPORTED_CATEGORY_SCOPE_ALL
     imported_category_owner_ids: list[str] = []
@@ -67,6 +68,7 @@ class ProfileUpdate(BaseModel):
     amount_convention:    Optional[str] = None
     skip_rows:            Optional[int] = None
     apply_categorization: Optional[bool] = None
+    enrich_from_source:   Optional[bool] = None
     use_imported_categories: Optional[bool] = None
     imported_category_scope_mode: Optional[str] = None
     imported_category_owner_ids: Optional[list[str]] = None
@@ -147,6 +149,7 @@ def _normalize_import_source_signature(source: dict) -> dict:
         "amount_convention": str(source.get("amount_convention") or "single_signed").strip() or "single_signed",
         "skip_rows": int(source.get("skip_rows") or 0),
         "apply_categorization": bool(source.get("apply_categorization") is not False),
+        "enrich_from_source": bool(source.get("enrich_from_source")),
         "account_id": str(source.get("account_id") or "").strip(),
         "column_map": {
             key: str(column_map.get(key) or "").strip()
@@ -171,6 +174,8 @@ def _signatures_are_compatible(profile_signature: dict, batch_signature: dict) -
     if profile_signature["skip_rows"] != batch_signature.get("skip_rows"):
         return False
     if profile_signature["apply_categorization"] != batch_signature.get("apply_categorization"):
+        return False
+    if profile_signature["enrich_from_source"] != bool(batch_signature.get("enrich_from_source")):
         return False
 
     profile_map = profile_signature.get("column_map") or {}
@@ -266,13 +271,14 @@ def create_profile(body: ProfileCreate):
               (id, name, filename_pattern, header_fingerprint, template_filename,
                template_file_hash, column_map,
                account_id, date_format, amount_convention, skip_rows,
-               apply_categorization, use_imported_categories, notes)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               apply_categorization, enrich_from_source, use_imported_categories, notes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (pid, normalized_name, body.filename_pattern, body.header_fingerprint,
               body.template_filename, body.template_file_hash,
               json.dumps(column_map), body.account_id, body.date_format,
               body.amount_convention, body.skip_rows,
               1 if body.apply_categorization else 0,
+              1 if body.enrich_from_source else 0,
               1 if body.use_imported_categories else 0,
               body.notes))
     return {"id": pid}
@@ -297,6 +303,7 @@ def update_profile(profile_id: str, body: ProfileUpdate):
         if body.amount_convention    is not None: fields.append("amount_convention = ?");    params.append(body.amount_convention)
         if body.skip_rows            is not None: fields.append("skip_rows = ?");            params.append(body.skip_rows)
         if body.apply_categorization is not None: fields.append("apply_categorization = ?"); params.append(1 if body.apply_categorization else 0)
+        if body.enrich_from_source   is not None: fields.append("enrich_from_source = ?");   params.append(1 if body.enrich_from_source else 0)
         if body.use_imported_categories is not None: fields.append("use_imported_categories = ?"); params.append(1 if body.use_imported_categories else 0)
         if body.notes                is not None: fields.append("notes = ?");                params.append(body.notes)
         imported_category_fields_present = (
@@ -351,7 +358,7 @@ def get_profile_compatible_batches(profile_id: str):
         profile = conn.execute(
             """
             SELECT id, name, header_fingerprint, column_map, account_id, date_format,
-                   amount_convention, skip_rows, apply_categorization
+                   amount_convention, skip_rows, apply_categorization, enrich_from_source
             FROM   csv_import_profile
             WHERE  id = ?
             """,
@@ -383,6 +390,7 @@ def get_profile_compatible_batches(profile_id: str):
             "amount_convention": snapshot.get("amount_convention"),
             "skip_rows": snapshot.get("skip_rows"),
             "apply_categorization": snapshot.get("apply_categorization"),
+            "enrich_from_source": snapshot.get("enrich_from_source"),
             "single_account_new": snapshot.get("single_account_new"),
         })
         if not _signatures_are_compatible(profile_signature, batch_signature):
@@ -469,8 +477,8 @@ def create_profile_from_batch(batch_id: str, body: BatchCreateProfileRequest):
               (id, name, filename_pattern, header_fingerprint, template_filename,
                template_file_hash, column_map,
                account_id, date_format, amount_convention, skip_rows,
-               apply_categorization, use_imported_categories, notes)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               apply_categorization, enrich_from_source, use_imported_categories, notes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             pid, normalized_name, (body.filename_pattern or None), snapshot.get("header_fingerprint"),
             batch["filename"], batch["file_content_hash"],
@@ -479,6 +487,7 @@ def create_profile_from_batch(batch_id: str, body: BatchCreateProfileRequest):
             snapshot.get("amount_convention") or "single_signed",
             int(snapshot.get("skip_rows") or 0),
             1 if snapshot.get("apply_categorization", True) else 0,
+            1 if snapshot.get("enrich_from_source") else 0,
             1 if batch["use_imported_categories"] else 0,
             None,
         ))
