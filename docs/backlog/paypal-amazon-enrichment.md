@@ -5,7 +5,10 @@
 > general. The record below is the *destination*, with a short history of what was explored and dropped
 > so the reasoning isn't lost. The design of record: **PayPal is an ordinary import; the one genuinely
 > new capability is a general feature — enrich an existing transaction with a later import's novel
-> detail.** Amazon is deferred and, when it lands, is built on that same feature, not a bespoke pipeline.
+> detail.** Amazon has since taken its own design pass — the **account + link model** (2026-07-05) —
+> which *reuses* the enrich/dedup match machinery but goes beyond it: Amazon item rows become first-class
+> transactions in an Amazon account, and a new, general **transaction-link** primitive ties the
+> funding card charge to them. See the Amazon section.
 
 ## The core realization: PayPal is an account, not a special source
 
@@ -86,21 +89,226 @@ rule_id, a migration backfill re-derives provenance (currently-matching rule's `
 `data-model.md`. Migration 6. This is general and independent of everything above — and it is exactly the
 manual-guard the enrich-on-duplicate feature relies on.
 
-## Amazon — deferred, and genuinely enrichment (unlike PayPal)
+## Amazon — the account + link model (design pass 2026-07-05)
 
-Amazon is the opposite species: **a merchant, not an account.** There is no Amazon account to import onto
-— its charges already hit your card as bare `AMAZON.COM` rows, and one order fans out into several card
-charges (billed per shipment). The job is to attach item detail to those *existing* card rows: match a
-parsed order-charge `(card last-4, date, amount)` to a card row and enrich it. That is precisely the
-**enrich-on-duplicate feature above**, fed by an Amazon adapter (parse the AZAD order export → per-charge
-detail) instead of a re-imported CSV. So Amazon, when scoped, is built *on* this feature — an adapter + a
-match, not a bespoke reconciler.
+**What changed, and why enrich-only wasn't enough.** The earlier sketch (kept as history at the end of
+this section) made Amazon a pure client of the enrich-on-duplicate feature: match each order-charge
+`(card last-4, date, amount)` to the card row and fold item text into `import_evidence_json`. That is
+correct for *drill-down* ("what was in this charge?") but it cannot deliver the two things that turned out
+to be the actual point of importing Amazon: **per-item categorization** and **dashboard visualization of
+what was bought.** The export data shows why — in 2024, ~11% of orders (4/35) span more than one top-level
+category, so a single category on the one card row is simply wrong for those; and a flat evidence blob
+can't be summed, so "Amazon spend by category" is impossible without structured, queryable per-item
+records. Enrich-only remains the right model for sources that *only* add descriptive text; Amazon needs
+more. (Data correction to the old sketch: an order does **not** fan out into several card charges — in the
+whole export every order maps to a *single* charge; the many-to-one that occurs is several *orders* on the
+same day, which the amount disambiguates.)
 
-Acquisition (unchanged): the open-source **AZAD** extension (`philipmulcahy/azad`, Apache-2.0) exports the
-order CSV; we ingest the file. Keep it loosely coupled — the extension is a swappable front-end. Open
-items for the Amazon pass: AZAD "preview features" gating (which item fields a plain install exports);
-whether multi-item/partial orders warrant more than attaching items to one card row; Amazon's own
-`payments` card record could map to an account, revisit then.
+**The model: Amazon item rows become transactions in an Amazon account; the card charge is excluded and
+linked.** This is the PayPal "it's an account" reframe applied to Amazon, plus an explicit link. Note an
+"account" here carries **no balance and no asset/net-worth role** — in this app an account is only a
+reporting / owner dimension on a transaction, and the only aggregation is totaling spending and income. So
+the "Amazon account" is an *ordinary* account, not a special pass-through kind, and there is nothing to
+suppress.
+
+- Item rows from the AZAD **items** export become **first-class transactions in an "Amazon" account** — each
+  with its own category (from Amazon's taxonomy, user-adjustable), so categorization, rules,
+  `category_source`/the manual guard, dashboards, and search all work unchanged. This is why the account
+  model (B) beats a second-class line-item model (A): it *reuses the entire spending stack* instead of
+  re-implementing categorization + reporting for a sub-entity.
+- The matching `AMAZON.COM` **card** charge (already in the ledger from the card CSV) is **recategorized into
+  an `exclude_from_totals` category** (an "Amazon" / transfer category) and **linked** to those item rows, so
+  the money is counted once — on the itemized side. Exclusion is just a category assignment (the existing
+  money-movement mechanism); doing it *conditionally* (only for itemized orders — a blanket
+  `AMAZON.COM → exclude` rule would wrongly drop every un-itemized Amazon charge from totals) is exactly what
+  the link expresses, and is why the link is the one genuinely new primitive here.
+
+**Correctness rule — the swap is atomic, and orders is the activating file.** An order's item rows count
+toward spending **only once that order is linked to and has excluded its card charge**; until then they are
+inert detail. So the **orders** export *activates* an order (link + exclude + a coarse categorized spend
+from the concatenated `items` text if the items file isn't loaded yet); the **items** export *refines* an
+activated order's coarse row into per-item categorized rows (same total, same link). Ingestion is therefore
+order-independent and idempotent, keyed on **`order id`** (a durable join-key column — **no staging table**;
+the Amazon-account rows *are* the state), and it never transiently double-counts.
+
+**Amounts — allocate the net cash charge across items (item prices are only weights).** The items file's
+prices do **not** reconcile to the charge: in 2024, 12 of 36 orders are off (often by $10+) because list
+prices ignore discounts, coupons, Subscribe & Save, and promo credits. So the item transactions' amounts are
+**not** taken from the items file — instead the **authoritative matched charge, net of any refund, is
+allocated across the order's items in proportion to their list prices**, so the per-category amounts always
+sum exactly to the real card charge. List price is kept in evidence for reference. This is robust to
+discounts / promos / tax / shipping all at once (it never depends on item prices summing to anything), and it
+replaces the earlier "add one tax/shipping row" idea. Orders-only (no items yet) → the coarse single row
+carries the whole charge amount.
+
+**Two files, disjoint halves.** `orders` carries the charge/link half (`payments` → `(last4, date,
+amount)`, `total`); `items` carries the categorization half (per-item `price`, `category`, ASIN). They join
+on `order id`. Both are required for the full model; each alone degrades predictably (items-only = uncounted
+detail; orders-only = activated + one coarse category). Auto-detect each by header signature and accept both
+in one drop, any order. `payments` is a **compound string** needing a dedicated Amazon parser (not the
+generic column mapper), which also splits multi-method orders (card + `Rewards Points`, the points leg
+carrying no dollar amount). Skip the export's `=SUBTOTAL(...)` footer row.
+
+**Orphans are reported, not blocked (bimodal).** AZAD exports one file per (kind × year) with all rows, so
+the two files for a year *should* have identical `order id` coverage. Orphan *count* is therefore
+diagnostic: ~all orphaned → benign ("upload the partner file"); a *small fraction* orphaned → a genuine gap
+in one export, with no procedural user fix — surfaced for review (not framed as a boundary artifact).
+**Manual remedy** is the model's two operations exposed by hand: manually **link** an order to its card
+charge (activation), or manually **itemize** a coarse order — surfaced fix-in-place on the import-file /
+duplicate report (where orphans appear), and reachable from the transaction register / detail for ad-hoc
+cleanup. Manual itemize is the same "create linked categorized item rows for a charge" capability the
+importer uses, exposed to the user.
+
+**The link is a general primitive; Amazon is its first client.** Design it as a typed association between a
+transaction and a set of counterpart transactions (with a role/kind), so it can *later* carry (a)
+credit-card **payment-leg pairing** — the clean two-sided case (checking debit ↔ card credit, equal amount)
+that plausibly falls out of the existing cross-account dedup — and (b) a **cash-flow vs spending lens.**
+**Do not build those now.** Honest scoping: the payment *leg-pair* is cheap, but "payment ↔ the charges it
+settled" is many-to-many, period/statement-based, and does **not** fall out of dedup; and a cash-flow *view*
+("money leaving bank accounts over time") is largely a reporting lens over account-type + money-movement
+flags, mostly independent of any link. So the primitive is built general-shaped for Amazon and
+*accommodates* the CC/cash-flow work without committing to the reconciler that was reverted (see below).
+
+**Decisions settled (2026-07-05):**
+
+- **Amounts / tax / shipping → allocation** (see "Amounts" above): allocate the net cash charge by
+  list-price weight; no separate tax row. Supersedes the earlier "one tax/shipping row" option, which the
+  data killed (item prices don't reconcile to the total).
+- **Orders with no matching card charge** (distinct from file-pairing orphans) — disambiguate via
+  `payments`: a card+amount we can't find → the charge is on an *untracked card*, so the items are the sole
+  record and count directly (no exclusion); a payment made only from a **non-cash instrument** —
+  `Rewards Points` or `Amazon gift card balance` (both appear as payment methods carrying no dollar amount;
+  gift-card balance shows in 12 of the sampled orders), or an off-card / gift order (`D01…`, no card) →
+  **non-cash**: record the items as detail but don't count them, and surface for manual handling. When an
+  instrument is *mixed* with a card (`Amazon gift card balance; Riverstone …`), only the card leg is
+  cash — allocate that; the instrument-funded remainder is non-cash. A refund reduces the allocation base
+  (`charge − refund`); a full refund nets the order's items to zero.
+- **Received rewards / gift cards → not in this data (income non-goal).** `Rewards Points` and
+  `Amazon gift card balance` are real money that entered the account *earlier*, but the AZAD *order* export
+  shows only what was *spent* from them, never the *credit* that loaded them (that lives on Amazon's
+  separate gift-card / rewards **activity** pages, which AZAD doesn't export). So surfacing received gift
+  cards or rewards as income isn't sourceable here; amounts are small. If a future export ever carries that
+  activity, mapping a credit → an income transaction is trivial — a data gap, not a design gap. (Note: gift
+  cards the user *buys* — the `gift` column, items like "…Gift Cards…" — are ordinary outbound spend.)
+- **Account semantics → nothing special needed.** An account is only a reporting / owner dimension with no
+  balance or net-worth role, so the Amazon account is an ordinary account — surface it normally. (Dropped
+  the earlier "synthetic / pass-through / non-balance flavor" idea; there is nothing to suppress.)
+- **Multiple Amazon accounts** — `n` of them, user-named (may map to different owners). On import the user
+  picks/creates which Amazon account the file targets (the file has no account column — the existing
+  single-account import pattern); the orders file's payment card last-4 is a **prefill hint** for that pick
+  but not authoritative (accounts can share a card — all 179 charges in the sample are one card), and the
+  items file inherits the account via its order-id join. (Distinct from this pick, the same card last-4
+  keys the **funding-source → account map** used for *charge* matching — design pass 2026-07-09.)
+- **Retroactive reclassification** — importing a past year flips those `AMAZON.COM` charges into the excluded
+  "Amazon" / transfer category (overriding a manual category is acceptable; the user then re-categorizes the
+  item rows). Reported and reversible via batch undo. The report **surfaces charges whose manual category was
+  changed** and **shows the linked Amazon import transactions there even when their detail is incomplete**,
+  so the reclassification is never opaque.
+
+**Acquisition (unchanged):** the open-source **AZAD** extension (`philipmulcahy/azad`, Apache-2.0) exports
+the orders and items CSVs; we ingest the files. Keep it loosely coupled — the extension is a swappable
+front-end, and the `order url` column is an auth-gated per-account deep link (fetching it server-side
+redirects to Amazon sign-in), usable only as a UI click-through, never a runtime data source. Open item:
+AZAD "preview features" gating (which item fields a plain install exports).
+
+**Ingestion ergonomics (deferred — the CSV is fine, this is polish).** AZAD renders its result as an
+on-screen table and both it and Luma run in the same browser, prompting "can we skip the file?" Options,
+lightest to heaviest: (1) **paste/drag the rendered table into Luma** — AZAD's "plain table" view is
+selectable; a Luma paste target reads the clipboard `text/html` (or tab-separated `text/plain`) and parses
+it, same as CSV, no file (caveat: set AZAD "Show → all entries" so pagination doesn't truncate); this is
+the realistic win. (2) a **Luma-owned extension / AZAD fork** that POSTs straight to the local backend —
+best UX but a new artifact to maintain and it couples us to Amazon's DOM, against the swappable-front-end
+principle. (3) **Luma drives a browser to log in and fetch** — rejected: a web app can't read a cross-origin
+window, and a backend headless scrape reintroduces exactly what AZAD avoids (the bot wall we already hit,
+credential/2FA handling, ToS). Note there is **no cross-origin "drag one window into another"** capability;
+option 1's "drag" is just HTML5 drag-drop of the selection, i.e. the same clipboard parse.
+
+**Earlier framing (superseded 2026-07-05, kept for history).** The first sketch called Amazon "a merchant,
+not an account — the opposite species from PayPal," and scoped it as enrich-only: attach item text to the
+existing card row via the enrich-on-duplicate feature, an adapter + a match, not a bespoke reconciler. That
+was right about acquisition and about reusing the dedup match, but it was abandoned once per-item
+*categorization* and *visualization* became firm requirements — which the account + link model above serves
+and enrich-only cannot. The durable insight it got right: Amazon detail must attach to *existing* card
+charges; the model just grew from "enrich the charge" to "itemize into a linked Amazon account."
+
+## Amazon — funding-source → account mapping (design pass 2026-07-09)
+
+**Why.** `find_matching_charge` keyed the card charge on the account's stored mask (`COALESCE(p.mask,
+a.mask) = payments last-4`). Real imported ledgers rarely carry masks (CSV imports don't populate them), so
+on the first multi-year Amazon import **zero of 56 cash charges matched** — every card charge stayed in its
+spending category *and* the Amazon items also counted (double-count), and nothing moved into the excluded
+Amazon Funding category. The last-4 is the right *precision* signal but the wrong *hard* dependency: absent
+masks it silently matches nothing.
+
+**The fix, two tiers.** (1) **A user-maintained funding-source map** — the authoritative signal: the user
+tells us which system payment account each Amazon payment instrument (a card `last-4` + network label) is,
+so the matcher constrains the charge search to that account (strong enough to also resolve the same-amount
+ambiguous cases). (2) **A graceful-last-4 fallback** for unmapped instruments — *landed this pass*: last-4
+now disambiguates only among accounts that *carry* a mask; a maskless account can't contradict it, so
+amount + date + uniqueness carries the match. The map is the durable answer; the fallback is what makes an
+un-set-up ledger work at all.
+
+**What's mapped, and its cardinality.** The instrument (`last-4` + network, e.g. "Fablecard ···4455")
+→ a system funding account. Discovered from the `payments` field of the files imported into an Amazon
+account; the distinct set is tiny and stable (the sample: three years, effectively one card) and
+**accrues** — new instruments append as they appear, old ones stay so historical orders keep resolving.
+**Many-to-one is first-class**: several Amazon accounts may fund from the same card (independent, correct
+assertions, not a conflict), and a card reissue (new last-4, same account) is just another instrument row
+pointing at the same account. A third state — **"untracked"** — is explicit ("this card isn't an account I
+hold"), making the doc's existing *untracked-card → items count directly* disposition a deliberate choice
+rather than an inference from a failed search.
+
+**Storage — one global table, optional per-account override (dissolves "one table vs. split by account").**
+Key on the instrument; value = funding account id (nullable / sentinel = untracked); scope = *all Amazon
+accounts* by default, or *one* Amazon account for an override. Resolution prefers a specific-account
+override, else the global default. Global-by-default gives the cross-account reuse the user asked for (map
+···4455 once, it applies when importing for any Amazon account); the per-account override is the escape
+hatch for the rare different-owners-same-last-4 collision — not a parallel structure. Not per-batch, and not
+a column on the account.
+
+**Where it's viewed / edited (the actual open question).** A persistent **"Amazon funding sources" section
+beneath the Amazon upload form**, mirroring the *pattern* of the generic Import tab's "Data sources" section
+(`ImportHistorySection`) that sits under its upload form — always reachable by opening the Amazon tab, never
+buried in a transient import step. The import flow reads/writes the *same* table: a dropped file surfaces
+only **new/unmapped** instruments inline (prefilled from the table); everything already mapped resolves
+silently. Secondary echo (optional): the account-detail view on the Accounts page can show that account's
+effective mappings read-mostly — but the canonical editable home is the Amazon-tab section, since the table
+is global. (The `payments` last-4 remains, separately, a weak *prefill hint* for which Amazon account to
+import into — a different use of the same field; see the "Multiple Amazon accounts" decision.)
+
+**Matcher resolution order.** override map → global map → graceful-last-4 fallback → (no match) manual link.
+A mapped instrument constrains the search to its funding account (`t.account_id = mapped`); untracked
+short-circuits to "items count directly, no charge"; unmapped falls to amount + date + graceful-last-4.
+
+**Shared components — reuse before building (per `shared-components.md`).**
+
+- **Section shell + controls:** build from `ui.jsx` primitives — `Card`, `Button`, `Select` (the
+  funding-account picker), `EmptyState`, `Badge`, `Spinner` — the same primitives `ImportHistorySection` is
+  built from; mirror that section's structure rather than a bespoke shell. No new panel/table control.
+- **Remove + undo:** `AppConfirmDialog` (if a confirm is wanted) and the shared **`UndoToast`** for a
+  reversible mapping removal, matching the app-wide undo pattern.
+- **Help:** extend the existing help registry (`help/content.jsx`) — the `amazon-import` `FeatureExplainer`
+  topic, or a sibling — for the funding-source concept; no ad-hoc help text.
+- **No shared account picker exists** (the index lists `CategoryPicker` / `TagPickerWithCreate` but no
+  account equivalent), so the target picker is a `Select` over the accounts list — reuse `AmazonImportTab`'s
+  existing accounts fetch rather than adding a second one.
+
+**Watchlist tipping points this surfaces (per `shared-components.md` → watchlist) — flag, don't silently
+add.**
+
+- **"Map a discovered identifier → account (existing or + New)"** already exists inline in the CSV
+  importer's account-mapping row (`ImportExport.jsx`); this funding-source row is a **second** instance. It
+  is not a shared control today — keep the two visually/behaviorally consistent, and this is the tipping
+  point to consider extracting a small shared `AccountMappingRow` (value label + account `Select` + "+ New").
+- **Reference-data fetch (accounts)** — `AmazonImportTab` already refetches accounts (a listed watchlist
+  instance) and the section needs the same list. Reuse that fetch; a 3rd+ independent refetch is the trigger
+  for a cached `useAccounts` hook (à la `useTags`).
+
+**Matcher hardening (landed this pass, independent of the map; tests in `test_amazon_enrich.py`).** Two bugs
+in `find_matching_charge`: (a) the last-4 hard-requirement → the graceful degrade above; (b) a **$0 order
+self-matched its own just-created $0 item** as the "charge" (the search excluded neither the Amazon account
+nor a non-positive amount), moving a phantom item into Amazon Funding — now the search excludes the target
+Amazon account and a `$0` charge never matches. These make the *fallback* correct; the map builds on top.
 
 ## What was explored and reverted (so the history isn't a mystery)
 
@@ -109,10 +317,19 @@ a headless two-axis reconciler (`p2p record × funding counterpart`), source ada
 source (schema + partial-unique singleton), an owner+account pairing step, and a persisted reconciliation
 report. It was reverted in favor of the ordinary-import + general-enrich direction above. Two things
 survived: **`display_name_source`** (general, kept) and the **delta-merge idea** (repurposed as the enrich
-engine). The reconciler itself was PayPal-shaped and neither PayPal (an account) nor Amazon (enrich-only)
-actually needs its create/transfer dispositions, so it was deleted rather than parked; Amazon's simpler
-need is served by the enrich-on-duplicate feature. The reasoning that led here — "PayPal is an account,"
-"Amazon is a merchant," "transfers are categorization" — is the durable part.
+engine). The reconciler itself was PayPal-shaped: its heavyweight create/transfer dispositions, owner+
+account pairing, and `kind` system-source were more than either source needed, so it was deleted rather
+than parked. The reasoning that led away from it — "PayPal is an account," "transfers are categorization"
+— is the durable part.
+
+> **Superseded by the 2026-07-05 Amazon pass.** This section originally added "Amazon is a merchant, not
+> an account" and "Amazon's need is served by enrich-only" as durable conclusions. The account + link
+> model above **reverses** the first (Amazon becomes an *account* precisely to get first-class item
+> categorization) and outgrows the second (enrich-only can't do per-item category or
+> dashboard rollups). Note this is *not* a return to the reverted reconciler: the new **transaction-link**
+> is a single lightweight typed association, not the two-axis reconciler with its pairing step and
+> system-source. What survived the revert still stands — `display_name_source` and the delta-merge enrich
+> engine; the Amazon model simply adds a link on top.
 
 ## Build plan
 
@@ -138,7 +355,60 @@ need is served by the enrich-on-duplicate feature. The reasoning that led here �
    mutates a row *outside* the batch, `reverse_batch_enrichments` runs in **both** `undo_batch` and the
    `replace_batch_id` re-import path *before* the duplicate records (which hold the deltas) are deleted —
    otherwise the change would be orphaned and un-reversible. Covered by `test_import_auto_enrich.py`.
-4. **Amazon** (separate, later): an AZAD adapter feeding the same enrich path.
+4. **Amazon** (separate, later) — the **account + link model** (see the Amazon section). Not "feed the
+   enrich path"; it grew into its own pipeline: (a) a general **transaction-link** primitive (typed
+   association between a transaction and its counterpart set) — **landed (2026-07-06):**
+   `services/txn_links.py` (`txn_link` + `txn_link_member` tables — a link groups transactions under a
+   `kind` with a per-member `role`, plus an optional `external_ref` and `metadata_json`; pure
+   association, never mutates the linked rows) with backup/restore/wipe wiring; covered by
+   `test_txn_links.py`. (b) an Amazon **account** whose item
+   rows are first-class categorized transactions (an ordinary account — no balance/asset role — chosen at
+   import; the engine just takes an `account_id`). (c) an AZAD **two-file adapter** — **parsing + engine
+   landed (2026-07-06):** `services/amazon_import.py` (source-pluggable: a thin `read_export` front-end
+   over a reusable `rows → orders` core — join on `order id`, `classify_order`, `allocate`) covered by
+   `test_amazon_import.py`; and `routers/import_export/amazon.py` (`apply_amazon_order` /
+   `reverse_amazon_order`: create item txns, allocate the net cash charge, find + exclude the matched card
+   charge into the "Amazon Funding" category, link charge↔items with the prior category stashed for undo;
+   non-cash and untracked-card and ambiguous-match dispositions; idempotent by order id) covered by
+   `test_amazon_enrich.py`. **Import run + UI landed (2026-07-06):** `run_amazon_import` (batch creation,
+   orders-activates / items-refines, coarse row for orders-only) and the `POST /amazon/import` endpoint
+   (covered by `test_amazon_endpoint.py`), with reversal wired into `undo_batch` and the re-import replace
+   path via `reverse_batch_amazon_links`; a dedicated **Amazon tab** on Import / Export
+   (`AmazonImportTab` — account pick/create, multi-file drop, result summary) surfaced through the shared
+   `ui.jsx` primitives; a `FeatureExplainer` **help topic** (`amazon-import`) covering AZAD install +
+   export steps; and drop-routing on the general CSV importer (a dropped AZAD file is header-sniffed via
+   `lib/amazonDetect.js` and handed to the Amazon tab); the batch is stamped
+   `source_kind = 'marketplace:amazon'` so the recent-import history groups these under an "Amazon"
+   entry rather than "unknown data source". (b) the Amazon **account** is an ordinary account
+   with an `ACCOUNT_TYPES` entry `kind: 'marketplace'` — excluded from the generic importer's type/account
+   pickers (see `architecture.md` → "Marketplace accounts — the extension pattern"). (d) the `payments`
+   compound-string parser — **landed** (in `amazon_import.py`). (e) orphan reporting — the import **summary**
+   reports the bimodal orphan counts; **still to build:** the fully-manual **link / itemize** actions on the
+   report (manually link an order to a charge, or itemize a coarse order) — the automatic path is done, the
+   hand-resolution UI is not.
+   Decisions are settled in the Amazon section (allocation of the net cash charge, no-matching-charge
+   disambiguation, ordinary-account semantics, multi-account, retroactive reclassification).
+5. **Amazon funding-source → account map** (design pass 2026-07-09; see that section) — **landed
+   (2026-07-09).** Storage: `amazon_funding_map` (migration 10) keys an instrument (`last-4` + network) →
+   funding account, `funding_account_id` NULL = the explicit *untracked* state, `amazon_account_id` NULL =
+   global default / non-NULL = per-account override, with two partial unique indexes (global vs. override
+   scope). Resolution + CRUD live in `services/amazon_funding.py` (`resolve_funding_account`,
+   `upsert_funding_source`, `delete_funding_source`, `list_funding_map`); `find_matching_charge` gained a
+   `restrict_account_id` that constrains the search to the mapped account and drops the last-4 clause, and
+   `apply_amazon_order` resolves the map first (**override → global → graceful-last-4 → no match**;
+   untracked short-circuits). `match_network` threads through `OrderDisposition`/`classify_order`, and
+   `run_amazon_import` returns the run's `instruments` with their map state. Endpoints: `GET/PUT/DELETE
+   /amazon/funding-sources`. `amazon_funding_map` rides in backups (dump/restore/wipe, dropping a mapping
+   whose named account didn't survive). UI: the persistent **`AmazonFundingSourcesSection`** under the
+   Amazon upload form (built from `ui.jsx` primitives — `Card`/`Select`/`Button`/`Badge`/`EmptyState`/
+   `Spinner`, `UndoToast` for a reversible removal, mirroring `ImportHistorySection`); a completed import
+   feeds its discovered instruments in so new/unmapped ones surface inline as **Needs mapping** rows, and
+   the summary nudges when an unmapped card was seen. Help topic `amazon-funding-sources`. Tests:
+   `test_amazon_funding.py` (resolution order, untracked, upsert/dedupe, many-to-one) + `test_amazon_enrich.py`
+   (mapped disambiguates a same-amount pair; untracked skips the match). **Watchlist flagged, not extracted**
+   (per `shared-components.md`): the funding row is the 2nd inline "map identifier → account" control (the CSV
+   importer's is the 1st) → the `AccountMappingRow` extraction tipping point; the section reuses the tab's
+   existing accounts fetch (a 3rd refetch would trigger a `useAccounts` hook).
 
 **Capture side — a user-picked "extra detail columns" selector (supersedes the keyword tweak).** The
 engine can only fold in detail the import *captured*, and today extra evidence is auto-detected purely by

@@ -103,7 +103,7 @@ def get_db(db_path: str | None = None):
 # rule-backed recurring series (`category_rule.is_recurring` + `recurring_series.rule_id`; the
 # `recurring_membership_override` table is created by the same CREATE TABLE IF NOT EXISTS script).
 
-CURRENT_VERSION = 8
+CURRENT_VERSION = 10
 
 MIGRATIONS = {}
 
@@ -235,6 +235,43 @@ def _add_import_profile_enrich_from_source(conn):
     # duplicate's novel detail into the existing transaction it matched (silently, but reported and
     # reversible). Off by default. Fresh installs get the column from the baseline CREATE TABLE.
     conn.execute("ALTER TABLE csv_import_profile ADD COLUMN enrich_from_source INTEGER NOT NULL DEFAULT 0")
+
+
+@migration(9)
+def _add_import_batch_source_kind(conn):
+    # Provenance class of an import batch, for history grouping: NULL = ordinary CSV import,
+    # 'marketplace:<vendor>' marks a dedicated marketplace importer's batch (see the import_batch baseline
+    # CREATE TABLE). Fresh installs get the column from that baseline; existing databases gain it here.
+    conn.execute("ALTER TABLE import_batch ADD COLUMN source_kind TEXT")
+
+
+@migration(10)
+def _add_amazon_funding_map(conn):
+    # Amazon funding-source → account map: keys a payment instrument (card last-4 + network) to the
+    # system account it charges, so the Amazon importer can constrain its card-charge search. Fresh
+    # installs get the table + its partial unique indexes from the baseline CREATE TABLE above; existing
+    # databases gain them here (the same DDL, so both paths converge).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS amazon_funding_map (
+            id                 TEXT PRIMARY KEY,
+            last4              TEXT NOT NULL,
+            network            TEXT,
+            amazon_account_id  TEXT REFERENCES account(id) ON DELETE CASCADE,
+            funding_account_id TEXT REFERENCES account(id) ON DELETE CASCADE,
+            created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_amazon_funding_global
+            ON amazon_funding_map(last4, COALESCE(network, ''))
+            WHERE amazon_account_id IS NULL
+    """)
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_amazon_funding_override
+            ON amazon_funding_map(last4, COALESCE(network, ''), amazon_account_id)
+            WHERE amazon_account_id IS NOT NULL
+    """)
 
 
 def get_db_version(conn) -> int:
@@ -591,7 +628,11 @@ def init_db(db_path: str | None = None):
                 deduped_count    INTEGER NOT NULL DEFAULT 0,
                 status           TEXT NOT NULL DEFAULT 'completed',
                 use_imported_categories INTEGER NOT NULL DEFAULT 0,
-                config_snapshot  TEXT
+                config_snapshot  TEXT,
+                -- Provenance class of the import, for history grouping. NULL = an ordinary CSV import;
+                -- 'marketplace:<vendor>' (e.g. 'marketplace:amazon') marks a dedicated marketplace
+                -- importer's batch so the history groups it under that vendor instead of "unknown source".
+                source_kind      TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_import_batch_file_hash ON import_batch(file_content_hash);
 
@@ -686,6 +727,56 @@ def init_db(db_path: str | None = None):
                 state      TEXT NOT NULL,
                 PRIMARY KEY (txn_id, series_id)
             );
+
+            -- Typed links between transactions: a general association primitive (services/txn_links.py).
+            -- A link groups transactions under a `kind` (e.g. 'amazon_order'), each member carrying a
+            -- `role` within the link (e.g. the funding 'charge' vs the 'item' rows it was split into).
+            -- `external_ref` is the external entity the link represents (an Amazon order id);
+            -- `metadata_json` is kind-specific (e.g. what a reversal must restore). The primitive only
+            -- *associates* rows — it never mutates the linked transactions; the owning feature does that.
+            CREATE TABLE IF NOT EXISTS txn_link (
+                id            TEXT PRIMARY KEY,
+                kind          TEXT NOT NULL,
+                external_ref  TEXT,
+                metadata_json TEXT,
+                created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_txn_link_ref ON txn_link(kind, external_ref);
+
+            CREATE TABLE IF NOT EXISTS txn_link_member (
+                link_id TEXT NOT NULL REFERENCES txn_link(id) ON DELETE CASCADE,
+                txn_id  TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+                role    TEXT NOT NULL,
+                PRIMARY KEY (link_id, txn_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_txn_link_member_txn ON txn_link_member(txn_id);
+
+            -- Amazon funding-source → account map (see docs/backlog/paypal-amazon-enrichment.md →
+            -- "funding-source → account mapping"). Keys an Amazon payment instrument (a card last-4 +
+            -- network label) to the system account it charges, so the Amazon importer can constrain its
+            -- card-charge search to that account. Three states: a row with funding_account_id set = mapped;
+            -- a row with funding_account_id NULL = "untracked" (an explicit "this card isn't an account I
+            -- hold" — items count directly, no charge); no row = unmapped (falls to the graceful-last-4
+            -- match). amazon_account_id NULL = the global default (applies when importing for any Amazon
+            -- account); non-NULL = a per-account override that wins over the global row for that account.
+            CREATE TABLE IF NOT EXISTS amazon_funding_map (
+                id                 TEXT PRIMARY KEY,
+                last4              TEXT NOT NULL,
+                network            TEXT,
+                amazon_account_id  TEXT REFERENCES account(id) ON DELETE CASCADE,
+                funding_account_id TEXT REFERENCES account(id) ON DELETE CASCADE,
+                created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            -- One row per instrument per scope. Split in two because SQLite treats NULLs as distinct in a
+            -- unique index, so the global (amazon_account_id IS NULL) rows need their own partial index to
+            -- be deduped on (last4, network); the override rows dedupe on all three columns.
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_amazon_funding_global
+                ON amazon_funding_map(last4, COALESCE(network, ''))
+                WHERE amazon_account_id IS NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_amazon_funding_override
+                ON amazon_funding_map(last4, COALESCE(network, ''), amazon_account_id)
+                WHERE amazon_account_id IS NOT NULL;
         """)
         init_merchant_renames(conn)
 

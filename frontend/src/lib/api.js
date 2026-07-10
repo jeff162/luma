@@ -421,6 +421,27 @@ export const api = {
       return res.json()
     })
   },
+  // AZAD Amazon order/items export(s): one or both files, sniffed server-side by header (a dropped file
+  // on the general importer is detected client-side via lib/amazonDetect and routed here).
+  importAmazon: (files, accountId) => {
+    const fd = new FormData()
+    for (const f of files) fd.append('files', f)
+    fd.append('account_id', accountId)
+    return fetch('/api/import-export/amazon/import', { method: 'POST', body: fd }).then(async res => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }))
+        throw buildResponseError(err, res.status)
+      }
+      signalDataMutated()
+      return res.json()
+    })
+  },
+  // Amazon funding-source → account map: which system account each Amazon payment instrument (card
+  // last-4 + network) charges, so the importer can match + exclude the card charge. Global by default,
+  // with an optional per-Amazon-account override (see docs/backlog/paypal-amazon-enrichment.md).
+  getAmazonFundingSources:    ()     => request('/import-export/amazon/funding-sources'),
+  saveAmazonFundingSource:    (body) => request('/import-export/amazon/funding-sources', { method: 'PUT', body: JSON.stringify(body) }),
+  deleteAmazonFundingSource:  (id)   => request(`/import-export/amazon/funding-sources/${id}`, { method: 'DELETE' }),
   // Shared (tenant-wide) "Group Imported Categories" workspace draft. Not a per-user preference — it
   // stages the one shared category tree, so it lives in import_workflow_state, not ui_preference.
   getCategoryWorkspaceDraft:  ()      => request('/import-export/category-workspace-draft'),

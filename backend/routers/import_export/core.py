@@ -3293,6 +3293,8 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             # Reverse any enrichments the batch being replaced applied to existing rows before its
             # duplicate records (which hold the deltas) are superseded.
             reverse_batch_enrichments(conn, replace_batch_id)
+            from .amazon import reverse_batch_amazon_links  # lazy: avoid the core↔amazon import cycle
+            reverse_batch_amazon_links(conn, replace_batch_id)
             conn.execute("DELETE FROM txn WHERE import_batch_id = ?", (replace_batch_id,))
             conn.execute("UPDATE import_batch SET status = 'undone' WHERE id = ?", (replace_batch_id,))
 
@@ -4112,7 +4114,7 @@ def list_batches():
         _reconcile_batch_history(conn, [row["id"] for row in batch_rows])
         batches = conn.execute("""
             SELECT b.id, b.profile_id, b.filename, b.file_content_hash, b.imported_at, b.row_count, b.skipped_count,
-                   b.deduped_count, b.status, b.use_imported_categories, b.config_snapshot, p.name AS profile_name,
+                   b.deduped_count, b.status, b.use_imported_categories, b.config_snapshot, b.source_kind, p.name AS profile_name,
                    EXISTS(
                        SELECT 1
                        FROM   txn t
@@ -5259,6 +5261,11 @@ def undo_batch(batch_id: str, force: bool = Query(False)):
         # records below — those records hold the delta needed to undo the change to the pre-existing
         # (non-batch) target rows, which otherwise would be orphaned and un-reversible.
         reverse_batch_enrichments(conn, batch_id)
+        # Same concern for Amazon links: the matched card charge sits *outside* this batch, so restore
+        # its prior category from the link metadata before the batch's item rows are deleted. Imported
+        # lazily — amazon.py imports from this module, so a top-level import would be circular.
+        from .amazon import reverse_batch_amazon_links
+        reverse_batch_amazon_links(conn, batch_id)
 
         conn.execute("DELETE FROM txn WHERE import_batch_id = ?", (batch_id,))
 

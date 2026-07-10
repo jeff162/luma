@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from backend.db.database import get_db, init_db, set_current_db_path
+from backend.db.database import get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.services.duplicate_detection import account_skipped_duplicate_summary
 
 
@@ -55,6 +55,9 @@ class AccountDuplicateSummaryTests(unittest.TestCase):
         self.token = set_current_db_path(str(self.db_path))
 
     def tearDown(self):
+        # Reset the db-path ContextVar set in setUp — without this it leaks the (now-deleted) temp path
+        # into later tests, redirecting their `get_db()` and breaking full-stack test isolation.
+        reset_current_db_path(self.token)
         self.tempdir.cleanup()
 
     def _seed(self):

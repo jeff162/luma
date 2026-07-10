@@ -605,6 +605,15 @@ def build_backup_data(conn) -> dict:
             # user's per-transaction pin/exclude corrections that survive scans.
             "recurring_series": dump("recurring_series"),
             "recurring_membership_overrides": dump("recurring_membership_override"),
+            # Typed transaction links (services/txn_links.py): the link rows plus their membership.
+            # Without these a restore would silently drop every link (e.g. an Amazon order's charge↔item
+            # association), the same failure the tag attachments guard against above.
+            "txn_links":         dump("txn_link"),
+            "txn_link_members":  dump("txn_link_member"),
+            # Amazon funding-source → account map (services/amazon_funding.py): the instrument→account
+            # mappings the Amazon importer resolves charges against. Without these a restore would drop
+            # the user's funding setup and re-imports would fall back to the graceful-last-4 match.
+            "amazon_funding_map": dump("amazon_funding_map"),
             # Tag system: the tag definitions plus every attachment surface (transaction, category/
             # group, account, rule). Without these a restore silently dropped all tagging.
             "tags":           dump("tag"),
@@ -734,6 +743,10 @@ def _wipe_user_data_tables(conn):
     conn.execute("DELETE FROM tag")
     # Membership overrides reference both txn and recurring_series, so clear them before either.
     conn.execute("DELETE FROM recurring_membership_override")
+    # Link members reference txn (and link) via ON DELETE CASCADE; the link rows themselves have no FK
+    # to txn, so they must be deleted explicitly or they'd survive the wipe as orphans.
+    conn.execute("DELETE FROM txn_link_member")
+    conn.execute("DELETE FROM txn_link")
     conn.execute("DELETE FROM txn")
     # After txn (which references recurring_series via recurring_series_id), before category/account
     # (which recurring_series references).
@@ -745,6 +758,9 @@ def _wipe_user_data_tables(conn):
     conn.execute("DELETE FROM category_rule")
     conn.execute("DELETE FROM merchant_rename")
     conn.execute("DELETE FROM csv_import_profile")
+    # Amazon funding-source → account map references account (ON DELETE CASCADE), so clear it before
+    # account so it doesn't survive as an orphan / rely on cascade during the deferred-FK wipe.
+    conn.execute("DELETE FROM amazon_funding_map")
     conn.execute("DELETE FROM category")
     conn.execute("DELETE FROM account")
     conn.execute("DELETE FROM owner")
@@ -824,6 +840,9 @@ def restore_backup(body: RestoreRequest):
     ui_preferences = [dict(row) for row in d.get("ui_preferences", [])]
     recurring_series = [dict(row) for row in d.get("recurring_series", [])]
     recurring_membership_overrides = [dict(row) for row in d.get("recurring_membership_overrides", [])]
+    txn_links = [dict(row) for row in d.get("txn_links", [])]
+    txn_link_members = [dict(row) for row in d.get("txn_link_members", [])]
+    amazon_funding_map = [dict(row) for row in d.get("amazon_funding_map", [])]
 
     owner_ids = {row.get("id") for row in owners if row.get("id")}
     account_ids = {row.get("id") for row in accounts if row.get("id")}
@@ -904,6 +923,22 @@ def restore_backup(body: RestoreRequest):
         r for r in recurring_membership_overrides
         if r.get("txn_id") in txn_ids and r.get("series_id") in recurring_series_ids
     ]
+    # A link member is kept only if both its link and its transaction survived; links themselves carry
+    # no hard FK, so they restore verbatim (a link left with no members is harmless).
+    link_ids = {row.get("id") for row in txn_links if row.get("id")}
+    txn_link_members = [
+        r for r in txn_link_members
+        if r.get("link_id") in link_ids and r.get("txn_id") in txn_ids
+    ]
+    # A funding mapping is kept only if the accounts it names survived: a NULL funding account is the
+    # valid "untracked" state (keep), but a *broken* funding/override account reference means the mapping
+    # is meaningless — drop it (returning that instrument to unmapped) rather than silently flip it to
+    # untracked by normalizing the FK to NULL.
+    amazon_funding_map = [
+        r for r in amazon_funding_map
+        if (not r.get("funding_account_id") or r.get("funding_account_id") in account_ids)
+        and (not r.get("amazon_account_id") or r.get("amazon_account_id") in account_ids)
+    ]
 
     with get_db() as conn:
         # The restore has many cross-table and self-referential foreign keys (account→parent,
@@ -957,6 +992,11 @@ def restore_backup(body: RestoreRequest):
         insert_rows("txn",          transactions)
         # After both txn and recurring_series (it references each).
         insert_rows("recurring_membership_override", recurring_membership_overrides)
+        # Links after txn (members reference txn); with deferred FK checks the order is flexible anyway.
+        insert_rows("txn_link",        txn_links)
+        insert_rows("txn_link_member", txn_link_members)
+        # References account only (both FKs); with deferred FK checks the order is flexible anyway.
+        insert_rows("amazon_funding_map", amazon_funding_map)
         insert_rows("txn_tag",      txn_tags)
         # No data-DB foreign keys (scope_id is a loose reference to a control-DB user/profile), so
         # ui_preferences restore verbatim.
@@ -1000,6 +1040,9 @@ def restore_backup(body: RestoreRequest):
             "ui_preferences": len(ui_preferences),
             "recurring_series": len(recurring_series),
             "recurring_membership_overrides": len(recurring_membership_overrides),
+            "txn_links": len(txn_links),
+            "txn_link_members": len(txn_link_members),
+            "amazon_funding_map": len(amazon_funding_map),
         },
     }
 

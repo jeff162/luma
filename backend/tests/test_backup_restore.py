@@ -58,6 +58,9 @@ TABLE_TO_SECTION = {
     "ui_preference": "ui_preferences",
     "recurring_series": "recurring_series",
     "recurring_membership_override": "recurring_membership_overrides",
+    "txn_link": "txn_links",
+    "txn_link_member": "txn_link_members",
+    "amazon_funding_map": "amazon_funding_map",
 }
 
 
@@ -149,6 +152,28 @@ class BackupRestoreTests(unittest.TestCase):
                 conn.execute(
                     "INSERT INTO recurring_membership_override (txn_id, series_id, state) VALUES (?, ?, 'pinned')",
                     (txn, series),
+                )
+
+                # A typed transaction link (an Amazon-style charge↔item association) plus a second txn
+                # to be its 'charge' member, so the round trip covers txn_link + txn_link_member.
+                charge = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO txn (id, account_id, owner_id, category_id, amount, merchant_name, display_name, raw_name, date, is_pending, category_overridden) VALUES (?, ?, ?, ?, 37.32, 'AMAZON.COM', 'AMAZON.COM', 'AMAZON.COM', '2026-04-15', 0, 0)",
+                    (charge, a1, SHARED_OWNER_ID, leaf),
+                )
+                link = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO txn_link (id, kind, external_ref, metadata_json) VALUES (?, 'amazon_order', 'ORD-1', '{\"prior_category_id\": null}')",
+                    (link,),
+                )
+                conn.execute("INSERT INTO txn_link_member (link_id, txn_id, role) VALUES (?, ?, 'charge')", (link, charge))
+                conn.execute("INSERT INTO txn_link_member (link_id, txn_id, role) VALUES (?, ?, 'item')", (link, txn))
+
+                # An Amazon funding-source → account mapping (a global instrument → funding account), so
+                # the round trip covers amazon_funding_map (a table with two FKs to account).
+                conn.execute(
+                    "INSERT INTO amazon_funding_map (id, last4, network, amazon_account_id, funding_account_id) VALUES (?, '4455', 'Fablecard', NULL, ?)",
+                    (str(uuid.uuid4()), a1),
                 )
 
     def _user_data_tables(self) -> set[str]:

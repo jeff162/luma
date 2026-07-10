@@ -144,6 +144,9 @@ export function ImportHistorySection({
                 {dataSourceRows.map(row => {
                   const isManual = row.kind === 'manual'
                   const isUnknown = row.kind === 'unknown'
+                  // A marketplace group (Amazon, …) is a real, non-editable source entry with no CSV
+                  // profile — labeled by its vendor, not styled as an unsaved draft.
+                  const isMarketplace = row.kind === 'marketplace'
                   const isUnsaved = isManual || isUnknown
                   const rowExpanded = !!expandedSourceRows[row.key]
                   const canExpand = row.batches.length > 0
@@ -176,7 +179,7 @@ export function ImportHistorySection({
                           ) : <span style={{ width: 20, height: 20 }} />}
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontStyle: isUnsaved ? 'italic' : 'normal', color: isUnsaved ? 'var(--muted)' : 'var(--text)' }}>
-                              {isManual ? 'temporary draft' : isUnknown ? 'unknown data source' : editingSourceNameKey === getSourceNameEditKey('list', row.profile.id) ? (
+                              {isManual ? 'temporary draft' : isUnknown ? 'unknown data source' : isMarketplace ? row.label : editingSourceNameKey === getSourceNameEditKey('list', row.profile.id) ? (
                                 <TransientTextInput
                                   value={sourceNameDraft}
                                   onChange={setSourceNameDraft}
@@ -229,7 +232,7 @@ export function ImportHistorySection({
                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 3, fontSize: 11, color: 'var(--muted)' }}>
                               {isManual ? (
                                 row.manualDraftRecord?.filenamePattern ? <span>{row.manualDraftRecord.filenamePattern}</span> : null
-                              ) : isUnknown ? null : editingSourceDescriptionId === row.profile.id ? (
+                              ) : isUnknown || isMarketplace ? null : editingSourceDescriptionId === row.profile.id ? (
                                 <TransientTextInput
                                   value={sourceDescriptionDraft}
                                   onChange={setSourceDescriptionDraft}
@@ -386,6 +389,10 @@ export function ImportHistorySection({
 
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'stretch', marginTop: 8 }}>
                                     <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                                      {/* Marketplace imports (Amazon, …) always carry their own category
+                                          detail from the importer, so the "use the file's existing categories"
+                                          opt-in doesn't apply — the empty spacer keeps Undo right-aligned. */}
+                                      {isMarketplace ? <div /> : (
                                       <label
                                         style={{
                                           display: 'inline-flex',
@@ -419,6 +426,7 @@ export function ImportHistorySection({
                                           onFilterClick={() => openBatchImportedCategorySettings(b)}
                                         />
                                       </label>
+                                      )}
                                       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap', alignItems: 'center', flexShrink: 0 }}>
                                         {isUnsaved ? (
                                             <select
@@ -452,7 +460,7 @@ export function ImportHistorySection({
                                         <button onClick={() => handleUndoClick(b)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}>Undo</button>
                                       </div>
                                     </div>
-                                    {b.use_imported_categories && batchImportedCategorySummary ? (
+                                    {!isMarketplace && b.use_imported_categories && batchImportedCategorySummary ? (
                                       <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'right' }}>
                                         {batchImportedCategorySummary}
                                       </div>

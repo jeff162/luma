@@ -18,7 +18,8 @@ and `router` is the combined router registered by `backend/main.py`.
 
 from fastapi import APIRouter
 
-from . import backup, core, preview, profiles
+# `amazon` imports from `core`, so it must be imported after it (core is listed first).
+from . import backup, core, preview, profiles, amazon
 
 # Re-export the public surface so `from backend.routers.import_export import X` keeps working
 # for callers and tests exactly as it did when this was a single module.
@@ -44,3 +45,4 @@ router.include_router(core.router)
 router.include_router(profiles.router)
 router.include_router(backup.router)
 router.include_router(preview.router)
+router.include_router(amazon.router)
