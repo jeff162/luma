@@ -91,6 +91,19 @@ manual-guard the enrich-on-duplicate feature relies on.
 
 ## Amazon — the account + link model (design pass 2026-07-05)
 
+> **Superseded 2026-07-10 by the orders-only model (see that section below).** This section's
+> *itemization* — one transaction **per item**, Amazon's category taxonomy, net-cash allocation across
+> items, and the two-file *pairing* it required (items-only staging / "awaiting a pair") — was dropped.
+> The realization: the **orders** file already carries the concatenated item descriptions, so the
+> **items** file's only unique substantive content is Amazon's category taxonomy plus product-reference
+> metadata (ASIN / URL / list price) — and the user does not want to categorize by Amazon's taxonomy. So
+> the whole itemization apparatus served a feature that isn't wanted. **What still stands from this
+> section:** Amazon orders become spending transactions in an Amazon *account*, the matching card charge
+> is recategorized into an excluded category and **linked** (the `txn_link` primitive), and the account
+> semantics. **What changed:** one transaction **per order** (not per item), the item detail rides in
+> *evidence* (not rows), and the items file is *optional enrichment* of an existing order row. Read the
+> orders-only section for the current design; this section is kept for the reasoning history.
+
 **What changed, and why enrich-only wasn't enough.** The earlier sketch (kept as history at the end of
 this section) made Amazon a pure client of the enrich-on-duplicate feature: match each order-charge
 `(card last-4, date, amount)` to the card row and fold item text into `import_evidence_json`. That is
@@ -310,6 +323,82 @@ self-matched its own just-created $0 item** as the "charge" (the search excluded
 nor a non-positive amount), moving a phantom item into Amazon Funding — now the search excludes the target
 Amazon account and a `$0` charge never matches. These make the *fallback* correct; the map builds on top.
 
+## Amazon — orders-only model (design pass 2026-07-10, current — landed)
+
+**The realization that collapsed itemization.** The **orders** export's `items` column already carries the
+full concatenated item descriptions ("what was bought") for every order. The **items** export's only
+*unique* content is per-item: Amazon's `category` taxonomy, `ASIN`, `item url`, list `price`, `quantity`,
+`subscribe & save`. Since the user categorizes Amazon spend by their **own** rules (not Amazon's taxonomy),
+the per-item split existed *only* to serve Amazon-category breakdowns — a feature that isn't wanted. So the
+itemization / two-file-pairing machinery was removed.
+
+**The model.**
+
+- **Orders file → one spending transaction per order** in the Amazon account: `amount` = net cash
+  (`total − refund`), `date`, memo/`display_name` = the orders file's item list. Categorized by the user's
+  rules. The funding card charge is matched (funding-source → account map, then graceful-last-4) and
+  recategorized into the excluded "Amazon spending" category + **linked** (money counts once, on the Amazon
+  side). A cash order with no matching charge is counted directly and surfaced in the report; a non-cash
+  (points / gift-card) order is recorded in the excluded category. Link member roles: `order` + optional
+  `charge`.
+- **Items file → optional enrichment**, PayPal-style: per-item reference detail (ASIN, list price,
+  quantity) is folded into the *existing* order transaction's `import_evidence` (idempotent). It never
+  creates rows. Amazon's category is parsed but deliberately unused.
+- **Items with no imported order → discarded** (reported, not staged): "import the orders file, then
+  re-import the items file." Nothing incomplete enters the ledger, and there is **no staging table** and no
+  "awaiting a pair" state — the earlier staging plan (a client of the CSV importer's off-ledger
+  `import_batch_duplicate` pattern) was rendered unnecessary once items became optional enrichment rather
+  than ledger-shaping.
+
+**Reconciliation report** (`amazon_reconciliation(batch_id)`, `GET /amazon/reconciliation/{batch_id}`;
+`AmazonReconciliationDialog`, opened from the import summary's "View reconciliation report →" and the
+marketplace batch's row in the import history). Three buckets: **matched** (order ↔ the card charge it
+excluded), **amazon_unmatched** (a cash order whose charge wasn't found — a manual-link candidate), and
+**payment_unmatched** — the **reverse scan**: Amazon-looking ledger charges (`merchant/raw LIKE %AMZN%/
+%AMAZON%`, positive amount) on the cards Amazon uses (this batch's matched-charge accounts ∪ every
+globally-mapped funding account), within the batch's date range, that no order is linked to. Heuristic and
+informational, so the user can spot purchases the export missed. A **manual link** action (landed) lets
+the user attach an `amazon_unmatched` order to one of the `payment_unmatched` charges
+(`manual_link_charge`, `POST /amazon/link-charge`): it excludes the charge + adds it as the link's
+`charge` member exactly like the auto-matcher (guarded so it can't double-exclude or steal an
+already-linked charge), reversing through the normal batch-undo path via the stashed `charge_prior`. The
+report dialog renders a charge picker + **Link** on each unmatched order.
+
+**Summary + counts.** `run_amazon_import` returns `orders_imported`, `charges_matched`, `items_enriched`,
+`items_discarded`, `non_cash`, `already_applied`, plus the instruments seen (funding-map state). The import
+UI shows a compact summary + the report link; the old top/bottom orphan duplication is gone.
+
+**The import mapping screen (landed 2026-07-10) — map before importing, never twice.** The Amazon tab is
+modeled on the CSV import-mapping page (there is *no* retroactive reconcile — a mapping, like the category,
+affects the current/future import only, matching the "we do not rewrite old imports" rule). Dropping files
+`POST /amazon/scan`s them (`_scan_instruments`, read-only) to find the distinct payment cards + each card's
+current funding-map state. The screen then shows, top-to-bottom: the **files**; the **target Amazon
+account** + the **excluded category** (`CategoryPicker`); a **payment-card row per instrument**
+(`AmazonPaymentSourceRow` → account / Untracked / + New, prefilled from the global map); an **apply-my-rules**
+toggle; and **Import / Cancel**. Import is gated until the account is chosen *and* every card is resolved
+(the hover text names the first unresolved one). Because the cards are mapped *before* the import runs, the
+charges match on that same pass — no re-import. The standalone "Amazon settings" card was removed (its
+category + funding-map controls live in this screen; both still persist globally and prefill next time).
+
+**Apply categorizations (landed).** An import option (default on; `run_amazon_import(..., apply_categorization)`,
+`POST /amazon/import` form field) runs the user's category rules over the new order rows via
+`_categorize_batch_orders` — the same category + rule-rename + rule-tag apply the CSV importer does (non-cash
+rows in the excluded category are skipped). Off leaves them uncategorized. No "enrich existing" (PayPal) or
+"use the file's categories" options.
+
+**Excluded-category settings (landed).** The category the card charge is moved into is a **global**
+setting (`import_workflow_state` key `amazon_funding_category`; `find_or_create_funding_category` reads it,
+falling back to the seeded "Amazon Funding" leaf under Transfers if unset or the chosen category was
+deleted). `GET`/`PUT /amazon/funding-category` expose it; the PUT requires a **leaf** category and is read
+at import time, so a change affects **future imports only** — an already-imported charge keeps its category.
+Surfaced as the category picker in the import mapping screen. The UI warns if a chosen category isn't
+actually excluded from totals (which would double-count Amazon spend). Not per-account.
+
+**Tests.** `test_amazon_enrich.py` (one-txn creation, refund, charge exclude/undo, non-cash, unmatched,
+funding-map disambiguation, untracked, orders-only, items-discarded, items-enrich + idempotency,
+reconciliation matched/unmatched + reverse scan); `test_amazon_endpoint.py` (one row per order + evidence);
+`test_amazon_funding.py` unchanged. Dead code: `amazon_import.allocate` (per-item allocation) is now unused.
+
 ## What was explored and reverted (so the history isn't a mystery)
 
 A full **reconciliation** approach was designed and largely built, then dropped as over-scoped for PayPal:
@@ -355,8 +444,12 @@ than parked. The reasoning that led away from it — "PayPal is an account," "tr
    mutates a row *outside* the batch, `reverse_batch_enrichments` runs in **both** `undo_batch` and the
    `replace_batch_id` re-import path *before* the duplicate records (which hold the deltas) are deleted —
    otherwise the change would be orphaned and un-reversible. Covered by `test_import_auto_enrich.py`.
-4. **Amazon** (separate, later) — the **account + link model** (see the Amazon section). Not "feed the
-   enrich path"; it grew into its own pipeline: (a) a general **transaction-link** primitive (typed
+4. **Amazon** (separate, later) — **the account+link *itemization* pipeline below was superseded
+   2026-07-10 by the orders-only model** (see "Amazon — orders-only model"). What survived: the
+   `txn_link` primitive, the Amazon account, and charge match+exclude+link. What was removed: per-item
+   rows, Amazon categories, net-cash allocation, and two-file pairing/staging. The description below is
+   history. Not "feed the enrich path"; it grew into its own pipeline: (a) a general **transaction-link**
+   primitive (typed
    association between a transaction and its counterpart set) — **landed (2026-07-06):**
    `services/txn_links.py` (`txn_link` + `txn_link_member` tables — a link groups transactions under a
    `kind` with a per-member `role`, plus an optional `external_ref` and `metadata_json`; pure

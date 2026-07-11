@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import React, { useCallback, useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react'
+import React, { useCallback, useState, useEffect, useRef, useMemo } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { sniffAmazonExportKind } from '../lib/amazonDetect.js'
@@ -13,14 +13,14 @@ import {
   Input,
   Spinner,
   Badge,
-  EmptyState,
+  Toggle,
   AppConfirmDialog,
   AppNoticeDialog,
   AppTextEntryDialog,
   getFloatingPanelHeaderBackground,
   getFloatingPanelSurfaceStyle,
 } from '../components/ui.jsx'
-import { UndoToast } from '../components/CategoryTreePrimitives.jsx'
+import CategoryPicker from '../components/CategoryPicker.jsx'
 import { useImportedCategoryWorkspace } from '../contexts/ImportedCategoryWorkspaceContext.jsx'
 import { getImportedCategoryWorkCounts } from '../lib/importExport/importedCategoryWork.js'
 import ImportColumnMappingSection from '../components/ImportColumnMappingSection.jsx'
@@ -46,7 +46,11 @@ import { RawFilePreview } from '../components/importExport/RawFilePreview.jsx'
 import { ExportTab } from '../components/importExport/ExportTab.jsx'
 import { BackupRestoreTab } from '../components/importExport/BackupRestoreTab.jsx'
 import { ImportUploadStage } from '../components/importExport/ImportUploadStage.jsx'
+import { useBatchUndo } from '../components/importExport/useBatchUndo.jsx'
+import { useBatchDetailPanels } from '../components/importExport/useBatchDetailPanels.jsx'
 import { ImportHistorySection } from '../components/importExport/ImportHistorySection.jsx'
+import { AmazonReconciliationDialog } from '../components/importExport/AmazonReconciliationDialog.jsx'
+import { MarketplaceImportHistory } from '../components/importExport/MarketplaceImportHistory.jsx'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
 import {
   getBlankImportSnapshot,
@@ -116,8 +120,6 @@ import {
   buildAccountImportStateSnapshot,
 } from '../lib/importExport/importAccountMatching.js'
 
-const ImportBatchDetail = lazy(() => import('../components/ImportBatchDetail.jsx'))
-
 function clampFloatingPanelPosition(pos, size, viewport = { width: window.innerWidth, height: window.innerHeight }) {
   if (!pos) return null
   const panelWidth = Number(size?.width || 0)
@@ -154,9 +156,6 @@ function ImportTab({ onAmazonDetected }) {
   const [categories, setCategories] = useState([])
   const [loading, setLoading] = useState(false)
   const [batches, setBatches] = useState([])
-  const [undoTarget, setUndoTarget] = useState(null)
-  const [undoEdited, setUndoEdited] = useState([])
-  const [undoLoading, setUndoLoading] = useState(false)
   const dropRef = useRef(null)
   const fileInputRef = useRef(null)
   const [selectedUploadSource, setSelectedUploadSource] = useState('')
@@ -276,7 +275,12 @@ function ImportTab({ onAmazonDetected }) {
   // report can survive route changes. We hold onto the context handles here to open it and to
   // know when it has reloaded (so the file-card pill counts can be refreshed in step).
   const unifiedDuplicatesViewer = useUnifiedDuplicatesViewer()
-  const [batchDetailPanels, setBatchDetailPanels] = useState([])
+  // Shared per-batch file-ledger panels (the `↗`). This tab keeps its own drill-through / URL openers
+  // below, which call `openBatchDetail`.
+  const { openBatchDetail, panelsNode } = useBatchDetailPanels({
+    categories,
+    onAddCategory: category => setCategories(prev => prev.some(existing => existing.id === category.id) ? prev : [...prev, category]),
+  })
   const [duplicateImporting, setDuplicateImporting] = useState(false)
   const [pendingDuplicateImport, setPendingDuplicateImport] = useState(null)
   const [pendingProfileMismatch, setPendingProfileMismatch] = useState(null)
@@ -348,28 +352,6 @@ function ImportTab({ onAmazonDetected }) {
   // Also invoked by the App-level duplicate-detection dialog's drill-through arrow — through
   // the viewer-context drill-through registration in the effect below (when ImportExport is
   // mounted), or via a URL-param fallback (the effect after that) when it isn't.
-  function openBatchDetail(batch) {
-    if (!batch?.id) return
-    // If the panel for this batch is already open, REPLACE its entry with the new payload
-    // rather than no-op'ing. The drill-through link from the duplicate-detection dialog can
-    // be invoked with different `_dateFilter` values (none, or a covered-range), and silently
-    // dropping the second invocation would leave the user staring at the panel with whatever
-    // filter the first invocation set — see "transaction register opens with the wrong date
-    // range" symptom when both a coverage row and a Shape-2 row in the report point at the
-    // same batch.
-    setBatchDetailPanels(prev => {
-      const existingIndex = prev.findIndex(panel => panel.id === batch.id)
-      if (existingIndex === -1) return [...prev, batch]
-      const next = [...prev]
-      next[existingIndex] = batch
-      return next
-    })
-  }
-
-  function closeBatchDetail(batchId) {
-    setBatchDetailPanels(prev => prev.filter(panel => panel.id !== batchId))
-  }
-
   // Register an in-place drill-through handler with the App-level duplicates viewer. While
   // we're mounted, clicking the source-batch link inside the floating dialog opens the batch
   // detail panel here without a URL navigation. When we unmount, the context falls back to
@@ -381,7 +363,7 @@ function ImportTab({ onAmazonDetected }) {
       const _dateFilter = (dateStart || dateEnd) ? { dateStart, dateEnd } : undefined
       openBatchDetail({ ...sourceBatch, _dateFilter })
     })
-  }, [unifiedDuplicatesViewer, batches])
+  }, [unifiedDuplicatesViewer, batches, openBatchDetail])
 
   // Drill-through fallback: when the user is on another page and clicks the source-batch link,
   // the context navigates here with these query params. Honor them once on arrival, then clean
@@ -400,7 +382,7 @@ function ImportTab({ onAmazonDetected }) {
       openBatchDetail({ ...sourceBatch, _dateFilter })
     }
     navigate('/import-export', { replace: true })
-  }, [location.search, batches, navigate])
+  }, [location.search, batches, navigate, openBatchDetail])
 
   // When the user resolves rows from the floating dialog, the file-card pill counts on this
   // page need to refresh so the displayed numbers stay honest. The context advances
@@ -2409,35 +2391,21 @@ function ImportTab({ onAmazonDetected }) {
     setUploadSourceDraftName('')
   }
 
-  async function handleUndoClick(batch) {
-    setUndoTarget(batch); setUndoLoading(true)
-    setUndoEdited(await api.getBatchEdited(batch.id)); setUndoLoading(false)
-  }
-
-  async function performBatchUndo(batch, force = false) {
-    if (!batch?.id) return
-    await api.undoBatch(batch.id, force)
-
-    // If the undone batch is the one currently shown in the Import complete box,
-    // clear it so the card disappears immediately without waiting for a refresh.
+  // The tab's post-undo cleanup (the shared undo hook does the delete itself): clear the import-result
+  // card, drop the stale manual draft / per-profile rule-learning state, then refetch batches.
+  const handleBatchUndone = useCallback(async (batch) => {
     if (importResult?.batch_id === batch.id) {
       setImportResult(null)
       setStage('upload')
     }
-
     const remainingBatches = batches.filter(b => b.id !== batch.id)
-
     if (!batch.profile_id) {
-      // If no profileless imports remain, drop the local manual draft so the
-      // temporary data source state does not linger indefinitely.
       const remainingManual = remainingBatches.filter(b => !b.profile_id)
       if (remainingManual.length === 0) {
         clearSavedImportDraft(dbInstanceId, preferenceSubjectId)
         setManualDraftRecord(null)
       }
     } else {
-      // If this was the last batch attached to the profile, clear stale import
-      // learning review state that no longer has any backing import history.
       const remainingForProfile = remainingBatches.filter(b => b.profile_id === batch.profile_id)
       if (remainingForProfile.length === 0) {
         const profile = profiles.find(p => p.id === batch.profile_id)
@@ -2450,14 +2418,17 @@ function ImportTab({ onAmazonDetected }) {
         }
       }
     }
+    await api.listBatches().then(setBatches)
+  }, [importResult, batches, profiles, dbInstanceId, preferenceSubjectId])
 
-    api.listBatches().then(setBatches)
-  }
+  const { openUndo, undoNode } = useBatchUndo(handleBatchUndone)
 
-  async function confirmUndo(force) {
-    const batch = undoTarget
-    setUndoTarget(null); setUndoEdited([]);
-    await performBatchUndo(batch, force)
+  // Direct (no-confirm) undo used by the auto-undo path below; the confirm-dialog path goes through
+  // the shared hook (openUndo).
+  async function performBatchUndo(batch, force = false) {
+    if (!batch?.id) return
+    await api.undoBatch(batch.id, force)
+    await handleBatchUndone(batch)
   }
 
   function openRuleSuggestionReview({ batchId = '', profileId = '' } = {}) {
@@ -4046,7 +4017,7 @@ function ImportTab({ onAmazonDetected }) {
             {importResult?.batch_id ? (
               <Button
                 variant="ghost"
-                onClick={() => handleUndoClick(getUndoTargetForSource(importResult))}
+                onClick={() => openUndo(getUndoTargetForSource(importResult))}
               >
                 Undo import
               </Button>
@@ -4100,7 +4071,7 @@ function ImportTab({ onAmazonDetected }) {
           openBatchImportedCategorySettings={openBatchImportedCategorySettings}
           openBatchDetail={openBatchDetail}
           markBatchReviewed={markBatchReviewed}
-          handleUndoClick={handleUndoClick}
+          handleUndoClick={openUndo}
           openRejectedRowsViewer={openRejectedRowsViewer}
           openUnifiedDuplicatesViewer={openUnifiedDuplicatesViewer}
         />
@@ -4242,74 +4213,8 @@ function ImportTab({ onAmazonDetected }) {
         />
       ) : null}
 
-      {undoTarget && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Card style={{ width: 480, maxHeight: '80vh', overflow: 'auto' }}>
-            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Undo import: {undoTarget.filename}</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>This will permanently delete {undoTarget.row_count - (undoTarget.skipped_count || 0) - (undoTarget.deduped_count || 0)} transactions.</div>
-            {undoLoading ? <Spinner /> : undoEdited.length > 0 ? (
-              <>
-                <div style={{ background: 'color-mix(in srgb, var(--danger) 10%, var(--surface2))', border: '1px solid var(--danger)', borderRadius: 8, padding: '10px 14px', marginBottom: 16 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, color: 'var(--danger)' }}>⚠ {undoEdited.length} transactions were manually edited after import</div>
-                  <div style={{ maxHeight: 180, overflowY: 'auto' }}>
-                    {undoEdited.map(t => (
-                      <div key={t.id} style={{ display: 'grid', gridTemplateColumns: '90px 1fr 80px', fontSize: 12, padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
-                        <span style={{ color: 'var(--muted)' }}>{t.date}</span>
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.display_name || t.merchant_name || t.raw_name}</span>
-                        <span style={{ textAlign: 'right', color: getTransactionAmountColor(t.amount) }}>{formatTransactionAmount(t.amount)}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 10 }}>
-                  <Button variant="danger" onClick={() => confirmUndo(true)}>Delete all anyway</Button>
-                  <Button variant="ghost" onClick={() => { setUndoTarget(null); setUndoEdited([]) }}>Cancel</Button>
-                </div>
-              </>
-            ) : (
-              <div style={{ display: 'flex', gap: 10 }}>
-                <Button variant="danger" onClick={() => confirmUndo(false)}>Delete {undoTarget.row_count - (undoTarget.skipped_count || 0) - (undoTarget.deduped_count || 0)} transactions</Button>
-                <Button variant="ghost" onClick={() => setUndoTarget(null)}>Cancel</Button>
-              </div>
-            )}
-          </Card>
-        </div>
-      )}
-
-      <Suspense fallback={batchDetailPanels.length ? (
-        <div style={{
-          position: 'fixed',
-          right: 24,
-          bottom: 24,
-          zIndex: 220,
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '10px 14px',
-          borderRadius: 12,
-          border: '1px solid color-mix(in srgb, var(--accent) 24%, var(--border))',
-          background: 'color-mix(in srgb, var(--surface) 94%, var(--surface2))',
-          boxShadow: '0 16px 40px rgba(15, 23, 42, 0.24)',
-          color: 'var(--text)',
-          fontSize: 13,
-        }}>
-          <Spinner size={14} />
-          <span>Loading import details...</span>
-        </div>
-      ) : null}>
-        {batchDetailPanels.map((batch, index) => (
-          <ImportBatchDetail
-            key={batch.id}
-            batch={batch}
-            categories={categories}
-            onAddCategory={category => setCategories(prev => prev.some(existing => existing.id === category.id) ? prev : [...prev, category])}
-            onClose={() => closeBatchDetail(batch.id)}
-            forceFloating
-            stackIndex={index}
-            isTopmost={index === batchDetailPanels.length - 1}
-          />
-        ))}
-      </Suspense>
+      {undoNode}
+      {panelsNode}
     </div>
   )
 }
@@ -4329,153 +4234,60 @@ function formatInstrumentLabel(last4, network) {
   return net ? `${net} ···${last4}` : `···${last4}`
 }
 
-// One instrument row: the card label + the account it charges (or "untracked"), plus Remove for a
-// mapping that already exists. This is the second "map a discovered identifier → account" control in
-// the importer (the CSV account-mapping row is the first); if a third appears, extract a shared
-// AccountMappingRow (see docs/shared-components.md → watchlist).
-function AmazonFundingSourceRow({ instrument, mapping, accountOptions, disabled, onPick, onRemove }) {
-  const value = mapping ? (mapping.untracked ? FUNDING_UNTRACKED : (mapping.funding_account_id || '')) : ''
+// Sentinel Select value: "create a new funding account for this card".
+const FUNDING_NEW = '__new_funding_account__'
+
+const mapLabelStyle = { fontSize: 13, color: 'var(--text)', fontWeight: 600, marginTop: 22, marginBottom: 8 }
+
+// One "Account from file" row for a payment card the scan found in the files: the card label → the
+// account it charges (an existing account, Untracked, or + New). Mirrors the CSV importer's
+// account-mapping rows; the chosen mapping persists to the global funding map (prefilling next time).
+function AmazonPaymentSourceRow({ instrument, accountOptions, disabled, onPick, onCreateAccount }) {
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState('')
+  const value = instrument.state === 'untracked' ? FUNDING_UNTRACKED
+    : instrument.state === 'mapped' ? (instrument.funding_account_id || '')
+    : ''
+  const submitNew = async () => {
+    const name = newName.trim()
+    if (!name) return
+    await onCreateAccount(instrument, name)
+    setCreating(false); setNewName('')
+  }
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderTop: '1px solid var(--border)' }}>
-      <div style={{ flex: '0 0 auto', minWidth: 150, fontSize: 13, color: 'var(--text)' }}>
-        {formatInstrumentLabel(instrument.last4, instrument.network)}
+    <div style={{ padding: '9px 0', borderTop: '1px solid var(--border)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ flex: '0 0 auto', minWidth: 150, fontSize: 13, color: 'var(--text)' }}>
+          {formatInstrumentLabel(instrument.last4, instrument.network)}
+        </div>
+        {instrument.state === 'unmapped' ? <Badge label="Needs mapping" toneKey="pending" /> : null}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Select
+            value={creating ? FUNDING_NEW : value}
+            onChange={v => { if (v === FUNDING_NEW) { setCreating(true) } else { setCreating(false); onPick(instrument, v) } }}
+            options={accountOptions}
+            aria-label={`Account for ${formatInstrumentLabel(instrument.last4, instrument.network)}`}
+            disabled={disabled}
+          />
+        </div>
       </div>
-      {!mapping && <Badge label="Needs mapping" toneKey="pending" />}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <Select value={value} onChange={v => onPick(instrument, v)} options={accountOptions} aria-label="Funding account" disabled={disabled} />
-      </div>
-      <div style={{ flex: '0 0 auto', width: 64, textAlign: 'right' }}>
-        {mapping && (
-          <Button small variant="ghost" onClick={() => onRemove(mapping)} disabled={disabled}>Remove</Button>
-        )}
-      </div>
+      {creating && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, marginLeft: 160 }}>
+          <Input value={newName} onChange={setNewName} placeholder="New account name"
+            aria-label="New account name" style={{ flex: 1 }} />
+          <Button small onClick={submitNew} disabled={disabled || !newName.trim()}>Create</Button>
+          <Button small variant="ghost" onClick={() => { setCreating(false); setNewName('') }}>Cancel</Button>
+        </div>
+      )}
     </div>
   )
 }
 
-// The persistent "Amazon funding sources" section beneath the upload form (see
-// docs/backlog/paypal-amazon-enrichment.md → "funding-source → account mapping"). It reads/writes the
-// one global instrument→account map; a just-run import passes its `discovered` instruments so the
-// new/unmapped ones surface here inline. Mirrors ImportHistorySection's "section under the upload form"
-// pattern, built from ui.jsx primitives. `accounts` is the tab's existing fetch (no second refetch).
-function AmazonFundingSourcesSection({ accounts, discovered }) {
-  const [mappings, setMappings] = useState(null)   // null = loading
-  const [busy, setBusy] = useState(false)
-  const [undo, setUndo] = useState(null)
-
-  const load = useCallback(
-    () => api.getAmazonFundingSources().then(r => setMappings(r.mappings || [])).catch(() => setMappings([])),
-    [],
-  )
-  useEffect(() => { load() }, [load])
-  // A completed import may have surfaced new instruments and/or resolved existing ones — refetch so the
-  // section reflects the current map (the discovered set is a fresh array per import, so this fires once).
-  useEffect(() => { if (discovered) load() }, [discovered, load])
-
-  // Every mapped instrument, then any discovered-but-unmapped ones (which still need a decision).
-  const rows = useMemo(() => {
-    const seen = new Set()
-    const out = []
-    for (const m of (mappings || [])) {
-      seen.add(`${m.last4}|${m.network || ''}`)
-      out.push({ instrument: { last4: m.last4, network: m.network }, mapping: m })
-    }
-    for (const inst of (discovered || [])) {
-      const key = `${inst.last4}|${inst.network || ''}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      out.push({ instrument: inst, mapping: null })
-    }
-    return out
-  }, [mappings, discovered])
-
-  const accountOptions = useMemo(() => [
-    { value: '', label: 'Select an account…' },
-    // A card charge never lands on a marketplace (Amazon) account itself, so those are excluded.
-    ...accounts
-      .filter(a => !isMarketplaceAccountType(a.type))
-      .map(a => ({ value: a.id, label: a.display_name || a.name })),
-    { value: FUNDING_UNTRACKED, label: 'Untracked — not an account I hold' },
-  ], [accounts])
-
-  const pick = async (instrument, value) => {
-    if (!value) return
-    setBusy(true)
-    try {
-      const body = { last4: instrument.last4, network: instrument.network || null }
-      if (value === FUNDING_UNTRACKED) body.untracked = true
-      else body.funding_account_id = value
-      await api.saveAmazonFundingSource(body)
-      await load()
-    } finally { setBusy(false) }
-  }
-
-  const remove = async (mapping) => {
-    setBusy(true)
-    try {
-      await api.deleteAmazonFundingSource(mapping.id)
-      await load()
-      setUndo(mapping)
-    } finally { setBusy(false) }
-  }
-
-  const undoRemove = async () => {
-    const m = undo
-    setUndo(null)
-    if (!m) return
-    setBusy(true)
-    try {
-      await api.saveAmazonFundingSource({
-        last4: m.last4, network: m.network || null,
-        untracked: !!m.untracked,
-        funding_account_id: m.untracked ? null : m.funding_account_id,
-        amazon_account_id: m.amazon_account_id || null,
-      })
-      await load()
-    } finally { setBusy(false) }
-  }
-
-  return (
-    <Card style={{ marginTop: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-        <span style={{ fontWeight: 600, color: 'var(--text)' }}>Amazon funding sources</span>
-        <FeatureExplainer topic="amazon-funding-sources" />
-      </div>
-      <p style={{ color: 'var(--muted)', fontSize: 14, lineHeight: 1.6, margin: '0 0 4px' }}>
-        Map each Amazon payment card to the account it charges, so the matching <strong>AMAZON.COM</strong>{' '}
-        charge is found and excluded from totals. Set once — the map applies to every Amazon import.
-      </p>
-      {mappings === null ? (
-        <Spinner />
-      ) : rows.length === 0 ? (
-        <EmptyState message="No funding sources yet. Import an Amazon file and the cards it used will be listed here to map." />
-      ) : (
-        <div style={{ marginTop: 8 }}>
-          {rows.map(r => (
-            <AmazonFundingSourceRow
-              key={`${r.instrument.last4}|${r.instrument.network || ''}`}
-              instrument={r.instrument}
-              mapping={r.mapping}
-              accountOptions={accountOptions}
-              disabled={busy}
-              onPick={pick}
-              onRemove={remove}
-            />
-          ))}
-        </div>
-      )}
-      {undo && (
-        <UndoToast
-          title="Funding source removed"
-          description={formatInstrumentLabel(undo.last4, undo.network)}
-          onUndo={undoRemove}
-          onDismiss={() => setUndo(null)}
-        />
-      )}
-    </Card>
-  )
-}
-
+// The Amazon import mapping screen. Mirrors the CSV import-mapping page: the dropped files up top, then
+// the target account + the excluded category for the matched card charge, then a row per payment card
+// found in the files (mapped to the account it charges), an "apply my rules" toggle, and Import / Cancel.
+// The card mappings + category are global and prefill on the next import; Import is gated until the
+// account is chosen and every discovered card has a decision.
 function AmazonImportTab({ initialFiles }) {
   const NEW_ACCOUNT = '__new__'
   const [accounts, setAccounts] = useState([])
@@ -4485,18 +4297,57 @@ function AmazonImportTab({ initialFiles }) {
   const [savingAccount, setSavingAccount] = useState(false)
   const [files, setFiles] = useState([])
   const [dragOver, setDragOver] = useState(false)
-  const [loading, setLoading] = useState(false)
+  const [scan, setScan] = useState(null)            // { instruments, unrecognized_files, ... } | null
+  const [scanning, setScanning] = useState(false)
+  const [categories, setCategories] = useState([])
+  const [fundingCategory, setFundingCategory] = useState(null)
+  const [applyCategorization, setApplyCategorization] = useState(true)
+  const [busy, setBusy] = useState(false)           // a mapping/category save in flight
+  const [loading, setLoading] = useState(false)     // the import itself
   const [summary, setSummary] = useState(null)
   const [error, setError] = useState('')
+  const [reconBatchId, setReconBatchId] = useState(null)
+  const [amazonBatches, setAmazonBatches] = useState([])   // this tab's recent Amazon imports
+  const [historyExpanded, setHistoryExpanded] = useState(true)
   const fileInputRef = useRef(null)
 
   const loadAccounts = useCallback(
     () => api.getAccounts({ include_children: true }).then(setAccounts).catch(() => {}),
     [],
   )
-  useEffect(() => { loadAccounts() }, [loadAccounts])
-  // Preload a file routed here from the general importer's Amazon-export detection.
+  const loadBatches = useCallback(
+    () => api.listBatches()
+      .then(rows => setAmazonBatches((rows || []).filter(b => b.source_kind === 'marketplace:amazon')))
+      .catch(() => {}),
+    [],
+  )
+  useEffect(() => {
+    loadAccounts()
+    loadBatches()
+    api.getCategories().then(setCategories).catch(() => {})
+    api.getAmazonFundingCategory().then(setFundingCategory).catch(() => {})
+  }, [loadAccounts, loadBatches])
   useEffect(() => { if (initialFiles?.length) setFiles(initialFiles) }, [initialFiles])
+
+  // Shared undo + file-ledger flows, same as the main import tab (see useBatchUndo / useBatchDetailPanels).
+  const { openUndo, undoNode } = useBatchUndo(async () => { await loadBatches() })
+  const { openBatchDetail, panelsNode } = useBatchDetailPanels({
+    categories,
+    onAddCategory: category => setCategories(prev => prev.some(existing => existing.id === category.id) ? prev : [...prev, category]),
+  })
+  const markReviewed = async (batchId) => { await api.markBatchReviewed(batchId); await loadBatches() }
+
+  // Scan the dropped files for their payment cards whenever the files (or the target account, which
+  // affects per-account override resolution) change. Read-only — no ledger changes.
+  const rescan = useCallback((currentFiles, currentAccountId) => {
+    if (!currentFiles.length) { setScan(null); return Promise.resolve() }
+    setScanning(true)
+    return api.scanAmazonFiles(currentFiles, currentAccountId)
+      .then(setScan)
+      .catch(e => { setError(e?.message || 'Could not read the files'); setScan(null) })
+      .finally(() => setScanning(false))
+  }, [])
+  useEffect(() => { rescan(files, accountId) }, [files, accountId, rescan])
 
   const onAccountChange = (value) => {
     if (value === NEW_ACCOUNT) { setCreatingAccount(true); setAccountId('') }
@@ -4518,17 +4369,52 @@ function AmazonImportTab({ initialFiles }) {
     }
   }
 
-  const addFiles = (list) => setFiles(prev => {
-    const byName = new Map(prev.map(f => [f.name, f]))
-    for (const f of Array.from(list)) byName.set(f.name, f)
-    return Array.from(byName.values())
-  })
+  const addFiles = (list) => {
+    // Snapshot the FileList to a real array *now*, synchronously — the <input>'s live FileList empties
+    // the moment we reset `e.target.value = ''`, and the setFiles updater runs later.
+    const incoming = Array.from(list)
+    setFiles(prev => {
+      const byName = new Map(prev.map(f => [f.name, f]))
+      for (const f of incoming) byName.set(f.name, f)
+      return Array.from(byName.values())
+    })
+  }
+  const clearAll = () => { setFiles([]); setScan(null); setSummary(null); setError('') }
+
+  // Map / untrack a payment card → persist to the global funding map, then re-scan to reflect.
+  const pickPaymentSource = async (instrument, value) => {
+    if (!value) return
+    setBusy(true)
+    try {
+      const body = { last4: instrument.last4, network: instrument.network || null }
+      if (value === FUNDING_UNTRACKED) body.untracked = true
+      else body.funding_account_id = value
+      await api.saveAmazonFundingSource(body)
+      await rescan(files, accountId)
+    } finally { setBusy(false) }
+  }
+  const createFundingAccount = async (instrument, name) => {
+    setBusy(true)
+    try {
+      const created = await api.createAccount({ name, type: 'credit' })
+      await loadAccounts()
+      await api.saveAmazonFundingSource({ last4: instrument.last4, network: instrument.network || null, funding_account_id: created.id })
+      await rescan(files, accountId)
+    } finally { setBusy(false) }
+  }
+
+  const chooseCategory = async (categoryId) => {
+    if (!categoryId) return
+    setBusy(true)
+    try { setFundingCategory(await api.setAmazonFundingCategory(categoryId)) } finally { setBusy(false) }
+  }
 
   const run = async () => {
     setError(''); setSummary(null); setLoading(true)
     try {
-      setSummary(await api.importAmazon(files, accountId))
-      setFiles([])
+      setSummary(await api.importAmazon(files, accountId, applyCategorization))
+      clearAll()
+      loadBatches()
     } catch (e) {
       setError(e?.message || 'Import failed')
     } finally {
@@ -4536,80 +4422,160 @@ function AmazonImportTab({ initialFiles }) {
     }
   }
 
-  // The picker lists Amazon-type accounts only (created here with type 'amazon'); other accounts stay
-  // out so the chooser is self-selecting, with inline create as the path when there are none yet.
+  // The account picker lists Amazon-type accounts only; the funding picker lists the user's non-marketplace
+  // accounts (a card charge never lands on an Amazon account), plus Untracked and + New.
   const amazonAccounts = accounts.filter(a => (a.type || '').toLowerCase() === 'amazon')
-  const accountOptions = [
+  const amazonAccountOptions = [
     { value: '', label: amazonAccounts.length ? 'Select an account…' : 'No Amazon account yet — create one →' },
     ...amazonAccounts.map(a => ({ value: a.id, label: a.display_name || a.name })),
     { value: NEW_ACCOUNT, label: '＋ New Amazon account…' },
   ]
+  const fundingAccountOptions = [
+    { value: '', label: '— Select —' },
+    ...accounts.filter(a => !isMarketplaceAccountType(a.type)).map(a => ({ value: a.id, label: a.display_name || a.name })),
+    { value: FUNDING_UNTRACKED, label: 'Untracked — not my account' },
+    { value: FUNDING_NEW, label: '＋ New account…' },
+  ]
+
+  const instruments = scan?.instruments || []
+  const unresolved = instruments.filter(i => i.state === 'unmapped')
+  const canImport = accountId && files.length > 0 && unresolved.length === 0 && !loading && !busy
+  const importHint = loading || canImport || files.length === 0 ? ''
+    : !accountId ? 'Choose an account to import into'
+    : unresolved.length ? `Map the card ${formatInstrumentLabel(unresolved[0].last4, unresolved[0].network)} (or mark it untracked)`
+    : ''
   const c = summary?.counts || {}
-  const orphans = summary?.orphans || {}
-  const labelStyle = { fontSize: 13, color: 'var(--muted)', marginTop: 18, marginBottom: 6 }
-  const canImport = accountId && files.length > 0 && !loading
+  // This tab's recent Amazon imports, shown below the file chooser (where the user lands after an import),
+  // rendered through the shared marketplace history section.
+  const amazonHistoryRow = { key: 'marketplace:amazon', vendor: 'amazon', label: 'Amazon', batches: amazonBatches, latestBatch: amazonBatches[0] || null }
 
   return (
-    <div style={{ maxWidth: 620 }}>
+    <div style={{ maxWidth: 640 }}>
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
           <span style={{ fontWeight: 600, color: 'var(--text)' }}>Import Amazon orders</span>
           <FeatureExplainer topic="amazon-import" />
         </div>
-        <p style={{ color: 'var(--muted)', fontSize: 14, lineHeight: 1.6, margin: '0 0 4px' }}>
-          Import an Amazon order history exported by the <strong>AZAD</strong> browser extension. Upload the
-          <strong> orders</strong> file, the <strong>items</strong> file, or both — each is recognized by its
-          columns, so upload order does not matter. Item purchases become transactions in the chosen account,
-          and the matching card charge is linked and excluded from totals so nothing is counted twice.
-        </p>
 
-        <div style={labelStyle}>Amazon account</div>
-        <Select value={creatingAccount ? NEW_ACCOUNT : accountId} onChange={onAccountChange} options={accountOptions} />
-        {creatingAccount && (
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <Input value={newAccountName} onChange={setNewAccountName} placeholder="Account name"
-              aria-label="New account name" style={{ flex: 1 }} />
-            <Button small onClick={createAccount} disabled={savingAccount || !newAccountName.trim()}>
-              {savingAccount ? 'Creating…' : 'Create'}
-            </Button>
-            <Button small variant="ghost" onClick={() => { setCreatingAccount(false); setNewAccountName('Amazon') }}>
-              Cancel
-            </Button>
-          </div>
+        {files.length === 0 ? (
+          <>
+            <p style={{ color: 'var(--muted)', fontSize: 14, lineHeight: 1.6, margin: '0 0 12px' }}>
+              Import an Amazon order history exported by the <strong>AZAD</strong> browser extension. Drop the
+              <strong> orders</strong> file (the <strong>items</strong> file is optional extra detail) — each is
+              recognized by its columns, so upload order does not matter.
+            </p>
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={e => { e.preventDefault(); setDragOver(false); if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files) }}
+              style={{
+                border: `1.5px dashed ${dragOver ? 'var(--accent)' : 'var(--border)'}`,
+                borderRadius: 8, padding: '30px 16px', textAlign: 'center', cursor: 'pointer',
+                background: dragOver ? 'color-mix(in srgb, var(--accent) 6%, transparent)' : 'transparent',
+                color: 'var(--muted)', fontSize: 13,
+              }}
+            >
+              Drop the AZAD CSV file(s) here, or click to browse.
+            </div>
+          </>
+        ) : (
+          <>
+            {/* 1 — files */}
+            <div style={{ ...mapLabelStyle, marginTop: 4 }}>File(s) to import</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {files.map(f => (
+                <div key={f.name} style={{ fontSize: 13, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <Button small variant="ghost" onClick={() => fileInputRef.current?.click()}>Add file(s)</Button>
+              <Button small variant="ghost" onClick={clearAll}>Clear</Button>
+            </div>
+            {scan?.unrecognized_files?.length ? (
+              <div style={{ marginTop: 8, color: '#b45309', fontSize: 12 }}>
+                Ignored (not an Amazon export): {scan.unrecognized_files.join(', ')}
+              </div>
+            ) : null}
+
+            {/* 2 — target account + category */}
+            <div style={mapLabelStyle}>Import into account</div>
+            <Select value={creatingAccount ? NEW_ACCOUNT : accountId} onChange={onAccountChange} options={amazonAccountOptions} />
+            {creatingAccount && (
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <Input value={newAccountName} onChange={setNewAccountName} placeholder="Account name"
+                  aria-label="New account name" style={{ flex: 1 }} />
+                <Button small onClick={createAccount} disabled={savingAccount || !newAccountName.trim()}>
+                  {savingAccount ? 'Creating…' : 'Create'}
+                </Button>
+                <Button small variant="ghost" onClick={() => { setCreatingAccount(false); setNewAccountName('Amazon') }}>
+                  Cancel
+                </Button>
+              </div>
+            )}
+
+            <div style={mapLabelStyle}>Category for matched card charges</div>
+            <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.5, margin: '0 0 6px' }}>
+              The matching <strong>AMAZON.COM</strong> charge is moved into this (excluded) category so Amazon
+              spend counts once. Changes apply to future imports too.
+            </p>
+            <CategoryPicker
+              value={fundingCategory?.category_id}
+              categories={categories}
+              showSelectedBadge
+              onChange={chooseCategory}
+              onCategoryCreated={async () => { setCategories(await api.getCategories().catch(() => categories)) }}
+            />
+            {fundingCategory && !fundingCategory.is_excluded ? (
+              <div style={{ color: '#b45309', fontSize: 12, marginTop: 6 }}>
+                This category isn’t excluded from totals — Amazon spend may be counted twice. Pick an excluded
+                (e.g. Transfers) category.
+              </div>
+            ) : null}
+
+            {/* 3 — payment sources */}
+            <div style={mapLabelStyle}>Payment cards in these files</div>
+            {scanning && instruments.length === 0 ? (
+              <Spinner />
+            ) : instruments.length === 0 ? (
+              <div style={{ color: 'var(--muted)', fontSize: 13 }}>No card charges found in these files.</div>
+            ) : (
+              <div>
+                {instruments.map(inst => (
+                  <AmazonPaymentSourceRow
+                    key={`${inst.last4}|${inst.network || ''}`}
+                    instrument={inst}
+                    accountOptions={fundingAccountOptions}
+                    disabled={busy || loading}
+                    onPick={pickPaymentSource}
+                    onCreateAccount={createFundingAccount}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* 4 — apply rules */}
+            <div style={{ marginTop: 20 }}>
+              <Toggle
+                checked={applyCategorization}
+                onChange={setApplyCategorization}
+                label="Apply my categorization rules to the imported orders"
+              />
+            </div>
+
+            {/* 5 — import / cancel */}
+            <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
+              <Button onClick={run} disabled={!canImport} title={importHint}>
+                {loading ? <>&nbsp;<Spinner />&nbsp;Importing…</> : `Import ${files.length} file${files.length === 1 ? '' : 's'}`}
+              </Button>
+              <Button variant="ghost" onClick={clearAll} disabled={loading}>Cancel</Button>
+            </div>
+          </>
         )}
 
-        <div style={labelStyle}>AZAD export file(s)</div>
-        <div
-          onClick={() => fileInputRef.current?.click()}
-          onDragOver={e => { e.preventDefault(); setDragOver(true) }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={e => { e.preventDefault(); setDragOver(false); if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files) }}
-          style={{
-            border: `1.5px dashed ${dragOver ? 'var(--accent)' : 'var(--border)'}`,
-            borderRadius: 8, padding: '22px 16px', textAlign: 'center', cursor: 'pointer',
-            background: dragOver ? 'color-mix(in srgb, var(--accent) 6%, transparent)' : 'transparent',
-            color: 'var(--muted)', fontSize: 13,
-          }}
-        >
-          Drop the AZAD CSV file(s) here, or click to browse.
-          <input ref={fileInputRef} type="file" accept=".csv" multiple hidden
-            onChange={e => { addFiles(e.target.files || []); e.target.value = '' }} />
-        </div>
-        {files.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
-            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{files.map(f => f.name).join(', ')}</span>
-            <Button small variant="ghost" onClick={() => setFiles([])}>Clear</Button>
-          </div>
-        )}
-
-        <div style={{ marginTop: 20 }}>
-          <Button onClick={run} disabled={!canImport}>
-            {loading ? <>&nbsp;<Spinner />&nbsp;Importing…</> : 'Import Amazon orders'}
-          </Button>
-        </div>
+        <input ref={fileInputRef} type="file" accept=".csv" multiple hidden
+          onChange={e => { addFiles(e.target.files || []); e.target.value = '' }} />
       </Card>
-
-      <AmazonFundingSourcesSection accounts={accounts} discovered={summary?.instruments} />
 
       {error && (
         <Card style={{ marginTop: 16, border: '1px solid var(--danger)', color: 'var(--danger)', fontSize: 13 }}>
@@ -4623,35 +4589,55 @@ function AmazonImportTab({ initialFiles }) {
             Imported {summary.order_count} order{summary.order_count === 1 ? '' : 's'}.
           </div>
           <div style={{ color: 'var(--muted)' }}>
-            {c.applied_full ? <div>{c.applied_full} itemized (per-item rows)</div> : null}
-            {c.applied_coarse ? <div>{c.applied_coarse} activated without item detail yet (one row each)</div> : null}
-            {c.charges_matched ? <div>{c.charges_matched} card charge{c.charges_matched === 1 ? '' : 's'} linked and excluded from totals</div> : null}
-            {c.non_cash ? <div>{c.non_cash} non-cash (points / gift-card) — recorded but not counted</div> : null}
-            {c.items_pending ? <div>{c.items_pending} item-only order{c.items_pending === 1 ? '' : 's'} awaiting an orders file</div> : null}
+            {c.orders_imported ? <div>{c.orders_imported} order{c.orders_imported === 1 ? '' : 's'} imported</div> : null}
+            {c.charges_matched ? <div>{c.charges_matched} card charge{c.charges_matched === 1 ? '' : 's'} matched and excluded from totals</div> : null}
+            {c.items_enriched ? <div>{c.items_enriched} order{c.items_enriched === 1 ? '' : 's'} enriched with item detail</div> : null}
+            {c.non_cash ? <div>{c.non_cash} non-cash (points / gift-card) — recorded, not counted</div> : null}
             {c.already_applied ? <div>{c.already_applied} already imported (skipped)</div> : null}
           </div>
-          {(orphans.orders_without_items || orphans.items_without_orders) ? (
-            <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', color: 'var(--muted)' }}>
-              {orphans.items_without_orders ? <div>{orphans.items_without_orders} order(s) had item detail but no orders file — upload it to link and count them.</div> : null}
-              {orphans.orders_without_items ? <div>{orphans.orders_without_items} order(s) had no item detail yet — upload the items file to itemize.</div> : null}
+          {c.items_discarded ? (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+              <strong style={{ color: 'var(--text)' }}>{c.items_discarded} order{c.items_discarded === 1 ? '' : 's'} of item detail had no matching order</strong>
+              <div style={{ color: 'var(--muted)' }}>
+                These came from an items file whose orders file hasn’t been imported, so there was nothing to
+                attach them to. Import the matching orders file, then re-import the items file to add their detail.
+              </div>
             </div>
           ) : null}
-          {(summary.instruments || []).some(i => i.state === 'unmapped') ? (
-            <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', color: 'var(--muted)' }}>
-              Some orders used a card that isn’t mapped yet — set its account under{' '}
-              <strong>Amazon funding sources</strong> above, then re-import to match and exclude those charges.
-            </div>
-          ) : null}
-          {summary.unrecognized_files?.length ? (
-            <div style={{ marginTop: 10, color: '#b45309' }}>
-              Ignored (not an Amazon export): {summary.unrecognized_files.join(', ')}
-            </div>
-          ) : null}
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: 12, display: 'flex', gap: 16 }}>
+            {summary.batch_id ? (
+              <button
+                onClick={() => setReconBatchId(summary.batch_id)}
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent2)', fontSize: 13 }}
+              >
+                View reconciliation report →
+              </button>
+            ) : null}
             <Link to="/accounts" style={{ color: 'var(--accent2)', textDecoration: 'none', fontSize: 13 }}>View your accounts →</Link>
           </div>
         </Card>
       )}
+
+      {/* Recent Amazon imports — shown on the file-chooser (empty) state, so the user sees the file(s)
+          they just loaded, with the same file ledger / undo / reconciliation as the main import page. */}
+      {files.length === 0 && amazonBatches.length > 0 ? (
+        <Card style={{ marginTop: 16, padding: 0, overflow: 'hidden' }}>
+          <MarketplaceImportHistory
+            row={amazonHistoryRow}
+            expanded={historyExpanded}
+            onToggleExpand={() => setHistoryExpanded(e => !e)}
+            onOpenLedger={openBatchDetail}
+            onUndo={openUndo}
+            onMarkReviewed={markReviewed}
+          />
+        </Card>
+      ) : null}
+
+      {reconBatchId ? (
+        <AmazonReconciliationDialog batchId={reconBatchId} onClose={() => setReconBatchId(null)} />
+      ) : null}
+      {undoNode}
+      {panelsNode}
     </div>
   )
 }

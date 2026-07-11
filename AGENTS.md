@@ -1,5 +1,26 @@
 # Agent Guidelines
 
+## Hard rules — no exceptions, no rationalizing
+
+The rules an agent most reliably talks itself out of "just this once." There is no case different
+enough. If a situation *feels* like it warrants an exception, that feeling **is the rule firing** —
+stop and follow the rule. Check these *before* acting, not after.
+
+1. **Never drive a browser, launch the app, or run the UI/E2E test suite to check your own work.**
+   Confirming a change works, checking a page renders, or verifying a refactor didn't break something
+   by launching the app or running **Playwright / any browser-driven test** is prohibited — hand that
+   check to the user instead. *Not exceptions:* "it's a bug," "it's a big/critical refactor,"
+   "Playwright is a test suite, not a browser," "just one quick look." The browser is allowed **only**
+   to diagnose a specific bug the user reported that cannot be diagnosed another way — never to confirm
+   your own changes. (Backend unit tests you write and run are fine; this is about browsers and app/UI
+   driving.)
+
+2. **A question or a bug report is not a build request.** When the user asks a question, reports what
+   the app did, asks "is this right?", or muses about a direction — answer and, if useful, propose; do
+   not edit code. Start changing code only on an explicit action word (*go / build it / do it / fix it
+   / add it*). Answering a design question, or the user picking among options you offered, is not
+   authorization to implement.
+
 Follow the commenting style defined in `docs/code-commenting-style.md`.
 
 Before any non-trivial change, read `docs/collaboration-notes.md` for project decision-making preferences and working habits. The bar is first-class code conforming to accepted best practice, not just something that works; when getting it right reveals a needed refactor or a real tradeoff, surface it for a decision rather than silently working around it or expanding scope.

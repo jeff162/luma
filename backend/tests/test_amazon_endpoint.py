@@ -30,7 +30,7 @@ ITEMS_CSV = (
 
 
 class AmazonEndpointTests(unittest.TestCase):
-    def test_two_file_import_lands_items_in_the_account(self):
+    def test_two_file_import_lands_one_order_row_with_item_evidence(self):
         with api_client() as (client, _):
             account = client.post("/api/accounts", json={"name": "Amazon", "type": "other"}).json()
 
@@ -45,13 +45,12 @@ class AmazonEndpointTests(unittest.TestCase):
             self.assertEqual(resp.status_code, 200, resp.text)
             summary = resp.json()
             self.assertEqual(summary["order_count"], 1)
-            self.assertEqual(summary["counts"]["applied_full"], 1)
+            self.assertEqual(summary["counts"]["orders_imported"], 1)
 
-            # The item purchases persisted through the full stack and allocate to the charge total.
+            # One row per order (orders-only model), amount = the order total, item detail folded in.
             txns = client.get("/api/transactions").json()["transactions"]
-            amounts = [t["amount"] for t in txns]
-            self.assertEqual(len(amounts), 2)
-            self.assertAlmostEqual(sum(amounts), 37.32, places=2)
+            self.assertEqual(len(txns), 1)
+            self.assertAlmostEqual(txns[0]["amount"], 37.32, places=2)
 
     def test_unrecognized_file_is_rejected(self):
         with api_client() as (client, _):

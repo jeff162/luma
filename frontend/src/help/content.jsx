@@ -773,15 +773,16 @@ export const HELP_TOPICS = [
     section: 'importing',
     title: 'Importing Amazon orders (AZAD)',
     surfaces: ['Import / Export — Amazon'],
-    summary: 'Amazon purchases arrive on your card as bare AMAZON.COM charges. The AZAD browser extension exports your order history as CSVs; upload the Orders and Items files on the Amazon tab to turn those charges into itemized, categorizable transactions.',
+    summary: 'Amazon purchases arrive on your card as bare AMAZON.COM charges. The AZAD browser extension exports your order history as CSVs; upload the Orders file on the Amazon tab to turn each charge into a described purchase in an Amazon account. The Items file is optional extra detail.',
     body: () => (
       <>
         <p>
           Amazon purchases hit your card statement as bare <strong>AMAZON.COM</strong> charges with no hint
           of what was bought. The open-source <strong>AZAD</strong> (Amazon Order History Reporter) browser
-          extension exports your own order history as spreadsheets; {APP_NAME} reads them to turn each
-          charge into itemized transactions in an Amazon account, links the matching card charge, and
-          excludes that charge from totals so nothing is counted twice.
+          extension exports your own order history as spreadsheets; {APP_NAME} reads the <strong>Orders</strong>{' '}
+          file to create one transaction per order in an Amazon account &mdash; described by what you bought &mdash;
+          then finds the matching card charge, links it, and excludes it from totals so nothing is counted twice.
+          You categorize those Amazon transactions with your own rules.
         </p>
         <p>
           <strong>Install the extension</strong> from the{' '}
@@ -791,11 +792,11 @@ export const HELP_TOPICS = [
           The default install is all you need &mdash; <em>preview / premium features</em> do not have to be
           enabled.
         </p>
-        <p><strong>Export each year — two files per year:</strong></p>
+        <p><strong>Export each year — the Orders file is what you need:</strong></p>
         <ol>
           <li>
             Sign in to Amazon, then open the AZAD extension. Leave <strong>Show totals in csv downloads</strong>{' '}
-            and <strong>Show category in item table</strong> checked.
+            checked.
           </li>
           <li>Select the <strong>Orders</strong> option and click the <strong>year</strong> you want.</li>
           <li>
@@ -803,18 +804,23 @@ export const HELP_TOPICS = [
             then click <strong>download spreadsheet (&apos;.csv&apos;)</strong>.
           </li>
           <li>
-            Open the extension again, select <strong>Items</strong>, pick the <strong>same year</strong>, set
-            the rows to <strong>All</strong>, and download again &mdash; save it under a different name so it
-            does not overwrite the orders file.
+            <em>Optional:</em> for extra reference detail (product links, list prices) on those transactions,
+            also export the <strong>Items</strong> file for the same year the same way &mdash; save it under a
+            different name. It is not required.
           </li>
           <li>Repeat for each year you want to bring in.</li>
         </ol>
         <p>
-          Upload the files on the <strong>Amazon</strong> tab &mdash; both files, any number of years, in one
-          go. Each file is recognized by its columns, so upload order and file names do not matter, and either
-          file on its own still works (the orders file links and counts the charge; the items file adds the
-          per-item detail). Afterwards you only need to export the <strong>current year</strong> now and then
-          to pull in recent purchases.
+          Drop the files on the <strong>Amazon</strong> tab &mdash; any number of years in one go; each file is
+          recognized by its columns, so upload order and file names do not matter. The tab then shows a
+          <strong> mapping screen</strong> (like the CSV importer): pick the <strong>account</strong> to import
+          into, confirm the <strong>category</strong> the matched card charges are excluded into, and map each
+          <strong> payment card</strong> the files use to the account it charges (a card you&apos;ve mapped
+          before is filled in automatically). <strong>Import</strong> lights up once every card has an account
+          (or is marked <em>Untracked</em>). An <strong>Items</strong> file adds its detail to the matching
+          orders you have imported; if its Orders file isn&apos;t in yet, that detail is set aside &mdash; import
+          the Orders file first, then re-import the Items file. Afterwards you only need to export the
+          <strong> current year</strong> now and then to pull in recent purchases.
         </p>
       </>
     ),
@@ -822,18 +828,18 @@ export const HELP_TOPICS = [
   {
     id: 'amazon-funding-sources',
     section: 'importing',
-    title: 'Amazon funding sources',
+    title: 'Amazon settings (funding sources + category)',
     surfaces: ['Import / Export — Amazon'],
-    summary: `Tell ${APP_NAME} which of your accounts each Amazon payment card charges, so it can find and exclude the matching card charge. Set once, applied to every Amazon import.`,
+    summary: `Two global Amazon settings: which of your accounts each payment card charges (so the matching charge is found and excluded), and which category that excluded charge goes into. Set once, applied to every Amazon import.`,
     body: () => (
       <>
         <p>
-          Every Amazon order names the card that paid for it (a network and the last four digits, e.g.
-          <em> Fablecard ···4455</em>), but that isn’t enough on its own to know which of <em>your</em>{' '}
-          accounts the charge landed on &mdash; imported statements usually don’t carry the card number.
-          A <strong>funding source</strong> makes that link: you map each Amazon payment card to the
-          account it charges, and {APP_NAME} constrains its search for the matching <strong>AMAZON.COM</strong>{' '}
-          charge to that account, so the charge is found, linked, and excluded from totals exactly once.
+          <strong>Funding sources.</strong> Every Amazon order names the card that paid for it (a network and
+          the last four digits, e.g. <em>Fablecard ···4455</em>), but that isn’t enough on its own to know
+          which of <em>your</em> accounts the charge landed on &mdash; imported statements usually don’t carry
+          the card number. A funding source makes that link: you map each Amazon payment card to the account
+          it charges, and {APP_NAME} constrains its search for the matching <strong>AMAZON.COM</strong> charge
+          to that account, so the charge is found, linked, and excluded from totals exactly once.
         </p>
         <p>
           The map is <strong>global</strong> &mdash; map a card once and it applies to every Amazon account
@@ -843,13 +849,58 @@ export const HELP_TOPICS = [
           <li><strong>Mapped to an account</strong> &mdash; the normal case; the charge is matched and excluded.</li>
           <li>
             <strong>Untracked</strong> &mdash; a card that isn’t one of your accounts (a spouse’s card, a
-            one-off). Its orders are still itemized and counted, since there’s no charge of yours to exclude.
+            one-off). Its orders are still recorded and counted, since there’s no charge of yours to exclude.
           </li>
         </ul>
         <p>
-          When you import a file that uses a card you haven’t mapped yet, it appears here as
-          <strong> Needs mapping</strong> &mdash; pick its account (or mark it untracked) and re-import to
-          match those charges. Everything already mapped is applied silently.
+          You set these on the <strong>mapping screen</strong> that appears after you drop your files, in the
+          <strong> Payment cards in these files</strong> section &mdash; each card the files use is listed, with
+          its account filled in if you&apos;ve mapped it before, or <strong>Needs mapping</strong> if it&apos;s
+          new. Import stays disabled until every card has an account (or is marked Untracked). Because you map
+          before importing, the charges are matched on that same import &mdash; there is never any need to
+          import a file twice.
+        </p>
+        <p>
+          <strong>Category for the excluded charge.</strong> When the card charge is matched, it’s moved into
+          an excluded category so your Amazon spending (the order transactions) counts once and the raw card
+          charge doesn’t double it. Pick or create the category to use &mdash; it’s global, and a change
+          applies to <em>future</em> imports only (already-imported charges keep their category). Choose an
+          excluded category (like one under <em>Transfers</em>); {APP_NAME} warns if the one you pick isn’t
+          excluded, since that would count Amazon spend twice.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'amazon-reconciliation',
+    section: 'importing',
+    title: 'Amazon reconciliation report',
+    surfaces: ['Import / Export — Amazon', 'Import history (Reconciliation ↗)'],
+    summary: 'After an Amazon import, a report shows how the imported orders line up with the card charges in your ledger — matched, orders with no charge found, and Amazon charges no order accounts for. You can link a stray charge by hand.',
+    body: () => (
+      <>
+        <p>
+          When you import Amazon orders, {APP_NAME} tries to pair each order with the <strong>AMAZON.COM</strong>{' '}
+          charge that paid for it and exclude that charge. The <strong>reconciliation report</strong> shows how
+          that went &mdash; open it from <strong>View reconciliation report →</strong> after an import, or from
+          the <strong>Reconciliation ↗</strong> link on that file in your import history. Three groups:
+        </p>
+        <ul>
+          <li><strong>Matched</strong> &mdash; the order and the card charge it excluded.</li>
+          <li>
+            <strong>Orders with no card charge found</strong> &mdash; counted, but no charge was matched to
+            exclude (an untracked card, or a miss). Check your funding sources, or link one by hand (below).
+          </li>
+          <li>
+            <strong>Amazon charges with no order</strong> &mdash; charges in your ledger that look like Amazon,
+            on the cards Amazon uses, in this import’s date range, that no imported order accounts for. This is
+            a best-effort heuristic to flag purchases the export may have missed &mdash; informational.
+          </li>
+        </ul>
+        <p>
+          To fix a miss, pick one of the unaccounted charges next to an unmatched order and click{' '}
+          <strong>Link</strong> &mdash; {APP_NAME} excludes that charge and pairs it, just like an automatic
+          match (and it reverses if you undo the import).
         </p>
       </>
     ),

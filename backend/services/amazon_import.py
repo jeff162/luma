@@ -61,8 +61,8 @@ class PaymentLeg:
 @dataclass
 class AmazonItem:
     description: str
-    price: Optional[float]      # list price — a *weight* for allocation only, never an absolute (see doc)
-    category: Optional[str]     # Amazon taxonomy (may be blank), e.g. "Electronics›GPS…›Item Finders"
+    price: Optional[float] = None   # list price — reference detail only (kept in evidence), never a ledger amount
+    category: Optional[str] = None  # Amazon taxonomy — parsed but deliberately unused (user categorizes their own way)
     asin: Optional[str] = None
     quantity: int = 1
     item_url: Optional[str] = None
@@ -214,11 +214,10 @@ def parse_item_rows(rows: list[dict]) -> dict[str, list[AmazonItem]]:
 
 @dataclass
 class OrderDisposition:
-    """How an order's cash resolves — the input to the enrich-via-link engine (see doc's decision
-    table). ``kind`` is ``'cash'`` (a real charge to match, exclude, and allocate across items) or
-    ``'non_cash'`` (points-/gift-funded — items are recorded as detail but not counted). ``charge_amount``
-    is the gross charge to find in the ledger; ``net_cash`` is what gets allocated across the items
-    (gross minus any refund)."""
+    """How an order's cash resolves — the input to the order engine (see doc). ``kind`` is ``'cash'`` (a
+    real charge to match + exclude) or ``'non_cash'`` (points-/gift-funded — recorded excluded, not
+    counted). ``charge_amount`` is the gross charge to find in the ledger; ``net_cash`` (gross minus any
+    refund) is the order transaction's amount."""
 
     kind: str
     net_cash: float
@@ -234,7 +233,7 @@ def classify_order(order: AmazonOrder) -> OrderDisposition:
     """Apply the settled decision table to one order. An order is *cash* if it has any payment leg
     carrying a dollar amount (a card charge, or a bare off-card amount); it is *non-cash* if every leg
     is a non-cash instrument or a bare card mention with no amount (points / gift-card balance — the
-    export never discloses their dollar figure). A refund reduces the allocation base."""
+    export never discloses their dollar figure). A refund reduces the net cash."""
     cash_legs = [leg for leg in order.payment_legs if leg.amount is not None and not leg.is_non_cash]
     if not cash_legs:
         return OrderDisposition(kind="non_cash", net_cash=0.0, charge_amount=None,
@@ -251,30 +250,6 @@ def classify_order(order: AmazonOrder) -> OrderDisposition:
         match_date=primary.date or order.order_date,
         match_network=primary.method,
     )
-
-
-def allocate(net_cash: float, items: list[AmazonItem]) -> list[float]:
-    """Distribute `net_cash` across `items` in proportion to each item's list price × quantity (a
-    *weight* only — list prices don't reconcile to the charge, see doc). Works in integer cents with
-    largest-remainder rounding so the result sums to `net_cash` **exactly**. Items with no usable price
-    fall back to an equal split. Returns per-item amounts aligned with `items`; ``[]`` for no items."""
-    n = len(items)
-    if n == 0:
-        return []
-    total_cents = round(net_cash * 100)
-    if total_cents <= 0:
-        return [0.0] * n
-    weights = [max(0.0, (item.price or 0.0) * (item.quantity or 1)) for item in items]
-    if sum(weights) <= 0:
-        weights = [1.0] * n
-    total_weight = sum(weights)
-    raw = [total_cents * w / total_weight for w in weights]
-    cents = [int(x) for x in raw]
-    remainder = total_cents - sum(cents)
-    # Hand the leftover cents to the largest fractional remainders, so the parts sum to the charge.
-    for idx in sorted(range(n), key=lambda i: raw[i] - cents[i], reverse=True)[:remainder]:
-        cents[idx] += 1
-    return [c / 100.0 for c in cents]
 
 
 def merge(

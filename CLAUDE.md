@@ -1,5 +1,31 @@
 # Project Instructions
 
+## Hard rules — no exceptions, no rationalizing
+
+These are the rules I most reliably talk myself out of "just this once." There is no case that is
+different enough. If a situation *feels* like it warrants an exception, that feeling **is the rule
+firing** — stop and follow the rule.
+
+1. **Never drive a browser, launch the app, or run the UI/E2E test suite to check my own work.**
+   Confirming a change works, checking a page renders, or verifying a refactor didn't break something
+   by launching the app, `npm run dev` for a look, or **Playwright / any browser-driven test** — all
+   prohibited. If I want that confidence I hand the check to the user; I do not take it myself. *Not
+   exceptions:* "it's a bug," "it's a big or critical refactor," "Playwright is a test suite, not a
+   browser," "just one quick look." The browser is allowed **only** to diagnose a specific bug the
+   user reported that cannot be diagnosed any other way — never to confirm my own changes. (Backend
+   unit tests I write and run are fine; this rule is about browsers and app/UI driving.)
+
+2. **A question or a bug report is not a build request.** When the user asks a question, reports what
+   the app did, asks "is this right?", or muses about a direction — **answer, and if useful propose**;
+   do not edit code. Only start changing code on an explicit action word (*go / build it / do it / fix
+   it / add it*). Answering a design question, or the user picking among options I offered, is **not**
+   authorization to implement — get the explicit go first.
+
+If I violate one of these, the honest failure is not the guideline's wording — it is that I did not
+stop at the moment of acting. Treat both as a hard gate checked *before* the action, not after.
+
+---
+
 Read `AGENTS.md` first if you haven't already — it is the shared, open-standard instruction
 file for every agent on this repo; this file only adds the Claude/harness-specific layer on
 top of it (`AGENTS.md` points back here with the same "if you haven't already" guard, so the

@@ -13,8 +13,10 @@ instruction and fix the drift rather than silently choosing the looser version.
 
 ## Collaboration Defaults
 
-- Treat questions, feasibility checks, and musings as discussion requests, not build requests.
-  Investigate freely, answer directly, recommend a path, and wait for confirmation before editing.
+- Treat questions, feasibility checks, bug reports, and musings as discussion requests, not build
+  requests (hard rule in `CLAUDE.md` / `AGENTS.md`). Investigate freely and answer directly, propose a
+  path, then edit code only on an explicit action word (go / build it / do it / fix it / add it). The
+  user picking among options you offered, or a detailed design answer, is not itself the go.
 
 - The user handles commits and pushes. Leave changes in the working tree and do not ask whether to
   commit at the end.
@@ -33,12 +35,15 @@ instruction and fix the drift rather than silently choosing the looser version.
   repro over long static tracing. A confirmed repro usually localizes the issue faster and more
   reliably.
 
-- Do not spend browser quota on routine post-change confirmation. Use the browser when it helps
-  debug or disambiguate behavior, not just to re-check ordinary UI work the user will inspect
-  anyway.
+- Never use a browser, launch the app, or run a browser-driven test (Playwright / E2E) to confirm
+  your own work — hard rule in `CLAUDE.md` / `AGENTS.md`. The browser is only for diagnosing a
+  specific reported bug you cannot localize any other way; it is never for re-checking UI work or a
+  refactor (the user inspects that), and "it makes me surer" is not a reason. "It's a bug," "it's a
+  big refactor," and "Playwright is a test, not a browser" are not exceptions — hand the check to the
+  user. (Backend unit tests you write and run are fine.)
 
-- If a temporary dev server or browser session is needed, tear down only the specific processes or
-  ports launched for that session. Never use broad process-name kills.
+- If a temporary dev server or browser session is genuinely needed for a bug diagnosis, tear down only
+  the specific processes or ports launched for that session. Never use broad process-name kills.
 
 ## Implementation Bias
 

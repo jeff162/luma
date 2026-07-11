@@ -14,6 +14,7 @@ import { Button, Card, EmptyState } from '../ui.jsx'
 import { ActionCountBadge, ImportedCategoryUsageInline } from './importPresentational.jsx'
 import { getSuggestedDataSourceName } from '../../lib/importExport/importDraft.js'
 import { summarizeImportOutcome } from '../../lib/importExport/importOutcome.js'
+import { MarketplaceImportHistory } from './MarketplaceImportHistory.jsx'
 import ContextualExplainer from '../../help/ContextualExplainer.jsx'
 import {
   summarizeImportedCategorySettings,
@@ -142,11 +143,27 @@ export function ImportHistorySection({
             {dataSourceRows.length === 0 ? <EmptyState message="No data sources or temporary drafts yet" /> : (
               <>
                 {dataSourceRows.map(row => {
+                  // A marketplace group (Amazon, …) renders through the shared marketplace section (its
+                  // own file ledger / undo / reconciliation / review pills), not the CSV data-source row.
+                  if (row.kind === 'marketplace') {
+                    return (
+                      <MarketplaceImportHistory
+                        key={row.key}
+                        row={row}
+                        expanded={!!expandedSourceRows[row.key]}
+                        onToggleExpand={() => setExpandedSourceRows(prev => {
+                          const nextState = prev && typeof prev === 'object' ? prev : {}
+                          return { ...nextState, [row.key]: !nextState[row.key] }
+                        })}
+                        onOpenLedger={openBatchDetail}
+                        onUndo={handleUndoClick}
+                        onMarkReviewed={markBatchReviewed}
+                      />
+                    )
+                  }
                   const isManual = row.kind === 'manual'
                   const isUnknown = row.kind === 'unknown'
-                  // A marketplace group (Amazon, …) is a real, non-editable source entry with no CSV
-                  // profile — labeled by its vendor, not styled as an unsaved draft.
-                  const isMarketplace = row.kind === 'marketplace'
+                  const isMarketplace = false
                   const isUnsaved = isManual || isUnknown
                   const rowExpanded = !!expandedSourceRows[row.key]
                   const canExpand = row.batches.length > 0

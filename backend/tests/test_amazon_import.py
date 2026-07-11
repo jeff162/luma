@@ -13,7 +13,6 @@ from backend.services.amazon_import import (
     AmazonItem,
     AmazonOrder,
     PaymentLeg,
-    allocate,
     classify_order,
     is_footer_row,
     merge,
@@ -211,41 +210,6 @@ class ClassifyOrderTests(unittest.TestCase):
         self.assertEqual(d.kind, "cash")
         self.assertEqual(d.charge_amount, 39.83)
         self.assertIsNone(d.match_last4)
-
-
-class AllocateTests(unittest.TestCase):
-    def _items(self, *prices):
-        return [AmazonItem(description=f"i{n}", price=p, category=None) for n, p in enumerate(prices)]
-
-    def test_allocation_sums_to_charge_exactly(self):
-        # List prices ($34.99 + $5.32) don't reconcile to the $37.32 charge; allocation still ties out.
-        parts = allocate(37.32, self._items(34.99, 5.32))
-        self.assertAlmostEqual(sum(parts), 37.32, places=2)
-        # Proportional: the pricier item gets the larger share.
-        self.assertGreater(parts[0], parts[1])
-
-    def test_remainder_cents_distributed(self):
-        parts = allocate(10.00, self._items(1.0, 1.0, 1.0))  # 1000c / 3 = 333.33…
-        self.assertAlmostEqual(sum(parts), 10.00, places=2)
-        self.assertEqual(sorted(round(p * 100) for p in parts), [333, 333, 334])
-
-    def test_zero_price_items_split_equally(self):
-        parts = allocate(9.00, self._items(None, None, None))
-        self.assertEqual(parts, [3.0, 3.0, 3.0])
-
-    def test_no_items_returns_empty(self):
-        self.assertEqual(allocate(10.0, []), [])
-
-    def test_zero_net_all_zero(self):
-        self.assertEqual(allocate(0.0, self._items(5.0, 5.0)), [0.0, 0.0])
-
-    def test_quantity_weights(self):
-        # Same unit price, but the second line has quantity 3 → gets ~3× the allocation.
-        items = [AmazonItem(description="a", price=1.0, category=None, quantity=1),
-                 AmazonItem(description="b", price=1.0, category=None, quantity=3)]
-        parts = allocate(8.0, items)
-        self.assertAlmostEqual(sum(parts), 8.0, places=2)
-        self.assertAlmostEqual(parts[1], parts[0] * 3, delta=0.02)
 
 
 if __name__ == "__main__":

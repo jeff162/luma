@@ -374,6 +374,20 @@ export default function CategoryPicker({
     panelRef.current.scrollTop = 0
   }, [open, trimmedQuery])
 
+  // Opening the (unsearched) list while a category is already chosen: put the keyboard cursor on it and
+  // scroll it into view, so the current choice is visibly selected and the user can see the categories
+  // around it rather than starting at the top.
+  useEffect(() => {
+    if (!open || trimmedQuery || value == null) return
+    const idx = displayedIndexById.get(value)
+    if (idx == null) return
+    setCursor(idx)
+    const timer = setTimeout(() => {
+      panelRef.current?.querySelector('[data-picker-row-selected="true"]')?.scrollIntoView({ block: 'nearest' })
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [open, trimmedQuery, value, displayedIndexById])
+
   useEffect(() => {
     setQuery(initialQuery || '')
   }, [initialQuery])
@@ -719,6 +733,7 @@ export default function CategoryPicker({
                         <div
                           key={c.id}
                           data-picker-row-active={active ? 'true' : 'false'}
+                          data-picker-row-selected={selectedRow ? 'true' : 'false'}
                           onMouseDown={e => { e.preventDefault(); pick(c) }}
                           onMouseEnter={() => {
                             const nextCursor = displayedIndexById.get(c.id)

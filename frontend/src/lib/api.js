@@ -423,10 +423,25 @@ export const api = {
   },
   // AZAD Amazon order/items export(s): one or both files, sniffed server-side by header (a dropped file
   // on the general importer is detected client-side via lib/amazonDetect and routed here).
-  importAmazon: (files, accountId) => {
+  // Inspect dropped AZAD files before importing: which payment cards they use + each card's funding-map
+  // state, so the user can map any unmapped card up front (the map feeds the import that follows).
+  scanAmazonFiles: (files, accountId) => {
+    const fd = new FormData()
+    for (const f of files) fd.append('files', f)
+    if (accountId) fd.append('account_id', accountId)
+    return fetch('/api/import-export/amazon/scan', { method: 'POST', body: fd }).then(async res => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }))
+        throw buildResponseError(err, res.status)
+      }
+      return res.json()
+    })
+  },
+  importAmazon: (files, accountId, applyCategorization = true) => {
     const fd = new FormData()
     for (const f of files) fd.append('files', f)
     fd.append('account_id', accountId)
+    fd.append('apply_categorization', applyCategorization ? 'true' : 'false')
     return fetch('/api/import-export/amazon/import', { method: 'POST', body: fd }).then(async res => {
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -439,6 +454,10 @@ export const api = {
   // Amazon funding-source → account map: which system account each Amazon payment instrument (card
   // last-4 + network) charges, so the importer can match + exclude the card charge. Global by default,
   // with an optional per-Amazon-account override (see docs/backlog/paypal-amazon-enrichment.md).
+  getAmazonReconciliation:    (batchId) => request(`/import-export/amazon/reconciliation/${batchId}`),
+  linkAmazonCharge:           (body) => request('/import-export/amazon/link-charge', { method: 'POST', body: JSON.stringify(body) }),
+  getAmazonFundingCategory:   ()     => request('/import-export/amazon/funding-category'),
+  setAmazonFundingCategory:   (categoryId) => request('/import-export/amazon/funding-category', { method: 'PUT', body: JSON.stringify({ category_id: categoryId }) }),
   getAmazonFundingSources:    ()     => request('/import-export/amazon/funding-sources'),
   saveAmazonFundingSource:    (body) => request('/import-export/amazon/funding-sources', { method: 'PUT', body: JSON.stringify(body) }),
   deleteAmazonFundingSource:  (id)   => request(`/import-export/amazon/funding-sources/${id}`, { method: 'DELETE' }),
