@@ -86,9 +86,19 @@ export function buildSingleShareText(txn) {
     .join('\n')
 }
 
+// One CSV field: quoted only when it needs it — a field containing a comma, whitespace ("blank"), or a
+// double-quote (category names like "Clothing, shoes, glasses, etc", account labels, most merchants),
+// with any embedded double-quote doubled per RFC 4180. A bare token like an amount (-$17.99) stays
+// unquoted. This also avoids the tab-stop padding of the old TSV, which made short cells look like they
+// had trailing spaces when pasted into a plain-text target.
+function csvField(value) {
+  const text = String(value ?? '')
+  return /[",\s]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
 export function buildListShareText(rows) {
-  const header = TRANSACTION_SHARE_COLUMNS.map(col => col.label).join('\t')
-  const body = getTransactionListRows(rows).map(cells => cells.join('\t'))
+  const header = TRANSACTION_SHARE_COLUMNS.map(col => csvField(col.label)).join(',')
+  const body = getTransactionListRows(rows).map(cells => cells.map(csvField).join(','))
   return [header, ...body].join('\n')
 }
 
@@ -116,6 +126,30 @@ export function buildListShareHtml(rows) {
 // Write both a rich-HTML and a plain-text flavor to the clipboard so a rich target (email, doc) gets the
 // table/record and a plain editor gets readable text. Falls back to plain-only where the async
 // ClipboardItem API isn't available. Returns true on success.
+// Last-resort clipboard copy for insecure contexts (plain HTTP on a non-localhost host — the common
+// WSL2/LAN case), where `navigator.clipboard` isn't exposed at all. A temporary off-screen textarea +
+// the legacy `execCommand('copy')` still works there. Plain-text only (execCommand can't reliably carry
+// rich HTML), so a rich copy degrades to its plain-text flavor rather than failing outright.
+function legacyCopyText(text) {
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.setAttribute('readonly', '')
+    // Off-screen but still selectable — display:none / visibility:hidden would make the selection fail.
+    ta.style.position = 'fixed'
+    ta.style.top = '-9999px'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    ta.setSelectionRange(0, ta.value.length)
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch {
+    return false
+  }
+}
+
 export async function copyShare({ text, html }) {
   try {
     if (navigator.clipboard && typeof window.ClipboardItem === 'function' && html) {
@@ -131,13 +165,15 @@ export async function copyShare({ text, html }) {
       return true
     }
   } catch {
-    // Fall through to the plain-text attempt below before giving up.
+    // The async API exists but threw (permissions, focus, …) — try its plain-text form before the
+    // legacy fallback.
     try {
       await navigator.clipboard?.writeText?.(text)
       return true
     } catch {
-      return false
+      return legacyCopyText(text)
     }
   }
-  return false
+  // No async clipboard API at all (insecure context): the legacy textarea path is the only option.
+  return legacyCopyText(text)
 }

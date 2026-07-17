@@ -73,7 +73,7 @@ function ListTable({ rows }) {
 }
 
 export default function TransactionShareDialog({ mode, txn, rows, title, onClose }) {
-  const [copied, setCopied] = useState(false)
+  const [copyState, setCopyState] = useState('idle')   // 'idle' | 'copied' | 'failed'
   const isList = mode === 'list'
   const count = isList ? (rows?.length || 0) : 1
 
@@ -82,10 +82,10 @@ export default function TransactionShareDialog({ mode, txn, rows, title, onClose
       ? { text: buildListShareText(rows), html: buildListShareHtml(rows) }
       : { text: buildSingleShareText(txn), html: buildSingleShareHtml(txn) }
     const ok = await copyShare(payload)
-    if (ok) {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1600)
-    }
+    // Surface failure rather than doing nothing silently — otherwise a blocked clipboard reads as a
+    // dead button. Select the text in the preview so the user can copy it by hand as a fallback.
+    setCopyState(ok ? 'copied' : 'failed')
+    setTimeout(() => setCopyState('idle'), ok ? 1600 : 3200)
   }
 
   return (
@@ -98,8 +98,15 @@ export default function TransactionShareDialog({ mode, txn, rows, title, onClose
       onClose={onClose}
       actions={(
         <>
+          {copyState === 'failed' ? (
+            <span style={{ fontSize: 12, color: 'var(--danger)', alignSelf: 'center', marginRight: 'auto' }}>
+              Couldn’t reach the clipboard — select the text above and copy it manually.
+            </span>
+          ) : null}
           <Button variant="ghost" onClick={onClose}>Close</Button>
-          <Button onClick={handleCopy}>{copied ? 'Copied ✓' : 'Copy'}</Button>
+          <Button onClick={handleCopy}>
+            {copyState === 'copied' ? 'Copied ✓' : copyState === 'failed' ? 'Copy failed' : 'Copy'}
+          </Button>
         </>
       )}
     >
