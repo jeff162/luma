@@ -568,6 +568,18 @@ export const HELP_TOPICS = [
           it); <strong>hover a pill</strong> for a short explanation of what it means.
         </p>
         <p>
+          A rejected duplicate&rsquo;s detail isn&rsquo;t wasted: when it unambiguously matched one existing
+          transaction, <strong>Enrich</strong> folds its <em>novel</em> detail (a memo, a transaction id, a
+          richer name) into that transaction&rsquo;s source record &mdash; additive and reversible
+          (<strong>Unenrich</strong> removes exactly what was added). The file card&rsquo;s
+          <strong> Enrich existing transactions from this source</strong> checkbox does the same for the
+          whole file at once &mdash; at any time, since rejected rows keep their full detail &mdash; and a
+          data source can opt in permanently on its mapping screen so future imports enrich automatically.
+          Once a row has enriched its match, its Kind reads <strong>Matched</strong> (green) rather than
+          &ldquo;Rejected&rdquo;: it was recognized as one you already had and contributed its detail, not
+          discarded.
+        </p>
+        <p>
           Removing a duplicate never makes a row vanish silently &mdash; see{' '}
           <HelpLink to="/help/removed-as-duplicates">where a removed duplicate went</HelpLink>. If a single
           file lists the same purchase twice, that&rsquo;s a different problem &mdash; see{' '}
@@ -641,16 +653,17 @@ export const HELP_TOPICS = [
   {
     id: 'covered-range-review',
     section: 'duplicates',
-    title: 'Reviewing covered-range duplicates (±2 days / no match)',
+    title: 'Reviewing covered-range duplicates (±2 days / transfer / no match)',
     surfaces: ['Duplicate-detection report'],
-    summary: 'When an earlier import already covered a date range, every transaction in that range is expected to already be present, so each new row landing in it is paired against the existing data by date and amount (exact, then ±1, then ±2 days). Two pairing outcomes are surfaced for review: Matched ±2 days (a counterpart turned up only after widening the window — posting dates drift between sources from pending/posted timing, weekend settlement, or time zones) and No specific match (nothing paired at all, so the row may be genuinely missing from the earlier import).',
+    summary: 'When an earlier import already covered a date range, every transaction in that range is expected to already be present, so each new row landing in it is paired against the existing data by date and amount (exact, then ±1, then ±2 days, then a cross-account transfer twin). Three pairing outcomes are surfaced for review: Matched ±2 days (a same-account counterpart turned up only after widening the window), Possible transfer match (a same-amount row naming this account sits on another account — a wallet funding leg whose twin is already on your books), and No specific match (nothing paired at all, so the row may be genuinely missing from the earlier import).',
     body: () => (
       <>
         <p>
           When an earlier import already covered a date range, every transaction in that range is expected to
           already be in the ledger, so a newly-imported row landing inside it is rejected as a presumed
           duplicate and paired against the existing data by date and amount &mdash; the exact date first, then
-          &plusmn;1 day, then &plusmn;2 days. Two of the pairing outcomes are surfaced for review:
+          &plusmn;1 day, then &plusmn;2 days, and finally a cross-account transfer twin. Three of the pairing
+          outcomes are surfaced for review:
         </p>
         <ul>
           <li><strong>Matched &plusmn;2 days</strong> &mdash; a counterpart turned up only after the date
@@ -660,10 +673,16 @@ export const HELP_TOPICS = [
             looks right, <strong>Mark reviewed</strong> (in bulk from the pill, or per row) clears it from the
             needs-attention list. If a pair turns out <em>not</em> to be the same transaction, select the rows
             and import both.</li>
+          <li><strong>Possible transfer match</strong> &mdash; nothing matched on this account, but a
+            same-amount transaction naming this account sits on <em>another</em> one, a few days apart. That
+            is the signature of a wallet funding/deposit leg (a PayPal/Venmo &ldquo;Bank Deposit&rdquo; row)
+            whose money-movement twin is the funding charge on your bank or card &mdash; already on your
+            books, so the leg is correctly not re-imported. <strong>Mark reviewed</strong> to confirm, or
+            <strong> Import anyway</strong> if they really are separate.</li>
           <li><strong>No specific match</strong> &mdash; the date is covered but nothing paired with it at
-            all, even at &plusmn;2 days. That makes it the row to actually investigate: it is usually present
-            in one source and genuinely missing from the other, in which case <strong>Import anyway</strong>
-            keeps it.</li>
+            all, even at &plusmn;2 days or across accounts. That makes it the row to actually investigate: it
+            is usually present in one source and genuinely missing from the other, in which case
+            <strong> Import anyway</strong> keeps it.</li>
         </ul>
         <p>
           A covered row that paired cleanly on the exact date or &plusmn;1 day stays rejected without being

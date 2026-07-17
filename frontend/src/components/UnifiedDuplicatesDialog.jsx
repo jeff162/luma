@@ -64,6 +64,7 @@ const DEFAULT_SORT_STATE = { key: 'kind', dir: 'asc' }
 const REVIEW_KIND_PILLS = [
   { key: 'review', label: 'Review', topic: 'cross-account-duplicates' },
   { key: 'matched_2d', label: 'Matched ±2 days', topic: 'covered-range-review' },
+  { key: 'transfer_match', label: 'Possible transfer match', topic: 'covered-range-review' },
   { key: 'no_match', label: 'No specific match', topic: 'covered-range-review' },
 ]
 
@@ -75,6 +76,7 @@ const REVIEW_KIND_PILLS = [
 function reviewKindOf(entry) {
   if (entry.kind === 'soft_flag') return 'review'
   if (entry.review_substate === 'matched_2d') return 'matched_2d'
+  if (entry.review_substate === 'transfer_match') return 'transfer_match'
   if (entry.review_substate === 'no_match') return 'no_match'
   return null
 }
@@ -99,7 +101,12 @@ const entryId = (entry) => `${entry.kind}:${entry.incoming?.txn_id || entry.inco
 function enrichTargetExists(entry) {
   const matched = entry.matched
   if (!matched || typeof matched !== 'object') return false
-  if (Array.isArray(matched.candidates)) return matched.candidates.length === 1
+  if (Array.isArray(matched.candidates)) {
+    // A cross-account transfer twin isn't an enrich target — the row is the funding leg of a transfer,
+    // not richer detail for the matched transaction; its only resolutions are Mark reviewed / Import anyway.
+    if (matched.candidates.some(c => c.cross_account)) return false
+    return matched.candidates.length === 1
+  }
   return !!matched.id
 }
 
@@ -140,12 +147,20 @@ function kindMeta(entry) {
   const isConfirmedSoftFlag = entry.kind === 'hard_reject' && !!entry.incoming?.txn_id
   const isAdvisoryReview = !!entry.review_substate
   const isAcknowledged = entry.kind === 'hard_reject' && entry.reviewed && !!entry.matched?.covered
+  // A settled hard-reject that folded its detail into the transaction it matched reads as a positive
+  // outcome, not a discard: "Rejected" (= not imported as new) undersells it. Labeled "Matched" (green),
+  // with the ✓ enriched detail line below carrying the specifics. Only when it isn't still a soft-flag
+  // or an advisory-review row that needs a decision first.
+  const isEnrichedMatch = entry.kind === 'hard_reject' && !!entry.enriched && !isConfirmedSoftFlag && !isAdvisoryReview
   return {
     warn: isSoft || isAdvisoryReview,
-    label: isSoft ? 'Review' : isConfirmedSoftFlag ? 'Resolved' : isAdvisoryReview ? 'Rejected · review' : isAcknowledged ? 'Reviewed' : 'Rejected',
+    positive: isEnrichedMatch,
+    label: isSoft ? 'Review' : isConfirmedSoftFlag ? 'Resolved' : isAdvisoryReview ? 'Rejected · review'
+      : isEnrichedMatch ? 'Matched' : isAcknowledged ? 'Reviewed' : 'Rejected',
     stripe: isSoft ? 'var(--warning)'
       : isConfirmedSoftFlag ? 'color-mix(in srgb, var(--warning) 60%, var(--border))'
       : isAdvisoryReview ? 'color-mix(in srgb, var(--warning) 30%, var(--border))'
+      : isEnrichedMatch ? 'var(--success)'
       : 'var(--border)',
   }
 }
@@ -199,7 +214,7 @@ export default function UnifiedDuplicatesDialog({
   ), [entries, accountFilter])
 
   const reviewKindBreakdown = useMemo(() => {
-    const counts = { review: 0, matched_2d: 0, no_match: 0 }
+    const counts = { review: 0, matched_2d: 0, transfer_match: 0, no_match: 0 }
     for (const e of scopedEntries) {
       const k = reviewKindOf(e)
       if (k) counts[k] += 1
@@ -400,19 +415,28 @@ export default function UnifiedDuplicatesDialog({
         dateStart:  covered.start_date,
         dateEnd:    covered.end_date,
       } : null
-      const noMatchMarker = (
+      // Cross-account transfer twin (a funding/deposit leg matched to its counterpart on the funding
+      // account): its own marker, since it's not a same-account match and reads differently.
+      const isTransferMatch = candidates.length > 0 && candidates.every(c => c.cross_account)
+      const markerStyle = {
+        display: 'inline-flex', alignItems: 'center', padding: '0 5px',
+        borderRadius: 4, fontSize: 9.5, fontWeight: 700, letterSpacing: '0.02em',
+        background: 'color-mix(in srgb, var(--warning) 14%, var(--surface2))',
+        color: 'var(--warning)', border: '1px solid color-mix(in srgb, var(--warning) 40%, var(--border))',
+        marginRight: 4,
+      }
+      const noMatchMarker = <span style={markerStyle}>NO SPECIFIC MATCH</span>
+      const transferMarker = (
         <span style={{
-          display: 'inline-flex', alignItems: 'center', padding: '0 5px',
-          borderRadius: 4, fontSize: 9.5, fontWeight: 700, letterSpacing: '0.02em',
-          background: 'color-mix(in srgb, var(--warning) 14%, var(--surface2))',
-          color: 'var(--warning)', border: '1px solid color-mix(in srgb, var(--warning) 40%, var(--border))',
-          marginRight: 4,
-        }}>NO SPECIFIC MATCH</span>
+          ...markerStyle,
+          background: 'color-mix(in srgb, var(--accent2) 14%, var(--surface2))',
+          color: 'var(--accent2)', border: '1px solid color-mix(in srgb, var(--accent2) 40%, var(--border))',
+        }}>POSSIBLE TRANSFER MATCH</span>
       )
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.3 }}>
           <div style={{ color: 'var(--muted)', fontSize: 11 }}>
-            {candidates.length === 0 ? noMatchMarker : null}
+            {candidates.length === 0 ? noMatchMarker : isTransferMatch ? transferMarker : null}
             <span style={{ fontVariantNumeric: 'tabular-nums' }}>{range ? `Range: ${range}` : ''}</span>
           </div>
           {/* Render the coverage-source link only when there are no candidates. With
@@ -432,6 +456,11 @@ export default function UnifiedDuplicatesDialog({
                 ) : null}
                 {' · '}<span>{c.merchant_name || ''}</span>
                 {' · '}<span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{formatAmount(c.amount)}</span>
+                {c.cross_account && c.account_name ? (
+                  <span style={{ marginLeft: 4, fontSize: 9.5, fontWeight: 600, color: 'var(--accent2)', whiteSpace: 'nowrap' }}>
+                    on {c.account_name}
+                  </span>
+                ) : null}
               </div>
               {c.source_filename ? sourceFileLink({
                 filename:   c.source_filename,
@@ -445,6 +474,10 @@ export default function UnifiedDuplicatesDialog({
           {candidates.length === 0 ? (
             <div style={{ color: 'var(--muted)', fontSize: 10.5, fontStyle: 'italic' }}>
               The date is in the covered range of the earlier import above, but no row on this account matches by date+amount. Open the source file to investigate.
+            </div>
+          ) : isTransferMatch ? (
+            <div style={{ color: 'var(--muted)', fontSize: 10.5, fontStyle: 'italic' }}>
+              A same-amount transaction naming this account sits on another account — likely the funding leg of this transfer, already on your books. Mark reviewed to confirm, or Import anyway if they&apos;re separate.
             </div>
           ) : null}
         </div>
@@ -556,7 +589,7 @@ export default function UnifiedDuplicatesDialog({
           persistentButton={false}
           style={{ margin: '10px 16px 4px' }}
         />
-        {(ruleBreakdown.length > 0 || reviewKindBreakdown.review || reviewKindBreakdown.matched_2d || reviewKindBreakdown.no_match) ? (
+        {(ruleBreakdown.length > 0 || reviewKindBreakdown.review || reviewKindBreakdown.matched_2d || reviewKindBreakdown.transfer_match || reviewKindBreakdown.no_match) ? (
           <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 6, alignItems: 'baseline', background: 'color-mix(in srgb, var(--surface2) 50%, transparent)' }}>
             <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>Show:</span>
             <button
@@ -597,14 +630,16 @@ export default function UnifiedDuplicatesDialog({
                 </button>
               )
             })}
-            {(reviewKindBreakdown.review || reviewKindBreakdown.matched_2d || reviewKindBreakdown.no_match) ? (
+            {(reviewKindBreakdown.review || reviewKindBreakdown.matched_2d || reviewKindBreakdown.transfer_match || reviewKindBreakdown.no_match) ? (
               <span style={{ width: 1, alignSelf: 'stretch', margin: '0 2px', background: 'var(--border)' }} />
             ) : null}
             {REVIEW_KIND_PILLS.map(k => {
               const count = reviewKindBreakdown[k.key]
               if (!count) return null
               const active = activeKindFilter === k.key
-              const accent = 'var(--warning)'  // amber = needs attention, matching the Kind-cell styling
+              // Amber = needs attention (matches the Kind-cell styling); the transfer-match pill uses
+              // accent2 to tie to its blue POSSIBLE TRANSFER MATCH badge in the matched-existing cell.
+              const accent = k.key === 'transfer_match' ? 'var(--accent2)' : 'var(--warning)'
               return (
                 <HelpHoverCard key={k.key} topic={k.topic}>
                   <button
@@ -716,7 +751,7 @@ export default function UnifiedDuplicatesDialog({
             { key: 'kind', label: 'Kind', width: 90, sortable: true, render: (entry) => {
               const meta = kindMeta(entry)
               return (
-                <div style={{ color: meta.warn ? 'var(--warning)' : 'var(--muted)', fontWeight: meta.warn ? 600 : 400, whiteSpace: 'nowrap' }}>
+                <div style={{ color: meta.warn ? 'var(--warning)' : meta.positive ? 'var(--success)' : 'var(--muted)', fontWeight: meta.warn || meta.positive ? 600 : 400, whiteSpace: 'nowrap' }}>
                   {meta.label}
                   {entry.enriched ? <div style={{ fontSize: 10, color: 'var(--success)', fontWeight: 600, marginTop: 2 }} title="This row's detail was folded into the transaction it matched.">✓ enriched</div> : null}
                 </div>

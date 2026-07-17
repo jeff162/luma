@@ -247,6 +247,11 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
         }
         if day_offset:
             row["day_offset"] = day_offset  # candidate's date is this many days off the incoming row's
+        if candidate.get("cross_account"):
+            # A transfer twin on the funding account — carry the marker + account label so the report
+            # can label it 'possible transfer match on <account>' rather than a same-account match.
+            row["cross_account"] = True
+            row["account_name"] = candidate.get("account_name")
         out.append(row)
 
     def _probe(offsets) -> None:
@@ -267,6 +272,14 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
     # by a coincidental ±2 neighbor — the ±2 band is purely the timezone-shift fallback.
     if not out:
         _probe(_far_date_offsets(parsed_date))
+    # Still nothing on this account or its linked group? A wallet funding/deposit leg's twin lives on
+    # the *funding* account — cross-account, opposite-signed, so invisible above. Surface it (tagged
+    # `cross_account`) as a reviewable 'possible transfer match' instead of a bare 'no specific match'.
+    if not out:
+        find_transfer = context.helpers.get("find_cross_account_transfer")
+        if find_transfer:
+            for candidate in find_transfer(receiving_account_id, parsed_date, amount):
+                _append(candidate, 0)
     return out
 
 
@@ -1036,6 +1049,12 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             candidates = enriched_matched.get("candidates") or []
             if not candidates:
                 review_substate = "no_match"
+            elif all(c.get("cross_account") for c in candidates):
+                # A funding/deposit leg whose only twin is the cross-account transfer counterpart —
+                # surfaced to confirm (correctly not re-imported) or reject (separate → import anyway).
+                # The cross-account fallback only runs when no same-account candidate exists, so a
+                # candidate set is never a mix of the two.
+                review_substate = "transfer_match"
             elif min(abs(c.get("day_offset", 0)) for c in candidates) >= 2:
                 review_substate = "matched_2d"
 

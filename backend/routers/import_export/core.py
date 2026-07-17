@@ -34,7 +34,7 @@ import uuid
 import os
 import re
 from contextlib import nullcontext
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Optional
@@ -375,8 +375,9 @@ class BatchDuplicateReviewRequest(BaseModel):
 
 class BatchDuplicateEnrichRequest(BaseModel):
     # Fold the incoming detail of these duplicate rows into the existing transaction each matched
-    # (enrich-on-duplicate), or undo that. Identified by CSV row_number within the batch.
-    row_numbers: list[int]
+    # (enrich-on-duplicate), or undo that. Identified by CSV row_number within the batch; omitted /
+    # empty means the whole batch (the file card's enrich toggle).
+    row_numbers: list[int] = []
 
 
 def make_hash(date_str: str, amount: float, description: str) -> str:
@@ -704,6 +705,60 @@ def _candidate_summary(candidate: Optional[dict]) -> Optional[dict]:
     for key in ("_consumed", "content_hash", "match_texts", "duplicate_scope", "csv_value", "scope_id"):
         summary.pop(key, None)
     return summary
+
+
+# A funding/deposit leg on a wallet account (PayPal, Venmo, …) has its money-movement twin on the
+# *funding* account — same magnitude, a day or three off (ACH/settlement lag), named for the wallet
+# ("PAYPAL", "WDRL-ACH PAYPAL …"). That twin is cross-account and opposite-signed, so the same-account
+# coverage lookup never sees it and the leg reads as "no specific match". This ±window is how far the
+# funding post may drift from the leg's date.
+_CROSS_ACCOUNT_TRANSFER_WINDOW_DAYS = 3
+
+
+def _find_cross_account_transfer_candidates(conn, receiving_account_id: str, parsed_date: str,
+                                            amount: float) -> list[dict]:
+    """The transfer counterpart of a coverage-rejected leg that found no same-account match: a row on a
+    *different* account, same |amount|, within a few days, whose name contains the receiving account's
+    name (the wallet it funds). Display-only and heuristic — surfaced for the user to confirm or reject,
+    never auto-resolved — so it turns a bare 'no specific match' into a reviewable 'possible transfer
+    match' without changing the (correct) reject verdict. Empty when the account can't be named or
+    nothing plausible exists."""
+    acct = conn.execute(
+        "SELECT COALESCE(NULLIF(display_name,''), name) AS label FROM account WHERE id = ?",
+        (receiving_account_id,),
+    ).fetchone()
+    token = _normalize_import_evidence_text(acct["label"]).replace(" ", "") if acct and acct["label"] else ""
+    try:
+        d = datetime.strptime(str(parsed_date), "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        d = None
+    if not token or d is None or amount is None:
+        return []
+    low, high = (d - timedelta(days=_CROSS_ACCOUNT_TRANSFER_WINDOW_DAYS)).isoformat(), \
+        (d + timedelta(days=_CROSS_ACCOUNT_TRANSFER_WINDOW_DAYS)).isoformat()
+    rows = conn.execute(
+        """SELECT t.id, t.date, t.amount, t.account_id,
+                  COALESCE(NULLIF(t.display_name,''), NULLIF(t.merchant_name,''), t.raw_name) AS merchant_name,
+                  t.import_batch_id,
+                  COALESCE(NULLIF(a.display_name,''), a.name) AS account_name
+           FROM   txn t JOIN account a ON a.id = t.account_id
+           WHERE  ROUND(ABS(t.amount), 2) = ROUND(ABS(?), 2)
+             AND  t.account_id <> ?
+             AND  t.trashed_at IS NULL
+             AND  date(t.date) BETWEEN date(?) AND date(?)""",
+        (float(amount), receiving_account_id, low, high),
+    ).fetchall()
+    out: list[dict] = []
+    for r in rows:
+        if token in _normalize_import_evidence_text(r["merchant_name"]).replace(" ", ""):
+            out.append({
+                "id": r["id"], "date": r["date"], "merchant_name": r["merchant_name"],
+                "amount": r["amount"], "account_id": r["account_id"], "account_name": r["account_name"],
+                "import_batch_id": r["import_batch_id"], "cross_account": True,
+            })
+    # Nearest-date first, so the most likely twin leads.
+    out.sort(key=lambda c: abs((datetime.strptime(c["date"][:10], "%Y-%m-%d").date() - d).days))
+    return out
 
 
 def _match_terminal_day_candidate(candidate_rows: list[dict], *, content_hash: str, amount: float, incoming_merchant: Optional[str] = None) -> Optional[dict]:
@@ -3383,6 +3438,11 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                 "match_terminal": _match_terminal_day_candidate,
                 "duplicate_amount_key": _duplicate_amount_key,
                 "find_textual": _find_textual_duplicate_candidate,
+                # Cross-account transfer fallback for a coverage-rejected leg with no same-account twin;
+                # closes over conn (a targeted query only fires on the 'no specific match' residual).
+                "find_cross_account_transfer": (
+                    lambda acct_id, date_str, amt: _find_cross_account_transfer_candidates(conn, acct_id, date_str, amt)
+                ),
             },
         )
 
@@ -3954,9 +4014,15 @@ def _enrich_duplicate_rows(conn, batch_id: str, row_numbers: list[int]) -> tuple
 @router.post("/batches/{batch_id}/duplicates/enrich")
 def enrich_batch_duplicates(batch_id: str, body: BatchDuplicateEnrichRequest):
     """Fold the given duplicate rows' incoming detail into the transactions they matched (manual action
-    from the duplicate report). Returns what was folded in and what was skipped and why."""
+    from the duplicate report). Omitting ``row_numbers`` means the batch's *entire* duplicate set — the
+    file card's "Enrich existing transactions from this source" toggle; idempotent, since already-enriched
+    / unmatched / nothing-new rows are skipped. Returns what was folded in and what was skipped and why."""
     row_numbers = [int(n) for n in (body.row_numbers or [])]
     with get_db() as conn:
+        if not row_numbers:
+            row_numbers = [r["row_number"] for r in conn.execute(
+                "SELECT row_number FROM import_batch_duplicate WHERE batch_id = ?", (batch_id,)
+            ).fetchall()]
         enriched, skipped = _enrich_duplicate_rows(conn, batch_id, row_numbers)
     return {"enriched": enriched, "skipped": skipped}
 
@@ -3964,10 +4030,16 @@ def enrich_batch_duplicates(batch_id: str, body: BatchDuplicateEnrichRequest):
 @router.post("/batches/{batch_id}/duplicates/enrich/undo")
 def undo_batch_duplicate_enrichment_endpoint(batch_id: str, body: BatchDuplicateEnrichRequest):
     """Reverse a prior enrich on the given duplicate rows — remove exactly the detail that was folded in
-    and clear the enriched marker."""
+    and clear the enriched marker. Omitting ``row_numbers`` reverses every enriched row of the batch
+    (the file card toggle switching off)."""
     row_numbers = [int(n) for n in (body.row_numbers or [])]
     undone = 0
     with get_db() as conn:
+        if not row_numbers:
+            row_numbers = [r["row_number"] for r in conn.execute(
+                "SELECT row_number FROM import_batch_duplicate WHERE batch_id = ? AND enriched_at IS NOT NULL",
+                (batch_id,),
+            ).fetchall()]
         for row_number in row_numbers:
             if undo_duplicate_enrichment(conn, batch_id, row_number):
                 undone += 1
@@ -4176,6 +4248,17 @@ def list_batches():
                 ORDER BY iba.was_skipped, iba.csv_value
             """, (b["id"],)).fetchall()
             d["accounts"] = [dict(a) for a in accs]
+            # Enrich-on-duplicate state for the file card's "Enrich existing transactions from this
+            # source" toggle: how many duplicate rows the batch recorded, and how many have folded
+            # their detail into the transaction they matched.
+            dup_counts = conn.execute("""
+                SELECT COUNT(*) AS total,
+                       COALESCE(SUM(CASE WHEN enriched_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS enriched
+                FROM   import_batch_duplicate
+                WHERE  batch_id = ?
+            """, (b["id"],)).fetchone()
+            d["duplicate_row_count"] = int(dup_counts["total"] or 0)
+            d["enriched_duplicate_count"] = int(dup_counts["enriched"] or 0)
             d["suspect_duplicate_count"] = int(conn.execute("""
                 SELECT COUNT(*) AS n
                 FROM   txn

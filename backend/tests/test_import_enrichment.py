@@ -229,6 +229,27 @@ class EndpointTests(unittest.TestCase):
             evidence = json.loads(conn.execute("SELECT import_evidence_json FROM txn WHERE id = ?", (self.txn_id,)).fetchone()[0])
         self.assertIn("Pats tix", {f["value"] for f in evidence["extra_text_fields"]})
 
+    def test_enrich_endpoint_empty_rows_means_the_whole_batch(self):
+        # The file card's "Enrich existing transactions from this source" toggle sends no row_numbers:
+        # every duplicate row of the batch is attempted (with the usual skips), and the empty-rows undo
+        # reverses every enriched row — a full on/off round trip.
+        from backend.routers.import_export.core import (
+            enrich_batch_duplicates,
+            undo_batch_duplicate_enrichment_endpoint,
+            BatchDuplicateEnrichRequest,
+        )
+        self._dup(7, [{"id": self.txn_id}])   # single match → enriched
+        self._dup(8, [])                       # no match → skipped
+        with self._use_db_path():
+            result = enrich_batch_duplicates(self.batch_id, BatchDuplicateEnrichRequest())
+            self.assertEqual([e["row"] for e in result["enriched"]], [7])
+            self.assertEqual({s["row"] for s in result["skipped"]}, {8})
+            undone = undo_batch_duplicate_enrichment_endpoint(self.batch_id, BatchDuplicateEnrichRequest())
+        self.assertEqual(undone["undone"], 1)
+        with self._use_db_path(), get_db() as conn:
+            evidence = json.loads(conn.execute("SELECT import_evidence_json FROM txn WHERE id = ?", (self.txn_id,)).fetchone()[0])
+        self.assertNotIn("extra_text_fields", evidence)
+
     def test_enrich_endpoint_undo_round_trips(self):
         from backend.routers.import_export.core import (
             enrich_batch_duplicates,

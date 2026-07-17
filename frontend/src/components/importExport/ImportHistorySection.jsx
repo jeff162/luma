@@ -50,6 +50,7 @@ export function ImportHistorySection({
   setAssignNewSourceName,
   assignUnknownBatchToProfile,
   updateBatchImportedCategoryUsage,
+  updateBatchEnrichment,
   buildBatchImportedCategoryChoices,
   openBatchImportedCategorySettings,
   openBatchDetail,
@@ -407,42 +408,76 @@ export function ImportHistorySection({
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'stretch', marginTop: 8 }}>
                                     <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', flexWrap: 'wrap', alignItems: 'flex-start' }}>
                                       {/* Marketplace imports (Amazon, …) always carry their own category
-                                          detail from the importer, so the "use the file's existing categories"
-                                          opt-in doesn't apply — the empty spacer keeps Undo right-aligned. */}
+                                          detail from the importer, so the per-file opt-ins don't apply —
+                                          the empty spacer keeps Undo right-aligned. The categories toggle
+                                          only renders when the source actually carried categories (a
+                                          disabled no-op checkbox on e.g. a PayPal card was just noise);
+                                          the enrich toggle only when the batch recorded rejected
+                                          duplicates whose detail could fold into their matches. */}
                                       {isMarketplace ? <div /> : (
-                                      <label
-                                        style={{
-                                          display: 'inline-flex',
-                                          alignItems: 'flex-start',
-                                          gap: 8,
-                                          fontSize: 11,
-                                          color: b.has_imported_categories ? 'var(--text)' : 'var(--muted)',
-                                          cursor: b.has_imported_categories ? 'pointer' : 'not-allowed',
-                                          lineHeight: 1.45,
-                                          flex: '1 1 420px',
-                                          minWidth: 0,
-                                          border: '1px solid var(--border)',
-                                          borderRadius: 8,
-                                          padding: '8px 10px',
-                                          background: 'color-mix(in srgb, var(--surface2) 50%, transparent)',
-                                        }}
-                                        title={b.has_imported_categories
-                                          ? ''
-                                          : summary.importedCount > 0
-                                            ? 'This import did not include a category column'
-                                            : 'This import did not load any new transactions'}
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          checked={!!b.use_imported_categories}
-                                          disabled={!b.has_imported_categories}
-                                          onChange={event => updateBatchImportedCategoryUsage(b.id, event.target.checked)}
-                                        />
-                                        <ImportedCategoryUsageInline
-                                          showFilter={b.use_imported_categories && batchImportedCategoryChoices.length > 1}
-                                          onFilterClick={() => openBatchImportedCategorySettings(b)}
-                                        />
-                                      </label>
+                                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', flex: '1 1 420px', minWidth: 0 }}>
+                                        {b.has_imported_categories ? (
+                                        <label
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'flex-start',
+                                            gap: 8,
+                                            fontSize: 11,
+                                            color: 'var(--text)',
+                                            cursor: 'pointer',
+                                            lineHeight: 1.45,
+                                            flex: '1 1 260px',
+                                            minWidth: 0,
+                                            border: '1px solid var(--border)',
+                                            borderRadius: 8,
+                                            padding: '8px 10px',
+                                            background: 'color-mix(in srgb, var(--surface2) 50%, transparent)',
+                                          }}
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={!!b.use_imported_categories}
+                                            onChange={event => updateBatchImportedCategoryUsage(b.id, event.target.checked)}
+                                          />
+                                          <ImportedCategoryUsageInline
+                                            showFilter={b.use_imported_categories && batchImportedCategoryChoices.length > 1}
+                                            onFilterClick={() => openBatchImportedCategorySettings(b)}
+                                          />
+                                        </label>
+                                        ) : null}
+                                        {Number(b.duplicate_row_count || 0) > 0 ? (
+                                        <label
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'flex-start',
+                                            gap: 8,
+                                            fontSize: 11,
+                                            color: 'var(--text)',
+                                            cursor: 'pointer',
+                                            lineHeight: 1.45,
+                                            flex: '1 1 260px',
+                                            minWidth: 0,
+                                            border: '1px solid var(--border)',
+                                            borderRadius: 8,
+                                            padding: '8px 10px',
+                                            background: 'color-mix(in srgb, var(--surface2) 50%, transparent)',
+                                          }}
+                                          title="Fold each rejected duplicate's novel detail (memos, transaction ids, richer names) into the transaction it matched — additive and reversible; rows with no unambiguous match or nothing new are skipped."
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={Number(b.enriched_duplicate_count || 0) > 0}
+                                            onChange={event => updateBatchEnrichment(b.id, event.target.checked)}
+                                          />
+                                          <span>
+                                            Enrich existing transactions from this source
+                                            {Number(b.enriched_duplicate_count || 0) > 0
+                                              ? ` — ${b.enriched_duplicate_count} row${Number(b.enriched_duplicate_count) === 1 ? '' : 's'} added detail`
+                                              : ''}
+                                          </span>
+                                        </label>
+                                        ) : null}
+                                      </div>
                                       )}
                                       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap', alignItems: 'center', flexShrink: 0 }}>
                                         {isUnsaved ? (

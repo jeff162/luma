@@ -2489,6 +2489,32 @@ function ImportTab({ onAmazonDetected }) {
     }
   }
 
+  // The file card's "Enrich existing transactions from this source" toggle: on = fold every rejected
+  // duplicate's novel detail into the transaction it matched (idempotent — ambiguous / nothing-new rows
+  // are skipped); off = remove exactly what was folded in. Batch-scoped and retroactive, like the
+  // imported-categories toggle above; the mapping screen's per-profile flag covers future imports.
+  async function updateBatchEnrichment(batchId, nextValue) {
+    try {
+      if (nextValue) {
+        const result = await api.enrichBatchDuplicates(batchId)
+        if (!result?.enriched?.length) {
+          setNoticeDialog({
+            title: 'Nothing to enrich',
+            description: "None of this file's rejected duplicates carried new detail for the transactions they matched.",
+          })
+        }
+      } else {
+        await api.undoBatchDuplicateEnrichment(batchId)
+      }
+      setBatches(await api.listBatches())
+    } catch (error) {
+      setNoticeDialog({
+        title: 'Could not update enrichment',
+        description: error?.message || 'Please try again.',
+      })
+    }
+  }
+
   async function markBatchReviewed(batchId) {
     // Optimistically zero the card's count, then confirm against the server.
     setBatches(prev => prev.map(batch => (
@@ -4077,6 +4103,7 @@ function ImportTab({ onAmazonDetected }) {
           setAssignNewSourceName={setAssignNewSourceName}
           assignUnknownBatchToProfile={assignUnknownBatchToProfile}
           updateBatchImportedCategoryUsage={updateBatchImportedCategoryUsage}
+          updateBatchEnrichment={updateBatchEnrichment}
           buildBatchImportedCategoryChoices={buildBatchImportedCategoryChoices}
           openBatchImportedCategorySettings={openBatchImportedCategorySettings}
           openBatchDetail={openBatchDetail}

@@ -47,7 +47,10 @@ a counterparty). The feature: **when an import matches a transaction already in 
 
 This is where the earlier "enrich on overlap" idea belongs: at the **dedup layer**, reusing what exists
 (`import_evidence_json` + the Origin hover; the duplicate-resolution screen; the match `evaluate_duplicate`
-already computes). It is *not* PayPal-specific.
+already computes). It is *not* PayPal-specific. (Shipped; 2026-07-16 added a batch-scoped **"Enrich
+existing transactions from this source"** toggle on the file card — retroactive fold at any time, exact
+undo on untoggle — alongside the per-profile auto-enrich flag and the per-row report actions. Rejected
+rows keep their full incoming detail forever, so enriching late loses nothing.)
 
 **Design guardrails:**
 

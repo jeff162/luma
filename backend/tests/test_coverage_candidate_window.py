@@ -98,6 +98,42 @@ class CoverageCandidateWindowTests(unittest.TestCase):
         self.assertNotIn("day_offset", out[0])
         self.assertEqual(out[1]["day_offset"], 1)
 
+    def test_cross_account_transfer_fallback_runs_only_when_same_account_empty(self):
+        # The cross-account transfer helper is consulted only after same-account/scope finds nothing —
+        # and its results are carried through with the cross_account marker + account label intact.
+        transfer = {
+            "id": "fund", "date": "2026-01-11", "merchant_name": "PayPal", "amount": 716.0,
+            "account_id": "checking", "account_name": "Northgate Checking", "cross_account": True,
+        }
+        calls = []
+
+        def fake_find(acct_id, date_str, amt):
+            calls.append((acct_id, date_str, amt))
+            return [transfer]
+
+        # Same-account match present → helper never consulted.
+        same = {"id": "same", "date": "2026-01-10", "merchant_name": "X", "amount": 716.0, "account_id": "acct"}
+        ctx = self._context({amount_key("2026-01-10", 716.0): [same]})
+        ctx.helpers = {"find_cross_account_transfer": fake_find}
+        out = self._lookup(ctx, "2026-01-10", amount="716.00")
+        self.assertEqual([c["id"] for c in out], ["same"])
+        self.assertEqual(calls, [], "same-account match must short-circuit the cross-account fallback")
+
+        # No same-account match → helper consulted, its candidate surfaced with marker + account.
+        ctx2 = self._context({})
+        ctx2.helpers = {"find_cross_account_transfer": fake_find}
+        out2 = self._lookup(ctx2, "2026-01-10", amount="716.00")
+        self.assertEqual([c["id"] for c in out2], ["fund"])
+        self.assertTrue(out2[0]["cross_account"])
+        self.assertEqual(out2[0]["account_name"], "Northgate Checking")
+        self.assertEqual(calls, [("acct", "2026-01-10", 716.0)])
+
+    def test_cross_account_fallback_absent_helper_is_a_no_op(self):
+        # A context without the helper (older callers / tests) simply keeps 'no specific match'.
+        ctx = self._context({})
+        out = self._lookup(ctx, "2026-01-10", amount="716.00")
+        self.assertEqual(out, [])
+
 
 if __name__ == "__main__":
     unittest.main()

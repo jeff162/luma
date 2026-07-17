@@ -51,24 +51,33 @@ duplicates between them. **Importing then merging** and **merging then importing
 state. **Detaching** an account later reverses the merge's auto-confirmations (your explicit
 Reject/Replace decisions are preserved).
 
-### A covered-range row is off by a day or two, or has no match (±2 days / no specific match)
+### A covered-range row is off by a day or two, matches a transfer, or has no match
 
 When an earlier import already covered a date range, every transaction in that range is expected to
 already be in the ledger, so a new row landing inside it is rejected as a presumed duplicate and paired
-against the existing data by date and amount — the exact date first, then ±1 day, then ±2 days. Two of
-the pairing outcomes are surfaced for review:
+against the existing data by date and amount — the exact date first, then ±1 day, then ±2 days, then a
+cross-account transfer twin. Three of the pairing outcomes are surfaced for review:
 
-- **Matched ±2 days** — a counterpart turned up only after the window widened to ±2 days. Posting dates
-  drift between sources for several reasons — pending-vs-posted timing, weekend or holiday settlement,
-  and time-zone differences on foreign charges — so the same transaction can sit a day or two apart in
-  two sources. After the pair is confirmed, **Mark reviewed** in bulk (or per row) clears it from the
-  needs-attention list. If a pair is *not* the same transaction, select the rows and **import both**.
-- **No specific match** — the date is covered but nothing paired at all, even at ±2 days. This is the
-  one to actually investigate: usually a row present in one source and genuinely missing from the
-  other, in which case **Import anyway** keeps it.
+- **Matched ±2 days** — a same-account counterpart turned up only after the window widened to ±2 days.
+  Posting dates drift between sources for several reasons — pending-vs-posted timing, weekend or holiday
+  settlement, and time-zone differences on foreign charges — so the same transaction can sit a day or
+  two apart in two sources. After the pair is confirmed, **Mark reviewed** in bulk (or per row) clears
+  it from the needs-attention list. If a pair is *not* the same transaction, select the rows and
+  **import both**.
+- **Possible transfer match** — nothing matched on this account, but a same-amount transaction that
+  *names this account* sits on another account within a few days. That is the wallet-funding signature:
+  importing a PayPal/Venmo account's activity, its "Bank Deposit" / funding legs have no twin on the
+  wallet itself — their money-movement twin is the funding charge on the bank or card that paid it
+  (named "PAYPAL…"), already in the ledger. So the leg is correctly not re-imported: **Mark reviewed**
+  to confirm, or **Import anyway** if they're genuinely separate. The match is by amount + date + the
+  account name (a soft signal, opposite-signed and cross-account, which is why the same-account lookup
+  misses it), so it is surfaced for confirmation, never applied automatically.
+- **No specific match** — the date is covered but nothing paired at all, even at ±2 days or across
+  accounts. This is the one to actually investigate: usually a row present in one source and genuinely
+  missing from the other, in which case **Import anyway** keeps it.
 
 A covered row that pairs cleanly on the exact date or ±1 day stays rejected without being flagged — only
-the two cases above need a look.
+the three cases above need a look.
 
 ### A source duplicates rows *within a single file*
 

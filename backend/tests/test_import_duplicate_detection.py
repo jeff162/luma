@@ -837,12 +837,17 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
 
     def test_coverage_reject_substate_classification(self):
         batch = "batch-substate"
-        # row 1: a twin found only at ±2 days → "matched ±2 days"; row 2: no candidate → "no specific match".
+        # row 1: a twin found only at ±2 days → "matched ±2 days"; row 2: no candidate → "no specific
+        # match"; row 3: only a cross-account transfer twin → "possible transfer match".
         self._insert_coverage_reject(batch_id=batch, filename="f.csv", row_number=1,
                                      candidates=[{"id": "x", "date": "2023-08-09", "amount": 20.22, "day_offset": -2}])
         self._insert_coverage_reject(batch_id=batch, filename="f.csv", row_number=2, candidates=[])
+        self._insert_coverage_reject(batch_id=batch, filename="f.csv", row_number=3,
+                                     candidates=[{"id": "y", "date": "2023-08-12", "amount": 20.22,
+                                                  "cross_account": True, "account_name": "Northgate Checking"}])
         self.assertEqual(self._entry_for_row(batch, 1)["review_substate"], "matched_2d")
         self.assertEqual(self._entry_for_row(batch, 2)["review_substate"], "no_match")
+        self.assertEqual(self._entry_for_row(batch, 3)["review_substate"], "transfer_match")
 
     def test_mark_reviewed_clears_substate(self):
         batch = "batch-ack"
