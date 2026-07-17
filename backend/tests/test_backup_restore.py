@@ -55,6 +55,7 @@ TABLE_TO_SECTION = {
     "account_tag": "account_tags",
     "rule_tag": "rule_tags",
     "account_pair_distinct": "account_pair_distinct",
+    "amazon_charge_distinct": "amazon_charge_distinct",
     "ui_preference": "ui_preferences",
     "recurring_series": "recurring_series",
     "recurring_membership_override": "recurring_membership_overrides",
@@ -122,6 +123,14 @@ class BackupRestoreTests(unittest.TestCase):
                 conn.execute("INSERT INTO rule_tag (rule_id, tag_id) VALUES (?, ?)", (rule, tag))
                 low, high = sorted([a1, a2])
                 conn.execute("INSERT INTO account_pair_distinct (account_id_low, account_id_high, asserted_at) VALUES (?, ?, '2026-04-15')", (low, high))
+                # A second txn so the charge-level "not duplicates" pair table can hold a row.
+                txn2 = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO txn (id, account_id, owner_id, category_id, amount, merchant_name, display_name, raw_name, date, is_pending, category_overridden) VALUES (?, ?, ?, ?, 10.0, 'M2', 'M2', 'M2', '2026-04-16', 0, 0)",
+                    (txn2, a1, SHARED_OWNER_ID, leaf),
+                )
+                t_low, t_high = sorted([txn, txn2])
+                conn.execute("INSERT INTO amazon_charge_distinct (txn_id_low, txn_id_high, asserted_at) VALUES (?, ?, '2026-04-16')", (t_low, t_high))
                 conn.execute("INSERT INTO ui_preference (scope_id, pref_key, pref_value, updated_at) VALUES ('profile-1', 'ui.dashboard.tagReports', '[{\"id\":\"r1\"}]', '2026-04-15')")
 
                 # Import history + an imported category that forward-references its batch.

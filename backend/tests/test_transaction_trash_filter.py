@@ -267,6 +267,25 @@ class TrashFilterCoverageTests(unittest.TestCase):
         self.assertTrue(self._txn_exists(auto))
         self.assertTrue(self._txn_exists(user_dup))
 
+    def test_amazon_removals_show_in_trash_and_empty_by_scope(self):
+        # Amazon reconciliation removals (amazon_merge / amazon_discard) are the visible exception
+        # among confirmed duplicates: they list in the Trash view (their own section in the UI), the
+        # 'deleted' scope leaves them alone, and the 'duplicates' scope empties only them.
+        account, group, _, user_trash = self._seed_two()
+        merged = self._insert_txn(account_id=account, category_id=group, amount=30.00, date="2026-04-25")
+        with self._use_db_path():
+            trash_transaction(user_trash)
+            self._mark_confirmed_duplicate(merged, resolved_by="amazon_merge")
+            ids = [row["id"] for row in list_trashed_transactions(limit=200)]
+            self.assertIn(merged, ids)
+            self.assertIn(user_trash, ids)
+            self.assertEqual(empty_transaction_trash(scope="deleted")["removed"], 1)
+        self.assertTrue(self._txn_exists(merged))       # duplicates section untouched
+        self.assertFalse(self._txn_exists(user_trash))  # deleted section purged
+        with self._use_db_path():
+            self.assertEqual(empty_transaction_trash(scope="duplicates")["removed"], 1)
+        self.assertFalse(self._txn_exists(merged))
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

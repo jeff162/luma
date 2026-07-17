@@ -569,6 +569,20 @@ def init_db(db_path: str | None = None):
 
             CREATE INDEX IF NOT EXISTS idx_account_pair_distinct_high ON account_pair_distinct(account_id_high);
 
+            -- Charge pairs the user declared "not duplicates" on the Amazon reconciliation report's
+            -- Unaccounted·duplicate grouping (same account + amount, days apart — but genuinely
+            -- distinct purchases). The grouping skips pairs present here, so the assertion sticks
+            -- across refreshes. Same sorted-pair shape as account_pair_distinct above.
+            CREATE TABLE IF NOT EXISTS amazon_charge_distinct (
+                txn_id_low  TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+                txn_id_high TEXT NOT NULL REFERENCES txn(id) ON DELETE CASCADE,
+                asserted_at TEXT NOT NULL,
+                PRIMARY KEY (txn_id_low, txn_id_high),
+                CHECK (txn_id_low < txn_id_high)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_amazon_charge_distinct_high ON amazon_charge_distinct(txn_id_high);
+
             -- Non-sensitive UI/layout preferences, keyed by scope_id (auth user id or local
             -- preference-profile id). Lives in the data DB so it travels with the data it describes
             -- and is captured by data backups; the control DB keeps only identity/secrets.

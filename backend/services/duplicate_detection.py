@@ -79,6 +79,7 @@ every cross-batch pair forever, with the per-pair table acting as the user's acc
 filter of "I've already decided these are different accounts."
 """
 
+import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
@@ -831,8 +832,6 @@ def account_skipped_duplicate_summary(conn: sqlite3.Connection, account_id: str)
     source files the matched (existing) transactions live on, and the importing batch(es) — with a
     `primary_batch_id` for a deep-link into the duplicate report scoped to this account.
     """
-    import json
-
     hard_reject_count = 0
     confirmed_count = 0
     batch_counts: dict[str, int] = {}
@@ -944,8 +943,6 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
     into the source file's transactions. Coverage-rule hard-rejects already carry source info on
     their `covered` block (the prior import whose date range caused the rejection).
     """
-    import json
-
     # Load a batch_id → filename/imported_at map once. Used to enrich every matched-existing
     # reference (specific rows AND coverage entries) with human-readable source context.
     batch_meta: dict[str, dict] = {}

@@ -195,7 +195,17 @@ flags, mostly independent of any link. So the primitive is built general-shaped 
   **non-cash**: record the items as detail but don't count them, and surface for manual handling. When an
   instrument is *mixed* with a card (`Amazon gift card balance; Riverstone …`), only the card leg is
   cash — allocate that; the instrument-funded remainder is non-cash. A refund reduces the allocation base
-  (`charge − refund`); a full refund nets the order's items to zero.
+  (`charge − refund`); a full refund nets the order's items to zero. A card leg carrying **$0.00** (a
+  free/promo order) is likewise non-cash — no cash moved, so there is no charge to find, and the order
+  must not surface as "No charge found" (settled 2026-07-16). Starting with the **2024** export, a
+  points-participating order names the card with **no per-leg amounts at all**
+  (`Riverstone ending in 5093; Rewards Points;`) — the split is undisclosed, so classification
+  alone lands non-cash; the importer then runs the **bare-card probe** (settled 2026-07-16): a *unique*
+  eligible charge equal to the order's **full total** on the named card (the matcher's own rules —
+  funding map / last-4, ±3-day window) proves the card paid everything, and the order imports as
+  ordinary cash (counted at its total, charge matched + excluded); no such charge → non-cash as before
+  (points-funded, or a partial split we never guess at). Sampled 2024–2025 data: every such order had a
+  full-total card charge, i.e. the points tag appeared without points actually paying.
 - **Received rewards / gift cards → not in this data (income non-goal).** `Rewards Points` and
   `Amazon gift card balance` are real money that entered the account *earlier*, but the AZAD *order* export
   shows only what was *spent* from them, never the *credit* that loaded them (that lives on Amazon's
@@ -398,6 +408,29 @@ actually excluded from totals (which would double-count Amazon spend). Not per-a
 funding-map disambiguation, untracked, orders-only, items-discarded, items-enrich + idempotency,
 reconciliation matched/unmatched + reverse scan); `test_amazon_endpoint.py` (one row per order + evidence);
 `test_amazon_funding.py` unchanged. Dead code: `amazon_import.allocate` (per-item allocation) is now unused.
+
+### Shipped on top of the orders-only model (2026-07-13 → 2026-07-16)
+
+The contracts now live in `data-model.md` → "Transaction links and Amazon order import" (this is just the
+changelog):
+
+- **Reconciliation v2** — the report gained a **duplicate** bucket (same charge imported twice: Merge → keep
+  one with identifier-token detail folding, or per-copy Discard; a `mergeable` flag keeps Merge off distinct
+  same-amount purchases) and a **matched_review** bucket (a split-shipment order covered by a *unique* set of
+  unaccounted charges: Accept links them all, Dismiss persists). Orders can link **multiple charges**
+  (per-charge `charge_priors` undo stash; manual multi-charge "Link charges…" picker). Row checkboxes + an
+  intersection bulk bar (Merge/Accept/Dismiss); duplicate + matched_review counts surface as the file card's
+  "N to resolve" warning and a Tasks-page nag.
+- **Import-detail report** — per-batch persisted `import_summary` (counts + enriched / already-enriched /
+  discarded / duplicate rows, each with `source_file` provenance) rendered as a second detached report
+  (orders / items matched / already enriched / discarded / duplicates / payments-by-account), opened from the
+  file card's outcome pills. Answers "which file did this come from?".
+- **Per-file re-import skip** — every file taken is content-hashed (`amazon_file_hashes`); a re-upload of the
+  same content is skipped with an "already imported" scan-time alert and creates no new card. A file with any
+  discarded rows is deliberately *not* remembered (items-before-orders stays re-importable; such a file shows
+  struck through on its card), and undo frees a batch's files.
+- **Both report dialogs are App-level detached viewers** on the shared `useDetachedReportViewer` seam
+  (float/drag/resize, minimize-to-nav, survive navigation) — see `ui-patterns.md`.
 
 ## What was explored and reverted (so the history isn't a mystery)
 

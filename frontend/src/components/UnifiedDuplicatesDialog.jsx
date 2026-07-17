@@ -35,12 +35,13 @@ import { useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
-import { Button, Spinner, EmptyState, SelectAllCheckbox } from './ui.jsx'
+import { Button, COMPACT_ACTION_BTN_STYLE } from './ui.jsx'
+import { MatchReport } from './importExport/MatchReport.jsx'
+import { TransactionMatchCell, SourceFileLink } from './importExport/TransactionMatchCell.jsx'
 import {
   DetailPanelShell,
   useDetailPanelChrome,
-  DETAIL_PANEL_MIN_WIDTH,
-  DETAIL_PANEL_MIN_HEIGHT,
+  useRestorablePanelGeometry,
 } from './detailShared.jsx'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
@@ -55,12 +56,6 @@ const UNIFIED_DUPLICATES_SORT_PREF_KEY = 'ui.unifiedDuplicates.sort'
 const UNIFIED_DUPLICATES_PANEL_PREF_KEY = 'ui.unifiedDuplicates.panel'
 
 const DEFAULT_SORT_STATE = { key: 'kind', dir: 'asc' }
-
-// The Resolve buttons (per-row, and the bulk-action bar) are deliberately compact: each row
-// offers up to three of them and the bulk bar lines up five, so the shared Button's default
-// sizing makes them too heavy. Padding/font-size here override Button's base (its `variant`
-// only sets colors, so these survive the merge).
-const COMPACT_ACTION_BTN_STYLE = { padding: '3px 8px', fontSize: 11.5, borderRadius: 6 }
 
 // The two "needs attention" kinds get their own quick-filter pills so the user can isolate them and
 // bulk-select (filter → header select-all). The resolved/plain-rejected kinds get none — they need no
@@ -93,6 +88,68 @@ function formatAmount(value) {
   return formatTransactionAmount(value)
 }
 
+// Pure per-entry helpers (like reviewKindOf above) — they read only their `entry` argument and module-level
+// constants, no props/state, so they live at module scope: stable identities that don't need to be listed
+// as hook dependencies where the selection summary and sort/render use them.
+const entryId = (entry) => `${entry.kind}:${entry.incoming?.txn_id || entry.incoming?.row_number || ''}`
+
+// A duplicate can enrich its match when exactly one existing transaction is unambiguously matched —
+// a coverage reject with a single candidate, or a terminal/exact reject matched to one row directly.
+// Mirrors the backend's `_duplicate_match_txn_id`.
+function enrichTargetExists(entry) {
+  const matched = entry.matched
+  if (!matched || typeof matched !== 'object') return false
+  if (Array.isArray(matched.candidates)) return matched.candidates.length === 1
+  return !!matched.id
+}
+
+function actionsFor(entry) {
+  if (entry.kind === 'soft_flag') return { keep: true, reject: true, replace: true }
+  if (entry.kind === 'hard_reject' && entry.incoming?.txn_id) return { restore: true }
+  if (entry.kind === 'hard_reject' && entry.incoming?.row_number != null) {
+    // Advisory coverage rejects: already rejected, but offer both "Import anyway" (if it's
+    // actually a distinct row missing from the other file) and "Mark reviewed" (acknowledge the
+    // rejection, clearing it from the needs-attention pills). A reviewed one can be un-reviewed.
+    const actions = { import_anyway: true }
+    if (entry.review_substate) actions.mark_reviewed = true
+    else if (entry.reviewed && entry.matched?.covered) actions.unreview = true
+    // Enrich: fold this rejected row's incoming detail into the transaction it matched (or undo).
+    if (entry.enriched) actions.unenrich = true
+    else if (enrichTargetExists(entry)) actions.enrich = true
+    return actions
+  }
+  return {}
+}
+
+// Display order for the Kind column: review (needs action) first, then rejected-review
+// (also needs attention but lower urgency), then resolved (a soft-flag the user already
+// decided about — either Rejected or auto-promoted), then plain Rejected (import-time
+// hard-reject with a specific match). Keep these four ranks in sync with the Kind-cell
+// labels in the row template further down.
+function kindRank(entry) {
+  if (entry.kind === 'soft_flag') return 0  // Review (undecided)
+  if (entry.review_substate) return 1       // Rejected · review (matched ±2 days / no specific match)
+  if (entry.incoming?.txn_id) return 2      // Resolved (confirmed soft-flag)
+  return 3                                  // Rejected (settled, incl. acknowledged)
+}
+
+// The Kind cell's label + amber emphasis and the row's left-border stripe, kept in sync (they read the
+// same four states). Used by the MatchReport column render and getRowStripe.
+function kindMeta(entry) {
+  const isSoft = entry.kind === 'soft_flag'
+  const isConfirmedSoftFlag = entry.kind === 'hard_reject' && !!entry.incoming?.txn_id
+  const isAdvisoryReview = !!entry.review_substate
+  const isAcknowledged = entry.kind === 'hard_reject' && entry.reviewed && !!entry.matched?.covered
+  return {
+    warn: isSoft || isAdvisoryReview,
+    label: isSoft ? 'Review' : isConfirmedSoftFlag ? 'Resolved' : isAdvisoryReview ? 'Rejected · review' : isAcknowledged ? 'Reviewed' : 'Rejected',
+    stripe: isSoft ? 'var(--warning)'
+      : isConfirmedSoftFlag ? 'color-mix(in srgb, var(--warning) 60%, var(--border))'
+      : isAdvisoryReview ? 'color-mix(in srgb, var(--warning) 30%, var(--border))'
+      : 'var(--border)',
+  }
+}
+
 export default function UnifiedDuplicatesDialog({
   entries = [],
   hardRejectCount = 0,
@@ -111,58 +168,17 @@ export default function UnifiedDuplicatesDialog({
   stackIndex = 0,
   isTopmost = true,
 }) {
-  // forceFloating=true makes the dialog non-modal — the user can interact with the rest of
-  // the app while the report stays open (the cross-account-merge workflow). initialSize
-  // gives the panel a constrained explicit height so it has vertical drag range; without
-  // it clampPanelPosition would lock Y when the panel filled the viewport.
-  //
-  // Saved geometry is shape { pos, size, viewport }: we snapshot the viewport at save time
-  // so a restore on a different-sized browser can scale pos/size proportionally (a panel
-  // saved bottom-right on 1920×1080 stays bottom-right on 1280×720, just smaller). Min
-  // sizes (DETAIL_PANEL_MIN_*) are enforced after scaling so an aggressive shrink can't
-  // produce an unusable panel. The hook's own clamp pass is the final safety net.
-  const [savedPanel, setSavedPanel] = useUserPreference(UNIFIED_DUPLICATES_PANEL_PREF_KEY, null)
-  const { initialPosition, initialSize } = useMemo(() => {
-    const fallbackSize = {
-      width:  Math.min(1280, (typeof window !== 'undefined' ? window.innerWidth  : 1280) - 48),
-      height: Math.min(720,  (typeof window !== 'undefined' ? window.innerHeight : 720)  - 160),
-    }
-    if (!savedPanel || typeof window === 'undefined') {
-      return { initialPosition: null, initialSize: fallbackSize }
-    }
-    const savedViewport = savedPanel.viewport
-    if (!savedViewport?.width || !savedViewport?.height) {
-      // Legacy save (pre-viewport-scaling): use as-is. Hook clamping handles overflow.
-      return { initialPosition: savedPanel.pos || null, initialSize: savedPanel.size || fallbackSize }
-    }
-    const scaleX = window.innerWidth / savedViewport.width
-    const scaleY = window.innerHeight / savedViewport.height
-    const scaledSize = savedPanel.size ? {
-      width:  Math.max(DETAIL_PANEL_MIN_WIDTH,  Math.round(savedPanel.size.width  * scaleX)),
-      height: Math.max(DETAIL_PANEL_MIN_HEIGHT, Math.round(savedPanel.size.height * scaleY)),
-    } : fallbackSize
-    const scaledPos = savedPanel.pos ? {
-      x: Math.round(savedPanel.pos.x * scaleX),
-      y: Math.round(savedPanel.pos.y * scaleY),
-    } : null
-    return { initialPosition: scaledPos, initialSize: scaledSize }
-  }, [savedPanel])
-  // Persist geometry once per completed drag/resize gesture (the hook fires onGestureEnd with the
-  // final pos/size, not on plain header clicks and not per intermediate frame). Snapshot the current
-  // viewport size alongside so the next restore can scale proportionally.
+  // forceFloating=true makes the dialog non-modal — the user can interact with the rest of the app
+  // while the report stays open (the cross-account-merge workflow). initialSize gives the panel a
+  // constrained explicit height so it has vertical drag range; without it clampPanelPosition would lock
+  // Y when the panel filled the viewport. Geometry is restored/persisted across opens by the shared hook.
+  const { initialPosition, initialSize, onGestureEnd } = useRestorablePanelGeometry(UNIFIED_DUPLICATES_PANEL_PREF_KEY)
   const { pos, size, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, {
     forceFloating: true,
     stackIndex,
     initialPosition,
     initialSize,
-    onGestureEnd: ({ pos: gPos, size: gSize }) => {
-      if (!gPos && !gSize) return
-      setSavedPanel({
-        pos: gPos || null,
-        size: gSize || null,
-        viewport: { width: window.innerWidth, height: window.innerHeight },
-      })
-    },
+    onGestureEnd,
   })
 
   const [selectedIds, setSelectedIds] = useState(() => new Set())
@@ -172,48 +188,6 @@ export default function UnifiedDuplicatesDialog({
   const [sortState, setSortState] = useUserPreference(UNIFIED_DUPLICATES_SORT_PREF_KEY, DEFAULT_SORT_STATE)
   const [pendingBulk, setPendingBulk] = useState(false)
   const [actionError, setActionError] = useState('')
-
-  const entryId = (entry) => `${entry.kind}:${entry.incoming?.txn_id || entry.incoming?.row_number || ''}`
-
-  // A duplicate can enrich its match when exactly one existing transaction is unambiguously matched —
-  // a coverage reject with a single candidate, or a terminal/exact reject matched to one row directly.
-  // Mirrors the backend's `_duplicate_match_txn_id`.
-  function enrichTargetExists(entry) {
-    const matched = entry.matched
-    if (!matched || typeof matched !== 'object') return false
-    if (Array.isArray(matched.candidates)) return matched.candidates.length === 1
-    return !!matched.id
-  }
-
-  function actionsFor(entry) {
-    if (entry.kind === 'soft_flag') return { keep: true, reject: true, replace: true }
-    if (entry.kind === 'hard_reject' && entry.incoming?.txn_id) return { restore: true }
-    if (entry.kind === 'hard_reject' && entry.incoming?.row_number != null) {
-      // Advisory coverage rejects: already rejected, but offer both "Import anyway" (if it's
-      // actually a distinct row missing from the other file) and "Mark reviewed" (acknowledge the
-      // rejection, clearing it from the needs-attention pills). A reviewed one can be un-reviewed.
-      const actions = { import_anyway: true }
-      if (entry.review_substate) actions.mark_reviewed = true
-      else if (entry.reviewed && entry.matched?.covered) actions.unreview = true
-      // Enrich: fold this rejected row's incoming detail into the transaction it matched (or undo).
-      if (entry.enriched) actions.unenrich = true
-      else if (enrichTargetExists(entry)) actions.enrich = true
-      return actions
-    }
-    return {}
-  }
-
-  // Display order for the Kind column: review (needs action) first, then rejected-review
-  // (also needs attention but lower urgency), then resolved (a soft-flag the user already
-  // decided about — either Rejected or auto-promoted), then plain Rejected (import-time
-  // hard-reject with a specific match). Keep these four ranks in sync with the Kind-cell
-  // labels in the row template further down.
-  function kindRank(entry) {
-    if (entry.kind === 'soft_flag') return 0  // Review (undecided)
-    if (entry.review_substate) return 1       // Rejected · review (matched ±2 days / no specific match)
-    if (entry.incoming?.txn_id) return 2      // Resolved (confirmed soft-flag)
-    return 3                                  // Rejected (settled, incl. acknowledged)
-  }
 
   // When opened from an account's detail panel, scope the whole report to that account's rows so the
   // counts, filter chips, and list all reflect just what's relevant — the user lands on exactly the
@@ -399,88 +373,16 @@ export default function UnifiedDuplicatesDialog({
     )
   }
 
-  function sortIndicator(key) {
-    if (sortState.key !== key) return <span style={{ color: 'var(--border)', marginLeft: 4 }}>↕</span>
-    return <span style={{ marginLeft: 4 }}>{sortState.dir === 'asc' ? '↑' : '↓'}</span>
-  }
 
-  function sortableHeader(label, key, extraStyle = {}) {
-    return (
-      <th
-        onClick={() => toggleSort(key)}
-        style={{ padding: '6px 8px', cursor: 'pointer', userSelect: 'none', ...extraStyle }}
-      >
-        {label}{sortIndicator(key)}
-      </th>
-    )
-  }
-
-  function sourceFileLink({ filename, batchId: linkBatchId, importedAt, dateStart, dateEnd }) {
-    if (!filename) return null
-    const short = filename.length > 32 ? `${filename.slice(0, 12)}…${filename.slice(-16)}` : filename
-    const tipParts = [filename]
-    if (importedAt) tipParts.push(`imported ${(importedAt || '').slice(0, 16).replace('T', ' ')}`)
-    const tip = tipParts.join(' — ')
-    return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, color: 'var(--muted)', fontSize: 11 }}>
-        <span title={tip} style={{ whiteSpace: 'nowrap' }}>from {short}</span>
-        {onDrillThrough && linkBatchId ? (
-          <button
-            type="button"
-            title={`Open ${filename} ledger${dateStart ? ` (${dateStart}…${dateEnd || dateStart})` : ''}`}
-            onClick={() => onDrillThrough({ batchId: linkBatchId, dateStart, dateEnd, filename })}
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px',
-              color: 'var(--accent)', fontSize: 12, lineHeight: 1,
-            }}
-          >↗</button>
-        ) : null}
-      </span>
-    )
+  // Thin wrappers over the shared match-report cells (see importExport/TransactionMatchCell). The
+  // duplicate report is the first consumer; the reconciliation report reuses the same cells.
+  function sourceFileLink(info) {
+    return <SourceFileLink {...info} onDrillThrough={onDrillThrough} />
   }
 
   function partyBlock(side, sourceInfo = null) {
-    if (!side) return <span style={{ color: 'var(--muted)' }}>—</span>
-    const acct = side.account_name || ''
-    // `account_merged_into` is the parent's effective name when this row's source account was
-    // later merged under another account. We show the as-imported label as the truth of the
-    // file and annotate the mapping (e.g. "Credit Card → Rewards Card") so the merge is
-    // visible without hiding what the file actually said.
-    const mergedInto = side.account_merged_into && side.account_merged_into !== acct
-      ? side.account_merged_into
-      : null
-    // Hard-reject rows carry the full raw source row in `csv_values`. Funding legs and transfers have no
-    // merchant, so date + amount alone can't identify them; expose every non-empty source cell on hover
-    // (Type, memo, the raw *signed* amount as it appears in the file, etc.) so the row is recognizable
-    // without leaving the report. Absent for in-ledger soft-flag rows, which already show a real merchant.
-    const rawDetail = side.csv_values && typeof side.csv_values === 'object'
-      ? Object.entries(side.csv_values)
-          .filter(([, value]) => String(value ?? '').trim() !== '')
-          .map(([key, value]) => `${key}: ${value}`)
-          .join('\n')
-      : ''
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 1, lineHeight: 1.3 }} title={rawDetail || undefined}>
-        <div>
-          <span style={{ fontVariantNumeric: 'tabular-nums' }}>{side.date || ''}</span>
-          {' · '}
-          <span>{side.merchant || ''}</span>
-          {' · '}
-          <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{formatAmount(side.amount)}</span>
-        </div>
-        {acct ? (
-          <div style={{ color: 'var(--muted)', fontSize: 11 }}>
-            {acct}
-            {mergedInto ? (
-              <span title={`Merged into ${mergedInto}`} style={{ color: 'var(--muted)' }}>
-                {' → '}{mergedInto}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-        {sourceInfo ? sourceFileLink(sourceInfo) : null}
-      </div>
-    )
+    if (!side) return <TransactionMatchCell record={null} />
+    return <TransactionMatchCell record={{ ...side, source: sourceInfo || undefined }} onDrillThrough={onDrillThrough} />
   }
 
   function matchedBlock(matched, reasonText) {
@@ -790,88 +692,57 @@ export default function UnifiedDuplicatesDialog({
           </div>
         ) : null}
 
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-          {loading || error || actionError || (!loading && !error && visibleEntries.length === 0) ? (
-            <div style={{ padding: '12px 16px' }}>
-              {loading ? <Spinner /> : null}
-              {error ? <div style={{ color: 'var(--danger)', marginBottom: 8 }}>{error}</div> : null}
-              {actionError ? <div style={{ color: 'var(--danger)', marginBottom: 8 }}>{actionError}</div> : null}
-              {!loading && !error && visibleEntries.length === 0 ? (
-                <EmptyState message={scopedEntries.length === 0
-                  ? (accountFilter?.id
-                    ? `No duplicate decisions recorded for ${accountFilter.name} in this import.`
-                    : "No duplicate decisions recorded for this import.")
-                  : "No entries match the current filter."} />
-              ) : null}
-            </div>
-          ) : null}
-          {!loading && !error && visibleEntries.length > 0 ? (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1, boxShadow: '0 1px 0 var(--border)' }}>
-                <tr style={{ color: 'var(--muted)', textAlign: 'left' }}>
-                  <th style={{ padding: '8px 8px 8px 16px', width: 32 }}>
-                    <SelectAllCheckbox
-                      checked={allVisibleSelected}
-                      indeterminate={someVisibleSelected}
-                      onChange={toggleSelectAllVisible}
-                      title={allVisibleSelected ? 'Deselect all visible' : 'Select all visible'}
-                    />
-                  </th>
-                  {sortableHeader('Kind', 'kind', { width: 90 })}
-                  {sortableHeader('Rule', 'rule')}
-                  {sortableHeader('Incoming', 'date')}
-                  <th style={{ padding: '8px' }}>Matched existing</th>
-                  <th style={{ padding: '8px 16px 8px 8px', width: 210 }}>Resolve</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleEntries.map((entry) => {
-                  const id = entryId(entry)
-                  const isSoft = entry.kind === 'soft_flag'
-                  const isConfirmedSoftFlag = entry.kind === 'hard_reject' && !!entry.incoming?.txn_id
-                  const isAdvisoryReview = !!entry.review_substate  // unreviewed coverage advisory
-                  const isAcknowledged = entry.kind === 'hard_reject' && entry.reviewed && !!entry.matched?.covered
-                  const stripe = isSoft ? 'var(--warning)'
-                               : isConfirmedSoftFlag ? 'color-mix(in srgb, var(--warning) 60%, var(--border))'
-                               : isAdvisoryReview ? 'color-mix(in srgb, var(--warning) 30%, var(--border))'
-                               : 'var(--border)'
-                  const a = actionsFor(entry)
-                  return (
-                    <tr key={id} style={{ borderBottom: '1px solid color-mix(in srgb, var(--border) 60%, transparent)', borderLeft: `3px solid ${stripe}` }}>
-                      <td style={{ padding: '6px 8px 6px 16px', textAlign: 'center' }}>
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(id)}
-                          onChange={() => toggleEntry(entry)}
-                        />
-                      </td>
-                      <td style={{ padding: '6px 8px', color: (isSoft || isAdvisoryReview) ? 'var(--warning)' : 'var(--muted)', fontWeight: (isSoft || isAdvisoryReview) ? 600 : 400, whiteSpace: 'nowrap' }}>
-                        {isSoft ? 'Review' : isConfirmedSoftFlag ? 'Resolved' : isAdvisoryReview ? 'Rejected · review' : isAcknowledged ? 'Reviewed' : 'Rejected'}
-                        {entry.enriched ? <div style={{ fontSize: 10, color: 'var(--success)', fontWeight: 600, marginTop: 2 }} title="This row's detail was folded into the transaction it matched.">✓ enriched</div> : null}
-                      </td>
-                      <td style={{ padding: '6px 8px' }}>{ruleBadge(entry)}</td>
-                      <td style={{ padding: '6px 8px' }}>{partyBlock(entry.incoming)}</td>
-                      <td style={{ padding: '6px 8px' }}>{matchedBlock(entry.matched, entry.reason_text)}</td>
-                      <td style={{ padding: '6px 16px 6px 8px' }}>
-                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                          {a.keep ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'keep')} title="These are different transactions: keep the new row too and mark the two accounts as distinct. Clears every other flagged row between this account pair and stops future imports from re-flagging it.">Keep both</Button> : null}
-                          {a.reject ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'reject')} title="The new file's row is a duplicate: discard it and keep the existing transaction.">Discard new</Button> : null}
-                          {a.replace ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'replace')} title="The new file's row is the correct record (e.g. correct account): keep it and remove the existing duplicate. Categorization follows whichever file was set to use its imported categories.">Replace existing</Button> : null}
-                          {a.restore ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'restore')}>Restore</Button> : null}
-                          {a.mark_reviewed ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'mark_reviewed')} title="Already rejected — acknowledge it as reviewed so it leaves the needs-attention list. Does not import it.">Mark reviewed</Button> : null}
-                          {a.import_anyway ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'import_anyway')}>Import anyway</Button> : null}
-                          {a.enrich ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'enrich')} title="Fold this row's extra detail (memo, counterparty, item title…) into the existing transaction it matched. Additive — nothing already there is overwritten — and reversible. Skips a row that adds nothing new.">Enrich existing</Button> : null}
-                          {a.unenrich ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'unenrich')} title="Remove the detail this row folded into the matched transaction.">Undo enrich</Button> : null}
-                          {a.unreview ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'unreview')} title="Move this back to the needs-review list.">Un-review</Button> : null}
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          ) : null}
-        </div>
+        {actionError ? <div style={{ padding: '8px 16px', color: 'var(--danger)' }}>{actionError}</div> : null}
+        <MatchReport
+          entries={visibleEntries}
+          getRowId={entryId}
+          getRowStripe={(entry) => kindMeta(entry).stripe}
+          sortState={sortState}
+          onHeaderClick={toggleSort}
+          selectable
+          selectedIds={selectedIds}
+          onToggleRow={toggleEntry}
+          onToggleAll={toggleSelectAllVisible}
+          allVisibleSelected={allVisibleSelected}
+          someVisibleSelected={someVisibleSelected}
+          loading={loading}
+          error={error}
+          emptyMessage={scopedEntries.length === 0
+            ? (accountFilter?.id
+              ? `No duplicate decisions recorded for ${accountFilter.name} in this import.`
+              : "No duplicate decisions recorded for this import.")
+            : "No entries match the current filter."}
+          columns={[
+            { key: 'kind', label: 'Kind', width: 90, sortable: true, render: (entry) => {
+              const meta = kindMeta(entry)
+              return (
+                <div style={{ color: meta.warn ? 'var(--warning)' : 'var(--muted)', fontWeight: meta.warn ? 600 : 400, whiteSpace: 'nowrap' }}>
+                  {meta.label}
+                  {entry.enriched ? <div style={{ fontSize: 10, color: 'var(--success)', fontWeight: 600, marginTop: 2 }} title="This row's detail was folded into the transaction it matched.">✓ enriched</div> : null}
+                </div>
+              )
+            } },
+            { key: 'rule', label: 'Rule', sortable: true, render: (entry) => ruleBadge(entry) },
+            { key: 'date', label: 'Incoming', sortable: true, render: (entry) => partyBlock(entry.incoming) },
+            { key: 'matched', label: 'Matched existing', render: (entry) => matchedBlock(entry.matched, entry.reason_text) },
+            { key: 'resolve', label: 'Resolve', width: 210, render: (entry) => {
+              const a = actionsFor(entry)
+              return (
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {a.keep ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'keep')} title="These are different transactions: keep the new row too and mark the two accounts as distinct. Clears every other flagged row between this account pair and stops future imports from re-flagging it.">Keep both</Button> : null}
+                  {a.reject ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'reject')} title="The new file's row is a duplicate: discard it and keep the existing transaction.">Discard new</Button> : null}
+                  {a.replace ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'replace')} title="The new file's row is the correct record (e.g. correct account): keep it and remove the existing duplicate. Categorization follows whichever file was set to use its imported categories.">Replace existing</Button> : null}
+                  {a.restore ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'restore')}>Restore</Button> : null}
+                  {a.mark_reviewed ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'mark_reviewed')} title="Already rejected — acknowledge it as reviewed so it leaves the needs-attention list. Does not import it.">Mark reviewed</Button> : null}
+                  {a.import_anyway ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'import_anyway')}>Import anyway</Button> : null}
+                  {a.enrich ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'enrich')} title="Fold this row's extra detail (memo, counterparty, item title…) into the existing transaction it matched. Additive — nothing already there is overwritten — and reversible. Skips a row that adds nothing new.">Enrich existing</Button> : null}
+                  {a.unenrich ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'unenrich')} title="Remove the detail this row folded into the matched transaction.">Undo enrich</Button> : null}
+                  {a.unreview ? <Button variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => runSingle(entry, 'unreview')} title="Move this back to the needs-review list.">Un-review</Button> : null}
+                </div>
+              )
+            } },
+          ]}
+        />
       </div>
     </DetailPanelShell>
   )

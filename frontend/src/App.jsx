@@ -20,6 +20,16 @@ import {
   MinimizedDuplicatesNavItem,
 } from './contexts/UnifiedDuplicatesViewerContext.jsx'
 import {
+  AmazonReconciliationViewerProvider,
+  AmazonReconciliationViewerRenderer,
+  MinimizedAmazonReconciliationNavItem,
+} from './contexts/AmazonReconciliationViewerContext.jsx'
+import {
+  AmazonImportDetailViewerProvider,
+  AmazonImportDetailViewerRenderer,
+  MinimizedAmazonImportDetailNavItem,
+} from './contexts/AmazonImportDetailViewerContext.jsx'
+import {
   ImportedCategoryWorkspaceProvider,
   ImportedCategoryWorkspaceRenderer,
   MinimizedImportedCategoryWorkspaceNavItem,
@@ -1523,9 +1533,13 @@ export default function App() {
             <PanelStackProvider>
               <TransactionShareProvider>
                 <UnifiedDuplicatesViewerProvider>
+                  <AmazonReconciliationViewerProvider>
+                  <AmazonImportDetailViewerProvider>
                   <ImportedCategoryWorkspaceProvider>
                     <ThemeController />
                     <UnifiedDuplicatesViewerRenderer />
+                    <AmazonReconciliationViewerRenderer />
+                    <AmazonImportDetailViewerRenderer />
                     <ImportedCategoryWorkspaceRenderer />
                     <style>{GLOBAL_SCROLLBAR_STYLES}</style>
                     {pendingLocalProfileDelete ? (
@@ -1594,6 +1608,8 @@ export default function App() {
                           </NavLink>
                         ))}
                         <MinimizedDuplicatesNavItem />
+                        <MinimizedAmazonReconciliationNavItem />
+                        <MinimizedAmazonImportDetailNavItem />
                         <MinimizedImportedCategoryWorkspaceNavItem />
                         <div style={s.navFooter}>
                           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
@@ -1790,6 +1806,8 @@ export default function App() {
                       </div>
                     )}
                   </ImportedCategoryWorkspaceProvider>
+                  </AmazonImportDetailViewerProvider>
+                  </AmazonReconciliationViewerProvider>
                 </UnifiedDuplicatesViewerProvider>
               </TransactionShareProvider>
             </PanelStackProvider>

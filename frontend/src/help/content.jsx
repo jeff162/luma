@@ -822,6 +822,12 @@ export const HELP_TOPICS = [
           the Orders file first, then re-import the Items file. Afterwards you only need to export the
           <strong> current year</strong> now and then to pull in recent purchases.
         </p>
+        <p>
+          Re-importing is always safe: files are recognized by <em>content</em>, so a file a completed import
+          already took is announced as “already imported” and dropped from the selection rather than
+          re-processed &mdash; and orders are keyed on their Amazon order id, so overlapping exports never
+          double anything.
+        </p>
       </>
     ),
   },
@@ -875,32 +881,94 @@ export const HELP_TOPICS = [
     id: 'amazon-reconciliation',
     section: 'importing',
     title: 'Amazon reconciliation report',
-    surfaces: ['Import / Export — Amazon', 'Import history (Reconciliation ↗)'],
-    summary: 'After an Amazon import, a report shows how the imported orders line up with the card charges in your ledger — matched, orders with no charge found, and Amazon charges no order accounts for. You can link a stray charge by hand.',
+    surfaces: ['Import / Export — Amazon', 'Import history (transactions ↗ pill)'],
+    summary: 'After an Amazon import, a floating report shows how the orders line up with the card charges in your ledger — matched, duplicate charges to merge or discard, split-shipment matches to confirm, orders with no charge, and Amazon charges no order accounts for.',
     body: () => (
       <>
         <p>
-          When you import Amazon orders, {APP_NAME} tries to pair each order with the <strong>AMAZON.COM</strong>{' '}
-          charge that paid for it and exclude that charge. The <strong>reconciliation report</strong> shows how
+          When you import Amazon orders, {APP_NAME} pairs each order with the card charge that paid for it and
+          excludes that charge so the money counts once. The <strong>reconciliation report</strong> shows how
           that went &mdash; open it from <strong>View reconciliation report →</strong> after an import, or from
-          the <strong>Reconciliation ↗</strong> link on that file in your import history. Three groups:
+          the file’s <strong>transactions ↗</strong> pill in the import history. It floats free of the page
+          (drag, resize, or <strong>Minimize</strong> it to the nav bar), so you can go inspect transactions
+          and come back. Rows group into:
         </p>
         <ul>
-          <li><strong>Matched</strong> &mdash; the order and the card charge it excluded.</li>
-          <li>
-            <strong>Orders with no card charge found</strong> &mdash; counted, but no charge was matched to
-            exclude (an untracked card, or a miss). Check your funding sources, or link one by hand (below).
-          </li>
-          <li>
-            <strong>Amazon charges with no order</strong> &mdash; charges in your ledger that look like Amazon,
-            on the cards Amazon uses, in this import’s date range, that no imported order accounts for. This is
-            a best-effort heuristic to flag purchases the export may have missed &mdash; informational.
-          </li>
+          <li><strong>Duplicate detected</strong> &mdash; two or more identical charges made the order ambiguous,
+            usually the same charge imported twice (e.g. two Mint syncs). <strong>Merge → keep one</strong> keeps
+            the richest copy (folding in any detail the others carried), trashes the rest, and matches the order;
+            <strong> Not duplicates</strong> marks the copies as distinct purchases instead (never re-flagged; the
+            order falls back to the unmatched path, and a copy dated on the order itself is re-suggested for
+            review). When other unmatched orders share the amount, Merge isn’t offered &mdash; use Not duplicates,
+            or the per-copy <strong>Discard</strong> for a copy you know is a double import.</li>
+          <li><strong>Duplicate · review</strong> &mdash; same-amount copies that only turn up <em>outside</em> the
+            strict &plusmn;3-day match window (within two weeks). Likely still a double import, but the dates
+            don’t corroborate it &mdash; so examine each copy (hover for its origin detail), then resolve with
+            the same Merge / Discard / <strong>Not duplicates</strong> &mdash; per row, or bulk-Merge the rows
+            you&rsquo;ve checked (a merged-away copy is restorable from Settings → Trash).</li>
+          <li><strong>No charge found</strong> &mdash; counted, but no charge was matched to exclude (an untracked
+            card, history that predates your imports, or a miss). <strong>Link charges…</strong> opens a picker
+            over the unaccounted charges with a running sum against the order total &mdash; check the charge(s)
+            that paid for it (several, if the order was split) and link them. A mismatched sum warns but doesn’t
+            block.</li>
+          <li><strong>Matched · review</strong> &mdash; no single charge equals the order total, but a unique set
+            of unaccounted charges sums to it: Amazon billed the order per shipment. <strong>Accept</strong> links
+            the whole set; <strong>Dismiss</strong> if it’s not a match (it won’t be re-suggested). A set spanning
+            more than a week is flagged so you can eyeball it first. A <em>single</em>-charge suggestion carries a
+            note naming why it didn’t match automatically &mdash; outside the ±3-day window, a cent off the
+            total, or imported after the order was.</li>
+          <li><strong>Unaccounted · duplicate</strong> &mdash; unaccounted charges that look like <em>copies of each
+            other</em> (same account and amount, days apart) with no order for either &mdash; the double import the
+            general dedupe can’t catch. <strong>Merge → keep one</strong> keeps the richest copy (which returns to
+            the unaccounted list); <strong>Discard</strong> a copy; or <strong>Not duplicates</strong> if they’re
+            distinct purchases &mdash; the group won’t be flagged again. Merge works per row or in bulk on
+            selected rows.
+            A merged-away or discarded copy is recoverable from Settings → Trash’s <em>Duplicate
+            transactions</em> section, grouped by the file it came from.</li>
+          <li><strong>Unaccounted charge</strong> &mdash; ledger charges that look like Amazon, on the cards Amazon
+            uses, in this import’s date range, that no order accounts for. Best-effort and informational.
+            <strong>Discard</strong> sends one to Trash &mdash; the escape hatch for a duplicate the report failed
+            to pair up.</li>
+          <li><strong>Matched</strong> &mdash; the order and the charge(s) it excluded.</li>
         </ul>
         <p>
-          To fix a miss, pick one of the unaccounted charges next to an unmatched order and click{' '}
-          <strong>Link</strong> &mdash; {APP_NAME} excludes that charge and pairs it, just like an automatic
-          match (and it reverses if you undo the import).
+          For batch cleanup, filter with the pills, tick the row checkboxes (or the select-all header), and the
+          bulk bar applies <strong>Merge / Accept / Dismiss</strong> to every selected row that supports it.
+          Items needing action also show as an <strong>N to resolve</strong> warning on the file card and a task
+          on the Tasks page; both clear as you resolve them. Everything the import itself did reverses if you
+          undo it; duplicate copies you merged or discarded are restorable from Settings → Trash instead.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'amazon-import-detail',
+    section: 'importing',
+    title: 'Amazon import detail report',
+    surfaces: ['Import history — outcome pills (orders / items matched / discarded / …)'],
+    summary: 'The outcome pills on an Amazon file card open a report of what that import actually did — the orders it created, items matched into orders, items discarded, duplicates, and payments — each row showing which file it came from.',
+    body: () => (
+      <>
+        <p>
+          Each Amazon file card carries outcome pills &mdash; <strong>orders</strong>, <strong>items
+          matched</strong>, <strong>already enriched</strong>, <strong>discarded</strong>,{' '}
+          <strong>duplicates</strong>, <strong>payments</strong> &mdash; and clicking one opens the{' '}
+          <strong>import detail report</strong> on that view. Every row shows the <strong>source file</strong> it
+          came from, which is what makes file mix-ups diagnosable:
+        </p>
+        <ul>
+          <li><strong>Discarded</strong> items had no matching order &mdash; usually the items file was imported
+            before its orders file. The file shows struck through on its card (nothing was loaded from it), and
+            it can be re-imported after the orders file &mdash; it is deliberately not treated as “already
+            imported.”</li>
+          <li><strong>Duplicates</strong> are orders a previous import already brought in &mdash; the file added
+            nothing new. <strong>Already enriched</strong> is the items-file flavor of the same thing.</li>
+          <li><strong>Payments</strong> tallies the matched card charges by the account they landed on.</li>
+        </ul>
+        <p>
+          Files are recognized by <em>content</em>, not name: re-uploading a file a completed import already took
+          is skipped with an “already imported” notice (no second file card), and undoing an import frees its
+          files to import again.
         </p>
       </>
     ),
@@ -919,7 +987,9 @@ export const HELP_TOPICS = [
           without a trace. Open a file’s ledger (the <strong>↗</strong>) and expand the collapsible
           <strong> Removed as duplicates</strong> list: it shows each removed row and which account the kept
           copy now lives on. So a Replace or merge done from another file never makes a transaction
-          mysteriously disappear.
+          mysteriously disappear. Duplicate charge copies merged away on the <em>Amazon reconciliation
+          report</em> land here too &mdash; for those the kept copy is usually on the <em>same</em> account (a
+          doubled import of one charge), and the removed copy is restorable from Settings → Trash.
         </p>
       </>
     ),

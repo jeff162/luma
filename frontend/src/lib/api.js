@@ -311,7 +311,7 @@ export const api = {
   bulkUpdateTransactions: (selection, actions) =>
     request('/transactions/bulk', { method: 'POST', body: JSON.stringify({ selection, actions }) }),
   getTrashedTransactions: ()        => request('/transactions/trash'),
-  emptyTransactionTrash: ()         => request('/transactions/trash/empty',     { method: 'POST'   }),
+  emptyTransactionTrash: (scope = 'all') => request(`/transactions/trash/empty?scope=${encodeURIComponent(scope)}`, { method: 'POST' }),
   // Soft-flag duplicate review. Flagging happens in the backend during import (new account,
   // soft match) and account merge; the per-batch unified report (UnifiedDuplicatesDialog)
   // calls these to let the user keep, reject, or undo a previous rejection on a flagged row.
@@ -455,7 +455,14 @@ export const api = {
   // last-4 + network) charges, so the importer can match + exclude the card charge. Global by default,
   // with an optional per-Amazon-account override (see docs/backlog/paypal-amazon-enrichment.md).
   getAmazonReconciliation:    (batchId) => request(`/import-export/amazon/reconciliation/${batchId}`),
+  getAmazonImportDetail:      (batchId) => request(`/import-export/amazon/import-detail/${batchId}`),
   linkAmazonCharge:           (body) => request('/import-export/amazon/link-charge', { method: 'POST', body: JSON.stringify(body) }),
+  linkAmazonCharges:          (body) => request('/import-export/amazon/link-charges', { method: 'POST', body: JSON.stringify(body) }),
+  dismissAmazonSplitSuggestion: (body) => request('/import-export/amazon/dismiss-split-suggestion', { method: 'POST', body: JSON.stringify(body) }),
+  trashAmazonDuplicateCharge: (body) => request('/import-export/amazon/trash-duplicate-charge', { method: 'POST', body: JSON.stringify(body) }),
+  mergeAmazonDuplicateCharges: (body) => request('/import-export/amazon/merge-duplicate-charges', { method: 'POST', body: JSON.stringify(body) }),
+  mergeUnaccountedAmazonCharges: (body) => request('/import-export/amazon/merge-unaccounted-charges', { method: 'POST', body: JSON.stringify(body) }),
+  markAmazonChargesNotDuplicates: (body) => request('/import-export/amazon/charges-not-duplicates', { method: 'POST', body: JSON.stringify(body) }),
   getAmazonFundingCategory:   ()     => request('/import-export/amazon/funding-category'),
   setAmazonFundingCategory:   (categoryId) => request('/import-export/amazon/funding-category', { method: 'PUT', body: JSON.stringify({ category_id: categoryId }) }),
   getAmazonFundingSources:    ()     => request('/import-export/amazon/funding-sources'),

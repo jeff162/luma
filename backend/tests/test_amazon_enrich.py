@@ -27,11 +27,18 @@ from backend.routers.import_export.amazon import (
     LINK_KIND,
     amazon_reconciliation,
     apply_amazon_order,
+    dismiss_split_suggestion,
     find_or_create_funding_category,
+    link_amazon_charges,
     manual_link_charge,
+    mark_charges_distinct,
+    merge_duplicate_charges,
+    merge_unaccounted_charges,
+    reconciliation_attention_count,
     reverse_amazon_order,
     reverse_batch_amazon_links,
     run_amazon_import,
+    trash_duplicate_charge,
 )
 from backend.services.amazon_import import AmazonItem, AmazonOrder, PaymentLeg, merge
 from backend.services import amazon_funding, txn_links
@@ -205,6 +212,42 @@ class AmazonOrdersTests(unittest.TestCase):
         # A non-cash order is recorded in the excluded category so it doesn't count.
         self.assertEqual(orders[0]["category_id"], funding_id)
 
+    def test_bare_card_order_upgrades_to_cash_when_full_total_charge_exists(self):
+        # The bare-card probe: "Riverstone ending in 5093; Rewards Points;" (2024+ shape) names a
+        # card but discloses no amounts, so classification alone says non-cash — but a unique ledger
+        # charge equal to the full total proves the card paid everything. The order imports as ordinary
+        # cash: counted at its total, the charge matched + excluded.
+        charge = self._add_card_charge(37.32)
+        order = _cash_order(order_id="points-2")
+        order.payment_legs = [
+            PaymentLeg(method="Test Card", last4="4321", date=None, amount=None),
+            PaymentLeg(method="Rewards Points", last4=None, date=None, amount=None, is_non_cash=True),
+        ]
+        with self._use_db_path(), get_db() as conn:
+            result = apply_amazon_order(conn, order, account_id="amazon", batch_id=self.batch_id)
+            funding_id = find_or_create_funding_category(conn)
+        self.assertEqual(result["disposition"], "cash")
+        self.assertTrue(result["charge_linked"])
+        orders = self._amazon_orders()
+        self.assertEqual(orders[0]["amount"], 37.32)                     # counted at the real total
+        self.assertIsNone(orders[0]["category_id"])                     # categorizable, like any cash order
+        self.assertEqual(self._txn(charge)["category_id"], funding_id)  # the charge is excluded, like any match
+
+    def test_bare_card_order_stays_non_cash_when_full_total_charge_is_ambiguous(self):
+        # Two same-amount charges: the probe demands a *unique* full-total charge — never guess.
+        self._add_card_charge(37.32)
+        self._add_card_charge(37.32)
+        order = _cash_order(order_id="points-3")
+        order.payment_legs = [
+            PaymentLeg(method="Test Card", last4="4321", date=None, amount=None),
+            PaymentLeg(method="Rewards Points", last4=None, date=None, amount=None, is_non_cash=True),
+        ]
+        with self._use_db_path(), get_db() as conn:
+            result = apply_amazon_order(conn, order, account_id="amazon", batch_id=self.batch_id)
+        self.assertEqual(result["disposition"], "non_cash")
+        self.assertFalse(result["charge_linked"])
+        self.assertEqual(self._amazon_orders()[0]["amount"], 0.0)
+
     def test_cash_order_with_no_matching_charge_counts_directly(self):
         # Untracked card: no ledger charge to match, so the order is the sole record and still counts.
         with self._use_db_path(), get_db() as conn:
@@ -223,6 +266,195 @@ class AmazonOrdersTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             result = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
         self.assertFalse(result["charge_linked"])
+
+    # ---- reconciliation: duplicate-charge detection + trash-to-resolve ----------------------------
+
+    def test_reconciliation_reports_duplicate_charges_not_unmatched(self):
+        # Two identical charges make the order ambiguous. Reconciliation must file it under `duplicate`
+        # (both copies carried) — not `amazon_unmatched` — and keep those copies out of the reverse scan.
+        c1 = self._add_card_charge(37.32)
+        c2 = self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            report = amazon_reconciliation(conn, self.batch_id)
+        self.assertEqual(len(report["duplicate"]), 1)
+        self.assertEqual(report["amazon_unmatched"], [])
+        self.assertEqual(report["matched"], [])
+        entry = report["duplicate"][0]
+        self.assertEqual({c["id"] for c in entry["charges"]}, {c1, c2})
+        self.assertTrue(all(c["matched"] is False for c in entry["charges"]))
+        # The order side carries provenance from its own import file.
+        self.assertEqual(entry["order"]["source"]["filename"], "amazon.csv")
+        # The duplicated copies are not double-shown as unaccounted charges.
+        self.assertEqual([c["id"] for c in report["payment_unmatched"] if c["id"] in (c1, c2)], [])
+
+    def test_trashing_a_duplicate_lets_the_order_match(self):
+        # Resolve the ambiguity by trashing one copy → the survivor auto-links → the order is now matched.
+        c1 = self._add_card_charge(37.32)
+        c2 = self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            outcome = trash_duplicate_charge(conn, c1, applied["link_id"])
+            report = amazon_reconciliation(conn, self.batch_id)
+            funding_id = find_or_create_funding_category(conn)
+        self.assertTrue(outcome["matched"])
+        self.assertIsNotNone(self._txn(c1)["trashed_at"])           # the copy we trashed is gone
+        self.assertEqual(len(report["matched"]), 1)
+        self.assertEqual(report["duplicate"], [])
+        self.assertEqual(report["matched"][0]["charges"][0]["id"], c2)  # linked to the survivor
+        self.assertEqual(self._txn(c2)["category_id"], funding_id)  # and excluded, like any match
+
+    def test_matched_charge_with_a_duplicate_copy_is_flagged(self):
+        # Point 3: a cleanly-matched order later gains a duplicate charge. Reconciliation surfaces every
+        # copy (the matched one included) so the user can trash the redundant one; the match survives.
+        c1 = self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            self.assertTrue(applied["charge_linked"])
+        c2 = self._add_card_charge(37.32)   # a duplicate arrives after the match
+        with self._use_db_path(), get_db() as conn:
+            report = amazon_reconciliation(conn, self.batch_id)
+        self.assertEqual(len(report["duplicate"]), 1)
+        charges = {c["id"]: c["matched"] for c in report["duplicate"][0]["charges"]}
+        self.assertEqual(charges, {c1: True, c2: False})
+        with self._use_db_path(), get_db() as conn:
+            trash_duplicate_charge(conn, c2, applied["link_id"])   # trash the redundant copy
+            report2 = amazon_reconciliation(conn, self.batch_id)
+        self.assertEqual(report2["duplicate"], [])
+        self.assertEqual(report2["matched"][0]["charges"][0]["id"], c1)   # original match intact
+
+    def test_equal_count_orders_auto_pair_at_import(self):
+        # Two distinct same-amount purchases + two charges: the matcher can't tell which pairs with which,
+        # but the assignment is immaterial, so the equal-count pass pairs them 1:1 at import rather than
+        # flagging false duplicates.
+        self._add_card_charge(37.32, date="2024-11-19")
+        self._add_card_charge(37.32, date="2024-11-20")
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, [_cash_order(order_id="A-1"), _cash_order(order_id="A-2")],
+                              account_id="amazon", apply_categorization=False)
+            batch = conn.execute("SELECT id FROM import_batch ORDER BY rowid DESC LIMIT 1").fetchone()["id"]
+            report = amazon_reconciliation(conn, batch)
+        self.assertEqual(len(report["matched"]), 2)
+        self.assertEqual(report["duplicate"], [])
+        self.assertEqual(report["amazon_unmatched"], [])
+
+    def test_surplus_charge_is_not_auto_paired(self):
+        # One order, two same-amount charges: a *surplus* is a real duplicate, so the equal-count pass leaves
+        # it alone for the reconciliation report to resolve.
+        self._add_card_charge(37.32)
+        self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, [_cash_order(order_id="A-1")], account_id="amazon", apply_categorization=False)
+            batch = conn.execute("SELECT id FROM import_batch ORDER BY rowid DESC LIMIT 1").fetchone()["id"]
+            report = amazon_reconciliation(conn, batch)
+        self.assertEqual(report["matched"], [])
+        self.assertEqual(len(report["duplicate"]), 1)
+
+    def test_merge_keeps_richest_and_trashes_the_rest(self):
+        # Same purchase imported twice, the later sync richer. Merge keeps that copy and trashes the plainer
+        # one, then links the survivor to the order.
+        plain = self._add_card_charge(37.32)   # raw_name 'AMAZON.COM'
+        detailed = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                """INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name, date, is_pending)
+                   VALUES (?, 'card', ?, 37.32, 'AMAZON.COM', 'AMAZON.COM', 'AMAZON MKTPLACE PMTS AMZN.COM/BILL WA — LONGER DETAIL', '2024-11-19', 0)""",
+                (detailed, SHARED_OWNER_ID),
+            )
+            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            result = merge_duplicate_charges(conn, applied["link_id"])
+            report = amazon_reconciliation(conn, self.batch_id)
+        self.assertEqual(result["survivor_id"], detailed)          # richer copy kept
+        self.assertIsNotNone(self._txn(plain)["trashed_at"])       # plainer copy trashed
+        self.assertIsNone(self._txn(detailed)["trashed_at"])
+        self.assertEqual(len(report["matched"]), 1)
+        self.assertEqual(report["matched"][0]["charges"][0]["id"], detailed)
+        self.assertEqual(report["duplicate"], [])
+
+    def _insert_charge(self, txn_id, raw_name, amount=37.32, date="2024-11-19"):
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                """INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name, date, is_pending)
+                   VALUES (?, 'card', ?, ?, 'AMAZON.COM', 'AMAZON.COM', ?, ?, 0)""",
+                (txn_id, SHARED_OWNER_ID, amount, raw_name, date),
+            )
+
+    def _folded_detail(self, txn_id):
+        raw = self._txn(txn_id)["import_evidence_json"]
+        fields = json.loads(raw).get("extra_text_fields", []) if raw else []
+        return [f["value"] for f in fields if f.get("header") == "Merged duplicate detail"]
+
+    def test_merge_drops_a_near_duplicate_restating(self):
+        # The losing copy only restates the survivor's charge in different words — an abbreviation
+        # (AMAZON MARKETPLACE vs the survivor's AMAZON MKTPLACE …). It adds no new token, so the merge
+        # keeps the survivor and folds nothing in as "extra" detail.
+        survivor, loser = str(uuid.uuid4()), str(uuid.uuid4())
+        self._insert_charge(survivor, "AMAZON MKTPLACE PMTSAMZN.COM/BILL WA SEATTLE")   # richest → kept
+        self._insert_charge(loser, "AMAZON MARKETPLACE")
+        with self._use_db_path(), get_db() as conn:
+            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            result = merge_duplicate_charges(conn, applied["link_id"])
+        self.assertEqual(result["survivor_id"], survivor)
+        self.assertIsNotNone(self._txn(loser)["trashed_at"])
+        self.assertEqual(self._folded_detail(survivor), [])
+
+    def test_merge_folds_a_copy_that_adds_a_novel_reference(self):
+        # A losing copy carrying a token the survivor lacks (a distinct order reference) is real detail —
+        # it is folded in so the merge keeps a composite rather than dropping it.
+        survivor, loser = str(uuid.uuid4()), str(uuid.uuid4())
+        self._insert_charge(survivor, "AMAZON MKTPLACE PMTSAMZN.COM/BILL WA SEATTLE")   # richest → kept
+        self._insert_charge(loser, "AMAZON MKTPLACE ORDER 112-9988776")
+        with self._use_db_path(), get_db() as conn:
+            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            result = merge_duplicate_charges(conn, applied["link_id"])
+        self.assertEqual(result["survivor_id"], survivor)
+        self.assertEqual(self._folded_detail(survivor), ["AMAZON MKTPLACE ORDER 112-9988776"])
+
+    def test_merge_drops_a_generic_descriptor_with_new_words(self):
+        # The losing copy adds new *words* (NA, PAYMENTS) but no distinguishing identifier — a generic
+        # Amazon payment descriptor. It's dropped as noise, not folded in, even though the words are new.
+        survivor, loser = str(uuid.uuid4()), str(uuid.uuid4())
+        self._insert_charge(survivor, "AMAZON MKTPLACE PMTSAMZN.COM/BILL WA SEATTLE")   # richest → kept
+        self._insert_charge(loser, "AMAZON MARKETPLACE NA - PAYMENTS")
+        with self._use_db_path(), get_db() as conn:
+            applied = apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            result = merge_duplicate_charges(conn, applied["link_id"])
+        self.assertEqual(result["survivor_id"], survivor)
+        self.assertIsNotNone(self._txn(loser)["trashed_at"])
+        self.assertEqual(self._folded_detail(survivor), [])
+
+    def test_merge_refuses_when_orders_share_the_amount(self):
+        # Two distinct same-amount orders + a surplus charge: not duplicates of one purchase, so merge refuses
+        # (it would steal a charge) and steers the user to per-row Discard.
+        for _ in range(3):
+            self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            a1 = apply_amazon_order(conn, _cash_order(order_id="A-1"), account_id="amazon", batch_id=self.batch_id)
+            apply_amazon_order(conn, _cash_order(order_id="A-2"), account_id="amazon", batch_id=self.batch_id)
+            with self.assertRaises(ValueError):
+                merge_duplicate_charges(conn, a1["link_id"])
+
+    def test_duplicate_is_mergeable_when_order_amount_is_unique(self):
+        # One order, two identical charges → the extra is a redundant copy, so the report offers Merge.
+        self._add_card_charge(37.32)
+        self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            recon = amazon_reconciliation(conn, self.batch_id)
+        self.assertEqual(len(recon["duplicate"]), 1)
+        self.assertTrue(recon["duplicate"][0]["mergeable"])
+
+    def test_duplicate_not_mergeable_when_orders_share_the_amount(self):
+        # Two distinct same-amount orders + surplus charges → merging one would steal the other's charge, so
+        # Merge must not be offered (the flag mirrors the guard in test_merge_refuses_when_orders_share_the_amount).
+        for _ in range(3):
+            self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            apply_amazon_order(conn, _cash_order(order_id="A-1"), account_id="amazon", batch_id=self.batch_id)
+            apply_amazon_order(conn, _cash_order(order_id="A-2"), account_id="amazon", batch_id=self.batch_id)
+            recon = amazon_reconciliation(conn, self.batch_id)
+        self.assertTrue(len(recon["duplicate"]) >= 1)
+        self.assertTrue(all(not d["mergeable"] for d in recon["duplicate"]))
 
     def test_mapped_instrument_disambiguates_same_amount_charges(self):
         # Two same-amount charges on different accounts would be ambiguous → no auto-match. The funding
@@ -273,18 +505,22 @@ class AmazonOrdersTests(unittest.TestCase):
         self.assertEqual(self._txn(charge_id)["category_id"], funding_id)
 
     def test_zero_charge_order_does_not_self_match(self):
-        # A $0 card leg (gift-card/points funded, reported as $0) has nothing to reconcile. It must never
-        # match its own just-created $0 order row.
+        # A $0 card leg (a free/promo order, or gift-card/points funded reported as $0) has nothing to
+        # reconcile: it classifies as non-cash, so no charge match is attempted — in particular it must
+        # never match its own just-created $0 order row — and it's recorded in the excluded category
+        # like any other non-cash order.
         order = _cash_order(order_id="zero-1", amount=0.0)
         order.total = 0.0
         order.payment_legs = [PaymentLeg(method="Test Card", last4="4321", date="2024-11-19", amount=0.0)]
         order.items = [AmazonItem(description="Freebie", price=0.0, asin="B0ZZZ")]
         with self._use_db_path(), get_db() as conn:
             result = apply_amazon_order(conn, order, account_id="amazon", batch_id=self.batch_id)
+            funding_id = find_or_create_funding_category(conn)
+        self.assertEqual(result["disposition"], "non_cash")
         self.assertFalse(result["charge_linked"])
         orders = self._amazon_orders()
         self.assertEqual(len(orders), 1)
-        self.assertIsNone(orders[0]["category_id"])
+        self.assertEqual(orders[0]["category_id"], funding_id)
         self.assertNotEqual(orders[0]["category_source"], "enrichment")
 
     def test_reimport_is_idempotent(self):
@@ -358,8 +594,103 @@ class AmazonOrdersTests(unittest.TestCase):
             run_amazon_import(conn, [orders_only], account_id="amazon", filename="orders.csv")
             run_amazon_import(conn, merge([], items_by_order), account_id="amazon", filename="items.csv")
             second = run_amazon_import(conn, merge([], items_by_order), account_id="amazon", filename="items.csv")
-        self.assertEqual(second["counts"]["items_enriched"], 0)   # already enriched → no-op
-        self.assertEqual(second["counts"]["already_applied"], 1)
+        self.assertEqual(second["counts"]["items_enriched"], 0)     # already enriched → no-op
+        self.assertEqual(second["counts"]["already_enriched"], 1)   # a re-imported items file (not a duplicate order)
+        self.assertEqual(second["counts"]["already_applied"], 0)
+
+    def test_import_detail_items_matched_and_already_enriched(self):
+        # An items-only import creates no order rows (they live in the orders file's batch), but the
+        # import-detail report still shows the orders it enriched — looked up by the recorded txn id — with
+        # the items file as their source. A re-import of the items file shows under "already enriched".
+        from backend.routers.import_export.amazon import amazon_import_detail
+        self._add_card_charge(37.32)
+        oid = _cash_order().order_id
+        orders_only = _cash_order(); orders_only.items = []; orders_only.has_item_detail = False
+        items_by_order = {oid: [AmazonItem(description="Air Widget", price=34.99, asin="B0AAA", source_file="2016-items.csv")]}
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, [orders_only], account_id="amazon", filename="2016-orders.csv")
+            items = run_amazon_import(conn, merge([], items_by_order), account_id="amazon", filename="2016-items.csv")
+            detail = amazon_import_detail(conn, items["batch_id"])
+            again = run_amazon_import(conn, merge([], items_by_order), account_id="amazon", filename="2016-items.csv")
+            detail_again = amazon_import_detail(conn, again["batch_id"])
+        self.assertEqual(len(detail["items_matched"]), 1)
+        self.assertEqual(detail["items_matched"][0]["source_file"], "2016-items.csv")
+        self.assertEqual(detail["counts"]["items_enriched"], 1)
+        self.assertEqual(len(detail_again["already_enriched"]), 1)
+        self.assertEqual(detail_again["counts"]["already_enriched"], 1)
+        self.assertEqual(detail_again["duplicate_orders"], [])
+
+    # ---- per-file hashing / re-import detection ----------------------------------------------------
+
+    _ORDERS_CSV = (
+        "order id,order url,items,to,date,total,shipping,shipping_refund,gift,tax,refund,payments\n"
+        '111-000,,Air Widget; ,J,2024-11-19,37.32,0,,,2.19,,"Test Card ending in 4321: 2024-11-19: $37.32; "\n'
+    )
+
+    class _Upload:
+        def __init__(self, filename, text):
+            self.filename = filename
+            self._data = text.encode("utf-8")
+
+        async def read(self):
+            return self._data
+
+    def test_reimported_file_is_skipped_by_hash(self):
+        # A file a completed import already took is recognized by content hash on a later upload — skipped
+        # (no re-parse, no new all-duplicates card) and reported as already imported, whatever its name.
+        import asyncio
+        from backend.routers.import_export.amazon import _imported_amazon_file_hashes, _read_amazon_uploads
+        orders, _items, names, _unrec, already, hashes = asyncio.run(
+            _read_amazon_uploads([self._Upload("2016-orders.csv", self._ORDERS_CSV)]))
+        self.assertEqual((names, already, len(hashes)), (["2016-orders.csv"], [], 1))
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, orders, account_id="amazon", filename="2016-orders.csv", file_hashes=hashes)
+            known = _imported_amazon_file_hashes(conn)
+        self.assertEqual(known, {hashes[0]["hash"]})
+        orders2, _i2, names2, _u2, already2, hashes2 = asyncio.run(
+            _read_amazon_uploads([self._Upload("2016-orders copy.csv", self._ORDERS_CSV)], known))
+        self.assertEqual((orders2, names2, hashes2), ([], [], []))
+        self.assertEqual(already2, ["2016-orders copy.csv"])
+
+    def test_same_file_twice_in_one_upload_is_skipped(self):
+        # Two copies of the same file in a single upload: the first is taken, the second skipped.
+        import asyncio
+        from backend.routers.import_export.amazon import _read_amazon_uploads
+        _orders, _items, names, _unrec, already, hashes = asyncio.run(
+            _read_amazon_uploads([self._Upload("a.csv", self._ORDERS_CSV), self._Upload("a (1).csv", self._ORDERS_CSV)]))
+        self.assertEqual(names, ["a.csv"])
+        self.assertEqual(already, ["a (1).csv"])
+        self.assertEqual(len(hashes), 1)
+
+    def test_all_discarded_file_stays_reimportable(self):
+        # An items file imported before its orders file: every row discards, so its hash must NOT persist
+        # (a later re-import would otherwise be skipped as "already imported" and the items lost forever).
+        # It's recorded in `skipped_files` (nothing loaded → the card strikes it through). Once the orders
+        # file is in, re-importing the same items content enriches normally — and only then does it persist.
+        from backend.routers.import_export.amazon import _imported_amazon_file_hashes
+        oid = _cash_order().order_id
+        items_by_order = {oid: [AmazonItem(description="Air Widget", price=34.99, asin="B0AAA", source_file="2016-items.csv")]}
+        items_hashes = [{"filename": "2016-items.csv", "hash": "H-ITEMS"}]
+        orders_only = _cash_order()
+        orders_only.items = []
+        orders_only.has_item_detail = False
+        with self._use_db_path(), get_db() as conn:
+            first = run_amazon_import(conn, merge([], items_by_order), account_id="amazon",
+                                      filename="2016-items.csv", file_hashes=items_hashes)
+            self.assertEqual(first["counts"]["items_discarded"], 1)
+            self.assertEqual(_imported_amazon_file_hashes(conn), set())
+            snap = json.loads(conn.execute(
+                "SELECT config_snapshot FROM import_batch WHERE id = ?", (first["batch_id"],)).fetchone()[0])
+            self.assertEqual(snap["import_summary"]["skipped_files"], ["2016-items.csv"])
+
+            run_amazon_import(conn, [orders_only], account_id="amazon", filename="2016-orders.csv",
+                              file_hashes=[{"filename": "2016-orders.csv", "hash": "H-ORDERS"}])
+            self.assertEqual(_imported_amazon_file_hashes(conn), {"H-ORDERS"})
+
+            second = run_amazon_import(conn, merge([], items_by_order), account_id="amazon",
+                                       filename="2016-items.csv", file_hashes=items_hashes)
+            self.assertEqual(second["counts"]["items_enriched"], 1)
+            self.assertIn("H-ITEMS", _imported_amazon_file_hashes(conn))
 
     # ---- batch-level run + undo -------------------------------------------------------------------
 
@@ -388,7 +719,7 @@ class AmazonOrdersTests(unittest.TestCase):
             )
             recon = amazon_reconciliation(conn, summary["batch_id"])
         self.assertEqual(len(recon["matched"]), 1)
-        self.assertIsNotNone(recon["matched"][0]["charge"])
+        self.assertIsNotNone(recon["matched"][0]["charges"][0])
         self.assertAlmostEqual(recon["matched"][0]["order"]["amount"], 37.32, places=2)
         # The second cash order found no card charge → surfaced for a manual link.
         self.assertEqual(len(recon["amazon_unmatched"]), 1)
@@ -406,6 +737,393 @@ class AmazonOrdersTests(unittest.TestCase):
         self.assertIn(stray, ids)
         # The matched charge is not double-reported in the reverse scan (it's linked).
         self.assertEqual(len(recon["payment_unmatched"]), 1)
+
+    def test_zero_dollar_order_never_shows_no_charge_found(self):
+        # A free/promo order (its cash legs sum to $0.00) is classified non-cash: recorded but not counted,
+        # and absent from the reconciliation buckets — there is no charge to find, so it must not be
+        # flagged "No charge found".
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, [_cash_order(amount=0.0)], account_id="amazon", filename="orders.csv")
+            recon = amazon_reconciliation(conn, summary["batch_id"])
+        self.assertEqual(summary["counts"]["non_cash"], 1)
+        self.assertEqual(recon["amazon_unmatched"], [])
+        self.assertEqual(recon["matched_review"], [])
+
+    # ---- split-charge reconciliation (Matched · review) -------------------------------------------
+
+    def _split_batch(self, extra_charges):
+        """A batch with one normal matched order (seeds the card account for the reverse scan) plus a $40
+        'split' order with no single matching charge. `extra_charges` are (amount, date) shipment pieces,
+        added first. Returns (batch_id, split_link_id_or_None, recon, [extra_charge_ids])."""
+        self._add_card_charge(37.32)                       # matches _cash_order(), seeds the 'card' account
+        ids = [self._add_card_charge(a, date=d) for a, d in extra_charges]
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(
+                conn, [_cash_order(), _cash_order(order_id="split", amount=40.00)],
+                account_id="amazon", filename="orders.csv")
+            recon = amazon_reconciliation(conn, summary["batch_id"])
+        split = [r for r in recon["matched_review"]] or None
+        link_id = split[0]["link_id"] if split else None
+        return summary["batch_id"], link_id, recon, ids
+
+    def test_unaccounted_copies_group_as_duplicates(self):
+        # Two same-amount strays a day apart on one card (bank post-date vs. aggregator date) group as
+        # Unaccounted·duplicate; a same-amount stray too far off stays informational, as does a different
+        # amount. Groups need a look, so they count toward the attention tally.
+        self._add_card_charge(37.32)   # matches _cash_order(), seeds the account
+        a = self._add_card_charge(12.50, date="2024-11-20")
+        b = self._add_card_charge(12.50, date="2024-11-21")
+        far = self._add_card_charge(12.50, date="2024-11-26")
+        lone = self._add_card_charge(5.25, date="2024-11-20")
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, [_cash_order()], account_id="amazon", filename="orders.csv")
+            recon = amazon_reconciliation(conn, summary["batch_id"])
+            self.assertEqual(reconciliation_attention_count(conn, summary["batch_id"]), 1)
+        self.assertEqual(len(recon["unaccounted_duplicate"]), 1)
+        self.assertEqual({c["id"] for c in recon["unaccounted_duplicate"][0]["charges"]}, {a, b})
+        self.assertEqual({c["id"] for c in recon["payment_unmatched"]}, {far, lone})
+
+    def test_merge_unaccounted_copies_keeps_richest_and_trashes_the_rest(self):
+        self._add_card_charge(37.32)
+        a = self._add_card_charge(12.50, date="2024-11-20")
+        b = self._add_card_charge(12.50, date="2024-11-21")
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, [_cash_order()], account_id="amazon", filename="orders.csv")
+            result = merge_unaccounted_charges(conn, [a, b])
+            recon = amazon_reconciliation(conn, summary["batch_id"])
+        self.assertEqual(result["status"], "merged")
+        self.assertIn(result["survivor_id"], {a, b})
+        loser = b if result["survivor_id"] == a else a
+        self.assertEqual(result["trashed"], [loser])
+        self.assertIsNotNone(self._txn(loser)["trashed_at"])
+        # The survivor returns to the informational unaccounted list; the group is gone.
+        self.assertEqual(recon["unaccounted_duplicate"], [])
+        self.assertEqual([c["id"] for c in recon["payment_unmatched"]], [result["survivor_id"]])
+
+    def test_not_duplicates_assertion_unflags_the_group(self):
+        # "Not duplicates" persists the pair assertion, so the grouping never re-flags them — both
+        # copies return to the informational unaccounted list on the next refresh, and stay there.
+        self._add_card_charge(37.32)
+        a = self._add_card_charge(12.50, date="2024-11-20")
+        b = self._add_card_charge(12.50, date="2024-11-21")
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, [_cash_order()], account_id="amazon", filename="orders.csv")
+            self.assertEqual(len(amazon_reconciliation(conn, summary["batch_id"])["unaccounted_duplicate"]), 1)
+            mark_charges_distinct(conn, [a, b])
+            recon = amazon_reconciliation(conn, summary["batch_id"])
+        self.assertEqual(recon["unaccounted_duplicate"], [])
+        self.assertEqual({c["id"] for c in recon["payment_unmatched"]}, {a, b})
+
+    def test_merged_copy_carries_provenance_and_restore_clears_it(self):
+        # A merge loser is tagged with the dedupe flow's provenance (pointing at the kept copy), shows
+        # in the Trash view, and Restore clears the tags — after which the group simply re-derives,
+        # making a mistaken merge fully undoable.
+        from backend.routers.transactions import list_trashed_transactions, restore_transaction
+        self._add_card_charge(37.32)
+        a = self._add_card_charge(12.50, date="2024-11-20")
+        b = self._add_card_charge(12.50, date="2024-11-21")
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, [_cash_order()], account_id="amazon", filename="orders.csv")
+            result = merge_unaccounted_charges(conn, [a, b])
+        loser = result["trashed"][0]
+        row = self._txn(loser)
+        self.assertEqual(row["suspect_duplicate_of"], result["survivor_id"])
+        self.assertEqual(row["rejection_reason"], "duplicate_confirmed")
+        self.assertEqual(row["dedupe_resolved_by"], "amazon_merge")
+        with self._use_db_path():
+            # Visible in the Trash view (unlike the unified dedupe flow's hidden confirmed rows)…
+            self.assertIn(loser, [t["id"] for t in list_trashed_transactions(limit=200)])
+            # …and Restore clears the provenance tags along with the untrash.
+            restore_transaction(loser)
+        row = self._txn(loser)
+        self.assertIsNone(row["trashed_at"])
+        self.assertIsNone(row["rejection_reason"])
+        self.assertIsNone(row["dedupe_resolved_by"])
+        self.assertIsNone(row["suspect_duplicate_of"])
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(len(amazon_reconciliation(conn, summary["batch_id"])["unaccounted_duplicate"]), 1)
+
+    def test_discarded_copy_carries_provenance_without_kept_pointer(self):
+        # A per-copy Discard tags the row like a merge loser (so the Trash page groups it under
+        # import reconciliation) — minus the kept-copy pointer, which a discard doesn't always know.
+        batch_id, _link, recon, ids = self._split_batch([(40.00, "2024-11-24"), (40.00, "2024-11-25")])
+        link_id = recon["duplicate_review"][0]["link_id"]
+        with self._use_db_path(), get_db() as conn:
+            trash_duplicate_charge(conn, ids[1], link_id)
+        row = self._txn(ids[1])
+        self.assertEqual(row["rejection_reason"], "duplicate_confirmed")
+        self.assertEqual(row["dedupe_resolved_by"], "amazon_discard")
+        self.assertIsNone(row["suspect_duplicate_of"])
+
+    def test_merge_unaccounted_copies_validates_the_group(self):
+        # The client sends explicit ids, so the server re-checks they're plausible copies.
+        self._add_card_charge(37.32)
+        a = self._add_card_charge(12.50, date="2024-11-20")
+        b = self._add_card_charge(13.50, date="2024-11-21")
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, [_cash_order()], account_id="amazon", filename="orders.csv")
+            linked = amazon_reconciliation(conn, summary["batch_id"])["matched"][0]["charges"][0]["id"]
+            with self.assertRaises(ValueError):
+                merge_unaccounted_charges(conn, [a])            # need at least two
+            with self.assertRaises(ValueError):
+                merge_unaccounted_charges(conn, [a, b])         # different amounts — not copies
+            with self.assertRaises(ValueError):
+                merge_unaccounted_charges(conn, [a, linked])    # an order's linked charge is off-limits
+
+    def test_not_duplicates_on_in_window_group_resuggests_the_on_date_charge(self):
+        # Two in-window equal charges → Duplicate detected. Marking them Not duplicates removes the
+        # duplicate claim but not the "which one is the order's?" question — the order falls to the
+        # suggestion pass, whose exact-date tie-break nominates the copy dated on the order itself.
+        batch_id, _link, recon, ids = self._split_batch([(40.00, "2024-11-19"), (40.00, "2024-11-20")])
+        self.assertEqual(len(recon["duplicate"]), 1)
+        link_id = recon["duplicate"][0]["link_id"]
+        with self._use_db_path(), get_db() as conn:
+            mark_charges_distinct(conn, ids)
+            recon2 = amazon_reconciliation(conn, batch_id)
+        self.assertEqual(recon2["duplicate"], [])
+        self.assertEqual(len(recon2["matched_review"]), 1)
+        review = recon2["matched_review"][0]
+        self.assertEqual(review["link_id"], link_id)
+        self.assertEqual([c["id"] for c in review["charges"]], [ids[0]])   # the 2024-11-19 (order-date) copy
+        self.assertIn("only charge dated on the order itself", review["reason"])
+        # The off-date sibling stays an ordinary unaccounted charge — never re-grouped as a duplicate.
+        self.assertIn(ids[1], [c["id"] for c in recon2["payment_unmatched"]])
+        self.assertEqual(recon2["unaccounted_duplicate"], [])
+
+    def test_not_duplicates_on_review_group_with_no_on_date_charge_goes_unmatched(self):
+        # A Duplicate·review pair (both copies off-date) marked Not duplicates: no date evidence favors
+        # either copy, so the order lands in No charge found and both copies stay plain unaccounted.
+        batch_id, _link, recon, ids = self._split_batch([(40.00, "2024-11-24"), (40.00, "2024-11-25")])
+        self.assertEqual(len(recon["duplicate_review"]), 1)
+        with self._use_db_path(), get_db() as conn:
+            mark_charges_distinct(conn, ids)
+            recon2 = amazon_reconciliation(conn, batch_id)
+        self.assertEqual(recon2["duplicate_review"], [])
+        self.assertEqual(recon2["matched_review"], [])
+        self.assertEqual(len(recon2["amazon_unmatched"]), 1)
+        self.assertEqual({c["id"] for c in recon2["payment_unmatched"]} & set(ids), set(ids))
+        self.assertEqual(recon2["unaccounted_duplicate"], [])
+
+    def test_not_duplicates_on_matched_order_with_extra_copy_keeps_the_match_clean(self):
+        # A matched order with an extra same-amount candidate marked Not duplicates: the match stands
+        # (no duplicate row), and the extra flows to the reverse scan as a distinct purchase. The extra
+        # copy arrives after the import — at import time the charge was unique, so the order matched.
+        self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, [_cash_order()], account_id="amazon", filename="orders.csv")
+        extra = self._add_card_charge(37.32, date="2024-11-20")
+        with self._use_db_path(), get_db() as conn:
+            recon = amazon_reconciliation(conn, summary["batch_id"])
+            self.assertEqual(len(recon["duplicate"]), 1)
+            linked = next(c["id"] for c in recon["duplicate"][0]["charges"] if c["matched"])
+            mark_charges_distinct(conn, [linked, extra])
+            recon2 = amazon_reconciliation(conn, summary["batch_id"])
+        self.assertEqual(recon2["duplicate"], [])
+        self.assertEqual(len(recon2["matched"]), 1)
+        self.assertIn(extra, [c["id"] for c in recon2["payment_unmatched"]])
+
+    def test_equal_charges_outside_match_window_surface_as_duplicate_review(self):
+        # Two same-amount copies at +5/+6 days: too far for the strict (±3) duplicate bucket, but the
+        # wider review window sees the ambiguity — surfaced as Duplicate·review for per-row resolution,
+        # never as a plain duplicate, a split suggestion, or a silent "No charge found".
+        batch_id, _link, recon, ids = self._split_batch([(40.00, "2024-11-24"), (40.00, "2024-11-25")])
+        self.assertEqual(recon["duplicate"], [])
+        self.assertEqual(recon["matched_review"], [])
+        self.assertEqual(recon["amazon_unmatched"], [])
+        self.assertEqual(len(recon["duplicate_review"]), 1)
+        review = recon["duplicate_review"][0]
+        self.assertEqual({c["id"] for c in review["charges"]}, set(ids))
+        self.assertTrue(review["mergeable"])
+        # It needs the user to act, so it counts toward the batch's attention tally.
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(reconciliation_attention_count(conn, batch_id), 1)
+
+    def test_duplicate_review_merge_uses_the_review_window(self):
+        # Merge must sweep exactly the ±14-day copy set the report row displayed; the plain (±3)
+        # derivation sees no copies here and refuses — the two populations never cross-contaminate.
+        batch_id, _link, recon, ids = self._split_batch([(40.00, "2024-11-24"), (40.00, "2024-11-25")])
+        link_id = recon["duplicate_review"][0]["link_id"]
+        with self._use_db_path(), get_db() as conn:
+            with self.assertRaises(ValueError):
+                merge_duplicate_charges(conn, link_id)
+            result = merge_duplicate_charges(conn, link_id, review_window=True)
+            recon2 = amazon_reconciliation(conn, batch_id)
+        self.assertEqual(result["status"], "merged")
+        self.assertIn(result["survivor_id"], ids)
+        loser = next(t for t in ids if t != result["survivor_id"])
+        self.assertEqual(result["trashed"], [loser])
+        self.assertIsNotNone(self._txn(loser)["trashed_at"])
+        # The survivor is the order's linked charge now, so the row reconciles as matched.
+        self.assertEqual(recon2["duplicate_review"], [])
+        self.assertIn(result["survivor_id"],
+                      [c["id"] for m in recon2["matched"] for c in m["charges"]])
+
+    def test_duplicate_review_discard_leaves_a_reviewable_lone_charge(self):
+        # Per-copy Discard trashes one copy, but the out-of-window survivor is deliberately NOT
+        # auto-linked (auto-pairing stays ±3) — the order comes back as Matched·review with the
+        # date-window note, one Accept away.
+        batch_id, _link, recon, ids = self._split_batch([(40.00, "2024-11-24"), (40.00, "2024-11-25")])
+        link_id = recon["duplicate_review"][0]["link_id"]
+        with self._use_db_path(), get_db() as conn:
+            result = trash_duplicate_charge(conn, ids[1], link_id)
+            recon2 = amazon_reconciliation(conn, batch_id)
+        self.assertFalse(result["matched"])
+        self.assertEqual(recon2["duplicate_review"], [])
+        self.assertEqual(len(recon2["matched_review"]), 1)
+        self.assertEqual([c["id"] for c in recon2["matched_review"][0]["charges"]], [ids[0]])
+        self.assertIn("±3-day window", recon2["matched_review"][0]["reason"])
+
+    def test_split_order_surfaces_as_matched_review(self):
+        # No single charge equals the $40 order, but two unaccounted charges sum to it → a Matched·review
+        # suggestion carrying both, their total, and their day-span; the order leaves "No charge found".
+        _batch, link_id, recon, ids = self._split_batch([(30.00, "2024-11-19"), (10.00, "2024-11-20")])
+        self.assertEqual(recon["amazon_unmatched"], [])
+        self.assertEqual(len(recon["matched_review"]), 1)
+        review = recon["matched_review"][0]
+        self.assertEqual({c["id"] for c in review["charges"]}, set(ids))
+        self.assertEqual(review["total"], 40.00)
+        self.assertEqual(review["spans_days"], 1)
+        self.assertIsNone(review["reason"])   # a genuine split — the charge count is the story
+
+    def test_lone_charge_outside_match_window_carries_a_reason(self):
+        # A single $40 charge 9 days after the order: exact amount, but outside the auto-matcher's ±3-day
+        # window — suggested for review with a note saying exactly that.
+        _batch, _link, recon, ids = self._split_batch([(40.00, "2024-11-28")])
+        self.assertEqual(len(recon["matched_review"]), 1)
+        review = recon["matched_review"][0]
+        self.assertEqual([c["id"] for c in review["charges"]], ids)
+        self.assertEqual(review["reason"],
+                         "The charge is 9 days after the order — outside the automatic match's ±3-day window.")
+
+    def test_lone_charge_a_cent_off_carries_a_reason(self):
+        # A single charge within the 2¢ suggestion tolerance but not exactly equal — the auto-matcher
+        # requires the exact amount, so the note names the discrepancy.
+        _batch, _link, recon, _ids = self._split_batch([(40.01, "2024-11-19")])
+        self.assertEqual(len(recon["matched_review"]), 1)
+        self.assertEqual(recon["matched_review"][0]["reason"],
+                         "The charge is 1¢ off the order total — the automatic match requires the exact amount.")
+
+    def test_lone_charge_imported_after_the_order_carries_a_reason(self):
+        # The charge passes every matcher rule *now* but arrived after the import — the note says the match
+        # simply wasn't available at import time. (A matched first order seeds the card account, as in
+        # _split_batch — the suggestion pool only scans accounts the batch or funding map already implicates.)
+        self._add_card_charge(37.32)   # matches _cash_order()
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(
+                conn, [_cash_order(), _cash_order(order_id="late", amount=40.00)],
+                account_id="amazon", filename="orders.csv")
+        self._add_card_charge(40.00)   # the late order's charge — lands after the import
+        with self._use_db_path(), get_db() as conn:
+            recon = amazon_reconciliation(conn, summary["batch_id"])
+        self.assertEqual(len(recon["matched_review"]), 1)
+        self.assertEqual(recon["matched_review"][0]["reason"],
+                         "This charge qualifies for an automatic match now, but wasn't available (or wasn't "
+                         "the only candidate) when the order was imported.")
+
+    def test_split_flags_charges_more_than_a_week_apart(self):
+        # A wider (±14d) window than the auto-matcher, but a >7-day spread is flagged for the user to eyeball.
+        _batch, _link, recon, _ids = self._split_batch([(30.00, "2024-11-19"), (10.00, "2024-11-29")])
+        self.assertEqual(len(recon["matched_review"]), 1)
+        self.assertEqual(recon["matched_review"][0]["spans_days"], 10)
+
+    def test_ambiguous_split_stays_unmatched(self):
+        # Two distinct subsets sum to the total (30+10 and 20+20) → we never guess; the order stays unmatched.
+        _batch, link_id, recon, _ids = self._split_batch(
+            [(30.00, "2024-11-19"), (10.00, "2024-11-19"), (20.00, "2024-11-19"), (20.00, "2024-11-20")])
+        self.assertEqual(recon["matched_review"], [])
+        self.assertEqual(len(recon["amazon_unmatched"]), 1)
+
+    def test_accept_split_links_all_and_undo_restores_each_charge(self):
+        # Accepting links every suggested charge (each excluded), and undo restores each to its *own* prior
+        # category — the per-charge `charge_priors` path, not one prior applied to all.
+        batch_id, link_id, _recon, ids = self._split_batch([(30.00, "2024-11-19"), (10.00, "2024-11-20")])
+        c1, c2 = ids
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("INSERT INTO category (id, name, category_type) VALUES ('cat-a','Cat A','expense')")
+            conn.execute("INSERT INTO category (id, name, category_type) VALUES ('cat-b','Cat B','expense')")
+            conn.execute("UPDATE txn SET category_id='cat-a' WHERE id=?", (c1,))
+            conn.execute("UPDATE txn SET category_id='cat-b' WHERE id=?", (c2,))
+            link_amazon_charges(conn, link_id, [c1, c2])
+            recon2 = amazon_reconciliation(conn, batch_id)
+            funding = find_or_create_funding_category(conn)
+        # The order is now matched, carrying both charges; both were moved to the funding category.
+        self.assertEqual(recon2["matched_review"], [])
+        matched = [m for m in recon2["matched"] if m["link_id"] == link_id]
+        self.assertEqual({c["id"] for c in matched[0]["charges"]}, {c1, c2})
+        self.assertEqual(self._txn(c1)["category_id"], funding)
+        self.assertEqual(self._txn(c2)["category_id"], funding)
+        with self._use_db_path(), get_db() as conn:
+            reverse_batch_amazon_links(conn, batch_id)
+        self.assertEqual(self._txn(c1)["category_id"], "cat-a")
+        self.assertEqual(self._txn(c2)["category_id"], "cat-b")
+
+    def test_dismiss_split_suppresses_the_suggestion(self):
+        # Dismiss persists (link metadata), so the suggestion doesn't come back; the order returns to unmatched.
+        batch_id, link_id, _recon, _ids = self._split_batch([(30.00, "2024-11-19"), (10.00, "2024-11-20")])
+        with self._use_db_path(), get_db() as conn:
+            dismiss_split_suggestion(conn, link_id)
+            recon2 = amazon_reconciliation(conn, batch_id)
+        self.assertEqual(recon2["matched_review"], [])
+        self.assertEqual(len(recon2["amazon_unmatched"]), 1)
+
+    def test_actionable_reconciliation_surfaces_a_task(self):
+        # Two identical charges make an order's charge ambiguous → a duplicate to resolve. That's actionable,
+        # so the Tasks nag surfaces an "amazon_reconciliation" warning counting it.
+        from backend.routers.tasks import get_tasks
+        self._add_card_charge(37.32)
+        self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, [_cash_order()], account_id="amazon", filename="orders.csv")
+        with self._use_db_path():
+            tasks = {t["id"]: t for t in get_tasks()["tasks"]}
+        self.assertIn("amazon_reconciliation", tasks)
+        self.assertEqual(tasks["amazon_reconciliation"]["count"], 1)
+        self.assertEqual(tasks["amazon_reconciliation"]["severity"], "warning")
+
+    def test_clean_reconciliation_has_no_task(self):
+        # One order cleanly matched to its single charge → nothing actionable → no reconciliation task.
+        from backend.routers.tasks import get_tasks
+        self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, [_cash_order()], account_id="amazon", filename="orders.csv")
+        with self._use_db_path():
+            task_ids = {t["id"] for t in get_tasks()["tasks"]}
+        self.assertNotIn("amazon_reconciliation", task_ids)
+
+    # ---- import-detail report --------------------------------------------------------------------
+
+    def test_import_detail_records_duplicates_and_discards_with_source_file(self):
+        # The exact file mix-up that motivated this: the same order re-imported from a second orders file
+        # (a duplicate) and an items file for an order that was never imported (discarded) — each traceable
+        # back to the file it came from.
+        from backend.routers.import_export.amazon import amazon_import_detail
+        first = _cash_order(order_id="A-1"); first.source_file = "2016-orders.csv"
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, [first], account_id="amazon", filename="2016-orders.csv")
+        dup = _cash_order(order_id="A-1"); dup.source_file = "2017-orders.csv"
+        dup.items = []; dup.has_item_detail = False   # a bare re-import, so it's already_applied not enriched
+        orphan = AmazonItem(description="Ghost Widget", order_date="2017-03-04", source_file="2017-items.csv")
+        merged = merge([dup], {"A-2": [orphan]})
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, merged, account_id="amazon", filename="2017-orders.csv, 2017-items.csv")
+            detail = amazon_import_detail(conn, summary["batch_id"])
+        self.assertEqual([(d["order_id"], d["source_file"]) for d in detail["duplicate_orders"]], [("A-1", "2017-orders.csv")])
+        self.assertEqual([(d["order_id"], d["date"], d["source_file"]) for d in detail["items_discarded"]],
+                         [("A-2", "2017-03-04", "2017-items.csv")])
+
+    def test_import_detail_orders_and_payments(self):
+        # The orders view carries each order's source file + item-detail flag; the payments view tallies the
+        # matched card charges by the ledger account they landed on.
+        from backend.routers.import_export.amazon import amazon_import_detail
+        self._add_card_charge(37.32)   # the order's matching charge, on the 'Rewards Card' account
+        order = _cash_order(); order.source_file = "2016-orders.csv"
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, [order], account_id="amazon", filename="2016-orders.csv")
+            detail = amazon_import_detail(conn, summary["batch_id"])
+        self.assertEqual(len(detail["orders"]), 1)
+        self.assertEqual(detail["orders"][0]["source_file"], "2016-orders.csv")
+        self.assertTrue(detail["orders"][0]["has_item_detail"])   # _cash_order carries items
+        self.assertEqual(detail["payments"], [{"account": "Rewards Card", "count": 1, "total": 37.32}])
 
     def test_apply_categorization_runs_rules_on_order_rows(self):
         # "Apply categorizations" runs the user's rules over the new order rows; off leaves them blank.

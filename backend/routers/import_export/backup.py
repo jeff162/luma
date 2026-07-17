@@ -623,6 +623,9 @@ def build_backup_data(conn) -> dict:
             "rule_tags":      dump("rule_tag"),
             # User's explicit "these two accounts are distinct" assertions (dedupe review state).
             "account_pair_distinct": dump("account_pair_distinct"),
+            # User's "these two charges are distinct" assertions from the Amazon reconciliation's
+            # unaccounted-duplicate grouping — same accumulated-filter role, charge-level.
+            "amazon_charge_distinct": dump("amazon_charge_distinct"),
             # UI/layout preferences (page layouts, dashboard tag reports, …), keyed by scope_id.
             "ui_preferences": dump("ui_preference"),
     })
@@ -739,6 +742,7 @@ def _wipe_user_data_tables(conn):
     conn.execute("DELETE FROM account_tag")
     conn.execute("DELETE FROM rule_tag")
     conn.execute("DELETE FROM account_pair_distinct")
+    conn.execute("DELETE FROM amazon_charge_distinct")
     conn.execute("DELETE FROM ui_preference")
     conn.execute("DELETE FROM tag")
     # Membership overrides reference both txn and recurring_series, so clear them before either.
@@ -837,6 +841,7 @@ def restore_backup(body: RestoreRequest):
     account_tags = [dict(row) for row in d.get("account_tags", [])]
     rule_tags = [dict(row) for row in d.get("rule_tags", [])]
     account_pair_distinct = [dict(row) for row in d.get("account_pair_distinct", [])]
+    amazon_charge_distinct = [dict(row) for row in d.get("amazon_charge_distinct", [])]
     ui_preferences = [dict(row) for row in d.get("ui_preferences", [])]
     recurring_series = [dict(row) for row in d.get("recurring_series", [])]
     recurring_membership_overrides = [dict(row) for row in d.get("recurring_membership_overrides", [])]
@@ -918,6 +923,10 @@ def restore_backup(body: RestoreRequest):
         r for r in account_pair_distinct
         if r.get("account_id_low") in account_ids and r.get("account_id_high") in account_ids
     ]
+    amazon_charge_distinct = [
+        r for r in amazon_charge_distinct
+        if r.get("txn_id_low") in txn_ids and r.get("txn_id_high") in txn_ids
+    ]
     # A pin/exclude override is meaningful only if both its transaction and its series survived.
     recurring_membership_overrides = [
         r for r in recurring_membership_overrides
@@ -995,6 +1004,8 @@ def restore_backup(body: RestoreRequest):
         # Links after txn (members reference txn); with deferred FK checks the order is flexible anyway.
         insert_rows("txn_link",        txn_links)
         insert_rows("txn_link_member", txn_link_members)
+        # References txn only (both FKs), so after txn.
+        insert_rows("amazon_charge_distinct", amazon_charge_distinct)
         # References account only (both FKs); with deferred FK checks the order is flexible anyway.
         insert_rows("amazon_funding_map", amazon_funding_map)
         insert_rows("txn_tag",      txn_tags)
@@ -1037,6 +1048,7 @@ def restore_backup(body: RestoreRequest):
             "account_tags": len(account_tags),
             "rule_tags": len(rule_tags),
             "account_pair_distinct": len(account_pair_distinct),
+            "amazon_charge_distinct": len(amazon_charge_distinct),
             "ui_preferences": len(ui_preferences),
             "recurring_series": len(recurring_series),
             "recurring_membership_overrides": len(recurring_membership_overrides),

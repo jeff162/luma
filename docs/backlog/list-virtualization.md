@@ -43,8 +43,14 @@ DOM node count stays ~constant regardless of dataset size.
 **Build it into the shared table shells, not per page** (per `ui-patterns.md` "shared product
 language" — virtualize once so every consumer benefits and behavior stays uniform):
 
-- `PillGridTable` — the **duplicate-rows dialog** and matching-imported-transactions report. The worst
-  offender (a single file can carry 10k+ rows) and a contained surface — **spike here first.**
+- `MatchReport` (`components/importExport/MatchReport.jsx`) — the **duplicate-rows dialog** and the
+  Amazon **reconciliation** report, which since 2026-07-13 both render through this new shared table
+  (extracted from the duplicate dialog's old hand-rolled table). The worst offender (a single 6k-row
+  bucket = ~100k+ DOM nodes; switching buckets, header-click re-sort, and even a single checkbox toggle
+  — a new `selectedIds` Set re-maps all rows, which aren't individually memoized — all lag) and a
+  contained surface, so **spike here first.** Note its sort and selection are **controlled** by the
+  consuming report, so a windower must keep driving `onHeaderClick` / `selectedIds` / select-all against
+  the full entry list, not just the mounted rows.
 - `TransactionListTable` (+ shared `TransactionRow` cells) — the report/detail lists.
 - The **Transactions ledger** renders its own rows (page-specific shell) but shares the row
   cells/controllers; it needs windowing too as loaded pages grow.
@@ -72,8 +78,8 @@ language" — virtualize once so every consumer benefits and behavior stays unif
 
 Prefer a **headless, measured-height** windower (e.g. TanStack Virtual) over a fixed-height list lib,
 given variable rows; or a small hand-rolled windowing hook if the dependency isn't wanted. Spike inside
-`PillGridTable` against the duplicate dialog, prove the sticky-header + shared-grid-template +
-bulk-select constraints hold, then lift into `TransactionListTable` and the ledger.
+`MatchReport` against the duplicate dialog, prove the sticky-header + controlled-sort/selection +
+select-all constraints hold, then lift into `PillGridTable` / `TransactionListTable` and the ledger.
 
 **Done when:** on a production build with DevTools closed, opening/closing the duplicate report and
 scrolling a large ledger stay sub-100ms tasks, and DOM node count for these lists is bounded by the

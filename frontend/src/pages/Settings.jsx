@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState, useEffect, useRef, useId } from 'react'
+import { useState, useEffect, useRef, useId, useCallback } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { APP_NAME, APP_VERSION } from '../lib/appConfig.js'
@@ -1866,9 +1866,16 @@ function TrashSection() {
   )
 }
 
-function TransactionsTrashSection() {
-  // Soft-deleted transactions follow the same pattern as trashed accounts: restoration just
-  // clears the `trashed_at` flag, emptying the trash drops the records permanently.
+// Whether a trashed transaction was removed by import reconciliation (an Amazon merge or per-copy
+// discard) rather than deleted directly by the user — the discriminator between the two
+// transaction-trash sections below. Module-level so the filter identities are stable.
+const isReconRemoval = (item) =>
+  item.dedupe_resolved_by === 'amazon_merge' || item.dedupe_resolved_by === 'amazon_discard'
+const isDirectDelete = (item) => !isReconRemoval(item)
+
+// Load / restore / empty plumbing shared by the two transaction-trash sections. `filter` selects the
+// section's slice of the trash; `scope` keeps its Empty button from deleting the other section's rows.
+function useTrashedTransactions(filter, scope) {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [workingId, setWorkingId] = useState('')
@@ -1876,20 +1883,20 @@ function TransactionsTrashSection() {
   const [error, setError] = useState('')
   const [confirmEmpty, setConfirmEmpty] = useState(false)
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
       const rows = await api.getTrashedTransactions()
-      setItems(Array.isArray(rows) ? rows : [])
+      setItems((Array.isArray(rows) ? rows : []).filter(filter))
       setError('')
     } catch (err) {
       setError(err.message || 'Failed to load trashed transactions')
     } finally {
       setLoading(false)
     }
-  }
+  }, [filter])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [load])
 
   async function restoreItem(txnId) {
     setWorkingId(txnId)
@@ -1909,7 +1916,7 @@ function TransactionsTrashSection() {
     setEmptying(true)
     setError('')
     try {
-      await api.emptyTransactionTrash()
+      await api.emptyTransactionTrash(scope)
       await load()
     } catch (err) {
       setError(err.message || 'Failed to empty trash')
@@ -1918,17 +1925,62 @@ function TransactionsTrashSection() {
     }
   }
 
+  return { items, loading, workingId, emptying, error, confirmEmpty, setConfirmEmpty, restoreItem, emptyTrash }
+}
+
+// One trashed transaction, shared by both sections (they differ only in list structure around it).
+function TrashedTxnRow({ item, first = false, working, emptying, onRestore }) {
+  const merchant = item.display_name || item.merchant_name || item.raw_name || '—'
+  const account = item.account_display_name || item.account_name || '—'
+  const amount = Number(item.amount) || 0
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0, 1fr) auto auto',
+        gap: 16,
+        alignItems: 'center',
+        padding: '10px 14px',
+        borderTop: first ? 'none' : '1px solid var(--border)',
+        background: 'var(--surface2)',
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {merchant}
+        </div>
+        <div style={{ marginTop: 2, fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+          {item.date} · {account}{item.category_name ? ` · ${item.category_name}` : ''} · Trashed {item.trashed_at || 'recently'}
+        </div>
+      </div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: amount < 0 ? 'var(--success)' : 'var(--text)', whiteSpace: 'nowrap' }}>
+        {amount < 0 ? '+' : ''}{amount.toFixed(2)}
+      </div>
+      <Button small onClick={() => onRestore(item.id)} disabled={working === item.id || emptying}>
+        {working === item.id ? 'Restoring…' : 'Restore'}
+      </Button>
+    </div>
+  )
+}
+
+function TransactionsTrashSection() {
+  // Transactions deleted directly (the transactions page, detail panels, bulk edit) — the import
+  // source isn't meaningful for these, so it's a flat list. Duplicate copies removed by import
+  // reconciliation live in the sibling DuplicateTransactionsTrashSection. Restoration just clears
+  // the `trashed_at` flag; emptying drops this section's records permanently.
+  const t = useTrashedTransactions(isDirectDelete, 'deleted')
+
   return (
     <>
-      {confirmEmpty ? (
+      {t.confirmEmpty ? (
         <AppConfirmDialog
           title="Empty transaction trash?"
-          description="This permanently removes every trashed transaction. Restored history will not be recoverable afterward."
+          description="This permanently removes every deleted transaction listed here (removed duplicates have their own section and are not touched). Restored history will not be recoverable afterward."
           confirmLabel="Empty trash"
           confirmVariant="danger"
           borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
-          onConfirm={emptyTrash}
-          onCancel={() => setConfirmEmpty(false)}
+          onConfirm={t.emptyTrash}
+          onCancel={() => t.setConfirmEmpty(false)}
           width="min(620px, 100%)"
         />
       ) : null}
@@ -1941,60 +1993,112 @@ function TransactionsTrashSection() {
           <Button
             small
             variant="ghost"
-            onClick={() => setConfirmEmpty(true)}
-            disabled={emptying || loading || items.length === 0}
+            onClick={() => t.setConfirmEmpty(true)}
+            disabled={t.emptying || t.loading || t.items.length === 0}
           >
-            {emptying ? 'Emptying…' : 'Empty trash'}
+            {t.emptying ? 'Emptying…' : 'Empty trash'}
           </Button>
         </div>
 
-        {loading ? <Spinner /> : items.length === 0 ? (
+        {t.loading ? <Spinner /> : t.items.length === 0 ? (
           <EmptyState message="No transactions in trash." />
         ) : (
           <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-            {items.map((item, index) => {
-              const merchant = item.display_name || item.merchant_name || item.raw_name || '—'
-              const account = item.account_display_name || item.account_name || '—'
-              const amount = Number(item.amount) || 0
-              return (
-                <div
-                  key={item.id}
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'minmax(0, 1fr) auto auto',
-                    gap: 16,
-                    alignItems: 'center',
-                    padding: '10px 14px',
-                    borderTop: index === 0 ? 'none' : '1px solid var(--border)',
-                    background: 'var(--surface2)',
-                  }}
-                >
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {merchant}
-                    </div>
-                    <div style={{ marginTop: 2, fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
-                      {item.date} · {account}{item.category_name ? ` · ${item.category_name}` : ''} · Trashed {item.trashed_at || 'recently'}
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: amount < 0 ? 'var(--success)' : 'var(--text)', whiteSpace: 'nowrap' }}>
-                    {amount < 0 ? '+' : ''}{amount.toFixed(2)}
-                  </div>
-                  <Button
-                    small
-                    onClick={() => restoreItem(item.id)}
-                    disabled={workingId === item.id || emptying}
-                  >
-                    {workingId === item.id ? 'Restoring…' : 'Restore'}
-                  </Button>
-                </div>
-              )
-            })}
+            {t.items.map((item, index) => (
+              <TrashedTxnRow key={item.id} item={item} first={index === 0}
+                working={t.workingId} emptying={t.emptying} onRestore={t.restoreItem} />
+            ))}
           </div>
         )}
 
-        {error ? (
-          <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div>
+        {t.error ? (
+          <div style={{ fontSize: 12, color: 'var(--danger)' }}>{t.error}</div>
+        ) : null}
+      </Card>
+    </>
+  )
+}
+
+function DuplicateTransactionsTrashSection() {
+  // Duplicate charge copies removed by import reconciliation (Merge → keep one / per-copy Discard),
+  // organized by the file each copy came from — that provenance is the whole reason these sit apart
+  // from ordinary deletes. Groups collapse for scanning; a lone file starts open. Restore brings a
+  // copy back, and the reconciliation report simply re-derives its grouping.
+  const t = useTrashedTransactions(isReconRemoval, 'duplicates')
+  const [openGroups, setOpenGroups] = useState(null)   // null = default (a lone group starts open)
+
+  const groups = []
+  const byFile = new Map()
+  for (const item of t.items) {   // items arrive most-recently-trashed first; rows keep that order
+    const label = item.source_filename || 'Unknown file'
+    if (!byFile.has(label)) { byFile.set(label, []); groups.push(label) }
+    byFile.get(label).push(item)
+  }
+  const effectiveOpen = openGroups ?? new Set(groups.length === 1 ? groups : [])
+  const toggleGroup = (label) => {
+    const next = new Set(effectiveOpen)
+    if (next.has(label)) next.delete(label)
+    else next.add(label)
+    setOpenGroups(next)
+  }
+
+  return (
+    <>
+      {t.confirmEmpty ? (
+        <AppConfirmDialog
+          title="Empty removed-duplicates trash?"
+          description="This permanently removes every duplicate copy listed here (deleted transactions have their own section and are not touched). The record of what was merged or discarded goes with them."
+          confirmLabel="Empty trash"
+          confirmVariant="danger"
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={t.emptyTrash}
+          onCancel={() => t.setConfirmEmpty(false)}
+          width="min(620px, 100%)"
+        />
+      ) : null}
+
+      <Card style={{ display: 'grid', gap: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, maxWidth: 620 }}>
+            Duplicate charge copies removed on the Amazon reconciliation report (Merge → keep one, or a
+            per-copy Discard), grouped by the file they were imported from. Restore brings a copy back.
+          </div>
+          <Button
+            small
+            variant="ghost"
+            onClick={() => t.setConfirmEmpty(true)}
+            disabled={t.emptying || t.loading || t.items.length === 0}
+          >
+            {t.emptying ? 'Emptying…' : 'Empty trash'}
+          </Button>
+        </div>
+
+        {t.loading ? <Spinner /> : t.items.length === 0 ? (
+          <EmptyState message="No removed duplicates in trash." />
+        ) : groups.map(label => {
+          const open = effectiveOpen.has(label)
+          const rows = byFile.get(label)
+          return (
+            <div key={label} style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+              <button
+                type="button"
+                onClick={() => toggleGroup(label)}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', background: 'var(--surface)', border: 'none', cursor: 'pointer', color: 'var(--text)', fontSize: 12.5, textAlign: 'left' }}
+              >
+                <span style={{ color: 'var(--muted)' }}>{open ? '▾' : '▸'}</span>
+                <span style={{ fontWeight: 600 }}>{label}</span>
+                <span style={{ color: 'var(--muted)', fontWeight: 400 }}>({rows.length})</span>
+              </button>
+              {open ? rows.map(item => (
+                <TrashedTxnRow key={item.id} item={item}
+                  working={t.workingId} emptying={t.emptying} onRestore={t.restoreItem} />
+              )) : null}
+            </div>
+          )
+        })}
+
+        {t.error ? (
+          <div style={{ fontSize: 12, color: 'var(--danger)' }}>{t.error}</div>
         ) : null}
       </Card>
     </>
@@ -2220,6 +2324,12 @@ export default function Settings() {
                   Transactions
                 </div>
                 <TransactionsTrashSection />
+              </div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
+                  Duplicate transactions
+                </div>
+                <DuplicateTransactionsTrashSection />
               </div>
             </div>
           </StickySection>

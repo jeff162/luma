@@ -103,6 +103,28 @@ def get_tasks():
                 "severity":    SEVERITY_WARNING,
             })
 
+        # Amazon imports whose reconciliation has actionable items — a duplicate charge to merge/discard, or a
+        # split-shipment suggestion to accept/dismiss. Computed from the on-demand reconciliation per Amazon
+        # batch (few in practice); plain "No charge found" is intentionally excluded (nothing to resolve).
+        from backend.routers.import_export.amazon import BATCH_SOURCE_KIND, reconciliation_attention_count
+        amazon_batches = conn.execute(
+            "SELECT id FROM import_batch WHERE source_kind = ? AND status = 'completed'",
+            (BATCH_SOURCE_KIND,),
+        ).fetchall()
+        amazon_attention = sum(reconciliation_attention_count(conn, row["id"]) for row in amazon_batches)
+        if amazon_attention:
+            tasks.append({
+                "id":          "amazon_reconciliation",
+                "title":       "Amazon orders need review",
+                "description": f"{amazon_attention} Amazon order{'s need' if amazon_attention != 1 else ' needs'} "
+                               "reconciling — a duplicate charge to resolve, or a split-shipment match to confirm. "
+                               "Open the import and review its Amazon reconciliation report.",
+                "count":       amazon_attention,
+                "link":        "/import-export",
+                "link_label":  "Open Import / Export",
+                "severity":    SEVERITY_WARNING,
+            })
+
     return {
         "tasks":       tasks,
         "total_count": sum(t["count"] for t in tasks),

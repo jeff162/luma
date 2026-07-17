@@ -9,16 +9,21 @@
 // rows by hopping to the Accounts or Transactions page and then come back. Hoisting the state
 // here lets the dialog persist across route changes.
 //
-// The context owns: the viewer payload (entries, counts, loading/error), open/close/reload
-// operations, a `version` counter that ImportExport watches so its file-card pill counts can
-// refresh after the user resolves rows from the floating dialog, and a registration slot for
-// the drill-through handler. ImportExport registers a direct handler when it mounts (cheap,
-// no URL churn); when it isn't mounted, drill-through falls back to a navigation to
-// /import-export?openBatch=… so the source-batch detail panel can render there.
+// The generic open/close/reload/minimize/restore state machine (over the envelope
+// `{ params, data, loading, error, minimized }`) lives in the shared `useDetachedReportViewer`
+// hook; this file adds only what is duplicate-report-specific: the data loader, a `version`
+// counter that ImportExport watches (via `viewer.data.version`) so its file-card pill counts can
+// refresh after the user resolves rows from the floating dialog, the account-scope filter, the
+// drill-through registration slot, and the accounts-changed auto-reload. ImportExport registers a
+// direct drill-through handler when it mounts (cheap, no URL churn); when it isn't mounted,
+// drill-through falls back to a navigation to /import-export?openBatch=… so the source-batch detail
+// panel can render there.
 
-import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import { useDetachedReportViewer } from '../lib/useDetachedReportViewer.js'
+import { MinimizedReportPill } from '../components/MinimizedReportPill.jsx'
 
 // Lazy so the heavy detail-panel chrome (`detailShared.jsx` is ~385 kB) doesn't get pulled into
 // the eager App bundle. The dialog code only loads the first time the user opens the report.
@@ -34,82 +39,33 @@ export function useUnifiedDuplicatesViewer() {
   return ctx
 }
 
+// The report-specific fetch + payload shape. `version` advances each reload (from the prior data)
+// so ImportExport can watch it and refresh its file-card pill counts.
+async function loadDuplicates(params, prev) {
+  const result = await api.getBatchDuplicatesUnified(params.batchId)
+  return {
+    entries: Array.isArray(result.entries) ? result.entries : [],
+    hardRejectCount: Number(result.hard_reject_count || 0),
+    softFlagCount: Number(result.soft_flag_count || 0),
+    ruleBreakdown: Array.isArray(result.rule_breakdown) ? result.rule_breakdown : [],
+    version: (prev?.version ?? -1) + 1,
+  }
+}
+
 export function UnifiedDuplicatesViewerProvider({ children }) {
-  const [viewer, setViewer] = useState(null)
+  const { viewer, setViewer, open: openViewer, reload, close, minimize, restore } = useDetachedReportViewer(loadDuplicates)
   const drillThroughHandlerRef = useRef(null)
   const navigate = useNavigate()
 
-  const close = useCallback(() => { setViewer(null) }, [])
-
-  // Minimize hides the dialog without dropping its loaded state. While minimized, the dialog
-  // disappears from view and a small pill appears in the nav bar (via MinimizedDuplicatesNavItem
-  // below); clicking the pill restores the dialog with its existing entries, sort, position,
-  // and size intact. This is the answer to "the dialog is covering the accounts I'm trying to
-  // edit" — you can stash it without losing your place in the report.
-  const minimize = useCallback(() => {
-    setViewer(prev => prev ? { ...prev, minimized: true } : prev)
-  }, [])
-  const restore = useCallback(() => {
-    setViewer(prev => prev ? { ...prev, minimized: false } : prev)
-  }, [])
-
-  // ImportExport keeps its file-card pill counts in sync by watching `viewer.version` and
-  // re-fetching the batch list when this counter advances.
-  const reload = useCallback(async () => {
-    const current = viewer
-    if (!current?.batchId) return
-    const { batchId, title, accountFilter } = current
-    try {
-      const result = await api.getBatchDuplicatesUnified(batchId)
-      setViewer({
-        batchId, title, accountFilter: accountFilter || null, loading: false, error: '',
-        entries: Array.isArray(result.entries) ? result.entries : [],
-        hardRejectCount: Number(result.hard_reject_count || 0),
-        softFlagCount: Number(result.soft_flag_count || 0),
-        ruleBreakdown: Array.isArray(result.rule_breakdown) ? result.rule_breakdown : [],
-        version: (current.version || 0) + 1,
-        // Carry minimized forward — a reload triggered by an account-change event must NOT
-        // unminimize the dialog, otherwise editing accounts while the report is stashed in
-        // the nav bar would pop the dialog back open mid-edit.
-        minimized: !!current.minimized,
-      })
-    } catch (err) {
-      setViewer(prev => prev ? { ...prev, error: err?.message || 'Reload failed' } : prev)
-    }
-  }, [viewer])
-
   // `accountFilter` ({ id, name }) scopes the report to one account's rows — used by the deep link
   // from an empty account's detail panel so the user lands on exactly its skipped duplicates rather
-  // than scrolling the whole batch report.
-  const open = useCallback(async ({ batchId, title, accountFilter = null }) => {
-    if (!batchId) return
-    setViewer({
-      batchId, title, accountFilter, loading: true, error: '',
-      entries: [], hardRejectCount: 0, softFlagCount: 0, ruleBreakdown: [], version: 0,
-    })
-    try {
-      const result = await api.getBatchDuplicatesUnified(batchId)
-      setViewer({
-        batchId, title, accountFilter, loading: false, error: '',
-        entries: Array.isArray(result.entries) ? result.entries : [],
-        hardRejectCount: Number(result.hard_reject_count || 0),
-        softFlagCount: Number(result.soft_flag_count || 0),
-        ruleBreakdown: Array.isArray(result.rule_breakdown) ? result.rule_breakdown : [],
-        version: 0,
-      })
-    } catch (err) {
-      setViewer({
-        batchId, title, accountFilter, loading: false,
-        error: err?.message || 'Could not load duplicate report.',
-        entries: [], hardRejectCount: 0, softFlagCount: 0, ruleBreakdown: [], version: 0,
-      })
-    }
-  }, [])
+  // than scrolling the whole batch report. Defaulted here so callers can omit it.
+  const open = useCallback((params) => openViewer({ accountFilter: null, ...params }), [openViewer])
 
   // Clear the account scope without reloading — the dialog's "Show all" banner action.
   const clearAccountFilter = useCallback(() => {
-    setViewer(prev => prev ? { ...prev, accountFilter: null } : prev)
-  }, [])
+    setViewer(prev => (prev ? { ...prev, params: { ...prev.params, accountFilter: null } } : prev))
+  }, [setViewer])
 
   // ImportExport registers itself when mounted so drill-through can open a batch detail panel
   // in-place without a URL navigation.
@@ -140,7 +96,7 @@ export function UnifiedDuplicatesViewerProvider({ children }) {
   // is "review duplicates → pop over to Accounts to merge or rename → return to the report" —
   // without this listener the user would see stale display names or stale candidate pairs and
   // have to remember to hit Refresh. Debounced so a rapid sequence of edits coalesces into a
-  // single reload. We read viewer through a ref so the listener identity is stable.
+  // single reload. We read viewer/reload through refs so the listener identity is stable.
   const viewerRef = useRef(viewer)
   viewerRef.current = viewer
   const reloadRef = useRef(reload)
@@ -149,7 +105,7 @@ export function UnifiedDuplicatesViewerProvider({ children }) {
     if (typeof window === 'undefined') return undefined
     let pendingTimeout = null
     function onAccountsChanged() {
-      if (!viewerRef.current?.batchId || viewerRef.current?.loading) return
+      if (!viewerRef.current?.params?.batchId || viewerRef.current?.loading) return
       if (pendingTimeout) clearTimeout(pendingTimeout)
       pendingTimeout = setTimeout(() => {
         pendingTimeout = null
@@ -181,16 +137,17 @@ export function UnifiedDuplicatesViewerProvider({ children }) {
 export function UnifiedDuplicatesViewerRenderer() {
   const { viewer, close, reload, drillThrough, minimize, clearAccountFilter } = useUnifiedDuplicatesViewer()
   if (!viewer || viewer.minimized) return null
+  const { params, data } = viewer
   return (
     <Suspense fallback={null}>
       <UnifiedDuplicatesDialog
-        entries={viewer.entries}
-        hardRejectCount={viewer.hardRejectCount}
-        softFlagCount={viewer.softFlagCount}
-        ruleBreakdown={viewer.ruleBreakdown}
-        title={viewer.title}
-        batchId={viewer.batchId}
-        accountFilter={viewer.accountFilter || null}
+        entries={data?.entries || []}
+        hardRejectCount={data?.hardRejectCount || 0}
+        softFlagCount={data?.softFlagCount || 0}
+        ruleBreakdown={data?.ruleBreakdown || []}
+        title={params?.title}
+        batchId={params?.batchId}
+        accountFilter={params?.accountFilter || null}
         onClearAccountFilter={clearAccountFilter}
         loading={!!viewer.loading}
         error={viewer.error || ''}
@@ -207,43 +164,16 @@ export function UnifiedDuplicatesViewerRenderer() {
 export function MinimizedDuplicatesNavItem() {
   const { viewer, restore } = useUnifiedDuplicatesViewer()
   if (!viewer || !viewer.minimized) return null
+  const title = viewer.params?.title
   // softFlagCount = rows still awaiting a Keep/Reject decision; entries.length would also
   // count already-resolved hard_rejects and inflate the badge misleadingly.
-  const unresolvedRows = viewer.softFlagCount || 0
+  const unresolvedRows = viewer.data?.softFlagCount || 0
   return (
-    <button
-      type="button"
-      onClick={restore}
-      title={`Restore duplicate detection report — ${viewer.title} (${unresolvedRows} left to review)`}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: '6px 10px',
-        margin: '4px 0',
-        background: 'color-mix(in srgb, var(--warning) 14%, var(--surface2))',
-        color: 'var(--text)',
-        border: '1px solid color-mix(in srgb, var(--warning) 40%, var(--border))',
-        borderRadius: 8,
-        cursor: 'pointer',
-        fontSize: 12,
-        textAlign: 'left',
-        width: '100%',
-        overflow: 'hidden',
-      }}
-    >
-      <span style={{ fontSize: 13, lineHeight: 1, color: 'var(--warning)' }}>↗</span>
-      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        Duplicates — {viewer.title}
-      </span>
-      {unresolvedRows > 0 ? (
-        <span style={{
-          background: 'var(--warning)', color: '#fff',
-          fontSize: 10, fontWeight: 700,
-          padding: '1px 6px', borderRadius: 99,
-          lineHeight: '16px', minWidth: 18, textAlign: 'center',
-        }}>
-          {unresolvedRows}
-        </span>
-      ) : null}
-    </button>
+    <MinimizedReportPill
+      label={`Duplicates — ${title}`}
+      badgeCount={unresolvedRows}
+      title={`Restore duplicate detection report — ${title} (${unresolvedRows} left to review)`}
+      onRestore={restore}
+    />
   )
 }

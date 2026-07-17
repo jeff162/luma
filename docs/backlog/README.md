@@ -36,6 +36,11 @@ delete the backlog file.
   button treatments (shared `Button` + bespoke one-offs that have drifted) and settle on one shared set
   of sizes/variants, then migrate the one-offs. Central decision is solid-vs-soft-tint primary and the
   ghost drop shadow, not just pixel size.
+- [amazon-reconciliation-not-duplicate.md](amazon-reconciliation-not-duplicate.md) — **implemented
+  (2026-07-16).** A "Not duplicates" disposition on every duplicate-flavored reconciliation row, persisted
+  in the `amazon_charge_distinct` pair table (not the `txn_link` kind originally guessed) so detection
+  never re-flags asserted pairs; an order-anchored group falls back to the unmatched path with an
+  exact-date tie-break suggestion. Kept as the design record.
 - [refactor-audits.md](refactor-audits.md) — **recurring process.** Periodically hunt duplication /
   shotgun-surgery smells (structural tools + a judgment pass), fix the safe ones. Records the first
   run's shipped items (`getFormControlStyle` in Dashboard, `TransactionListToolbar`, `useTags()`), the

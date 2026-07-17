@@ -49,9 +49,9 @@ import { ImportUploadStage } from '../components/importExport/ImportUploadStage.
 import { useBatchUndo } from '../components/importExport/useBatchUndo.jsx'
 import { useBatchDetailPanels } from '../components/importExport/useBatchDetailPanels.jsx'
 import { ImportHistorySection } from '../components/importExport/ImportHistorySection.jsx'
-import { AmazonReconciliationDialog } from '../components/importExport/AmazonReconciliationDialog.jsx'
 import { MarketplaceImportHistory } from '../components/importExport/MarketplaceImportHistory.jsx'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
+import { useAmazonReconciliationViewer } from '../contexts/AmazonReconciliationViewerContext.jsx'
 import {
   getBlankImportSnapshot,
   getBlankMappingSuggestions,
@@ -98,6 +98,7 @@ import {
   MANUAL_DATA_SOURCE_VALUE,
   EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY,
   DATA_SOURCE_MANAGER_POS_PREF_KEY,
+  AMAZON_IMPORT_ACCOUNT_PREF_KEY,
   IMPORTED_CATEGORY_SCOPE_FILTERED,
   IMPORTED_CATEGORY_SETTINGS_KEY,
   IMPORTED_CATEGORY_FILTER_DIALOG_TITLE,
@@ -275,6 +276,7 @@ function ImportTab({ onAmazonDetected }) {
   // report can survive route changes. We hold onto the context handles here to open it and to
   // know when it has reloaded (so the file-card pill counts can be refreshed in step).
   const unifiedDuplicatesViewer = useUnifiedDuplicatesViewer()
+  const amazonReconciliationViewer = useAmazonReconciliationViewer()
   // Shared per-batch file-ledger panels (the `↗`). This tab keeps its own drill-through / URL openers
   // below, which call `openBatchDetail`.
   const { openBatchDetail, panelsNode } = useBatchDetailPanels({
@@ -386,13 +388,21 @@ function ImportTab({ onAmazonDetected }) {
 
   // When the user resolves rows from the floating dialog, the file-card pill counts on this
   // page need to refresh so the displayed numbers stay honest. The context advances
-  // `viewer.version` on every reload; we watch that counter (only when mounted) and re-fetch
+  // `viewer.data.version` on every reload; we watch that counter (only when mounted) and re-fetch
   // the batch list when it changes.
-  const viewerVersion = unifiedDuplicatesViewer.viewer?.version || 0
+  const viewerVersion = unifiedDuplicatesViewer.viewer?.data?.version || 0
   useEffect(() => {
     if (viewerVersion === 0) return
     api.listBatches().then(setBatches).catch(() => { })
   }, [viewerVersion])
+
+  // Same idea for the Amazon reconciliation report: resolving items there changes a batch's "N to resolve"
+  // count (recomputed in listBatches), so refresh the data-sources cards when that report reloads.
+  const amazonReconVersion = amazonReconciliationViewer.viewer?.data?._version || 0
+  useEffect(() => {
+    if (amazonReconVersion === 0) return
+    api.listBatches().then(setBatches).catch(() => { })
+  }, [amazonReconVersion])
 
   // Choosing a source (explicitly from the picker, or resolved by auto-detect) settles the upload
   // screen back to the drop zone with that source applied.
@@ -4291,13 +4301,15 @@ function AmazonPaymentSourceRow({ instrument, accountOptions, disabled, onPick, 
 function AmazonImportTab({ initialFiles }) {
   const NEW_ACCOUNT = '__new__'
   const [accounts, setAccounts] = useState([])
-  const [accountId, setAccountId] = useState('')
+  // Persisted per user so the chosen Amazon account carries over from visit to visit.
+  const [accountId, setAccountId] = useUserPreference(AMAZON_IMPORT_ACCOUNT_PREF_KEY, '')
   const [creatingAccount, setCreatingAccount] = useState(false)
   const [newAccountName, setNewAccountName] = useState('Amazon')
   const [savingAccount, setSavingAccount] = useState(false)
   const [files, setFiles] = useState([])
   const [dragOver, setDragOver] = useState(false)
   const [scan, setScan] = useState(null)            // { instruments, unrecognized_files, ... } | null
+  const [skippedFilesAlert, setSkippedFilesAlert] = useState(null)   // already-imported names awaiting an OK
   const [scanning, setScanning] = useState(false)
   const [categories, setCategories] = useState([])
   const [fundingCategory, setFundingCategory] = useState(null)
@@ -4306,10 +4318,10 @@ function AmazonImportTab({ initialFiles }) {
   const [loading, setLoading] = useState(false)     // the import itself
   const [summary, setSummary] = useState(null)
   const [error, setError] = useState('')
-  const [reconBatchId, setReconBatchId] = useState(null)
   const [amazonBatches, setAmazonBatches] = useState([])   // this tab's recent Amazon imports
   const [historyExpanded, setHistoryExpanded] = useState(true)
   const fileInputRef = useRef(null)
+  const amazonReconciliationViewer = useAmazonReconciliationViewer()
 
   const loadAccounts = useCallback(
     () => api.getAccounts({ include_children: true }).then(setAccounts).catch(() => {}),
@@ -4329,6 +4341,21 @@ function AmazonImportTab({ initialFiles }) {
   }, [loadAccounts, loadBatches])
   useEffect(() => { if (initialFiles?.length) setFiles(initialFiles) }, [initialFiles])
 
+  // Drop a remembered account that no longer exists (deleted, or no longer an Amazon account) once the
+  // account list has loaded, so the selector doesn't sit on a stale value.
+  useEffect(() => {
+    if (!accountId || !accounts.length) return
+    if (!accounts.some(a => a.id === accountId && (a.type || '').toLowerCase() === 'amazon')) setAccountId('')
+  }, [accounts, accountId, setAccountId])
+
+  // Resolving items in the floating reconciliation report changes a batch's "N to resolve" count, which the
+  // backend recomputes in listBatches — so refetch this tab's Amazon batches when the report reloads.
+  const reconVersion = amazonReconciliationViewer.viewer?.data?._version || 0
+  useEffect(() => {
+    if (reconVersion === 0) return
+    loadBatches()
+  }, [reconVersion, loadBatches])
+
   // Shared undo + file-ledger flows, same as the main import tab (see useBatchUndo / useBatchDetailPanels).
   const { openUndo, undoNode } = useBatchUndo(async () => { await loadBatches() })
   const { openBatchDetail, panelsNode } = useBatchDetailPanels({
@@ -4339,11 +4366,17 @@ function AmazonImportTab({ initialFiles }) {
 
   // Scan the dropped files for their payment cards whenever the files (or the target account, which
   // affects per-account override resolution) change. Read-only — no ledger changes.
+  // Already-imported files (matched by content) get a must-acknowledge notice whose OK drops them from
+  // the selection — so a later rescan can't see (or re-nag about) them.
   const rescan = useCallback((currentFiles, currentAccountId) => {
     if (!currentFiles.length) { setScan(null); return Promise.resolve() }
     setScanning(true)
     return api.scanAmazonFiles(currentFiles, currentAccountId)
-      .then(setScan)
+      .then(result => {
+        setScan(result)
+        const skipped = result?.already_imported_files || []
+        if (skipped.length) setSkippedFilesAlert(skipped)
+      })
       .catch(e => { setError(e?.message || 'Could not read the files'); setScan(null) })
       .finally(() => setScanning(false))
   }, [])
@@ -4379,7 +4412,9 @@ function AmazonImportTab({ initialFiles }) {
       return Array.from(byName.values())
     })
   }
-  const clearAll = () => { setFiles([]); setScan(null); setSummary(null); setError('') }
+  const clearAll = () => {
+    setFiles([]); setScan(null); setSummary(null); setError('')
+  }
 
   // Map / untrack a payment card → persist to the global funding map, then re-scan to reflect.
   const pickPaymentSource = async (instrument, value) => {
@@ -4586,15 +4621,29 @@ function AmazonImportTab({ initialFiles }) {
       {summary && (
         <Card style={{ marginTop: 16, fontSize: 13, lineHeight: 1.7 }}>
           <div style={{ fontWeight: 600, marginBottom: 8, color: 'var(--text)' }}>
-            Imported {summary.order_count} order{summary.order_count === 1 ? '' : 's'}.
+            {summary.batch_id
+              ? `Imported ${summary.order_count} order${summary.order_count === 1 ? '' : 's'}.`
+              : 'Nothing new to import.'}
           </div>
           <div style={{ color: 'var(--muted)' }}>
             {c.orders_imported ? <div>{c.orders_imported} order{c.orders_imported === 1 ? '' : 's'} imported</div> : null}
             {c.charges_matched ? <div>{c.charges_matched} card charge{c.charges_matched === 1 ? '' : 's'} matched and excluded from totals</div> : null}
             {c.items_enriched ? <div>{c.items_enriched} order{c.items_enriched === 1 ? '' : 's'} enriched with item detail</div> : null}
+            {c.already_enriched ? <div>{c.already_enriched} item row{c.already_enriched === 1 ? '' : 's'} already enriched (skipped)</div> : null}
             {c.non_cash ? <div>{c.non_cash} non-cash (points / gift-card) — recorded, not counted</div> : null}
             {c.already_applied ? <div>{c.already_applied} already imported (skipped)</div> : null}
           </div>
+          {summary.already_imported_files?.length ? (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+              <strong style={{ color: 'var(--text)' }}>
+                {summary.already_imported_files.length} file{summary.already_imported_files.length === 1 ? '' : 's'} skipped — already imported
+              </strong>
+              <div style={{ color: 'var(--muted)' }}>
+                {summary.already_imported_files.join(', ')} — identical content was imported before, so it was
+                not re-processed. Its existing file card still covers it.
+              </div>
+            </div>
+          ) : null}
           {c.items_discarded ? (
             <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
               <strong style={{ color: 'var(--text)' }}>{c.items_discarded} order{c.items_discarded === 1 ? '' : 's'} of item detail had no matching order</strong>
@@ -4607,7 +4656,7 @@ function AmazonImportTab({ initialFiles }) {
           <div style={{ marginTop: 12, display: 'flex', gap: 16 }}>
             {summary.batch_id ? (
               <button
-                onClick={() => setReconBatchId(summary.batch_id)}
+                onClick={() => amazonReconciliationViewer.open({ batchId: summary.batch_id, title: summary.filename })}
                 style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent2)', fontSize: 13 }}
               >
                 View reconciliation report →
@@ -4633,8 +4682,23 @@ function AmazonImportTab({ initialFiles }) {
         </Card>
       ) : null}
 
-      {reconBatchId ? (
-        <AmazonReconciliationDialog batchId={reconBatchId} onClose={() => setReconBatchId(null)} />
+      {skippedFilesAlert ? (
+        <AppNoticeDialog
+          title={`${skippedFilesAlert.length} file${skippedFilesAlert.length === 1 ? ' was' : 's were'} already imported`}
+          description="Identical content was imported before (matched by file content, not name), so these will be removed from the selection — their existing file cards still cover them."
+          onClose={() => {
+            // Acknowledging drops the flagged files (scan reports names; the list is keyed by name), so
+            // nothing already imported lingers in the import list.
+            const dropped = new Set(skippedFilesAlert)
+            setFiles(prev => prev.filter(f => !dropped.has(f.name)))
+            setSkippedFilesAlert(null)
+          }}
+          width="min(560px, 100%)"
+        >
+          <div style={{ maxHeight: '40vh', overflow: 'auto', fontSize: 13, color: 'var(--text)' }}>
+            {skippedFilesAlert.map(name => <div key={name} style={{ padding: '2px 0' }}>{name}</div>)}
+          </div>
+        </AppNoticeDialog>
       ) : null}
       {undoNode}
       {panelsNode}

@@ -66,6 +66,8 @@ class AmazonItem:
     asin: Optional[str] = None
     quantity: int = 1
     item_url: Optional[str] = None
+    order_date: Optional[str] = None    # the items file's `order date` — promoted to an orphan order in merge
+    source_file: Optional[str] = None   # which uploaded items file this row came from (import-detail provenance)
 
 
 @dataclass
@@ -85,9 +87,12 @@ class AmazonOrder:
     items: list[AmazonItem] = field(default_factory=list)
     # Provenance: which export(s) contributed. `has_order_detail` (from the orders file) is what
     # *activates* an order — the charge match + link; `has_item_detail` (from the items file) is what
-    # *refines* it into per-item rows. An order missing one side is an orphan (see doc).
+    # *refines* it into per-item rows. An order missing one side is an orphan (see doc). `source_file`
+    # names the uploaded file this order's *order detail* came from (an orphan-item entry carries its
+    # items file's name) — for the import-detail report's "which file did this come from?".
     has_order_detail: bool = False
     has_item_detail: bool = False
+    source_file: Optional[str] = None
 
 
 # --------------------------------------------------------------------------------------------------
@@ -207,6 +212,7 @@ def parse_item_rows(rows: list[dict]) -> dict[str, list[AmazonItem]]:
                 asin=(row.get("ASIN") or "").strip() or None,
                 quantity=parse_quantity(row.get("quantity")),
                 item_url=(row.get("item url") or "").strip() or None,
+                order_date=(row.get("order date") or "").strip() or None,
             )
         )
     return by_order
@@ -227,18 +233,32 @@ class OrderDisposition:
     # The paying instrument's network label (the leg's method, e.g. "Riverstone") — with
     # `match_last4` it identifies the instrument for the funding-source → account map (see doc).
     match_network: Optional[str] = None
+    # A card the payments string *names* but gives no dollar amount for (non-cash orders only —
+    # "Riverstone ending in 5093; Rewards Points;", the 2024+ points-order shape). The export
+    # hides the card/points split, so classification lands non-cash; the importer probes the ledger
+    # for a unique full-total charge on this card and upgrades the order to cash when one exists
+    # (see the router's bare-card probe).
+    bare_card_last4: Optional[str] = None
+    bare_card_network: Optional[str] = None
 
 
 def classify_order(order: AmazonOrder) -> OrderDisposition:
-    """Apply the settled decision table to one order. An order is *cash* if it has any payment leg
-    carrying a dollar amount (a card charge, or a bare off-card amount); it is *non-cash* if every leg
+    """Apply the settled decision table to one order. An order is *cash* if its payment legs carry a
+    positive dollar total (a card charge, or a bare off-card amount); it is *non-cash* if every leg
     is a non-cash instrument or a bare card mention with no amount (points / gift-card balance — the
-    export never discloses their dollar figure). A refund reduces the net cash."""
+    export never discloses their dollar figure), or if its cash legs sum to $0.00 (a free/promo order —
+    no cash moved, so there is no charge to find). A non-cash disposition still carries any bare card
+    mention (``bare_card_*``) so the importer's ledger probe can settle the undisclosed split. A refund
+    reduces the net cash."""
     cash_legs = [leg for leg in order.payment_legs if leg.amount is not None and not leg.is_non_cash]
-    if not cash_legs:
-        return OrderDisposition(kind="non_cash", net_cash=0.0, charge_amount=None,
-                                match_last4=None, match_date=None)
     charge_amount = round(sum(leg.amount for leg in cash_legs), 2)
+    if not cash_legs or charge_amount <= 0:
+        bare = next((leg for leg in order.payment_legs
+                     if leg.amount is None and not leg.is_non_cash and (leg.last4 or leg.method)), None)
+        return OrderDisposition(kind="non_cash", net_cash=0.0, charge_amount=None,
+                                match_last4=None, match_date=None,
+                                bare_card_last4=bare.last4 if bare else None,
+                                bare_card_network=bare.method if bare else None)
     refund = order.refund or 0.0
     net_cash = round(max(0.0, charge_amount - refund), 2)
     primary = next((leg for leg in cash_legs if leg.last4), cash_legs[0])
@@ -266,7 +286,13 @@ def merge(
     for order_id, items in items_by_order.items():
         order = by_id.get(order_id)
         if order is None:
-            order = AmazonOrder(order_id=order_id)
+            # Items with no matching order — carry the items file's name (so a discarded row is traceable)
+            # and the items file's order date (the only date such an orphan has).
+            order = AmazonOrder(
+                order_id=order_id,
+                order_date=next((i.order_date for i in items if i.order_date), None),
+                source_file=next((i.source_file for i in items if i.source_file), None),
+            )
             by_id[order_id] = order
         order.items = items
         order.has_item_detail = bool(items)

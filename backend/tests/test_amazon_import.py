@@ -108,10 +108,12 @@ class OrderRowTests(unittest.TestCase):
 class ItemRowTests(unittest.TestCase):
     def test_groups_by_order(self):
         rows = [
-            {"﻿order id": "111-0000000-0000002", "quantity": "1", "description": "Air Widget",
-             "price": "$34.99", "ASIN": "B0AAA", "category": "Electronics›Widgets", "item url": "u1"},
-            {"order id": "111-0000000-0000002", "quantity": "2", "description": "Widget Picks",
-             "price": "$5.32", "ASIN": "B0BBB", "category": "Health›Picks", "item url": "u2"},
+            {"﻿order id": "111-0000000-0000002", "order date": "2024-11-19", "quantity": "1",
+             "description": "Air Widget", "price": "$34.99", "ASIN": "B0AAA",
+             "category": "Electronics›Widgets", "item url": "u1"},
+            {"order id": "111-0000000-0000002", "order date": "2024-11-19", "quantity": "2",
+             "description": "Widget Picks", "price": "$5.32", "ASIN": "B0BBB",
+             "category": "Health›Picks", "item url": "u2"},
         ]
         by_order = parse_item_rows(rows)
         self.assertEqual(set(by_order), {"111-0000000-0000002"})
@@ -120,6 +122,7 @@ class ItemRowTests(unittest.TestCase):
         self.assertEqual(items[1].quantity, 2)
         self.assertEqual(items[1].price, 5.32)
         self.assertEqual(items[0].category, "Electronics›Widgets")
+        self.assertEqual(items[0].order_date, "2024-11-19")
 
 
 class MergeTests(unittest.TestCase):
@@ -136,10 +139,13 @@ class MergeTests(unittest.TestCase):
 
     def test_orphan_items_create_order_without_order_detail(self):
         # Items arrived before (or without) the orders file — an order with detail but no charge yet.
-        merged = {o.order_id: o for o in merge([], {"O2": [AmazonItem(description="X", price=5.0, category=None)]})}
+        # The items file's order date is promoted to the orphan (it's the only date such an order has).
+        items = {"O2": [AmazonItem(description="X", price=5.0, category=None, order_date="2024-11-19")]}
+        merged = {o.order_id: o for o in merge([], items)}
         self.assertIn("O2", merged)
         self.assertFalse(merged["O2"].has_order_detail)
         self.assertTrue(merged["O2"].has_item_detail)
+        self.assertEqual(merged["O2"].order_date, "2024-11-19")
 
     def test_orphan_order_without_items(self):
         orders = parse_order_rows([{"﻿order id": "O3", "date": "2024-01-01", "total": "5.00", "payments": ""}])
@@ -191,10 +197,27 @@ class ClassifyOrderTests(unittest.TestCase):
         self.assertEqual(d.kind, "non_cash")
         self.assertEqual(d.net_cash, 0.0)
         self.assertIsNone(d.charge_amount)
+        # The amount-less card mention rides along for the importer's bare-card ledger probe.
+        self.assertEqual(d.bare_card_last4, "4321")
+        self.assertEqual(d.bare_card_network, "Test Card")
+
+    def test_instrument_only_order_carries_no_bare_card(self):
+        d = classify_order(self._order("Rewards Points;"))
+        self.assertEqual(d.kind, "non_cash")
+        self.assertIsNone(d.bare_card_last4)
+        self.assertIsNone(d.bare_card_network)
 
     def test_gift_card_only_is_non_cash(self):
         d = classify_order(self._order("Amazon gift card balance;"))
         self.assertEqual(d.kind, "non_cash")
+
+    def test_zero_dollar_cash_leg_is_non_cash(self):
+        # A $0.00 card leg (a free/promo order): no cash moved, so there is no charge to find — same
+        # handling as a non-cash instrument, keeping it out of "No charge found" downstream.
+        d = classify_order(self._order("Test Card ending in 4321: 2024-01-01: $0.00;"))
+        self.assertEqual(d.kind, "non_cash")
+        self.assertEqual(d.net_cash, 0.0)
+        self.assertIsNone(d.charge_amount)
 
     def test_refund_reduces_net(self):
         d = classify_order(self._order("Test Card ending in 4321: 2024-01-01: $50.00;", refund=20.0))

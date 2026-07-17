@@ -4129,6 +4129,9 @@ def list_batches():
             LIMIT  50
         """).fetchall()
 
+        # Lazy import: amazon.py imports from this module, so a top-level import would be circular.
+        from .amazon import BATCH_SOURCE_KIND, reconciliation_attention_count
+
         result = []
         for b in batches:
             d = dict(b)
@@ -4188,6 +4191,10 @@ def list_batches():
                   AND  needs_review = 1
                   AND  trashed_at    IS NULL
             """, (b["id"],)).fetchone()["n"] or 0)
+            # Amazon marketplace batches carry an actionable-reconciliation count (a duplicate to merge, or a
+            # split suggestion to accept/dismiss) so the card can warn without opening the report.
+            if d.get("source_kind") == BATCH_SOURCE_KIND:
+                d["recon_attention_count"] = reconciliation_attention_count(conn, b["id"])
             result.append(d)
         return result
 

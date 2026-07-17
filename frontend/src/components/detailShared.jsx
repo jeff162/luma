@@ -22,12 +22,13 @@
  *     key so changing a filter starts over at page 1.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, LabelList,
 } from 'recharts'
 import { monthLabel } from '../lib/utils.js'
+import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { formatSignedAxisTick, formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { getFloatingPanelSurfaceStyle, getFloatingPanelHeaderBackground } from './ui.jsx'
 import { usePanelStackSlot } from '../contexts/PanelStackContext.jsx'
@@ -314,6 +315,46 @@ export function useDetailPanelChrome(onClose, options = {}) {
   }, [panelRef])
 
   return { pos, size, panelRef, onDragStart, onResizeStart }
+}
+
+// Restore + persist a floating panel's geometry across opens, keyed by a per-user preference. Returns
+// the `{ initialPosition, initialSize }` to seed `useDetailPanelChrome` with and the `onGestureEnd`
+// that saves the final pos/size after each drag/resize. Saved geometry is shape { pos, size, viewport }:
+// the viewport is snapshotted at save time so a restore on a different-sized browser scales pos/size
+// proportionally (a panel saved bottom-right on 1920×1080 stays bottom-right on 1280×720, just smaller);
+// min sizes are re-enforced after scaling so an aggressive shrink can't produce an unusable panel, and
+// the chrome hook's own clamp pass is the final safety net. Shared by every detached report dialog.
+export function useRestorablePanelGeometry(prefKey, { fallbackWidth = 1280, fallbackHeight = 720, edgeGutter = 48, topGutter = 160 } = {}) {
+  const [savedPanel, setSavedPanel] = useUserPreference(prefKey, null)
+  const { initialPosition, initialSize } = useMemo(() => {
+    const hasWindow = typeof window !== 'undefined'
+    const fallbackSize = {
+      width:  Math.min(fallbackWidth,  (hasWindow ? window.innerWidth  : fallbackWidth)  - edgeGutter),
+      height: Math.min(fallbackHeight, (hasWindow ? window.innerHeight : fallbackHeight) - topGutter),
+    }
+    if (!savedPanel || !hasWindow) return { initialPosition: null, initialSize: fallbackSize }
+    const savedViewport = savedPanel.viewport
+    if (!savedViewport?.width || !savedViewport?.height) {
+      // Legacy save (pre-viewport-scaling): use as-is. Hook clamping handles overflow.
+      return { initialPosition: savedPanel.pos || null, initialSize: savedPanel.size || fallbackSize }
+    }
+    const scaleX = window.innerWidth / savedViewport.width
+    const scaleY = window.innerHeight / savedViewport.height
+    const scaledSize = savedPanel.size ? {
+      width:  Math.max(DETAIL_PANEL_MIN_WIDTH,  Math.round(savedPanel.size.width  * scaleX)),
+      height: Math.max(DETAIL_PANEL_MIN_HEIGHT, Math.round(savedPanel.size.height * scaleY)),
+    } : fallbackSize
+    const scaledPos = savedPanel.pos ? {
+      x: Math.round(savedPanel.pos.x * scaleX),
+      y: Math.round(savedPanel.pos.y * scaleY),
+    } : null
+    return { initialPosition: scaledPos, initialSize: scaledSize }
+  }, [savedPanel, fallbackWidth, fallbackHeight, edgeGutter, topGutter])
+  const onGestureEnd = ({ pos: gPos, size: gSize }) => {
+    if (!gPos && !gSize) return
+    setSavedPanel({ pos: gPos || null, size: gSize || null, viewport: { width: window.innerWidth, height: window.innerHeight } })
+  }
+  return { initialPosition, initialSize, onGestureEnd }
 }
 
 // Gates a detail panel's reveal on its geometry going quiet, returning a `revealed` flag for

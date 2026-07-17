@@ -121,6 +121,85 @@ row vanish without a trace.
 The file-ledger and Transactions search boxes accept date and amount, not just merchant — type a year
 (`2023`), month (`03/2023`), day (`03/15/2023`), or an amount (`68`) to jump to it.
 
+### An Amazon order shows "Duplicate detected" on the reconciliation report
+
+Two or more identical same-amount charges made the order's auto-match ambiguous — usually the same
+charge imported twice (e.g. two Mint syncs). If it's one purchase with redundant copies, use
+**Merge → keep one**: the richest copy survives (any distinguishing detail from the others folds into
+it), the rest go to Trash, and the order matches the survivor. When *other* unmatched orders share the
+amount, the copies are distinct purchases, not redundant — Merge isn't offered; use **Not duplicates**
+to mark the group distinct (it never re-flags; the order falls back to the unmatched path, where a copy
+dated on the order itself is re-suggested for review), or the per-copy **Discard** to remove only the
+copies you know are double imports. Filter to one kind with the pills, select rows with the checkboxes,
+and the bulk bar applies Merge/Accept/Dismiss to everything selected that supports it.
+
+### An Amazon order shows "Duplicate · review" (same amount, dates don't line up)
+
+Same-amount copies exist, but only **outside** the strict ±3-day match window (within two weeks) — so
+the dates don't corroborate the duplicate reading the way an in-window pair's do. The row offers the
+same per-copy **Discard**, **Merge → keep one** (merging exactly the copies the row displays), and
+**Not duplicates**; examine each copy's origin detail (hover) before resolving — then resolve per row,
+or select the rows you've checked and bulk-Merge (a merged copy is restorable from Settings → Trash).
+Note that after a
+per-copy Discard the out-of-window survivor is *not* auto-linked — the order returns as
+**Matched · review** with a note naming the date gap, one Accept away; Merge links the survivor in
+one step.
+
+### Two "Unaccounted charges" are copies of each other
+
+Copies of one real charge (a bank's post date vs. an aggregator's date, e.g. Mint) land on the same
+account with the same amount a day or three apart — and when no order accounts for either, the general
+dedupe can't catch them (different dates / payee text). The report groups these as
+**Unaccounted · duplicate**: **Merge → keep one** keeps the richest copy (folding in the others'
+detail) and returns it to the unaccounted list, **Discard** a copy by hand, or **Not duplicates**
+asserts they're distinct purchases — persisted (`amazon_charge_distinct`), so the group never
+re-flags. Same-amount-nearby without an order is weaker evidence (repeated same-price purchases are
+real), so check each group's origin detail first — then Merge per row, or bulk-Merge the selected
+groups. A plain **Unaccounted charge** row also offers **Discard** as the escape hatch for a duplicate
+the grouping failed to pair.
+
+A mistaken merge or discard is undoable: the removed copy sits in Settings → Trash under the
+**Duplicate transactions** section, in a collapsible group named for the file it was imported from
+(ordinary deletes stay in the separate Transactions section), and **Restore** brings it back — the
+reconciliation grouping simply re-derives on the next refresh. A merge loser also appears in its
+source file's "Removed as duplicates" ledger list, pointing at the kept copy.
+
+### An Amazon order shows "Matched · review" (a split shipment)
+
+No single charge equals the order total, but a unique set of unaccounted charges sums to it — Amazon
+billed the order per shipment. **Accept** links the whole set (each charge is excluded, so the money
+still counts once); **Dismiss** if it's not a match (it won't be re-suggested). A set whose charges are
+more than a week apart is flagged so you can eyeball it first. A *single*-charge suggestion means the
+auto-matcher refused a pairing the wider review pass found — the row carries a note naming why (charge
+outside the ±3-day match window, a cent off the order total, on an unexpected account, or simply
+imported after the order was). After a **Not duplicates** verdict frees same-amount candidates back to
+this pass, the one dated on the order itself is suggested over its off-date rivals (the note says so);
+if none is on-date, the order lands in No charge found for manual linking.
+
+### An Amazon order shows "No charge found"
+
+Either the paying card isn't in your ledger (an untracked card, or the charge predates your imported
+history) — nothing to do, the order still counts — or the match was missed. **Link charges…** opens a
+picker over the unaccounted charges with a running sum against the order total: check the charge(s)
+that paid for it (several, if it was split) and link them. A mismatched sum warns but doesn't block.
+
+### I imported the Amazon items file before its orders file
+
+The items had no orders to attach to, so they were **discarded** (nothing entered the ledger) — the
+file shows struck-through on its card, and the import-detail report lists exactly which order ids were
+skipped and from which file. Import the orders file, then re-import the same items file: it is *not*
+blocked as "already imported" (a file with discarded rows is deliberately not remembered), and its
+items attach normally.
+
+### I re-imported an Amazon file (or uploaded the same file twice)
+
+Files are matched by **content**, not name: one that a completed import already took raises an
+"already imported" alert at scan time, and acknowledging it drops the file from the selection — nothing
+is re-processed and no new file card is created; the original card still covers it. Undoing an import
+frees its files to be imported again. Use the file
+card's outcome pills (orders / items matched / discarded / duplicates / payments) to open the
+import-detail report and see what any import actually did, including which file each row came from.
+
 ## Tags (cross-cutting reporting)
 
 Accounts have owners; **categories/groups do not**. The dimensions you report by — personal/shared,
@@ -133,9 +212,10 @@ those dimensions in the account or category tree.
 The situations above are surfaced inside the app through the Help/FeatureExplainer registry
 (`frontend/src/help/content.jsx`) — see `docs/ui-patterns.md` → *Help and contextual explainers* for
 the pattern. Each situation is a help topic, reachable three ways from that single source: the `/help`
-pages, an always-present `?` next to the relevant surface (the duplicate-report header, the
-amount-convention picker, the Group Imported Categories title, the Accounts merge area, the rule-
-suggestion review, the file-ledger search and removed-as-duplicates list), and a context-triggered
+pages, an always-present `?` next to the relevant surface (the duplicate-report header, the Amazon
+reconciliation and import-detail report headers, the amount-convention picker, the Group Imported
+Categories title, the Accounts merge area, the rule-suggestion review, the file-ledger search and
+removed-as-duplicates list), and a context-triggered
 "explain this" tip that appears only when the app recognizes the situation (cross-account matches,
 covered-range ±2-day and no-match rows, unknown-source files, rule-suggestion conflicts).
 

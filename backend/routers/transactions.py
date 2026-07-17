@@ -1238,7 +1238,18 @@ def restore_transaction(txn_id: str):
         row = conn.execute("SELECT id FROM txn WHERE id = ?", (txn_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Transaction not found")
-        conn.execute("UPDATE txn SET trashed_at = NULL WHERE id = ?", (txn_id,))
+        # A restore asserts "this is a real transaction after all" — so a confirmed-duplicate's dedupe
+        # tags clear with the untrash (mirroring restore_rejected_duplicate). Left in place, the row
+        # would return to the ledger still filtered out as a removed duplicate.
+        conn.execute(
+            """UPDATE txn
+               SET trashed_at = NULL,
+                   suspect_duplicate_of = CASE WHEN rejection_reason = 'duplicate_confirmed' THEN NULL ELSE suspect_duplicate_of END,
+                   dedupe_resolved_by   = CASE WHEN rejection_reason = 'duplicate_confirmed' THEN NULL ELSE dedupe_resolved_by END,
+                   rejection_reason     = CASE WHEN rejection_reason = 'duplicate_confirmed' THEN NULL ELSE rejection_reason END
+               WHERE id = ?""",
+            (txn_id,),
+        )
     return {"ok": True}
 
 
@@ -1249,22 +1260,27 @@ def list_trashed_transactions(limit: int = Query(200, le=1000)):
             """
             SELECT t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
                    t.account_id, t.category_id, t.trashed_at, t.notes,
+                   t.dedupe_resolved_by,
                    a.name AS account_name, a.display_name AS account_display_name, a.mask AS account_mask,
                    c.name AS category_name,
-                   p.name AS group_name, p.id AS group_id
+                   p.name AS group_name, p.id AS group_id,
+                   ib.filename AS source_filename
             FROM   txn t
             LEFT JOIN account  a ON a.id = t.account_id
             LEFT JOIN category c ON c.id = t.category_id
             LEFT JOIN category p ON p.id = c.parent_id
+            LEFT JOIN import_batch ib ON ib.id = t.import_batch_id
             WHERE  t.trashed_at IS NOT NULL
-              -- Confirmed-duplicate rows are soft-deleted by the dedupe flow, not by the user:
-              -- either as a side effect of merging accounts (dedupe_resolved_by='auto_merge') or
-              -- by an explicit Reject in the duplicate report (dedupe_resolved_by='user'). Both set
-              -- rejection_reason='duplicate_confirmed'. They belong to the originating file's
-              -- duplicate report and are restorable from there (detach the accounts, or "undo
-              -- reject"), so they're kept out of the manual Trash view to avoid implying the user
-              -- deleted them or should empty them here.
-              AND COALESCE(t.rejection_reason, '') <> 'duplicate_confirmed'
+              -- Confirmed-duplicate rows soft-deleted by the *unified dedupe flow* — account merges
+              -- (dedupe_resolved_by='auto_merge') and explicit Rejects in the duplicate report
+              -- (dedupe_resolved_by='user') — belong to the originating file's duplicate report and
+              -- are restorable from there (detach the accounts, or "undo reject"), so they're kept
+              -- out of the manual Trash view to avoid implying the user deleted them or should empty
+              -- them here. Amazon reconciliation removals ('amazon_merge' / 'amazon_discard') ARE
+              -- shown: the user removed those copies deliberately, and the Trash page (grouped by
+              -- origin) is their undo path.
+              AND NOT (COALESCE(t.rejection_reason, '') = 'duplicate_confirmed'
+                       AND COALESCE(t.dedupe_resolved_by, '') NOT IN ('amazon_merge', 'amazon_discard'))
             ORDER  BY t.trashed_at DESC, t.date DESC
             LIMIT  ?
             """,
@@ -1274,14 +1290,27 @@ def list_trashed_transactions(limit: int = Query(200, le=1000)):
 
 
 @router.post("/trash/empty")
-def empty_transaction_trash():
+def empty_transaction_trash(scope: str = "all"):
+    """Empty the visible transaction trash. ``scope`` narrows to one Trash section — ``deleted``
+    (rows the user trashed directly) or ``duplicates`` (Amazon reconciliation removals) — so each
+    section's Empty button touches only its own rows; ``all`` empties both. The unified dedupe flow's
+    confirmed-duplicate rows are protected regardless: they aren't shown in the Trash view, so
+    emptying it must not permanently delete them either — doing so would silently destroy the rows
+    that account-detach (auto_merge) and "undo reject" (user) rely on to restore them."""
+    # The two visible slices. Amazon removals are exactly the duplicate_confirmed rows tagged
+    # amazon_*; direct deletes are the untagged remainder (the dedupe flow's rows match neither).
+    amazon = "COALESCE(dedupe_resolved_by, '') IN ('amazon_merge', 'amazon_discard')"
+    direct = "COALESCE(rejection_reason, '') <> 'duplicate_confirmed'"
+    if scope == "deleted":
+        visible = direct
+    elif scope == "duplicates":
+        visible = amazon
+    elif scope == "all":
+        visible = f"({direct} OR {amazon})"
+    else:
+        raise HTTPException(status_code=400, detail="Unknown trash scope")
     with get_db() as conn:
-        # Mirror the /trash exclusion: confirmed-duplicate rows aren't shown in the Trash view, so
-        # emptying it must not permanently delete them either — doing so would silently destroy the
-        # rows that account-detach (auto_merge) and "undo reject" (user) rely on to restore them.
-        cursor = conn.execute(
-            "DELETE FROM txn WHERE trashed_at IS NOT NULL AND COALESCE(rejection_reason, '') <> 'duplicate_confirmed'"
-        )
+        cursor = conn.execute(f"DELETE FROM txn WHERE trashed_at IS NOT NULL AND {visible}")
         removed = cursor.rowcount or 0
     return {"removed": removed}
 

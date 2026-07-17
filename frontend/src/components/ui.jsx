@@ -673,6 +673,12 @@ export function Button({ children, onClick, onMouseDown, variant = 'primary', sm
   )
 }
 
+// Compact per-row action-button sizing — the tighter, flatter footprint for the repeated action
+// buttons in dense report rows (duplicate detection, Amazon reconciliation). Pair with
+// `variant="ghost"`; it overrides Button's default padding/font/radius through the caller `style`
+// seam (the variant only owns colour/border/shadow, so size props here win).
+export const COMPACT_ACTION_BTN_STYLE = { padding: '3px 8px', fontSize: 11.5, borderRadius: 6 }
+
 export function Select({ value, onChange, options, style, id, ...rest }) {
   const autoId = useId()  // self-assigned id (caller's wins) clears the "field needs an id/name" check
   return (
