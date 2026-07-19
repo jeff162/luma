@@ -17,14 +17,19 @@ import sys
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(__file__))
 
-# 🚫 obvious low-value comment patterns
+# 🚫 obvious low-value comment patterns: a whole comment that only restates the next statement
+# ("# get user", "# loop through rows").
+#
+# Deliberately anchored to a comment that is *entirely* the low-value phrase and short. An unanchored
+# keyword search cannot tell noise from substance — the signal is the whole comment's value, not one
+# verb — and it misfires on the good comments this style guide asks for: a wrapped explanation puts a
+# `#` at the start of every continuation line, so any line that happens to begin "get their own…" or
+# "update the profile so…" looked identical to "# get user". That made the false-positive rate rise
+# with comment quality, which is exactly backwards.
+LOW_VALUE_OPENERS = r"(loop through|iterates?|gets?|sets?|initialize[sd]?|updates?)"
+# ^ start of line, the comment is only this phrase plus a few words, and it ends there.
 BAD_PATTERNS = [
-    r"#\s*loop through",
-    r"#\s*iterate",
-    r"#\s*set ",
-    r"#\s*get ",
-    r"#\s*initialize",
-    r"#\s*update ",
+    rf"^\s*#\s*{LOW_VALUE_OPENERS}\b[^\n]{{0,24}}$",
 ]
 
 # Heuristic: file is "complex" if it has enough functions/classes
@@ -56,8 +61,14 @@ def has_top_level_comment(content):
 def check_bad_comments(file_path, content):
     issues = []
     for pattern in BAD_PATTERNS:
-        if re.search(pattern, content, re.IGNORECASE):
-            issues.append(f"{file_path}: contains low-value comment matching '{pattern}'")
+        # MULTILINE so `^`/`$` anchor to each line: the rule is about one comment line standing alone,
+        # not about the phrase appearing somewhere in the file.
+        for match in re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE):
+            line_no = content.count("\n", 0, match.start()) + 1
+            issues.append(
+                f"{file_path}:{line_no}: low-value comment — says what the code says: "
+                f"{match.group(0).strip()!r}"
+            )
     return issues
 
 def should_require_system_comment(file_path, content):
@@ -94,11 +105,13 @@ def check_missing_system_comment(file_path, content):
     issues = []
 
     fn_count = count_functions(content)
+    line_count = len(content.splitlines())
 
     if should_require_system_comment(file_path, content):
         if not has_top_level_comment(content):
             issues.append(
-                f"{file_path}: likely missing top-level system comment (fn={fn_count}, lines={line_count})"            )
+                f"{file_path}: likely missing top-level system comment (fn={fn_count}, lines={line_count})"
+            )
 
     return issues
     

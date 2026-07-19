@@ -202,6 +202,33 @@ setLoading(true)
 
 ---
 
+## The automated check (and what it can't do)
+
+`backend/scripts/check_comments.py` runs in the pre-commit hook (via
+`scripts/run_backend_comment_check.js`, which just picks the right Python on each platform). It
+enforces two things, both deliberately narrow:
+
+1. **A complex module needs a top-level system comment.** Files under `routers/`/`services/` with 2+
+   definitions, scripts over ~150 lines, the core entry points, or any file with 4+ definitions or
+   200+ lines must open with a docstring. This is the check that matches the concern at the top of
+   this document — a system with no stated mental model is the expensive kind of missing comment.
+2. **A comment that is *only* a restatement** — `# get user`, `# loop through rows`, `# set value`.
+   The pattern is anchored to a whole comment line that is short and consists of just that phrase.
+
+**The anchoring is the important part, and it is not incidental.** An unanchored keyword search
+cannot distinguish noise from substance, because the signal is the *whole comment's* value, not any
+one verb. A wrapped explanation puts a `#` at the start of every continuation line, so a line
+beginning "get their own bucket…" or "update the profile so…" is indistinguishable from `# get user`
+to a naive pattern. That makes the false-positive rate rise as comments get better — precisely
+backwards for a guide that asks for prose explanations. If you extend `BAD_PATTERNS`, keep the
+`^…$` anchors and the length bound, or the check will start punishing the style it exists to protect.
+
+**What it cannot do:** judge whether a comment is *true*, whether it explains the right thing, or
+whether a system-level comment is missing from a file that happens to be short. Those stay a
+review-time concern; the script only catches the two mechanical cases above.
+
+---
+
 ## Summary
 
 * Comment **systems, not lines**
