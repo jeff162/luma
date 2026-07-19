@@ -88,6 +88,9 @@ export function buildEmptyDataSourceBody(name) {
     amount_convention: 'single_signed',
     skip_rows: 0,
     apply_categorization: true,
+    // Spelled out like its siblings even though it matches the API default, so the shape stays complete
+    // and a later change to that default can't silently alter what a new empty source starts with.
+    enrich_from_source: false,
     use_imported_categories: false,
     imported_category_scope_mode: IMPORTED_CATEGORY_SCOPE_ALL,
     imported_category_owner_ids: [],
@@ -190,6 +193,9 @@ export function buildProfileBodyFromSnapshot(name, draftRecord) {
     amount_convention: snapshot.amount_convention || 'single_signed',
     skip_rows: snapshot.skip_rows || 0,
     apply_categorization: snapshot.apply_categorization !== false,
+    // Every per-source toggle the import screen offers has to be carried here, or saving the source
+    // silently drops it to the API's default and the next recognized file comes back unchecked.
+    enrich_from_source: !!snapshot.enrich_from_source,
     use_imported_categories: !!snapshot.use_imported_categories,
     imported_category_scope_mode: importedCategorySettings.scope_mode,
     imported_category_owner_ids: importedCategorySettings.owner_ids,

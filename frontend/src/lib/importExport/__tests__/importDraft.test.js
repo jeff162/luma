@@ -44,6 +44,7 @@ describe('buildProfileBodyFromSnapshot', () => {
         amount_convention: 'two_column',
         skip_rows: 1,
         apply_categorization: false,
+        enrich_from_source: true,
         use_imported_categories: true,
       },
     }
@@ -59,6 +60,9 @@ describe('buildProfileBodyFromSnapshot', () => {
     expect(body.amount_convention).toBe('two_column')
     expect(body.skip_rows).toBe(1)
     expect(body.apply_categorization).toBe(false)
+    // Every per-source toggle must survive the save: an omitted field falls back to the API's default,
+    // so the next file recognized as this source silently comes back with the box unchecked.
+    expect(body.enrich_from_source).toBe(true)
     expect(body.use_imported_categories).toBe(true)
 
     // Account mapping nests under column_map; single_account_new gets the default type.
