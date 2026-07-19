@@ -34,7 +34,8 @@ import sqlite3
 import uuid
 from collections import Counter
 from datetime import date
-from typing import Optional
+from urllib.parse import urlsplit
+from typing import NamedTuple, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -148,7 +149,16 @@ def _charge_candidate_ids(conn: sqlite3.Connection, *, amount, match_date, last4
     funding map (``restrict_account_id``) or, absent a map, the card's last-4 (a carded account whose mask
     contradicts the last-4 is excluded; a maskless one stays eligible). ``find_matching_charge`` links only
     when this returns exactly one; the reconciliation report uses the full list to tell a *duplicate* (two or
-    more) from a clean match, so both read from the same rule."""
+    more) from a clean match, so both read from the same rule.
+
+    **No instrument at all** (neither a mapped account nor a last-4 — an order whose payments string names
+    no card, e.g. a digital D01 order) leaves amount + date as the only constraints, which drags in every
+    coincidental same-amount charge in the window on *any* account: that is what produced both a wrong
+    auto-match to an unrelated charge and a bogus duplicate group of someone else's payments. With no
+    account signal left, the payee is the only one there is, so the charge must at least *look* like Amazon
+    (``_AMAZON_NAME_LIKE``, the same predicate the reverse scan uses). The deliberate trade: an off-card
+    order whose real charge carries a non-Amazon descriptor now shows as "No charge found" (a miss, fixable
+    with Link charges…) instead of silently excluding an unrelated charge from the user's totals."""
     if amount is None or amount <= 0:
         return []
     clauses = [
@@ -169,6 +179,9 @@ def _charge_candidate_ids(conn: sqlite3.Connection, *, amount, match_date, last4
     elif last4:
         clauses.append("(COALESCE(p.mask, a.mask) = ? OR COALESCE(p.mask, a.mask) IS NULL OR COALESCE(p.mask, a.mask) = '')")
         params.append(last4)
+    else:
+        # No account signal at all — fall back to the payee (see the docstring's no-instrument case).
+        clauses.append(_AMAZON_NAME_LIKE)
     rows = conn.execute(
         f"""SELECT t.id
             FROM   txn t
@@ -205,6 +218,95 @@ def _order_charge_candidates(conn: sqlite3.Connection, meta: dict, order: dict,
         window_days=window_days)
 
 
+def _effective_account_map(conn: sqlite3.Connection, txn_ids, cache: Optional[dict] = None) -> dict:
+    """``txn id → effective account id`` (the linked-group root, or the account itself). ``cache`` is a
+    caller-owned dict that survives across calls — the reconciliation loop passes one for the whole run,
+    so ids are resolved once instead of per order (the wide-window pass re-asks about the same charges
+    the strict pass just looked up). Ids with no row are cached as ``None`` so a miss isn't re-queried."""
+    ids = [t for t in dict.fromkeys(txn_ids) if t]
+    if not ids:
+        return {}
+    if cache is None:
+        cache = {}
+    missing = [t for t in ids if t not in cache]
+    if missing:
+        placeholders = ",".join("?" * len(missing))
+        rows = conn.execute(
+            f"""SELECT t.id, COALESCE(a.parent_account_id, a.id) AS eff
+                FROM   txn t JOIN account a ON a.id = t.account_id
+                WHERE  t.id IN ({placeholders})""",
+            missing,
+        ).fetchall()
+        for r in rows:
+            cache[r["id"]] = r["eff"]
+        for t in missing:
+            cache.setdefault(t, None)
+    return {t: cache[t] for t in ids if cache.get(t)}
+
+
+def _same_account_copies(conn: sqlite3.Connection, charge_ids: list, anchor: Optional[str] = None,
+                         eff_cache: Optional[dict] = None) -> list[str]:
+    """Narrow a candidate set to charges that could actually be *copies of one charge*: those sharing an
+    effective account. Two imports of the same charge always land on the same physical account (the
+    Mint double-sync case); same-amount charges on **different** accounts are distinct transactions —
+    or the cross-account dedupe system's business, which has its own keep/reject and account-merge
+    semantics. This guard matters because an order with no instrument has no last-4/account constraint
+    at all, so every same-amount charge in the date window on *any* account is a candidate; without it a
+    Merge would trash a real transaction on another account (see the D01 digital-order case).
+
+    With ``anchor`` (an order's already-linked charge) returns that charge's account-mates; without one,
+    the largest same-account cluster. Fewer than two copies → no duplicate group."""
+    ids = [c for c in dict.fromkeys(charge_ids) if c]
+    eff = _effective_account_map(conn, ids + ([anchor] if anchor else []), eff_cache)
+    if anchor:
+        target = eff.get(anchor)
+        return [c for c in ids if c != anchor and target and eff.get(c) == target]
+    clusters: dict = {}
+    for cid in ids:
+        key = eff.get(cid)
+        if key:
+            clusters.setdefault(key, []).append(cid)
+    best = max(clusters.values(), key=len, default=[])
+    return best if len(best) >= 2 else []
+
+
+class _DuplicateGroup(NamedTuple):
+    """The answer to "are these charges duplicates of one another?". ``copies`` is the group to report
+    (empty when there is none); ``settled`` distinguishes *no cluster at all* from *a real cluster the
+    user already declared Not duplicates*, which callers must not then re-derive in a wider window."""
+
+    copies: list
+    settled: bool
+
+
+def _duplicate_group(conn: sqlite3.Connection, candidates: list, *, anchor: Optional[str] = None,
+                     eff_cache: Optional[dict] = None) -> _DuplicateGroup:
+    """Every guard a **duplicate claim** must pass, in one place, so a consumer inherits them instead of
+    re-deriving them. Each guard exists because omitting it destroyed real data:
+
+      * **same effective account** — two imports of one charge always land on one physical account, so
+        same-amount rows on *different* accounts are distinct transactions and merging them trashes a
+        real one (see :func:`_same_account_copies`).
+      * **the user's "Not duplicates" assertion** — a group explicitly settled as distinct purchases
+        must never re-flag (``amazon_charge_distinct``).
+
+    With ``anchor`` (an order's already-linked charge) ``copies`` are that charge's account-mates and
+    exclude the anchor itself; without one it is the largest same-account cluster.
+
+    Callers wanting the *matcher's* candidate set rather than a duplicate claim — the equal-count pairing
+    pass, the split-suggestion pass — should keep calling :func:`_order_charge_candidates` directly; only
+    the "these are copies of each other" question belongs here."""
+    copies = _same_account_copies(conn, candidates, anchor=anchor, eff_cache=eff_cache)
+    if not copies:
+        return _DuplicateGroup([], False)
+    # With an anchor a non-empty result is already a group of 2+; without one _same_account_copies
+    # only returns clusters of 2+, so the group is well-formed either way.
+    group = [anchor, *copies] if anchor else copies
+    if _charges_marked_distinct(conn, group):
+        return _DuplicateGroup([], True)
+    return _DuplicateGroup(copies, False)
+
+
 def _order_label(order: AmazonOrder) -> str:
     """The order transaction's display name: the concatenated item list the *orders* file already
     carries (so it reads like "Air Widget; Widget Picks"), falling back to the joined item descriptions,
@@ -214,6 +316,22 @@ def _order_label(order: AmazonOrder) -> str:
         or "; ".join(i.description for i in order.items if i.description)
         or f"Amazon order {order.order_id}"
     )
+
+
+def _safe_source_url(value: Optional[str]) -> Optional[str]:
+    """An ``http(s)`` URL captured from an imported file, or ``None``. Captured URLs are rendered as real
+    links, so a crafted export could otherwise smuggle a ``javascript:`` URL into the ledger and have it
+    execute when a user clicks it in the origin hover. The render side validates too; this keeps the bad
+    value out of the database in the first place, so the guard doesn't depend on every future renderer
+    remembering it."""
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        scheme = urlsplit(text).scheme.lower()
+    except ValueError:
+        return None
+    return text if scheme in ("http", "https") else None
 
 
 def _order_evidence(order: AmazonOrder) -> dict:
@@ -240,6 +358,13 @@ def _order_evidence(order: AmazonOrder) -> dict:
         evidence["description"] = {"header": "Items", "value": summary}
     if order.source_file:
         evidence["source_file"] = order.source_file   # which uploaded file this order came from
+    # A deep link to the order's own Amazon page — the only place the full detail lives for a thin
+    # export row (a digital D01 order often carries no item text at all). Deliberately its own key
+    # rather than another `extra_text_fields` entry: those feed rule source-text matching and the
+    # duplicate-merge "richest text" comparison, which a long URL would pollute.
+    source_url = _safe_source_url(order.order_url)
+    if source_url:
+        evidence["source_url"] = source_url
     return evidence
 
 
@@ -880,9 +1005,11 @@ def amazon_reconciliation(conn: sqlite3.Connection, batch_id: str) -> dict:
         suggested ``charges`` + ``total`` + ``spans_days`` for the user to Accept (link them) or Dismiss;
         a single-charge suggestion also carries a ``reason`` naming why it wasn't auto-matched.
       * **duplicate**         — an order whose charge is *duplicated*: two or more same-amount charges within
-        the matcher's window, so auto-matching bailed on the ambiguity (or a matched charge that has an extra
-        duplicate copy). Carries every copy (``charges`` with a ``matched`` flag) so the user can trash the
-        redundant one, which then lets the order match. The common Mint-double-import case.
+        the matcher's window **on one effective account**, so auto-matching bailed on the ambiguity (or a
+        matched charge that has an extra same-account copy). Carries every copy (``charges`` with a
+        ``matched`` flag) so the user can trash the redundant one, which then lets the order match. The
+        common Mint-double-import case. Candidates spread across *different* accounts are never grouped
+        here (see :func:`_same_account_copies`) — they're distinct transactions.
       * **duplicate_review**  — same shape, but the equal-amount copies only turn up in the *wider review
         window* (±14 days — outside the auto-matcher's ±3), so the dates don't corroborate the way an
         in-window duplicate's do. Kept out of the plain duplicate bucket so each copy gets eyeballed
@@ -940,52 +1067,54 @@ def amazon_reconciliation(conn: sqlite3.Connection, batch_id: str) -> dict:
     def _charge_entry(txn_id, *, is_matched, link_id):
         return dict(_txn_summary(conn, txn_id), matched=is_matched, order_link_id=link_id)
 
+    def _duplicate_row(link_id, meta, order, copies, *, matched_id=None):
+        """One duplicate-bucket row (plain or review). `matched_id` is the order's already-linked charge
+        when it has one — it leads the stack, badged, and the copies are the redundant extras. Every
+        surfaced copy is consumed so it can't also appear as an unaccounted charge."""
+        charges = [_charge_entry(matched_id, is_matched=True, link_id=link_id)] if matched_id else []
+        for cid in copies:
+            charges.append(_charge_entry(cid, is_matched=False, link_id=link_id))
+            consumed.add(cid)
+        return {"link_id": link_id, "order": order, "charges": charges,
+                "mergeable": _is_mergeable(meta, has_charge=bool(matched_id))}
+
     matched, duplicate, duplicate_review, amazon_unmatched, matched_review = [], [], [], [], []
     unmatched_candidates = []   # (link_id, meta, order): cash orders with no charge — try split suggestions
+    eff_cache: dict = {}        # txn id → effective account, resolved once for the whole run
     for link_id, meta, order, charge_ids in order_rows:
         # The order's eligible charges beyond any it already links — the matcher's own candidate set (respects
         # last-4 / funding map, empty for an untracked card), so "duplicate" means exactly what blocked a match.
         candidates = _order_charge_candidates(conn, meta, order)
         if charge_ids:
-            # A matched charge that *also* has extra eligible duplicate copies → surface the redundancy —
-            # unless the user marked the whole group Not duplicates (the extras are distinct purchases),
-            # in which case the match stands clean and the extras stay in the reverse scan.
-            if candidates and not _charges_marked_distinct(conn, [charge_ids[0], *candidates]):
-                charges = [_charge_entry(charge_ids[0], is_matched=True, link_id=link_id)]
-                for sid in candidates:
-                    charges.append(_charge_entry(sid, is_matched=False, link_id=link_id))
-                    consumed.add(sid)
-                duplicate.append({"link_id": link_id, "order": order, "charges": charges,
-                                  "mergeable": _is_mergeable(meta, has_charge=True)})
+            # A matched charge that *also* has redundant copies → surface the redundancy. _duplicate_group
+            # owns what counts as a copy (same account, not user-settled); a same-amount charge on another
+            # account is a distinct transaction and stays available to the reverse scan.
+            group = _duplicate_group(conn, candidates, anchor=charge_ids[0], eff_cache=eff_cache)
+            if group.copies:
+                duplicate.append(_duplicate_row(link_id, meta, order, group.copies, matched_id=charge_ids[0]))
             else:
                 # A matched order carries every charge it links — usually one, several for an accepted split.
                 matched.append({"link_id": link_id, "order": order,
                                 "charges": [_txn_summary(conn, cid) for cid in charge_ids]})
         elif meta.get("disposition") == "cash":
-            if len(candidates) >= 2 and not _charges_marked_distinct(conn, candidates):
-                charges = []
-                for cid in candidates:
-                    charges.append(_charge_entry(cid, is_matched=False, link_id=link_id))
-                    consumed.add(cid)
-                duplicate.append({"link_id": link_id, "order": order, "charges": charges,
-                                  "mergeable": _is_mergeable(meta, has_charge=False)})
-            elif len(candidates) >= 2:
-                # Every pair marked Not duplicates: distinct purchases, not copies — so no duplicate row.
-                # The order still can't auto-match (distinctness doesn't say which charge is *its* match);
-                # it falls to the suggestion pass, whose exact-date tie-break may still nominate one.
+            group = _duplicate_group(conn, candidates, eff_cache=eff_cache)
+            if group.copies:
+                duplicate.append(_duplicate_row(link_id, meta, order, group.copies))
+            elif group.settled:
+                # A real cluster the user marked Not duplicates: distinct purchases, so no duplicate row —
+                # and deliberately no wider re-derivation, which would only re-flag the settled set with a
+                # neighbour attached. The order still can't auto-match (distinctness doesn't say which
+                # charge is *its* match); the suggestion pass's exact-date tie-break may still nominate one.
                 unmatched_candidates.append((link_id, meta, order, candidates))
             else:
-                # Under two eligible copies in the strict window — check the wider review window before
-                # giving up: equal-amount copies out there are still likely a double import, but the dates
-                # don't corroborate, so they get their own review bucket (never the plain duplicate one).
-                wide = _order_charge_candidates(conn, meta, order, window_days=_SPLIT_SUGGESTION_WINDOW_DAYS)
-                if len(wide) >= 2 and not _charges_marked_distinct(conn, wide):
-                    charges = []
-                    for cid in wide:
-                        charges.append(_charge_entry(cid, is_matched=False, link_id=link_id))
-                        consumed.add(cid)
-                    duplicate_review.append({"link_id": link_id, "order": order, "charges": charges,
-                                             "mergeable": _is_mergeable(meta, has_charge=False)})
+                # No copies in the strict window — try the wider review window before giving up: equal-amount
+                # copies out there are still likely a double import, but the dates don't corroborate, so they
+                # get their own review bucket (never the plain duplicate one).
+                wide = _duplicate_group(
+                    conn, _order_charge_candidates(conn, meta, order, window_days=_SPLIT_SUGGESTION_WINDOW_DAYS),
+                    eff_cache=eff_cache)
+                if wide.copies:
+                    duplicate_review.append(_duplicate_row(link_id, meta, order, wide.copies))
                 else:
                     # Keep the matcher's candidate list (0 or 1 ids here): a suggested charge that IS the
                     # live candidate tells the reason note "eligible now, just not at import time".
@@ -1335,11 +1464,21 @@ def _order_batch_id(conn: sqlite3.Connection, link_id: str) -> Optional[str]:
 
 
 def trash_duplicate_charge(conn: sqlite3.Connection, charge_txn_id: str,
-                           order_link_id: Optional[str] = None) -> dict:
-    """Discard one duplicate copy from the reconciliation report, then let the order match. If the trashed
-    copy was the order's *linked* charge, detach + restore it first; then re-run the equal-count pairing pass
-    for the batch so the now-balanced cluster (e.g. one order, one surviving charge) links up. Returns
-    ``status`` plus whether the order matched as a result."""
+                           order_link_id: Optional[str] = None, *, as_duplicate: bool = True) -> dict:
+    """Remove one charge from the reconciliation report, then let the order match. If the trashed copy was
+    the order's *linked* charge, detach + restore it first; then re-run the equal-count pairing pass for
+    the batch so the now-balanced cluster (e.g. one order, one surviving charge) links up. Returns
+    ``status`` plus whether the order matched as a result.
+
+    ``as_duplicate`` records *why* the row went to Trash, which decides where it files:
+
+      * ``True`` (the per-copy **Discard** on a stacked duplicate row) — a dedupe resolution, tagged like
+        a merge loser minus the kept-copy pointer a discard doesn't always know. Lands in the Trash page's
+        *Duplicate transactions* section, grouped by source file.
+      * ``False`` (the row-level **Trash** on an unaccounted charge) — the user saying "this shouldn't be
+        in my ledger at all". An ordinary delete with no dedupe provenance, so it files under *Deleted
+        transactions* with everything else the user removed by hand; tagging it as a confirmed duplicate
+        would misdescribe it."""
     row = conn.execute(
         "SELECT id FROM txn WHERE id = ? AND trashed_at IS NULL", (charge_txn_id,)
     ).fetchone()
@@ -1352,15 +1491,19 @@ def trash_duplicate_charge(conn: sqlite3.Connection, charge_txn_id: str,
     if link and charge_txn_id in txn_links.member_txn_ids(conn, order_link_id, role="charge"):
         _detach_charge(conn, order_link_id, charge_txn_id)
 
-    # Tagged like a merge loser (minus the kept-copy pointer, which a per-copy discard doesn't always
-    # know) so the Trash page groups it under import reconciliation rather than manual deletes.
-    conn.execute(
-        """UPDATE txn SET trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                          rejection_reason = 'duplicate_confirmed',
-                          dedupe_resolved_by = 'amazon_discard'
-           WHERE id = ?""",
-        (charge_txn_id,),
-    )
+    if as_duplicate:
+        conn.execute(
+            """UPDATE txn SET trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                              rejection_reason = 'duplicate_confirmed',
+                              dedupe_resolved_by = 'amazon_discard'
+               WHERE id = ?""",
+            (charge_txn_id,),
+        )
+    else:
+        conn.execute(
+            "UPDATE txn SET trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+            (charge_txn_id,),
+        )
 
     matched = False
     if link:
@@ -1371,18 +1514,54 @@ def trash_duplicate_charge(conn: sqlite3.Connection, charge_txn_id: str,
     return {"status": "trashed", "matched": matched}
 
 
+def unlink_order_charges(conn: sqlite3.Connection, order_link_id: str) -> dict:
+    """Undo an order↔charge pairing: detach every charge on the link and restore each one's
+    pre-exclusion categorization (so it stops sitting in the funding category). The order returns to
+    the unmatched path, where the report offers Link charges… to pair it correctly — the correction
+    for a wrong match (a coincidental same-amount charge, an accepted suggestion that turned out
+    wrong). The order transaction itself is untouched; only the pairing is removed."""
+    link = txn_links.get_link(conn, order_link_id)
+    if not link or link.get("kind") != LINK_KIND:
+        raise ValueError("Unknown Amazon order link")
+    charge_ids = txn_links.member_txn_ids(conn, order_link_id, role="charge")
+    if not charge_ids:
+        raise ValueError("This order has no linked charge")
+    for charge_id in charge_ids:
+        _detach_charge(conn, order_link_id, charge_id)
+    return {"status": "unlinked", "detached": charge_ids}
+
+
+class UnlinkOrderChargesRequest(BaseModel):
+    order_link_id: str
+
+
+@router.post("/amazon/unlink-charges")
+async def amazon_unlink_charges_endpoint(body: UnlinkOrderChargesRequest):
+    """Detach every card charge from an Amazon order (restoring their categories) so a wrong pairing
+    can be corrected — the order goes back to needing a charge."""
+    with get_db() as conn:
+        try:
+            return unlink_order_charges(conn, body.order_link_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+
 class TrashDuplicateChargeRequest(BaseModel):
     charge_txn_id: str
     order_link_id: Optional[str] = None
+    # False for the row-level Trash on an unaccounted charge — an ordinary delete rather than a dedupe
+    # resolution, so it files under the Trash page's Deleted transactions (see trash_duplicate_charge).
+    as_duplicate: bool = True
 
 
 @router.post("/amazon/trash-duplicate-charge")
 async def amazon_trash_duplicate_charge_endpoint(body: TrashDuplicateChargeRequest):
-    """Trash one duplicate card charge from the reconciliation report, re-matching the order if it's now
-    unambiguous."""
+    """Trash one card charge from the reconciliation report, re-matching the order if it's now
+    unambiguous. ``as_duplicate`` decides whether it files as a dedupe resolution or an ordinary delete."""
     with get_db() as conn:
         try:
-            return trash_duplicate_charge(conn, body.charge_txn_id, body.order_link_id)
+            return trash_duplicate_charge(conn, body.charge_txn_id, body.order_link_id,
+                                          as_duplicate=body.as_duplicate)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1512,12 +1691,23 @@ def merge_duplicate_charges(conn: sqlite3.Connection, order_link_id: str, *,
         raise ValueError("Other orders share this amount — these look like distinct purchases; discard the extra copy instead.")
 
     linked = txn_links.member_txn_ids(conn, order_link_id, role="charge")
+    if len(linked) > 1:
+        # A split reconciliation: every linked charge is a real shipment, so there is no single "copy"
+        # to keep — merging would trash legitimate rows (each extra shipment looks like a redundant
+        # copy of the first). Steer to the per-copy Discard, which names the row to remove.
+        raise ValueError("This order is matched to several shipment charges — discard the specific "
+                         "redundant copy instead of merging.")
     window = _SPLIT_SUGGESTION_WINDOW_DAYS if review_window else _CHARGE_DATE_WINDOW_DAYS
-    copies = list(dict.fromkeys(
-        list(linked) + _order_charge_candidates(conn, link.get("metadata") or {}, order, window_days=window)
-    ))
-    if len(copies) < 2:
+    # Re-derived through the same _duplicate_group the report used, rather than trusting the client:
+    # merging trashes rows, so every guard (same account, not user-settled) has to hold server-side.
+    # `derived` already excludes linked charges, so the order's own charge only enters as the anchor.
+    derived = _order_charge_candidates(conn, link.get("metadata") or {}, order, window_days=window)
+    group = _duplicate_group(conn, derived, anchor=linked[0] if linked else None)
+    if group.settled:
+        raise ValueError("These charges were marked as not duplicates.")
+    if not group.copies:
         raise ValueError("Nothing to merge")
+    copies = [linked[0], *group.copies] if linked else list(group.copies)
 
     survivor = _richest_charge(conn, copies)
     losers = [c for c in copies if c != survivor]

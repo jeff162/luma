@@ -32,3 +32,19 @@ export function isIncome(amount) {
   // Plaid amounts are account-centric, so income detection has to invert the usual "positive means money in" intuition.
   return amount < 0
 }
+
+// The href we're willing to render for a URL that came out of an imported file (an Amazon order's own
+// page, say). Only http(s) survives: a crafted import could otherwise carry a `javascript:` URL, and
+// React renders those with a warning rather than blocking them — so an innocuous-looking link in a hover
+// card would execute script in the app's origin. Returns null for anything unsafe or unparseable
+// (including relative URLs, which have no absolute target to open), so callers can skip the link.
+export function safeExternalUrl(value) {
+  const text = String(value ?? '').trim()
+  if (!text) return null
+  try {
+    const { protocol } = new URL(text)
+    return protocol === 'http:' || protocol === 'https:' ? text : null
+  } catch {
+    return null
+  }
+}

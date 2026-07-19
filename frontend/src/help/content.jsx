@@ -926,7 +926,8 @@ export const HELP_TOPICS = [
             the same Merge / Discard / <strong>Not duplicates</strong> &mdash; per row, or bulk-Merge the rows
             you&rsquo;ve checked (a merged-away copy is restorable from Settings → Trash).</li>
           <li><strong>No charge found</strong> &mdash; counted, but no charge was matched to exclude (an untracked
-            card, history that predates your imports, or a miss). <strong>Link charges…</strong> opens a picker
+            card, history that predates your imports, an order whose export named no card and whose charge
+            doesn&rsquo;t read as Amazon, or a miss). <strong>Link charges…</strong> opens a picker
             over the unaccounted charges with a running sum against the order total &mdash; check the charge(s)
             that paid for it (several, if the order was split) and link them. A mismatched sum warns but doesn’t
             block.</li>
@@ -946,13 +947,30 @@ export const HELP_TOPICS = [
             transactions</em> section, grouped by the file it came from.</li>
           <li><strong>Unaccounted charge</strong> &mdash; ledger charges that look like Amazon, on the cards Amazon
             uses, in this import’s date range, that no order accounts for. Best-effort and informational.
-            <strong>Discard</strong> sends one to Trash &mdash; the escape hatch for a duplicate the report failed
-            to pair up.</li>
-          <li><strong>Matched</strong> &mdash; the order and the charge(s) it excluded.</li>
+            <strong>Trash</strong> sends one to Trash &mdash; the escape hatch for a duplicate the report failed
+            to pair up. It acts on the whole row, so it also works in bulk (<strong>Move to trash</strong>);
+            the per-copy <strong>Discard</strong> on a stacked duplicate row names one copy instead, which is
+            why only Trash has a bulk form. They also file differently: Discard is a dedupe resolution and
+            lands under Settings → Trash&rsquo;s <em>Duplicate transactions</em>, while Trash is an ordinary
+            delete and lands under <em>Transactions</em>.</li>
+          <li><strong>Matched</strong> &mdash; the order and the charge(s) it excluded. If a pairing is wrong
+            (a coincidental same-amount charge, or a suggestion you accepted that turned out not to be this
+            order&rsquo;s), <strong>Unlink</strong> detaches the charge &mdash; its original category is
+            restored and the order returns to <em>No charge found</em>, where <strong>Link charges…</strong>
+            can pair it correctly.</li>
         </ul>
         <p>
+          Hover any order or charge for its <strong>origin detail</strong> (source file, captured fields,
+          imported category), and use the <strong>↗</strong> beside an order to open that order&rsquo;s own
+          page on Amazon &mdash; often the only place a thin digital order&rsquo;s detail exists. (The link is
+          captured at import, so it appears on orders imported from now on.)
+        </p>
+        <p>
           For batch cleanup, filter with the pills, tick the row checkboxes (or the select-all header), and the
-          bulk bar applies <strong>Merge / Accept / Dismiss</strong> to every selected row that supports it.
+          bulk bar applies <strong>Merge / Accept / Dismiss / Unlink / Move to trash</strong> to every selected
+          row that supports it. Rows of different kinds accept different actions, so each button carries the
+          number of your selection it applies to &mdash; a selection can be mixed, and each action reaches
+          only its own rows.
           Items needing action also show as an <strong>N to resolve</strong> warning on the file card and a task
           on the Tasks page; both clear as you resolve them. Everything the import itself did reverses if you
           undo it; duplicate copies you merged or discarded are restorable from Settings → Trash instead.

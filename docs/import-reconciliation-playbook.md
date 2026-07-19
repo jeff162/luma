@@ -132,15 +132,23 @@ The file-ledger and Transactions search boxes accept date and amount, not just m
 
 ### An Amazon order shows "Duplicate detected" on the reconciliation report
 
-Two or more identical same-amount charges made the order's auto-match ambiguous — usually the same
-charge imported twice (e.g. two Mint syncs). If it's one purchase with redundant copies, use
+Two or more identical same-amount charges **on the same account** made the order's auto-match
+ambiguous — usually the same charge imported twice (e.g. two Mint syncs). Same-amount charges on
+*different* accounts are never grouped as duplicates: two imports of one charge always land on the
+same account, so cross-account matches are distinct transactions (this matters because an order whose
+payments string names no card has no last-4/account constraint at all, making every same-amount charge
+in the window a candidate — without the guard a Merge could trash a real transaction elsewhere). If it's one purchase with redundant copies, use
 **Merge → keep one**: the richest copy survives (any distinguishing detail from the others folds into
 it), the rest go to Trash, and the order matches the survivor. When *other* unmatched orders share the
 amount, the copies are distinct purchases, not redundant — Merge isn't offered; use **Not duplicates**
 to mark the group distinct (it never re-flags; the order falls back to the unmatched path, where a copy
 dated on the order itself is re-suggested for review), or the per-copy **Discard** to remove only the
 copies you know are double imports. Filter to one kind with the pills, select rows with the checkboxes,
-and the bulk bar applies Merge/Accept/Dismiss to everything selected that supports it.
+and the bulk bar applies Merge/Accept/Dismiss/Unlink/Move-to-trash to everything selected that supports
+it. Because the report's rows are heterogeneous — each kind has its own valid resolutions — a mixed
+selection is allowed and each button shows the count of selected rows it actually applies to, rather
+than restricting the selection to one kind. Only row-level actions get a bulk form: the per-copy
+**Discard** on a stacked duplicate row names *which* copy to remove, so its bulk equivalent is Merge.
 
 ### An Amazon order shows "Duplicate · review" (same amount, dates don't line up)
 
@@ -164,8 +172,13 @@ detail) and returns it to the unaccounted list, **Discard** a copy by hand, or *
 asserts they're distinct purchases — persisted (`amazon_charge_distinct`), so the group never
 re-flags. Same-amount-nearby without an order is weaker evidence (repeated same-price purchases are
 real), so check each group's origin detail first — then Merge per row, or bulk-Merge the selected
-groups. A plain **Unaccounted charge** row also offers **Discard** as the escape hatch for a duplicate
-the grouping failed to pair.
+groups. A plain **Unaccounted charge** row offers **Trash** as the escape hatch for a duplicate the
+grouping failed to pair. It is named Trash rather than Discard because it acts on the whole row (that
+row owns one charge) — which is also what lets it work in bulk as **Move to trash**, where the per-copy
+**Discard** on a stacked duplicate row can't, since that one names *which* copy to remove. The two also
+file differently in Settings → Trash: a per-copy **Discard** is a dedupe resolution and lands under
+*Duplicate transactions*, while **Trash** is an ordinary delete and lands under *Transactions* with
+everything else you removed by hand.
 
 A mistaken merge or discard is undoable: the removed copy sits in Settings → Trash under the
 **Duplicate transactions** section, in a collapsible group named for the file it was imported from
@@ -184,6 +197,32 @@ outside the ±3-day match window, a cent off the order total, on an unexpected a
 imported after the order was). After a **Not duplicates** verdict frees same-amount candidates back to
 this pass, the one dated on the order itself is suggested over its off-date rivals (the note says so);
 if none is on-date, the order lands in No charge found for manual linking.
+
+### How an order's charge is found (and why some orders don't match)
+
+The matcher looks for an unlinked charge of the same amount within ±3 days, narrowed by whatever
+account signal the order carries: a **mapped funding source** pins it to that account; failing that the
+card's **last-4** rules out accounts whose mask disagrees. An order whose payments string names **no
+card at all** (a digital `D01` order, or one paid off-card) has neither — so the payee becomes the only
+remaining signal and the charge must at least *look* like Amazon (`AMZN`/`AMAZON`). Without that rule,
+amount + date alone would match any coincidental same-amount charge in the window, on any account.
+
+The deliberate trade-off: an off-card order whose real charge carries a non-Amazon descriptor (say it
+was funded through PayPal, so the card reads "PAYPAL") now lands in **No charge found** instead of
+matching. That's a miss you fix with **Link charges…** — much cheaper than a wrong match, which would
+exclude an unrelated charge from your totals and can't be spotted without auditing.
+
+### An Amazon order is matched to the wrong charge
+
+A pairing can be wrong — a coincidental same-amount charge, or an accepted suggestion that turned out
+not to be this order's. **Unlink** on the Matched row detaches the charge(s), restores each one's
+pre-exclusion category, and drops the order back to "No charge found", where **Link charges…** pairs
+it correctly. The order transaction itself is untouched; only the pairing is removed.
+
+To investigate what an order actually was, hover it for its origin detail (source file, captured
+fields) or click the **↗** to open the order's own page on Amazon — often the only place the detail
+exists for a thin digital (D01) order, whose export row may carry no item text at all. The Amazon link
+is captured at import, so it is present on orders imported after that capture was added.
 
 ### An Amazon order shows "No charge found"
 

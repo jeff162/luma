@@ -51,7 +51,10 @@ export function getTransactionShareFields(txn) {
       fields.push({ label: '', value: row.note })
       continue
     }
-    push(row.label, row.suffix ? `${row.value} (${row.suffix})` : row.value)
+    // A followable row's useful content is the URL itself — "View on Amazon" is link text, meaningless
+    // once pasted into an email or notes.
+    const value = row.href || row.value
+    push(row.label, row.suffix ? `${value} (${row.suffix})` : value)
   }
 
   return fields

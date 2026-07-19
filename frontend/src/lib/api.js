@@ -463,6 +463,7 @@ export const api = {
   mergeAmazonDuplicateCharges: (body) => request('/import-export/amazon/merge-duplicate-charges', { method: 'POST', body: JSON.stringify(body) }),
   mergeUnaccountedAmazonCharges: (body) => request('/import-export/amazon/merge-unaccounted-charges', { method: 'POST', body: JSON.stringify(body) }),
   markAmazonChargesNotDuplicates: (body) => request('/import-export/amazon/charges-not-duplicates', { method: 'POST', body: JSON.stringify(body) }),
+  unlinkAmazonOrderCharges: (body) => request('/import-export/amazon/unlink-charges', { method: 'POST', body: JSON.stringify(body) }),
   getAmazonFundingCategory:   ()     => request('/import-export/amazon/funding-category'),
   setAmazonFundingCategory:   (categoryId) => request('/import-export/amazon/funding-category', { method: 'PUT', body: JSON.stringify({ category_id: categoryId }) }),
   getAmazonFundingSources:    ()     => request('/import-export/amazon/funding-sources'),

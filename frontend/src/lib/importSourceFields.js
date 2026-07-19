@@ -12,11 +12,14 @@
 // matching on source text or selectable report columns) all read from here rather than re-parsing
 // the evidence themselves. See docs/import-source-fields-plan.md.
 //
-// Row shape: { key, label, value, scope, always?, suffix?, note? }
+// Row shape: { key, label, value, scope, always?, suffix?, note?, href? }
 //   scope  — 'name' (identity), 'text' (source free text), 'meta' (file / provenance)
 //   always — shown without an expand toggle (the identity + raw rows)
 //   suffix — muted trailing detail on the same line (e.g. "imported 2026-06-21 19:21")
 //   note   — a standalone muted line with no "label:" prefix (the cleared-category notice)
+//   href   — makes the row followable; only ever a scheme-checked http(s) URL (see safeExternalUrl)
+
+import { safeExternalUrl } from './utils.js'
 
 const CATEGORIZED_BY_LABEL = {
   rule: 'a categorization rule',
@@ -101,6 +104,19 @@ export function getTxnOriginRows(txn) {
         rows.push({ key: `extra_${idx}`, label: field.header || 'Other', value: field.value, scope: 'text' })
       }
     })
+    // A deep link back to the source record's own page (an Amazon order, …). `href` marks the row as
+    // followable so renderers can make it a real link; the value stays readable text for the rest.
+    // Scheme-checked because the value came out of an imported file — see safeExternalUrl.
+    const sourceHref = safeExternalUrl(evidence.source_url)
+    if (sourceHref) {
+      rows.push({
+        key: 'source_url',
+        label: 'Order page',
+        value: 'View on Amazon',
+        href: sourceHref,
+        scope: 'meta',
+      })
+    }
   }
 
   if (txn.category_source === 'cleared') {

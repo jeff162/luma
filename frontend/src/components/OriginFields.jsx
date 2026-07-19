@@ -15,7 +15,15 @@ export function OriginRow({ row }) {
   }
   return (
     <div>
-      <span style={mutedStyle}>{row.label}:</span> {row.value}
+      <span style={mutedStyle}>{row.label}:</span>{' '}
+      {/* A row carrying `href` (e.g. an Amazon order's own page) is followable — the surrounding
+          hover card is `interactive`, so the pointer can reach it. */}
+      {row.href ? (
+        <a href={row.href} target="_blank" rel="noreferrer"
+          style={{ color: 'var(--accent2)' }} onClick={e => e.stopPropagation()}>
+          {row.value} ↗
+        </a>
+      ) : row.value}
       {row.suffix ? <span style={mutedStyle}> · {row.suffix}</span> : null}
     </div>
   )

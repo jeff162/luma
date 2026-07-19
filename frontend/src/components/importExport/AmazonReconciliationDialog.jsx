@@ -6,6 +6,7 @@ import { api } from '../../lib/api.js'
 import { AppDialog, Button, Tooltip, COMPACT_ACTION_BTN_STYLE } from '../ui.jsx'
 import { DetailPanelShell, useDetailPanelChrome, useRestorablePanelGeometry } from '../detailShared.jsx'
 import { formatTransactionAmount } from '../../lib/moneyDisplay.js'
+import { safeExternalUrl } from '../../lib/utils.js'
 import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import { MerchantOriginHoverCard } from '../OriginFields.jsx'
 import { MatchReport } from './MatchReport.jsx'
@@ -39,9 +40,43 @@ function toRecord(txn) {
 // card reads (see _txn_summary / importSourceFields.js).
 function withOriginHover(txn, child) {
   return (
-    <Tooltip content={<MerchantOriginHoverCard txn={txn} />} maxWidth={380} triggerStyle={{ minWidth: 0 }}>
+    // `interactive` so the pointer can move into the card — its rows can carry a followable link
+    // (an order's own Amazon page), which a close-on-leave tooltip would make unreachable.
+    <Tooltip content={<MerchantOriginHoverCard txn={txn} />} maxWidth={380} triggerStyle={{ minWidth: 0 }} interactive>
       {child}
     </Tooltip>
+  )
+}
+
+// The order's own page on Amazon, when the export captured it (evidence `source_url`). A thin digital
+// order carries almost nothing else, so this is often the only route to the real detail — kept as a
+// visible ↗ rather than hover-only so it takes one click. Resolved once per entry when the rows are
+// built, not per render: parsing every order's evidence blob on each filter click / busy-state change
+// would re-do the work for the whole report.
+function orderSourceUrl(order) {
+  try {
+    const evidence = order?.import_evidence_json ? JSON.parse(order.import_evidence_json) : null
+    // Scheme-checked: the URL came out of an imported file (see safeExternalUrl).
+    return safeExternalUrl(evidence?.source_url)
+  } catch {
+    return null
+  }
+}
+
+// The order cell: the same origin-detail hover the charge cells use (source file, captured fields,
+// imported category), plus the ↗ to the order's Amazon page.
+function OrderCell({ order, url }) {
+  if (!order) return <TransactionMatchCell record={null} />
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        {withOriginHover(order, <div><TransactionMatchCell record={toRecord(order)} /></div>)}
+      </div>
+      {url ? (
+        <a href={url} target="_blank" rel="noreferrer" title="Open this order on Amazon"
+          style={{ flexShrink: 0, color: 'var(--accent2)', textDecoration: 'none', fontSize: 12 }}>↗</a>
+      ) : null}
+    </div>
   )
 }
 
@@ -176,10 +211,15 @@ function LinkChargesDialog({ order, candidates, busy, onCancel, onConfirm }) {
 // and enables only when some selected row offers it). Merge is offered only for a *mergeable* duplicate
 // (no other unmatched order shares its amount — see the backend `mergeable` flag); the per-copy Discard and
 // the manual Link need per-item choices, so they aren't bulk actions.
+// A row's bulk-eligible actions. Only row-level ones qualify: the per-copy Discard on a multi-charge row
+// names *which* copy to remove, so it has no unambiguous bulk form (its bulk equivalent is Merge). The
+// single-charge `reverse` row's button is row-level — hence "Trash" rather than "Discard" — so it does.
 function rowActionsFor(entry) {
   if (entry.kind === 'duplicate' || entry.kind === 'duplicate_review') return entry.mergeable ? { merge: true } : {}
   if (entry.kind === 'unaccounted_duplicate') return { merge: true }
   if (entry.kind === 'matched_review') return { accept: true, dismiss: true }
+  if (entry.kind === 'matched') return { unlink: true }
+  if (entry.kind === 'reverse') return { trash: true }
   return {}
 }
 
@@ -226,11 +266,11 @@ export function AmazonReconciliationDialog({
   const entries = useMemo(() => {
     const entryDate = (e) => (e.order || e.charges?.[0] || e.charge)?.date || ''
     const rows = [
-      ...matched.map(m => ({ id: `m:${m.link_id}`, kind: 'matched', linkId: m.link_id, order: m.order, charges: m.charges || [] })),
-      ...matchedReview.map(r => ({ id: `r:${r.link_id}`, kind: 'matched_review', linkId: r.link_id, order: r.order, charges: r.charges || [], total: r.total, spansDays: r.spans_days, reason: r.reason })),
-      ...duplicate.map(d => ({ id: `d:${d.link_id}`, kind: 'duplicate', linkId: d.link_id, order: d.order, charges: d.charges, mergeable: d.mergeable })),
-      ...duplicateReview.map(d => ({ id: `dr:${d.link_id}`, kind: 'duplicate_review', linkId: d.link_id, order: d.order, charges: d.charges, mergeable: d.mergeable })),
-      ...amazonUnmatched.map(m => ({ id: `u:${m.link_id}`, kind: 'unmatched', linkId: m.link_id, order: m.order, charges: null })),
+      ...matched.map(m => ({ id: `m:${m.link_id}`, kind: 'matched', linkId: m.link_id, order: m.order, orderUrl: orderSourceUrl(m.order), charges: m.charges || [] })),
+      ...matchedReview.map(r => ({ id: `r:${r.link_id}`, kind: 'matched_review', linkId: r.link_id, order: r.order, orderUrl: orderSourceUrl(r.order), charges: r.charges || [], total: r.total, spansDays: r.spans_days, reason: r.reason })),
+      ...duplicate.map(d => ({ id: `d:${d.link_id}`, kind: 'duplicate', linkId: d.link_id, order: d.order, orderUrl: orderSourceUrl(d.order), charges: d.charges, mergeable: d.mergeable })),
+      ...duplicateReview.map(d => ({ id: `dr:${d.link_id}`, kind: 'duplicate_review', linkId: d.link_id, order: d.order, orderUrl: orderSourceUrl(d.order), charges: d.charges, mergeable: d.mergeable })),
+      ...amazonUnmatched.map(m => ({ id: `u:${m.link_id}`, kind: 'unmatched', linkId: m.link_id, order: m.order, orderUrl: orderSourceUrl(m.order), charges: null })),
       ...paymentUnmatched.map(t => ({ id: `p:${t.id}`, kind: 'reverse', linkId: null, order: null, charge: t })),
       ...unaccountedDuplicate.map(g => ({ id: `ud:${g.charges[0]?.id}`, kind: 'unaccounted_duplicate', linkId: null, order: null, charges: g.charges })),
     ]
@@ -261,7 +301,7 @@ export function AmazonReconciliationDialog({
   })
   // The intersection of bulk actions across the selected rows — each button shows its applicable count.
   const selectionSummary = useMemo(() => {
-    const s = { total: 0, merge: 0, accept: 0, dismiss: 0 }
+    const s = { total: 0, merge: 0, accept: 0, dismiss: 0, unlink: 0, trash: 0 }
     for (const e of visibleEntries) {
       if (!selectedIds.has(e.id)) continue
       s.total += 1
@@ -269,6 +309,8 @@ export function AmazonReconciliationDialog({
       if (a.merge) s.merge += 1
       if (a.accept) s.accept += 1
       if (a.dismiss) s.dismiss += 1
+      if (a.unlink) s.unlink += 1
+      if (a.trash) s.trash += 1
     }
     return s
   }, [visibleEntries, selectedIds])
@@ -320,7 +362,14 @@ export function AmazonReconciliationDialog({
     setBusyTrash(true)
     setActionError('')
     try {
-      await api.trashAmazonDuplicateCharge({ charge_txn_id: charge.id, order_link_id: entry.linkId || null })
+      await api.trashAmazonDuplicateCharge({
+        charge_txn_id: charge.id,
+        order_link_id: entry.linkId || null,
+        // A reverse row's Trash is an ordinary delete ("this shouldn't be here at all"), not a dedupe
+        // resolution — so it files under the Trash page's Deleted transactions. The per-copy Discard on
+        // a stacked duplicate row is a dedupe resolution and keeps that provenance.
+        as_duplicate: entry.kind !== 'reverse',
+      })
       onReload?.()
     } catch (e) {
       setActionError(e?.message || 'Could not discard the charge')
@@ -356,6 +405,21 @@ export function AmazonReconciliationDialog({
       : api.mergeAmazonDuplicateCharges({ order_link_id: entry.linkId, review_window: entry.kind === 'duplicate_review' })
   )
 
+  // Undo a wrong pairing: detach the order's charge(s) (their categories are restored) so the order
+  // returns to the unmatched path, where Link charges… can pair it correctly.
+  const unlinkCharges = async (entry) => {
+    setBusyTrash(true)
+    setActionError('')
+    try {
+      await api.unlinkAmazonOrderCharges({ order_link_id: entry.linkId })
+      onReload?.()
+    } catch (e) {
+      setActionError(e?.message || 'Could not unlink the charges')
+    } finally {
+      setBusyTrash(false)
+    }
+  }
+
   const mergeGroup = async (entry) => {
     setBusyTrash(true)
     setActionError('')
@@ -382,6 +446,10 @@ export function AmazonReconciliationDialog({
         if (action === 'merge') return mergeCallFor(entry)
         if (action === 'accept') return api.linkAmazonCharges({ link_id: entry.linkId, charge_txn_ids: (entry.charges || []).map(c => c.id) })
         if (action === 'dismiss') return api.dismissAmazonSplitSuggestion({ link_id: entry.linkId })
+        if (action === 'unlink') return api.unlinkAmazonOrderCharges({ order_link_id: entry.linkId })
+        // A reverse-scan row owns exactly one charge and no order link, so trashing it is independent
+        // of every other selected row (no re-pairing pass runs) — safe to fire in parallel.
+        if (action === 'trash') return api.trashAmazonDuplicateCharge({ charge_txn_id: entry.charge?.id, order_link_id: null, as_duplicate: false })
         return null
       }).filter(Boolean))
       setSelectedIds(new Set())
@@ -415,7 +483,7 @@ export function AmazonReconciliationDialog({
         </span>
       )
     } },
-    { key: 'order', label: 'Amazon order', width: 330, render: (entry) => <TransactionMatchCell record={toRecord(entry.order)} /> },
+    { key: 'order', label: 'Amazon order', width: 330, render: (entry) => <OrderCell order={entry.order} url={entry.orderUrl} /> },
     { key: 'charge', label: 'Card charge', width: 320, render: (entry) => {
       if (entry.kind === 'duplicate' || entry.kind === 'duplicate_review' || entry.kind === 'unaccounted_duplicate') {
         const note = entry.kind === 'duplicate_review'
@@ -466,12 +534,14 @@ export function AmazonReconciliationDialog({
         )
       }
       if (entry.kind === 'reverse') {
-        // The escape hatch for a duplicate the grouping failed to pair: trash this copy by hand.
+        // The escape hatch for a duplicate the grouping failed to pair. Labelled "Trash" rather than
+        // "Discard" because it acts on the whole row (this row owns one charge), which is also what makes
+        // it bulk-able — unlike the per-copy Discard on a stacked duplicate row, which names one copy.
         return (
           <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
             <Button small variant="ghost" disabled={busy} onClick={() => discardCharge(entry.charge, entry)}
-              title="Send this charge to Trash — for a duplicate copy the report failed to pair up (recoverable from Trash)">
-              Discard
+              title="Send this charge to Trash — for a duplicate copy the report failed to pair up (recoverable from Settings → Trash)">
+              Trash
             </Button>
           </div>
         )
@@ -504,6 +574,19 @@ export function AmazonReconciliationDialog({
           <div style={{ display: 'flex', gap: 6 }}>
             <Button small variant="ghost" disabled={busy} onClick={() => acceptSuggestion(entry)} title="Link these charges to the order — each is excluded from totals">Accept</Button>
             <Button small variant="ghost" disabled={busy} onClick={() => dismissSuggestion(entry)} title="Not a match — keep this order as no-charge-found and stop suggesting it">Dismiss</Button>
+          </div>
+        )
+      }
+      // A matched row can be wrong (a coincidental same-amount charge, or an accepted suggestion that
+      // turned out not to be this order's). Unlink detaches the charge(s), restores their categories,
+      // and drops the order back to "No charge found" where Link charges… can pair it correctly.
+      if (entry.kind === 'matched') {
+        return (
+          <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+            <Button small variant="ghost" disabled={busy} onClick={() => unlinkCharges(entry)}
+              title="Not this order's charge — detach it (its category is restored) and put the order back to needing a match">
+              Unlink
+            </Button>
           </div>
         )
       }
@@ -617,6 +700,14 @@ export function AmazonReconciliationDialog({
             <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk || selectionSummary.dismiss === 0}
               onClick={() => runBulk('dismiss')} title="Dismiss each selected split suggestion">
               Dismiss ({selectionSummary.dismiss})
+            </Button>
+            <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk || selectionSummary.unlink === 0}
+              onClick={() => runBulk('unlink')} title="Detach each selected matched order's charge(s) — their categories are restored and the orders return to needing a match">
+              Unlink ({selectionSummary.unlink})
+            </Button>
+            <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk || selectionSummary.trash === 0}
+              onClick={() => runBulk('trash')} title="Send each selected unaccounted charge to Trash (recoverable from Settings → Trash)">
+              Move to trash ({selectionSummary.trash})
             </Button>
             <span style={{ flex: 1 }} />
             <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => setSelectedIds(new Set())}>
