@@ -1109,7 +1109,7 @@ def amazon_reconciliation(conn: sqlite3.Connection, batch_id: str) -> dict:
             else:
                 # No copies in the strict window — try the wider review window before giving up: equal-amount
                 # copies out there are still likely a double import, but the dates don't corroborate, so they
-                # get their own review bucket (never the plain duplicate one).
+                # land in their own review bucket (never the plain duplicate one).
                 wide = _duplicate_group(
                     conn, _order_charge_candidates(conn, meta, order, window_days=_SPLIT_SUGGESTION_WINDOW_DAYS),
                     eff_cache=eff_cache)

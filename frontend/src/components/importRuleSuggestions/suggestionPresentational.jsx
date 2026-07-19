@@ -16,7 +16,9 @@ import {
 } from '../pillStyles.js'
 import { getStatusPalette, getStatusSymbol } from '../../lib/importRuleSuggestions.js'
 
-export function ProgressPill({ label, value, tone = 'default', active = false, onClick, disabled = false }) {
+// `title` explains where the pill's contents come from, on hover — the filter's own description is only
+// rendered once it's the *active* view, which is too late for the pill you don't understand yet.
+export function ProgressPill({ label, value, tone = 'default', active = false, onClick, disabled = false, title = undefined }) {
   const palette = getStatusPalette(tone)
   const symbol = getStatusSymbol(tone)
   const content = (
@@ -66,12 +68,13 @@ export function ProgressPill({ label, value, tone = 'default', active = false, o
       <span style={{ fontWeight: active ? 700 : 500 }}>{label}</span>
     </span>
   )
-  if (!onClick) return content
+  if (!onClick) return title ? <span title={title}>{content}</span> : content
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
+      title={title}
       style={{ background: 'none', border: 'none', padding: 0, cursor: disabled ? 'not-allowed' : 'pointer' }}
     >
       {content}

@@ -1298,11 +1298,22 @@ export default function ImportRuleSuggestionReview({
     { key: 'accepted', label: 'accepted', value: summary.accepted_count || 0, tone: 'accepted' },
     { key: 'deferred', label: 'deferred', value: summary.skipped_count || 0, tone: 'skipped' },
     { key: 'discarded', label: 'discarded', value: summary.discarded_count || 0, tone: 'discarded' },
-    { key: 'trash', label: 'trash', value: trashSets.length || summary.trash_set_count || 0, tone: 'trash' },
+    // Named for the action that fills it (Clear discarded / accepted / deferred) rather than "trash",
+    // which no button on this page says. The label carries the *unit* too: unlike every other pill —
+    // which counts suggestions — this one counts whole cleared sets, so a bare number beside them read
+    // as suggestions. The `trash` key stays: it's the persisted filter value.
+    {
+      key: 'trash',
+      label: (trashSets.length || summary.trash_set_count || 0) === 1 ? 'cleared set' : 'cleared sets',
+      value: trashSets.length || summary.trash_set_count || 0,
+      tone: 'trash',
+    },
   ]
 
   // A title + one-line description for whichever filter is active, so it's always clear what the list
-  // below is showing. Shown on the controls row beneath the pills.
+  // below is showing. Shown on the controls row beneath the pills — and, since that only appears once a
+  // filter is *already* active, also used as each pill's hover text so a pill explains itself before
+  // you commit to clicking it. Each description says where the contents come from.
   const viewHeaders = {
     total: { title: 'All suggestions', description: 'Every proposed rule, in any state.' },
     pending: { title: 'Pending', description: 'Proposed rules awaiting a decision.' },
@@ -1311,7 +1322,10 @@ export default function ImportRuleSuggestionReview({
     accepted: { title: 'Accepted', description: 'Suggestions you turned into rules.' },
     deferred: { title: 'Deferred', description: 'Suggestions set aside for later.' },
     discarded: { title: 'Discarded', description: 'Suggestions you dismissed.' },
-    trash: { title: 'Trash', description: 'Cleared review sets that can be restored.' },
+    trash: {
+      title: 'Cleared sets',
+      description: 'Settled suggestions you removed from the review with Clear — one set per Clear, restorable whole.',
+    },
   }
   const activeViewHeader = viewHeaders[reviewFilter] || viewHeaders.pending
 
@@ -2624,6 +2638,7 @@ export default function ImportRuleSuggestionReview({
                 value={pill.value}
                 tone={pill.tone}
                 active={reviewFilter === pill.key}
+                title={viewHeaders[pill.key]?.description}
                 onClick={bulkMode ? undefined : () => onChangeReviewFilter(pill.key)}
                 disabled={bulkMode}
               />
