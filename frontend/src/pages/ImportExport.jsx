@@ -2368,6 +2368,18 @@ function ImportTab({ onAmazonDetected }) {
     }
   }, [stage])
 
+  // Same problem at the other end of the flow: finishing an import leaves the scroll position wherever
+  // the Import button was — typically far down the mapping screen — and the newly-expanded source row
+  // adds file cards above it, so the result lands off-screen and the import reads as if nothing happened.
+  // Bring the summary into view once it has mounted. Keyed on the batch id so importing a second file
+  // scrolls again rather than only on the first transition into `done`.
+  const doneStageRef = useRef(null)
+  useEffect(() => {
+    if (stage === 'done' && importResult?.batch_id) {
+      doneStageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [stage, importResult?.batch_id])
+
   function importAnotherFile() {
     scrollToUploadOnMount.current = true
     resetImport()
@@ -3862,6 +3874,9 @@ function ImportTab({ onAmazonDetected }) {
       )}
 
       {stage === 'done' && importResult && (
+        // Wrapper rather than a ref on Card: Card is a plain function component, so a ref passed to it
+        // would be dropped (and warn) instead of reaching the DOM node the scroll needs.
+        <div ref={doneStageRef}>
         <Card>
           <div style={{ fontSize: 18, marginBottom: 12 }}>✅ Import complete</div>
           {importResult.has_imported_categories ? (
@@ -3927,6 +3942,21 @@ function ImportTab({ onAmazonDetected }) {
               )
             }
 
+            // Lead with what actually happened. A file whose rows all duplicate existing history is a
+            // *successful* import for an enrich-oriented source (a PayPal export duplicates what the bank
+            // already shows; the value delivered is the detail folded into those matches) — so it says so
+            // rather than reporting "0 transactions imported", which reads as a failure. The row counts
+            // then appear once each, in their own lines, instead of a combined breakdown whose
+            // "0 imported, 0 not imported, 59 deduped" arithmetic contradicted itself.
+            const everyRowDuplicate = summary.importedCount === 0
+              && summary.dedupedCount > 0
+              && summary.dedupedCount === summary.totalRows
+            const headline = summary.importedCount > 0
+              ? `${summary.importedCount} transaction${summary.importedCount === 1 ? '' : 's'} imported.`
+              : everyRowDuplicate
+                ? 'No new transactions — every row was already in the ledger.'
+                : 'No new transactions imported.'
+
             return (
               <div style={{
                 marginBottom: 16,
@@ -3936,11 +3966,11 @@ function ImportTab({ onAmazonDetected }) {
                 background: 'color-mix(in srgb, var(--surface2) 26%, transparent)',
               }}>
                 <div style={{ fontSize: 14, color: 'var(--text)', fontWeight: 600, marginBottom: 4 }}>
-                  {summary.importedCount} transactions imported.
+                  {headline}
                 </div>
                 {summary.totalRows > 0 ? (
                   <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
-                    {summary.totalRows} rows reviewed: {summary.importedCount} imported, {summary.skippedCount} not imported, {summary.dedupedCount} deduped.
+                    {summary.totalRows} row{summary.totalRows === 1 ? '' : 's'} in this file.
                   </div>
                 ) : null}
                 {summary.dedupedCount > 0 ? (
@@ -3955,17 +3985,17 @@ function ImportTab({ onAmazonDetected }) {
                     >
                       {summary.dedupedCount} duplicate row{summary.dedupedCount === 1 ? '' : 's'}
                     </button>
-                    {' '}matched existing transactions and were not imported automatically.
+                    {' '}matched existing transactions.
                   </div>
                 ) : null}
                 {summary.enrichedCount > 0 ? (
                   <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
-                    {summary.enrichedCount} existing transaction{summary.enrichedCount === 1 ? '' : 's'} enriched with detail from this source.
+                    New detail added from {summary.enrichedCount} duplicate row{summary.enrichedCount === 1 ? '' : 's'}.
                   </div>
                 ) : null}
                 {summary.skippedCount > 0 ? (
                   <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
-                    {summary.skippedCount} rows not imported
+                    {summary.skippedCount} row{summary.skippedCount === 1 ? '' : 's'} couldn&rsquo;t be imported
                     {parts.length > 0 ? (
                       <>
                         {' ('}
@@ -4061,6 +4091,7 @@ function ImportTab({ onAmazonDetected }) {
             <Button onClick={importAnotherFile}>Import another file</Button>
           </div>
         </Card>
+        </div>
       )}
 
       {showStarterRules ? (
