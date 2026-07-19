@@ -48,6 +48,7 @@ not in these tables.
 | **`usePanelReveal`** — hold a detail panel invisible until its geometry settles, then fade it in fully formed | letting a panel visibly grow/reposition as async content lands | `components/detailShared.jsx` |
 | **`TransactionDetail`** — the payee/transaction detail panel (chart + list + editors) | a custom per-transaction or per-payee detail view | `components/TransactionDetail.jsx` |
 | **`PillGridTable` / `PillTableHeader`** — the pill-header sortable/re-orderable/resizable grid-table shell | a one-off table with a custom sortable/resizable header | `components/PillGridTable.jsx`, `components/PillTableHeader.jsx` |
+| **`MatchReport`** — the "did these records match?" report table (left record ↔ matched right record), built on `PillGridTable` + `useColumnPreference`, with **windowed rows** so a multi-thousand-entry bucket stays cheap. Sort and selection are controlled by the owning report | a bespoke table for a new match/reconciliation report | `components/importExport/MatchReport.jsx` |
 | **`useColumnPreference`** — persisted per-user column order/width | re-implementing column persistence | `lib/useColumnPreference.js` |
 | **`useTransactionTableLayout`** — the transaction-list column layout (order/width) built on `useColumnPreference`, wired for `TransactionListTable`'s columns | hand-wiring transaction column prefs | `lib/transactionTablePreferences.js` |
 

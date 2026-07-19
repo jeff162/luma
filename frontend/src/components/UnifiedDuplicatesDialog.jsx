@@ -35,6 +35,7 @@ import { useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { DUPLICATE_REPORT_COLUMNS_PREF_KEY } from '../lib/importExport/constants.js'
 import { Button, COMPACT_ACTION_BTN_STYLE } from './ui.jsx'
 import { MatchReport } from './importExport/MatchReport.jsx'
 import { TransactionMatchCell, SourceFileLink } from './importExport/TransactionMatchCell.jsx'
@@ -729,6 +730,7 @@ export default function UnifiedDuplicatesDialog({
 
         {actionError ? <div style={{ padding: '8px 16px', color: 'var(--danger)' }}>{actionError}</div> : null}
         <MatchReport
+          columnsPrefKey={DUPLICATE_REPORT_COLUMNS_PREF_KEY}
           entries={visibleEntries}
           getRowId={entryId}
           getRowStripe={(entry) => kindMeta(entry).stripe}
@@ -748,7 +750,7 @@ export default function UnifiedDuplicatesDialog({
               : "No duplicate decisions recorded for this import.")
             : "No entries match the current filter."}
           columns={[
-            { key: 'kind', label: 'Kind', width: 90, sortable: true, render: (entry) => {
+            { key: 'kind', label: 'Kind', width: 90, minWidth: 76, sortable: true, render: (entry) => {
               const meta = kindMeta(entry)
               return (
                 <div style={{ color: meta.warn ? 'var(--warning)' : meta.positive ? 'var(--success)' : 'var(--muted)', fontWeight: meta.warn || meta.positive ? 600 : 400, whiteSpace: 'nowrap' }}>
@@ -757,10 +759,10 @@ export default function UnifiedDuplicatesDialog({
                 </div>
               )
             } },
-            { key: 'rule', label: 'Rule', sortable: true, render: (entry) => ruleBadge(entry) },
-            { key: 'date', label: 'Incoming', sortable: true, render: (entry) => partyBlock(entry.incoming) },
-            { key: 'matched', label: 'Matched existing', render: (entry) => matchedBlock(entry.matched, entry.reason_text) },
-            { key: 'resolve', label: 'Resolve', width: 210, render: (entry) => {
+            { key: 'rule', label: 'Rule', width: 150, minWidth: 90, sortable: true, render: (entry) => ruleBadge(entry) },
+            { key: 'date', label: 'Incoming', width: 300, minWidth: 160, sortable: true, render: (entry) => partyBlock(entry.incoming) },
+            { key: 'matched', label: 'Matched existing', width: 340, minWidth: 160, render: (entry) => matchedBlock(entry.matched, entry.reason_text) },
+            { key: 'resolve', label: 'Resolve', width: 210, minWidth: 140, render: (entry) => {
               const a = actionsFor(entry)
               return (
                 <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>

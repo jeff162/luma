@@ -3,10 +3,11 @@
 
 import { useMemo, useState } from 'react'
 import { api } from '../../lib/api.js'
-import { AppDialog, Button, Tooltip, COMPACT_ACTION_BTN_STYLE } from '../ui.jsx'
+import { AppDialog, Button, Tooltip, COMPACT_ACTION_BTN_STYLE, ROW_HOVER_OPEN_DELAY_MS } from '../ui.jsx'
 import { DetailPanelShell, useDetailPanelChrome, useRestorablePanelGeometry } from '../detailShared.jsx'
 import { formatTransactionAmount } from '../../lib/moneyDisplay.js'
 import { safeExternalUrl } from '../../lib/utils.js'
+import { AMAZON_RECONCILIATION_COLUMNS_PREF_KEY } from '../../lib/importExport/constants.js'
 import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import { MerchantOriginHoverCard } from '../OriginFields.jsx'
 import { MatchReport } from './MatchReport.jsx'
@@ -41,8 +42,9 @@ function toRecord(txn) {
 function withOriginHover(txn, child) {
   return (
     // `interactive` so the pointer can move into the card — its rows can carry a followable link
-    // (an order's own Amazon page), which a close-on-leave tooltip would make unreachable.
-    <Tooltip content={<MerchantOriginHoverCard txn={txn} />} maxWidth={380} triggerStyle={{ minWidth: 0 }} interactive>
+    // (an order's own Amazon page), which a close-on-leave tooltip would make unreachable. The dwell
+    // keeps these cells from strobing a card at every row that scrolls under a resting cursor.
+    <Tooltip content={<MerchantOriginHoverCard txn={txn} />} maxWidth={380} triggerStyle={{ minWidth: 0 }} interactive openDelay={ROW_HOVER_OPEN_DELAY_MS}>
       {child}
     </Tooltip>
   )
@@ -717,6 +719,7 @@ export function AmazonReconciliationDialog({
         ) : null}
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <MatchReport
+            columnsPrefKey={AMAZON_RECONCILIATION_COLUMNS_PREF_KEY}
             columns={columns}
             entries={visibleEntries}
             getRowId={(entry) => entry.id}

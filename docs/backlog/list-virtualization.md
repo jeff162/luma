@@ -1,6 +1,7 @@
 # List virtualization (render windowing for large lists)
 
-**Status:** deferred, not blocking. Structural/perf work to do before transaction volume grows large.
+**Status:** in progress. `MatchReport` is **done** (2026-07-19); the remaining surfaces below are still
+unwindowed. Structural/perf work to do before transaction volume grows large.
 
 ## Why
 
@@ -31,6 +32,22 @@ Re-baseline any measurement with the **DevTools Components panel closed** on a *
   or reads `scrollWidth` in a `useLayoutEffect` per row (that was thousands of forced reflows on a long
   list). Measurement is now a read-only post-paint effect plus an on-hover re-check. This reduced
   per-row cost but does **not** bound DOM node count — windowing still needed.
+- **`MatchReport` is windowed (2026-07-19).** It now renders through `PillGridTable` +
+  `useColumnPreference` with `@tanstack/react-virtual` (measured heights) instead of its old hand-rolled
+  `<table>`, so the duplicate-detection report, the Amazon reconciliation report, and the Amazon
+  import-detail report all mount only the rows near the viewport. Three things learned here that the
+  remaining surfaces will hit too:
+  - **Windowing requires a content-independent column geometry.** The old `<table>` used
+    `table-layout: auto`, sizing columns from whichever rows happened to be in the DOM — under windowing
+    that makes widths jump while scrolling. Moving to `PillGridTable`'s `--pgt-grid` template fixed the
+    widths first; windowing was only safe afterwards. `TransactionListTable` and the ledger already have
+    this property, so they start from a better place.
+  - **Row-id helpers must not scan the list.** `AmazonImportDetailDialog` resolved a row's index with
+    `entries.indexOf(entry)`; a windower calls the id function per mounted row, making it O(n²). The
+    `getRowId(entry, index)` signature now hands the index over.
+  - **Each report needs its own column pref key** (`normalizeColumnConfig` drops unknown keys and appends
+    defaults, so sharing one key across different column sets silently merges them). The Amazon
+    import-detail dialog keys per *category tab* for the same reason.
 - **Ledger fetch is already server-paginated** (`/transactions`, `limit` + incremental load, sorted
   server-side — see `ui-patterns.md` "Long transaction ledgers…"). That bounds the *fetch*, but loaded
   pages still accumulate as DOM nodes; the ledger is **not** DOM-virtualized.
@@ -43,14 +60,9 @@ DOM node count stays ~constant regardless of dataset size.
 **Build it into the shared table shells, not per page** (per `ui-patterns.md` "shared product
 language" — virtualize once so every consumer benefits and behavior stays uniform):
 
-- `MatchReport` (`components/importExport/MatchReport.jsx`) — the **duplicate-rows dialog** and the
-  Amazon **reconciliation** report, which since 2026-07-13 both render through this new shared table
-  (extracted from the duplicate dialog's old hand-rolled table). The worst offender (a single 6k-row
-  bucket = ~100k+ DOM nodes; switching buckets, header-click re-sort, and even a single checkbox toggle
-  — a new `selectedIds` Set re-maps all rows, which aren't individually memoized — all lag) and a
-  contained surface, so **spike here first.** Note its sort and selection are **controlled** by the
-  consuming report, so a windower must keep driving `onHeaderClick` / `selectedIds` / select-all against
-  the full entry list, not just the mounted rows.
+- ~~`MatchReport`~~ — **done, see "Already done" above.** Was the worst offender and the spike surface.
+  Its sort and selection stay **controlled** by the consuming report: the windower drives
+  `onHeaderClick` / `selectedIds` / select-all against the full entry list, never the mounted subset.
 - `TransactionListTable` (+ shared `TransactionRow` cells) — the report/detail lists.
 - The **Transactions ledger** renders its own rows (page-specific shell) but shares the row
   cells/controllers; it needs windowing too as loaded pages grow.
@@ -76,10 +88,21 @@ language" — virtualize once so every consumer benefits and behavior stays unif
 
 ## Approach
 
-Prefer a **headless, measured-height** windower (e.g. TanStack Virtual) over a fixed-height list lib,
-given variable rows; or a small hand-rolled windowing hook if the dependency isn't wanted. Spike inside
-`MatchReport` against the duplicate dialog, prove the sticky-header + controlled-sort/selection +
-select-all constraints hold, then lift into `PillGridTable` / `TransactionListTable` and the ledger.
+**Settled:** `@tanstack/react-virtual` (headless, measured heights), chosen over a hand-rolled hook
+because the hard part is scroll anchoring — correcting the viewport when a row above it measures taller
+than its estimate, which is the usual source of scroll jitter — plus a measurement cache that survives
+unmount and `scrollToIndex`. It is already a dependency and already proven in `MatchReport`; reuse it for
+the remaining surfaces rather than reopening the choice.
+
+Remaining lift: `TransactionListTable` and the ledger, then `ImportRuleSuggestionReview`. Both transaction
+surfaces already have persisted column geometry, which is the precondition `MatchReport` had to be given
+first.
+
+**Testing note.** jsdom does no layout, so a virtualizer under test renders nothing until the scroll
+element and the rows are given real geometry. `MatchReport.test.jsx` stubs `ResizeObserver` plus
+`offsetWidth`/`offsetHeight`/`getBoundingClientRect`, keyed off the row's `data-index` attribute so a row
+never reports the viewport's height (which would make one row appear to fill the screen and silently
+defeat the assertions). Reuse that harness for the next surface.
 
 **Done when:** on a production build with DevTools closed, opening/closing the duplicate report and
 scrolling a large ledger stay sub-100ms tasks, and DOM node count for these lists is bounded by the

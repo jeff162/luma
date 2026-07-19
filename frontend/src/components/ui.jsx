@@ -25,14 +25,48 @@ import { getCategoryBadgeTheme } from '../lib/categoryAppearance.js'
  *     the gap from trigger to popover) and makes it clickable, so the content can hold a link or button.
  *   - `bare` drops the themed box chrome and only positions `content`, for content that brings its own
  *     card (e.g. a help summary panel). Combine both for a hover help card.
+ *
+ * `openDelay` (ms) makes the hover have to *dwell* before the hint appears. It defaults to 0 — instant,
+ * the historical behavior — and is opt-in per caller. Set it on hints attached to **rows of a scrollable
+ * list**: with the cursor held still and the list moving under it, every row that slides past counts as
+ * a fresh hover, so zero-delay hints strobe as the user scrolls. A dwell requirement costs nothing to a
+ * user who actually stops on a row and removes the flicker entirely for one who is just passing through.
  */
-export function Tooltip({ children, content, maxWidth = 280, align = 'left', tone = 'neutral', interactive = false, bare = false, triggerStyle = null }) {
+// The dwell to use for a hint attached to a row of a long scrolling list. Long enough that scrolling
+// past under a resting cursor never fires it, short enough that deliberately stopping on a row still
+// feels immediate. Shared so these hovers stay consistent across reports rather than each picking a
+// number.
+export const ROW_HOVER_OPEN_DELAY_MS = 300
+
+export function Tooltip({ children, content, maxWidth = 280, align = 'left', tone = 'neutral', interactive = false, bare = false, triggerStyle = null, openDelay = 0 }) {
   const triggerRef = useRef(null)
   const tipRef = useRef(null)
   const [open, setOpen] = useState(false)
+  // Distinct from `open`: the hover has landed and the dwell timer is running, but nothing is shown yet.
+  // Tracked in state rather than a ref so the scroll effect below can observe it and arm itself.
+  const [pending, setPending] = useState(false)
   const [pos, setPos] = useState(null)
   const closeTimer = useRef(null)
-  useEffect(() => () => clearTimeout(closeTimer.current), [])
+  const openTimer = useRef(null)
+  useEffect(() => () => { clearTimeout(closeTimer.current); clearTimeout(openTimer.current) }, [])
+
+  // An open tooltip is positioned once, in fixed coordinates, against where its trigger was at the time.
+  // Scrolling moves the trigger but not the tooltip, so it would hang detached in mid-air until the
+  // pointer left. Close on any scroll instead, and cancel a pending open so a scroll that starts during
+  // the dwell never resolves into a hint. Capture phase because the scroll almost always happens in an
+  // ancestor container and scroll events don't bubble. Only listens while this tooltip is showing or
+  // armed, so the many idle tooltips in a list cost nothing.
+  useEffect(() => {
+    if (!open && !pending) return undefined
+    function onScroll() {
+      clearTimeout(openTimer.current)
+      clearTimeout(closeTimer.current)
+      setPending(false)
+      setOpen(false)
+    }
+    window.addEventListener('scroll', onScroll, true)
+    return () => window.removeEventListener('scroll', onScroll, true)
+  }, [open, pending])
   // Position only once the tooltip is mounted, so its real measured size is known. A portaled DOM
   // tooltip can't paint past the window the way a native `title` can, so the best it can do is stay
   // fully inside the viewport: clamp horizontally to keep it on-screen, and flip above the trigger
@@ -57,9 +91,19 @@ export function Tooltip({ children, content, maxWidth = 280, align = 'left', ton
   if (!content) return children
   function show() {
     clearTimeout(closeTimer.current)
-    setOpen(true)
+    if (!openDelay) { setOpen(true); return }
+    // Re-entering the same trigger while already open (e.g. crossing a child element) must not drop the
+    // hint and re-serve the delay, so only an unopened tooltip arms the dwell timer.
+    if (open) return
+    setPending(true)
+    openTimer.current = setTimeout(() => {
+      setPending(false)
+      setOpen(true)
+    }, openDelay)
   }
   function hide() {
+    clearTimeout(openTimer.current)
+    setPending(false)
     if (interactive) closeTimer.current = setTimeout(() => setOpen(false), 140)
     else setOpen(false)
   }

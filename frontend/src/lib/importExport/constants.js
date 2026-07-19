@@ -42,6 +42,11 @@ export const EXPANDED_IMPORT_SOURCE_ROWS_PREF_KEY = 'import.expandedDataSourceRo
 export const DATA_SOURCE_MANAGER_POS_PREF_KEY = 'import.dataSourceManagerPos'
 export const AMAZON_IMPORT_ACCOUNT_PREF_KEY = 'import.amazonAccountId'
 export const DUPLICATE_ROWS_COLUMNS_PREF_KEY = 'ui.import.duplicateRows.columns'
+// One key per MatchReport-hosted report: the three share a table shell but not a column set, so they
+// each remember their own geometry.
+export const DUPLICATE_REPORT_COLUMNS_PREF_KEY = 'ui.import.duplicateReport.columns'
+export const AMAZON_RECONCILIATION_COLUMNS_PREF_KEY = 'ui.import.amazonReconciliation.columns'
+export const AMAZON_IMPORT_DETAIL_COLUMNS_PREF_KEY = 'ui.import.amazonImportDetail.columns'
 export const UNASSIGNED_CATEGORY_SYSTEM_KEY = 'unassigned'
 export const IMPORTED_CATEGORY_SCOPE_ALL = 'all'
 export const IMPORTED_CATEGORY_SCOPE_FILTERED = 'filtered'

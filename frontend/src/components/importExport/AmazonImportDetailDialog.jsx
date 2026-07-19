@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useMemo, useState } from 'react'
-import { Tooltip } from '../ui.jsx'
+import { Tooltip, ROW_HOVER_OPEN_DELAY_MS } from '../ui.jsx'
 import { DetailPanelShell, useDetailPanelChrome, useRestorablePanelGeometry } from '../detailShared.jsx'
 import { formatTransactionAmount } from '../../lib/moneyDisplay.js'
+import { AMAZON_IMPORT_DETAIL_COLUMNS_PREF_KEY } from '../../lib/importExport/constants.js'
 import FeatureExplainer from '../../help/FeatureExplainer.jsx'
 import { MerchantOriginHoverCard } from '../OriginFields.jsx'
 import { MatchReport } from './MatchReport.jsx'
@@ -29,7 +30,8 @@ function toRecord(txn) {
 function OrderCell({ txn }) {
   if (!txn) return <TransactionMatchCell record={null} />
   return (
-    <Tooltip content={<MerchantOriginHoverCard txn={txn} />} maxWidth={380} triggerStyle={{ minWidth: 0 }}>
+    // The dwell keeps the card from strobing at every row that scrolls under a resting cursor.
+    <Tooltip content={<MerchantOriginHoverCard txn={txn} />} maxWidth={380} triggerStyle={{ minWidth: 0 }} openDelay={ROW_HOVER_OPEN_DELAY_MS}>
       <div><TransactionMatchCell record={toRecord(txn)} /></div>
     </Tooltip>
   )
@@ -190,9 +192,12 @@ export function AmazonImportDetailDialog({
         </div>
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <MatchReport
+            // Each category tab is its own column set, so each remembers its own geometry — a single
+            // shared key would merge unrelated columns through normalizeColumnConfig.
+            columnsPrefKey={`${AMAZON_IMPORT_DETAIL_COLUMNS_PREF_KEY}.${active.key}`}
             columns={active.columns}
             entries={entries}
-            getRowId={(entry) => active.getRowId(entry, entries.indexOf(entry))}
+            getRowId={active.getRowId}
             loading={loading}
             error={error}
             emptyMessage={`No ${active.label.toLowerCase()} in this import.`}
