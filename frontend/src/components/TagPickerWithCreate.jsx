@@ -188,6 +188,7 @@ export default function TagPickerWithCreate({
               type="text"
               value={createName}
               placeholder="New tag name"
+              autoComplete="off"
               onChange={event => setCreateName(event.target.value)}
               onKeyDown={event => {
                 if (event.key === 'Enter') {

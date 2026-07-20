@@ -224,6 +224,7 @@ function NewCategoryForm({ groups, mode, defaultGroupId, defaultName = '', onSav
           id={`${fieldIdBase}-name`}
           name="category-picker-new-name"
           aria-label={mode === 'group' ? 'New group name' : 'New category name'}
+          autoComplete="off"
           value={name}
           onChange={nextValue => {
             if (error) setError('')
@@ -598,6 +599,7 @@ export default function CategoryPicker({
             id={`${pickerId}-search`}
             name="category-picker-search"
             aria-label="Search categories"
+            autoComplete="off"
             value={query}
             onFocus={() => {
               if (!open) openPicker()

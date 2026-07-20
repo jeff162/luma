@@ -69,6 +69,7 @@ from backend.services.duplicate_detection import (
 )
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
 from backend.services.import_enrichment import enrich_duplicate_row, undo_duplicate_enrichment, reverse_batch_enrichments
+from backend.services.money_movement import suppress_batch_funding_legs, reverse_batch_money_movement_links
 
 router = APIRouter()
 
@@ -3348,6 +3349,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             # Reverse any enrichments the batch being replaced applied to existing rows before its
             # duplicate records (which hold the deltas) are superseded.
             reverse_batch_enrichments(conn, replace_batch_id)
+            reverse_batch_money_movement_links(conn, replace_batch_id)
             from .amazon import reverse_batch_amazon_links  # lazy: avoid the core↔amazon import cycle
             reverse_batch_amazon_links(conn, replace_batch_id)
             conn.execute("DELETE FROM txn WHERE import_batch_id = ?", (replace_batch_id,))
@@ -3743,9 +3745,12 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             "rejected_rows": rejected_rows,
             "duplicate_headers": headers,
             "enriched_count": 0,
+            "money_movement_suppressed_count": 0,
+            "money_movement_unrecognized_types": [],
         }
 
         enriched_count = 0
+        money_movement_suppressed_count = 0
         # If nothing was imported, remove the batch record entirely —
         # a zero-row import shouldn't appear in Recent imports
         if imported == 0 and deduped == 0:
@@ -3762,6 +3767,14 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                 )
                 enriched_count = len(auto_enriched)
             import_summary["enriched_count"] = enriched_count
+            # Suppress wallet funding legs: a nameless deposit paired with its equal-and-opposite same-day
+            # purchase (both rows this batch just imported) is money movement, not income — move the leg
+            # into the excluded "Money movement" category and link it to the purchase. Always on; safe
+            # because only an unambiguous structural 1:1 pair acts. See services/money_movement.py.
+            money_movement = suppress_batch_funding_legs(conn, batch_id)
+            money_movement_suppressed_count = len(money_movement["suppressed"])
+            import_summary["money_movement_suppressed_count"] = money_movement_suppressed_count
+            import_summary["money_movement_unrecognized_types"] = money_movement["unrecognized_types"]
             config_snapshot[IMPORT_SUMMARY_KEY] = import_summary
             save_batch_snapshot(conn, batch_id, config_snapshot)
             for csv_val, info in batch_account_stats.items():
@@ -3827,6 +3840,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         "rejected_rows":        rejected_rows,
         "duplicate_count":      deduped,
         "enriched_count":       enriched_count,
+        "money_movement_suppressed_count": money_movement_suppressed_count,
         "import_summary":       import_summary,
         "new_accounts_created": len(created_account_ids),
         "new_accounts_without_owner": sum(
@@ -5351,6 +5365,10 @@ def undo_batch(batch_id: str, force: bool = Query(False)):
         # records below — those records hold the delta needed to undo the change to the pre-existing
         # (non-batch) target rows, which otherwise would be orphaned and un-reversible.
         reverse_batch_enrichments(conn, batch_id)
+        # Drop the wallet funding-leg links this batch created (their rows are deleted below, but the link
+        # row has no FK to txn so it must be removed explicitly). Runs before the delete so the links are
+        # still reachable via their members.
+        reverse_batch_money_movement_links(conn, batch_id)
         # Same concern for Amazon links: the matched card charge sits *outside* this batch, so restore
         # its prior category from the link metadata before the batch's item rows are deleted. Imported
         # lazily — amazon.py imports from this module, so a top-level import would be circular.

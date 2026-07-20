@@ -662,6 +662,29 @@ look once the enrich work is done. (The report's sign/detail confusion around th
 separately in `UnifiedDuplicatesDialog`: stored amounts now render through `formatTransactionAmount`, and
 the incoming cell hovers the full raw row.)
 
+> **Landed (2026-07-19) — the *in-file paired* case (distinct from the cross-account leg above).** The
+> parking-lot leg above is the leg's *cross-account* twin (the `PAYPAL` charge on the bank), which
+> `_find_cross_account_transfer_candidates` surfaces display-only. A second, cleaner case is the
+> **intra-file** pair: a balance-funded purchase writes *two* rows in one PayPal export — the payment out
+> to the merchant, and an equal-and-opposite nameless deposit *into* the wallet balance. That deposit is
+> money movement, not income. `services/money_movement.py` (`suppress_batch_funding_legs`, wired into
+> `run_import_core` after the insert loop; always on) pairs them **within the batch** — a nameless credit
+> whose unique same-day equal-and-opposite twin is a *named* debit — and moves only the **leg** into an
+> excluded **"Money movement"** category (a leaf under the seeded `Transfers` group), linking it to the
+> purchase via `txn_link` (`kind='wallet_funding'`, roles `leg`/`purchase`; the leg's prior category
+> stashed for reversal). Deliberately conservative so a genuine inbound payment (a *named* credit with no
+> offsetting purchase) can never be swept up, and only an **unambiguous 1:1 pair** acts. The `Type` column
+> is **corroborating, not required**: the recognized money-movement vocabulary is a code constant
+> (`_MONEY_MOVEMENT_TYPES`), the structural signal works without it, and any *unrecognized* `Type` seen on a
+> suppressed leg is reported (`money_movement_unrecognized_types` in the import summary) so the set can be
+> grown deliberately — a first step toward the "learn new types" idea, kept out of the DB for now.
+> Reversal (`reverse_batch_money_movement_links`) is wired into both `undo_batch` and the re-import replace
+> path, mirroring the Amazon-link reversal. The category is deliberately **generic/source-agnostic** (not
+> "PayPal transfer"): detection is structural and the same shape appears in other wallets (Venmo, Cash App);
+> per-source provenance still lives on the link + the leg's evidence. Tests:
+> `test_money_movement_suppression.py`. **Still open (deferred):** a manual per-pair un-suppress action in
+> the report, and a DB-backed editable `Type` vocabulary with an "add this type?" prompt.
+
 ## Reuse map (don't reinvent)
 
 - Match / duplicate identification → existing `duplicate_detection` (`evaluate_duplicate`); the enrich acts
