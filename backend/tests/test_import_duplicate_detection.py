@@ -490,6 +490,76 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum("Possible cross-source match by date, amount, and source text in the linked account group" in reason for reason in reasons), 1)
         self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_linked_compare_ledger.csv"))
 
+    async def test_duplicate_compare_only_reasserted_when_alias_account_already_exists(self):
+        # The multi-file / re-import case: the *first* file creates the duplicate-compare alias account,
+        # so a *later* file with the same alias config finds it already created and reuses it by name. The
+        # compare-against-existing instruction is per-import (not stored on the account), so it must be
+        # re-asserted on the already-exists path — otherwise the later file's rows skip the cross-account
+        # duplicate check the first file's rows received (they'd all import as new).
+        checking_id = self._insert_account("House Checking", account_type="depository", mask="4321")
+
+        base_config = self._account_mapping_config(
+            headers={
+                "date": "Date",
+                "description": "Description",
+                "account": "Account",
+                "amount": "Amount",
+                "category": "Category",
+                "date_format": "%m/%d/%Y",
+            },
+            account_map={"House Checking": checking_id},
+        )
+        await self._run_import_fixture("duplicate_linked_base.csv", base_config)
+        self._insert_existing_transaction(
+            account_id=checking_id,
+            date="2025-10-13",
+            amount=125.00,
+            merchant_name="PAYPAL INST XFER CLEANING CREW",
+            raw_name="PAYPAL INST XFER CLEANING CREW",
+            display_name="PAYPAL INST XFER CLEANING CREW",
+        )
+
+        alias_config = {
+            "filename": "duplicate_linked_seed.csv",
+            "profile_id": None,
+            "account_id": None,
+            "single_account_new": None,
+            "account_map": {},
+            "skip_accounts": [],
+            "new_accounts": [
+                {
+                    "csv_value": "CHECKING (...4321)",
+                    "name": "House Checking Alias",
+                    "type": "depository",
+                    "duplicate_compare_account_id": checking_id,
+                }
+            ],
+            "column_map": {
+                "date": "Date",
+                "description": "Merchant",
+                "account": "Account",
+                "amount": "Amount",
+                "category": "Category",
+                "notes": "Notes",
+            },
+            "date_format": "%Y-%m-%d",
+            "amount_convention": "single_signed",
+            "skip_rows": 0,
+            "apply_categorization": False,
+            "use_imported_categories": False,
+        }
+        # First file: creates the "House Checking Alias" account (its one row doesn't overlap checking).
+        seed_result = await self._run_import_fixture("duplicate_linked_seed.csv", alias_config)
+        self.assertEqual(seed_result["imported"], 1)
+        self.assertEqual(seed_result["deduped"], 0)
+
+        # Second file: same alias config, but the alias account now already exists. Its overlapping rows
+        # must still dedupe against the compare target (checking) — 3 duplicates, 1 genuinely new (Venmo).
+        # Before the fix, the compare target wasn't re-asserted on the existing path, so all 4 imported.
+        result_two = await self._run_import_fixture("duplicate_linked_compare.csv", {**alias_config, "filename": "duplicate_linked_compare.csv"})
+        self.assertEqual(result_two["imported"], 1)
+        self.assertEqual(result_two["deduped"], 3)
+
     async def test_group_with_existing_account_dedupes_against_three_account_group(self):
         parent_id = self._insert_account("Merged Checking", account_type="depository", mask="0000")
         child_a_id = self._insert_account(
@@ -738,6 +808,90 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second_result["imported"], 6)
         self.assertEqual(second_result["deduped"], 0)
         self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_prior_base_ledger.csv"))
+
+    async def test_already_imported_409_names_the_matched_file(self):
+        # The multi-file selector relies on this structured 409 to skip a duplicate copy and name the file
+        # it duplicates. A second file with identical *content* (but a different name) must 409 with
+        # reason='already_imported' and the first file's name, so the UI can say "X already imported as Y".
+        # This is the whole-file (single-account) path — no account column, so it hits the file-wide 409,
+        # not the per-account variant.
+        checking_id = self._insert_account("House Checking", account_type="depository", mask="4321")
+        config = {
+            "filename": "fixture.csv",
+            "profile_id": None,
+            "account_id": checking_id,
+            "single_account_new": None,
+            "account_map": {},
+            "skip_accounts": [],
+            "new_accounts": None,
+            "column_map": {"date": "Date", "description": "Description", "amount": "Amount", "category": "Category"},
+            "date_format": "%m/%d/%Y",
+            "amount_convention": "single_signed",
+            "skip_rows": 0,
+            "apply_categorization": False,
+            "use_imported_categories": False,
+        }
+        first = await self._run_import_fixture("already_imported_original.csv", config)
+        self.assertEqual(first["imported"], 2)
+
+        with self.assertRaises(HTTPException) as ctx:
+            await self._run_import_fixture("already_imported_copy.csv", config)
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIsInstance(ctx.exception.detail, dict)
+        self.assertEqual(ctx.exception.detail["reason"], "already_imported")
+        self.assertEqual(ctx.exception.detail["already_imported_filename"], "already_imported_original.csv")
+
+    async def _two_account_config(self, id_a, id_b, *, skip=(), map_b=True):
+        account_map = {"Checking A": id_a}
+        if map_b:
+            account_map["Checking B"] = id_b
+        return {
+            "filename": "fixture.csv",
+            "profile_id": None,
+            "account_id": None,
+            "single_account_new": None,
+            "account_map": account_map,
+            "skip_accounts": list(skip),
+            "new_accounts": None,
+            "column_map": {"date": "Date", "description": "Description", "account": "Account", "amount": "Amount", "category": "Category"},
+            "date_format": "%m/%d/%Y",
+            "amount_convention": "single_signed",
+            "skip_rows": 0,
+            "apply_categorization": False,
+            "use_imported_categories": False,
+        }
+
+    async def test_reimport_adds_previously_skipped_account_without_blocking(self):
+        # An account-column file re-used to import an account that was *skipped* the first time must not be
+        # blocked: the new account imports, and the already-imported account's identical rows are caught by
+        # ordinary row-level dedup — no special treatment.
+        id_a = self._insert_account("Checking A", account_type="depository", mask="1111")
+        id_b = self._insert_account("Checking B", account_type="depository", mask="2222")
+
+        first = await self._run_import_fixture(
+            "two_account_scopes.csv", await self._two_account_config(id_a, id_b, skip=["Checking B"], map_b=False)
+        )
+        self.assertEqual(first["imported"], 2)  # Checking A's two rows; Checking B skipped
+
+        second = await self._run_import_fixture(
+            "two_account_scopes.csv", await self._two_account_config(id_a, id_b)
+        )
+        self.assertEqual(second["imported"], 1)   # Checking B's row is new
+        self.assertEqual(second["deduped"], 2)    # Checking A's rows are ordinary duplicates
+
+    async def test_reimport_when_nothing_new_is_skipped_as_duplicate(self):
+        # Same file, both accounts already imported: re-importing would add nothing, so it is treated as a
+        # duplicate and blocked with the structured skip 409 (so a multi-file import passes over it).
+        id_a = self._insert_account("Checking A", account_type="depository", mask="1111")
+        id_b = self._insert_account("Checking B", account_type="depository", mask="2222")
+
+        first = await self._run_import_fixture("two_account_scopes.csv", await self._two_account_config(id_a, id_b))
+        self.assertEqual(first["imported"], 3)
+
+        with self.assertRaises(HTTPException) as ctx:
+            await self._run_import_fixture("two_account_scopes.csv", await self._two_account_config(id_a, id_b))
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["reason"], "already_imported")
 
     async def test_two_file_labels_creating_same_named_new_account_merge(self):
         # Contract the import account-mapping UI relies on: two distinct CSV account labels both

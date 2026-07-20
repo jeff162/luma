@@ -2998,6 +2998,19 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             ).fetchone()
             if existing:
                 created_account_ids[csv_val] = existing["id"]
+                # A later file in a multi-file import (or a re-import into the same account) finds the
+                # account already created and reuses it by name. A *grouping* relationship persists on the
+                # account (`parent_account_id`), so its dedupe scope is restored automatically. But the
+                # duplicate-compare **alias** ("keep a separate account, but check its rows for duplicates
+                # against an existing one") is a per-import instruction that is not stored on the account —
+                # so re-assert it here, or this file's rows would skip the cross-account duplicate check the
+                # first file's rows received.
+                if requested_compare_target_id:
+                    effective_target = _get_effective_account_row(conn, requested_compare_target_id)
+                    if not effective_target:
+                        raise HTTPException(status_code=400, detail="Duplicate comparison target account not found")
+                    account_duplicate_compare_targets[csv_val] = str(effective_target["id"])
+                    explicit_alias_csv_values.add(csv_val)
                 continue
             new_acc_id = str(uuid.uuid4())
             conn.execute("""
@@ -3060,7 +3073,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         if not replace_batch_id:
             previous_batch = conn.execute(
                 """
-                SELECT id
+                SELECT id, filename
                 FROM   import_batch
                 WHERE  file_content_hash = ? AND status = 'completed'
                 ORDER  BY imported_at DESC LIMIT 1
@@ -3083,27 +3096,32 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                 }
 
         if previous_batch:
-            # Duplicate detection is file-wide, but account-column imports can still reuse
-            # the same CSV for accounts that were skipped or not imported in the earlier run.
+            # Re-importing an identical file (same content hash) is blocked only when it would add
+            # *nothing*. For a plain single-scope file that means always. For an account-column file it
+            # means every account this run would import was already imported from the earlier run — the
+            # file can still be re-used for accounts that were skipped/not-imported before, so if any such
+            # new account is present we fall through and import it, and the already-imported accounts' rows
+            # are caught by ordinary row-level dedup (no special handling or warning needed).
+            nothing_new = True
             if col.account:
                 present_csv_values = {
                     str(row.get(col.account, "")).strip()
                     for row in data_rows
                     if str(row.get(col.account, "")).strip()
                 }
-                blocked_values = sorted((present_csv_values - skip_set) & previously_imported_values)
-                if blocked_values:
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
-                            "message": "Some accounts from this file were already imported and cannot be imported again.",
-                            "already_imported_values": blocked_values,
-                        },
-                    )
-            else:
+                new_values = (present_csv_values - skip_set) - previously_imported_values
+                nothing_new = not new_values
+            if nothing_new:
+                # Structured so a multi-file import can skip this one file and carry on (naming the file
+                # it duplicates), while a single-file import still shows the readable message. `reason`
+                # is the stable code the frontend branches on.
                 raise HTTPException(
                     status_code=409,
-                    detail="This file has already been imported. Undo the earlier import first.",
+                    detail={
+                        "message": "This file has already been imported. Undo the earlier import first.",
+                        "reason": "already_imported",
+                        "already_imported_filename": previous_batch["filename"],
+                    },
                 )
 
         # Pre-load pending rows so a posted transaction can replace the earlier

@@ -841,6 +841,9 @@ export function SelectAllCheckbox({ checked, indeterminate, onChange, title }) {
       type="checkbox"
       checked={checked}
       onChange={onChange}
+      // A controlled checkbox needs a handler *or* `readOnly`, else React warns. When a caller renders
+      // this without an `onChange` (a read-only/display table), mark it read-only rather than warning.
+      readOnly={!onChange}
       title={title}
       style={{ cursor: 'pointer', margin: 0 }}
     />

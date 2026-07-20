@@ -12,6 +12,8 @@ import {
   profileHeaderClearlyMismatches,
   findProfilesMatchingPreview,
   getSuggestedDataSourceName,
+  groupFilesBySource,
+  unionPreviewColumnValues,
 } from '../importDraft.js'
 import { IMPORTED_CATEGORY_SETTINGS_KEY } from '../constants.js'
 
@@ -150,5 +152,88 @@ describe('getSuggestedDataSourceName', () => {
   it('infers from the filename (stripping the date suffix) when no pattern is saved', () => {
     expect(getSuggestedDataSourceName({ draftRecord: { templateFilename: 'Acme_2026-03-15.csv' } })).toBe('Acme')
     expect(getSuggestedDataSourceName({ previewLike: { filename: 'Acme_2026-03-15.csv' } })).toBe('Acme')
+  })
+})
+
+describe('groupFilesBySource', () => {
+  const profiles = [
+    { id: 'p-riverstone', name: 'Riverstone', header_fingerprint: 'fp-riverstone' },
+    { id: 'p-northgate', name: 'Chase', header_fingerprint: 'fp-northgate' },
+    { id: 'p-alt', name: 'Riverstone (alt)', header_fingerprint: 'fp-riverstone' }, // same shape as Riverstone -> ambiguous
+  ]
+  const entry = (name, fingerprint) => ({
+    file: { name },
+    preview: { filename: name, header_fingerprint: fingerprint },
+  })
+
+  it('groups same-fingerprint files into one group labeled by the matched source', () => {
+    const groups = groupFilesBySource(
+      [entry('Northgate_01.csv', 'fp-northgate'), entry('Northgate_02.csv', 'fp-northgate')],
+      [profiles[1]],
+    )
+    expect(groups).toHaveLength(1)
+    expect(groups[0].files.map(f => f.file.name)).toEqual(['Northgate_01.csv', 'Northgate_02.csv'])
+    expect(groups[0].profileId).toBe('p-northgate')
+    expect(groups[0].label).toBe('Chase')
+    expect(groups[0].ambiguous).toBe(false)
+  })
+
+  it('splits distinct sources into separate groups, first-seen order preserved', () => {
+    const groups = groupFilesBySource(
+      [entry('Northgate_01.csv', 'fp-northgate'), entry('Riverstone_01.csv', 'fp-riverstone'), entry('Northgate_02.csv', 'fp-northgate')],
+      [profiles[0], profiles[1]],
+    )
+    expect(groups.map(g => g.fingerprint)).toEqual(['fp-northgate', 'fp-riverstone'])
+    expect(groups[0].files).toHaveLength(2) // both Chase files, even though Riverstone came between them
+    expect(groups[1].files).toHaveLength(1)
+  })
+
+  it('labels an unmatched shape as an unknown source, using the filename suggestion', () => {
+    const groups = groupFilesBySource([entry('Venmo_2026-01.csv', 'fp-venmo')], profiles)
+    expect(groups[0].profileId).toBeNull()
+    expect(groups[0].matchedProfiles).toEqual([])
+    expect(groups[0].label).toBe('Venmo')
+  })
+
+  it('flags a shape that matches several saved sources as ambiguous', () => {
+    const groups = groupFilesBySource([entry('Riverstone_01.csv', 'fp-riverstone')], profiles)
+    expect(groups[0].ambiguous).toBe(true)
+    expect(groups[0].profileId).toBeNull()
+    expect(groups[0].label).toBe('Riverstone, Riverstone (alt)')
+  })
+
+  it('never merges files it could not fingerprint', () => {
+    const groups = groupFilesBySource([entry('a.csv', ''), entry('b.csv', '')], profiles)
+    expect(groups).toHaveLength(2)
+  })
+})
+
+describe('unionPreviewColumnValues', () => {
+  const preview = (distinct, counts) => ({
+    column_distinct_values: { Account: distinct },
+    column_value_counts: { Account: counts },
+  })
+
+  it('unions distinct values across files, first-seen order, no duplicates', () => {
+    const { values } = unionPreviewColumnValues(
+      [preview(['CHK', 'SAV'], {}), preview(['SAV', 'BIZ'], {})],
+      'Account',
+    )
+    // The account value BIZ appears only in the second file — it must still surface.
+    expect(values).toEqual(['CHK', 'SAV', 'BIZ'])
+  })
+
+  it('sums the per-value counts across files', () => {
+    const { counts } = unionPreviewColumnValues(
+      [preview(['CHK'], { CHK: 3 }), preview(['CHK'], { CHK: 5 })],
+      'Account',
+    )
+    expect(counts).toEqual({ CHK: 8 })
+  })
+
+  it('is a no-op without a column, and degrades to a single preview', () => {
+    expect(unionPreviewColumnValues([preview(['CHK'], {})], null)).toEqual({ values: [], counts: {} })
+    expect(unionPreviewColumnValues([preview(['CHK'], { CHK: 2 })], 'Account'))
+      .toEqual({ values: ['CHK'], counts: { CHK: 2 } })
   })
 })

@@ -92,6 +92,43 @@ export function summarizeImportOutcome(source) {
   }
 }
 
+// Roll several single-file import results into one aggregate for the multi-file selector's completion
+// summary. Each file was imported as its own batch/card, so this only sums the headline counts; per-file
+// detail (rejected rows, duplicates, rule suggestions) stays on the individual history cards. `perFile`
+// is `[{ filename, result }]`.
+export function buildMultiFileResult(perFile) {
+  const entries = Array.isArray(perFile) ? perFile : []
+  const sum = key => entries.reduce((total, entry) => total + (Number(entry?.result?.[key]) || 0), 0)
+  return {
+    multiFile: true,
+    fileCount: entries.length,
+    perFile: entries,
+    imported: sum('imported'),
+    deduped: sum('deduped'),
+    skipped: sum('skipped'),
+    enriched_count: sum('enriched_count'),
+    money_movement_suppressed_count: sum('money_movement_suppressed_count'),
+    rejected_count: sum('rejected_count'),
+    has_imported_categories: entries.some(entry => entry?.result?.has_imported_categories),
+    // The rich single-file review affordances (raw-file review, auto-opened dialogs) don't apply to an
+    // aggregate — detail lives on the per-file cards — so these stay off.
+    trailing_non_transaction_suspected: false,
+    invalid_rows_suspected: false,
+  }
+}
+
+// The user-facing line for a file skipped during a multi-file import because its content was already
+// imported. When the matched file has the same name (or is unknown), name it once; otherwise say which
+// already-imported file it duplicates. `skip` is `{ filename, matchedFilename }`.
+export function formatSkippedImportMessage(skip) {
+  const filename = String(skip?.filename || 'This file').trim() || 'This file'
+  const matched = String(skip?.matchedFilename || '').trim()
+  if (!matched || matched === filename) {
+    return `${filename} has already been imported — Skipping`
+  }
+  return `${filename} has already been imported as ${matched} — Skipping`
+}
+
 export function getUndoTargetForSource(source) {
   if (!source) return null
   // importResult and batch records expose count fields under different shapes.

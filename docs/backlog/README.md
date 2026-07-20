@@ -36,6 +36,11 @@ delete the backlog file.
   button treatments (shared `Button` + bespoke one-offs that have drifted) and settle on one shared set
   of sizes/variants, then migrate the one-offs. Central decision is solid-vs-soft-tint primary and the
   ghost drop shadow, not just pixel size.
+- [amazon-batch-by-period.md](amazon-batch-by-period.md) — **noted, not started (2026-07-19).** Amazon
+  import batches by *drop* (one card per upload, any number of periods) rather than by *coherent period*;
+  correct for the orders+items pairing of one span but it also bundles unrelated years onto one card.
+  Direction: batch by period/order-set, keeping same-period orders+items together. Amazon-specific — the
+  CSV importer already batches per file.
 - [amazon-reconciliation-not-duplicate.md](amazon-reconciliation-not-duplicate.md) — **implemented
   (2026-07-16).** A "Not duplicates" disposition on every duplicate-flavored reconciliation row, persisted
   in the `amazon_charge_distinct` pair table (not the `txn_link` kind originally guessed) so detection

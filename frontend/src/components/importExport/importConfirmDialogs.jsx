@@ -171,6 +171,59 @@ export function MultipleSourceMatchDialog({
   )
 }
 
+// The selected files span more than one data source. Multi-file import handles one source at a time,
+// so this shows each detected source with its files and lets the user pick which source to import now.
+export function MultiFileSourceChooserDialog({ groups = [], unreadable = [], onPickGroup, onCancel }) {
+  if (!groups.length) return null
+  return (
+    <OverlayBackdrop zIndex={1200} tint="rgba(15, 23, 42, 0.38)">
+      <FloatingPanel style={{ width: 'min(620px, 100%)' }}>
+        <FloatingPanelHeader style={{ padding: '16px 20px' }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 600 }}>These files are from different data sources</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+              Files are imported one source at a time. Pick the source to import now — you can re-run for the others.
+            </div>
+          </div>
+        </FloatingPanelHeader>
+        <div style={{ padding: 20, display: 'grid', gap: 12, maxHeight: '55vh', overflowY: 'auto' }}>
+          {groups.map(group => (
+            <button
+              key={group.key}
+              type="button"
+              onClick={() => onPickGroup?.(group)}
+              style={{
+                textAlign: 'left', border: '1px solid var(--border)', borderRadius: 8,
+                padding: '12px 14px', background: 'var(--surface)', cursor: 'pointer', display: 'grid', gap: 6,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>
+                  {group.label}{group.ambiguous ? ' (choose which saved source next)' : ''}
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                  {group.files.length} file{group.files.length === 1 ? '' : 's'}
+                </span>
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {group.files.map(entry => entry.file.name).join(', ')}
+              </div>
+            </button>
+          ))}
+          {unreadable.length ? (
+            <div style={{ fontSize: 12, color: 'var(--danger)', lineHeight: 1.5 }}>
+              Could not read: {unreadable.join(', ')}
+            </div>
+          ) : null}
+        </div>
+        <DialogActions align="center">
+          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+        </DialogActions>
+      </FloatingPanel>
+    </OverlayBackdrop>
+  )
+}
+
 export function CompatibleBatchAttachDialog({ prompt, onConfirm, onCancel, attaching = false }) {
   if (!prompt) return null
   const batches = Array.isArray(prompt.batches) ? prompt.batches : []

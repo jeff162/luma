@@ -253,3 +253,68 @@ export function findProfilesMatchingPreview(previewLike, profiles) {
     profile => String(profile?.header_fingerprint || '').trim() === previewHeader,
   )
 }
+
+// Union a column's whole-file distinct values (and summed value counts) across several previews — the
+// files of one multi-file import group. This is what lets the account-mapping UI surface every account
+// value in the selection, including one that appears only in a non-first file. Values keep first-seen
+// order; counts are summed. A single preview degrades to just that preview's values, unchanged.
+export function unionPreviewColumnValues(previews, column) {
+  const values = []
+  const seen = new Set()
+  const counts = {}
+  if (!column) return { values, counts }
+  for (const preview of previews || []) {
+    for (const value of preview?.column_distinct_values?.[column] || []) {
+      if (!seen.has(value)) { seen.add(value); values.push(value) }
+    }
+    const previewCounts = preview?.column_value_counts?.[column] || {}
+    for (const [value, count] of Object.entries(previewCounts)) {
+      counts[value] = (counts[value] || 0) + (Number(count) || 0)
+    }
+  }
+  return { values, counts }
+}
+
+// Group previewed files by data source for the multi-file selector. Two files are the *same source*
+// when they share a header fingerprint (the same objective signal profile-matching uses); that grouping
+// is independent of whether a saved profile exists. Each group is labeled by its matched data source:
+// exactly one matching profile -> that source; none -> an "unknown" group (mapped by hand, using the
+// filename-suggested name); several -> ambiguous (the user still resolves *which* saved source after
+// picking the group, via the existing single-file source chooser). A file we couldn't fingerprint
+// (empty signature, usually a parse failure) is never merged with another — it gets its own group — so
+// unrelated shapes can't be silently lumped together. First-seen order is preserved.
+//
+// `entries` is an array of `{ file, preview }` (preview = the previewCsv result). Returns
+// `[{ key, fingerprint, files: [{file, preview}], matchedProfiles, profileId, ambiguous, label }]`.
+export function groupFilesBySource(entries, profiles) {
+  const groups = []
+  const byFingerprint = new Map()
+  ;(entries || []).forEach((entry, index) => {
+    if (!entry || !entry.file) return
+    const fingerprint = String(entry.preview?.header_fingerprint || '').trim()
+    // Empty fingerprint -> a unique key so un-fingerprintable files never coalesce.
+    const key = fingerprint || `__unfingerprinted_${index}__`
+    let group = fingerprint ? byFingerprint.get(fingerprint) : null
+    if (!group) {
+      group = { key, fingerprint, files: [], matchedProfiles: [], profileId: null, ambiguous: false, label: '' }
+      groups.push(group)
+      if (fingerprint) byFingerprint.set(fingerprint, group)
+    }
+    group.files.push({ file: entry.file, preview: entry.preview })
+  })
+  for (const group of groups) {
+    const representative = group.files[0]?.preview || null
+    const matched = findProfilesMatchingPreview(representative, profiles)
+    group.matchedProfiles = matched
+    group.ambiguous = matched.length > 1
+    group.profileId = matched.length === 1 ? matched[0].id : null
+    if (matched.length === 1) {
+      group.label = matched[0].name || 'Saved source'
+    } else if (matched.length > 1) {
+      group.label = matched.map(profile => profile.name).filter(Boolean).join(', ') || 'Multiple sources'
+    } else {
+      group.label = getSuggestedDataSourceName({ previewLike: representative }) || 'Unknown source'
+    }
+  }
+  return groups
+}

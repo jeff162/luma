@@ -35,6 +35,7 @@ import { ImportErrorBoundary } from '../components/importExport/ImportErrorBound
 import {
   DataSourceMismatchDialog,
   MultipleSourceMatchDialog,
+  MultiFileSourceChooserDialog,
   CompatibleBatchAttachDialog,
   DuplicateImportConfirmDialog,
   PossibleAccountMatchChooserDialog,
@@ -67,10 +68,14 @@ import {
   getSuggestedDataSourceName,
   profileHeaderClearlyMismatches,
   findProfilesMatchingPreview,
+  groupFilesBySource,
+  unionPreviewColumnValues,
 } from '../lib/importExport/importDraft.js'
 import {
   summarizeImportOutcome,
   getUndoTargetForSource,
+  buildMultiFileResult,
+  formatSkippedImportMessage,
 } from '../lib/importExport/importOutcome.js'
 import { countPendingRuleSuggestions, hasRuleSuggestionWork } from '../lib/importExport/ruleSuggestionWork.js'
 import {
@@ -152,6 +157,17 @@ function ImportTab({ onAmazonDetected }) {
   const [savedDataSourceManagerPos, setSavedDataSourceManagerPos] = useUserPreference(DATA_SOURCE_MANAGER_POS_PREF_KEY, null)
   const [stage, setStage] = useState('upload')
   const [preview, setPreview] = useState(null)
+  // Multi-file selection: the same-source group of files to import under the current mapping (the
+  // representative file's preview drives the mapping stage; runImport loops these). Empty = the ordinary
+  // single-file path, which falls back to [preview.file]. `multiSourceChoice` holds the grouped files
+  // when a selection spans more than one data source, so the user can pick which source to import.
+  const [importFiles, setImportFiles] = useState([])
+  // Previews for every file in the current multi-file group (same order as importFiles). Needed so
+  // account-column values that appear only in a *later* file still surface in the mapping UI and are
+  // routed correctly — the union across these drives the account mapping, not just the first file.
+  const [importFilePreviews, setImportFilePreviews] = useState([])
+  const [multiSourceChoice, setMultiSourceChoice] = useState(null)
+  const [multiImportProgress, setMultiImportProgress] = useState(null)
   const [profiles, setProfiles] = useState([])
   const [accounts, setAccounts] = useState([])
   const [categories, setCategories] = useState([])
@@ -516,14 +532,19 @@ function ImportTab({ onAmazonDetected }) {
     }
   }, [dataSourceManagerDragging, dataSourceManagerPos, setSavedDataSourceManagerPos])
 
-  const distinctAccountValues = useMemo(() => {
-    if (!colAccount || !preview?.column_distinct_values) return []
-    return preview.column_distinct_values[colAccount] || []
-  }, [colAccount, preview])
-  const accountValueCounts = useMemo(() => {
-    if (!colAccount || !preview?.column_value_counts) return {}
-    return preview.column_value_counts[colAccount] || {}
-  }, [colAccount, preview])
+  // Every file being imported under the current mapping: the multi-file group when there is one, else
+  // just the single previewed file. The account-column mapping unions across all of them so no value is
+  // missed when it only appears in a non-first file.
+  const importGroupPreviews = useMemo(
+    () => (importFilePreviews.length ? importFilePreviews : (preview ? [preview] : [])),
+    [importFilePreviews, preview],
+  )
+  const accountValuesUnion = useMemo(
+    () => unionPreviewColumnValues(importGroupPreviews, colAccount),
+    [colAccount, importGroupPreviews],
+  )
+  const distinctAccountValues = accountValuesUnion.values
+  const accountValueCounts = accountValuesUnion.counts
 
   // Distinct new accounts the user has chosen to create in THIS import (deduped by name). Offered
   // as targets in every other label's picker so several file labels can collapse onto one new
@@ -1490,6 +1511,8 @@ function ImportTab({ onAmazonDetected }) {
     setAccountMap({})
     setCategoryAssignments({})
     setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
+    setImportFiles([])
+    setImportFilePreviews([])
   }
 
   function performApplyProfile(profileId, previewLike = preview) {
@@ -1825,6 +1848,106 @@ function ImportTab({ onAmazonDetected }) {
     } finally { setLoading(false) }
   }
 
+  // Multi-file entry point: a shortcut for importing several files one at a time. A single file goes
+  // through the untouched single-file path; several files are previewed and grouped by data source
+  // (header fingerprint). All one source -> straight to the mapping stage carrying the file group; more
+  // than one source -> a chooser so the user picks which source to import.
+  async function handleFiles(fileList) {
+    const files = Array.from(fileList || [])
+    if (!files.length) return
+    // Route any AZAD Amazon exports to the Amazon flow (which already accepts multiple); the rest are CSV.
+    let csvFiles = files
+    if (onAmazonDetected) {
+      const amazon = []
+      csvFiles = []
+      for (const file of files) {
+        const head = await file.slice(0, 16384).text().catch(() => '')
+        if (sniffAmazonExportKind(head.split(/\r?\n/, 1)[0])) amazon.push(file)
+        else csvFiles.push(file)
+      }
+      if (amazon.length) onAmazonDetected(amazon)
+    }
+    if (!csvFiles.length) return
+    // One file: preserve the existing single-file behavior (saved drafts, source-match chooser) exactly.
+    if (csvFiles.length === 1) { handleFile(csvFiles[0]); return }
+
+    setLoading(true)
+    try {
+      const entries = []
+      const unreadable = []
+      for (const file of csvFiles) {
+        try {
+          const preview = await api.previewCsv(file)
+          entries.push({ file, preview })
+        } catch {
+          unreadable.push(file.name)
+        }
+      }
+      if (!entries.length) {
+        setNoticeDialog({
+          title: 'Failed to parse CSV',
+          description: 'None of the selected files could be read as CSV.',
+        })
+        return
+      }
+      const groups = groupFilesBySource(entries, profiles)
+      if (groups.length === 1) {
+        startGroupImport(groups[0], { unreadable })
+      } else {
+        setMultiSourceChoice({ groups, unreadable })
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Set up the mapping stage for one same-source group of files. A representative file's preview drives
+  // the mapping UI; runImport then applies that mapping to every file in `importFiles`.
+  function startGroupImport(group, { unreadable = [] } = {}) {
+    if (!group.files.length) return
+    // Drive the mapping screen from a file that hasn't already been imported, so a duplicate sitting
+    // first in the selection doesn't put the screen into the "already imported" state and block the whole
+    // import. The duplicates stay in the group and are skipped during the sequential import instead.
+    // (`previous_batch` only flags cross-session duplicates; a copy of another selected file is caught at
+    // import time.) If *every* file was already imported, there's nothing to map — say so and stop.
+    const repIndex = group.files.findIndex(entry => !entry.preview?.previous_batch)
+    if (repIndex === -1) {
+      const names = group.files.map(entry => entry.file.name)
+      setNoticeDialog({
+        title: 'Already imported',
+        description: names.length === 1
+          ? `${names[0]} has already been imported.`
+          : `All ${names.length} selected files have already been imported.`,
+      })
+      return
+    }
+    const representative = group.files[repIndex].preview
+    const representativeFile = group.files[repIndex].file
+    setMultiSourceChoice(null)
+    resetImportMappingState()
+    setShowRaw(false)
+    setShowAdvanced(false)
+    setPreview({ ...representative, file: representativeFile })
+    setAccountMap({})
+    setSingleAccountNew({ enabled: false, name: '', type: 'depository' })
+    setCategoryAssignments({})
+    setImportFiles(group.files.map(entry => entry.file))
+    setImportFilePreviews(group.files.map(entry => entry.preview))
+    if (unreadable.length) {
+      setNoticeDialog({
+        title: 'Some files were skipped',
+        description: `Could not read: ${unreadable.join(', ')}. The remaining files will be imported.`,
+      })
+    }
+    if (group.ambiguous) {
+      // The shape matches several saved sources — reuse the single-file chooser to pick which one; the
+      // file group is already staged in importFiles and survives the choice.
+      setPendingSourceMatchChoice({ previewLike: representative, matches: group.matchedProfiles })
+      return
+    }
+    proceedWithImport(group.profileId || MANUAL_DATA_SOURCE_VALUE, representative)
+  }
+
   function handleSourceMatchChoice(sourceId) {
     const pending = pendingSourceMatchChoice
     setPendingSourceMatchChoice(null)
@@ -1835,6 +1958,8 @@ function ImportTab({ onAmazonDetected }) {
   function cancelSourceMatchChoice() {
     setPendingSourceMatchChoice(null)
     setPreview(null)
+    setImportFiles([])
+    setImportFilePreviews([])
   }
 
   function handleProfileMismatchConfirm() {
@@ -1915,7 +2040,7 @@ function ImportTab({ onAmazonDetected }) {
     e.preventDefault()
     // While the explicit data-source picker is open the user must choose a source first.
     if (sourceChooserOpen) return
-    handleFile(e.dataTransfer.files[0])
+    handleFiles(e.dataTransfer.files)
   }
 
   function getColumnMap() {
@@ -2049,44 +2174,55 @@ function ImportTab({ onAmazonDetected }) {
     if (!canImport()) return
     setLoading(true)
     try {
-      let finalAccountMap = null, newAccounts = null, skipAccounts = null
-      if (colAccount) {
-        finalAccountMap = {}; newAccounts = []; skipAccounts = []
-        // Only process CSV values that actually appear in this file — the accountMap
-        // may contain stale entries from previous imports that used the same profile
-        const relevantValues = new Set(distinctAccountValues)
-        for (const [v, m] of Object.entries(accountMap)) {
-          if (!relevantValues.has(v)) continue
-          if (m.skip) skipAccounts.push(v)
-          else if (m.createNew) {
-            newAccounts.push({
-              csv_value: v,
-              name: m.newName,
-              type: m.newType,
-              ...(m.groupWithAccountId ? { group_with_account_id: m.groupWithAccountId } : {}),
-              ...(m.duplicateCompareTargetAccountId ? { duplicate_compare_account_id: m.duplicateCompareTargetAccountId } : {}),
-            })
+      // The account mapping for one file: only the CSV account values that actually appear in *that*
+      // file (its own preview's distinct values). For a same-source multi-select this means each new
+      // account is created by the first file that contains it — the backend then reuses it by name for
+      // later files (find-or-create) — and a file is never asked to create an account it has no rows for.
+      // `accountMap` may carry stale entries from other files/imports, so the per-file value set filters it.
+      const buildAccountConfig = (filePreview) => {
+        if (colAccount) {
+          const relevantValues = new Set(filePreview?.column_distinct_values?.[colAccount] || [])
+          const account_map = {}
+          const new_accounts = []
+          const skip_accounts = []
+          for (const [v, m] of Object.entries(accountMap)) {
+            if (!relevantValues.has(v)) continue
+            if (m.skip) skip_accounts.push(v)
+            else if (m.createNew) {
+              new_accounts.push({
+                csv_value: v,
+                name: m.newName,
+                type: m.newType,
+                ...(m.groupWithAccountId ? { group_with_account_id: m.groupWithAccountId } : {}),
+                ...(m.duplicateCompareTargetAccountId ? { duplicate_compare_account_id: m.duplicateCompareTargetAccountId } : {}),
+              })
+            }
+            else if (m.accountId) account_map[v] = m.accountId
           }
-          else if (m.accountId) finalAccountMap[v] = m.accountId
+          return { account_map, skip_accounts, new_accounts: new_accounts.length ? new_accounts : null }
         }
-      } else if (singleAccountNew.enabled) {
-        newAccounts = [{ csv_value: '__single_account__', name: singleAccountNew.name.trim(), type: singleAccountNew.type || 'depository' }]
+        if (singleAccountNew.enabled) {
+          return {
+            account_map: null,
+            skip_accounts: null,
+            new_accounts: [{ csv_value: '__single_account__', name: singleAccountNew.name.trim(), type: singleAccountNew.type || 'depository' }],
+          }
+        }
+        return { account_map: null, skip_accounts: null, new_accounts: null }
       }
       // Snapshot before the import so we can tell post-import whether a prior
       // profileless batch will be displaced into the unknown-source row.
       const hadPriorManualBatch = !selectedProfile && batches.some(b => !b.profile_id && !b.unknown_source_fallback)
       const columnMap = getColumnMap()
       const normalizedImportedCategorySettings = normalizeImportedCategorySettings(importedCategorySettings)
-      const result = await api.runImport(preview.file, {
+      // The mapping (columns, date/amount conventions, category settings) is identical for every file in
+      // a same-source group; only the file, its filename, and its per-file account config vary.
+      const baseConfig = {
         profile_id: selectedProfile || null,
-        filename: preview.filename,
         account_id: colAccount || singleAccountNew.enabled ? null : accountId,
         single_account_new: (!colAccount && singleAccountNew.enabled)
           ? { name: singleAccountNew.name.trim(), type: singleAccountNew.type || 'depository' }
           : null,
-        account_map: finalAccountMap,
-        skip_accounts: skipAccounts,
-        new_accounts: newAccounts?.length ? newAccounts : null,
         date_format: dateFormat,
         amount_convention: amtConv,
         column_map: columnMap,
@@ -2097,7 +2233,41 @@ function ImportTab({ onAmazonDetected }) {
         imported_category_scope_mode: normalizedImportedCategorySettings.scope_mode,
         imported_category_owner_ids: normalizedImportedCategorySettings.owner_ids,
         imported_category_unassigned_account_tokens: normalizedImportedCategorySettings.unassigned_account_tokens,
-      })
+      }
+      // Each file paired with its own preview (for the per-file account config). Single-file falls back
+      // to the previewed file, unchanged.
+      const importEntries = importFiles.length
+        ? importFiles.map((file, i) => ({ file, filePreview: importFilePreviews[i], filename: file.name }))
+        : [{ file: preview.file, filePreview: preview, filename: preview.filename }]
+      let result
+      if (importEntries.length === 1) {
+        const only = importEntries[0]
+        result = await api.runImport(only.file, { ...baseConfig, ...buildAccountConfig(only.filePreview), filename: only.filename })
+        setMultiImportProgress(null)
+      } else {
+        // Import each file as its own batch/card (the natural per-file result), one after another. A file
+        // whose content was already imported (e.g. a duplicate copy in the selection) is skipped and the
+        // rest continue — only a genuine error aborts the run.
+        const perFile = []
+        const skipped = []
+        for (let i = 0; i < importEntries.length; i++) {
+          const { file, filePreview, filename } = importEntries[i]
+          setMultiImportProgress({ current: i + 1, total: importEntries.length, filename })
+          try {
+            const fileResult = await api.runImport(file, { ...baseConfig, ...buildAccountConfig(filePreview), filename })
+            perFile.push({ filename, result: fileResult })
+          } catch (err) {
+            if (err?.status === 409 && err?.detail?.reason === 'already_imported') {
+              skipped.push({ filename, matchedFilename: err.detail.already_imported_filename || '' })
+              continue
+            }
+            throw err
+          }
+        }
+        setMultiImportProgress(null)
+        result = buildMultiFileResult(perFile)
+        result.skipped = skipped
+      }
       setImportResult(result)
       if (result.trailing_non_transaction_suspected || result.invalid_rows_suspected) setShowRaw(true)
       const refreshedAccounts = await api.getAccounts({ include_children: true })
@@ -2116,8 +2286,38 @@ function ImportTab({ onAmazonDetected }) {
       if (selectedProfile) {
         await autoSaveProfile(refreshedAccounts).catch(() => { })
       }
-      setStage(result.trailing_non_transaction_suspected ? 'review-data' : 'done')
+      if (result.multiFile) {
+        // Each file landed as its own card in the history below; summarize and return to the upload
+        // screen rather than the single-file review (whose per-file dialogs don't apply to an aggregate).
+        const skipped = result.skipped || []
+        const parts = [`${result.imported} transaction${result.imported === 1 ? '' : 's'} added`]
+        if (result.deduped) parts.push(`${result.deduped} duplicate row${result.deduped === 1 ? '' : 's'} skipped`)
+        if (result.enriched_count) parts.push(`${result.enriched_count} enriched`)
+        if (result.rejected_count) parts.push(`${result.rejected_count} row${result.rejected_count === 1 ? '' : 's'} rejected`)
+        const importedLine = result.fileCount > 0
+          ? `${parts.join(', ')}. Each file is a separate card below — open one for its per-file detail.`
+          : ''
+        const skipLines = skipped.map(formatSkippedImportMessage)
+        const totalSelected = result.fileCount + skipped.length
+        setNoticeDialog({
+          title: skipped.length
+            ? `Imported ${result.fileCount} of ${totalSelected} files`
+            : `Imported ${result.fileCount} files`,
+          description: (
+            <>
+              {importedLine ? <div>{importedLine}</div> : null}
+              {skipLines.map((line, i) => (
+                <div key={i} style={{ marginTop: (importedLine || i) ? 6 : 0 }}>{line}</div>
+              ))}
+            </>
+          ),
+        })
+        resetImport()
+      } else {
+        setStage(result.trailing_non_transaction_suspected ? 'review-data' : 'done')
+      }
     } catch (e) {
+      setMultiImportProgress(null)
       setNoticeDialog({
         title: 'Import failed',
         description: e.message,
@@ -3003,7 +3203,7 @@ function ImportTab({ onAmazonDetected }) {
             dropRef={dropRef}
             fileInputRef={fileInputRef}
             handleDrop={handleDrop}
-            handleFile={handleFile}
+            handleFiles={handleFiles}
             loading={loading}
           />
         </div>
@@ -3796,7 +3996,13 @@ function ImportTab({ onAmazonDetected }) {
           <div style={{ display: 'flex', gap: 10 }}>
             <span title={!canImport() && !loading ? getImportDisabledReason() : ''}>
               <Button onClick={runImport} disabled={!canImport() || loading}>
-                {loading ? 'Importing…' : `Import ${importableRowCount} rows`}
+                {loading
+                  ? (multiImportProgress
+                    ? `Importing ${multiImportProgress.current}/${multiImportProgress.total}…`
+                    : 'Importing…')
+                  : (importFiles.length > 1
+                    ? `Import ${importFiles.length} files`
+                    : `Import ${importableRowCount} rows`)}
               </Button>
             </span>
             <Button variant="ghost" onClick={resetImport}>Cancel</Button>
@@ -4245,6 +4451,15 @@ function ImportTab({ onAmazonDetected }) {
           onSelectProfile={handleSourceMatchChoice}
           onSelectTemporaryDraft={() => handleSourceMatchChoice(MANUAL_DATA_SOURCE_VALUE)}
           onCancel={cancelSourceMatchChoice}
+        />
+      ) : null}
+
+      {multiSourceChoice ? (
+        <MultiFileSourceChooserDialog
+          groups={multiSourceChoice.groups}
+          unreadable={multiSourceChoice.unreadable}
+          onPickGroup={group => startGroupImport(group, { unreadable: multiSourceChoice.unreadable })}
+          onCancel={() => setMultiSourceChoice(null)}
         />
       ) : null}
 

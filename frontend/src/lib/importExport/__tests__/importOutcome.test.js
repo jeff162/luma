@@ -4,7 +4,7 @@
 // exactly the kind of thing a backend field rename would silently break, so these pin it.
 
 import { describe, it, expect } from 'vitest'
-import { summarizeImportOutcome, getUndoTargetForSource } from '../importOutcome.js'
+import { summarizeImportOutcome, getUndoTargetForSource, buildMultiFileResult, formatSkippedImportMessage } from '../importOutcome.js'
 
 describe('summarizeImportOutcome', () => {
   it('returns an all-zero shape for a null source', () => {
@@ -70,5 +70,59 @@ describe('getUndoTargetForSource', () => {
 
   it('returns null for a null source', () => {
     expect(getUndoTargetForSource(null)).toBeNull()
+  })
+})
+
+describe('buildMultiFileResult', () => {
+  it('sums the headline counts across the per-file results', () => {
+    const result = buildMultiFileResult([
+      { filename: 'a.csv', result: { imported: 10, deduped: 2, skipped: 1, enriched_count: 3, rejected_count: 0 } },
+      { filename: 'b.csv', result: { imported: 5, deduped: 0, skipped: 0, enriched_count: 0, rejected_count: 4 } },
+    ])
+    expect(result.multiFile).toBe(true)
+    expect(result.fileCount).toBe(2)
+    expect(result.imported).toBe(15)
+    expect(result.deduped).toBe(2)
+    expect(result.enriched_count).toBe(3)
+    expect(result.rejected_count).toBe(4)
+    expect(result.perFile).toHaveLength(2)
+  })
+
+  it('keeps the single-file review affordances off (they do not apply to an aggregate)', () => {
+    const result = buildMultiFileResult([
+      { filename: 'a.csv', result: { imported: 1, trailing_non_transaction_suspected: true, invalid_rows_suspected: true } },
+    ])
+    expect(result.trailing_non_transaction_suspected).toBe(false)
+    expect(result.invalid_rows_suspected).toBe(false)
+  })
+
+  it('flags imported categories if any file had them', () => {
+    expect(buildMultiFileResult([
+      { filename: 'a.csv', result: { imported: 1 } },
+      { filename: 'b.csv', result: { imported: 1, has_imported_categories: true } },
+    ]).has_imported_categories).toBe(true)
+  })
+
+  it('tolerates an empty list', () => {
+    const result = buildMultiFileResult([])
+    expect(result.fileCount).toBe(0)
+    expect(result.imported).toBe(0)
+  })
+})
+
+describe('formatSkippedImportMessage', () => {
+  it('names the file once when the matched file has the same name', () => {
+    expect(formatSkippedImportMessage({ filename: 'jan.csv', matchedFilename: 'jan.csv' }))
+      .toBe('jan.csv has already been imported — Skipping')
+  })
+
+  it('names the matched file when it differs', () => {
+    expect(formatSkippedImportMessage({ filename: 'jan-copy.csv', matchedFilename: 'jan.csv' }))
+      .toBe('jan-copy.csv has already been imported as jan.csv — Skipping')
+  })
+
+  it('degrades gracefully when the matched name is unknown', () => {
+    expect(formatSkippedImportMessage({ filename: 'jan.csv' }))
+      .toBe('jan.csv has already been imported — Skipping')
   })
 })

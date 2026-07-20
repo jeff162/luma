@@ -38,7 +38,7 @@ export function ImportUploadStage({
   dropRef,
   fileInputRef,
   handleDrop,
-  handleFile,
+  handleFiles,
   loading,
   demoLoaded = false,
 }) {
@@ -266,7 +266,7 @@ export function ImportUploadStage({
                 ? 'Imports are disabled while demo data is loaded'
                 : chooserOpen
                   ? (profiles.length === 0 ? 'Create a data source or select skip to begin' : 'Choose a data source or select skip to begin')
-                  : 'Drop a CSV file here, or click to browse'}
+                  : 'Drop CSV file(s) here, or click to browse'}
             </div>
             {!chooserOpen && !hasSelectedSource && !demoLoaded ? (
               <div style={{ fontSize: 12, color: 'var(--muted)' }}>
@@ -293,9 +293,10 @@ export function ImportUploadStage({
               id="csv-file-input"
               type="file"
               accept=".csv"
+              multiple
               style={{ display: 'none' }}
               onChange={e => {
-                handleFile(e.target.files[0])
+                handleFiles(e.target.files)
                 e.target.value = ''
               }}
             />
