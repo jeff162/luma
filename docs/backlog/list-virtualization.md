@@ -1,9 +1,10 @@
 # List virtualization (render windowing for large lists)
 
-**Status:** largely done (2026-07-19). `MatchReport`, `TransactionListTable`, and the **Transactions
-ledger** are windowed through the shared `WindowedRows` component. `ImportRuleSuggestionReview` (card
-list, not a table) is the one surface left. Structural/perf work done before transaction volume grows
-large.
+**Status:** effectively complete (2026-07-19). `MatchReport`, `TransactionListTable`, and the
+**Transactions ledger** are windowed through the shared `WindowedRows` component.
+`ImportRuleSuggestionReview` (a grouped card list, not a table) is **deliberately left unwindowed** —
+it's the hard case with the weakest payoff; the obstacles and how a future attempt would tackle them are
+recorded below as notes, not as a queued task.
 
 ## Why
 
@@ -86,11 +87,59 @@ language" — virtualize once so every consumer benefits and behavior stays unif
 - ~~`TransactionListTable`~~ (+ shared `TransactionRow` cells) — **done.** The report/detail lists.
 - ~~The **Transactions ledger**~~ — **done.** Its own page-specific shell, but rows now render through
   the same `WindowedRows`.
-- `ImportRuleSuggestionReview` — many suggestion/merchant **cards** (not a pill-grid table). The one
-  surface left. `WindowedRows` is table-agnostic (it windows any list of rows), so it should drop in;
-  the open question is variable card heights and the in-card expand/collapse, which change a card's
-  height after mount — `WindowedRows` re-measures via ResizeObserver, but verify the expand animation
-  doesn't fight it.
+- `ImportRuleSuggestionReview` — the one surface left, and **deliberately not done.** See the section
+  below for why it's the hard case and what a future attempt would have to solve first — this is a
+  record of the obstacles, not a queued task.
+
+## `ImportRuleSuggestionReview`: why it's the hard case (notes, not a plan)
+
+This is the last unwindowed list, and it's excluded on purpose — meaningfully harder than the tables,
+with a weaker payoff. If someone later decides it must be windowed, these are the obstacles in the way
+and how each would have to be handled; none is a blocker alone, but together they mean this is a
+restructure, not a drop-in of `WindowedRows`.
+
+- **The list is grouped and heterogeneous, not a flat list of uniform rows.** In the normal (non-bulk)
+  view, same-merchant suggestions collapse into one bordered container (`renderMerchantGroup`), and a
+  top-level item can be any of four shapes: a single suggestion card, a conflict-set card, a
+  settled-conflict *table*, or a merchant group wrapping several of those. Heights range from ~80px to
+  1500px+. `WindowedRows` tolerates variable heights, but variance this extreme wrecks the total-size
+  estimate and reintroduces the scroll-jump jitter windowing exists to prevent. *Handling:* window at
+  the **merchant-group** granularity (the stable top-level unit), and give the virtualizer a per-item
+  `estimateSize` derived from each group's member count rather than one global constant, so the
+  estimate tracks reality before measurement corrects it. Bulk mode is already flat (one card each), so
+  it's the easy path and could be windowed independently first.
+
+- **It doesn't own a scroll container — it scrolls with the page.** Every windowed surface so far had a
+  dedicated `overflow: auto` viewport with a sticky `PillTableHeader` inside it. This component instead
+  walks up to `findNearestScrollParent`, and manually manages a sticky filter panel plus scroll
+  compensation against that outer scroller. `WindowedRows` takes a `scrollRef` and assumes that element
+  *is* the viewport. *Handling:* the honest prerequisite is giving the page a real bounded scroll
+  viewport (its own `flex:1, minHeight:0, overflow:auto` region, like the ledger's Card) — that's the
+  structural blocker and deserves its own decision, because it changes the page's scroll model and the
+  sticky-panel math. The alternative — a document-scroller windowing mode in `WindowedRows` — is new
+  surface area that was deliberately not built; don't add it for one consumer.
+
+- **It reads its own rows out of the DOM** (the same footgun the ledger's CSV copy had, in more than
+  one place). Bulk-anchor scroll restoration does
+  `listTopRef.current.querySelectorAll('[data-rule-suggestion-id]')` to find and scroll a specific card
+  into view; after windowing the target card is often not mounted. *Handling:* drive scroll-to-card
+  from the virtualizer's `scrollToIndex` against the item's position in the data, not from a DOM query.
+  Audit the whole file for other `querySelectorAll`/`getBoundingClientRect`-over-rows reads before
+  starting — 3100 lines, likely more than one.
+
+- **Cards mutate height in place** — inline category/tag/keyword editing and conflict-set expansion are
+  the *primary* interactions here, not rare events. `WindowedRows` re-measures via ResizeObserver, so
+  it copes, but each in-place growth can shift scroll position mid-edit. *Handling:* verify the
+  expand/collapse animation doesn't fight the ResizeObserver (measure on animation *end*, or measure
+  the final height and let CSS animate within it); accept that a card growing above the viewport will
+  nudge scroll, or pin the edited card as the scroll anchor.
+
+- **The payoff is smaller.** The tables could hit 6k+ rows; this is one card per *suggested rule*,
+  grouped by merchant — realistically dozens to low hundreds of top-level groups. It's the surface
+  least likely to actually stall. **If it ever does get slow, reach for memoization first:** wrap
+  `renderSuggestionCard` in `React.memo` so a single edit stops re-rendering every card (same class of
+  win as the `formatAmount` / `useDetailPanelChrome` fixes above), which is far less risky than
+  fighting the grouping, the page-level scroll, and the DOM-reading scroll restoration all at once.
 
 ## Constraints the virtualization must preserve (why it's non-trivial)
 
