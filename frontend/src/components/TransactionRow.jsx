@@ -14,7 +14,7 @@ import TransientTextInput from './TransientTextInput.jsx'
 import NoteEditor from './NoteEditor.jsx'
 import AmountDisplay from './AmountDisplay.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
-import { Tooltip } from './ui.jsx'
+import { Tooltip, ROW_HOVER_OPEN_DELAY_MS } from './ui.jsx'
 import { MerchantOriginHoverCard } from './OriginFields.jsx'
 import { hasFileOriginDetail } from '../lib/importSourceFields.js'
 import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerContext.jsx'
@@ -24,6 +24,13 @@ import { useUnifiedDuplicatesViewer } from '../contexts/UnifiedDuplicatesViewerC
  * the cells keep transient edit state local and report only committed changes back so each surface can stay
  * optimistic without forking the interaction rules for merchant rename, notes, or recategorization.
  */
+
+// Every tooltip in a transaction row goes through this so it inherits the scroll-list dwell: these rows
+// live in windowed/scrolling lists where a resting cursor would otherwise strobe a hint at each row that
+// scrolls past. A caller can still override `openDelay` if it needs to. See ui-patterns.md.
+function RowTooltip({ openDelay = ROW_HOVER_OPEN_DELAY_MS, ...props }) {
+  return <Tooltip openDelay={openDelay} {...props} />
+}
 
 const detailButtonStyle = {
   background: 'none',
@@ -321,16 +328,16 @@ export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true })
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0, maxWidth: '100%' }}>
       {showOriginHover ? (
-        <Tooltip
+        <RowTooltip
           content={<MerchantOriginHoverCard txn={txn} />}
           maxWidth={380}
           triggerStyle={{ minWidth: 0, flex: '0 1 auto', maxWidth: '100%' }}
         >
           {labelSpan}
-        </Tooltip>
+        </RowTooltip>
       ) : labelSpan}
       {onOpenDetail && showReport && (
-        <Tooltip content="Open merchant spending report">
+        <RowTooltip content="Open merchant spending report">
           <button
             // The merchant report and the transaction editor share one panel (TransactionDetail). The
             // `↗` wants the merchant *report* (activity only), so it tags the open payload; the panel
@@ -342,7 +349,7 @@ export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true })
             aria-label="Open merchant spending report"
             style={{ ...detailButtonStyle, flexShrink: 0 }}
           >↗</button>
-        </Tooltip>
+        </RowTooltip>
       )}
     </div>
   )
@@ -411,7 +418,7 @@ function TagLetterChip({ tag, inherited, onClick }) {
     ? `${tag.name} (inherited from ${tag.source})`
     : tag.name
   return (
-    <Tooltip content={tooltip} maxWidth={MAX_TAG_TOOLTIP_WIDTH}>
+    <RowTooltip content={tooltip} maxWidth={MAX_TAG_TOOLTIP_WIDTH}>
       <button
         type="button"
         onClick={event => {
@@ -442,7 +449,7 @@ function TagLetterChip({ tag, inherited, onClick }) {
       >
         {getTagLetter(tag)}
       </button>
-    </Tooltip>
+    </RowTooltip>
   )
 }
 
@@ -470,7 +477,7 @@ function TagStackChip({ tags, onClick }) {
     </div>
   )
   return (
-    <Tooltip content={tooltip} maxWidth={MAX_TAG_TOOLTIP_WIDTH}>
+    <RowTooltip content={tooltip} maxWidth={MAX_TAG_TOOLTIP_WIDTH}>
       <button
         type="button"
         onClick={event => {
@@ -515,7 +522,7 @@ function TagStackChip({ tags, onClick }) {
           {tags.length}
         </span>
       </button>
-    </Tooltip>
+    </RowTooltip>
   )
 }
 
@@ -623,7 +630,7 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
         resized over it. paddingLeft keeps a small margin between the cut text and the first marker. */}
       <div ref={markerStripRef} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, alignSelf: 'stretch', background: 'var(--surface)', paddingLeft: 6 }}>
         {txn.needs_review ? (
-          <Tooltip
+          <RowTooltip
             content={<span>Needs review — recently imported and not yet looked over. Clears when you edit its category or mark it reviewed.</span>}
             maxWidth={MAX_TAG_TOOLTIP_WIDTH}
           >
@@ -633,10 +640,10 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
             >
               R
             </span>
-          </Tooltip>
+          </RowTooltip>
         ) : null}
         {txn.recurring_series_id ? (
-          <Tooltip
+          <RowTooltip
             content={<span>Part of a recurring series.</span>}
             maxWidth={MAX_TAG_TOOLTIP_WIDTH}
           >
@@ -646,10 +653,10 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
             >
               ↻
             </span>
-          </Tooltip>
+          </RowTooltip>
         ) : null}
         {txn.suspect_duplicate_of ? (
-          <Tooltip
+          <RowTooltip
             content={<span>Possible duplicate of another transaction. Click to review.</span>}
             maxWidth={MAX_TAG_TOOLTIP_WIDTH}
           >
@@ -680,10 +687,10 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
             >
               ⚠
             </button>
-          </Tooltip>
+          </RowTooltip>
         ) : null}
         {hasNote ? (
-          <Tooltip
+          <RowTooltip
             content={<span style={{ whiteSpace: 'pre-wrap' }}>{txn.notes}</span>}
             maxWidth={MAX_NOTE_TOOLTIP_WIDTH}
           >
@@ -698,7 +705,7 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
             >
               <NoteGlyph size={13} />
             </button>
-          </Tooltip>
+          </RowTooltip>
         ) : null}
         {useStack ? (
           <TagStackChip tags={visibleTags} onClick={() => setShowTags(true)} />
@@ -738,7 +745,7 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
           </RowPopoverPortal>
         ) : null}
         {excludedFromTotals ? (
-          <Tooltip
+          <RowTooltip
             content={<span>Not counted in spending totals — its category is in a group excluded from totals (e.g. Transfers).</span>}
             maxWidth={MAX_TAG_TOOLTIP_WIDTH}
           >
@@ -748,7 +755,7 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
             >
               ⊘
             </span>
-          </Tooltip>
+          </RowTooltip>
         ) : null}
       </div>
       {/* The amount sits in a stable min-width slot so the marker strip to its left anchors at a
@@ -761,7 +768,7 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
         style={{ display: 'flex', justifyContent: 'flex-end', minWidth: 72, flexShrink: 0, ...(excludedFromTotals ? { opacity: 0.5 } : {}) }}
       />
       {onOpenDetail ? (
-        <Tooltip content="Edit transaction…">
+        <RowTooltip content="Edit transaction…">
           <button
             type="button"
             onClick={event => {
@@ -773,7 +780,7 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
           >
             <PencilGlyph size={13} />
           </button>
-        </Tooltip>
+        </RowTooltip>
       ) : null}
     </div>
   )
@@ -865,13 +872,13 @@ export function CategoryCell({ txn, categories, onSave, onAddCategory, onRulePro
         />
       </div>
       {onOpenDetail && txn.category_name && (
-        <Tooltip content="View category spending history">
+        <RowTooltip content="View category spending history">
           <button
             onClick={e => { e.stopPropagation(); onOpenDetail() }}
             aria-label="View category spending history"
             style={detailButtonStyle}
           >↗</button>
-        </Tooltip>
+        </RowTooltip>
       )}
     </div>
   )

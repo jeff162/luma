@@ -15,10 +15,11 @@
  * floating-panel backdrop to whatever's behind.
  */
 
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { formatDate } from '../lib/utils.js'
 import { CategoryCell, MerchantCell, TransactionAmountCell, getTxnMerchantLabel } from './TransactionRow.jsx'
 import PillGridTable from './PillGridTable.jsx'
+import WindowedRows from './WindowedRows.jsx'
 import { SelectAllCheckbox } from './ui.jsx'
 import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
 import { useTransactionRowActions, TransactionRowActionsChrome } from '../lib/useTransactionRowActions.jsx'
@@ -157,6 +158,15 @@ export default function TransactionListTable({
   bulkSelection = null,
   bulkTotal = 0,
 }) {
+  // The wrapper below is both the scroll viewport the rows window against and the element callers
+  // attach infinite-scroll to, so it needs a ref whether or not the caller passed one.
+  const internalScrollRef = useRef(null)
+  const attachScrollRef = useCallback(node => {
+    internalScrollRef.current = node
+    if (typeof scrollRef === 'function') scrollRef(node)
+    else if (scrollRef) scrollRef.current = node
+  }, [scrollRef])
+
   const externallyControlled = typeof externalOnSort === 'function'
   const [internalSortState, setInternalSortState] = useState(null)
   const sortState = externallyControlled ? externalSortState : internalSortState
@@ -285,10 +295,12 @@ export default function TransactionListTable({
     }
   }
 
-  function renderRows(columns, gridTemplateColumns) {
-    return visibleRows.map(txn => (
+  // One row. Rendered through WindowedRows, so only the rows near the viewport exist in the DOM —
+  // note there is deliberately no `content-visibility` here: windowing already keeps unmounted rows out
+  // of layout, and the intrinsic-size placeholder would feed the virtualizer a wrong measurement.
+  function renderRow(columns, gridTemplateColumns, txn) {
+    return (
       <div
-        key={txn.id}
         onContextMenu={rowMenuEnabled ? e => rowActions.onContextMenu(e, txn) : undefined}
         style={{
           display: 'grid',
@@ -297,10 +309,6 @@ export default function TransactionListTable({
           alignItems: 'center',
           fontSize: 13,
           borderBottom: '1px solid var(--border)',
-          // Skip style/layout/paint for off-screen rows so a column resize only re-styles the visible
-          // rows, not every loaded row. contain-intrinsic-size reserves scroll space for skipped rows.
-          contentVisibility: 'auto',
-          containIntrinsicSize: 'auto 41px',
           ...getRowStyle?.(txn),
         }}
       >
@@ -318,7 +326,7 @@ export default function TransactionListTable({
           </div>
         ))}
       </div>
-    ))
+    )
   }
 
   if (!rows.length) {
@@ -377,7 +385,7 @@ export default function TransactionListTable({
         which subtly changes the wrapper's measured size and throws off the floating detail
         panel's initial centered position. */}
       <div
-        ref={scrollRef}
+        ref={attachScrollRef}
         style={{
           border: '1px solid var(--border)',
           borderRadius: 10,
@@ -398,9 +406,14 @@ export default function TransactionListTable({
             zIndex: 2,
           }}
           renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
-            <div>
-              {renderRows(activeColumns, gridTemplateColumns)}
-            </div>
+            <WindowedRows
+              scrollRef={internalScrollRef}
+              items={visibleRows}
+              getItemKey={txn => txn.id}
+              estimateSize={41}
+              measureKey={activeColumns.map(col => col.width).join(',')}
+              renderRow={txn => renderRow(activeColumns, gridTemplateColumns, txn)}
+            />
           )}
         />
       </div>

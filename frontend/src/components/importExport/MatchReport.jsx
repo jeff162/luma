@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import React, { useCallback, useEffect, useMemo, useRef } from 'react'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import React, { useMemo, useRef } from 'react'
 import { Spinner, EmptyState, SelectAllCheckbox } from '../ui.jsx'
 import PillGridTable from '../PillGridTable.jsx'
+import WindowedRows from '../WindowedRows.jsx'
 import { useColumnPreference } from '../../lib/useColumnPreference.js'
 
 // The shared match-report table: a sortable list where each row is one match entry (typically a left
@@ -108,23 +108,10 @@ export function MatchReport({
     [columns],
   )
 
-  const rowVirtualizer = useVirtualizer({
-    count: entries.length,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => estimatedRowHeight,
-    // Entry identity, not list position, so a re-sort or a filter change re-keys the measurement cache
-    // instead of reusing the previous row's height at that index.
-    getItemKey: useCallback(index => getRowId(entries[index], index), [entries, getRowId]),
-    overscan: 10,
-  })
-
-  // A column resize changes how much row content wraps, so every cached row height is stale. The live
+  // A column resize changes how much row content wraps, so every cached row height goes stale. The live
   // drag mutates the CSS var straight on the DOM (PillGridTable never re-renders during the gesture) and
   // the per-row ResizeObserver catches that; this covers the committed change, which does re-render.
   const gridSignature = cols.map(col => col.width).join(',')
-  useEffect(() => {
-    rowVirtualizer.measure()
-  }, [gridSignature, rowVirtualizer])
 
   const headerColumns = useMemo(
     () => cols.map(col => (
@@ -153,8 +140,6 @@ export function MatchReport({
   if (error) return <div style={{ padding: '12px 16px', color: 'var(--danger)' }}>{error}</div>
   if (entries.length === 0) return <div style={{ padding: '12px 16px' }}><EmptyState message={emptyMessage} /></div>
 
-  const virtualRows = rowVirtualizer.getVirtualItems()
-
   return (
     <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
       <PillGridTable
@@ -171,26 +156,18 @@ export function MatchReport({
           boxShadow: '0 1px 0 var(--border)',
         }}
         renderBody={({ gridTemplateColumns }) => (
-          // The spacer carries the full scroll height; the inner wrapper is offset to the first mounted
-          // row so each row can be measured at its natural height (the dynamic-measurement pattern —
-          // per-row absolute positioning fights ResizeObserver).
-          <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative', fontSize: 12 }}>
-            <div style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: '100%',
-              transform: `translateY(${virtualRows[0]?.start ?? 0}px)`,
-            }}>
-              {virtualRows.map(virtualRow => {
-                const entry = entries[virtualRow.index]
-                const id = getRowId(entry, virtualRow.index)
+          <div style={{ fontSize: 12 }}>
+            <WindowedRows
+              scrollRef={scrollRef}
+              items={entries}
+              getItemKey={getRowId}
+              estimateSize={estimatedRowHeight}
+              measureKey={gridSignature}
+              renderRow={(entry, index) => {
+                const id = getRowId(entry, index)
                 const stripe = getRowStripe ? getRowStripe(entry) : 'var(--border)'
                 return (
                   <div
-                    key={virtualRow.key}
-                    data-index={virtualRow.index}
-                    ref={rowVirtualizer.measureElement}
                     style={{
                       display: 'grid',
                       gridTemplateColumns,
@@ -219,8 +196,8 @@ export function MatchReport({
                     ))}
                   </div>
                 )
-              })}
-            </div>
+              }}
+            />
           </div>
         )}
       />

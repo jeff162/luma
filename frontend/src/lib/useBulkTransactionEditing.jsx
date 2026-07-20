@@ -184,7 +184,10 @@ export function useBulkTransactionEditing({
 
 // Action bar (shown in bulk mode) plus the edit/confirm/notice dialogs. Render once next to the table;
 // the dialogs self-gate on their own open state, so the notice still shows after bulk mode exits.
-export function BulkEditChrome({ controller, barStyle }) {
+// `actions` is an optional slot for surface-specific bulk actions, rendered before Clear. Only the
+// Transactions ledger uses it so far (Copy as CSV, which needs that page's column set to build the
+// rows); everything shared stays in the bar itself so the common surfaces keep one identical set.
+export function BulkEditChrome({ controller, barStyle, actions = null }) {
   const {
     bulkMode, selectedCount, selection, categories,
     showPanel, setShowPanel, applying, pendingTrash, setPendingTrash,
@@ -208,6 +211,7 @@ export function BulkEditChrome({ controller, barStyle }) {
             <Button small onClick={() => setShowPanel(true)} disabled={selectedCount === 0}>Edit…</Button>
             <Button small variant="ghost" onClick={() => runActions([{ type: 'mark_reviewed' }])} disabled={selectedCount === 0 || applying}>Mark reviewed</Button>
             <Button small variant="ghost" onClick={() => setPendingTrash(true)} disabled={selectedCount === 0}>Move to trash</Button>
+            {actions}
             {selectedCount > 0 ? (
               <Button small variant="ghost" onClick={() => selection.clear()}>Clear</Button>
             ) : null}

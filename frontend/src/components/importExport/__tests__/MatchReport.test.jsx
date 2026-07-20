@@ -68,8 +68,13 @@ function renderReport(props = {}, { initialPreferences = {} } = {}) {
   )
 }
 
+// WindowedRows owns the measured `[data-index]` wrapper; the report's own grid row is its child.
 function rowElements(container) {
   return container.querySelectorAll('[data-index]')
+}
+
+function rowGrid(container, index) {
+  return rowElements(container)[index].firstElementChild
 }
 
 describe('MatchReport windowing', () => {
@@ -143,10 +148,9 @@ describe('MatchReport selection stays scoped to the full entry list', () => {
 describe('MatchReport column geometry', () => {
   it('builds one fixed grid template so widths cannot shift as rows mount and unmount', () => {
     const { container } = renderReport()
-    const row = rowElements(container)[0]
 
     // Every row consumes the same published template rather than sizing itself from its own content.
-    expect(row.style.gridTemplateColumns).toBe('var(--pgt-grid)')
+    expect(rowGrid(container, 0).style.gridTemplateColumns).toBe('var(--pgt-grid)')
   })
 
   it('applies persisted widths over the column defaults', () => {

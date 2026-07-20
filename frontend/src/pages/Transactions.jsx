@@ -23,6 +23,7 @@ import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import CopyTransactionsButton from '../components/CopyTransactionsButton.jsx'
+import WindowedRows from '../components/WindowedRows.jsx'
 
 const COLUMN_DEFS = [
   { key: 'date', label: 'Date', defaultWidth: 100, minWidth: 70 },
@@ -542,38 +543,60 @@ export default function Transactions() {
     ]
   }, [bulkMode, tableColumns, allMatchingSelected, bulkSelectedCount, selection])
 
-  const handleTransactionCopy = useCallback((event) => {
-    const root = listScrollRef.current
-    const selection = window.getSelection?.()
-    if (!root || !selection || selection.isCollapsed || selection.rangeCount === 0) return
+  // CSV copy runs off the bulk selection rather than off a dragged text selection. It used to read the
+  // rows back out of the DOM and intersect them with the browser's selection range, which only worked
+  // because every loaded row was a real node; now that the ledger is windowed, a drag could only ever
+  // reach the rows currently mounted. Driving it from the selection is both windowing-safe and strictly
+  // more capable — select-all-matching can copy the whole filtered result, which no drag could.
+  const [copyStatus, setCopyStatus] = useState('')
+  const [copying, setCopying] = useState(false)
 
-    const range = selection.getRangeAt(0)
-    const rowIds = Array.from(root.querySelectorAll('[data-txn-copy-row]'))
-      .filter(row => {
-        try {
-          return range.intersectsNode(row)
-        } catch {
-          return false
-        }
-      })
-      .map(row => row.getAttribute('data-txn-copy-row'))
-      .filter(Boolean)
+  const copySelectedTransactions = useCallback(async () => {
+    setCopying(true)
+    setCopyStatus('')
+    try {
+      // In all-matching mode the selection reaches past the loaded pages, so re-resolve it from the
+      // server using the same filter *and sort* the list is showing — otherwise the CSV would come out
+      // in a different order than what the user is looking at.
+      let candidates = data.transactions
+      if (selection.allMatching && data.transactions.length < data.total) {
+        const response = await api.getTransactions({
+          ...currentFilterParams,
+          sort_by: sortState.key,
+          sort_dir: sortState.dir,
+          limit: data.total,
+          offset: 0,
+        })
+        candidates = response.transactions || []
+      }
 
-    if (rowIds.length === 0) return
+      const selected = candidates.filter(txn => selection.isSelected(txn.id))
+      const csvText = selected
+        .map(txn => cols.map(col => escapeCsvClipboardCell(formatTransactionClipboardCell(col.key, txn, { showSourceInCategorySlot }))).join(','))
+        .join('\r\n')
 
-    const txnById = new Map(data.transactions.map(txn => [txn.id, txn]))
-    const csvText = rowIds
-      .map(id => txnById.get(id))
-      .filter(Boolean)
-      .map(txn => cols.map(col => escapeCsvClipboardCell(formatTransactionClipboardCell(col.key, txn, { showSourceInCategorySlot }))).join(','))
-      .join('\r\n')
+      if (!csvText) {
+        setCopyStatus('Nothing to copy')
+        return
+      }
+      // writeText only: the clipboard API restricts which MIME types a page may write, so the old
+      // copy-event handler's parallel text/csv flavour isn't available here. Spreadsheets paste CSV
+      // text fine.
+      await navigator.clipboard.writeText(csvText)
+      setCopyStatus(`Copied ${selected.length} row${selected.length === 1 ? '' : 's'}`)
+    } catch {
+      setCopyStatus('Copy failed')
+    } finally {
+      setCopying(false)
+    }
+  }, [cols, currentFilterParams, data.total, data.transactions, selection, showSourceInCategorySlot, sortState])
 
-    if (!csvText) return
-
-    event.preventDefault()
-    event.clipboardData.setData('text/plain', csvText)
-    event.clipboardData.setData('text/csv', csvText)
-  }, [cols, data.transactions, showSourceInCategorySlot])
+  // Clear the transient status so it doesn't linger next to a selection it no longer describes.
+  useEffect(() => {
+    if (!copyStatus) return undefined
+    const timer = setTimeout(() => setCopyStatus(''), 2500)
+    return () => clearTimeout(timer)
+  }, [copyStatus])
 
   function renderCell(col, txn) {
     switch (col.key) {
@@ -821,7 +844,24 @@ export default function Transactions() {
           </div>
         </div>
 
-        <BulkEditChrome controller={bulk} barStyle={{ marginBottom: 12 }} />
+        <BulkEditChrome
+          controller={bulk}
+          barStyle={{ marginBottom: 12 }}
+          actions={
+            <>
+              <Button
+                small
+                variant="ghost"
+                onClick={copySelectedTransactions}
+                disabled={bulkSelectedCount === 0 || copying}
+                title="Copy the selected transactions as CSV"
+              >
+                {copying ? 'Copying…' : 'Copy as CSV'}
+              </Button>
+              {copyStatus ? <span style={{ fontSize: 12, color: 'var(--muted)', alignSelf: 'center' }}>{copyStatus}</span> : null}
+            </>
+          }
+        />
 
         {/* Card clips the rounded corners; the inner div is the actual scroll viewport
             so the sticky PillTableHeader inside pins to it. listScrollRef + maybeLoadMore
@@ -831,7 +871,6 @@ export default function Transactions() {
           <div
             ref={listScrollRef}
             onScroll={maybeLoadMore}
-            onCopy={handleTransactionCopy}
             style={{ overflowX: 'auto', overflowY: 'auto', flex: 1, minHeight: 0 }}
           >
             <PillGridTable
@@ -850,43 +889,46 @@ export default function Transactions() {
                   {initialLoading ? <Spinner /> : data.transactions.length === 0 ? (
                     <EmptyState message={quickFilter.trim() ? 'No matching transactions' : 'No transactions found'} />
                   ) : (
-                    data.transactions.map(txn => (
-                      <div
-                        key={txn.id}
-                        data-txn-copy-row={txn.id}
-                        onContextMenu={e => rowActions.onContextMenu(e, txn)}
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns,
-                          padding: '9px 14px', alignItems: 'center',
-                          borderBottom: '1px solid var(--border)',
-                          fontSize: 13,
-                          background: editId === txn.id ? 'var(--surface2)' : 'transparent',
-                          minWidth: 0,
-                          // Skip style/layout/paint for off-screen rows so a column resize (which
-                          // re-styles the grid template) only touches visible rows, not the whole
-                          // infinitely-scrolled ledger. contain-intrinsic-size reserves scroll space.
-                          contentVisibility: 'auto',
-                          containIntrinsicSize: 'auto 40px',
-                        }}
-                      >
-                        {activeColumns.map(col => (
-                          <div
-                            key={col.key}
-                            style={{
-                              minWidth: 0,
-                              ...(col.key === BULK_SELECT_COLUMN_KEY
-                                ? { display: 'flex', justifyContent: 'center' }
-                                : col.key === 'amount'
-                                  ? {}
-                                  : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
-                            }}
-                          >
-                            {renderCell(col, txn)}
-                          </div>
-                        ))}
-                      </div>
-                    ))
+                    // Windowed: only the rows near the viewport are in the DOM. No `content-visibility`
+                    // here — windowing already keeps unmounted rows out of layout, and the
+                    // intrinsic-size placeholder would feed the virtualizer a wrong measurement.
+                    <WindowedRows
+                      scrollRef={listScrollRef}
+                      items={data.transactions}
+                      getItemKey={txn => txn.id}
+                      estimateSize={40}
+                      measureKey={activeColumns.map(col => col.width).join(',')}
+                      renderRow={txn => (
+                        <div
+                          onContextMenu={e => rowActions.onContextMenu(e, txn)}
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns,
+                            padding: '9px 14px', alignItems: 'center',
+                            borderBottom: '1px solid var(--border)',
+                            fontSize: 13,
+                            background: editId === txn.id ? 'var(--surface2)' : 'transparent',
+                            minWidth: 0,
+                          }}
+                        >
+                          {activeColumns.map(col => (
+                            <div
+                              key={col.key}
+                              style={{
+                                minWidth: 0,
+                                ...(col.key === BULK_SELECT_COLUMN_KEY
+                                  ? { display: 'flex', justifyContent: 'center' }
+                                  : col.key === 'amount'
+                                    ? {}
+                                    : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+                              }}
+                            >
+                              {renderCell(col, txn)}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    />
                   )}
                   {!initialLoading && data.transactions.length > 0 ? (
                     <div style={{ padding: '12px 14px', textAlign: 'center', color: 'var(--muted)', fontSize: 11 }}>

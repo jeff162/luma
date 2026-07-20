@@ -1,7 +1,9 @@
 # List virtualization (render windowing for large lists)
 
-**Status:** in progress. `MatchReport` is **done** (2026-07-19); the remaining surfaces below are still
-unwindowed. Structural/perf work to do before transaction volume grows large.
+**Status:** largely done (2026-07-19). `MatchReport`, `TransactionListTable`, and the **Transactions
+ledger** are windowed through the shared `WindowedRows` component. `ImportRuleSuggestionReview` (card
+list, not a table) is the one surface left. Structural/perf work done before transaction volume grows
+large.
 
 ## Why
 
@@ -48,9 +50,27 @@ Re-baseline any measurement with the **DevTools Components panel closed** on a *
   - **Each report needs its own column pref key** (`normalizeColumnConfig` drops unknown keys and appends
     defaults, so sharing one key across different column sets silently merges them). The Amazon
     import-detail dialog keys per *category tab* for the same reason.
+- **`TransactionListTable` + the Transactions ledger are windowed (2026-07-19).** Both now render rows
+  through the shared **`WindowedRows`** component (`components/WindowedRows.jsx`), extracted from
+  `MatchReport` so all three share one windowing implementation (and the measurement/anchoring
+  subtleties live in one place). Notes specific to these two:
+  - **`content-visibility: auto` was removed from both.** Each row previously carried
+    `content-visibility: auto` + `contain-intrinsic-size` to skip layout/paint for off-screen rows.
+    That is redundant under windowing (unmounted rows aren't in layout at all) and actively harmful: an
+    off-screen row reports its intrinsic-size *placeholder* instead of its true height, feeding the
+    virtualizer a wrong measurement. Don't reintroduce it on a windowed row.
+  - **The ledger's drag-select → Ctrl-C CSV copy was rebuilt on the bulk selection.** It used to read
+    rows back out of the DOM (`data-txn-copy-row`) and intersect them with the browser's selection
+    range, which only worked because every loaded row was a real node. It now runs off
+    `useTransactionSelection` via a **Copy as CSV** button in the bulk bar (an opt-in `actions` slot on
+    `BulkEditChrome`), and in all-matching mode re-fetches the full filtered result with the list's sort
+    so the CSV order matches the screen — strictly more capable than the old drag (can copy every
+    matching row, not just what fit on screen). `navigator.clipboard.writeText` only (the async
+    clipboard API restricts writable MIME types, so the old parallel `text/csv` flavour is gone; CSV
+    text pastes into spreadsheets fine).
 - **Ledger fetch is already server-paginated** (`/transactions`, `limit` + incremental load, sorted
-  server-side — see `ui-patterns.md` "Long transaction ledgers…"). That bounds the *fetch*, but loaded
-  pages still accumulate as DOM nodes; the ledger is **not** DOM-virtualized.
+  server-side — see `ui-patterns.md` "Long transaction ledgers…"). That bounds the *fetch*; windowing
+  now also bounds the DOM as loaded pages grow.
 
 ## The fix
 
@@ -60,13 +80,17 @@ DOM node count stays ~constant regardless of dataset size.
 **Build it into the shared table shells, not per page** (per `ui-patterns.md` "shared product
 language" — virtualize once so every consumer benefits and behavior stays uniform):
 
-- ~~`MatchReport`~~ — **done, see "Already done" above.** Was the worst offender and the spike surface.
-  Its sort and selection stay **controlled** by the consuming report: the windower drives
-  `onHeaderClick` / `selectedIds` / select-all against the full entry list, never the mounted subset.
-- `TransactionListTable` (+ shared `TransactionRow` cells) — the report/detail lists.
-- The **Transactions ledger** renders its own rows (page-specific shell) but shares the row
-  cells/controllers; it needs windowing too as loaded pages grow.
-- `ImportRuleSuggestionReview` — many suggestion/merchant cards.
+- ~~`MatchReport`~~ — **done.** Was the worst offender and the spike surface. Sort/selection stay
+  **controlled** by the consuming report: the windower drives `onHeaderClick` / `selectedIds` /
+  select-all against the full entry list, never the mounted subset.
+- ~~`TransactionListTable`~~ (+ shared `TransactionRow` cells) — **done.** The report/detail lists.
+- ~~The **Transactions ledger**~~ — **done.** Its own page-specific shell, but rows now render through
+  the same `WindowedRows`.
+- `ImportRuleSuggestionReview` — many suggestion/merchant **cards** (not a pill-grid table). The one
+  surface left. `WindowedRows` is table-agnostic (it windows any list of rows), so it should drop in;
+  the open question is variable card heights and the in-card expand/collapse, which change a card's
+  height after mount — `WindowedRows` re-measures via ResizeObserver, but verify the expand animation
+  doesn't fight it.
 
 ## Constraints the virtualization must preserve (why it's non-trivial)
 
