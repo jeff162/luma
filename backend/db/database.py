@@ -103,7 +103,7 @@ def get_db(db_path: str | None = None):
 # rule-backed recurring series (`category_rule.is_recurring` + `recurring_series.rule_id`; the
 # `recurring_membership_override` table is created by the same CREATE TABLE IF NOT EXISTS script).
 
-CURRENT_VERSION = 11
+CURRENT_VERSION = 12
 
 MIGRATIONS = {}
 
@@ -281,6 +281,17 @@ def _add_import_profile_source_kind(conn):
     # PayPal imports attach to (so PayPal imports group under one header and share one money-movement
     # review). Fresh installs get the column from the csv_import_profile baseline; existing databases here.
     conn.execute("ALTER TABLE csv_import_profile ADD COLUMN source_kind TEXT")
+
+
+@migration(12)
+def _add_import_batch_recon_cache(conn):
+    # Cache for the Amazon reconciliation attention count (expensive to compute; read on every history load
+    # and Tasks poll). recon_attention_count holds the last computed value; recon_epoch holds the global
+    # recon epoch it was computed at, so a batch trailing the current epoch is recomputed lazily. Fresh
+    # installs get both columns from the import_batch baseline CREATE TABLE; the epoch-bump triggers are
+    # created for both paths after run_migrations (they reference tables that exist by then).
+    conn.execute("ALTER TABLE import_batch ADD COLUMN recon_attention_count INTEGER")
+    conn.execute("ALTER TABLE import_batch ADD COLUMN recon_epoch INTEGER")
 
 
 def get_db_version(conn) -> int:
@@ -656,7 +667,13 @@ def init_db(db_path: str | None = None):
                 -- Provenance class of the import, for history grouping. NULL = an ordinary CSV import;
                 -- 'marketplace:<vendor>' (e.g. 'marketplace:amazon') marks a dedicated marketplace
                 -- importer's batch so the history groups it under that vendor instead of "unknown source".
-                source_kind      TEXT
+                source_kind      TEXT,
+                -- Cached Amazon reconciliation "attention" count (a duplicate/split to resolve), with the
+                -- global recon epoch (db_meta 'recon_epoch') it was computed at. Recomputed lazily only when
+                -- the batch's epoch trails the current one; see amazon.reconciliation_attention_count and the
+                -- recon-epoch triggers created after run_migrations. NULL = never computed.
+                recon_attention_count INTEGER,
+                recon_epoch      INTEGER
             );
             CREATE INDEX IF NOT EXISTS idx_import_batch_file_hash ON import_batch(file_content_hash);
 
@@ -834,7 +851,49 @@ def init_db(db_path: str | None = None):
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_recurring_override_pin ON recurring_membership_override(txn_id) WHERE state = 'pinned'"
         )
+        _create_recon_epoch_triggers(conn)
         ensure_shared_owner(conn)
+
+
+# The Amazon reconciliation attention count (a duplicate charge to merge, or a split suggestion to
+# confirm) is surfaced per batch in the import history and summed into the Tasks nag — both read paths, hit
+# often. Computing it live per batch runs the whole reconciliation, so it is cached on the batch and
+# recomputed lazily only when stale (see amazon.reconciliation_attention_count). "Stale" is a single
+# monotonic epoch in db_meta ('recon_epoch'): any write to a table the reconciliation reads bumps it, and a
+# batch whose stored recon_epoch trails it is recomputed on the next read.
+#
+# These are triggers, not Python bump calls at each mutation, on purpose: the charge-affecting writes are
+# scattered across many endpoints (every transaction edit, link/unlink, account merge/detach, funding-map
+# change, "not duplicates" assertion), and a single missed site would silently show a stale count — the bug
+# a persisted cache is most prone to. A trigger on each source table makes a miss impossible. Over-
+# invalidation (e.g. a category or tag edit that can't change the count still touches `txn`) is harmless:
+# it only forces one recompute on the next read. The accessor's own cache write targets import_batch, which
+# has no trigger, so there is no feedback loop.
+_RECON_EPOCH_SOURCE_TABLES = {
+    "txn":                    ("INSERT", "UPDATE", "DELETE"),
+    "txn_link":               ("INSERT", "UPDATE", "DELETE"),
+    "txn_link_member":        ("INSERT", "UPDATE", "DELETE"),
+    "account":                ("INSERT", "UPDATE", "DELETE"),
+    "amazon_funding_map":     ("INSERT", "UPDATE", "DELETE"),
+    "amazon_charge_distinct": ("INSERT", "DELETE"),
+}
+
+
+def _create_recon_epoch_triggers(conn: sqlite3.Connection) -> None:
+    """Create (idempotently) the triggers that bump db_meta 'recon_epoch' on any write to a table the
+    Amazon reconciliation reads. Runs after run_migrations so every referenced table — including the ones a
+    migration adds (amazon_funding_map, amazon_charge_distinct) — and db_meta exist on both fresh and
+    migrated databases."""
+    for table, events in _RECON_EPOCH_SOURCE_TABLES.items():
+        for event in events:
+            conn.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS trg_recon_epoch_{table}_{event.lower()}
+                AFTER {event} ON {table}
+                BEGIN
+                    INSERT INTO db_meta (key, value) VALUES ('recon_epoch', 1)
+                    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1;
+                END
+            """)
 
 
 def _seed_default_categories(conn: sqlite3.Connection, *, include_leaves: bool = False):

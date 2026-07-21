@@ -1143,14 +1143,49 @@ def amazon_reconciliation(conn: sqlite3.Connection, batch_id: str) -> dict:
     }
 
 
-def reconciliation_attention_count(conn: sqlite3.Connection, batch_id: str) -> int:
+def _compute_reconciliation_attention(conn: sqlite3.Connection, batch_id: str) -> int:
     """How many of a batch's orders need the user to *act* — a duplicate charge to merge/discard, or a
-    Matched·review split suggestion to accept/dismiss. Powers the import card's warning tint and the Tasks
-    nag. Deliberately excludes plain 'No charge found' (usually an untracked card / pre-coverage gap with
-    nothing to resolve, so it would nag forever). Reuses the on-demand reconciliation."""
+    Matched·review split suggestion to accept/dismiss. Deliberately excludes plain 'No charge found'
+    (usually an untracked card / pre-coverage gap with nothing to resolve, so it would nag forever). Runs
+    the full reconciliation, so it is the expensive path the cache in
+    :func:`reconciliation_attention_count` fronts."""
     recon = amazon_reconciliation(conn, batch_id)
     return (len(recon["duplicate"]) + len(recon["duplicate_review"])
             + len(recon["matched_review"]) + len(recon["unaccounted_duplicate"]))
+
+
+def _recon_epoch(conn: sqlite3.Connection) -> int:
+    """The current global reconciliation epoch (db_meta 'recon_epoch'), bumped by a trigger on every write
+    to a table the reconciliation reads (see `database._create_recon_epoch_triggers`). Absent = 0 (no
+    charge-affecting write has happened yet)."""
+    row = conn.execute("SELECT value FROM db_meta WHERE key = 'recon_epoch'").fetchone()
+    try:
+        return int(row["value"]) if row else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def reconciliation_attention_count(conn: sqlite3.Connection, batch_id: str) -> int:
+    """The batch's actionable-reconciliation count, powering the import card's warning tint and the Tasks
+    nag — both hit on every history load / task poll. Cached on the batch and recomputed lazily only when
+    stale: a batch whose stored `recon_epoch` matches the current global epoch returns its cached
+    `recon_attention_count`; otherwise the value is recomputed once and the cache refreshed. Any
+    charge-affecting write bumps the epoch (via trigger), so a stale count is impossible while a clean read
+    is a single indexed lookup. The cache write targets import_batch (no trigger), so it never invalidates
+    itself."""
+    epoch = _recon_epoch(conn)
+    row = conn.execute(
+        "SELECT recon_attention_count, recon_epoch FROM import_batch WHERE id = ?", (batch_id,)
+    ).fetchone()
+    if row and row["recon_epoch"] is not None and int(row["recon_epoch"]) == epoch \
+            and row["recon_attention_count"] is not None:
+        return int(row["recon_attention_count"])
+    count = _compute_reconciliation_attention(conn, batch_id)
+    conn.execute(
+        "UPDATE import_batch SET recon_attention_count = ?, recon_epoch = ? WHERE id = ?",
+        (count, epoch, batch_id),
+    )
+    return count
 
 
 @router.get("/amazon/reconciliation/{batch_id}")

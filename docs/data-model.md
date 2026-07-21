@@ -607,7 +607,9 @@ Post-rebrand, the **migration runner is active**: `run_migrations` advances an e
 schema and stamped directly. Registered migrations so far: **v2** adds `category_rule.match_source_text`,
 **v3** adds `txn.needs_review`, **v4** adds `txn.recurring_series_id` (the `recurring_series` table
 itself is created by `init_db`'s `CREATE TABLE IF NOT EXISTS` script, which runs on both fresh and
-migrated databases, so only the new *column* needs an `ALTER`) (`CURRENT_VERSION = 4`).
+migrated databases, so only the new *column* needs an `ALTER`). Later migrations continue the additive
+pattern; the newest, **v12**, adds the `import_batch.recon_attention_count` / `recon_epoch` cache columns
+and the recon-epoch invalidation triggers (`CURRENT_VERSION = 12`).
 
 When the schema changes from here:
 
@@ -617,11 +619,15 @@ When the schema changes from here:
 - register a `@migration(N)` that brings an existing database to the same shape (idempotent
   `ALTER TABLE … ADD COLUMN …` etc.) and bump `CURRENT_VERSION` to `N`
 
-- a structural object that *references* the new column (e.g. an index over it) must **not** live in
-  `init_db`'s `CREATE TABLE`/`executescript` block — on a pre-`N` database the column doesn't exist
-  yet when that script runs (it is all `CREATE TABLE IF NOT EXISTS`, so the column is added only later
-  by `run_migrations`). Create such objects after the fresh/migrate branch in `init_db`, where the
-  column is guaranteed present on both paths. `idx_txn_needs_review` is the worked example.
+- a structural object that *references* a migration-added column **or a migration-added table** (e.g. an
+  index over the column, or a trigger on the table) must **not** live in `init_db`'s
+  `CREATE TABLE`/`executescript` block — on a pre-`N` database that column/table doesn't exist yet when
+  that script runs (it is all `CREATE TABLE IF NOT EXISTS`, so the column is added only later by
+  `run_migrations`). Create such objects after the fresh/migrate branch in `init_db`, where they are
+  guaranteed present on both paths. `idx_txn_needs_review` is the worked example for a column-referencing
+  index; the recon-epoch triggers (`_create_recon_epoch_triggers`) are the example for triggers on tables
+  a migration adds (`amazon_funding_map`, `amazon_charge_distinct`) — they also need `db_meta`, which the
+  fresh/migrate branch has just created, so the post-branch placement satisfies both dependencies.
 
 ## Reporting assumptions
 

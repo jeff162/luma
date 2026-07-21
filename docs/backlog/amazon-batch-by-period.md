@@ -43,6 +43,17 @@ period together. Open questions when picked up:
 - Interaction with the existing per-file re-import skip (`amazon_file_hashes`) — already per-file, so it
   largely carries over.
 
+## Already addressed: the per-batch reconciliation-count cost
+
+Splitting one drop into many period batches multiplies the number of Amazon batches, and the
+actionable-attention count was recomputed live per batch on every history load and Tasks poll — the
+degradation this item's growth would have exposed. That is now handled independently: the count is cached
+on the batch (`import_batch.recon_attention_count`) and recomputed lazily only when a monotonic
+`db_meta.recon_epoch` (bumped by triggers on the tables the reconciliation reads) advances — see
+`architecture.md` → Amazon order import contract, and `amazon.reconciliation_attention_count`. So more
+batches no longer means proportionally more reconciliation passes per read; period-batching can proceed
+without carrying that cost.
+
 ## Reuse / where it lives
 
 `routers/import_export/amazon.py` (`run_amazon_import`, `_read_amazon_uploads`, the reconciliation +

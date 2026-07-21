@@ -1576,6 +1576,65 @@ class AmazonOrdersTests(unittest.TestCase):
             )
         return acct_id
 
+    # ---- reconciliation attention count is cached and invalidated by charge edits ------------------
+
+    def _recon_epoch(self):
+        from backend.routers.import_export.amazon import _recon_epoch
+        with self._use_db_path(), get_db() as conn:
+            return _recon_epoch(conn)
+
+    def _batch_with_a_duplicate(self):
+        """An Amazon batch whose order has a duplicated charge → attention count 1."""
+        self._add_card_charge(37.32)
+        dup = self._add_card_charge(37.32)  # a second same-amount copy makes the auto-match ambiguous
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, [_cash_order()], account_id="amazon", filename="orders.csv")
+        return summary["batch_id"], dup
+
+    def test_attention_count_is_cached_until_a_charge_edit(self):
+        batch_id, _dup = self._batch_with_a_duplicate()
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(reconciliation_attention_count(conn, batch_id), 1)
+            # The value is now cached on the batch at the current epoch.
+            row = conn.execute("SELECT recon_attention_count, recon_epoch FROM import_batch WHERE id = ?", (batch_id,)).fetchone()
+            self.assertEqual(row["recon_attention_count"], 1)
+            self.assertIsNotNone(row["recon_epoch"])
+        # Corrupt the cached value *without* bumping the epoch (a bare import_batch write fires no trigger).
+        # A clean read must return the cached value — proving it did not recompute.
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("UPDATE import_batch SET recon_attention_count = 999 WHERE id = ?", (batch_id,))
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(reconciliation_attention_count(conn, batch_id), 999, "a clean read serves the cache, not a recompute")
+
+    def test_a_charge_edit_invalidates_the_cache(self):
+        batch_id, dup = self._batch_with_a_duplicate()
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(reconciliation_attention_count(conn, batch_id), 1)
+        epoch_before = self._recon_epoch()
+        # Resolve the ambiguity by trashing the duplicate copy — a txn edit, which bumps the epoch.
+        with self._use_db_path(), get_db() as conn:
+            conn.execute("UPDATE txn SET trashed_at = '2026-01-01T00:00:00Z' WHERE id = ?", (dup,))
+        self.assertGreater(self._recon_epoch(), epoch_before, "a charge edit must advance the epoch")
+        # The stale cache is recomputed on the next read: the order now matches cleanly, attention 0.
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(reconciliation_attention_count(conn, batch_id), 0)
+            self.assertEqual(
+                conn.execute("SELECT recon_attention_count FROM import_batch WHERE id = ?", (batch_id,)).fetchone()["recon_attention_count"], 0)
+
+    def test_an_unrelated_charge_edit_still_invalidates(self):
+        # Strict invalidation: even an edit to a charge on another account bumps the epoch, so the cached
+        # count is recomputed rather than trusted. (Over-invalidation is safe — the recompute yields the
+        # same 1 here; the point is the cache never goes stale.)
+        batch_id, _dup = self._batch_with_a_duplicate()
+        with self._use_db_path(), get_db() as conn:
+            reconciliation_attention_count(conn, batch_id)
+            cached_epoch = conn.execute("SELECT recon_epoch FROM import_batch WHERE id = ?", (batch_id,)).fetchone()["recon_epoch"]
+        unrelated = self._add_card_charge(5.00, name="Grocery Store")
+        with self._use_db_path(), get_db() as conn:
+            reconciliation_attention_count(conn, batch_id)
+            new_epoch = conn.execute("SELECT recon_epoch FROM import_batch WHERE id = ?", (batch_id,)).fetchone()["recon_epoch"]
+        self.assertGreater(new_epoch, cached_epoch, "the cache was refreshed at a newer epoch after an unrelated charge insert")
+
 
 if __name__ == "__main__":
     unittest.main()
