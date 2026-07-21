@@ -7,13 +7,13 @@ delete the backlog file.
 
 ## Items
 
-- [paypal-amazon-enrichment.md](paypal-amazon-enrichment.md) — **active working design (not parked).**
-  Collapsed from a bespoke reconciliation source to something small and general: **PayPal is an ordinary
-  import** (an account like any card; transfers stay categorization), and the one new capability is a
-  **general feature — enrich an existing transaction with a later import's novel detail** at the dedup
-  layer (a manual resolution-screen action + an opt-in per-source auto-enrich). `display_name_source`
-  (the manual-rename guard it relies on) has **landed**. Amazon is deferred and, when scoped, is built on
-  the same enrich feature (it is genuinely a merchant enriching existing card rows, unlike PayPal).
+- [paypal-amazon-enrichment.md](paypal-amazon-enrichment.md) — **shipped; deferred remainder only.** The
+  import-enrichment + Amazon initiative landed in full — PayPal as an ordinary import, the general
+  enrich-an-existing-transaction capability, `display_name_source`, evidence capture + role tagging, the
+  Amazon orders-only account+link model with the funding-source map and reconciliation, and wallet
+  funding-leg suppression — all folded into the main docs. What remains: AZAD paste/drag ingestion
+  ergonomics, AZAD preview-features gating, a manual un-suppress of a funding-leg pair, enrich re-derive
+  from stored raw values, and the deferred column-centric mapping-screen rework.
 - [online-categorizer.md](online-categorizer.md) — **parked design.** An opt-in online (LLM) merchant
   categorizer for cold-start, plus deterministic merchant-name cleaning at rule-build time. Both
   terminate in the existing rule store ("the rule is the cache"). Adjacent to the rules work — worth
@@ -42,22 +42,16 @@ delete the backlog file.
   account-type rule criterion (parallel to the existing account-id one), and structured account-type
   filters — with a `accttype:`/`acctname:` tag grammar flagged as the harder free-text-search piece.
   Money-movement rules are the first consumer ready to migrate. Punts on existing data.
-- [paypal-money-movement-recognition.md](paypal-money-movement-recognition.md) — **A+B+C landed
-  (2026-07-20).** PayPal files recognized by header (`source:paypal` + force-captured `Type`/`Item Title`);
-  money-movement recognized by `Type` as **user-approved rules** (fragment-flagged, idempotent
-  match_source_text → excluded Money movement, recategorized). Remaining polish: the re-openable
-  bidirectional edit surface (account-scoped) is in progress; folding into the generic suggestion engine
-  is deferred.
+- [paypal-money-movement-recognition.md](paypal-money-movement-recognition.md) — **shipped; deferred
+  remainder only.** PayPal source recognition, force-captured `Type`/`Item Title`, and the user-approved,
+  account-scoped, bidirectional `Type` → *Money movement* rules all landed (2026-07-20) and are folded into
+  the main docs. What remains: fold the dedicated review into the generic rule-suggestion engine (cluster by
+  `Type`), and migrate the rules from account-id to account-type scope once that axis exists.
 - [amazon-batch-by-period.md](amazon-batch-by-period.md) — **noted, not started (2026-07-19).** Amazon
   import batches by *drop* (one card per upload, any number of periods) rather than by *coherent period*;
   correct for the orders+items pairing of one span but it also bundles unrelated years onto one card.
   Direction: batch by period/order-set, keeping same-period orders+items together. Amazon-specific — the
   CSV importer already batches per file.
-- [amazon-reconciliation-not-duplicate.md](amazon-reconciliation-not-duplicate.md) — **implemented
-  (2026-07-16).** A "Not duplicates" disposition on every duplicate-flavored reconciliation row, persisted
-  in the `amazon_charge_distinct` pair table (not the `txn_link` kind originally guessed) so detection
-  never re-flags asserted pairs; an order-anchored group falls back to the unmatched path with an
-  exact-date tie-break suggestion. Kept as the design record.
 - [refactor-audits.md](refactor-audits.md) — **recurring process.** Periodically hunt duplication /
   shotgun-surgery smells (structural tools + a judgment pass), fix the safe ones. Records the first
   run's shipped items (`getFormControlStyle` in Dashboard, `TransactionListToolbar`, `useTags()`), the
