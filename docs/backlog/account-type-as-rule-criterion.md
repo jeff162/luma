@@ -60,6 +60,13 @@ those **collapse to one rule per `Type`** (scoped to the PayPal account type), a
 to enumerate accounts — the review + apply just target the type. That migration is the concrete first win
 of this item.
 
+Interim note (until this lands): `create_money_movement_rules` writes into `category_rule` directly rather
+than through `rules.create_rule`'s reconciliation, so it carries its own guards — it refuses an empty
+account set (which would fork a *global* rule) and skips a `Type` whose (keyword, account, source-text)
+matcher already exists (idempotent for ours, and it won't fork past a user rule pointing elsewhere). The
+account-type migration should fold these rules onto the shared `create_rule` path so the one-matcher
+reconciliation is inherited rather than re-implemented.
+
 ## Open questions
 
 - PayPal as `type` vs `subtype` vs a new `kind` dimension (and how it coexists with marketplace).

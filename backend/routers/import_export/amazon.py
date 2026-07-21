@@ -42,6 +42,7 @@ from pydantic import BaseModel
 
 from backend.db.database import get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.services import amazon_funding, txn_links
+from backend.services.transfer_categories import ensure_excluded_transfers_leaf
 from backend.services.amazon_import import (
     AmazonItem,
     AmazonOrder,
@@ -70,26 +71,12 @@ FUNDING_CATEGORY_STATE_KEY = "amazon_funding_category"
 
 
 def _default_funding_category(conn: sqlite3.Connection) -> str:
-    """The seeded default excluded category: a leaf under the always-seeded ``Transfers`` group (which
-    carries ``exclude_from_totals = 1``, evaluated as ``COALESCE(parent, leaf, 0)``), so the charge drops
-    out of spending totals without a per-row flag."""
-    transfers = conn.execute(
-        "SELECT id FROM category WHERE name = 'Transfers' AND parent_id IS NULL"
-    ).fetchone()
-    parent_id = transfers["id"] if transfers else None
-    existing = conn.execute(
-        "SELECT id FROM category WHERE name = ? AND parent_id IS ?",
-        (AMAZON_FUNDING_CATEGORY, parent_id),
-    ).fetchone()
-    if existing:
-        return existing["id"]
-    new_id = str(uuid.uuid4())
-    conn.execute(
-        """INSERT INTO category (id, parent_id, name, category_type, exclude_from_totals)
-           VALUES (?, ?, ?, 'expense', 1)""",
-        (new_id, parent_id, AMAZON_FUNDING_CATEGORY),
-    )
-    return new_id
+    """The seeded default excluded category: a leaf under the ``Transfers`` group (which carries
+    ``exclude_from_totals = 1``, evaluated as ``COALESCE(parent, leaf, 0)``), so the charge drops out of
+    spending totals without a per-row flag. Shared with wallet money-movement suppression via
+    ``ensure_excluded_transfers_leaf``, which also recreates the group if the user deleted it (so the
+    excluded category never lands as a parentless leaf a transaction couldn't be assigned to)."""
+    return ensure_excluded_transfers_leaf(conn, AMAZON_FUNDING_CATEGORY)
 
 
 def find_or_create_funding_category(conn: sqlite3.Connection) -> str:
@@ -876,18 +863,23 @@ def _charges_marked_distinct(conn: sqlite3.Connection, ids: list) -> bool:
 
 def _group_unaccounted_duplicates(conn: sqlite3.Connection, charges: list[dict]) -> tuple[list[dict], list[dict]]:
     """Split the reverse scan's unaccounted charges into suspected double imports and true singles.
-    Copies of one real charge (bank post-date vs. an aggregator's date) land on the *same account* with
-    the *same amount* a day or three apart — so cluster by (account, rounded amount) with dates chained
-    within the matcher's ±3-day window. Clusters of 2+ become Unaccounted·duplicate groups for per-row
-    review (same-amount-nearby is weaker evidence than an order-anchored duplicate — repeated same-price
-    purchases are real); the rest stay informational. Pairs the user has declared **Not duplicates**
+    Copies of one real charge (bank post-date vs. an aggregator's date) land on the *same effective
+    account* with the *same amount* a day or three apart — so cluster by (effective account, rounded
+    amount) with dates chained within the matcher's ±3-day window. **Effective** account (the linked-group
+    root, ``COALESCE(parent, account)``) so two copies that straddle a parent/child account merge — the
+    Mint double-import case this targets — still group, matching the order-anchored path
+    (``_same_account_copies``). Clusters of 2+ become Unaccounted·duplicate groups for per-row review
+    (same-amount-nearby is weaker evidence than an order-anchored duplicate — repeated same-price purchases
+    are real); the rest stay informational. Pairs the user has declared **Not duplicates**
     (``amazon_charge_distinct``) never chain, so the assertion sticks across refreshes. Cross-account
-    copies are deliberately not paired here — that's the unified duplicates system's job, with its
-    keep/reject account-pair semantics. Returns ``(singles, groups)``; groups carry ``{"charges": [...]}``."""
+    copies (distinct effective accounts) are deliberately not paired here — that's the unified duplicates
+    system's job, with its keep/reject account-pair semantics. Returns ``(singles, groups)``; groups carry
+    ``{"charges": [...]}``."""
     distinct = _distinct_charge_pairs(conn, [c["id"] for c in charges])
+    eff = _effective_account_map(conn, [c["id"] for c in charges])
     by_key: dict[tuple, list[dict]] = {}
     for c in charges:
-        by_key.setdefault((c.get("account_id"), round(c.get("amount") or 0, 2)), []).append(c)
+        by_key.setdefault((eff.get(c["id"]), round(c.get("amount") or 0, 2)), []).append(c)
     singles: list[dict] = []
     groups: list[dict] = []
     for rows in by_key.values():
@@ -1420,14 +1412,41 @@ def _unmatched_cash_orders(conn: sqlite3.Connection, batch_id: str) -> list[dict
     return out
 
 
+def _perfect_matching(order_candidates: list[list[str]]) -> Optional[dict[int, str]]:
+    """A one-to-one assignment of each order (by index) to one of *its own* candidate charges, each charge
+    used once — or ``None`` if no assignment covers every order. Kuhn's augmenting-path bipartite matching;
+    the clusters here are tiny (a handful of same-amount orders), so the recursion is trivial. Matching by
+    each order's own candidate set is what keeps the equal-count pass from linking an order to a charge on
+    a card it never used (two same-amount orders on different cards must not swap charges)."""
+    charge_to_order: dict[str, int] = {}
+
+    def _augment(order_index: int, visited: set[str]) -> bool:
+        for charge_id in order_candidates[order_index]:
+            if charge_id in visited:
+                continue
+            visited.add(charge_id)
+            holder = charge_to_order.get(charge_id)
+            if holder is None or _augment(holder, visited):
+                charge_to_order[charge_id] = order_index
+                return True
+        return False
+
+    for order_index in range(len(order_candidates)):
+        if not _augment(order_index, set()):
+            return None
+    return {order_index: charge_id for charge_id, order_index in charge_to_order.items()}
+
+
 def _pair_equal_amount_clusters(conn: sqlite3.Connection, batch_id: str) -> int:
     """Second pass over a batch's still-unmatched cash orders: when a set of same-amount orders is exactly
     balanced by the same number of unlinked Amazon charges (in the matcher's window), they're *distinct*
     purchases the matcher only left unmatched because their equal amounts made *which* order pairs with
     *which* charge ambiguous — and that assignment is immaterial (each charge is excluded either way). Pair
-    them 1:1 by date so they resolve to matched instead of showing as false 'duplicate detected'. A *surplus*
-    of charges (more charges than orders) is a real duplicate and is deliberately left alone. Returns the
-    number of orders newly paired."""
+    them 1:1 so they resolve to matched instead of showing as false 'duplicate detected'. Each order is
+    linked only to a charge in *its own* candidate set (respecting the funding map / last-4), via a perfect
+    bipartite matching — so same-amount orders paid on different cards can't be cross-linked to each other's
+    charge. A *surplus* of charges (more distinct charges than orders) is a real duplicate and is
+    deliberately left alone. Returns the number of orders newly paired."""
     clusters: dict = {}
     for o in _unmatched_cash_orders(conn, batch_id):
         clusters.setdefault(round(o["amount"], 2), []).append(o)
@@ -1435,6 +1454,7 @@ def _pair_equal_amount_clusters(conn: sqlite3.Connection, batch_id: str) -> int:
     paired = 0
     for group in clusters.values():
         pairable_orders: list[dict] = []   # only orders that actually have an eligible charge count toward balance
+        order_candidates: list[list[str]] = []
         candidate_ids: list[str] = []
         seen: set = set()
         for o in group:
@@ -1442,16 +1462,22 @@ def _pair_equal_amount_clusters(conn: sqlite3.Connection, batch_id: str) -> int:
             if not cands:
                 continue   # untracked / last-4 mismatch: this order can't take any of these charges
             pairable_orders.append(o)
+            order_candidates.append(cands)
             for cid in cands:
                 if cid not in seen:
                     seen.add(cid)
                     candidate_ids.append(cid)
-        if candidate_ids and len(candidate_ids) == len(pairable_orders):
-            ordered_orders = sorted(pairable_orders, key=lambda g: g["order"]["date"] or "")
-            ordered_charges = sorted(candidate_ids, key=lambda cid: (_txn_summary(conn, cid) or {}).get("date") or "")
-            for o, charge_id in zip(ordered_orders, ordered_charges):
-                manual_link_charge(conn, o["link_id"], charge_id)
-                paired += 1
+        # Only the exactly-balanced case (distinct charges == orders) is an ambiguity to resolve; a surplus
+        # is a real duplicate left for the report. Even then, apply only a *perfect* matching that assigns
+        # each order to one of its own candidates — never a blind zip that could cross cards.
+        if not candidate_ids or len(candidate_ids) != len(pairable_orders):
+            continue
+        matching = _perfect_matching(order_candidates)
+        if matching is None:
+            continue
+        for order_index, charge_id in matching.items():
+            manual_link_charge(conn, pairable_orders[order_index]["link_id"], charge_id)
+            paired += 1
     return paired
 
 
@@ -1755,7 +1781,11 @@ def merge_unaccounted_charges(conn: sqlite3.Connection, charge_txn_ids: list) ->
         if conn.execute("SELECT 1 FROM txn_link_member WHERE txn_id = ?", (cid,)).fetchone():
             raise ValueError("A charge linked to an order can't be merged from here")
         rows.append(row)
-    if len({r["account_id"] for r in rows}) != 1 or len({round(r["amount"], 2) for r in rows}) != 1:
+    # Compare *effective* accounts (linked-group root), matching how the grouping in
+    # `_group_unaccounted_duplicates` clustered these — otherwise a group the report legitimately formed
+    # across a parent/child merge would fail re-validation here.
+    eff = _effective_account_map(conn, ids)
+    if len({eff.get(cid) for cid in ids}) != 1 or len({round(r["amount"], 2) for r in rows}) != 1:
         raise ValueError("These charges don't look like copies of one charge (different account or amount)")
     survivor = _richest_charge(conn, ids)
     losers = [c for c in ids if c != survivor]

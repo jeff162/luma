@@ -248,7 +248,14 @@ def rule_scalar_effects(result, *, fallback_name: str) -> dict:
 
 def recategorize_all(conn: sqlite3.Connection) -> int:
     # Retroactive recategorization is intentionally opt-in and skips manual overrides,
-    # so user edits remain the final authority even after rules evolve.
+    # so user edits remain the final authority even after rules evolve. It also skips
+    # `enrichment` rows — a matched Amazon funding charge or a suppressed wallet funding leg
+    # that a feature deliberately moved into an excluded category and stashed a prior for
+    # reversal. Those are feature-owned, not rule-owned; letting a rule reclaim one (or clear
+    # it when nothing matches) would silently un-exclude it and double-count the spend. They
+    # carry `category_overridden = 0`, so the source guard — not the lock bit — is what protects
+    # them here and in `preview_recategorize_count`. Only an explicit full-force rule apply may
+    # take them (see `rules._apply_rule_to_existing`).
     txns = conn.execute(
         """SELECT
                t.id,
@@ -265,7 +272,8 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
                t.import_evidence_json
            FROM   txn t
            JOIN   account a ON a.id = t.account_id
-           WHERE  category_overridden = 0"""
+           WHERE  category_overridden = 0
+             AND  category_source IS NOT 'enrichment'"""
     ).fetchall()
 
     rules = load_categorization_rules(conn)
@@ -323,8 +331,8 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
 
 def preview_recategorize_count(conn: sqlite3.Connection) -> int:
     # The Rules page uses this to decide whether "re-run categorization" is the
-    # likely next action, so the preview must mirror the same override-skipping
-    # and rule-matching contract as the real recategorize pass.
+    # likely next action, so the preview must mirror the same override-skipping,
+    # enrichment-skipping, and rule-matching contract as the real recategorize pass.
     txns = conn.execute(
         """SELECT
                t.id,
@@ -340,7 +348,8 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
                t.import_evidence_json
            FROM   txn t
            JOIN   account a ON a.id = t.account_id
-           WHERE  category_overridden = 0"""
+           WHERE  category_overridden = 0
+             AND  category_source IS NOT 'enrichment'"""
     ).fetchall()
 
     rules = load_categorization_rules(conn)

@@ -187,7 +187,13 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
 
     where_clauses, where_params = [], []
     if preserve_manual:
+        # Preserve-manual reclaims import-locked rows but spares a deliberate manual edit — and,
+        # for the same reason recategorize_all does, spares `enrichment` rows: a feature-owned
+        # excluded Amazon charge / suppressed funding leg must not be pulled into a rule's category
+        # by an automatic reclaim (it would un-exclude and double-count). The unscoped full-force
+        # apply (preserve_manual=False) remains the only path that may take them.
         where_clauses.append("t.category_source IS NOT 'manual'")
+        where_clauses.append("t.category_source IS NOT 'enrichment'")
     if txn_ids is not None:
         if not txn_ids:
             return []

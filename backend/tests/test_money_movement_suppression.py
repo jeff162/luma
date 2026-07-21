@@ -237,6 +237,26 @@ class MoneyMovementSuppressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self._links(), [], "undo must leave no orphan link")
         self.assertIsNone(self._nameless_leg(), "the batch's rows are gone")
 
+    async def test_recategorize_all_leaves_the_suppressed_leg_excluded(self):
+        # The suppressed funding leg is `enrichment`, feature-owned; a Run categorization pass (e.g. the one
+        # apply_money_movement_rules triggers) must not clear it back out of the excluded category.
+        csv = "\n".join([
+            "Date,Name,Type,Amount",
+            "2024-01-11,RANDONNEURS USA,Express Checkout Payment,-10.00",
+            "2024-01-11,,Bank Deposit to PP Account,10.00",
+        ])
+        result = await self._run_import(csv)
+        self.assertEqual(result["money_movement_suppressed_count"], 1)
+        leg_before = self._nameless_leg()
+        with self._use_db_path():
+            with get_db() as conn:
+                from backend.services.categorizer import recategorize_all
+                recategorize_all(conn)
+        leg_after = self._nameless_leg()
+        self.assertEqual(leg_after["category_id"], leg_before["category_id"], "leg must stay in Money movement")
+        self.assertEqual(leg_after["category_source"], "enrichment")
+        self.assertEqual(self._category(leg_after["category_id"])["name"], "Money movement")
+
     async def test_reimport_replace_reverses_then_repairs(self):
         first = await self._run_import("\n".join([
             "Date,Name,Type,Amount",

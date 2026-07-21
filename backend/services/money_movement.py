@@ -39,6 +39,7 @@ import uuid
 from typing import Optional
 
 from backend.services import txn_links
+from backend.services.transfer_categories import TRANSFERS_GROUP, ensure_excluded_transfers_leaf
 
 LINK_KIND = "wallet_funding"
 MONEY_MOVEMENT_CATEGORY = "Money movement"
@@ -56,28 +57,11 @@ _MONEY_MOVEMENT_TYPES = frozenset({
 
 
 def _default_money_movement_category(conn: sqlite3.Connection) -> str:
-    """The excluded category funding legs are moved into: a leaf named "Money movement" under the seeded
-    ``Transfers`` group (which carries ``exclude_from_totals = 1``). The leaf is created excluded in its own
-    right too, so it drops out of spending totals even if the parent group is missing. Mirrors
-    ``import_export.amazon._default_funding_category`` — a candidate for a shared "transfers leaf" helper if
-    a third client appears."""
-    transfers = conn.execute(
-        "SELECT id FROM category WHERE name = 'Transfers' AND parent_id IS NULL"
-    ).fetchone()
-    parent_id = transfers["id"] if transfers else None
-    existing = conn.execute(
-        "SELECT id FROM category WHERE name = ? AND parent_id IS ?",
-        (MONEY_MOVEMENT_CATEGORY, parent_id),
-    ).fetchone()
-    if existing:
-        return existing["id"]
-    new_id = str(uuid.uuid4())
-    conn.execute(
-        """INSERT INTO category (id, parent_id, name, category_type, exclude_from_totals)
-           VALUES (?, ?, ?, 'expense', 1)""",
-        (new_id, parent_id, MONEY_MOVEMENT_CATEGORY),
-    )
-    return new_id
+    """The excluded category funding legs are moved into: a leaf named "Money movement" under the
+    ``Transfers`` group (which carries ``exclude_from_totals = 1``). Shared with the Amazon importer via
+    ``ensure_excluded_transfers_leaf``, which recreates the group if the user deleted it so the leaf is
+    never a parentless (group-shaped) row."""
+    return ensure_excluded_transfers_leaf(conn, MONEY_MOVEMENT_CATEGORY)
 
 
 def _resolved_name(row) -> str:
@@ -136,11 +120,16 @@ def batch_account_ids(conn: sqlite3.Connection, batch_id: str) -> list[str]:
 
 
 def _money_movement_category_id_if_exists(conn: sqlite3.Connection) -> Optional[str]:
-    """The Money movement leaf id if it has been created (read-only — never creates it), else None."""
-    transfers = conn.execute("SELECT id FROM category WHERE name = 'Transfers' AND parent_id IS NULL").fetchone()
-    parent_id = transfers["id"] if transfers else None
+    """The Money movement leaf id if it has been created (read-only — never creates it), else None. Looks
+    only under the ``Transfers`` group, mirroring where ``ensure_excluded_transfers_leaf`` creates it, so a
+    missing group means the leaf can't exist yet."""
+    transfers = conn.execute(
+        "SELECT id FROM category WHERE name = ? AND parent_id IS NULL", (TRANSFERS_GROUP,)
+    ).fetchone()
+    if not transfers:
+        return None
     row = conn.execute(
-        "SELECT id FROM category WHERE name = ? AND parent_id IS ?", (MONEY_MOVEMENT_CATEGORY, parent_id)
+        "SELECT id FROM category WHERE name = ? AND parent_id = ?", (MONEY_MOVEMENT_CATEGORY, transfers["id"])
     ).fetchone()
     return row["id"] if row else None
 
@@ -217,19 +206,37 @@ def money_movement_type_proposals_for_profile(conn: sqlite3.Connection, profile_
 def create_money_movement_rules(conn: sqlite3.Connection, type_values, account_ids: list[str]) -> int:
     """Create `match_source_text` rules routing each `Type` to the excluded Money movement category,
     **scoped to each of `account_ids`** so the rule only fires on that (PayPal) account — a same-text
-    transaction elsewhere can't match. Idempotent per (keyword, category, account). Returns the count
-    created; the caller runs recategorize to apply them."""
+    transaction elsewhere can't match. Returns the count created; the caller runs recategorize to apply
+    them.
+
+    Two safety properties matter here, because these rules go straight into `category_rule` rather than
+    through `rules.create_rule`'s reconciliation:
+
+      * **An empty `account_ids` creates nothing.** A rule with `account_id IS NULL` would be *global* —
+        the opposite of the account-scoping intent — so a caller whose accounts came back empty (every row
+        trashed, the batch undone) gets no rule rather than a silent global one.
+      * **The one-rule-per-matcher invariant is respected.** The matcher is (keyword, owner, account,
+        amount range, debit/credit, match_source_text); these rules leave owner/amount NULL and
+        debit/credit at its unscoped `'both'`, with match_source_text = 1. If a rule with that same matcher
+        already exists — ours (idempotent) or
+        a user's pointing at a different category — we skip rather than fork a second rule with the same
+        matcher (which would make "which rule wins" order-dependent). A different-category collision is
+        left for the user to resolve on the Rules page; it is not silently overwritten."""
+    if not account_ids:
+        return 0
     category_id = _default_money_movement_category(conn)
-    scopes = account_ids or [None]
     created = 0
     for raw in type_values or []:
         keyword = str(raw or "").strip().lower()
         if not keyword:
             continue
-        for account_id in scopes:
+        for account_id in account_ids:
             exists = conn.execute(
-                "SELECT 1 FROM category_rule WHERE keyword = ? AND category_id = ? AND account_id IS ?",
-                (keyword, category_id, account_id),
+                """SELECT 1 FROM category_rule
+                   WHERE keyword = ? AND account_id IS ? AND match_source_text = 1
+                     AND owner_id IS NULL AND amount_min IS NULL AND amount_max IS NULL
+                     AND COALESCE(debit_credit, 'both') = 'both'""",
+                (keyword, account_id),
             ).fetchone()
             if exists:
                 continue
@@ -243,17 +250,17 @@ def create_money_movement_rules(conn: sqlite3.Connection, type_values, account_i
 
 def delete_money_movement_rules(conn: sqlite3.Connection, type_values, account_ids: list[str]) -> int:
     """Remove the money-movement rules for each `Type` on each of `account_ids` — the "changed my mind"
-    path. Returns the count deleted; the caller runs recategorize so the rows fall out of Money movement."""
+    path. Scoped to the given accounts (an empty set removes nothing, mirroring create). Returns the count
+    deleted; the caller runs recategorize so the rows fall out of Money movement."""
     category_id = _money_movement_category_id_if_exists(conn)
-    if not category_id:
+    if not category_id or not account_ids:
         return 0
-    scopes = account_ids or [None]
     deleted = 0
     for raw in type_values or []:
         keyword = str(raw or "").strip().lower()
         if not keyword:
             continue
-        for account_id in scopes:
+        for account_id in account_ids:
             cursor = conn.execute(
                 "DELETE FROM category_rule WHERE keyword = ? AND category_id = ? AND account_id IS ? AND match_source_text = 1",
                 (keyword, category_id, account_id),

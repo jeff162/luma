@@ -251,6 +251,40 @@ class PaypalMoneyMovementTests(unittest.IsolatedAsyncioTestCase):
                 delete_profile(profile_id)
         self.assertEqual(ctx.exception.status_code, 400)
 
+    async def test_empty_account_scope_creates_no_global_rule(self):
+        # A rule with account_id NULL would be global — the opposite of the account-scoping intent. An empty
+        # account set must create nothing rather than a silent global rule.
+        from backend.services.money_movement import create_money_movement_rules
+        with self._use_db_path(), get_db() as conn:
+            created = create_money_movement_rules(conn, ["General Withdrawal"], [])
+            self.assertEqual(created, 0)
+            self.assertIsNone(conn.execute("SELECT 1 FROM category_rule WHERE keyword = 'general withdrawal'").fetchone())
+
+    async def test_matcher_collision_with_a_user_rule_does_not_fork(self):
+        # A user rule already owns the (keyword, account, source-text) matcher pointing at a different
+        # category. Creating a money-movement rule for the same Type must NOT fork a second rule with that
+        # matcher (which would make "which rule wins" order-dependent) — it skips instead.
+        from backend.services.money_movement import create_money_movement_rules
+        result = await self._import()
+        account_ids = [self.account_id]
+        with self._use_db_path(), get_db() as conn:
+            # Seed a user rule with the same matcher (keyword+account+source-text) but a different category.
+            other_leaf = str(uuid.uuid4())
+            conn.execute("INSERT INTO category (id, parent_id, name, category_type) VALUES (?, NULL, 'Misc Grp', 'expense')", (str(uuid.uuid4()),))
+            grp = conn.execute("SELECT id FROM category WHERE name = 'Misc Grp'").fetchone()["id"]
+            conn.execute("INSERT INTO category (id, parent_id, name, category_type) VALUES (?, ?, 'Misc Leaf', 'expense')", (other_leaf, grp))
+            conn.execute(
+                "INSERT INTO category_rule (id, category_id, keyword, account_id, match_source_text) VALUES (?, ?, 'general withdrawal', ?, 1)",
+                (str(uuid.uuid4()), other_leaf, self.account_id),
+            )
+            created = create_money_movement_rules(conn, ["General Withdrawal"], account_ids)
+            self.assertEqual(created, 0, "must not fork a second rule with an existing matcher")
+            n = conn.execute(
+                "SELECT COUNT(*) c FROM category_rule WHERE keyword = 'general withdrawal' AND account_id = ? AND match_source_text = 1",
+                (self.account_id,),
+            ).fetchone()["c"]
+            self.assertEqual(n, 1, "the matcher still has exactly one rule")
+
     async def test_already_ruled_and_remove_round_trip(self):
         result = await self._import()
         with self._use_db_path():

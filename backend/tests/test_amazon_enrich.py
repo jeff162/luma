@@ -41,8 +41,14 @@ from backend.routers.import_export.amazon import (
     run_amazon_import,
     trash_duplicate_charge,
 )
+from backend.routers.import_export.amazon import (
+    _group_unaccounted_duplicates,
+    _pair_equal_amount_clusters,
+    _txn_summary,
+)
 from backend.services.amazon_import import AmazonItem, AmazonOrder, PaymentLeg, merge
 from backend.services import amazon_funding, txn_links
+from backend.services.categorizer import recategorize_all
 
 
 def _cash_order(order_id="111-0000000-0000010", last4="4321", amount=37.32, refund=None):
@@ -1447,6 +1453,128 @@ class AmazonOrdersTests(unittest.TestCase):
         self.assertEqual(reversed_count, 1)
         self.assertIsNone(self._txn(charge_id)["category_id"])  # charge restored
         self.assertEqual(self._amazon_orders(), [])             # order row gone
+
+    # ---- an excluded charge is feature-owned: automatic categorization must not touch it (#1) --------
+
+    def _add_rule(self, keyword, leaf_name):
+        """A simple keyword→leaf rule, creating the leaf under a plain (non-excluded) group."""
+        with self._use_db_path(), get_db() as conn:
+            grp = conn.execute("SELECT id FROM category WHERE name = ? AND parent_id IS NULL", (leaf_name + " Grp",)).fetchone()
+            grp_id = grp["id"] if grp else str(uuid.uuid4())
+            if not grp:
+                conn.execute("INSERT INTO category (id, parent_id, name, category_type) VALUES (?, NULL, ?, 'expense')", (grp_id, leaf_name + " Grp"))
+            leaf_id = str(uuid.uuid4())
+            conn.execute("INSERT INTO category (id, parent_id, name, category_type) VALUES (?, ?, ?, 'expense')", (leaf_id, grp_id, leaf_name))
+            conn.execute("INSERT INTO category_rule (id, category_id, keyword) VALUES (?, ?, ?)", (str(uuid.uuid4()), leaf_id, keyword))
+        return leaf_id
+
+    def test_recategorize_all_leaves_an_excluded_charge_excluded_with_no_rule(self):
+        # With no matching rule, recategorize_all clears rule/uncategorized rows to NULL — but the excluded
+        # funding charge is `enrichment`, feature-owned, and must stay excluded (else it re-enters totals).
+        charge_id = self._add_card_charge(37.32)
+        with self._use_db_path(), get_db() as conn:
+            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            funding_id = find_or_create_funding_category(conn)
+            recategorize_all(conn)
+        charge = self._txn(charge_id)
+        self.assertEqual(charge["category_id"], funding_id, "excluded charge must survive recategorize")
+        self.assertEqual(charge["category_source"], "enrichment")
+
+    def test_recategorize_all_does_not_let_a_rule_reclaim_an_excluded_charge(self):
+        # A rule matching the charge's Amazon merchant must NOT pull the excluded charge into its category —
+        # that would un-exclude it and double-count the order's spend.
+        charge_id = self._add_card_charge(37.32, name="AMAZON.COM")
+        shopping_leaf = self._add_rule("amazon", "Online Shopping")
+        with self._use_db_path(), get_db() as conn:
+            apply_amazon_order(conn, _cash_order(), account_id="amazon", batch_id=self.batch_id)
+            funding_id = find_or_create_funding_category(conn)
+            recategorize_all(conn)
+        charge = self._txn(charge_id)
+        self.assertEqual(charge["category_id"], funding_id, "a rule must not reclaim an enrichment row")
+        self.assertNotEqual(charge["category_id"], shopping_leaf)
+        self.assertEqual(charge["category_source"], "enrichment")
+
+    # ---- effective-account grouping of unaccounted duplicates across a merge (#3) --------------------
+
+    def _merge_child_under(self, parent_id, *, mask, name):
+        """Insert a child account merged under `parent_id` (its effective account is the parent)."""
+        child_id = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, mask, owner_id, parent_account_id)
+                   VALUES (?, ?, 'fixture', ?, ?, 'credit', ?, ?, ?)""",
+                (child_id, f"p_{child_id}", name, name, mask, SHARED_OWNER_ID, parent_id),
+            )
+        return child_id
+
+    def test_unaccounted_copies_across_a_merge_group_and_merge(self):
+        # Two copies of one Amazon charge that straddle a parent/child account merge share an *effective*
+        # account, so they must group as one unaccounted-duplicate (and be mergeable) — a raw account_id
+        # comparison would wrongly treat them as distinct.
+        child_id = self._merge_child_under("card", mask="9999", name="Rewards Card (old)")
+        copy_a = self._add_card_charge(50.00, date="2024-03-01", account_id="card", name="AMZN Mktp US")
+        copy_b = self._add_card_charge(50.00, date="2024-03-02", account_id=child_id, name="AMAZON.COM")
+        with self._use_db_path(), get_db() as conn:
+            charges = [_txn_summary(conn, copy_a), _txn_summary(conn, copy_b)]
+            singles, groups = _group_unaccounted_duplicates(conn, charges)
+        self.assertEqual(singles, [])
+        self.assertEqual(len(groups), 1)
+        self.assertEqual({c["id"] for c in groups[0]["charges"]}, {copy_a, copy_b})
+
+        with self._use_db_path(), get_db() as conn:
+            result = merge_unaccounted_charges(conn, [copy_a, copy_b])
+        self.assertEqual(result["status"], "merged")
+        self.assertEqual(len(result["trashed"]), 1)
+
+    # ---- equal-count pairing links each order to its OWN card, never a swap (#5) ---------------------
+
+    def _order_link_no_charge(self, *, order_date, last4, amount):
+        """A cash order link with no charge yet (as the equal-count pass finds them), carrying the
+        instrument in metadata so `_order_charge_candidates` reconstructs the matcher's candidate set."""
+        order_txn = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                """INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name, date, is_pending, import_batch_id)
+                   VALUES (?, 'amazon', ?, ?, 'Amazon order', 'Amazon order', 'Amazon order', ?, 0, ?)""",
+                (order_txn, SHARED_OWNER_ID, amount, order_date, self.batch_id),
+            )
+            link_id = txn_links.create_link(
+                conn, LINK_KIND, [(order_txn, "order")], external_ref=str(uuid.uuid4()),
+                metadata={"disposition": "cash", "charge_amount": amount,
+                          "instrument": {"last4": last4, "network": "Visa"}},
+            )
+        return link_id
+
+    def test_equal_count_pairing_matches_each_order_to_its_own_card(self):
+        # Two same-amount orders on different cards, each with exactly one eligible charge on its own card,
+        # left unmatched for the equal-count pass. A blind date-sort zip would cross them (order A's charge
+        # is dated later than order B's); the perfect matching must link each order to ITS card's charge.
+        card1 = self._merge_child_under_top(mask="1111", name="Card One")
+        card2 = self._merge_child_under_top(mask="2222", name="Card Two")
+        # Crossed dates: order A earlier, its charge later; order B later, its charge earlier.
+        link_a = self._order_link_no_charge(order_date="2024-05-10", last4="1111", amount=50.00)
+        link_b = self._order_link_no_charge(order_date="2024-05-11", last4="2222", amount=50.00)
+        charge_x = self._add_card_charge(50.00, date="2024-05-12", account_id=card1, name="AMZN Mktp")
+        charge_y = self._add_card_charge(50.00, date="2024-05-09", account_id=card2, name="AMZN Mktp")
+
+        with self._use_db_path(), get_db() as conn:
+            paired = _pair_equal_amount_clusters(conn, self.batch_id)
+            a_charges = txn_links.member_txn_ids(conn, link_a, role="charge")
+            b_charges = txn_links.member_txn_ids(conn, link_b, role="charge")
+        self.assertEqual(paired, 2)
+        self.assertEqual(a_charges, [charge_x], "order A (last4 1111) must link its own card's charge")
+        self.assertEqual(b_charges, [charge_y], "order B (last4 2222) must link its own card's charge")
+
+    def _merge_child_under_top(self, *, mask, name):
+        """A standalone top-level card account with a mask — its own effective account."""
+        acct_id = str(uuid.uuid4())
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, mask, owner_id)
+                   VALUES (?, ?, 'fixture', ?, ?, 'credit', ?, ?)""",
+                (acct_id, f"p_{acct_id}", name, name, mask, SHARED_OWNER_ID),
+            )
+        return acct_id
 
 
 if __name__ == "__main__":

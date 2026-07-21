@@ -12,7 +12,11 @@ import { Button, DialogActions, FloatingPanel, FloatingPanelHeader, OverlayBackd
  * my mind" surface too. The user always decides; nothing is auto-applied. `onApply({ add, remove })`.
  */
 export function MoneyMovementReviewDialog({ proposals = [], onApply, onClose, applying = false, editing = false }) {
-  const initial = new Set(proposals.filter(p => (editing ? p.already_ruled : p.money_movement)).map(p => p.type))
+  // Start checked = every type already routed to Money movement, plus (on the post-import auto-review, not
+  // when re-editing) the fragment-suggested ones. `already_ruled` must be included in BOTH modes: an
+  // approved type that isn't fragment-suggested would otherwise start unchecked, land in the `remove`
+  // delta, and get its rule silently deleted on Apply.
+  const initial = new Set(proposals.filter(p => p.already_ruled || (!editing && p.money_movement)).map(p => p.type))
   const [checked, setChecked] = useState(() => new Set(initial))
   if (!proposals.length) return null
 
