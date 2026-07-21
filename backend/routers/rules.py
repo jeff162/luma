@@ -545,68 +545,79 @@ def _merge_actions_into_rule(conn, target: dict, *, category_id, clean_name, tag
         conn.execute("INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)", (target["id"], tag_id))
 
 
-@router.post("")
-def create_rule(body: RuleCreate, on_existing: Literal["reject", "merge"] = "reject"):
-    """Create a rule, reconciling against any existing rule with the same matcher.
+def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject") -> dict:
+    """Create a rule against an already-open connection, reconciling against any existing rule with the
+    same matcher. This is the reusable core of the POST endpoint below (a thin ``get_db()`` wrapper) and of
+    any in-process caller that already owns a transaction — e.g. the PayPal money-movement Type rules
+    (`services/money_movement.create_money_movement_rules`), which route here so they inherit the
+    one-matcher reconciliation rather than re-implementing a slice of it.
 
     Two rules sharing a matcher can't coexist cleanly — whichever the engine orders first wins, and
     editing one leaves the other firing. So rather than fork a duplicate, a collision is classified
     (duplicate / mergeable / conflict) and, by default (`on_existing='reject'`), reported back without
     writing. Callers then decide: a single manual save prompts the user (merge, or open the existing
-    rule); the bulk Generate Rules flow re-calls with `on_existing='merge'` to fold mergeable saves in
-    and skip duplicates, surfacing only conflicts. A genuinely different matcher is not a collision and
-    is created normally. `status` in the response is 'created' | 'merged' | 'duplicate' | 'mergeable'
-    | 'conflict'.
+    rule); the bulk Generate Rules flow and the money-movement apply pass `on_existing='merge'` to fold
+    mergeable saves in and skip duplicates, surfacing only conflicts. A genuinely different matcher is not
+    a collision and is created normally. `status` is 'created' | 'merged' | 'duplicate' | 'mergeable'
+    | 'conflict'; a 'merged' result also carries `relation` ('mergeable' vs. a no-op 'duplicate') so a
+    caller can tell whether anything actually changed.
     """
     if not body.category_id and not (body.clean_name or "").strip() and not body.tag_ids and not body.is_recurring:
         raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, tag, or recurring")
     keyword = body.keyword.lower().strip()
-    with get_db() as conn:
-        existing = _existing_rule_for_matcher(conn, keyword, body)
-        if existing:
-            existing_tag_ids = {
-                row["tag_id"] for row in
-                conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (existing["id"],)).fetchall()
-            }
-            relation = _classify_rule_collision(
-                existing, existing_tag_ids,
+    existing = _existing_rule_for_matcher(conn, keyword, body)
+    if existing:
+        existing_tag_ids = {
+            row["tag_id"] for row in
+            conn.execute("SELECT tag_id FROM rule_tag WHERE rule_id = ?", (existing["id"],)).fetchall()
+        }
+        relation = _classify_rule_collision(
+            existing, existing_tag_ids,
+            category_id=body.category_id, clean_name=body.clean_name, tag_ids=body.tag_ids,
+        )
+        # Turning an existing matcher recurring is always an additive, non-conflicting action, so a save
+        # that only adds is_recurring should merge rather than be reported as a bare duplicate.
+        if on_existing == "merge" and (relation in ("mergeable", "duplicate") or body.is_recurring):
+            _merge_actions_into_rule(
+                conn, existing,
                 category_id=body.category_id, clean_name=body.clean_name, tag_ids=body.tag_ids,
             )
-            # Turning an existing matcher recurring is always an additive, non-conflicting action, so a save
-            # that only adds is_recurring should merge rather than be reported as a bare duplicate.
-            if on_existing == "merge" and (relation in ("mergeable", "duplicate") or body.is_recurring):
-                _merge_actions_into_rule(
-                    conn, existing,
-                    category_id=body.category_id, clean_name=body.clean_name, tag_ids=body.tag_ids,
-                )
-                if body.is_recurring:
-                    conn.execute("UPDATE category_rule SET is_recurring = 1 WHERE id = ?", (existing["id"],))
-                    _ensure_recurring_series(conn, existing["id"], body.cadence)
-                return {"id": existing["id"], "status": "merged", "relation": relation}
-            return {
-                "id": existing["id"],
-                "status": relation,
-                "existing_rule_id": existing["id"],
-                "existing_category_id": existing["category_id"],
-                "existing_clean_name": existing["clean_name"],
-            }
-        rid = str(uuid.uuid4())
+            if body.is_recurring:
+                conn.execute("UPDATE category_rule SET is_recurring = 1 WHERE id = ?", (existing["id"],))
+                _ensure_recurring_series(conn, existing["id"], body.cadence)
+            return {"id": existing["id"], "status": "merged", "relation": relation}
+        return {
+            "id": existing["id"],
+            "status": relation,
+            "existing_rule_id": existing["id"],
+            "existing_category_id": existing["category_id"],
+            "existing_clean_name": existing["clean_name"],
+        }
+    rid = str(uuid.uuid4())
+    conn.execute(
+        """INSERT INTO category_rule
+           (id, category_id, keyword, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, match_source_text, is_recurring)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (rid, body.category_id, keyword,
+         body.amount_min, body.amount_max, body.debit_credit, body.clean_name, body.owner_id, body.account_id,
+         int(bool(body.match_source_text)), int(bool(body.is_recurring))),
+    )
+    for tag_id in body.tag_ids:
         conn.execute(
-            """INSERT INTO category_rule
-               (id, category_id, keyword, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, match_source_text, is_recurring)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            (rid, body.category_id, keyword,
-             body.amount_min, body.amount_max, body.debit_credit, body.clean_name, body.owner_id, body.account_id,
-             int(bool(body.match_source_text)), int(bool(body.is_recurring))),
+            "INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)",
+            (rid, tag_id),
         )
-        for tag_id in body.tag_ids:
-            conn.execute(
-                "INSERT OR IGNORE INTO rule_tag (rule_id, tag_id) VALUES (?, ?)",
-                (rid, tag_id),
-            )
-        if body.is_recurring:
-            _ensure_recurring_series(conn, rid, body.cadence)
+    if body.is_recurring:
+        _ensure_recurring_series(conn, rid, body.cadence)
     return {"id": rid, "status": "created", **body.model_dump()}
+
+
+@router.post("")
+def create_rule(body: RuleCreate, on_existing: Literal["reject", "merge"] = "reject"):
+    """Create a rule, reconciling against any existing rule with the same matcher — the HTTP wrapper around
+    :func:`create_rule_core` (see it for the reconciliation contract and `status` values)."""
+    with get_db() as conn:
+        return create_rule_core(conn, body, on_existing)
 
 
 def _resulting_rule_state(current: dict, body: RuleUpdate) -> dict:

@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import uuid
 from typing import Optional
 
 from backend.services import txn_links
@@ -206,46 +205,40 @@ def money_movement_type_proposals_for_profile(conn: sqlite3.Connection, profile_
 def create_money_movement_rules(conn: sqlite3.Connection, type_values, account_ids: list[str]) -> int:
     """Create `match_source_text` rules routing each `Type` to the excluded Money movement category,
     **scoped to each of `account_ids`** so the rule only fires on that (PayPal) account — a same-text
-    transaction elsewhere can't match. Returns the count created; the caller runs recategorize to apply
-    them.
+    transaction elsewhere can't match. Returns the number of rules newly created or changed (so the caller
+    knows whether to recategorize).
 
-    Two safety properties matter here, because these rules go straight into `category_rule` rather than
-    through `rules.create_rule`'s reconciliation:
-
-      * **An empty `account_ids` creates nothing.** A rule with `account_id IS NULL` would be *global* —
-        the opposite of the account-scoping intent — so a caller whose accounts came back empty (every row
-        trashed, the batch undone) gets no rule rather than a silent global one.
-      * **The one-rule-per-matcher invariant is respected.** The matcher is (keyword, owner, account,
-        amount range, debit/credit, match_source_text); these rules leave owner/amount NULL and
-        debit/credit at its unscoped `'both'`, with match_source_text = 1. If a rule with that same matcher
-        already exists — ours (idempotent) or
-        a user's pointing at a different category — we skip rather than fork a second rule with the same
-        matcher (which would make "which rule wins" order-dependent). A different-category collision is
-        left for the user to resolve on the Rules page; it is not silently overwritten."""
+    These route through `rules.create_rule_core` rather than a direct INSERT, so they inherit the shared
+    one-matcher reconciliation: a `Type` whose (keyword, account, source-text) matcher already exists is a
+    no-op (idempotent); a matcher owned by a rename/tag-only rule folds the Money-movement category in; and
+    a matcher owned by a rule pointing at a *different* category is a conflict left for the user to resolve
+    on the Rules page rather than silently forked into a second same-matcher rule. An **empty `account_ids`
+    creates nothing** — a rule with `account_id` NULL would be *global*, the opposite of the
+    account-scoping intent — so a caller whose accounts came back empty (every row trashed, the batch
+    undone) gets no rule."""
     if not account_ids:
         return 0
+    # Lazy import: this service is loaded by the import router at module load, and `rules` is a router, so
+    # a top-level import risks a service→router cycle. Mirrors amazon._categorize_batch_orders.
+    from backend.routers.rules import RuleCreate, create_rule_core
+
     category_id = _default_money_movement_category(conn)
-    created = 0
+    changed = 0
     for raw in type_values or []:
         keyword = str(raw or "").strip().lower()
         if not keyword:
             continue
         for account_id in account_ids:
-            exists = conn.execute(
-                """SELECT 1 FROM category_rule
-                   WHERE keyword = ? AND account_id IS ? AND match_source_text = 1
-                     AND owner_id IS NULL AND amount_min IS NULL AND amount_max IS NULL
-                     AND COALESCE(debit_credit, 'both') = 'both'""",
-                (keyword, account_id),
-            ).fetchone()
-            if exists:
-                continue
-            conn.execute(
-                "INSERT INTO category_rule (id, category_id, keyword, account_id, match_source_text) VALUES (?, ?, ?, ?, 1)",
-                (str(uuid.uuid4()), category_id, keyword, account_id),
+            result = create_rule_core(
+                conn,
+                RuleCreate(keyword=keyword, category_id=category_id, account_id=account_id, match_source_text=True),
+                on_existing="merge",
             )
-            created += 1
-    return created
+            # A brand-new rule, or a merge that actually added the category to a rule that lacked it, is a
+            # change worth recategorizing for; a no-op duplicate/conflict is not.
+            if result["status"] == "created" or (result["status"] == "merged" and result.get("relation") == "mergeable"):
+                changed += 1
+    return changed
 
 
 def delete_money_movement_rules(conn: sqlite3.Connection, type_values, account_ids: list[str]) -> int:

@@ -261,11 +261,11 @@ class PaypalMoneyMovementTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(conn.execute("SELECT 1 FROM category_rule WHERE keyword = 'general withdrawal'").fetchone())
 
     async def test_matcher_collision_with_a_user_rule_does_not_fork(self):
-        # A user rule already owns the (keyword, account, source-text) matcher pointing at a different
-        # category. Creating a money-movement rule for the same Type must NOT fork a second rule with that
-        # matcher (which would make "which rule wins" order-dependent) — it skips instead.
+        # A user rule already owns the (keyword, account, source-text) matcher pointing at a *different*
+        # category. Routing through create_rule_core, that is a conflict left unresolved (not silently
+        # overwritten), so no second rule with that matcher is forked and nothing is counted as changed.
         from backend.services.money_movement import create_money_movement_rules
-        result = await self._import()
+        await self._import()
         account_ids = [self.account_id]
         with self._use_db_path(), get_db() as conn:
             # Seed a user rule with the same matcher (keyword+account+source-text) but a different category.
@@ -277,13 +277,37 @@ class PaypalMoneyMovementTests(unittest.IsolatedAsyncioTestCase):
                 "INSERT INTO category_rule (id, category_id, keyword, account_id, match_source_text) VALUES (?, ?, 'general withdrawal', ?, 1)",
                 (str(uuid.uuid4()), other_leaf, self.account_id),
             )
-            created = create_money_movement_rules(conn, ["General Withdrawal"], account_ids)
-            self.assertEqual(created, 0, "must not fork a second rule with an existing matcher")
+            changed = create_money_movement_rules(conn, ["General Withdrawal"], account_ids)
+            self.assertEqual(changed, 0, "a conflicting matcher must not fork a second rule")
             n = conn.execute(
                 "SELECT COUNT(*) c FROM category_rule WHERE keyword = 'general withdrawal' AND account_id = ? AND match_source_text = 1",
                 (self.account_id,),
             ).fetchone()["c"]
             self.assertEqual(n, 1, "the matcher still has exactly one rule")
+            # The existing rule is untouched — still pointing at the user's category, not Money movement.
+            self.assertEqual(
+                conn.execute("SELECT category_id FROM category_rule WHERE keyword = 'general withdrawal' AND account_id = ?", (self.account_id,)).fetchone()["category_id"],
+                other_leaf,
+            )
+
+    async def test_folds_into_a_same_matcher_rename_only_rule(self):
+        # A user rule with the same matcher but *no category* (a rename/tag-only source-text rule): routing
+        # through create_rule_core folds the Money-movement category into it (mergeable) rather than forking
+        # or skipping — the reconciliation upgrade over a plain existence-check skip.
+        from backend.services.money_movement import create_money_movement_rules, _default_money_movement_category
+        await self._import()
+        with self._use_db_path(), get_db() as conn:
+            rule_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO category_rule (id, category_id, keyword, account_id, clean_name, match_source_text) VALUES (?, NULL, 'general withdrawal', ?, 'PP Withdrawal', 1)",
+                (rule_id, self.account_id),
+            )
+            changed = create_money_movement_rules(conn, ["General Withdrawal"], [self.account_id])
+            mm_cat = _default_money_movement_category(conn)
+            row = conn.execute("SELECT category_id, clean_name FROM category_rule WHERE id = ?", (rule_id,)).fetchone()
+        self.assertEqual(changed, 1, "folding a category into the matcher is a change")
+        self.assertEqual(row["category_id"], mm_cat, "the Money-movement category folded into the existing rule")
+        self.assertEqual(row["clean_name"], "PP Withdrawal", "the existing rename is preserved (additive merge)")
 
     async def test_already_ruled_and_remove_round_trip(self):
         result = await self._import()
