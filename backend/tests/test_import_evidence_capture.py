@@ -193,6 +193,38 @@ class ImportEvidenceCaptureTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(self._txn()["merchant_name"], "Check 1042")
 
+    async def test_recognized_paypal_file_stamps_source_and_forces_type_item_title(self):
+        # A PayPal Activity file: even with capture explicitly emptied, Type + Item Title are captured,
+        # and the batch is stamped source:paypal.
+        account_id = self._insert_account("PayPal")
+        csv_text = "\n".join([
+            '"Date","Time","TimeZone","Name","Type","Status","Currency","Amount","Fees","Total","Exchange Rate","Receipt ID","Balance","Transaction ID","Item Title"',
+            '"2019-11-02","12:00:00","PST","VeloViewer Ltd","Website Payment","Completed","USD","-10.00","0.00","-10.00","","R1","100.00","T1","Bike subscription"',
+        ])
+        config = {
+            "filename": "Paypal-2019.csv",
+            "profile_id": None,
+            "account_id": account_id,
+            "account_map": {},
+            "skip_accounts": [],
+            "new_accounts": None,
+            # Name → description; capture explicitly emptied so nothing is captured *by choice*.
+            "column_map": {"date": "Date", "description": "Name", "amount": "Amount", "evidence_columns": []},
+            "date_format": "%Y-%m-%d",
+            "amount_convention": "single_signed",
+            "skip_rows": 0,
+            "apply_categorization": False,
+            "use_imported_categories": False,
+        }
+        with self._use_db_path():
+            result = await run_import(file=FakeUploadFile("Paypal-2019.csv", csv_text), config=json.dumps(config))
+            with get_db() as conn:
+                batch = conn.execute("SELECT source_kind FROM import_batch WHERE id = ?", (result["batch_id"],)).fetchone()
+        self.assertEqual(batch["source_kind"], "source:paypal")
+        headers = {f["header"] for f in self._evidence().get("extra_text_fields", [])}
+        self.assertIn("Type", headers)
+        self.assertIn("Item Title", headers)
+
 
 if __name__ == "__main__":
     unittest.main()

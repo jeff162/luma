@@ -39,7 +39,16 @@ from backend.routers.import_export.core import (
     _build_evidence_column_plan,
     _classify_evidence_column_role,
     _collect_duplicate_match_texts,
+    _forced_evidence_headers,
+    sniff_paypal_activity,
 )
+
+# The real PayPal Activity export header (data/paypal/, identical across years). The leading BOM on the
+# first column is deliberately included — the sniff must tolerate it.
+PAYPAL_HEADERS = [
+    "﻿Date", "Time", "TimeZone", "Name", "Type", "Status", "Currency", "Amount", "Fees",
+    "Total", "Exchange Rate", "Receipt ID", "Balance", "Transaction ID", "Item Title",
+]
 
 
 class ClassifyEvidenceColumnRoleTests(unittest.TestCase):
@@ -116,6 +125,47 @@ class BuildEvidenceColumnPlanTests(unittest.TestCase):
         rows = [{"Type": v} for v in (["Deposit"] * 4 + ["Withdrawal"] * 4)]
         plan = dict(_build_evidence_column_plan(rows, headers, self._col(evidence_columns=["Type"])))
         self.assertEqual(plan.get("Type"), EVIDENCE_ROLE_CATEGORICAL)
+
+    def test_paypal_type_and_item_title_forced_even_when_unchecked(self):
+        # The user unchecked everything for a PayPal file — Type/Item Title are still captured, because
+        # money-movement categorization + enrichment depend on them.
+        rows = [{"Type": "Bank Deposit to PP Account", "Item Title": "Pats tix", "Name": "x"}]
+        plan = dict(_build_evidence_column_plan(rows, PAYPAL_HEADERS, self._col(evidence_columns=[])))
+        self.assertIn("Type", plan)
+        self.assertIn("Item Title", plan)
+
+    def test_paypal_type_forced_even_when_keyword_autodetect_misses_it(self):
+        # None path (keyword auto-detect): Type isn't a keyword, but a PayPal file still captures it.
+        rows = [{"Type": "General Withdrawal", "Item Title": ""}]
+        plan = dict(_build_evidence_column_plan(rows, PAYPAL_HEADERS, self._col()))
+        self.assertIn("Type", plan)
+        self.assertIn("Item Title", plan)
+
+    def test_non_paypal_file_does_not_force_type(self):
+        # A bank CSV that happens to have a Type column, unchecked, must NOT get it forced in.
+        headers = ["Date", "Description", "Amount", "Type"]
+        rows = [{"Type": "DEBIT"}]
+        plan = dict(_build_evidence_column_plan(rows, headers, self._col(evidence_columns=[])))
+        self.assertEqual(plan, {})
+
+    def test_forced_type_keeps_its_categorical_role(self):
+        rows = [{"Type": v, "Item Title": f"t{i}"} for i, v in enumerate(["Deposit"] * 4 + ["Withdrawal"] * 4)]
+        plan = dict(_build_evidence_column_plan(rows, PAYPAL_HEADERS, self._col(evidence_columns=[])))
+        self.assertEqual(plan.get("Type"), EVIDENCE_ROLE_CATEGORICAL)
+
+
+class PaypalSourceRecognitionTests(unittest.TestCase):
+    def test_sniffs_the_paypal_activity_header(self):
+        self.assertTrue(sniff_paypal_activity(PAYPAL_HEADERS))
+
+    def test_rejects_a_bank_or_amazon_header(self):
+        self.assertFalse(sniff_paypal_activity(["Date", "Description", "Account", "Amount", "Category"]))
+        self.assertFalse(sniff_paypal_activity(["order id", "items", "total", "payments"]))
+        self.assertFalse(sniff_paypal_activity([]))
+
+    def test_forced_evidence_headers_only_for_paypal(self):
+        self.assertEqual(_forced_evidence_headers(PAYPAL_HEADERS), ["Type", "Item Title"])
+        self.assertEqual(_forced_evidence_headers(["Date", "Type", "Item Title", "Amount"]), [])
 
 
 class CollectDuplicateMatchTextsTests(unittest.TestCase):

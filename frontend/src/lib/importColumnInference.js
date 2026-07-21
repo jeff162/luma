@@ -358,6 +358,17 @@ export function defaultEvidenceColumns(options) {
   return (options || []).filter(option => option.defaultChecked).map(option => option.header)
 }
 
+// Headers a recognized source always captures, regardless of the user's checkboxes. Mirrors the backend
+// `_forced_evidence_headers`: for a PayPal file (`preview.is_paypal`), Type + Item Title. Returned as the
+// actual header strings present in `options`, so the capture panel can show them checked-and-disabled.
+const PAYPAL_FORCED_EVIDENCE = new Set(['type', 'item title'])
+export function forcedEvidenceColumns(preview, options) {
+  if (!preview?.is_paypal) return []
+  return (options || [])
+    .filter(option => PAYPAL_FORCED_EVIDENCE.has(String(option.header || '').trim().toLowerCase()))
+    .map(option => option.header)
+}
+
 function buildColumnSamples(preview, skipRows = 0) {
   if (!preview?.headers?.length || !preview?.rows?.length) return {}
   const rows = preview.rows.slice(skipRows)

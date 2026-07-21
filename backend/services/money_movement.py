@@ -108,6 +108,160 @@ def _leg_type(evidence_json: Optional[str]) -> Optional[str]:
     return None
 
 
+# --- Type-based money-movement categorization (user-approved rules) --------------------------------
+# Lexical fragments that mark a PayPal `Type` as money movement, robust to PayPal renaming an exact
+# string (a future "eCheck Deposit" still matches "deposit"). Used only to *pre-flag* proposals for the
+# user's review — the user decides which types actually become rules. See
+# docs/backlog/paypal-money-movement-recognition.md.
+_MONEY_MOVEMENT_TYPE_FRAGMENTS = ("deposit", "withdrawal", "currency conversion", "hold")
+
+
+def is_money_movement_type(type_value: Optional[str]) -> bool:
+    """Whether a PayPal `Type` looks like money movement (deposits, withdrawals, conversions, holds) vs a
+    real payment. Fragment-based so it survives PayPal renaming a specific type."""
+    t = str(type_value or "").casefold()
+    if not t:
+        return False
+    return t in _MONEY_MOVEMENT_TYPES or any(fragment in t for fragment in _MONEY_MOVEMENT_TYPE_FRAGMENTS)
+
+
+def batch_account_ids(conn: sqlite3.Connection, batch_id: str) -> list[str]:
+    """The distinct accounts a batch's rows landed on — the accounts a money-movement rule is scoped to
+    (a PayPal import lands on one account, so this is normally a single id)."""
+    rows = conn.execute(
+        "SELECT DISTINCT account_id FROM txn WHERE import_batch_id = ? AND trashed_at IS NULL AND account_id IS NOT NULL",
+        (batch_id,),
+    ).fetchall()
+    return [row["account_id"] for row in rows]
+
+
+def _money_movement_category_id_if_exists(conn: sqlite3.Connection) -> Optional[str]:
+    """The Money movement leaf id if it has been created (read-only — never creates it), else None."""
+    transfers = conn.execute("SELECT id FROM category WHERE name = 'Transfers' AND parent_id IS NULL").fetchone()
+    parent_id = transfers["id"] if transfers else None
+    row = conn.execute(
+        "SELECT id FROM category WHERE name = ? AND parent_id IS ?", (MONEY_MOVEMENT_CATEGORY, parent_id)
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def _ruled_keywords(conn: sqlite3.Connection, category_id: Optional[str], account_ids: list[str]) -> set[str]:
+    """The Type keywords already routed to Money movement for these accounts — so a proposal can show
+    which types are currently ruled (the review's checked state)."""
+    if not category_id or not account_ids:
+        return set()
+    placeholders = ",".join("?" for _ in account_ids)
+    rows = conn.execute(
+        f"""SELECT keyword FROM category_rule
+            WHERE category_id = ? AND match_source_text = 1 AND account_id IN ({placeholders})""",
+        (category_id, *account_ids),
+    ).fetchall()
+    return {row["keyword"] for row in rows}
+
+
+def profile_account_ids(conn: sqlite3.Connection, profile_id: str) -> list[str]:
+    """Every account the data source's imports landed on — the accounts its money-movement rules scope to.
+    A single PayPal source can span accounts (files carry no account column), so this can be several."""
+    rows = conn.execute(
+        """SELECT DISTINCT t.account_id
+           FROM   txn t JOIN import_batch b ON b.id = t.import_batch_id
+           WHERE  b.profile_id = ? AND t.trashed_at IS NULL AND t.account_id IS NOT NULL""",
+        (profile_id,),
+    ).fetchall()
+    return [row["account_id"] for row in rows]
+
+
+def _proposals_from_evidence(evidence_rows, ruled: set[str]) -> list[dict]:
+    """Build the ranked proposal list from rows' evidence JSON: distinct captured `Type`, count, the
+    money-movement pre-flag, and whether each is already ruled. Money-movement first, then by count."""
+    counts: dict[str, int] = {}
+    for row in evidence_rows:
+        type_value = _leg_type(row["import_evidence_json"])
+        if type_value:
+            counts[type_value] = counts.get(type_value, 0) + 1
+    proposals = [
+        {
+            "type": type_value,
+            "count": count,
+            "money_movement": is_money_movement_type(type_value),
+            "already_ruled": type_value.strip().lower() in ruled,
+        }
+        for type_value, count in counts.items()
+    ]
+    proposals.sort(key=lambda p: (not p["money_movement"], -p["count"], p["type"].casefold()))
+    return proposals
+
+
+def money_movement_type_proposals(conn: sqlite3.Connection, batch_id: str) -> list[dict]:
+    """One batch's `Type` proposals (see `_proposals_from_evidence`)."""
+    ruled = _ruled_keywords(conn, _money_movement_category_id_if_exists(conn), batch_account_ids(conn, batch_id))
+    rows = conn.execute(
+        "SELECT import_evidence_json FROM txn WHERE import_batch_id = ? AND trashed_at IS NULL", (batch_id,)
+    ).fetchall()
+    return _proposals_from_evidence(rows, ruled)
+
+
+def money_movement_type_proposals_for_profile(conn: sqlite3.Connection, profile_id: str) -> list[dict]:
+    """`Type` proposals across **all** of a data source's imports — the single, source-level review so the
+    user sees every PayPal type at once (not one card at a time), with each type's current rule state."""
+    ruled = _ruled_keywords(conn, _money_movement_category_id_if_exists(conn), profile_account_ids(conn, profile_id))
+    rows = conn.execute(
+        """SELECT t.import_evidence_json
+           FROM   txn t JOIN import_batch b ON b.id = t.import_batch_id
+           WHERE  b.profile_id = ? AND t.trashed_at IS NULL""",
+        (profile_id,),
+    ).fetchall()
+    return _proposals_from_evidence(rows, ruled)
+
+
+def create_money_movement_rules(conn: sqlite3.Connection, type_values, account_ids: list[str]) -> int:
+    """Create `match_source_text` rules routing each `Type` to the excluded Money movement category,
+    **scoped to each of `account_ids`** so the rule only fires on that (PayPal) account — a same-text
+    transaction elsewhere can't match. Idempotent per (keyword, category, account). Returns the count
+    created; the caller runs recategorize to apply them."""
+    category_id = _default_money_movement_category(conn)
+    scopes = account_ids or [None]
+    created = 0
+    for raw in type_values or []:
+        keyword = str(raw or "").strip().lower()
+        if not keyword:
+            continue
+        for account_id in scopes:
+            exists = conn.execute(
+                "SELECT 1 FROM category_rule WHERE keyword = ? AND category_id = ? AND account_id IS ?",
+                (keyword, category_id, account_id),
+            ).fetchone()
+            if exists:
+                continue
+            conn.execute(
+                "INSERT INTO category_rule (id, category_id, keyword, account_id, match_source_text) VALUES (?, ?, ?, ?, 1)",
+                (str(uuid.uuid4()), category_id, keyword, account_id),
+            )
+            created += 1
+    return created
+
+
+def delete_money_movement_rules(conn: sqlite3.Connection, type_values, account_ids: list[str]) -> int:
+    """Remove the money-movement rules for each `Type` on each of `account_ids` — the "changed my mind"
+    path. Returns the count deleted; the caller runs recategorize so the rows fall out of Money movement."""
+    category_id = _money_movement_category_id_if_exists(conn)
+    if not category_id:
+        return 0
+    scopes = account_ids or [None]
+    deleted = 0
+    for raw in type_values or []:
+        keyword = str(raw or "").strip().lower()
+        if not keyword:
+            continue
+        for account_id in scopes:
+            cursor = conn.execute(
+                "DELETE FROM category_rule WHERE keyword = ? AND category_id = ? AND account_id IS ? AND match_source_text = 1",
+                (keyword, category_id, account_id),
+            )
+            deleted += cursor.rowcount or 0
+    return deleted
+
+
 def suppress_batch_funding_legs(conn: sqlite3.Connection, batch_id: str) -> dict:
     """Pair and suppress the batch's wallet funding legs. Returns
     ``{"suppressed": [ {leg_id, purchase_id, amount, date, leg_type, recognized_type}, … ],

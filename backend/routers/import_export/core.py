@@ -30,6 +30,7 @@ import csv
 import hashlib
 import io
 import json
+import sqlite3
 import uuid
 import os
 import re
@@ -55,6 +56,7 @@ from backend.services.categorizer import (
     extract_source_match_text,
     load_categorization_rules,
     load_rule_tags_by_id,
+    recategorize_all,
     rule_scalar_effects,
     source_match_text_from_json,
 )
@@ -69,7 +71,16 @@ from backend.services.duplicate_detection import (
 )
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
 from backend.services.import_enrichment import enrich_duplicate_row, undo_duplicate_enrichment, reverse_batch_enrichments
-from backend.services.money_movement import suppress_batch_funding_legs, reverse_batch_money_movement_links
+from backend.services.money_movement import (
+    suppress_batch_funding_legs,
+    reverse_batch_money_movement_links,
+    money_movement_type_proposals,
+    money_movement_type_proposals_for_profile,
+    create_money_movement_rules,
+    delete_money_movement_rules,
+    batch_account_ids,
+    profile_account_ids,
+)
 
 router = APIRouter()
 
@@ -506,6 +517,70 @@ def _classify_evidence_column_role(values: list[str]) -> str:
     return EVIDENCE_ROLE_DESCRIPTIVE
 
 
+# PayPal Activity CSV recognition. The export header is stable and distinctive across years — no
+# bank/card/Amazon CSV carries this combination — so a header-only sniff identifies it. A recognized
+# PayPal file force-captures `Type`/`Item Title` (see `_forced_evidence_headers`) and is stamped
+# `source_kind = 'source:paypal'`. See docs/backlog/paypal-money-movement-recognition.md.
+_PAYPAL_HEADER_MARKERS = frozenset({"timezone", "type", "status", "currency", "receipt id", "transaction id"})
+PAYPAL_SOURCE_KIND = "source:paypal"
+# Fields always worth keeping from a PayPal export regardless of what the user mapped/checked: `Type`
+# drives money-movement categorization; `Item Title` is the richest enrichment detail. Matched on header,
+# case-insensitively.
+_PAYPAL_FORCED_EVIDENCE = ("type", "item title")
+
+
+def _clean_header_key(header) -> str:
+    """Normalize a header for source sniffing: strip a leading UTF-8 BOM (present on PayPal/AZAD exports)
+    and surrounding whitespace, then casefold."""
+    return str(header or "").lstrip("﻿").strip().lower()
+
+
+def sniff_paypal_activity(headers) -> bool:
+    """True when `headers` are a PayPal Activity export, by a distinctive header-marker subset."""
+    cols = {_clean_header_key(h) for h in (headers or [])}
+    return _PAYPAL_HEADER_MARKERS.issubset(cols)
+
+
+def _forced_evidence_headers(headers: list[str]) -> list[str]:
+    """Headers to capture into evidence regardless of the user's mapping/selection, for a recognized
+    source. Today: PayPal's `Type` + `Item Title`. Empty for any other file, so nothing else changes."""
+    if not sniff_paypal_activity(headers):
+        return []
+    forced = []
+    for header in headers:
+        if _clean_header_key(header) in _PAYPAL_FORCED_EVIDENCE:
+            forced.append(str(header or "").strip())
+    return forced
+
+
+def _get_or_create_paypal_profile(conn, *, header_fingerprint: str, column_map: dict,
+                                  date_format: str, amount_convention: str) -> str:
+    """The single system PayPal data source (`source_kind = 'source:paypal'`), created on first use so all
+    PayPal imports attach to one header — a home for the shared money-movement review. It behaves like any
+    data source (visible, renamable, auto-matches future PayPal files by fingerprint), except it can't be
+    deleted. Name defaults to "PayPal", disambiguated ("PayPal 2", …) if the user already has that name.
+    `account_id` is left NULL — PayPal files carry no account column, so the target account is picked per
+    import (a source can span accounts, like any CSV source)."""
+    existing = conn.execute(
+        "SELECT id FROM csv_import_profile WHERE source_kind = ? ORDER BY created_at LIMIT 1",
+        (PAYPAL_SOURCE_KIND,),
+    ).fetchone()
+    if existing:
+        return existing["id"]
+    name, suffix = "PayPal", 1
+    while conn.execute("SELECT 1 FROM csv_import_profile WHERE LOWER(name) = LOWER(?)", (name,)).fetchone():
+        suffix += 1
+        name = f"PayPal {suffix}"
+    profile_id = str(uuid.uuid4())
+    conn.execute(
+        """INSERT INTO csv_import_profile
+             (id, name, header_fingerprint, column_map, date_format, amount_convention, source_kind)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (profile_id, name, header_fingerprint, json.dumps(column_map), date_format, amount_convention, PAYPAL_SOURCE_KIND),
+    )
+    return profile_id
+
+
 def _build_evidence_column_plan(data_rows: list[dict], headers: list[str], col: ColumnMap) -> list[tuple[str, str]]:
     """Decide which non-mapped columns to capture into import evidence and each one's role.
 
@@ -518,8 +593,13 @@ def _build_evidence_column_plan(data_rows: list[dict], headers: list[str], col: 
     keyword default they unchecked). We capture exactly those, uncapped — the user asked for them. When
     it is None (a saved profile with no capture config, or an API caller), we fall back to the zero-
     effort keyword auto-detect, capped so an unmapped file can't flood evidence.
+
+    A recognized source's **forced** columns (PayPal `Type`/`Item Title`) are always captured on top of
+    either path — the user can't accidentally drop the fields money-movement categorization + enrichment
+    depend on. They don't count against the keyword cap.
     """
     reserved = _import_evidence_reserved_headers(col)
+    forced = {name for name in _forced_evidence_headers(headers) if name not in reserved}
 
     def column_role(header: str) -> str:
         return _classify_evidence_column_role([str(row.get(header, "") or "").strip() for row in data_rows])
@@ -527,14 +607,17 @@ def _build_evidence_column_plan(data_rows: list[dict], headers: list[str], col: 
     plan: list[tuple[str, str]] = []
     used: set[str] = set()
 
+    def add(name: str) -> None:
+        if name and name not in reserved and name not in used:
+            plan.append((name, column_role(name)))
+            used.add(name)
+
     if col.evidence_columns is not None:
         explicit = set(_normalize_string_list(col.evidence_columns))
         for header in headers:
             name = str(header or "").strip()
-            if not name or name in reserved or name in used or name not in explicit:
-                continue
-            plan.append((name, column_role(name)))
-            used.add(name)
+            if name in explicit or name in forced:
+                add(name)
         return plan
 
     keyword_added = 0
@@ -542,11 +625,16 @@ def _build_evidence_column_plan(data_rows: list[dict], headers: list[str], col: 
         if keyword_added >= MAX_IMPORT_EVIDENCE_TEXT_FIELDS:
             break
         name = str(header or "").strip()
-        if not name or name in reserved or name in used or not _header_matches_import_evidence_keyword(name):
+        # Reserved/forced/already-used headers don't consume a keyword slot (forced land below regardless).
+        if name in used or name in reserved or name in forced or not _header_matches_import_evidence_keyword(name):
             continue
-        plan.append((name, column_role(name)))
-        used.add(name)
+        add(name)
         keyword_added += 1
+    # Forced columns always land, even if the keyword heuristic missed them or the cap was reached.
+    for header in headers:
+        name = str(header or "").strip()
+        if name in forced:
+            add(name)
     return plan
 
 
@@ -719,11 +807,15 @@ _CROSS_ACCOUNT_TRANSFER_WINDOW_DAYS = 3
 def _find_cross_account_transfer_candidates(conn, receiving_account_id: str, parsed_date: str,
                                             amount: float) -> list[dict]:
     """The transfer counterpart of a coverage-rejected leg that found no same-account match: a row on a
-    *different* account, same |amount|, within a few days, whose name contains the receiving account's
-    name (the wallet it funds). Display-only and heuristic — surfaced for the user to confirm or reject,
-    never auto-resolved — so it turns a bare 'no specific match' into a reviewable 'possible transfer
-    match' without changing the (correct) reject verdict. Empty when the account can't be named or
-    nothing plausible exists."""
+    *different* account, same |amount|, within a few days, whose name **or captured source text** contains
+    the receiving account's name (the wallet it funds). The source text matters because a bank's cleaned
+    descriptor often drops "PayPal" while the raw statement keeps it — e.g. Mint stores a clean
+    `ELECTRONIC PAYMENT INST XFER` display name but an `Original Description` of
+    `ELECTRONIC PAYMENT PAYPAL INST XFER`; searching only the cleaned name misses the majority of these
+    transfers. Display-only and heuristic — surfaced for the user to confirm or reject, never
+    auto-resolved — so it turns a bare 'no specific match' into a reviewable 'possible transfer match'
+    without changing the (correct) reject verdict. Empty when the account can't be named or nothing
+    plausible exists."""
     acct = conn.execute(
         "SELECT COALESCE(NULLIF(display_name,''), name) AS label FROM account WHERE id = ?",
         (receiving_account_id,),
@@ -740,6 +832,7 @@ def _find_cross_account_transfer_candidates(conn, receiving_account_id: str, par
     rows = conn.execute(
         """SELECT t.id, t.date, t.amount, t.account_id,
                   COALESCE(NULLIF(t.display_name,''), NULLIF(t.merchant_name,''), t.raw_name) AS merchant_name,
+                  t.import_evidence_json,
                   t.import_batch_id,
                   COALESCE(NULLIF(a.display_name,''), a.name) AS account_name
            FROM   txn t JOIN account a ON a.id = t.account_id
@@ -751,7 +844,13 @@ def _find_cross_account_transfer_candidates(conn, receiving_account_id: str, par
     ).fetchall()
     out: list[dict] = []
     for r in rows:
-        if token in _normalize_import_evidence_text(r["merchant_name"]).replace(" ", ""):
+        # Search the wallet token across the resolved name *and* the captured source text (Mint's
+        # "Original Description" etc.) — the same haystack `match_source_text` rules use — since the
+        # cleaned name frequently omits "PayPal" that the raw statement carries.
+        haystack = _normalize_import_evidence_text(
+            f"{r['merchant_name'] or ''} {source_match_text_from_json(r['import_evidence_json'])}"
+        ).replace(" ", "")
+        if token in haystack:
             out.append({
                 "id": r["id"], "date": r["date"], "merchant_name": r["merchant_name"],
                 "amount": r["amount"], "account_id": r["account_id"], "account_name": r["account_name"],
@@ -760,6 +859,66 @@ def _find_cross_account_transfer_candidates(conn, receiving_account_id: str, par
     # Nearest-date first, so the most likely twin leads.
     out.sort(key=lambda c: abs((datetime.strptime(c["date"][:10], "%Y-%m-%d").date() - d).days))
     return out
+
+
+# How far a corroborating charge may sit from the payment (card settlement lag is looser than the
+# transfer window). Generic tokens carry no identifying signal, so they never anchor a match.
+_PAYMENT_MATCH_WINDOW_DAYS = 14
+_GENERIC_MERCHANT_TOKENS = frozenset({
+    "payment", "paypal", "purchase", "online", "store", "user", "inc", "llc", "ltd", "the", "and",
+})
+
+
+def _merchant_match_tokens(name: Optional[str]) -> list[str]:
+    """Distinctive tokens of a merchant name for corroboration matching: normalized words of 4+ chars
+    that aren't generic filler. Empty when the name carries nothing identifying."""
+    normalized = _normalize_import_evidence_text(name)
+    return [t for t in normalized.split() if len(t) >= 4 and t not in _GENERIC_MERCHANT_TOKENS]
+
+
+def _find_ledger_payment_match(conn, receiving_account_id: str, parsed_date: str, amount: float,
+                               incoming_merchant: Optional[str]) -> Optional[dict]:
+    """For a coverage-rejected **named** payment with no same-account/transfer candidate: is it actually
+    already in the ledger as a charge elsewhere — e.g. a ``PAYPAL <merchant>`` card charge — or is it a
+    genuinely-new payment the covering aggregator never saw (a balance-funded subscription or P2P send)?
+    Matches by a distinctive merchant token + same |amount| within a couple of weeks on another account.
+
+    Returns a compact candidate dict (a corroborating charge exists → keep rejecting, and the report can
+    show it) or ``None`` (nothing corroborates → the payment is genuinely new and should import). Nameless
+    money-movement rows never reach here — the caller gates on a non-empty merchant — so this only ever
+    decides real payments, never funding legs."""
+    tokens = _merchant_match_tokens(incoming_merchant)
+    try:
+        d = datetime.strptime(str(parsed_date), "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        d = None
+    if not tokens or d is None or amount is None:
+        return None
+    low, high = (d - timedelta(days=_PAYMENT_MATCH_WINDOW_DAYS)).isoformat(), \
+        (d + timedelta(days=_PAYMENT_MATCH_WINDOW_DAYS)).isoformat()
+    rows = conn.execute(
+        """SELECT t.id, t.date, t.amount, t.account_id,
+                  COALESCE(NULLIF(t.display_name,''), NULLIF(t.merchant_name,''), t.raw_name) AS merchant_name,
+                  t.import_evidence_json, t.import_batch_id,
+                  COALESCE(NULLIF(a.display_name,''), a.name) AS account_name
+           FROM   txn t JOIN account a ON a.id = t.account_id
+           WHERE  ROUND(ABS(t.amount), 2) = ROUND(ABS(?), 2)
+             AND  t.account_id <> ?
+             AND  t.trashed_at IS NULL
+             AND  date(t.date) BETWEEN date(?) AND date(?)""",
+        (float(amount), receiving_account_id, low, high),
+    ).fetchall()
+    for r in rows:
+        haystack = _normalize_import_evidence_text(
+            f"{r['merchant_name'] or ''} {source_match_text_from_json(r['import_evidence_json'])}"
+        ).replace(" ", "")
+        if any(tok in haystack for tok in tokens):
+            return {
+                "id": r["id"], "date": r["date"], "merchant_name": r["merchant_name"],
+                "amount": r["amount"], "account_id": r["account_id"], "account_name": r["account_name"],
+                "import_batch_id": r["import_batch_id"], "cross_account": True, "payment_match": True,
+            }
+    return None
 
 
 def _match_terminal_day_candidate(candidate_rows: list[dict], *, content_hash: str, amount: float, incoming_merchant: Optional[str] = None) -> Optional[dict]:
@@ -2947,6 +3106,21 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
     # Run inside the caller's transaction when one is supplied (demo loader); otherwise own the connection.
     with (nullcontext(conn) if conn is not None else get_db()) as conn:
         default_owner_id = resolve_default_owner_id(conn, None)
+        # A recognized PayPal import groups under the single system PayPal data source, so all PayPal
+        # imports share one header + one money-movement review. With no source picked, get-or-create it;
+        # with a source picked (a hand-created PayPal source), *adopt* it — tag it `source:paypal` so it
+        # gets the same treatment (non-deletable, money-movement review) as an auto-created one.
+        if not replace_batch_id and sniff_paypal_activity(headers):
+            if profile_id is None:
+                profile_id = _get_or_create_paypal_profile(
+                    conn, header_fingerprint="|".join(headers), column_map=cm_dict,
+                    date_format=date_format, amount_convention=amount_convention,
+                )
+            else:
+                conn.execute(
+                    "UPDATE csv_import_profile SET source_kind = ? WHERE id = ? AND source_kind IS NULL",
+                    (PAYPAL_SOURCE_KIND, profile_id),
+                )
         valid_category_ids = {
             row["id"] for row in conn.execute("SELECT id FROM category").fetchall()
         }
@@ -3404,9 +3578,10 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             config_snapshot["account_duplicate_compare"] = account_duplicate_compare_targets
         conn.execute("""
             INSERT INTO import_batch
-              (id, profile_id, filename, file_content_hash, row_count, skipped_count, deduped_count, use_imported_categories, config_snapshot)
-            VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?)
-        """, (batch_id, profile_id, filename, file_content_hash, 1 if use_imported_categories else 0, json.dumps(config_snapshot)))
+              (id, profile_id, filename, file_content_hash, row_count, skipped_count, deduped_count, use_imported_categories, config_snapshot, source_kind)
+            VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?, ?)
+        """, (batch_id, profile_id, filename, file_content_hash, 1 if use_imported_categories else 0, json.dumps(config_snapshot),
+              PAYPAL_SOURCE_KIND if sniff_paypal_activity(headers) else None))
 
         if not profile_id:
             previous_profileless_batches = conn.execute(
@@ -3462,6 +3637,11 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                 # closes over conn (a targeted query only fires on the 'no specific match' residual).
                 "find_cross_account_transfer": (
                     lambda acct_id, date_str, amt: _find_cross_account_transfer_candidates(conn, acct_id, date_str, amt)
+                ),
+                # Corroboration check for a coverage-rejected *named* payment: is it already in the ledger
+                # as a charge elsewhere (keep rejecting), or genuinely new (let it import)?
+                "find_payment_match": (
+                    lambda acct_id, date_str, amt, merchant: _find_ledger_payment_match(conn, acct_id, date_str, amt, merchant)
                 ),
             },
         )
@@ -3859,6 +4039,8 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         "duplicate_count":      deduped,
         "enriched_count":       enriched_count,
         "money_movement_suppressed_count": money_movement_suppressed_count,
+        "is_paypal":            sniff_paypal_activity(headers),
+        "profile_id":           profile_id,
         "import_summary":       import_summary,
         "new_accounts_created": len(created_account_ids),
         "new_accounts_without_owner": sum(
@@ -3897,6 +4079,72 @@ def get_batch_duplicates(batch_id: str):
             "rows": duplicate_rows,
             "count": len(duplicate_rows),
         }
+
+
+class MoneyMovementRulesRequest(BaseModel):
+    add: list[str] = Field(default_factory=list)
+    remove: list[str] = Field(default_factory=list)
+
+
+@router.get("/batches/{batch_id}/money-movement-types")
+def get_money_movement_types(batch_id: str):
+    """The distinct captured `Type` values in a (PayPal) batch, with counts and a money-movement pre-flag,
+    so the user can review which types to route to the excluded Money movement category."""
+    with get_db() as conn:
+        batch = conn.execute("SELECT id, filename FROM import_batch WHERE id = ?", (batch_id,)).fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+        return {
+            "batch_id": batch_id,
+            "filename": batch["filename"],
+            "proposals": money_movement_type_proposals(conn, batch_id),
+        }
+
+
+@router.post("/batches/{batch_id}/money-movement-rules")
+def apply_money_movement_rules(batch_id: str, body: MoneyMovementRulesRequest):
+    """Add and/or remove money-movement rules (scoped to the batch's account) for the given `Type` values,
+    then recategorize so this batch and existing rows update. `add` creates the routing to Money movement;
+    `remove` deletes it (the "changed my mind" path)."""
+    with get_db() as conn:
+        batch = conn.execute("SELECT id FROM import_batch WHERE id = ?", (batch_id,)).fetchone()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+        account_ids = batch_account_ids(conn, batch_id)
+        created = create_money_movement_rules(conn, body.add, account_ids)
+        deleted = delete_money_movement_rules(conn, body.remove, account_ids)
+        recategorized = recategorize_all(conn) if (created or deleted) else 0
+    return {"created": created, "deleted": deleted, "recategorized": recategorized}
+
+
+@router.get("/profiles/{profile_id}/money-movement-types")
+def get_profile_money_movement_types(profile_id: str):
+    """The distinct captured `Type` values across a data source's imports (source-level review) — the one
+    surface for all its money-movement types, each with count + money-movement + already_ruled flags."""
+    with get_db() as conn:
+        profile = conn.execute("SELECT id, name FROM csv_import_profile WHERE id = ?", (profile_id,)).fetchone()
+        if not profile:
+            raise HTTPException(status_code=404, detail="Data source not found")
+        return {
+            "profile_id": profile_id,
+            "name": profile["name"],
+            "proposals": money_movement_type_proposals_for_profile(conn, profile_id),
+        }
+
+
+@router.post("/profiles/{profile_id}/money-movement-rules")
+def apply_profile_money_movement_rules(profile_id: str, body: MoneyMovementRulesRequest):
+    """Add/remove money-movement rules for a data source's `Type` values, scoped to every account its
+    imports touched, then recategorize."""
+    with get_db() as conn:
+        profile = conn.execute("SELECT id FROM csv_import_profile WHERE id = ?", (profile_id,)).fetchone()
+        if not profile:
+            raise HTTPException(status_code=404, detail="Data source not found")
+        account_ids = profile_account_ids(conn, profile_id)
+        created = create_money_movement_rules(conn, body.add, account_ids)
+        deleted = delete_money_movement_rules(conn, body.remove, account_ids)
+        recategorized = recategorize_all(conn) if (created or deleted) else 0
+    return {"created": created, "deleted": deleted, "recategorized": recategorized}
 
 
 # Combined view of duplicate decisions made for this batch — both the hard-rejects that never
@@ -4215,7 +4463,13 @@ def list_batches():
             ORDER  BY b.imported_at DESC
             LIMIT  50
         """).fetchall()
-        _reconcile_batch_history(conn, [row["id"] for row in batch_rows])
+        # Best-effort cleanup of stale batch-account rows. It writes, but this is a read endpoint, so a
+        # transient "database is locked" (another request mid-write) must not fail the whole listing — the
+        # next call reconciles. See the manage-sources refetch-loop fix that made this contention possible.
+        try:
+            _reconcile_batch_history(conn, [row["id"] for row in batch_rows])
+        except sqlite3.OperationalError as exc:
+            log_warning(f"[import] batch-history reconcile skipped (transient): {exc}")
         batches = conn.execute("""
             SELECT b.id, b.profile_id, b.filename, b.file_content_hash, b.imported_at, b.row_count, b.skipped_count,
                    b.deduped_count, b.status, b.use_imported_categories, b.config_snapshot, b.source_kind, p.name AS profile_name,

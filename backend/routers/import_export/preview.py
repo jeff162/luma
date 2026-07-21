@@ -26,6 +26,7 @@ from .core import (
     MAX_DISTINCT_VALUES_PER_COLUMN,
     _detect_header_row_index,
     make_import_file_hash,
+    sniff_paypal_activity,
 )
 
 router = APIRouter()
@@ -184,6 +185,7 @@ async def preview_csv(file: UploadFile = File(...)):
         "filename":               filename,
         "file_content_hash":      file_content_hash,
         "header_fingerprint":     header_fp,
+        "is_paypal":              sniff_paypal_activity(headers),
         "suggested_profile_id":   suggested_profile_id,
         "previous_batch":         dict(previous_batch) if previous_batch else None,
         "previous_batch_accounts":previous_batch_accounts,

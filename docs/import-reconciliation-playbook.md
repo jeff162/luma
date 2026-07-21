@@ -70,11 +70,20 @@ cross-account transfer twin. Three of the pairing outcomes are surfaced for revi
   wallet itself — their money-movement twin is the funding charge on the bank or card that paid it
   (named "PAYPAL…"), already in the ledger. So the leg is correctly not re-imported: **Mark reviewed**
   to confirm, or **Import anyway** if they're genuinely separate. The match is by amount + date + the
-  account name (a soft signal, opposite-signed and cross-account, which is why the same-account lookup
-  misses it), so it is surfaced for confirmation, never applied automatically.
+  account name, searched across both the cleaned merchant name **and** the captured source text (e.g.
+  Mint's `Original Description`) — the bank's clean descriptor often drops "PayPal" while the raw
+  statement keeps it, so searching only the name misses most of these. A soft signal (opposite-signed,
+  cross-account), surfaced for confirmation, never applied automatically.
 - **No specific match** — the date is covered but nothing paired at all, even at ±2 days or across
-  accounts. This is the one to actually investigate: usually a row present in one source and genuinely
-  missing from the other, in which case **Import anyway** keeps it.
+  accounts. **A *named* payment that reaches this point is auto-rescued:** the importer checks whether
+  the same payment already sits in the ledger as a charge elsewhere (a `PAYPAL <merchant>` card charge,
+  matched by a distinctive merchant token + amount within ±14 days). If none does, the payment is
+  genuinely new — a balance-funded subscription or P2P send the covering aggregator never saw, since it
+  never hit a card/bank — and it **imports** instead of being buried here; if a corroborating charge
+  *does* exist, it stays rejected and that charge is shown as the match. So this bucket is now mostly
+  **nameless money-movement** (deposits, withdrawals, currency conversions, holds) — genuinely no
+  counterparty, correctly held back — plus any payment whose new-vs-duplicate status the token match
+  couldn't settle; **Import anyway** for anything real that remains.
 
 A covered row that pairs cleanly on the exact date or ±1 day stays rejected without being flagged — only
 the three cases above need a look.

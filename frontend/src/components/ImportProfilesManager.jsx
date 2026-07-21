@@ -7,6 +7,7 @@ import {
   analyzeImportColumns,
   computeEvidenceColumnOptions,
   defaultEvidenceColumns,
+  forcedEvidenceColumns,
   DEFAULT_IMPORT_DATE_FORMAT,
   formatLikelyMatchLabel,
   inferImportFileCharacteristicsFromPreview,
@@ -153,6 +154,11 @@ function ProfileForm({
     () => [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount].filter(Boolean),
     [colDate, colAmount, colDebit, colCredit, colDir, colDesc, colCategory, colNotes, colPending, colAccount],
   )
+  // "Imports from this data source have been categorized" only makes sense with a Category column mapped;
+  // clear it if that mapping is removed.
+  useEffect(() => {
+    if (!colCategory) setUseImportedCategories(false)
+  }, [colCategory])
   const evidenceColumnOptions = useMemo(
     () => computeEvidenceColumnOptions(samplePreview, mappedHeaders, skipRowsValue),
     [samplePreview, mappedHeaders, skipRowsValue],
@@ -693,6 +699,7 @@ function ProfileForm({
       <ImportEvidenceColumnsSection
         options={evidenceColumnOptions}
         checked={resolvedEvidenceColumns}
+        forced={forcedEvidenceColumns(samplePreview, evidenceColumnOptions)}
         onChange={setEvidenceColumns}
       />
 
@@ -710,12 +717,20 @@ function ProfileForm({
             </span>
           </span>
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-          <input name="profile-use-imported-categories" type="checkbox" checked={useImportedCategories} onChange={e => setUseImportedCategories(e.target.checked)} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: colCategory ? 'pointer' : 'not-allowed', opacity: colCategory ? 1 : 0.55 }}>
+          <input
+            name="profile-use-imported-categories"
+            type="checkbox"
+            checked={useImportedCategories}
+            disabled={!colCategory}
+            onChange={e => setUseImportedCategories(e.target.checked)}
+          />
           <span>
             Imports from this data source have been categorized
             <span style={{ display: 'block', fontSize: 11, color: 'var(--muted)' }}>
-              Missing categories are added to the system and suggestions for rules are built from the categorization patterns.
+              {colCategory
+                ? 'Missing categories are added to the system and suggestions for rules are built from the categorization patterns.'
+                : 'Map a Category column above to use this — an import can only carry categories from a category column.'}
             </span>
           </span>
         </label>
@@ -1137,15 +1152,19 @@ export default function ImportProfilesManager({
                         >
                           Edit
                         </button>
-                        <button
-                          onClick={() => setPendingDeleteProfile(profile)}
-                          style={{
-                            background: 'none', border: 'none',
-                            color: 'var(--danger)', cursor: 'pointer', fontSize: 14, padding: '2px 6px',
-                          }}
-                        >
-                          ×
-                        </button>
+                        {profile.source_kind ? (
+                          <span title="This data source is managed by the system and can't be deleted." style={{ color: 'var(--muted)', fontSize: 14, padding: '2px 6px', cursor: 'default' }}>🔒</span>
+                        ) : (
+                          <button
+                            onClick={() => setPendingDeleteProfile(profile)}
+                            style={{
+                              background: 'none', border: 'none',
+                              color: 'var(--danger)', cursor: 'pointer', fontSize: 14, padding: '2px 6px',
+                            }}
+                          >
+                            ×
+                          </button>
+                        )}
                       </div>
                     </>
                   )

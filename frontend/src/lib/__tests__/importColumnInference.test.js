@@ -13,6 +13,7 @@ import {
   classifyEvidenceColumnShape,
   computeEvidenceColumnOptions,
   defaultEvidenceColumns,
+  forcedEvidenceColumns,
   headerMatchesEvidenceKeyword,
   EVIDENCE_COLUMN_SHAPE,
   DEFAULT_IMPORT_DATE_FORMAT,
@@ -234,5 +235,26 @@ describe('column mapping', () => {
   it('returns safe defaults for an empty preview', () => {
     expect(inferImportFileCharacteristicsFromPreview({}).amountConvention).toBe('single_signed')
     expect(inferImportMappingFromPreview({}).columnMap.date).toBe('')
+  })
+})
+
+describe('forcedEvidenceColumns', () => {
+  const options = [
+    { header: 'Type', shape: 'categorical' },
+    { header: 'Item Title', shape: 'free_text' },
+    { header: 'Status', shape: 'categorical' },
+  ]
+
+  it('forces Type + Item Title for a recognized PayPal file', () => {
+    expect(forcedEvidenceColumns({ is_paypal: true }, options)).toEqual(['Type', 'Item Title'])
+  })
+
+  it('forces nothing when the file is not PayPal', () => {
+    expect(forcedEvidenceColumns({ is_paypal: false }, options)).toEqual([])
+    expect(forcedEvidenceColumns(null, options)).toEqual([])
+  })
+
+  it('only returns forced headers that are actually present as options', () => {
+    expect(forcedEvidenceColumns({ is_paypal: true }, [{ header: 'Status' }])).toEqual([])
   })
 })

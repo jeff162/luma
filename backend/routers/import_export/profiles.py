@@ -340,6 +340,11 @@ def update_profile(profile_id: str, body: ProfileUpdate):
 @router.delete("/profiles/{profile_id}")
 def delete_profile(profile_id: str):
     with get_db() as conn:
+        # A system data source (the auto-created PayPal source) is editable/renamable like any other but
+        # can't be deleted — it's the durable home for its imports and the money-movement review.
+        row = conn.execute("SELECT source_kind FROM csv_import_profile WHERE id = ?", (profile_id,)).fetchone()
+        if row and row["source_kind"]:
+            raise HTTPException(status_code=400, detail="This data source is managed by the system and can't be deleted.")
         batches = conn.execute(
             "SELECT id, config_snapshot FROM import_batch WHERE profile_id = ?",
             (profile_id,),

@@ -103,7 +103,7 @@ def get_db(db_path: str | None = None):
 # rule-backed recurring series (`category_rule.is_recurring` + `recurring_series.rule_id`; the
 # `recurring_membership_override` table is created by the same CREATE TABLE IF NOT EXISTS script).
 
-CURRENT_VERSION = 10
+CURRENT_VERSION = 11
 
 MIGRATIONS = {}
 
@@ -272,6 +272,15 @@ def _add_amazon_funding_map(conn):
             ON amazon_funding_map(last4, COALESCE(network, ''), amazon_account_id)
             WHERE amazon_account_id IS NOT NULL
     """)
+
+
+@migration(11)
+def _add_import_profile_source_kind(conn):
+    # Provenance class of a data source (import profile), mirroring import_batch.source_kind: NULL = an
+    # ordinary user-created source, 'source:paypal' marks the auto-created system PayPal source that all
+    # PayPal imports attach to (so PayPal imports group under one header and share one money-movement
+    # review). Fresh installs get the column from the csv_import_profile baseline; existing databases here.
+    conn.execute("ALTER TABLE csv_import_profile ADD COLUMN source_kind TEXT")
 
 
 def get_db_version(conn) -> int:
@@ -628,6 +637,7 @@ def init_db(db_path: str | None = None):
                 enrich_from_source   INTEGER NOT NULL DEFAULT 0,
                 use_imported_categories INTEGER NOT NULL DEFAULT 0,
                 notes                TEXT,
+                source_kind          TEXT,
                 created_at           TEXT NOT NULL DEFAULT (datetime('now'))
             );
 

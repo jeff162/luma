@@ -305,6 +305,32 @@ def _coverage_matched(cov: dict, candidates: list[dict]) -> dict:
     }
 
 
+def _coverage_reject_verdict(context: "DedupeContext", cov: dict, receiving_account_id: str,
+                             parsed_date: str, amount: float, duplicate_amount_key, include_scope: bool,
+                             incoming_merchant, reason: str):
+    """The verdict for a coverage-window hit: a hard-reject, carrying any same-account/transfer candidates
+    for the report. One exception keeps real spending from being silently dropped: a **named** row (a real
+    payment, not a nameless money-movement leg) with no such candidate is only treated as a duplicate when
+    a corroborating charge actually exists elsewhere in the ledger (a ``PAYPAL <merchant>`` card charge,
+    matched by merchant + amount). When none does, the payment is genuinely new — the covering import
+    never saw it (it was funded from the wallet balance, so it never hit a card/bank) — and this returns
+    ``None`` so the row falls through to import instead of being buried as 'covered, no specific match'.
+    Nameless money-movement rows keep their existing coverage rejection unchanged."""
+    candidates = _candidate_summary_rows_for_coverage(
+        context, receiving_account_id, parsed_date, amount, duplicate_amount_key, include_scope,
+    )
+    find_payment = context.helpers.get("find_payment_match")
+    if not candidates and incoming_merchant and find_payment is not None:
+        payment_match = find_payment(receiving_account_id, parsed_date, amount, incoming_merchant)
+        if payment_match is None:
+            return None  # genuinely-new named payment → let it import
+        candidates = [payment_match]
+    return DedupeVerdict(
+        hard_reject=True, passthrough=False,
+        matched=_coverage_matched(cov, candidates), reason=reason,
+    )
+
+
 def evaluate_duplicate(
     *,
     context: DedupeContext,
@@ -349,14 +375,13 @@ def evaluate_duplicate(
             None,
         )
         if cov:
-            candidates = _candidate_summary_rows_for_coverage(
-                context, receiving_account_id, parsed_date, amount, duplicate_amount_key, include_scope=False,
-            )
-            return DedupeVerdict(
-                hard_reject=True, passthrough=False,
-                matched=_coverage_matched(cov, candidates),
+            verdict = _coverage_reject_verdict(
+                context, cov, receiving_account_id, parsed_date, amount, duplicate_amount_key,
+                include_scope=False, incoming_merchant=incoming_merchant,
                 reason="Falls within the fully covered date range from an earlier import for this source account",
             )
+            if verdict is not None:
+                return verdict
 
     # Rule 2: in-scope coverage window — same linked group, different csv_value. Precondition: the
     # entry must be for the receiving account itself (or for an account the user explicitly
@@ -376,14 +401,13 @@ def evaluate_duplicate(
             None,
         )
         if cov:
-            candidates = _candidate_summary_rows_for_coverage(
-                context, receiving_account_id, parsed_date, amount, duplicate_amount_key, include_scope=True,
-            )
-            return DedupeVerdict(
-                hard_reject=True, passthrough=False,
-                matched=_coverage_matched(cov, candidates),
+            verdict = _coverage_reject_verdict(
+                context, cov, receiving_account_id, parsed_date, amount, duplicate_amount_key,
+                include_scope=True, incoming_merchant=incoming_merchant,
                 reason="Falls within the fully covered date range from an earlier import in this account scope",
             )
+            if verdict is not None:
+                return verdict
 
     # Rule 3: exact content-hash match within the receiving account. Reached only when the row is
     # NOT inside a covered range above. Two different checks can share date+amount+description, so a

@@ -47,6 +47,7 @@ import { RawFilePreview } from '../components/importExport/RawFilePreview.jsx'
 import { ExportTab } from '../components/importExport/ExportTab.jsx'
 import { BackupRestoreTab } from '../components/importExport/BackupRestoreTab.jsx'
 import { ImportUploadStage } from '../components/importExport/ImportUploadStage.jsx'
+import { MoneyMovementReviewDialog } from '../components/importExport/MoneyMovementReviewDialog.jsx'
 import { useBatchUndo } from '../components/importExport/useBatchUndo.jsx'
 import { useBatchDetailPanels } from '../components/importExport/useBatchDetailPanels.jsx'
 import { ImportHistorySection } from '../components/importExport/ImportHistorySection.jsx'
@@ -82,6 +83,7 @@ import {
   analyzeImportColumns,
   computeEvidenceColumnOptions,
   defaultEvidenceColumns,
+  forcedEvidenceColumns,
   formatLikelyMatchLabel,
   inferFilenamePattern,
   inferImportFileCharacteristicsFromPreview,
@@ -168,6 +170,10 @@ function ImportTab({ onAmazonDetected }) {
   const [importFilePreviews, setImportFilePreviews] = useState([])
   const [multiSourceChoice, setMultiSourceChoice] = useState(null)
   const [multiImportProgress, setMultiImportProgress] = useState(null)
+  // After a PayPal import, the money-movement review: { batchId, proposals }. The user approves which
+  // Type values route to the excluded Money movement category.
+  const [moneyMovementReview, setMoneyMovementReview] = useState(null)
+  const [moneyMovementApplying, setMoneyMovementApplying] = useState(false)
   const [profiles, setProfiles] = useState([])
   const [accounts, setAccounts] = useState([])
   const [categories, setCategories] = useState([])
@@ -459,14 +465,14 @@ function ImportTab({ onAmazonDetected }) {
     setDataSourceManagerDragging(false)
   }
 
-  function handleManagerDataChange({ profiles: nextProfiles, batches: nextBatches } = {}) {
-    if (Array.isArray(nextProfiles)) {
-      setProfiles(nextProfiles)
-    }
-    if (Array.isArray(nextBatches)) {
-      setBatches(nextBatches)
-    }
-  }
+  // Memoized so the data-source manager's `refreshManagerData` (which depends on this via `onDataChange`)
+  // keeps a stable identity — otherwise its load effect re-fires on every parent render, which the manager
+  // triggers by calling back here, and the two ping-pong into an infinite accounts/batches/profiles
+  // refetch loop. setState functions are stable, so `[]` deps are correct.
+  const handleManagerDataChange = useCallback(({ profiles: nextProfiles, batches: nextBatches } = {}) => {
+    if (Array.isArray(nextProfiles)) setProfiles(nextProfiles)
+    if (Array.isArray(nextBatches)) setBatches(nextBatches)
+  }, [])
 
   function startDataSourceManagerDrag(event) {
     if (dataSourceManagerEditing || !dataSourceManagerRef.current) return
@@ -786,6 +792,10 @@ function ImportTab({ onAmazonDetected }) {
     const base = evidenceColumns == null ? defaultEvidenceColumns(evidenceColumnOptions) : evidenceColumns
     return base.filter(header => optionHeaders.has(header))
   }, [evidenceColumns, evidenceColumnOptions])
+  const forcedEvidenceCols = useMemo(
+    () => forcedEvidenceColumns(preview, evidenceColumnOptions),
+    [preview, evidenceColumnOptions],
+  )
 
   const selectedDateAnalysis = colDate ? columnAnalysis.dateAnalysisByHeader[colDate] : null
   const selectedAmountAnalysis = colAmount ? columnAnalysis.amountAnalysisByHeader[colAmount] : null
@@ -2276,19 +2286,33 @@ function ImportTab({ onAmazonDetected }) {
       // even if this source was collapsed in the user's saved history view.
       // For temporary draft imports, also expand unknown-source if a prior batch
       // is being displaced into it by the new import becoming the active draft.
-      const rowKeyToExpand = selectedProfile ? `profile:${selectedProfile}` : 'manual-draft'
+      // The batch's actual data source (from the backend result) wins — it includes an auto-created source
+      // like the PayPal one, which the frontend's `selectedProfile` doesn't know about. A multi-file import
+      // shares one profile across its per-file results.
+      const resolvedProfileId = result.multiFile
+        ? (result.perFile || []).map(entry => entry?.result?.profile_id).find(Boolean)
+        : result.profile_id
+      const rowKeyToExpand = resolvedProfileId
+        ? `profile:${resolvedProfileId}`
+        : (selectedProfile ? `profile:${selectedProfile}` : 'manual-draft')
       setExpandedSourceRows(prev => {
         const next = { ...(prev && typeof prev === 'object' ? prev : {}), [rowKeyToExpand]: true }
         if (hadPriorManualBatch) next['unknown-source'] = true
         return next
       })
       api.listBatches().then(setBatches)
+      // Refresh profiles too, so a data source the import just auto-created (the PayPal source) is known
+      // and its header renders immediately instead of only after navigating away and back.
+      api.getImportProfiles().then(setProfiles).catch(() => { })
       if (selectedProfile) {
         await autoSaveProfile(refreshedAccounts).catch(() => { })
       }
       if (result.multiFile) {
         // Each file landed as its own card in the history below; summarize and return to the upload
         // screen rather than the single-file review (whose per-file dialogs don't apply to an aggregate).
+        // If a PayPal money-movement review takes over (the actionable follow-up), skip the summary
+        // notice so two dialogs don't stack — the per-file counts remain on the history cards.
+        const reviewOpened = await maybeOpenMoneyMovementReview(result)
         const skipped = result.skipped || []
         const parts = [`${result.imported} transaction${result.imported === 1 ? '' : 's'} added`]
         if (result.deduped) parts.push(`${result.deduped} duplicate row${result.deduped === 1 ? '' : 's'} skipped`)
@@ -2299,22 +2323,25 @@ function ImportTab({ onAmazonDetected }) {
           : ''
         const skipLines = skipped.map(formatSkippedImportMessage)
         const totalSelected = result.fileCount + skipped.length
-        setNoticeDialog({
-          title: skipped.length
-            ? `Imported ${result.fileCount} of ${totalSelected} files`
-            : `Imported ${result.fileCount} files`,
-          description: (
-            <>
-              {importedLine ? <div>{importedLine}</div> : null}
-              {skipLines.map((line, i) => (
-                <div key={i} style={{ marginTop: (importedLine || i) ? 6 : 0 }}>{line}</div>
-              ))}
-            </>
-          ),
-        })
+        if (!reviewOpened) {
+          setNoticeDialog({
+            title: skipped.length
+              ? `Imported ${result.fileCount} of ${totalSelected} files`
+              : `Imported ${result.fileCount} files`,
+            description: (
+              <>
+                {importedLine ? <div>{importedLine}</div> : null}
+                {skipLines.map((line, i) => (
+                  <div key={i} style={{ marginTop: (importedLine || i) ? 6 : 0 }}>{line}</div>
+                ))}
+              </>
+            ),
+          })
+        }
         resetImport()
       } else {
         setStage(result.trailing_non_transaction_suspected ? 'review-data' : 'done')
+        maybeOpenMoneyMovementReview(result)
       }
     } catch (e) {
       setMultiImportProgress(null)
@@ -2324,6 +2351,61 @@ function ImportTab({ onAmazonDetected }) {
       })
     }
     finally { setLoading(false) }
+  }
+
+  // After a PayPal import, offer the money-movement review. All PayPal imports share the one system
+  // PayPal data source, so the review is scoped to that *profile* — it covers every PayPal type across
+  // every import at once (single- or multi-file). Returns whether a review opened; non-fatal on failure.
+  async function maybeOpenMoneyMovementReview(result) {
+    const profileId = result?.multiFile
+      ? (result.perFile || []).map(entry => entry?.result).find(r => r?.is_paypal && r?.profile_id)?.profile_id
+      : (result?.is_paypal ? result?.profile_id : null)
+    if (!profileId) return false
+    try {
+      const data = await api.getMoneyMovementTypes(profileId)
+      if (data?.proposals?.some(proposal => proposal.money_movement)) {
+        setMoneyMovementReview({ profileId, proposals: data.proposals })
+        return true
+      }
+    } catch { /* review is optional — ignore */ }
+    return false
+  }
+
+  async function applyMoneyMovementRules({ add = [], remove = [] }) {
+    if (!moneyMovementReview || (!add.length && !remove.length)) return
+    setMoneyMovementApplying(true)
+    try {
+      const res = await api.applyMoneyMovementRules(moneyMovementReview.profileId, { add, remove })
+      setMoneyMovementReview(null)
+      api.getAccounts({ include_children: true }).then(setAccounts).catch(() => { })
+      const changes = []
+      if (res.created) changes.push(`added ${res.created} rule${res.created === 1 ? '' : 's'}`)
+      if (res.deleted) changes.push(`removed ${res.deleted} rule${res.deleted === 1 ? '' : 's'}`)
+      setNoticeDialog({
+        title: 'Money movement updated',
+        description: `${changes.join(', ') || 'No changes'} — ${res.recategorized} transaction${res.recategorized === 1 ? '' : 's'} recategorized.`,
+      })
+    } catch (e) {
+      setNoticeDialog({ title: 'Could not update rules', description: e.message })
+    } finally {
+      setMoneyMovementApplying(false)
+    }
+  }
+
+  // Open the review for a PayPal data source (from its header row) — the one place to add/remove
+  // money-movement types across all of that source's imports.
+  async function reviewMoneyMovementForProfile(profileId) {
+    if (!profileId) return
+    try {
+      const data = await api.getMoneyMovementTypes(profileId)
+      if (data?.proposals?.length) {
+        setMoneyMovementReview({ profileId, proposals: data.proposals, editing: true })
+      } else {
+        setNoticeDialog({ title: 'No transaction types', description: 'This data source captured no PayPal transaction types to review.' })
+      }
+    } catch (e) {
+      setNoticeDialog({ title: 'Could not load types', description: e.message })
+    }
   }
 
   async function createUploadDataSource() {
@@ -3578,6 +3660,7 @@ function ImportTab({ onAmazonDetected }) {
             <ImportEvidenceColumnsSection
               options={evidenceColumnOptions}
               checked={resolvedEvidenceColumns}
+              forced={forcedEvidenceCols}
               onChange={setEvidenceColumns}
             />
             {!colAccount && singleAccountNew.enabled && (
@@ -4314,6 +4397,7 @@ function ImportTab({ onAmazonDetected }) {
         <ImportHistorySection
           dataSourceRows={dataSourceRows}
           profiles={profiles}
+          onReviewMoneyMovement={reviewMoneyMovementForProfile}
           expandedSourceRows={expandedSourceRows}
           setExpandedSourceRows={setExpandedSourceRows}
           setShowDataSourceManager={setShowDataSourceManager}
@@ -4460,6 +4544,16 @@ function ImportTab({ onAmazonDetected }) {
           unreadable={multiSourceChoice.unreadable}
           onPickGroup={group => startGroupImport(group, { unreadable: multiSourceChoice.unreadable })}
           onCancel={() => setMultiSourceChoice(null)}
+        />
+      ) : null}
+
+      {moneyMovementReview ? (
+        <MoneyMovementReviewDialog
+          proposals={moneyMovementReview.proposals}
+          editing={!!moneyMovementReview.editing}
+          applying={moneyMovementApplying}
+          onApply={applyMoneyMovementRules}
+          onClose={() => setMoneyMovementReview(null)}
         />
       ) : null}
 

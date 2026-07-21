@@ -10,6 +10,7 @@ pin `_find_cross_account_transfer_candidates` (the targeted SQL that finds the t
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 import uuid
@@ -44,13 +45,16 @@ class CrossAccountTransferMatchTests(unittest.TestCase):
         finally:
             reset_current_db_path(token)
 
-    def _txn(self, account_id, amount, date, name):
+    def _txn(self, account_id, amount, date, name, *, original_description=None):
         tid = str(uuid.uuid4())
+        evidence = None
+        if original_description is not None:
+            evidence = json.dumps({"extra_text_fields": [{"header": "Original Description", "value": original_description}]})
         with self._use_db_path(), get_db() as conn:
             conn.execute(
-                """INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name, date, is_pending)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)""",
-                (tid, account_id, SHARED_OWNER_ID, amount, name, name, name, date),
+                """INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name, date, is_pending, import_evidence_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+                (tid, account_id, SHARED_OWNER_ID, amount, name, name, name, date, evidence),
             )
         return tid
 
@@ -72,9 +76,29 @@ class CrossAccountTransferMatchTests(unittest.TestCase):
         out = self._find("2026-03-11", -2251.67)
         self.assertEqual([c["id"] for c in out], [fund])
 
+    def test_matches_via_original_description_evidence_when_the_clean_name_omits_the_wallet(self):
+        # The common Mint shape: the cleaned display name drops "PayPal" but the captured Original
+        # Description keeps it. Searching the source text (not just the name) must still find the twin.
+        fund = self._txn(
+            "checking", 254.88, "2026-08-24", "ELECTRONIC PAYMENT  INST XFER 200824",
+            original_description="ELECTRONIC PAYMENT PAYPAL    INST XFER    200824",
+        )
+        out = self._find("2026-08-23", -254.88)
+        self.assertEqual([c["id"] for c in out], [fund])
+        self.assertTrue(out[0]["cross_account"])
+
     def test_ignores_same_amount_rows_not_named_for_the_wallet(self):
         # A same-amount, near-date charge on another account that doesn't mention PayPal is not the twin.
         self._txn("card", 716.0, "2026-01-20", "Whole Foods")
+        self.assertEqual(self._find("2026-01-20", -716.0), [])
+
+    def test_ignores_rows_whose_name_and_evidence_both_lack_the_wallet(self):
+        # Evidence text must not become a false-positive source: a same-amount, near-date row whose name
+        # AND Original Description both omit PayPal is still not the twin.
+        self._txn(
+            "card", 716.0, "2026-01-20", "ELECTRONIC PAYMENT  INST XFER",
+            original_description="ELECTRONIC PAYMENT  INST XFER 200120",
+        )
         self.assertEqual(self._find("2026-01-20", -716.0), [])
 
     def test_ignores_rows_outside_the_window_and_on_the_wallet_itself(self):

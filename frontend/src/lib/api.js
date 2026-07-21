@@ -421,6 +421,15 @@ export const api = {
       return res.json()
     })
   },
+  // PayPal money-movement review, at the data-source (profile) level: the distinct captured Type values
+  // across all of the source's imports (with money-movement + already-ruled flags), and the endpoint that
+  // adds/removes account-scoped match_source_text rules → Money movement, recategorizing existing rows.
+  getMoneyMovementTypes: (profileId) =>
+    request(`/import-export/profiles/${profileId}/money-movement-types`),
+  applyMoneyMovementRules: (profileId, { add = [], remove = [] }) =>
+    request(`/import-export/profiles/${profileId}/money-movement-rules`, {
+      method: 'POST', body: JSON.stringify({ add, remove }),
+    }),
   // AZAD Amazon order/items export(s): one or both files, sniffed server-side by header (a dropped file
   // on the general importer is detected client-side via lib/amazonDetect and routed here).
   // Inspect dropped AZAD files before importing: which payment cards they use + each card's funding-map

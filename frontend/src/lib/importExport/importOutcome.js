@@ -129,6 +129,32 @@ export function formatSkippedImportMessage(skip) {
   return `${filename} has already been imported as ${matched} — Skipping`
 }
 
+// Merge money-movement Type proposals across several PayPal batches (a multi-file import creates one
+// batch per file). Same Type sums its counts and stays money-movement if any batch flagged it. Ordered
+// money-movement first, then by count, then alphabetically — mirroring the backend's single-batch order.
+export function mergeMoneyMovementProposals(proposalLists) {
+  const byType = new Map()
+  for (const list of proposalLists || []) {
+    for (const proposal of list || []) {
+      if (!proposal?.type) continue
+      const existing = byType.get(proposal.type)
+      if (existing) {
+        existing.count += Number(proposal.count) || 0
+        existing.money_movement = existing.money_movement || !!proposal.money_movement
+      } else {
+        byType.set(proposal.type, {
+          type: proposal.type,
+          count: Number(proposal.count) || 0,
+          money_movement: !!proposal.money_movement,
+        })
+      }
+    }
+  }
+  return [...byType.values()].sort(
+    (a, b) => (Number(b.money_movement) - Number(a.money_movement)) || (b.count - a.count) || a.type.localeCompare(b.type),
+  )
+}
+
 export function getUndoTargetForSource(source) {
   if (!source) return null
   // importResult and batch records expose count fields under different shapes.

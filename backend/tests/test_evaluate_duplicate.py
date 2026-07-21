@@ -138,6 +138,56 @@ class EvaluateDuplicateRuleTests(unittest.TestCase):
         # No fake amount echoed into matched (that was the bug we're guarding against).
         self.assertNotIn("amount", verdict.matched)
 
+    # ---- coverage rescue of genuinely-new named payments ---------------
+    # A named payment (not a nameless money-movement leg) that coverage would reject with no
+    # same-account/transfer candidate is only a duplicate when a corroborating charge exists elsewhere
+    # in the ledger (find_payment_match). Otherwise it is genuinely new — a balance-funded payment the
+    # covering import never saw — and must import.
+
+    def _coverage_ctx(self, payment_match):
+        helpers = _helpers_dict()
+        helpers["find_payment_match"] = lambda acct_id, date_str, amt, merchant: payment_match
+        return _empty_context(
+            import_coverage_by_csv_value={
+                "PayPal": [{
+                    "start_date": "2025-10-01", "end_date": "2025-10-31",
+                    "csv_value": "PayPal", "account_id": "ACCT-1", "batch_id": "BATCH-A",
+                }],
+            },
+            helpers=helpers,
+        )
+
+    def _eval_covered_payment(self, ctx, merchant):
+        return evaluate_duplicate(
+            context=ctx, receiving_account_id="ACCT-1", csv_value="PayPal",
+            content_hash="unique-hash", parsed_date="2025-10-15", amount=-10.00,
+            scope_id="ACCT-1", txn_payload={"merchant_name": merchant, "display_name": merchant},
+        )
+
+    def test_covered_named_payment_with_no_ledger_charge_imports(self):
+        # No corroborating charge (find_payment_match -> None): genuinely new, so it passes through.
+        verdict = self._eval_covered_payment(self._coverage_ctx(payment_match=None), "VeloViewer Ltd")
+        self.assertTrue(verdict.passthrough)
+        self.assertFalse(verdict.hard_reject)
+
+    def test_covered_named_payment_with_a_ledger_charge_stays_rejected(self):
+        # A matching card charge exists (find_payment_match -> a candidate): a real duplicate, kept
+        # rejected, and the corroborating charge is surfaced in the report.
+        charge = {"id": "CARD-CHARGE", "date": "2025-10-16", "merchant_name": "PAYPAL RANDONNEURS",
+                  "amount": -10.00, "account_id": "ACCT-CARD", "account_name": "Chase", "cross_account": True}
+        verdict = self._eval_covered_payment(self._coverage_ctx(payment_match=charge), "RANDONNEURS USA")
+        self.assertTrue(verdict.hard_reject)
+        self.assertEqual(verdict.matched["candidate_count"], 1)
+        self.assertEqual(verdict.matched["candidates"][0]["id"], "CARD-CHARGE")
+
+    def test_covered_nameless_money_movement_leg_stays_rejected(self):
+        # A nameless money-movement leg is never rescued (the payment path gates on a merchant name),
+        # even with the helper wired — it keeps the 'covered, no specific match' hard-reject.
+        ctx = self._coverage_ctx(payment_match=None)
+        verdict = self._eval_covered_payment(ctx, "")
+        self.assertTrue(verdict.hard_reject)
+        self.assertEqual(verdict.matched["candidate_count"], 0)
+
     def test_coverage_in_scope_skipped_when_receiving_account_is_brand_new(self):
         # Phase 1 invariant: a brand-new sibling account in a linked group must NOT inherit
         # hard-dedupe behavior from its siblings via the in-scope coverage rule. The receiving

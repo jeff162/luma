@@ -4,7 +4,7 @@
 // exactly the kind of thing a backend field rename would silently break, so these pin it.
 
 import { describe, it, expect } from 'vitest'
-import { summarizeImportOutcome, getUndoTargetForSource, buildMultiFileResult, formatSkippedImportMessage } from '../importOutcome.js'
+import { summarizeImportOutcome, getUndoTargetForSource, buildMultiFileResult, formatSkippedImportMessage, mergeMoneyMovementProposals } from '../importOutcome.js'
 
 describe('summarizeImportOutcome', () => {
   it('returns an all-zero shape for a null source', () => {
@@ -124,5 +124,32 @@ describe('formatSkippedImportMessage', () => {
   it('degrades gracefully when the matched name is unknown', () => {
     expect(formatSkippedImportMessage({ filename: 'jan.csv' }))
       .toBe('jan.csv has already been imported — Skipping')
+  })
+})
+
+describe('mergeMoneyMovementProposals', () => {
+  it('sums counts for the same Type across batches and keeps money-movement if any flags it', () => {
+    const merged = mergeMoneyMovementProposals([
+      [{ type: 'Bank Deposit to PP Account', count: 3, money_movement: true }, { type: 'Website Payment', count: 2, money_movement: false }],
+      [{ type: 'Bank Deposit to PP Account', count: 5, money_movement: true }, { type: 'General Withdrawal', count: 1, money_movement: true }],
+    ])
+    const byType = Object.fromEntries(merged.map(p => [p.type, p]))
+    expect(byType['Bank Deposit to PP Account'].count).toBe(8)
+    expect(byType['General Withdrawal'].money_movement).toBe(true)
+    expect(byType['Website Payment'].money_movement).toBe(false)
+  })
+
+  it('orders money-movement first, then by count', () => {
+    const merged = mergeMoneyMovementProposals([
+      [{ type: 'Website Payment', count: 100, money_movement: false },
+       { type: 'General Withdrawal', count: 1, money_movement: true },
+       { type: 'Bank Deposit to PP Account', count: 9, money_movement: true }],
+    ])
+    expect(merged.map(p => p.type)).toEqual(['Bank Deposit to PP Account', 'General Withdrawal', 'Website Payment'])
+  })
+
+  it('tolerates empty / malformed input', () => {
+    expect(mergeMoneyMovementProposals([])).toEqual([])
+    expect(mergeMoneyMovementProposals([[{ count: 1 }], null])).toEqual([])
   })
 })

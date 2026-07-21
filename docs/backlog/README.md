@@ -36,6 +36,18 @@ delete the backlog file.
   button treatments (shared `Button` + bespoke one-offs that have drifted) and settle on one shared set
   of sizes/variants, then migrate the one-offs. Central decision is solid-vs-soft-tint primary and the
   ghost drop shadow, not just pixel size.
+- [account-type-as-rule-criterion.md](account-type-as-rule-criterion.md) — **backlog, not started
+  (2026-07-20).** Generalize "restrict to PayPal/Amazon" from per-account-id scoping to **account *type***
+  as a first-class axis for rules (and filtering/search): add PayPal as an account type, add an
+  account-type rule criterion (parallel to the existing account-id one), and structured account-type
+  filters — with a `accttype:`/`acctname:` tag grammar flagged as the harder free-text-search piece.
+  Money-movement rules are the first consumer ready to migrate. Punts on existing data.
+- [paypal-money-movement-recognition.md](paypal-money-movement-recognition.md) — **A+B+C landed
+  (2026-07-20).** PayPal files recognized by header (`source:paypal` + force-captured `Type`/`Item Title`);
+  money-movement recognized by `Type` as **user-approved rules** (fragment-flagged, idempotent
+  match_source_text → excluded Money movement, recategorized). Remaining polish: the re-openable
+  bidirectional edit surface (account-scoped) is in progress; folding into the generic suggestion engine
+  is deferred.
 - [amazon-batch-by-period.md](amazon-batch-by-period.md) — **noted, not started (2026-07-19).** Amazon
   import batches by *drop* (one card per upload, any number of periods) rather than by *coherent period*;
   correct for the orders+items pairing of one span but it also bundles unrelated years onto one card.

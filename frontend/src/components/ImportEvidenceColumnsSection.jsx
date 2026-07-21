@@ -21,11 +21,14 @@ const SHAPE_LABEL = {
  * categorical columns are pre-checked (see computeEvidenceColumnOptions); the user can adjust freely.
  * The checked set is authoritative: whatever is checked is exactly what gets captured.
  */
-export default function ImportEvidenceColumnsSection({ options = [], checked = [], onChange, title = 'Capture extra detail' }) {
+export default function ImportEvidenceColumnsSection({ options = [], checked = [], forced = [], onChange, title = 'Capture extra detail' }) {
   if (!options.length) return null
-  const checkedSet = new Set(checked)
+  const forcedSet = new Set(forced)
+  // Forced columns (e.g. PayPal's Type / Item Title) are always captured — reflect that in the checked set.
+  const checkedSet = new Set([...checked, ...forced])
 
   function toggle(header) {
+    if (forcedSet.has(header)) return // forced columns can't be unchecked
     const next = new Set(checkedSet)
     if (next.has(header)) next.delete(header)
     else next.add(header)
@@ -54,15 +57,22 @@ export default function ImportEvidenceColumnsSection({ options = [], checked = [
               borderBottom: index < options.length - 1 ? '1px solid var(--border)' : 'none',
             }}
           >
-            <input type="checkbox" checked={checkedSet.has(option.header)} onChange={() => toggle(option.header)} />
+            <input
+              type="checkbox"
+              checked={checkedSet.has(option.header)}
+              disabled={forcedSet.has(option.header)}
+              onChange={() => toggle(option.header)}
+            />
             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {option.header}
             </span>
             <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>
-              {SHAPE_LABEL[option.shape] || option.shape}
-              {option.shape === 'categorical' && Number.isFinite(option.distinctCount)
-                ? ` · ${option.distinctCount} value${option.distinctCount === 1 ? '' : 's'}`
-                : ''}
+              {forcedSet.has(option.header)
+                ? 'always captured for PayPal'
+                : (SHAPE_LABEL[option.shape] || option.shape)
+                  + (option.shape === 'categorical' && Number.isFinite(option.distinctCount)
+                    ? ` · ${option.distinctCount} value${option.distinctCount === 1 ? '' : 's'}`
+                    : '')}
             </span>
           </label>
         ))}

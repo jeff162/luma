@@ -56,6 +56,7 @@ export function ImportHistorySection({
   openBatchDetail,
   markBatchReviewed,
   handleUndoClick,
+  onReviewMoneyMovement,
   openRejectedRowsViewer,
   openUnifiedDuplicatesViewer,
 }) {
@@ -337,6 +338,16 @@ export function ImportHistorySection({
                           </div>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
+                          {row.profile?.source_kind === 'source:paypal' && onReviewMoneyMovement ? (
+                            <button
+                              type="button"
+                              onClick={() => onReviewMoneyMovement(row.profile.id)}
+                              title="Review which PayPal transaction types are money movement (deposits, withdrawals, holds…) and keep them out of spending totals"
+                              style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}
+                            >
+                              Money movement
+                            </button>
+                          ) : null}
                           {isManual && row.manualDraftRecord ? (
                             <button
                               type="button"
