@@ -1,11 +1,33 @@
 # Account type as a selection criterion (rules, filtering, search) + PayPal as an account type
 
-**Status: backlog, not started (2026-07-20).** Came out of the PayPal money-movement work: the
-money-movement rules are scoped to a specific PayPal **account id**, which means one rule per PayPal
-account (auto-built, so nothing to maintain — see `paypal-money-movement-recognition.md`). A cleaner
-long-term primitive is to scope by **account *type*** ("this is a PayPal / Amazon wallet") so **one** rule
-covers all accounts of that type. This item is that generalization. **Deliberately punts on existing
-data** — no backfill required.
+**Status: parts 1–2 IMPLEMENTED (2026-07-21, migration v13); part 3 (filtering/search) deferred.**
+Came out of the PayPal money-movement work: the money-movement rules were scoped to a specific PayPal
+**account id** (one rule per PayPal account). The cleaner primitive — scope by **account *type*** so **one**
+rule covers all accounts of that type — now exists: `category_rule.account_type` matches the row's
+effective account type, PayPal is a first-class `type`, and the money-movement rules are migrated onto
+`account_type='paypal'`. Contrary to the original "punts on existing data" note, migration v13 **does**
+backfill: it marks accounts that already received PayPal imports as `type='paypal'` and consolidates the
+per-account money-movement rules onto one type-scoped rule per `Type`. The living contracts are in
+`data-model.md` (Accounts → `type`; Rules → account-type scope, precedence, matcher identity) and
+`architecture.md` (Rules and categorization → Scope by account type).
+
+**What shipped (parts 1–2):**
+
+- PayPal as an account type (`accountTypes.js`), auto-assigned to a new account on a recognized PayPal
+  import, and typed at money-movement approval (existing generic accounts) — a deliberately-set type is
+  never clobbered.
+- `account_type` rule criterion threaded through the matcher (`rule_matches_row` + `categorize_transaction`,
+  and every feeding SELECT), the rule loader/precedence (account_id > account_type > global), the matcher
+  identity (`create_rule_core`/`update_rule`), and the RuleForm scope picker.
+- Money-movement rules migrated to `account_type='paypal'` (via the shared `create_rule_core`), plus the
+  v13 data migration.
+
+**Still deferred — part 3 (filtering/search by account type):** structured transaction filters/search that
+scope by account type, and the free-text `accttype:`/`acctname:` query grammar. See the Scope section
+below; nothing here was built.
+
+**Original framing (for context):** A cleaner long-term primitive is to scope by **account *type*** ("this
+is a PayPal / Amazon wallet") so **one** rule covers all accounts of that type.
 
 ## Why account type, not `source_kind`
 

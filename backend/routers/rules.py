@@ -124,12 +124,14 @@ def _find_matching_rule(conn, txn):
         ORDER  BY
             CASE WHEN owner_id IS NOT NULL THEN 1 ELSE 0 END DESC,
             CASE WHEN account_id IS NOT NULL THEN 1 ELSE 0 END DESC,
+            CASE WHEN account_type IS NOT NULL THEN 1 ELSE 0 END DESC,
             LENGTH(keyword) DESC,
             (CASE WHEN amount_min IS NOT NULL THEN 1 ELSE 0 END +
              CASE WHEN amount_max IS NOT NULL THEN 1 ELSE 0 END +
              CASE WHEN COALESCE(debit_credit, 'both') <> 'both' THEN 1 ELSE 0 END +
-             CASE WHEN owner_id   IS NOT NULL THEN 1 ELSE 0 END +
-             CASE WHEN account_id IS NOT NULL THEN 1 ELSE 0 END) DESC
+             CASE WHEN owner_id     IS NOT NULL THEN 1 ELSE 0 END +
+             CASE WHEN account_id   IS NOT NULL THEN 1 ELSE 0 END +
+             CASE WHEN account_type IS NOT NULL THEN 1 ELSE 0 END) DESC
         """
     ).fetchall()
 
@@ -137,7 +139,7 @@ def _find_matching_rule(conn, txn):
     for rule in rules:
         full_rule = conn.execute(
             """
-            SELECT id, keyword, amount_min, amount_max, debit_credit, owner_id, account_id, category_id, clean_name, match_source_text
+            SELECT id, keyword, amount_min, amount_max, debit_credit, owner_id, account_id, account_type, category_id, clean_name, match_source_text
             FROM category_rule
             WHERE id = ?
             """,
@@ -146,6 +148,8 @@ def _find_matching_rule(conn, txn):
         if full_rule["owner_id"] is not None and full_rule["owner_id"] != txn["owner_id"]:
             continue
         if full_rule["account_id"] is not None and full_rule["account_id"] != txn["effective_account_id"]:
+            continue
+        if full_rule["account_type"] is not None and full_rule["account_type"] != txn["effective_account_type"]:
             continue
         keyword = full_rule["keyword"].lower()
         if keyword not in text and not (full_rule["match_source_text"] and source_text and keyword in source_text):
@@ -174,8 +178,10 @@ def _rule_affected_txn_ids(conn, rule) -> list[str]:
     still-matched row is unchanged)."""
     rows = conn.execute(
         """SELECT t.id, t.merchant_name, t.display_name, t.raw_name, t.amount, t.owner_id, t.account_id,
-                  t.import_evidence_json, COALESCE(a.parent_account_id, t.account_id) AS effective_account_id
+                  t.import_evidence_json, COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
+                  COALESCE(p.type, a.type) AS effective_account_type
            FROM   txn t JOIN account a ON a.id = t.account_id
+           LEFT   JOIN account p ON p.id = a.parent_account_id
            WHERE  t.category_overridden = 0"""
     ).fetchall()
     return [r["id"] for r in rows if _rule_matches_txn(rule, r)]
@@ -193,7 +199,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     # when accepting an import-rule suggestion so the rule's outputs land on exactly the rows that
     # generated it, leaving conflicting rows for other suggestions alone.
     rule = conn.execute(
-        """SELECT id, keyword, category_id, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, match_source_text
+        """SELECT id, keyword, category_id, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, account_type, match_source_text
            FROM category_rule
            WHERE id = ?""",
         (rule_id,),
@@ -230,9 +236,11 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
                t.category_id          AS prior_category_id,
                t.category_source      AS prior_category_source,
                t.category_overridden  AS prior_category_overridden,
-               COALESCE(a.parent_account_id, t.account_id) AS effective_account_id
+               COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
+               COALESCE(p.type, a.type) AS effective_account_type
            FROM txn t
            JOIN account a ON a.id = t.account_id
+           LEFT JOIN account p ON p.id = a.parent_account_id
            {where_sql}""",
         where_params,
     ).fetchall()
@@ -304,6 +312,7 @@ class RulePreview(BaseModel):
     clean_name:   Optional[str] = None
     owner_id:     Optional[str] = None
     account_id:   Optional[str] = None
+    account_type: Optional[str] = None
     tag_ids:      list[str] = []
     match_source_text: bool = False
 
@@ -320,6 +329,7 @@ def preview_rule(body: RulePreview):
         "clean_name":  body.clean_name,
         "owner_id":    body.owner_id,
         "account_id":  body.account_id,
+        "account_type": body.account_type,
         "match_source_text": body.match_source_text,
     }
     rule_tag_ids = set(body.tag_ids)
@@ -342,7 +352,8 @@ def preview_rule(body: RulePreview):
                 b.imported_at AS import_batch_imported_at,
                 o.name        AS owner_name,
                 o.color       AS owner_color,
-                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id
+                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
+                COALESCE(p.type, a.type) AS effective_account_type
             FROM txn t
             JOIN account a ON a.id = t.account_id
             LEFT JOIN account p ON p.id = a.parent_account_id
@@ -395,6 +406,7 @@ class RuleCreate(BaseModel):
     clean_name:  Optional[str]   = None
     owner_id:    Optional[str]   = None
     account_id:  Optional[str]   = None
+    account_type: Optional[str]  = None
     tag_ids:     list[str]       = []
     match_source_text: bool      = False
     # Declare this rule a recurring series: its matches become members of a source='rule' series (cadence
@@ -412,6 +424,7 @@ class RuleUpdate(BaseModel):
     clean_name:  Optional[str]   = None
     owner_id:    Optional[str]   = None
     account_id:  Optional[str]   = None
+    account_type: Optional[str]  = None
     tag_ids:     Optional[list[str]] = None
     match_source_text: Optional[bool] = None
     is_recurring:     Optional[bool] = None
@@ -421,6 +434,7 @@ class RuleUpdate(BaseModel):
     clear_clean_name: bool = False
     clear_owner:      bool = False
     clear_account:    bool = False
+    clear_account_type: bool = False
 
 
 @router.get("")
@@ -436,6 +450,7 @@ def list_rules(search: Optional[str] = Query(None)):
                 cr.category_id,
                 cr.owner_id,
                 cr.account_id,
+                cr.account_type,
                 cr.match_source_text,
                 cr.is_recurring,
                 (SELECT rs.cadence FROM recurring_series rs WHERE rs.rule_id = cr.id) AS recurring_cadence,
@@ -489,9 +504,11 @@ def match_rule_for_transaction(txn_id: str):
                 t.owner_id,
                 t.account_id,
                 t.import_evidence_json,
-                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id
+                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
+                COALESCE(p.type, a.type) AS effective_account_type
             FROM txn t
             JOIN account a ON a.id = t.account_id
+            LEFT JOIN account p ON p.id = a.parent_account_id
             WHERE t.id = ?
             """,
             (txn_id,),
@@ -507,20 +524,22 @@ def _normalize_clean_name(value: Optional[str]) -> str:
 
 
 def _existing_rule_for_matcher(conn, keyword: str, body: "RuleCreate"):
-    # The matcher is keyword + the full scope (owner, account, amount range, direction) + whether the
-    # rule also matches source text — two rules that differ only by `match_source_text` target different
-    # rows, so they are distinct matchers. `IS` is SQLite's null-safe comparison for the nullable scope.
+    # The matcher is keyword + the full scope (owner, account, account *type*, amount range, direction) +
+    # whether the rule also matches source text — two rules that differ only by `match_source_text` (or by
+    # account_type) target different rows, so they are distinct matchers. `IS` is SQLite's null-safe
+    # comparison for the nullable scope.
     return conn.execute(
         """SELECT id, category_id, clean_name FROM category_rule
            WHERE keyword = ?
              AND owner_id     IS ?
              AND account_id   IS ?
+             AND account_type IS ?
              AND amount_min   IS ?
              AND amount_max   IS ?
              AND debit_credit IS ?
              AND match_source_text IS ?""",
-        (keyword, body.owner_id, body.account_id, body.amount_min, body.amount_max, body.debit_credit,
-         int(bool(body.match_source_text))),
+        (keyword, body.owner_id, body.account_id, body.account_type, body.amount_min, body.amount_max,
+         body.debit_credit, int(bool(body.match_source_text))),
     ).fetchone()
 
 
@@ -612,11 +631,11 @@ def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject") -> d
     rid = str(uuid.uuid4())
     conn.execute(
         """INSERT INTO category_rule
-           (id, category_id, keyword, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, match_source_text, is_recurring)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+           (id, category_id, keyword, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, account_type, match_source_text, is_recurring)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
         (rid, body.category_id, keyword,
          body.amount_min, body.amount_max, body.debit_credit, body.clean_name, body.owner_id, body.account_id,
-         int(bool(body.match_source_text)), int(bool(body.is_recurring))),
+         body.account_type, int(bool(body.match_source_text)), int(bool(body.is_recurring))),
     )
     for tag_id in body.tag_ids:
         conn.execute(
@@ -643,6 +662,7 @@ def _resulting_rule_state(current: dict, body: RuleUpdate) -> dict:
         "keyword":      body.keyword.lower().strip() if body.keyword is not None else current["keyword"],
         "owner_id":     None if body.clear_owner      else (body.owner_id   if body.owner_id   is not None else current["owner_id"]),
         "account_id":   None if body.clear_account    else (body.account_id if body.account_id is not None else current["account_id"]),
+        "account_type": None if body.clear_account_type else (body.account_type if body.account_type is not None else current["account_type"]),
         "amount_min":   None if body.clear_amount_min else (body.amount_min if body.amount_min is not None else current["amount_min"]),
         "amount_max":   None if body.clear_amount_max else (body.amount_max if body.amount_max is not None else current["amount_max"]),
         "debit_credit": body.debit_credit if body.debit_credit is not None else current["debit_credit"],
@@ -672,7 +692,7 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
     """
     with get_db() as conn:
         current = conn.execute(
-            """SELECT id, keyword, category_id, clean_name, owner_id, account_id,
+            """SELECT id, keyword, category_id, clean_name, owner_id, account_id, account_type,
                       amount_min, amount_max, debit_credit, match_source_text, is_recurring
                FROM category_rule WHERE id = ?""",
             (rule_id,),
@@ -696,13 +716,14 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
                  AND keyword = ?
                  AND owner_id     IS ?
                  AND account_id   IS ?
+                 AND account_type IS ?
                  AND amount_min   IS ?
                  AND amount_max   IS ?
                  AND debit_credit IS ?
                  AND match_source_text IS ?""",
             (rule_id, resulting["keyword"], resulting["owner_id"], resulting["account_id"],
-             resulting["amount_min"], resulting["amount_max"], resulting["debit_credit"],
-             resulting["match_source_text"]),
+             resulting["account_type"], resulting["amount_min"], resulting["amount_max"],
+             resulting["debit_credit"], resulting["match_source_text"]),
         ).fetchone()
         if other:
             other_tag_ids = {
@@ -741,6 +762,7 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
         if body.debit_credit is not None: fields.append("debit_credit = ?"); params.append(body.debit_credit)
         if body.owner_id    is not None: fields.append("owner_id = ?");    params.append(body.owner_id)
         if body.account_id  is not None: fields.append("account_id = ?");  params.append(body.account_id)
+        if body.account_type is not None: fields.append("account_type = ?"); params.append(body.account_type)
         if body.match_source_text is not None: fields.append("match_source_text = ?"); params.append(int(bool(body.match_source_text)))
         if body.is_recurring is not None: fields.append("is_recurring = ?"); params.append(int(bool(body.is_recurring)))
         if body.clear_amount_min:        fields.append("amount_min = NULL")
@@ -748,6 +770,7 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
         if body.clear_clean_name:        fields.append("clean_name = NULL")
         if body.clear_owner:             fields.append("owner_id = NULL")
         if body.clear_account:           fields.append("account_id = NULL")
+        if body.clear_account_type:      fields.append("account_type = NULL")
         if body.clean_name  is not None and not body.clear_clean_name:
             fields.append("clean_name = ?"); params.append(body.clean_name)
         if fields:
@@ -785,7 +808,7 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
             affected_ids = set(affected)
             post_rule = conn.execute(
                 """SELECT id, keyword, category_id, amount_min, amount_max, debit_credit, clean_name,
-                          owner_id, account_id, match_source_text
+                          owner_id, account_id, account_type, match_source_text
                    FROM category_rule WHERE id = ?""",
                 (rule_id,),
             ).fetchone()
@@ -838,7 +861,7 @@ def delete_rule(rule_id: str, reconcile: bool = False):
         if reconcile:
             rule = conn.execute(
                 """SELECT id, keyword, category_id, amount_min, amount_max, debit_credit, clean_name,
-                          owner_id, account_id, match_source_text
+                          owner_id, account_id, account_type, match_source_text
                    FROM category_rule WHERE id = ?""",
                 (rule_id,),
             ).fetchone()

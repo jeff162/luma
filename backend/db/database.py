@@ -103,7 +103,7 @@ def get_db(db_path: str | None = None):
 # rule-backed recurring series (`category_rule.is_recurring` + `recurring_series.rule_id`; the
 # `recurring_membership_override` table is created by the same CREATE TABLE IF NOT EXISTS script).
 
-CURRENT_VERSION = 12
+CURRENT_VERSION = 13
 
 MIGRATIONS = {}
 
@@ -294,6 +294,58 @@ def _add_import_batch_recon_cache(conn):
     conn.execute("ALTER TABLE import_batch ADD COLUMN recon_epoch INTEGER")
 
 
+@migration(13)
+def _add_rule_account_type(conn):
+    # Account *type* as a rule scope criterion ('paypal', 'amazon', …): a rule matches only rows whose
+    # effective account is of this type, so one rule covers every account of the type. Fresh installs get
+    # the column from the category_rule baseline CREATE TABLE. This migration also does the one-time data
+    # move the criterion enables for its first consumer, the PayPal money-movement rules:
+    #   1. mark accounts that already received PayPal imports as type='paypal' (only generic current types,
+    #      so a deliberately-set type is never clobbered), and
+    #   2. consolidate the existing per-account money-movement rules onto a single account_type='paypal'
+    #      scope (dedup by keyword), the rule shape create_money_movement_rules now produces.
+    conn.execute("ALTER TABLE category_rule ADD COLUMN account_type TEXT")
+
+    # 1. Backfill PayPal account types from PayPal import provenance.
+    conn.execute(
+        """
+        UPDATE account SET type = 'paypal'
+        WHERE id IN (
+            SELECT DISTINCT t.account_id FROM txn t
+            JOIN import_batch b ON b.id = t.import_batch_id
+            WHERE b.source_kind = 'source:paypal' AND t.account_id IS NOT NULL
+        )
+          AND (type IS NULL OR type IN ('depository', 'other', 'p2p'))
+        """
+    )
+
+    # 2. Consolidate money-movement rules (match_source_text, pointing at the excluded "Money movement"
+    #    leaf, account_id-scoped) onto account_type='paypal'. Resolve the leaf structurally (under the
+    #    seeded Transfers group); a database with no money movement set up simply matches nothing.
+    mm_leaf = conn.execute(
+        """SELECT c.id FROM category c JOIN category p ON p.id = c.parent_id
+           WHERE c.name = 'Money movement' AND p.name = 'Transfers' AND p.parent_id IS NULL"""
+    ).fetchone()
+    if mm_leaf:
+        leaf_id = mm_leaf["id"]
+        conn.execute(
+            """UPDATE category_rule SET account_type = 'paypal', account_id = NULL
+               WHERE match_source_text = 1 AND account_id IS NOT NULL AND category_id = ?""",
+            (leaf_id,),
+        )
+        # Rows are now uniform except keyword — keep one rule per keyword (rule_tag cascades on delete).
+        conn.execute(
+            """DELETE FROM category_rule
+               WHERE match_source_text = 1 AND account_type = 'paypal' AND category_id = ?
+                 AND id NOT IN (
+                    SELECT MIN(id) FROM category_rule
+                    WHERE match_source_text = 1 AND account_type = 'paypal' AND category_id = ?
+                    GROUP BY keyword
+                 )""",
+            (leaf_id, leaf_id),
+        )
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -456,6 +508,10 @@ def init_db(db_path: str | None = None):
                 clean_name   TEXT,
                 owner_id     TEXT REFERENCES owner(id) ON DELETE SET NULL,
                 account_id   TEXT REFERENCES account(id) ON DELETE SET NULL,
+                -- Optional scope by account *type* (e.g. 'paypal', 'amazon'): the rule matches only rows
+                -- whose effective account is of this type. Parallel to account_id but covers every account
+                -- of the type with one rule. Part of the matcher identity; precedence account_id > type.
+                account_type TEXT,
                 -- 1 = also match the rule's keyword against the row's captured import source text
                 -- (description + extra evidence fields like "Original Statement"), not just the
                 -- merchant/raw/display name. Opt-in per rule; part of the rule's matcher identity.

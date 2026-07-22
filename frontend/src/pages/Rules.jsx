@@ -9,6 +9,7 @@ import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState, AppDialog 
 import PillGridTable from '../components/PillGridTable.jsx'
 import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
 import RuleForm, { amountConditionSummary } from '../components/RuleForm.jsx'
+import { ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
 import { TagBadge } from '../components/TagUi.jsx'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
@@ -41,6 +42,10 @@ function describeRule(rule, owners, accounts) {
       const mask = accountObj.mask ? ` •••${accountObj.mask}` : ''
       parts.push(`account is ${accountObj.name}${mask}`)
     }
+  }
+
+  if (rule.account_type) {
+    parts.push(`account type is ${ACCOUNT_TYPE_LABEL[rule.account_type] ?? rule.account_type}`)
   }
 
   if (rule.match_source_text) {
@@ -262,6 +267,7 @@ function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel 
               debit_credit: rule.debit_credit || 'both',
               owner_id: rule.owner_id || '',
               account_id: rule.account_id || '',
+              account_type: rule.account_type || '',
               catId: rule.category_id,
               cleanName: rule.clean_name || '',
               tagIds: rule.tag_ids || [],

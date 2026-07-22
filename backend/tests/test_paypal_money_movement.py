@@ -80,7 +80,7 @@ class PaypalMoneyMovementTests(unittest.IsolatedAsyncioTestCase):
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, subtype, mask, owner_id, parent_account_id, trashed_at)
-                   VALUES (?, ?, 'fixture', ?, ?, 'checking', 'checking', NULL, ?, NULL, NULL)""",
+                   VALUES (?, ?, 'fixture', ?, ?, 'depository', 'checking', NULL, ?, NULL, NULL)""",
                 (account_id, f"p_{account_id}", name, name, SHARED_OWNER_ID),
             )
         return account_id
@@ -171,11 +171,11 @@ class PaypalMoneyMovementTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first["created"], 1)
         self.assertEqual(second["created"], 0)
 
-    async def test_rules_are_scoped_to_the_paypal_account(self):
-        # The created rule carries the PayPal account id, so a same-text transaction on another account
-        # can never match it.
+    async def test_rules_are_scoped_to_the_paypal_account_type(self):
+        # The created rule carries account_type='paypal' (not a single account id), so a same-text
+        # transaction on a non-PayPal account can never match it.
         result = await self._import()
-        other_account = self._insert_account("Northgate Checking")
+        other_account = self._insert_account("Northgate Checking")  # stays type 'depository'
         with self._use_db_path(), get_db() as conn:
             # A checking transaction whose text contains the same Type string.
             conn.execute(
@@ -186,14 +186,65 @@ class PaypalMoneyMovementTests(unittest.IsolatedAsyncioTestCase):
             )
         with self._use_db_path(), get_db() as conn:
             apply_money_movement_rules(result["batch_id"], MoneyMovementRulesRequest(add=["General Withdrawal"]))
-            rule = conn.execute("SELECT account_id FROM category_rule WHERE keyword = 'general withdrawal'").fetchone()
-            self.assertEqual(rule["account_id"], self.account_id)
-        # The checking row (same Type text, different account) is not routed to Money movement.
+            rule = conn.execute("SELECT account_id, account_type FROM category_rule WHERE keyword = 'general withdrawal'").fetchone()
+            self.assertIsNone(rule["account_id"])
+            self.assertEqual(rule["account_type"], "paypal")
+            # The PayPal import's account was typed 'paypal' on approval; the other account stays generic.
+            self.assertEqual(conn.execute("SELECT type FROM account WHERE id = ?", (self.account_id,)).fetchone()["type"], "paypal")
+        # The non-PayPal row (same Type text, different account type) is not routed to Money movement.
         with self._use_db_path(), get_db() as conn:
             other = conn.execute(
                 "SELECT category_id FROM txn WHERE account_id = ? AND merchant_name = 'ACME'", (other_account,)
             ).fetchone()
         self.assertIsNone(other["category_id"])
+
+    async def test_proposal_counts_split_affected_and_extra(self):
+        # A rule-eligible row (overridden=0) and an import-locked row (overridden=1) carrying the same Type
+        # on the source's account: the proposal counts the first as `count` (affected) and the second as
+        # `extra_count` (the rule doesn't override imported/manual categories).
+        result = await self._import()  # PAYPAL_CSV carries "Account Hold for Open Authorization" (overridden=0)
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                """INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name, date,
+                                    is_pending, category_overridden, category_source, import_evidence_json)
+                   VALUES (?, ?, ?, 9.0, 'Hertz', 'Hertz', 'Hertz', '2019-12-25', 0, 1, 'import', ?)""",
+                (str(uuid.uuid4()), self.account_id, SHARED_OWNER_ID,
+                 json.dumps({"extra_text_fields": [{"header": "Type", "value": "Account Hold for Open Authorization"}]})),
+            )
+        # Separate block so the insert commits before the endpoint (its own connection) reads.
+        with self._use_db_path(), get_db() as conn:
+            props = {p["type"]: p for p in get_money_movement_types(result["batch_id"])["proposals"]}
+        hold = props["Account Hold for Open Authorization"]
+        self.assertEqual(hold["count"], 1, "one rule-eligible row is affected")
+        self.assertEqual(hold["extra_count"], 1, "the import-locked row is counted as extra, not affected")
+
+    async def test_import_evidence_type_filter_selects_matching_rows(self):
+        from backend.routers.transactions import _build_transaction_filter
+        await self._import()
+        with self._use_db_path(), get_db() as conn:
+            # A row bearing a distinctive Type, and a control row without it.
+            match_id = str(uuid.uuid4())
+            conn.execute(
+                """INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name, date, is_pending, import_evidence_json)
+                   VALUES (?, ?, ?, 1.0, 'X', 'X', 'X', '2019-12-25', 0, ?)""",
+                (match_id, self.account_id, SHARED_OWNER_ID,
+                 json.dumps({"extra_text_fields": [{"header": "Type", "value": "General Withdrawal"}]})),
+            )
+            conn.execute(
+                """INSERT INTO txn (id, account_id, owner_id, amount, merchant_name, display_name, raw_name, date, is_pending, import_evidence_json)
+                   VALUES (?, ?, ?, 1.0, 'Y', 'Y', 'Y', '2019-12-25', 0, ?)""",
+                (str(uuid.uuid4()), self.account_id, SHARED_OWNER_ID,
+                 json.dumps({"extra_text_fields": [{"header": "Type", "value": "Website Payment"}]})),
+            )
+            clauses, params = _build_transaction_filter(import_evidence_type="General Withdrawal")
+            where = " AND ".join(clauses)
+            ids = [r["id"] for r in conn.execute(
+                f"""SELECT t.id FROM txn t JOIN account a ON a.id = t.account_id
+                    LEFT JOIN account p ON p.id = a.parent_account_id WHERE {where}""",
+                params,
+            ).fetchall()]
+        self.assertIn(match_id, ids)
+        self.assertEqual(len(ids), 1, "only the row bearing that Type matches")
 
     async def test_paypal_import_attaches_to_a_single_system_data_source(self):
         first = await self._import()
@@ -251,42 +302,46 @@ class PaypalMoneyMovementTests(unittest.IsolatedAsyncioTestCase):
                 delete_profile(profile_id)
         self.assertEqual(ctx.exception.status_code, 400)
 
-    async def test_empty_account_scope_creates_no_global_rule(self):
-        # A rule with account_id NULL would be global — the opposite of the account-scoping intent. An empty
-        # account set must create nothing rather than a silent global rule.
+    async def test_creates_one_type_scoped_rule_per_type(self):
+        # A money-movement rule is created once, scoped to account_type='paypal' (not per account) — one
+        # rule covers every PayPal account.
         from backend.services.money_movement import create_money_movement_rules
+        await self._import()
         with self._use_db_path(), get_db() as conn:
-            created = create_money_movement_rules(conn, ["General Withdrawal"], [])
-            self.assertEqual(created, 0)
-            self.assertIsNone(conn.execute("SELECT 1 FROM category_rule WHERE keyword = 'general withdrawal'").fetchone())
+            created = create_money_movement_rules(conn, ["General Withdrawal"])
+            self.assertEqual(created, 1)
+            rows = conn.execute(
+                "SELECT account_id, account_type FROM category_rule WHERE keyword = 'general withdrawal'"
+            ).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0]["account_id"])
+        self.assertEqual(rows[0]["account_type"], "paypal")
 
     async def test_matcher_collision_with_a_user_rule_does_not_fork(self):
-        # A user rule already owns the (keyword, account, source-text) matcher pointing at a *different*
+        # A user rule already owns the (keyword, account_type, source-text) matcher pointing at a *different*
         # category. Routing through create_rule_core, that is a conflict left unresolved (not silently
         # overwritten), so no second rule with that matcher is forked and nothing is counted as changed.
         from backend.services.money_movement import create_money_movement_rules
         await self._import()
-        account_ids = [self.account_id]
         with self._use_db_path(), get_db() as conn:
-            # Seed a user rule with the same matcher (keyword+account+source-text) but a different category.
+            # Seed a user rule with the same matcher (keyword+account_type+source-text) but a different category.
             other_leaf = str(uuid.uuid4())
             conn.execute("INSERT INTO category (id, parent_id, name, category_type) VALUES (?, NULL, 'Misc Grp', 'expense')", (str(uuid.uuid4()),))
             grp = conn.execute("SELECT id FROM category WHERE name = 'Misc Grp'").fetchone()["id"]
             conn.execute("INSERT INTO category (id, parent_id, name, category_type) VALUES (?, ?, 'Misc Leaf', 'expense')", (other_leaf, grp))
             conn.execute(
-                "INSERT INTO category_rule (id, category_id, keyword, account_id, match_source_text) VALUES (?, ?, 'general withdrawal', ?, 1)",
-                (str(uuid.uuid4()), other_leaf, self.account_id),
+                "INSERT INTO category_rule (id, category_id, keyword, account_type, match_source_text) VALUES (?, ?, 'general withdrawal', 'paypal', 1)",
+                (str(uuid.uuid4()), other_leaf),
             )
-            changed = create_money_movement_rules(conn, ["General Withdrawal"], account_ids)
+            changed = create_money_movement_rules(conn, ["General Withdrawal"])
             self.assertEqual(changed, 0, "a conflicting matcher must not fork a second rule")
             n = conn.execute(
-                "SELECT COUNT(*) c FROM category_rule WHERE keyword = 'general withdrawal' AND account_id = ? AND match_source_text = 1",
-                (self.account_id,),
+                "SELECT COUNT(*) c FROM category_rule WHERE keyword = 'general withdrawal' AND account_type = 'paypal' AND match_source_text = 1"
             ).fetchone()["c"]
             self.assertEqual(n, 1, "the matcher still has exactly one rule")
             # The existing rule is untouched — still pointing at the user's category, not Money movement.
             self.assertEqual(
-                conn.execute("SELECT category_id FROM category_rule WHERE keyword = 'general withdrawal' AND account_id = ?", (self.account_id,)).fetchone()["category_id"],
+                conn.execute("SELECT category_id FROM category_rule WHERE keyword = 'general withdrawal' AND account_type = 'paypal'").fetchone()["category_id"],
                 other_leaf,
             )
 
@@ -299,10 +354,10 @@ class PaypalMoneyMovementTests(unittest.IsolatedAsyncioTestCase):
         with self._use_db_path(), get_db() as conn:
             rule_id = str(uuid.uuid4())
             conn.execute(
-                "INSERT INTO category_rule (id, category_id, keyword, account_id, clean_name, match_source_text) VALUES (?, NULL, 'general withdrawal', ?, 'PP Withdrawal', 1)",
-                (rule_id, self.account_id),
+                "INSERT INTO category_rule (id, category_id, keyword, account_type, clean_name, match_source_text) VALUES (?, NULL, 'general withdrawal', 'paypal', 'PP Withdrawal', 1)",
+                (rule_id,),
             )
-            changed = create_money_movement_rules(conn, ["General Withdrawal"], [self.account_id])
+            changed = create_money_movement_rules(conn, ["General Withdrawal"])
             mm_cat = _default_money_movement_category(conn)
             row = conn.execute("SELECT category_id, clean_name FROM category_rule WHERE id = ?", (rule_id,)).fetchone()
         self.assertEqual(changed, 1, "folding a category into the matcher is a change")

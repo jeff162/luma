@@ -563,7 +563,7 @@ def _build_transaction_filter(
     category_ids=None, tag_ids=None, owner_ids=None, payees=None,
     direction=None, view=None, search=None, quick_filter=None, ids=None,
     needs_review=None, include_trashed=False, recurring_series_id=None,
-    recurring_excluded_series_id=None,
+    recurring_excluded_series_id=None, account_type=None, import_evidence_type=None,
 ):
     # Single source of truth for the transaction-list WHERE clause, shared by the list feed and the
     # bulk endpoint so "select all matching the current filter" resolves the exact set the user sees.
@@ -612,6 +612,20 @@ def _build_transaction_filter(
             params.extend(id_list)
     _append_effective_account_filter(clauses, params, account_id=account_id, account_ids=account_ids)
     _append_source_account_filter(clauses, params, source_account_ids=source_account_ids)
+    # Scope by the *effective* account type ('paypal'/'amazon'/…) — the money-movement report uses this
+    # with `import_evidence_type` to list every row the type-scoped rule reaches.
+    if account_type and isinstance(account_type, str):
+        clauses.append("COALESCE(p.type, a.type) = ?")
+        params.append(account_type)
+    # Rows whose captured import evidence carries a specific `Type` value (the PayPal money-movement Type).
+    # Matched case-insensitively against the extra_text_fields entry whose header is "Type".
+    if import_evidence_type and isinstance(import_evidence_type, str):
+        clauses.append(
+            "EXISTS (SELECT 1 FROM json_each(json_extract(t.import_evidence_json, '$.extra_text_fields')) je "
+            "WHERE LOWER(json_extract(je.value, '$.header')) = 'type' "
+            "AND LOWER(json_extract(je.value, '$.value')) = ?)"
+        )
+        params.append(import_evidence_type.strip().lower())
     if _append_uncategorized_filter(clauses, params, category_id=category_id):
         pass
     elif category_id and category_id.startswith("__group__"):
@@ -762,6 +776,8 @@ def list_transactions(
     ids:          Optional[str] = Query(None, description="comma-separated transaction IDs — re-fetch a specific set of rows"),
     recurring_series_id: Optional[str] = Query(None, description="Only rows linked to this recurring series (its members)."),
     recurring_excluded_series_id: Optional[str] = Query(None, description="Only rows the user removed from this series (an 'excluded' override)."),
+    account_type: Optional[str] = Query(None, description="Only rows whose effective account is of this type (e.g. 'paypal')."),
+    import_evidence_type: Optional[str] = Query(None, description="Only rows whose captured import evidence carries this `Type` value (PayPal money-movement report)."),
     needs_review: bool          = Query(False, description="Only rows still flagged as needing review (freshly imported/synced, not yet looked over)."),
     include_trashed: bool       = Query(False, description="Include rows in the trash. Off by default — the trash view sets this explicitly."),
     limit:        int           = Query(200, le=1000),
@@ -780,6 +796,7 @@ def list_transactions(
         direction=direction, view=view, search=search, quick_filter=quick_filter, ids=ids,
         needs_review=needs_review, include_trashed=include_trashed, recurring_series_id=recurring_series_id,
         recurring_excluded_series_id=recurring_excluded_series_id,
+        account_type=account_type, import_evidence_type=import_evidence_type,
     )
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""

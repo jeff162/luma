@@ -17,6 +17,10 @@ export const ACCOUNT_TYPES = [
   { value: 'credit',     label: 'Credit card', shortLabel: 'Credit'    },
   { value: 'depository', label: 'Checking',    shortLabel: 'Checking'  },
   { value: 'p2p',        label: 'P2P',         shortLabel: 'P2P'       },
+  // PayPal is an ordinary account type (no marketplace `kind`): PayPal Activity files are imported through
+  // the generic CSV importer — recognized by header sniff — not a dedicated tab. The type exists so
+  // rules (money movement, and any user rule) can be scoped to "all PayPal accounts" by account type.
+  { value: 'paypal',     label: 'PayPal',      shortLabel: 'PayPal'    },
   { value: 'amazon',     label: 'Amazon',      shortLabel: 'Amazon',   kind: 'marketplace' },
   { value: 'investment', label: 'Investment',  shortLabel: 'Invest.'   },
   { value: 'savings',    label: 'Savings',     shortLabel: 'Savings'   },

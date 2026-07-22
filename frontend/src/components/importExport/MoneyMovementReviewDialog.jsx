@@ -11,7 +11,7 @@ import { Button, DialogActions, FloatingPanel, FloatingPanelHeader, OverlayBackd
  * creates its (account-scoped) rule; unchecking one that was ruled removes it — so this is the "changed
  * my mind" surface too. The user always decides; nothing is auto-applied. `onApply({ add, remove })`.
  */
-export function MoneyMovementReviewDialog({ proposals = [], onApply, onClose, applying = false, editing = false }) {
+export function MoneyMovementReviewDialog({ proposals = [], onApply, onClose, onOpenReport, applying = false, editing = false }) {
   // Start checked = every type already routed to Money movement, plus (on the post-import auto-review, not
   // when re-editing) the fragment-suggested ones. `already_ruled` must be included in BOTH modes: an
   // approved type that isn't fragment-suggested would otherwise start unchecked, land in the `remove`
@@ -51,25 +51,51 @@ export function MoneyMovementReviewDialog({ proposals = [], onApply, onClose, ap
         </FloatingPanelHeader>
         <div style={{ padding: 12, display: 'grid', gap: 2, maxHeight: '55vh', overflowY: 'auto' }}>
           {proposals.map(proposal => (
-            <label
+            <div
               key={proposal.type}
               style={{
                 display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 6,
-                cursor: 'pointer', fontSize: 13,
+                fontSize: 13,
                 background: checked.has(proposal.type) ? 'color-mix(in srgb, var(--accent) 7%, transparent)' : 'transparent',
               }}
             >
-              <input type="checkbox" checked={checked.has(proposal.type)} onChange={() => toggle(proposal.type)} />
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {proposal.type}
-              </span>
-              {proposal.money_movement ? (
-                <span title="Auto-detected as money movement by its type, so it's pre-checked" style={{ fontSize: 11, color: 'var(--accent2)', flexShrink: 0 }}>suggested</span>
-              ) : null}
-              <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>
-                {proposal.count} row{proposal.count === 1 ? '' : 's'}
-              </span>
-            </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, cursor: 'pointer' }}>
+                <input type="checkbox" checked={checked.has(proposal.type)} onChange={() => toggle(proposal.type)} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {proposal.type}
+                </span>
+                {proposal.money_movement ? (
+                  <span title="Auto-detected as money movement by its type, so it's pre-checked" style={{ fontSize: 11, color: 'var(--accent2)', flexShrink: 0 }}>suggested</span>
+                ) : null}
+              </label>
+              {/* Count = rows the rule affects; `extra_count` = rows carrying this type that already have an
+                  imported/manual category (the rule leaves those alone). The ↗ pill opens a report of both,
+                  matching the launch affordance used on import cards. */}
+              {onOpenReport ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenReport(proposal.type, proposal.already_ruled)}
+                  title="Show these transactions"
+                  aria-label={`Show ${proposal.type} transactions`}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, fontSize: 11,
+                    padding: '2px 7px', borderRadius: 99, cursor: 'pointer', whiteSpace: 'nowrap',
+                    background: 'var(--surface2)', color: 'var(--muted)', border: '1px solid var(--border)',
+                  }}
+                >
+                  <span>
+                    {proposal.count} row{proposal.count === 1 ? '' : 's'}
+                    {proposal.extra_count ? ` · ${proposal.extra_count} not affected` : ''}
+                  </span>
+                  <span style={{ color: 'var(--accent2)', fontSize: 10, lineHeight: 1 }} aria-hidden="true">↗</span>
+                </button>
+              ) : (
+                <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                  {proposal.count} row{proposal.count === 1 ? '' : 's'}
+                  {proposal.extra_count ? ` · ${proposal.extra_count} not affected` : ''}
+                </span>
+              )}
+            </div>
           ))}
         </div>
         <DialogActions>

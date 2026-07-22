@@ -48,6 +48,7 @@ import { ExportTab } from '../components/importExport/ExportTab.jsx'
 import { BackupRestoreTab } from '../components/importExport/BackupRestoreTab.jsx'
 import { ImportUploadStage } from '../components/importExport/ImportUploadStage.jsx'
 import { MoneyMovementReviewDialog } from '../components/importExport/MoneyMovementReviewDialog.jsx'
+import { MoneyMovementTypeReportPanel } from '../components/importExport/MoneyMovementTypeReportPanel.jsx'
 import { useBatchUndo } from '../components/importExport/useBatchUndo.jsx'
 import { useBatchDetailPanels } from '../components/importExport/useBatchDetailPanels.jsx'
 import { ImportHistorySection } from '../components/importExport/ImportHistorySection.jsx'
@@ -173,6 +174,8 @@ function ImportTab({ onAmazonDetected }) {
   // After a PayPal import, the money-movement review: { batchId, proposals }. The user approves which
   // Type values route to the excluded Money movement category.
   const [moneyMovementReview, setMoneyMovementReview] = useState(null)
+  // The per-Type drill-down report opened from the money-movement review's arrow (stacked over the dialog).
+  const [moneyMovementReport, setMoneyMovementReport] = useState(null)
   const [moneyMovementApplying, setMoneyMovementApplying] = useState(false)
   const [profiles, setProfiles] = useState([])
   const [accounts, setAccounts] = useState([])
@@ -2364,7 +2367,7 @@ function ImportTab({ onAmazonDetected }) {
     try {
       const data = await api.getMoneyMovementTypes(profileId)
       if (data?.proposals?.some(proposal => proposal.money_movement)) {
-        setMoneyMovementReview({ profileId, proposals: data.proposals })
+        setMoneyMovementReview({ profileId, proposals: data.proposals, accountIds: data.account_ids || [] })
         return true
       }
     } catch { /* review is optional — ignore */ }
@@ -2399,7 +2402,7 @@ function ImportTab({ onAmazonDetected }) {
     try {
       const data = await api.getMoneyMovementTypes(profileId)
       if (data?.proposals?.length) {
-        setMoneyMovementReview({ profileId, proposals: data.proposals, editing: true })
+        setMoneyMovementReview({ profileId, proposals: data.proposals, editing: true, accountIds: data.account_ids || [] })
       } else {
         setNoticeDialog({ title: 'No transaction types', description: 'This data source captured no PayPal transaction types to review.' })
       }
@@ -4553,7 +4556,18 @@ function ImportTab({ onAmazonDetected }) {
           editing={!!moneyMovementReview.editing}
           applying={moneyMovementApplying}
           onApply={applyMoneyMovementRules}
+          onOpenReport={(type, alreadyRuled) => setMoneyMovementReport({ type, alreadyRuled })}
           onClose={() => setMoneyMovementReview(null)}
+        />
+      ) : null}
+
+      {moneyMovementReport && moneyMovementReview ? (
+        <MoneyMovementTypeReportPanel
+          type={moneyMovementReport.type}
+          alreadyRuled={!!moneyMovementReport.alreadyRuled}
+          accountIds={moneyMovementReview.accountIds || []}
+          categories={categories}
+          onClose={() => setMoneyMovementReport(null)}
         />
       ) : null}
 

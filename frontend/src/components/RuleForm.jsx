@@ -16,6 +16,7 @@ import {
   getFormControlStyle,
 } from './ui.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
+import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
 import { useTags } from '../lib/useTags.js'
 import PillGridTable from './PillGridTable.jsx'
 import { CategoryCell, MerchantCell, TransactionAmountCell } from './TransactionRow.jsx'
@@ -537,6 +538,8 @@ const RuleForm = forwardRef(function RuleForm({
   const [amtSide, setAmtSide] = useState(initialAmount.amtSide)
   const [ownerId, setOwnerId] = useState(initialValues.ownerId ?? initialValues.owner_id ?? '')
   const [accountId, setAccountId] = useState(initialValues.accountId ?? initialValues.account_id ?? '')
+  // Scope by account *type* (e.g. all PayPal or Amazon accounts) — one rule covers every account of it.
+  const [accountType, setAccountType] = useState(initialValues.accountType ?? initialValues.account_type ?? '')
   // Opt-in: also match the keyword against the row's captured import source text (description + extra
   // evidence fields like "Original Statement"), not just the merchant/raw/display name.
   const [matchSourceText, setMatchSourceText] = useState(!!(initialValues.matchSourceText ?? initialValues.match_source_text ?? false))
@@ -548,6 +551,7 @@ const RuleForm = forwardRef(function RuleForm({
   const [amtOpen, setAmtOpen] = useState(!!(initialAmount.amtLow != null || initialAmount.amtHigh != null || initialAmount.amtSide !== 'both'))
   const [ownOpen, setOwnOpen] = useState(!!(initialValues.ownerId ?? initialValues.owner_id))
   const [accOpen, setAccOpen] = useState(!!(initialValues.accountId ?? initialValues.account_id))
+  const [accTypeOpen, setAccTypeOpen] = useState(!!(initialValues.accountType ?? initialValues.account_type))
 
   const [catId, setCatId] = useState(initialValues.catId ?? '')
   const [cleanName, setCleanName] = useState(initialValues.cleanName ?? '')
@@ -638,6 +642,7 @@ const RuleForm = forwardRef(function RuleForm({
           clean_name: cleanName.trim() || null,
           owner_id: ownerId || null,
           account_id: accountId || null,
+          account_type: accountType || null,
           tag_ids: tagIds,
           match_source_text: matchSourceText,
         })
@@ -653,7 +658,7 @@ const RuleForm = forwardRef(function RuleForm({
       }
     }, 700)
     return () => clearTimeout(changeDebounceRef.current)
-  }, [keyword, amtLow, amtHigh, amtSide, ownerId, accountId, catId, cleanName, tagIds, matchSourceText, hasAction, matchOnly])
+  }, [keyword, amtLow, amtHigh, amtSide, ownerId, accountId, accountType, catId, cleanName, tagIds, matchSourceText, hasAction, matchOnly])
 
   const buildDraftPayload = useCallback(() => ({
     keyword: keyword.trim(),
@@ -664,6 +669,7 @@ const RuleForm = forwardRef(function RuleForm({
     clean_name: cleanName.trim() || null,
     owner_id: ownerId || null,
     account_id: accountId || null,
+    account_type: accountType || null,
     tag_ids: tagIds,
     match_source_text: matchSourceText,
     is_recurring: isRecurring,
@@ -673,8 +679,9 @@ const RuleForm = forwardRef(function RuleForm({
     clear_clean_name: !cleanName.trim(),
     clear_owner: !ownerId,
     clear_account: !accountId,
+    clear_account_type: !accountType,
     applyToExisting,
-  }), [keyword, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, tagIds, matchSourceText, isRecurring, cadence, applyToExisting])
+  }), [keyword, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, accountType, tagIds, matchSourceText, isRecurring, cadence, applyToExisting])
 
   const getDraftState = useCallback(() => ({
     data: buildDraftPayload(),
@@ -912,6 +919,20 @@ const RuleForm = forwardRef(function RuleForm({
               <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>Restrict this rule to one account only</div>
             </ConditionChip>
           )}
+
+          <ConditionChip
+            label="Account type"
+            summary={accTypeOpen ? (ACCOUNT_TYPES.find(t => t.value === accountType)?.label ?? null) : null}
+            active={accTypeOpen}
+            onActivate={() => setAccTypeOpen(true)}
+            onClear={() => { setAccountType(''); setAccTypeOpen(false) }}
+          >
+            <select name="rule-account-type" aria-label="Rule account type" value={accountType} onChange={e => setAccountType(e.target.value)} style={{ width: '100%', ...getFormControlStyle({ size: 'md', clickable: true }) }}>
+              <option value="">— Select type —</option>
+              {ACCOUNT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+            </select>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>Restrict this rule to all accounts of one type (e.g. every PayPal account)</div>
+          </ConditionChip>
         </div>
       </div>
 
@@ -1057,6 +1078,7 @@ const RuleForm = forwardRef(function RuleForm({
               {amtSummary ? <span style={{ color: 'var(--muted)' }}> · {amtSummary}</span> : null}
               {ownerId ? <span style={{ color: 'var(--muted)' }}> · owner {owners.find(o => o.id === ownerId)?.name}</span> : null}
               {accountId ? <span style={{ color: 'var(--muted)' }}> · account {accounts.find(a => a.id === accountId)?.name}</span> : null}
+              {accountType ? <span style={{ color: 'var(--muted)' }}> · type {ACCOUNT_TYPES.find(t => t.value === accountType)?.label ?? accountType}</span> : null}
             </>
           ) : (
             <span style={{ color: 'var(--muted)' }}>Add a merchant keyword above to define the rule.</span>

@@ -66,6 +66,16 @@ def _amount_side_matches(amount: float, debit_credit: str | None) -> bool:
     return True
 
 
+def _dict_get(mapping, key):
+    """Read `key` from a dict or `sqlite3.Row`, returning None when the key/column is absent (a plain dict
+    raises KeyError, a Row raises IndexError). Lets the matcher tolerate a caller whose SELECT predates a
+    newly-added scope column instead of crashing."""
+    try:
+        return mapping[key]
+    except (KeyError, IndexError):
+        return None
+
+
 def _amount_rule_matches(amount: float, amount_min, amount_max, debit_credit: str | None) -> bool:
     if not _amount_side_matches(amount, debit_credit):
         return False
@@ -77,14 +87,20 @@ def rule_matches_row(rule, row) -> bool:
     (rules._apply_rule_to_existing) and rule-backed recurring-series membership
     (recurring_detection.reconcile_series), so "which rows a rule owns" has a single definition.
 
-    Both args are dict-like. `rule` provides keyword/owner_id/account_id/amount_min/amount_max/
+    Both args are dict-like. `rule` provides keyword/owner_id/account_id/account_type/amount_min/amount_max/
     debit_credit/match_source_text; `row` provides display_name/merchant_name/raw_name/amount/owner_id/
-    effective_account_id and (for match_source_text rules) import_evidence_json. A row whose SELECT omits
-    import_evidence_json simply can't match on source text, which is safe.
+    effective_account_id/effective_account_type and (for match_source_text rules) import_evidence_json. A
+    row whose SELECT omits import_evidence_json simply can't match on source text, which is safe.
     """
     if rule["owner_id"] is not None and rule["owner_id"] != row["owner_id"]:
         return False
     if rule["account_id"] is not None and rule["account_id"] != row["effective_account_id"]:
+        return False
+    # account_type is read defensively on both sides: a rule dict from a SELECT that predates this column,
+    # or a row SELECT that omits the effective type, resolves to None rather than raising. A rule with a
+    # type scope simply won't match a row that couldn't supply its type (a safe miss, not a crash).
+    rule_account_type = _dict_get(rule, "account_type")
+    if rule_account_type is not None and rule_account_type != _dict_get(row, "effective_account_type"):
         return False
     text = " ".join(filter(None, [row["display_name"], row["merchant_name"], row["raw_name"]])).lower()
     keyword = rule["keyword"].lower()
@@ -116,6 +132,35 @@ def _resolve_effective_account_id(
     return row["effective_account_id"] if row else account_id
 
 
+def _resolve_effective_account(
+    conn: sqlite3.Connection,
+    account_id: str | None,
+    effective_account_id: str | None = None,
+    effective_account_type: str | None = None,
+) -> tuple[str | None, str | None]:
+    """Resolve `(effective_account_id, effective_account_type)` for the account-scope rule clauses in one
+    query when a caller didn't already have them. The effective account is the linked-group root
+    (`COALESCE(parent, self)`) and its *type* is that root's type — so a merged child inherits the parent's
+    type for matching, mirroring how `effective_account_id` already resolves. Batch callers pass both in
+    (from their SELECT) so no per-row query runs; single-row/import callers let this resolve them."""
+    if effective_account_id and effective_account_type is not None:
+        return effective_account_id, effective_account_type
+    if not account_id:
+        return effective_account_id, effective_account_type
+    row = conn.execute(
+        """SELECT COALESCE(a.parent_account_id, a.id) AS eff_id,
+                  COALESCE(p.type, a.type)            AS eff_type
+           FROM   account a LEFT JOIN account p ON p.id = a.parent_account_id
+           WHERE  a.id = ?""",
+        (account_id,),
+    ).fetchone()
+    if not row:
+        return effective_account_id or account_id, effective_account_type
+    return effective_account_id or row["eff_id"], (
+        effective_account_type if effective_account_type is not None else row["eff_type"]
+    )
+
+
 def load_categorization_rules(conn: sqlite3.Connection) -> list:
     """Load the ordered rule set ONCE so a per-transaction matcher can reuse it across a whole pass.
 
@@ -127,21 +172,26 @@ def load_categorization_rules(conn: sqlite3.Connection) -> list:
     """
     return conn.execute(
         """SELECT cr.id, cr.category_id, cr.keyword, cr.amount_min, cr.amount_max,
-                  cr.debit_credit, cr.owner_id, cr.account_id, cr.clean_name, cr.match_source_text
+                  cr.debit_credit, cr.owner_id, cr.account_id, cr.account_type, cr.clean_name, cr.match_source_text
            FROM   category_rule cr
            LEFT   JOIN category c ON c.id = cr.category_id
            -- Deactivating a category prunes its rules, but stay defensive: a rule must never
            -- categorize into an inactive category. Tag-only rules (category_id NULL) still apply.
            WHERE  cr.category_id IS NULL OR c.is_active = 1
+           -- Precedence: a specific account beats an account *type* beats global; then longer keyword,
+           -- then more conditions. (account_id > account_type: a rule pinned to one account is more
+           -- specific than one covering every account of a type.)
            ORDER  BY
                CASE WHEN cr.owner_id IS NOT NULL THEN 1 ELSE 0 END DESC,
                CASE WHEN cr.account_id IS NOT NULL THEN 1 ELSE 0 END DESC,
+               CASE WHEN cr.account_type IS NOT NULL THEN 1 ELSE 0 END DESC,
                LENGTH(cr.keyword) DESC,
                (CASE WHEN cr.amount_min IS NOT NULL THEN 1 ELSE 0 END +
                 CASE WHEN cr.amount_max IS NOT NULL THEN 1 ELSE 0 END +
                 CASE WHEN COALESCE(cr.debit_credit, 'both') <> 'both' THEN 1 ELSE 0 END +
-                CASE WHEN cr.owner_id   IS NOT NULL THEN 1 ELSE 0 END +
-                CASE WHEN cr.account_id IS NOT NULL THEN 1 ELSE 0 END) DESC"""
+                CASE WHEN cr.owner_id     IS NOT NULL THEN 1 ELSE 0 END +
+                CASE WHEN cr.account_id   IS NOT NULL THEN 1 ELSE 0 END +
+                CASE WHEN cr.account_type IS NOT NULL THEN 1 ELSE 0 END) DESC"""
     ).fetchall()
 
 
@@ -162,6 +212,7 @@ def categorize_transaction(
     owner_id: str | None = None,
     account_id: str | None = None,
     effective_account_id: str | None = None,
+    effective_account_type: str | None = None,
     rules: list | None = None,
     rule_tags_by_id: dict | None = None,
     source_text: str | None = None,
@@ -174,7 +225,9 @@ def categorize_transaction(
     source_text_lc = (source_text or "").lower()
     if not text and not source_text_lc:
         return None
-    resolved_effective_account_id = _resolve_effective_account_id(conn, account_id, effective_account_id)
+    resolved_effective_account_id, resolved_effective_account_type = _resolve_effective_account(
+        conn, account_id, effective_account_id, effective_account_type
+    )
 
     # Callers that categorize many rows in a loop (recategorize, preview, import, sync) pass `rules` /
     # `rule_tags_by_id` in so they are loaded once; a lone single-row caller can omit them and we load
@@ -190,6 +243,8 @@ def categorize_transaction(
         if rule["owner_id"] is not None and rule["owner_id"] != owner_id:
             continue
         if rule["account_id"] is not None and rule["account_id"] != resolved_effective_account_id:
+            continue
+        if rule["account_type"] is not None and rule["account_type"] != resolved_effective_account_type:
             continue
         keyword = rule["keyword"].lower()
         if keyword not in text and not (rule["match_source_text"] and source_text_lc and keyword in source_text_lc):
@@ -291,9 +346,11 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
                t.category_id,
                t.category_source,
                t.display_name_source,
-               t.import_evidence_json
+               t.import_evidence_json,
+               COALESCE(p.type, a.type) AS effective_account_type
            FROM   txn t
            JOIN   account a ON a.id = t.account_id
+           LEFT   JOIN account p ON p.id = a.parent_account_id
            WHERE  {' AND '.join(where)}""",
         params,
     ).fetchall()
@@ -312,6 +369,7 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
             owner_id=txn["owner_id"],
             account_id=txn["account_id"],
             effective_account_id=txn["effective_account_id"],
+            effective_account_type=txn["effective_account_type"],
             rules=rules,
             rule_tags_by_id=rule_tags_by_id,
             source_text=source_text,
@@ -381,9 +439,11 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
                t.category_id,
                t.display_name_source,
-               t.import_evidence_json
+               t.import_evidence_json,
+               COALESCE(p.type, a.type) AS effective_account_type
            FROM   txn t
            JOIN   account a ON a.id = t.account_id
+           LEFT   JOIN account p ON p.id = a.parent_account_id
            WHERE  category_overridden = 0
              AND  category_source IS NOT 'enrichment'"""
     ).fetchall()
@@ -400,6 +460,7 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
             owner_id=txn["owner_id"],
             account_id=txn["account_id"],
             effective_account_id=txn["effective_account_id"],
+            effective_account_type=txn["effective_account_type"],
             rules=rules,
             rule_tags_by_id=rule_tags_by_id,
             source_text=source_text,

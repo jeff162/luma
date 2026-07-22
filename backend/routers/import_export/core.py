@@ -79,6 +79,7 @@ from backend.services.money_movement import (
     create_money_movement_rules,
     delete_money_movement_rules,
     money_movement_category_id_if_exists,
+    ensure_paypal_account_type,
     batch_account_ids,
     profile_account_ids,
 )
@@ -3143,6 +3144,11 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         if single_account_new:
             single_name = str(single_account_new.get("name", "")).strip()
             single_type = single_account_new.get("type", "depository")
+            # A new account created by a recognized PayPal import is a PayPal wallet — mark its type so the
+            # account-type rule criterion (money movement, and any user rule) covers it. Only when the type
+            # is generic, so an explicit non-generic choice is respected; existing accounts are never touched.
+            if sniff_paypal_activity(headers) and single_type in (None, "", "depository", "other"):
+                single_type = "paypal"
             if single_name:
                 existing = conn.execute(
                     "SELECT id FROM account WHERE LOWER(name) = LOWER(?)", (single_name,)
@@ -4125,16 +4131,19 @@ def _recategorize_after_money_movement_change(conn, *, created: int, deleted: in
 
 @router.post("/batches/{batch_id}/money-movement-rules")
 def apply_money_movement_rules(batch_id: str, body: MoneyMovementRulesRequest):
-    """Add and/or remove money-movement rules (scoped to the batch's account) for the given `Type` values,
-    then recategorize so this batch and existing rows update. `add` creates the routing to Money movement;
-    `remove` deletes it (the "changed my mind" path)."""
+    """Add and/or remove money-movement rules (scoped to the PayPal account *type*) for the given `Type`
+    values, then recategorize so this batch and existing rows update. `add` creates the routing to Money
+    movement; `remove` deletes it (the "changed my mind" path)."""
     with get_db() as conn:
         batch = conn.execute("SELECT id FROM import_batch WHERE id = ?", (batch_id,)).fetchone()
         if not batch:
             raise HTTPException(status_code=404, detail="Batch not found")
-        account_ids = batch_account_ids(conn, batch_id)
-        created = create_money_movement_rules(conn, body.add, account_ids)
-        deleted = delete_money_movement_rules(conn, body.remove, account_ids)
+        # Approving PayPal money-movement types declares the batch's accounts PayPal, so type them (when
+        # generic) — the now-type-scoped rules match by account type.
+        if body.add:
+            ensure_paypal_account_type(conn, batch_account_ids(conn, batch_id))
+        created = create_money_movement_rules(conn, body.add)
+        deleted = delete_money_movement_rules(conn, body.remove)
         recategorized = _recategorize_after_money_movement_change(conn, created=created, deleted=deleted)
     return {"created": created, "deleted": deleted, "recategorized": recategorized}
 
@@ -4151,20 +4160,26 @@ def get_profile_money_movement_types(profile_id: str):
             "profile_id": profile_id,
             "name": profile["name"],
             "proposals": money_movement_type_proposals_for_profile(conn, profile_id),
+            # The source's accounts — so a per-Type drill-down report can scope its transaction fetch to
+            # exactly the rows the count reflects (same scope as _type_row_counts_for_accounts).
+            "account_ids": profile_account_ids(conn, profile_id),
         }
 
 
 @router.post("/profiles/{profile_id}/money-movement-rules")
 def apply_profile_money_movement_rules(profile_id: str, body: MoneyMovementRulesRequest):
-    """Add/remove money-movement rules for a data source's `Type` values, scoped to every account its
-    imports touched, then recategorize."""
+    """Add/remove money-movement rules for a data source's `Type` values, scoped to the PayPal account
+    type, then recategorize."""
     with get_db() as conn:
         profile = conn.execute("SELECT id FROM csv_import_profile WHERE id = ?", (profile_id,)).fetchone()
         if not profile:
             raise HTTPException(status_code=404, detail="Data source not found")
-        account_ids = profile_account_ids(conn, profile_id)
-        created = create_money_movement_rules(conn, body.add, account_ids)
-        deleted = delete_money_movement_rules(conn, body.remove, account_ids)
+        # Approving PayPal money-movement types declares the source's accounts PayPal, so type them (when
+        # generic) — the now-type-scoped rules match by account type.
+        if body.add:
+            ensure_paypal_account_type(conn, profile_account_ids(conn, profile_id))
+        created = create_money_movement_rules(conn, body.add)
+        deleted = delete_money_movement_rules(conn, body.remove)
         recategorized = _recategorize_after_money_movement_change(conn, created=created, deleted=deleted)
     return {"created": created, "deleted": deleted, "recategorized": recategorized}
 

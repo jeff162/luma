@@ -78,6 +78,8 @@ Important behavior:
 
 - account ownership affects owner-based reporting and tasks
 
+- **`type`** classifies the account (`depository`/`credit`/`savings`/`loan`/`investment`/`p2p`/`other`, plus the marketplace `amazon` and the wallet `paypal`). It is user-editable on the Accounts page and, beyond display, is what the **account-type rule scope** matches against (see Rules). A recognized **PayPal** import auto-assigns `type='paypal'` to a **newly-created** target account (only — an existing account keeps its type on import); approving that source's money-movement `Type`s additionally types the source's accounts `paypal` when still generic (`depository`/`other`/`p2p`), since the money-movement rules are account-type scoped and need the account typed to match. A deliberately-set non-generic type is never overwritten. `amazon` carries a `kind: 'marketplace'` UI convention (hidden from the generic importer); `paypal` does not (PayPal uses the generic CSV importer)
+
 - `display_name` is the effective label used outside the Accounts page; standalone accounts keep it aligned to `name`, while merged child accounts inherit the parent's display name
 
 - `parent_account_id = NULL` means the row is a top-level selectable account; child accounts keep historical account numbers visible on the Accounts page but resolve through the parent for account filtering, import/export display, and other account-facing surfaces
@@ -211,7 +213,15 @@ They can include:
 
 - owner scope
 
-- account scope
+- account scope (a single account)
+
+- account **type** scope (`account\_type`, e.g. `paypal`/`amazon`): the rule matches only rows whose
+  **effective** account (`COALESCE(parent, self)`, so a merged child inherits the parent's type) is of
+  that type — one rule covers *every* account of the type. Parallel to the single-account scope but
+  broader; part of the matcher identity. Precedence is **account_id > account_type > global** (a rule
+  pinned to one account is more specific than one covering a whole type). This is the primitive the PayPal
+  money-movement rules are scoped by — one `account_type='paypal'` rule per `Type` instead of one per
+  (Type, account). See `docs/backlog/account-type-as-rule-criterion.md`.
 
 - category assignment
 
@@ -235,7 +245,7 @@ Important behavior:
 
 - owner-scoped rules beat global rules when otherwise similar
 
-- at most one rule per *matcher* (keyword + owner + account + amount range + debit/credit + the `match\_source\_text` flag — two rules differing only by whether they also match source text target different rows, so they are distinct matchers). Saving a rule whose matcher already exists does not fork a second copy — `create_rule` classifies the collision and reconciles instead: a **duplicate** (adds nothing) is reported, not written; a **mergeable** save (adds a category/rename the existing rule lacks, or new tags) folds additively into the existing rule; a **conflict** (a category/rename that disagrees with the existing rule) is surfaced rather than silently resolved. A genuinely different matcher is not a collision and is created normally. A single manual save prompts the user on collision; the bulk Generate Rules flow auto-merges mergeable saves, skips duplicates, and surfaces conflicts in a summary. In the rule-suggestions UI that conflict summary names the colliding rule's category and resolves each in place without leaving the review: **Replace** overwrites the existing rule's action with the suggestion's — preserving the rule's id and tags — and accepts the suggestion against it, while **Keep** leaves the existing rule untouched and defers the suggestion; the conflict response carries the existing rule's category/rename so the summary can show both sides in one round trip. Because a merge or replace changes a rule that may already govern transactions (unlike accepting a brand-new rule), that summary then offers to re-categorize the rows the changed rule already matches, using a **preserve-manual** apply: it reclaims rows the rule should own — including import-locked ones — but leaves a deliberate manual per-transaction edit as the final say. Tags still union across *different* matching rules; only a same-matcher tag addition becomes a merge into the one rule.
+- at most one rule per *matcher* (keyword + owner + account + account **type** + amount range + debit/credit + the `match\_source\_text` flag — two rules differing only by whether they also match source text, or only by account type, target different rows, so they are distinct matchers). Saving a rule whose matcher already exists does not fork a second copy — `create_rule` classifies the collision and reconciles instead: a **duplicate** (adds nothing) is reported, not written; a **mergeable** save (adds a category/rename the existing rule lacks, or new tags) folds additively into the existing rule; a **conflict** (a category/rename that disagrees with the existing rule) is surfaced rather than silently resolved. A genuinely different matcher is not a collision and is created normally. A single manual save prompts the user on collision; the bulk Generate Rules flow auto-merges mergeable saves, skips duplicates, and surfaces conflicts in a summary. In the rule-suggestions UI that conflict summary names the colliding rule's category and resolves each in place without leaving the review: **Replace** overwrites the existing rule's action with the suggestion's — preserving the rule's id and tags — and accepts the suggestion against it, while **Keep** leaves the existing rule untouched and defers the suggestion; the conflict response carries the existing rule's category/rename so the summary can show both sides in one round trip. Because a merge or replace changes a rule that may already govern transactions (unlike accepting a brand-new rule), that summary then offers to re-categorize the rows the changed rule already matches, using a **preserve-manual** apply: it reclaims rows the rule should own — including import-locked ones — but leaves a deliberate manual per-transaction edit as the final say. Tags still union across *different* matching rules; only a same-matcher tag addition becomes a merge into the one rule.
 
 - a rule must target an **active** category. Deleting a category deletes every rule pointing into the deactivated branch, and the categorizer skips any rule whose target category is inactive — so a stale rule can never re-categorize new rows into a deleted category. Tag-only rules (no category) are unaffected.
 
@@ -562,7 +572,7 @@ The review record (`review_state.suggestions[id]`, in the batch/profile/system s
 
 - **Source recognition.** A PayPal Activity CSV is identified by its header (`sniff_paypal_activity`, a marker-subset test). A recognized import auto-attaches to the **single system "PayPal" data source** — `csv_import_profile.source_kind = 'source:paypal'`, created on first use (named "PayPal", "PayPal 2"… on name collision), `account_id` NULL so one source spans accounts (the target is picked per import), **visible/renamable but not deletable**. A *hand-created* PayPal source is **adopted** (tagged `source:paypal`) on its next PayPal import rather than left untagged, so there's exactly one. The batch is likewise stamped `source_kind = 'source:paypal'`.
 - **Forced capture.** A recognized file **force-captures** `Type` + `Item Title` into `import_evidence` regardless of the user's column-capture picks (`_forced_evidence_headers`), so the signal money-movement handling depends on is always present (an unchecked `Type` can't silently drop it).
-- **User-approved `Type` rules, not a frozen vocabulary.** Approved types become `match_source_text` rules keyed on the `Type` value → the excluded **Money movement** category. `is_money_movement_type` is **fragment-based** (*deposit / withdrawal / currency conversion / hold* — so a future `eCheck Deposit` still matches, stale-resistant) and only **pre-checks** a review; the user decides which types become rules. The review is **source-scoped** (`money_movement_type_proposals_for_profile` unions the `Type`s across all the source's imports — one surface for every type, not one per card) and **bidirectional** (each type's `already_ruled` state; an `{add, remove}` apply creates/deletes rules and runs `recategorize_all`, so *existing* rows move too). Rules are **account-scoped** to the source's accounts, so a same-text transaction on another account can't match. Reached from a "Money movement" button on the PayPal data-source header and automatically after a PayPal import.
+- **User-approved `Type` rules, not a frozen vocabulary.** Approved types become `match_source_text` rules keyed on the `Type` value → the excluded **Money movement** category. `is_money_movement_type` is **fragment-based** (*deposit / withdrawal / currency conversion / hold* — so a future `eCheck Deposit` still matches, stale-resistant) and only **pre-checks** a review; the user decides which types become rules. The review is **source-scoped** (`money_movement_type_proposals_for_profile` unions the `Type`s across all the source's imports — one surface for every type, not one per card) and **bidirectional** (each type's `already_ruled` state; an `{add, remove}` apply creates/deletes rules and runs `recategorize_all`, so *existing* rows move too). Rules are **account-type-scoped** (`account_type='paypal'`), so **one** rule per `Type` covers every PayPal account and a same-text transaction on a non-PayPal account can't match. Approving a `Type` also types the source's accounts `paypal` when generic (so the type-scoped rule matches — see Accounts → `type`). Reached from a "Money movement" button on the PayPal data-source header and automatically after a PayPal import.
 
 ## Backups
 
@@ -610,8 +620,11 @@ schema and stamped directly. Registered migrations so far: **v2** adds `category
 **v3** adds `txn.needs_review`, **v4** adds `txn.recurring_series_id` (the `recurring_series` table
 itself is created by `init_db`'s `CREATE TABLE IF NOT EXISTS` script, which runs on both fresh and
 migrated databases, so only the new *column* needs an `ALTER`). Later migrations continue the additive
-pattern; the newest, **v12**, adds the `import_batch.recon_attention_count` / `recon_epoch` cache columns
-and the recon-epoch invalidation triggers (`CURRENT_VERSION = 12`).
+pattern; **v12** adds the `import_batch.recon_attention_count` / `recon_epoch` cache columns and the
+recon-epoch invalidation triggers, and the newest, **v13**, adds `category_rule.account_type` (the
+account-type rule scope) and, as a one-time data move, marks accounts that already received PayPal imports
+as `type='paypal'` and consolidates the per-account money-movement rules onto one `account_type='paypal'`
+rule per `Type` (`CURRENT_VERSION = 13`).
 
 When the schema changes from here:
 

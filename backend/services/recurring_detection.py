@@ -133,11 +133,13 @@ def _load_pool(conn: sqlite3.Connection, window_months: int) -> tuple[list[dict]
         """
         SELECT t.id,
                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
+               COALESCE(p.type, a.type) AS effective_account_type,
                t.category_id, t.category_source, t.amount, t.date,
                t.merchant_name, t.display_name, t.raw_name,
                t.owner_id, t.import_evidence_json
         FROM   txn t
         JOIN   account a ON a.id = t.account_id
+        LEFT   JOIN account p ON p.id = a.parent_account_id
         WHERE  t.trashed_at IS NULL
           AND  t.is_pending = 0
           AND  t.date >= ?
@@ -159,10 +161,11 @@ def _load_pool(conn: sqlite3.Connection, window_months: int) -> tuple[list[dict]
         pool.append({
             "id": r["id"],
             "account_id": r["effective_account_id"],
-            # effective_account_id/owner_id/name fields/import_evidence_json carry the columns the shared
-            # rule matcher (categorizer.rule_matches_row) reads, so a rule-backed series can compute its
-            # members straight from the pool without a second query per row.
+            # effective_account_id/effective_account_type/owner_id/name fields/import_evidence_json carry the
+            # columns the shared rule matcher (categorizer.rule_matches_row) reads, so a rule-backed series
+            # can compute its members straight from the pool without a second query per row.
             "effective_account_id": r["effective_account_id"],
+            "effective_account_type": r["effective_account_type"],
             "owner_id": r["owner_id"],
             "merchant_name": r["merchant_name"],
             "raw_name": r["raw_name"],
