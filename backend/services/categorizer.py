@@ -10,6 +10,7 @@ transaction text, owner, account, and amount window.
 
 import json
 import sqlite3
+from typing import Optional
 
 from backend.services.transaction_tags import (
     load_rule_tag_sync_rows,
@@ -246,18 +247,39 @@ def rule_scalar_effects(result, *, fallback_name: str) -> dict:
     return {"display_name": clean_name or fallback_name, "renamed_by_rule": bool(clean_name)}
 
 
-def recategorize_all(conn: sqlite3.Connection) -> int:
-    # Retroactive recategorization is intentionally opt-in and skips manual overrides,
-    # so user edits remain the final authority even after rules evolve. It also skips
-    # `enrichment` rows — a matched Amazon funding charge or a suppressed wallet funding leg
-    # that a feature deliberately moved into an excluded category and stashed a prior for
-    # reversal. Those are feature-owned, not rule-owned; letting a rule reclaim one (or clear
-    # it when nothing matches) would silently un-exclude it and double-count the spend. They
-    # carry `category_overridden = 0`, so the source guard — not the lock bit — is what protects
-    # them here and in `preview_recategorize_count`. Only an explicit full-force rule apply may
-    # take them (see `rules._apply_rule_to_existing`).
+def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] = None,
+                     retain_unmatched: bool = True) -> int:
+    """Re-run the rules over the `category_overridden = 0` rows (so manual and import edits — the locked
+    sources — are left alone, along with feature-owned `enrichment` rows: an excluded Amazon funding
+    charge or a suppressed wallet leg that a feature moved into an excluded category and stashed a prior
+    for; letting a rule reclaim or clear one would un-exclude it and double-count the spend).
+
+    **`retain_unmatched` decides what happens to a rule-categorized row that now matches nothing** — the
+    behavior a user hits after deleting a rule, narrowing its scope, or renaming a transaction:
+
+      * **`True` (default — retain):** the pass is *monotonic*. It only ever sets or changes a category or
+        rule-tag, never removes one. A row a rule previously categorized keeps that category (and its
+        rule-applied tags) even though no rule claims it now; the row stays `category_overridden = 0`, so a
+        future rule can still reclaim it. This is why the routine "Run categorization" can never strip a
+        category a rule once set — deleting an obsolete rule does not silently un-categorize its history.
+      * **`False` (reconcile):** a no-match rule row is cleared back to uncategorized (a `cleared` row keeps
+        its marker) and its rule-tags removed — the old projection behavior. Reserved for a **scoped** pass
+        (`txn_ids` set) invoked deliberately: the opt-in "re-evaluate this rule's transactions" on a rule
+        edit/delete, and the money-movement "remove a type" path. Scoping it to one rule's rows is what
+        keeps this from mass-reverting the orphaned-rule rows retain has accumulated across the ledger.
+
+    `txn_ids` restricts the pass to a specific row set (for the scoped reconcile); `None` is the whole
+    ledger. A row already at its correct category matches identically either way — retain vs. reconcile
+    only differ on the no-match case."""
+    where = ["category_overridden = 0", "category_source IS NOT 'enrichment'"]
+    params: list = []
+    if txn_ids is not None:
+        if not txn_ids:
+            return 0
+        where.append(f"t.id IN ({','.join('?' * len(txn_ids))})")
+        params.extend(txn_ids)
     txns = conn.execute(
-        """SELECT
+        f"""SELECT
                t.id,
                t.merchant_name,
                t.display_name,
@@ -272,8 +294,8 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
                t.import_evidence_json
            FROM   txn t
            JOIN   account a ON a.id = t.account_id
-           WHERE  category_overridden = 0
-             AND  category_source IS NOT 'enrichment'"""
+           WHERE  {' AND '.join(where)}""",
+        params,
     ).fetchall()
 
     rules = load_categorization_rules(conn)
@@ -304,25 +326,39 @@ def recategorize_all(conn: sqlite3.Connection) -> int:
         apply_rule_name = name_effects["renamed_by_rule"] and txn["display_name_source"] != "manual"
         current_name = txn["display_name"] or txn["merchant_name"] or txn["raw_name"]
         display_name = name_effects["display_name"] if apply_rule_name else current_name
-        category_changed = cat_id != txn["category_id"]
+
+        # Category: a rule match sets/changes it to 'rule'; on no match we retain (leave it) or, in a
+        # reconcile pass, clear it (a `cleared` row keeps its marker so a rename/tag-only match doesn't
+        # silently drop it — see set_rejected_suggestion_disposition).
+        if cat_id is not None:
+            next_category_id, next_source = cat_id, "rule"
+        elif retain_unmatched:
+            next_category_id, next_source = txn["category_id"], txn["category_source"]
+        else:
+            next_category_id = None
+            next_source = "cleared" if txn["category_source"] == "cleared" else None
+        category_changed = next_category_id != txn["category_id"] or next_source != txn["category_source"]
+
         display_name_changed = display_name != current_name
-        tags_changed = would_sync_rule_tags_change(conn, txn["id"], matched_tag_ids, existing_rows=tag_rows_by_txn.get(txn["id"], {}))
         if category_changed or display_name_changed:
-            # When a rule assigns a category the row becomes rule-owned; when none does it falls back to
-            # uncategorized (NULL) — EXCEPT a user-`cleared` row, which keeps its `cleared` marker so a
-            # rename/tag-only rule match can clean its name without silently dropping the marker (which
-            # would re-expose it to the trust-flag re-grab). See set_rejected_suggestion_disposition.
-            next_source = "rule" if cat_id else ("cleared" if txn["category_source"] == "cleared" else None)
             set_parts = ["category_id = ?", "display_name = ?", "category_source = ?"]
-            params = [cat_id, display_name, next_source]
+            params = [next_category_id, display_name, next_source]
             if apply_rule_name:
                 set_parts.append("display_name_source = 'rule'")
             conn.execute(
                 f"UPDATE txn SET {', '.join(set_parts)} WHERE id = ?",
                 (*params, txn["id"]),
             )
-        if sync_rule_tags_for_transaction(conn, txn["id"], matched_tag_ids):
-            tags_changed = True
+
+        # Tags follow the category: reconcile syncs to exactly the matched set (dropping rule-tags whose
+        # rule no longer matches); retain is additive — it unions the matched tags with the row's existing
+        # rule-applied tags, so a rule-tag survives its rule the same way the category does.
+        if retain_unmatched:
+            existing_rule_tags = {tid for tid, row in tag_rows_by_txn.get(txn["id"], {}).items() if row["rule_present"]}
+            tag_target = existing_rule_tags | {str(t) for t in matched_tag_ids if t}
+        else:
+            tag_target = matched_tag_ids
+        tags_changed = sync_rule_tags_for_transaction(conn, txn["id"], tag_target)
         if category_changed or display_name_changed or tags_changed:
             updated += 1
 
@@ -375,10 +411,15 @@ def preview_recategorize_count(conn: sqlite3.Connection) -> int:
         apply_rule_name = name_effects["renamed_by_rule"] and txn["display_name_source"] != "manual"
         current_name = txn["display_name"] or txn["merchant_name"] or txn["raw_name"]
         display_name_changed = apply_rule_name and name_effects["display_name"] != current_name
+        # Mirror the pass's default (retain): a no-match row does not change category, and rule-tags are
+        # additive (a no-longer-matched tag is not removed), so only a real set/change is counted.
+        category_would_change = cat_id is not None and cat_id != txn["category_id"]
+        existing_rule_tags = {tid for tid, row in tag_rows_by_txn.get(txn["id"], {}).items() if row["rule_present"]}
+        tag_target = existing_rule_tags | {str(t) for t in matched_tag_ids if t}
         if (
-            cat_id != txn["category_id"]
+            category_would_change
             or display_name_changed
-            or would_sync_rule_tags_change(conn, txn["id"], matched_tag_ids, existing_rows=tag_rows_by_txn.get(txn["id"], {}))
+            or would_sync_rule_tags_change(conn, txn["id"], tag_target, existing_rows=tag_rows_by_txn.get(txn["id"], {}))
         ):
             pending += 1
 

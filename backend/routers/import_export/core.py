@@ -78,6 +78,7 @@ from backend.services.money_movement import (
     money_movement_type_proposals_for_profile,
     create_money_movement_rules,
     delete_money_movement_rules,
+    money_movement_category_id_if_exists,
     batch_account_ids,
     profile_account_ids,
 )
@@ -4101,6 +4102,27 @@ def get_money_movement_types(batch_id: str):
         }
 
 
+def _recategorize_after_money_movement_change(conn, *, created: int, deleted: int) -> int:
+    """Recategorize after adding/removing money-movement `Type` rules. Because `recategorize_all` now
+    *retains* a category when no rule matches, removing a type would otherwise strand its rows in the
+    excluded "Money movement" category. So a removal triggers a **scoped reconcile** over just the Money
+    movement leaf's rows: the ones still matching a surviving type stay, the removed ones fall back out —
+    without disturbing any other rule-categorized row. The following retain pass then applies any newly
+    added types to their matching rows. Returns the retain pass's changed-row count."""
+    if not (created or deleted):
+        return 0
+    if deleted:
+        mm_leaf = money_movement_category_id_if_exists(conn)
+        if mm_leaf:
+            ids = [
+                r["id"] for r in conn.execute(
+                    "SELECT id FROM txn WHERE category_id = ? AND category_overridden = 0", (mm_leaf,)
+                ).fetchall()
+            ]
+            recategorize_all(conn, txn_ids=ids, retain_unmatched=False)
+    return recategorize_all(conn)
+
+
 @router.post("/batches/{batch_id}/money-movement-rules")
 def apply_money_movement_rules(batch_id: str, body: MoneyMovementRulesRequest):
     """Add and/or remove money-movement rules (scoped to the batch's account) for the given `Type` values,
@@ -4113,7 +4135,7 @@ def apply_money_movement_rules(batch_id: str, body: MoneyMovementRulesRequest):
         account_ids = batch_account_ids(conn, batch_id)
         created = create_money_movement_rules(conn, body.add, account_ids)
         deleted = delete_money_movement_rules(conn, body.remove, account_ids)
-        recategorized = recategorize_all(conn) if (created or deleted) else 0
+        recategorized = _recategorize_after_money_movement_change(conn, created=created, deleted=deleted)
     return {"created": created, "deleted": deleted, "recategorized": recategorized}
 
 
@@ -4143,7 +4165,7 @@ def apply_profile_money_movement_rules(profile_id: str, body: MoneyMovementRules
         account_ids = profile_account_ids(conn, profile_id)
         created = create_money_movement_rules(conn, body.add, account_ids)
         deleted = delete_money_movement_rules(conn, body.remove, account_ids)
-        recategorized = recategorize_all(conn) if (created or deleted) else 0
+        recategorized = _recategorize_after_money_movement_change(conn, created=created, deleted=deleted)
     return {"created": created, "deleted": deleted, "recategorized": recategorized}
 
 

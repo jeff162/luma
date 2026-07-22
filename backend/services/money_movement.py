@@ -118,7 +118,7 @@ def batch_account_ids(conn: sqlite3.Connection, batch_id: str) -> list[str]:
     return [row["account_id"] for row in rows]
 
 
-def _money_movement_category_id_if_exists(conn: sqlite3.Connection) -> Optional[str]:
+def money_movement_category_id_if_exists(conn: sqlite3.Connection) -> Optional[str]:
     """The Money movement leaf id if it has been created (read-only — never creates it), else None. Looks
     only under the ``Transfers`` group, mirroring where ``ensure_excluded_transfers_leaf`` creates it, so a
     missing group means the leaf can't exist yet."""
@@ -182,7 +182,7 @@ def _proposals_from_evidence(evidence_rows, ruled: set[str]) -> list[dict]:
 
 def money_movement_type_proposals(conn: sqlite3.Connection, batch_id: str) -> list[dict]:
     """One batch's `Type` proposals (see `_proposals_from_evidence`)."""
-    ruled = _ruled_keywords(conn, _money_movement_category_id_if_exists(conn), batch_account_ids(conn, batch_id))
+    ruled = _ruled_keywords(conn, money_movement_category_id_if_exists(conn), batch_account_ids(conn, batch_id))
     rows = conn.execute(
         "SELECT import_evidence_json FROM txn WHERE import_batch_id = ? AND trashed_at IS NULL", (batch_id,)
     ).fetchall()
@@ -192,7 +192,7 @@ def money_movement_type_proposals(conn: sqlite3.Connection, batch_id: str) -> li
 def money_movement_type_proposals_for_profile(conn: sqlite3.Connection, profile_id: str) -> list[dict]:
     """`Type` proposals across **all** of a data source's imports — the single, source-level review so the
     user sees every PayPal type at once (not one card at a time), with each type's current rule state."""
-    ruled = _ruled_keywords(conn, _money_movement_category_id_if_exists(conn), profile_account_ids(conn, profile_id))
+    ruled = _ruled_keywords(conn, money_movement_category_id_if_exists(conn), profile_account_ids(conn, profile_id))
     rows = conn.execute(
         """SELECT t.import_evidence_json
            FROM   txn t JOIN import_batch b ON b.id = t.import_batch_id
@@ -245,7 +245,7 @@ def delete_money_movement_rules(conn: sqlite3.Connection, type_values, account_i
     """Remove the money-movement rules for each `Type` on each of `account_ids` — the "changed my mind"
     path. Scoped to the given accounts (an empty set removes nothing, mirroring create). Returns the count
     deleted; the caller runs recategorize so the rows fall out of Money movement."""
-    category_id = _money_movement_category_id_if_exists(conn)
+    category_id = money_movement_category_id_if_exists(conn)
     if not category_id or not account_ids:
         return 0
     deleted = 0

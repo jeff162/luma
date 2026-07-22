@@ -12,7 +12,7 @@ from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 from typing import Literal, Optional
 from backend.db.database import get_db
-from backend.services.categorizer import _amount_rule_matches, rule_matches_row, source_match_text_from_json
+from backend.services.categorizer import _amount_rule_matches, rule_matches_row, recategorize_all, source_match_text_from_json
 from backend.services.recurring_detection import CADENCES, link_series_members, _normalize_payee
 from backend.services.transaction_tags import sync_rule_tags_for_transaction, would_sync_rule_tags_change, get_visible_transaction_tag_map
 
@@ -163,6 +163,22 @@ def _rule_matches_txn(rule, txn) -> bool:
     # Thin wrapper over the shared service predicate so rule apply and rule-backed recurring membership
     # can never diverge on "which rows a rule owns". `txn` here carries import_evidence_json when present.
     return rule_matches_row(rule, txn)
+
+
+def _rule_affected_txn_ids(conn, rule) -> list[str]:
+    """The `category_overridden = 0` transactions a rule currently matches — the candidate set for a scoped
+    reconcile when the rule is deleted or its scope narrowed with the "re-evaluate this rule's
+    transactions" opt-in. Uses the same shared matcher as apply, so "which rows a rule owns" has one
+    definition. Gathered *before* the delete/edit so the old matcher is still in force; the reconcile then
+    re-derives each row against the remaining rules (a fell-out row clears or moves to another rule; a
+    still-matched row is unchanged)."""
+    rows = conn.execute(
+        """SELECT t.id, t.merchant_name, t.display_name, t.raw_name, t.amount, t.owner_id, t.account_id,
+                  t.import_evidence_json, COALESCE(a.parent_account_id, t.account_id) AS effective_account_id
+           FROM   txn t JOIN account a ON a.id = t.account_id
+           WHERE  t.category_overridden = 0"""
+    ).fetchall()
+    return [r["id"] for r in rows if _rule_matches_txn(rule, r)]
 
 
 def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False, txn_ids: Optional[list[str]] = None, capture_prior: Optional[list] = None) -> list[str]:
@@ -637,7 +653,8 @@ def _resulting_rule_state(current: dict, body: RuleUpdate) -> dict:
 
 
 @router.patch("/{rule_id}")
-def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "merge"] = "reject"):
+def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "merge"] = "reject",
+                reconcile: bool = False):
     """Update a rule, guarding the case where the edit makes its matcher collide with *another* rule.
 
     Unlike create, both rules already exist, so reconciling means one has to go: by default
@@ -646,6 +663,12 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
     edit would assign a different category than the other rule) is never auto-merged — the user
     resolves it (edit the other rule, delete one, or change scope). `status` is 'updated' | 'merged' |
     'duplicate' | 'mergeable' | 'conflict'.
+
+    `reconcile` (opt-in, default off) re-evaluates the transactions this rule *used* to match: rows that
+    the edit pushes out of scope are recomputed against the remaining rules (falling to another rule or to
+    uncategorized) instead of retaining their old category. It is captured from the pre-edit matcher, so it
+    catches exactly the rows a narrowed keyword/scope drops. Only applied on a clean update (not a
+    collision merge/report).
     """
     with get_db() as conn:
         current = conn.execute(
@@ -656,6 +679,10 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
         ).fetchone()
         if not current:
             raise HTTPException(status_code=404, detail="Rule not found")
+
+        # Capture the rows the *old* rule owned before the edit changes its matcher, so a scoped reconcile
+        # below can re-evaluate exactly the rows an edit drops from scope.
+        affected = _rule_affected_txn_ids(conn, current) if reconcile else []
 
         resulting = _resulting_rule_state(current, body)
         resulting_tag_ids = (
@@ -751,6 +778,21 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
             _ensure_recurring_series(conn, rule_id, body.cadence)
         elif body.is_recurring is False:
             _drop_recurring_series_for_rule(conn, rule_id)
+        # Opt-in reconcile: re-evaluate the rows the pre-edit rule owned. Rows still matching the edited
+        # rule are unchanged; rows the edit dropped from scope clear or fall to another rule. Union with the
+        # rows the edited rule now matches so a broadened edit also stamps the newly-covered rows.
+        if reconcile:
+            affected_ids = set(affected)
+            post_rule = conn.execute(
+                """SELECT id, keyword, category_id, amount_min, amount_max, debit_credit, clean_name,
+                          owner_id, account_id, match_source_text
+                   FROM category_rule WHERE id = ?""",
+                (rule_id,),
+            ).fetchone()
+            if post_rule:
+                affected_ids.update(_rule_affected_txn_ids(conn, post_rule))
+            if affected_ids:
+                recategorize_all(conn, txn_ids=list(affected_ids), retain_unmatched=False)
     return {"ok": True, "status": "updated"}
 
 
@@ -784,10 +826,28 @@ def apply_rule_to_transactions(rule_id: str, body: ApplyToTransactionsBody):
 
 
 @router.delete("/{rule_id}")
-def delete_rule(rule_id: str):
+def delete_rule(rule_id: str, reconcile: bool = False):
+    """Delete a rule. `reconcile` (opt-in, default off) additionally re-evaluates the transactions this
+    rule categorized: because `recategorize_all` now retains a category when no rule matches, deleting a
+    rule normally leaves its past categorizations in place. Passing `reconcile=true` is the "this rule was
+    wrong — revert its rows" path: the rows it matched are recomputed against the remaining rules (falling
+    to another matching rule or to uncategorized). Scoped to this rule's rows, so it never touches
+    categorizations left behind by other rules."""
     with get_db() as conn:
+        affected: list[str] = []
+        if reconcile:
+            rule = conn.execute(
+                """SELECT id, keyword, category_id, amount_min, amount_max, debit_credit, clean_name,
+                          owner_id, account_id, match_source_text
+                   FROM category_rule WHERE id = ?""",
+                (rule_id,),
+            ).fetchone()
+            if rule:
+                affected = _rule_affected_txn_ids(conn, rule)
         # A rule-backed recurring series has no matcher without its rule, so deleting the rule removes it
         # (and unlinks its members) rather than leaving an orphan on the Recurring page.
         _drop_recurring_series_for_rule(conn, rule_id)
         conn.execute("DELETE FROM category_rule WHERE id = ?", (rule_id,))
+        if reconcile and affected:
+            recategorize_all(conn, txn_ids=affected, retain_unmatched=False)
     return {"ok": True}

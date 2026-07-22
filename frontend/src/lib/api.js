@@ -334,8 +334,15 @@ export const api = {
   // `onExisting`: like createRule, but for an edit that makes this rule's matcher collide with another
   // rule. Default classifies without writing; 'merge' folds this rule's actions into the other and
   // deletes this one. Response `status`: 'updated'|'merged'|'duplicate'|'mergeable'|'conflict'.
-  updateRule: (id, data, { onExisting } = {}) =>
-    request(`/rules/${id}${onExisting ? `?on_existing=${onExisting}` : ''}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  // `reconcile` (default off) re-evaluates the transactions this rule previously categorized so rows an
+  // edit drops from scope revert instead of retaining their old category (the "this rule was wrong" path).
+  updateRule: (id, data, { onExisting, reconcile } = {}) => {
+    const params = new URLSearchParams()
+    if (onExisting) params.set('on_existing', onExisting)
+    if (reconcile) params.set('reconcile', 'true')
+    const qs = params.toString()
+    return request(`/rules/${id}${qs ? `?${qs}` : ''}`, { method: 'PATCH', body: JSON.stringify(data) })
+  },
   // `preserveManual` re-categorizes the rule's matches but leaves manual per-transaction edits alone
   // (used after a merge/replace changes the governing rule); omitted = full force, overwriting all matches.
   applyRule: (id, { preserveManual } = {}) =>
@@ -344,7 +351,10 @@ export const api = {
   // import-rule suggestion), leaving conflicting rows and manual exceptions alone.
   applyRuleToTransactions: (id, transaction_ids) =>
     request(`/rules/${id}/apply-to-transactions`, { method: 'POST', body: JSON.stringify({ transaction_ids }) }),
-  deleteRule: (id) => request(`/rules/${id}`, { method: 'DELETE' }),
+  // `reconcile` (default off) re-evaluates the transactions this rule categorized so they revert instead
+  // of retaining the deleted rule's category.
+  deleteRule: (id, { reconcile } = {}) =>
+    request(`/rules/${id}${reconcile ? '?reconcile=true' : ''}`, { method: 'DELETE' }),
   traceImportRuleSuggestionAction: data =>
     request('/import-export/rule-suggestions/debug-trace', {
       method: 'POST',

@@ -52,6 +52,9 @@ function describeRule(rule, owners, accounts) {
 
 function RuleRow({ rule, owners, accounts, onSave, onDelete, gridTemplateColumns }) {
   const [confirmDel,  setConfirmDel]  = useState(false)
+  // Opt-in (off by default): also re-evaluate the transactions this rule categorized so they revert
+  // instead of retaining the deleted rule's category. Reset whenever the confirm is dismissed.
+  const [reconcileDel, setReconcileDel] = useState(false)
 
   const conditions = describeRule(rule, owners, accounts)
   const hasConditions = conditions.length > 0
@@ -105,12 +108,19 @@ function RuleRow({ rule, owners, accounts, onSave, onDelete, gridTemplateColumns
         >✎</button>
         {confirmDel ? (
           <>
+            <label
+              title="Also re-evaluate the transactions this rule categorized, so they revert (to another matching rule or uncategorized) instead of keeping this rule's category. Off keeps them as they are."
+              style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <input type="checkbox" checked={reconcileDel} onChange={e => setReconcileDel(e.target.checked)} />
+              revert txns
+            </label>
             <button
-              onClick={() => { setConfirmDel(false); onDelete(rule.id) }}
+              onClick={() => { setConfirmDel(false); const r = reconcileDel; setReconcileDel(false); onDelete(rule.id, r) }}
               style={{ background: 'var(--danger)', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 7px', fontSize: 11, cursor: 'pointer', fontWeight: 600 }}
             >Del</button>
             <button
-              onClick={() => setConfirmDel(false)}
+              onClick={() => { setConfirmDel(false); setReconcileDel(false) }}
               style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--muted)', borderRadius: 4, padding: '2px 6px', fontSize: 11, cursor: 'pointer' }}
             >✕</button>
           </>
@@ -134,6 +144,9 @@ function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel 
   })
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
+  // Opt-in (off by default): re-evaluate the transactions this rule previously categorized, so rows this
+  // edit drops from scope revert instead of retaining the old category.
+  const [reconcile, setReconcile] = useState(false)
 
   if (!rule) return null
 
@@ -143,7 +156,7 @@ function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel 
     setWorking(true)
     setError('')
     try {
-      await onSave(currentDraftState.data)
+      await onSave({ ...currentDraftState.data, reconcile })
     } catch (err) {
       setError(err.message || 'Failed to save rule')
       setWorking(false)
@@ -209,6 +222,13 @@ function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel 
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto', flexShrink: 0 }}>
+            <label
+              title="Re-evaluate the transactions this rule previously categorized: rows this edit no longer covers revert (to another matching rule or uncategorized) instead of keeping this rule's old category. Off leaves existing categorizations as they are."
+              style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)', cursor: working ? 'not-allowed' : 'pointer', marginRight: 4 }}
+            >
+              <input type="checkbox" checked={reconcile} onChange={e => setReconcile(e.target.checked)} disabled={working} />
+              Re-evaluate transactions
+            </label>
             <button
               type="button"
               onClick={handleSave}
@@ -355,10 +375,12 @@ export default function Rules() {
   }
 
   async function handleEditSave(data) {
-    const { applyToExisting, ...ruleData } = data
+    // `reconcile` is an overlay-level opt-in (re-evaluate this rule's rows), not a rule field; it applies
+    // only to the clean update path, mirroring the backend (a collision merge doesn't reconcile).
+    const { applyToExisting, reconcile, ...ruleData } = data
     // An edit can make this rule's matcher collide with another rule. Default update only classifies;
     // we ask before merging (which removes this rule) or surfacing a conflict.
-    const result = await api.updateRule(editingRuleId, ruleData)
+    const result = await api.updateRule(editingRuleId, ruleData, { reconcile })
     if (result?.status && result.status !== 'updated') {
       setCollision({ status: result.status, existingRuleId: result.existing_rule_id, ruleData, applyToExisting, fromEdit: true, editedRuleId: editingRuleId })
       return
@@ -369,8 +391,8 @@ export default function Rules() {
     loadRecategorizePreview()
   }
 
-  async function handleDelete(id) {
-    await api.deleteRule(id)
+  async function handleDelete(id, reconcile = false) {
+    await api.deleteRule(id, { reconcile })
     if (editingRuleId === id) setEditingRuleId(null)
     loadRules()
     loadRecategorizePreview()
