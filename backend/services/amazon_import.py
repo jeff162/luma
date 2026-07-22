@@ -251,6 +251,9 @@ def classify_order(order: AmazonOrder) -> OrderDisposition:
     mention (``bare_card_*``) so the importer's ledger probe can settle the undisclosed split. A refund
     reduces the net cash."""
     cash_legs = [leg for leg in order.payment_legs if leg.amount is not None and not leg.is_non_cash]
+    # Round the summed legs to cents: summing floats manufactures sub-cent drift (0.1 + 0.2 =
+    # 0.30000000000000004) that would otherwise fail the cent-level match against the cleanly-parsed
+    # ledger charge. This — not the source data, which is 2-decimal — is why the amount is rounded.
     charge_amount = round(sum(leg.amount for leg in cash_legs), 2)
     if not cash_legs or charge_amount <= 0:
         bare = next((leg for leg in order.payment_legs
