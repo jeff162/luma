@@ -13,7 +13,7 @@ import { Button, Card, PageHeader, Spinner, EmptyState, Input, SelectAllCheckbox
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
-import { MerchantCell, CategoryCell, TransactionAmountCell, getTxnMerchantLabel, getTxnImportSourceLabel } from '../components/TransactionRow.jsx'
+import { MerchantCell, CategoryCell, TransactionMarkersCell, TransactionAmountCell, getTxnMerchantLabel, getTxnImportSourceLabel } from '../components/TransactionRow.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import { useTransactionRowActions, TransactionRowActionsChrome } from '../lib/useTransactionRowActions.jsx'
 import { BULK_SELECT_COLUMN_KEY } from '../lib/useTransactionSelection.js'
@@ -30,10 +30,13 @@ const COLUMN_DEFS = [
   { key: 'merchant', label: 'Merchant', defaultWidth: 220, minWidth: 120 },
   { key: 'category', label: 'Category', defaultWidth: 150, minWidth: 100 },
   { key: 'account', label: 'Account', defaultWidth: 150, minWidth: 100 },
-  { key: 'amount', label: 'Amount', defaultWidth: 110, minWidth: 70 },
+  // Note/tag/status markers (see TransactionMarkersCell). Not sortable — no single meaningful order
+  // across a mix of tags, notes, and status flags.
+  { key: 'tags', label: 'Tags', defaultWidth: 90, minWidth: 44, sortable: false },
+  { key: 'amount', label: 'Amount', defaultWidth: 92, minWidth: 70 },
 ]
 
-const DEFAULT_ORDER = ['date', 'merchant', 'category', 'account', 'amount']
+const DEFAULT_ORDER = ['date', 'merchant', 'category', 'account', 'tags', 'amount']
 const TXN_COLUMNS_PREF_KEY = 'ui.transactions.columns'
 const TXN_SESSION_STATE_STORAGE_KEY = 'luma:txn-session-state'
 const DEFAULT_TRANSACTION_SORT = { key: 'date', dir: 'desc' }
@@ -110,11 +113,20 @@ function defaultColumnConfig() {
 function normalizeColumnConfig(cfg) {
   if (!Array.isArray(cfg)) return null
   const byKey = new Map(cfg.map(col => [col.key, col]))
-  const allPresent = DEFAULT_ORDER.every(key => byKey.has(key))
-  if (!allPresent || byKey.size !== DEFAULT_ORDER.length) return null
-  // Preserve the user's column order as-is — every column (including category) reorders freely.
-  // (Validation above guarantees exactly the expected set of keys.)
-  return cfg.map(col => ({ ...col }))
+  // Reject a corrupt or foreign config (duplicate keys, or keys we no longer recognize) → defaults.
+  // A config that merely predates a newly-added column is NOT rejected: the missing column is spliced
+  // in below, so introducing a column (e.g. `tags`) doesn't wipe a user's customized order and widths.
+  if (byKey.size !== cfg.length) return null
+  if (![...byKey.keys()].every(key => DEFAULT_ORDER.includes(key))) return null
+  // Preserve the user's order for the columns they saved; every column (including category) reorders
+  // freely. Any column added since they last saved lands at its canonical position.
+  const result = cfg.map(col => ({ ...col }))
+  DEFAULT_ORDER.forEach((key, index) => {
+    if (byKey.has(key)) return
+    const def = COLUMN_DEFS.find(candidate => candidate.key === key)
+    result.splice(Math.min(index, result.length), 0, { key, width: def.defaultWidth })
+  })
+  return result
 }
 
 
@@ -132,6 +144,8 @@ function formatTransactionClipboardCell(key, txn, { showSourceInCategorySlot = f
       return showSourceInCategorySlot ? getTxnImportSourceLabel(txn) : (txn.category_name || 'Uncategorized')
     case 'account':
       return `${txn.account_name || ''}${txn.account_mask ? ` ···${txn.account_mask}` : ''}`.trim()
+    case 'tags':
+      return (Array.isArray(txn.tags) ? txn.tags : []).map(tag => tag.name).join(', ')
     case 'amount':
       return formatTransactionAmount(txn.amount)
     default:
@@ -483,16 +497,20 @@ export default function Transactions() {
       const def = COLUMN_DEFS.find(candidate => candidate.key === col.key)
       const headerLabel = col.key === 'category' && showSourceInCategorySlot ? 'Source' : (def?.label ?? col.key)
       const align = col.key === 'amount' ? 'end' : 'start'
+      const sortable = def?.sortable !== false
       return {
         ...col,
         label: headerLabel,
         align,
+        sortable,
         minWidth: def?.minWidth ?? 60,
         leadingInset: col.key === 'date' ? 4 : undefined,
         trailingInset: col.key === 'amount' ? 4 : undefined,
         title: col.key === 'category'
           ? `${headerLabel} — right-click for options`
-          : `Click to sort. Drag middle to move ${headerLabel}`,
+          : sortable
+            ? `Click to sort. Drag middle to move ${headerLabel}`
+            : `Drag middle to move ${headerLabel}`,
         onContextMenu: col.key === 'category'
           ? event => {
             event.preventDefault()
@@ -728,12 +746,18 @@ export default function Transactions() {
           </span>
         )
       }
+      case 'tags':
+        return (
+          <TransactionMarkersCell
+            txn={txn}
+            onUpdateNote={updateNote}
+            onUpdateTags={updateTags}
+          />
+        )
       case 'amount':
         return (
           <TransactionAmountCell
             txn={txn}
-            onUpdateNote={updateNote}
-            onUpdateTags={updateTags}
             onOpenDetail={detailTxn => openDetailPanel('txn', detailTxn)}
           />
         )

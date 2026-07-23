@@ -279,7 +279,7 @@ export function TransactionRowActionsChrome({ controller }) {
       {/* Menu-driven note / tag editors render as centered overlays above the floating-panel stack
         (zIndex 1000 clears the 401+ detail panels these lists also live inside; data-modal-overlay
         lets an underlying panel yield Escape to them). The inline note/tag affordances in
-        TransactionAmountCell stay the primary entry point; this mirrors them for the menu path. */}
+        TransactionMarkersCell stay the primary entry point; this mirrors them for the menu path. */}
       {noteTarget ? (
         <div
           data-modal-overlay=""

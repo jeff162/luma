@@ -56,6 +56,34 @@ function TagChips({ tags, selected, onToggle, tone }) {
   )
 }
 
+// A two-option segmented control. Used here for the binary review status; kept local since it's the
+// only segmented choice in the panel.
+function SegmentedToggle({ value, onChange, options }) {
+  return (
+    <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+      {options.map((opt, i) => {
+        const on = value === opt.value
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            style={{
+              padding: '6px 14px', fontSize: 13, cursor: 'pointer', border: 'none',
+              borderLeft: i === 0 ? 'none' : '1px solid var(--border)',
+              background: on ? 'color-mix(in srgb, var(--accent) 18%, var(--surface2))' : 'var(--surface)',
+              color: on ? 'var(--text)' : 'var(--muted)',
+              fontWeight: on ? 600 : 500,
+            }}
+          >
+            {opt.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function BulkEditPanel({ count, categories = [], onApply, onCancel, applying = false }) {
   const { tags: allTags, addTag } = useTags()
   const [setCategory, setSetCategory] = useState(false)
@@ -70,6 +98,9 @@ export default function BulkEditPanel({ count, categories = [], onApply, onCance
   const [merchantValue, setMerchantValue] = useState('')
   const [setDate, setSetDate] = useState(false)
   const [dateValue, setDateValue] = useState('')
+  const [setReview, setSetReview] = useState(false)
+  // false = mark reviewed (clears the flag), true = flag for another look. Reviewed is the common case.
+  const [reviewNeedsReview, setReviewNeedsReview] = useState(false)
 
 
   function toggleIn(setter) {
@@ -89,6 +120,7 @@ export default function BulkEditPanel({ count, categories = [], onApply, onCance
     if (setNotes) actions.push({ type: 'set_notes', notes: notesValue })          // empty clears
     if (setMerchant && merchantValue.trim()) actions.push({ type: 'set_merchant', merchant: merchantValue.trim() })
     if (setDate && dateValue) actions.push({ type: 'set_date', date: dateValue })
+    if (setReview) actions.push({ type: 'set_review_status', needs_review: reviewNeedsReview })
     return actions
   }
 
@@ -169,6 +201,17 @@ export default function BulkEditPanel({ count, categories = [], onApply, onCance
           value={dateValue}
           onChange={e => setDateValue(e.target.value)}
           style={{ ...getFormControlStyle({ size: 'md' }) }}
+        />
+      </FieldRow>
+
+      <FieldRow enabled={setReview} onToggle={setSetReview} label="Set review status">
+        <SegmentedToggle
+          value={reviewNeedsReview ? 'needs_review' : 'reviewed'}
+          onChange={v => setReviewNeedsReview(v === 'needs_review')}
+          options={[
+            { value: 'reviewed', label: 'Reviewed' },
+            { value: 'needs_review', label: 'Needs review' },
+          ]}
         />
       </FieldRow>
     </AppDialog>

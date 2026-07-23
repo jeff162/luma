@@ -114,6 +114,8 @@ export function useBulkTransactionEditing({
               return { ...txn, date: action.date }
             case 'mark_reviewed':
               return { ...txn, needs_review: 0 }
+            case 'set_review_status':
+              return { ...txn, needs_review: action.needs_review ? 1 : 0 }
             case 'add_tags': {
               const present = new Set((txn.tags || []).map(tag => tag.id))
               const additions = action.tag_ids

@@ -169,7 +169,7 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTag
     <div
       onClick={() => { onClick(); onClose() }}
       style={{
-        padding: '8px 14px', cursor: 'pointer', fontSize: 13,
+        padding: '5px 14px', cursor: 'pointer', fontSize: 13,
         color: danger ? 'var(--danger)' : 'var(--text)',
         borderRadius: 6,
       }}
@@ -205,7 +205,7 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTag
       {onRemoveFromRecurring && menu.txn.recurring_series_id
         ? item('↻ Remove from recurring series', () => onRemoveFromRecurring(menu.txn))
         : null}
-      <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+      <div style={{ height: 1, background: 'var(--border)', margin: '3px 0' }} />
       {item(
         menu.txn.notes ? '📝 Edit note' : '📝 Add note',
         () => onEditNote(menu.txn)
@@ -215,7 +215,7 @@ export function ContextMenu({ menu, onClose, onOpenDetail, onEditNote, onEditTag
       {onMarkReviewed && menu.txn.needs_review ? item('✓ Mark reviewed', () => onMarkReviewed(menu.txn)) : null}
       {onTrash ? (
         <>
-          <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+          <div style={{ height: 1, background: 'var(--border)', margin: '3px 0' }} />
           {item('🗑 Send to trash…', () => onTrash(menu.txn), true)}
         </>
       ) : null}
@@ -534,8 +534,8 @@ function TagStackChip({ tags, onClick }) {
 // `content-visibility: auto` (paint containment) which makes each row its own stacking context —
 // so an absolutely-positioned popover is trapped behind the rows that follow it. Portaling the
 // popover to <body> and positioning it `fixed` against the anchor's live rect escapes that trap
-// (the same approach CategoryPicker uses). Right-aligned to the anchor since the amount strip sits
-// at the right edge; flips above the anchor when there isn't room below.
+// (the same approach CategoryPicker uses). Right-aligned to the anchor (the marker strip); flips
+// above the anchor when there isn't room below.
 function RowPopoverPortal({ anchorRef, children }) {
   const [layout, setLayout] = useState(null)
 
@@ -577,7 +577,7 @@ function RowPopoverPortal({ anchorRef, children }) {
   )
 }
 
-export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenDetail, showExcludedFromTotals = false }) {
+export function TransactionMarkersCell({ txn, onUpdateNote, onUpdateTags, showExcludedFromTotals = false }) {
   const navigate = useNavigate()
   const unifiedDuplicatesViewer = useUnifiedDuplicatesViewer()
   const markerStripRef = useRef(null)
@@ -622,17 +622,17 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
   const useStack = visibleTags.length > TAG_INLINE_LIMIT
   const hasNote = !!txn.notes
   // Surfaces that pair this list with a total which omits excluded-from-totals rows (the account
-  // activity panel) opt in via showExcludedFromTotals; the row then carries a quiet marker and a
-  // dimmed amount so the gap between the visible rows and the total reads as intentional.
+  // activity panel) opt in via showExcludedFromTotals; the row then carries a quiet ⊘ marker (and its
+  // amount is dimmed over in TransactionAmountCell) so the gap between the visible rows and the total
+  // reads as intentional.
   const excludedFromTotals = showExcludedFromTotals && !!txn.excluded_from_totals
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, width: '100%', minWidth: 0 }}>
-      {/* Opaque, full-height background so when the strip overflows leftward onto a long neighbouring
-        column (e.g. a truncated account name) it cleanly *covers* that text instead of letting it show
-        through the gaps in the transparent glyphs — the same way one column cleanly hides another when
-        resized over it. paddingLeft keeps a small margin between the cut text and the first marker. */}
-      <div ref={markerStripRef} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, alignSelf: 'stretch', background: 'var(--surface)', paddingLeft: 6 }}>
+    <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, maxWidth: '100%' }}>
+      {/* The markers live in their own column now, so the strip no longer needs the opaque background
+        that used to let it overflow leftward and paint over the neighbouring column — it simply lays
+        out left-to-right within its own cell. `position: relative` anchors the note/tag popovers. */}
+      <div ref={markerStripRef} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
         {txn.needs_review ? (
           <RowTooltip
             content={<span>Needs review — recently imported and not yet looked over. Clears when you edit its category or mark it reviewed.</span>}
@@ -762,10 +762,17 @@ export function TransactionAmountCell({ txn, onUpdateNote, onUpdateTags, onOpenD
           </RowTooltip>
         ) : null}
       </div>
-      {/* The amount sits in a stable min-width slot so the marker strip to its left anchors at a
-        constant right edge instead of sliding around with the amount's magnitude — which is what made
-        the note/tag/⊘ markers fail to line up row-to-row. Markers grow leftward from that edge; a rare
-        5+ digit amount widens the slot and nudges them, but the common case lines up. */}
+    </div>
+  )
+}
+
+// The amount and its inline edit pencil. The status/tag markers that used to share this cell now live
+// in their own column (TransactionMarkersCell) so the amount reorders on its own; the pencil stays
+// here, riding the amount's right edge. A stable min-width slot keeps amounts right-aligned row to row.
+export function TransactionAmountCell({ txn, onOpenDetail, showExcludedFromTotals = false }) {
+  const excludedFromTotals = showExcludedFromTotals && !!txn.excluded_from_totals
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, width: '100%', minWidth: 0 }}>
       <AmountDisplay
         amount={txn.amount}
         isPending={!!txn.is_pending}

@@ -99,12 +99,13 @@ class BulkSelection(BaseModel):
 
 
 class BulkAction(BaseModel):
-    type: str                                   # set_category | add_tags | remove_tags | set_notes | set_merchant | set_date | mark_reviewed | trash
+    type: str                                   # set_category | add_tags | remove_tags | set_notes | set_merchant | set_date | mark_reviewed | set_review_status | trash
     category_id: Optional[str] = None
     tag_ids: Optional[list[str]] = None
     notes: Optional[str] = None
     merchant: Optional[str] = None
     date: Optional[str] = None
+    needs_review: Optional[bool] = None         # set_review_status: True = needs review, False = reviewed
 
 
 class BulkUpdateRequest(BaseModel):
@@ -1225,6 +1226,19 @@ def _apply_bulk_action(conn, ids: list[str], action: BulkAction):
             conn.execute(
                 f"UPDATE txn SET needs_review = 0 WHERE id IN ({placeholders})",
                 chunk,
+            )
+    elif kind == "set_review_status":
+        # Two-way review toggle (the bulk panel's "Review status" field). Unlike mark_reviewed, which
+        # only clears the flag, this can also set it back on so a batch can be deliberately flagged for
+        # another look. A missing value is a client bug, not a silent no-op.
+        if action.needs_review is None:
+            raise HTTPException(status_code=400, detail="needs_review is required for set_review_status")
+        flag = 1 if action.needs_review else 0
+        for chunk in _chunk(ids):
+            placeholders = ",".join("?" * len(chunk))
+            conn.execute(
+                f"UPDATE txn SET needs_review = ? WHERE id IN ({placeholders})",
+                [flag, *chunk],
             )
     elif kind == "trash":
         for chunk in _chunk(ids):

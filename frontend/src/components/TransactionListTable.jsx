@@ -17,7 +17,7 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { formatDate } from '../lib/utils.js'
-import { CategoryCell, MerchantCell, TransactionAmountCell, getTxnMerchantLabel } from './TransactionRow.jsx'
+import { CategoryCell, MerchantCell, TransactionMarkersCell, TransactionAmountCell, getTxnMerchantLabel } from './TransactionRow.jsx'
 import PillGridTable from './PillGridTable.jsx'
 import WindowedRows from './WindowedRows.jsx'
 import { SelectAllCheckbox } from './ui.jsx'
@@ -33,10 +33,11 @@ const COLUMN_DEFS = {
   // effective/top-level account — identical for every row inside a merged-account report and so
   // surfaced only there (see AccountDetail), where it tells the merged children apart.
   sourceAccount: { key: 'sourceAccount', label: 'Account', defaultWidth: 150, minWidth: 110 },
-  // A touch wider than the bare number needs, so the right-aligned amount leaves a bit of room to its
-  // left for the note/tag/excluded markers (which anchor against the amount's stable min-width slot —
-  // see TransactionAmountCell) instead of crowding into the neighbouring column.
-  amount: { key: 'amount', label: 'Amount', defaultWidth: 124, minWidth: 88, align: 'end' },
+  // The note/tag/status markers (see TransactionMarkersCell). Not sortable — there is no single
+  // meaningful order across a mix of tags, notes, and status flags. Left-aligned like the other
+  // text columns; overflow past its width is clipped by the cell wrapper.
+  tags: { key: 'tags', label: 'Tags', defaultWidth: 96, minWidth: 44, sortable: false },
+  amount: { key: 'amount', label: 'Amount', defaultWidth: 96, minWidth: 72, align: 'end' },
 }
 
 function getAvailableColumns({ showCategory, showAccount, showSourceAccount }) {
@@ -46,6 +47,7 @@ function getAvailableColumns({ showCategory, showAccount, showSourceAccount }) {
     ...(showCategory ? [COLUMN_DEFS.category] : []),
     ...(showAccount ? [COLUMN_DEFS.account] : []),
     ...(showSourceAccount ? [COLUMN_DEFS.sourceAccount] : []),
+    COLUMN_DEFS.tags,
     COLUMN_DEFS.amount,
   ]
 }
@@ -101,13 +103,17 @@ function normalizeInteractiveColumns(columnConfig, availableColumns) {
     }
   }
 
-  for (const def of availableColumns) {
-    if (usedKeys.has(def.key)) continue
-    normalized.push({
+  // Splice any available column the saved config didn't have (e.g. `tags`, added after a config was
+  // stored) in at its canonical position rather than tacking it onto the end, so a newly introduced
+  // column lands next to its natural neighbours instead of stranded to the right of Amount.
+  availableColumns.forEach((def, canonicalIndex) => {
+    if (usedKeys.has(def.key)) return
+    normalized.splice(Math.min(canonicalIndex, normalized.length), 0, {
       key: def.key,
       width: def.defaultWidth,
     })
-  }
+    usedKeys.add(def.key)
+  })
 
   return normalized
 }
@@ -280,13 +286,20 @@ export default function TransactionListTable({
             {txn.source_account_raw_name || ''}
           </span>
         )
+      case 'tags':
+        return (
+          <TransactionMarkersCell
+            txn={txn}
+            showExcludedFromTotals={markExcludedFromTotals}
+            onUpdateNote={(id, notes) => patchRows(id, { notes })}
+            onUpdateTags={(id, tags, blockedTags) => patchRows(id, { tags, blocked_tags: blockedTags })}
+          />
+        )
       case 'amount':
         return (
           <TransactionAmountCell
             txn={txn}
             showExcludedFromTotals={markExcludedFromTotals}
-            onUpdateNote={(id, notes) => patchRows(id, { notes })}
-            onUpdateTags={(id, tags, blockedTags) => patchRows(id, { tags, blocked_tags: blockedTags })}
             onOpenDetail={onTransactionOpenDetail}
           />
         )
@@ -345,6 +358,7 @@ export default function TransactionListTable({
       width: column.width,
       minWidth: def.minWidth,
       align: def.align,
+      sortable: def.sortable !== false,
       draggable: true,
       resizable: true,
       title: `Drag middle to move ${def.label}`,

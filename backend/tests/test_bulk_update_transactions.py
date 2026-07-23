@@ -150,6 +150,19 @@ class BulkUpdateTransactionTests(unittest.TestCase):
         self._bulk(BulkSelection(mode="ids", ids=[a]), [BulkAction(type="set_date", date="2026-03-15")])
         self.assertEqual(self._row(a)["date"], "2026-03-15")
 
+    def test_set_review_status_both_directions(self):
+        a = self._insert_txn()
+        self._bulk(BulkSelection(mode="ids", ids=[a]), [BulkAction(type="set_review_status", needs_review=True)])
+        self.assertEqual(self._row(a)["needs_review"], 1)
+        self._bulk(BulkSelection(mode="ids", ids=[a]), [BulkAction(type="set_review_status", needs_review=False)])
+        self.assertEqual(self._row(a)["needs_review"], 0)
+
+    def test_set_review_status_requires_a_value(self):
+        a = self._insert_txn()
+        with self.assertRaises(HTTPException) as ctx:
+            self._bulk(BulkSelection(mode="ids", ids=[a]), [BulkAction(type="set_review_status")])
+        self.assertEqual(ctx.exception.status_code, 400)
+
     def test_trash_sets_trashed_at_and_count(self):
         a, b = self._insert_txn(), self._insert_txn()
         result = self._bulk(BulkSelection(mode="ids", ids=[a, b]), [BulkAction(type="trash")])
