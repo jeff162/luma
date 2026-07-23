@@ -297,10 +297,10 @@ function SeriesCard({ series, onAction, onOpenReport, onEditRule, active }) {
                 onMouseEnter={e => { e.currentTarget.style.textDecoration = 'underline' }}
                 onMouseLeave={e => { e.currentTarget.style.textDecoration = active ? 'underline' : 'none' }}
               >
-                {series.occurrence_count} charge{series.occurrence_count === 1 ? '' : 's'}
+                {series.occurrence_count} transaction{series.occurrence_count === 1 ? '' : 's'}
               </button>
             ) : (
-              <span>{series.occurrence_count} charges</span>
+              <span>{series.occurrence_count} transactions</span>
             )}
             {detected && series.confidence != null ? (
               <><span style={{ opacity: 0.5 }}>·</span><span>{Math.round(series.confidence * 100)}% match</span></>
@@ -710,7 +710,7 @@ export default function Recurring() {
   }
 
   const openReport = useCallback((s) => {
-    // Clicking the charge count of the already-open series closes the drill-down (toggle); clicking a
+    // Clicking the transaction count of the already-open series closes the drill-down (toggle); clicking a
     // different card switches to it. Members come from the shared transactions endpoint (full rows), so
     // the drill-down renders and edits exactly like every other transaction list.
     if (report && report.series.id === s.id) { setReport(null); return }

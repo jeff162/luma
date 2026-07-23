@@ -57,7 +57,7 @@ export const HELP_SECTIONS = [
   {
     key: 'recurring',
     label: 'Recurring transactions',
-    blurb: 'Charges that repeat on a schedule -- what the scan finds on its own, and how to declare one it cannot see.',
+    blurb: 'Transactions that repeat on a schedule -- what the scan finds on its own, and how to declare one it cannot see.',
   },
   {
     key: 'reports',
@@ -1210,7 +1210,7 @@ export const HELP_TOPICS = [
     section: 'recurring',
     title: 'Recurring transactions',
     surfaces: ['Recurring', 'Rules (recurring series)', 'Transactions (row menu)'],
-    summary: 'A recurring series tracks a charge that repeats on a schedule. Many are found automatically by looking for similar looking transactions on a fixed schedule.Recurring transactions the scan misses can be identified by creating a Rule. Per-transaction overrides exist for the exceptions.',
+    summary: 'A recurring series tracks a transaction that repeats on a schedule. Many are found automatically by looking for similar looking transactions on a fixed schedule.Recurring transactions the scan misses can be identified by creating a Rule. Per-transaction overrides exist for the exceptions.',
     body: () => (
       <>
         <p>
@@ -1228,7 +1228,7 @@ export const HELP_TOPICS = [
         </p>
         <p>
           Amount is a hint, not a gate. A utility bill that changes every month still qualifies, because
-          it arrives on a schedule. Charges are grouped by payee <em>and</em> category, so one biller
+          it arrives on a schedule. Transactions are grouped by payee <em>and</em> category, so one biller
           with several obligations -- a town charging property tax quarterly and water monthly -- becomes
           individual series rather than one muddled one.
         </p>
@@ -1244,7 +1244,7 @@ export const HELP_TOPICS = [
           to create rules that generate a single name for a payee, rules can also indicate that the
           matching transactions for a series. Turn on this flag and every transaction the rule matches
           becomes a member of one series. A rule matches by keyword -- with optional amount and scope -- so
-          it gathers all the spellings at once, and later charges attach themselves as they arrive. To
+          it gathers all the spellings at once, and later transactions attach themselves as they arrive. To
           change which transactions belong, edit the rule. It is unusual but if all of the transactions
           for a series cannot be captured by a single rule, having multiple rules to generate a single
           merchant name will surface the series.
@@ -1260,13 +1260,13 @@ export const HELP_TOPICS = [
         </p>
         <ul>
           <li>
-            <strong>Remove from the series</strong> -- for a charge the scan swept in by mistake. It stays
+            <strong>Remove from the series</strong> -- for a transaction the scan swept in by mistake. It stays
             out across future scans. A removal is reversible: undo it from the prompt, from the removed
             transaction’s own right-click menu (<em>Restore to recurring series</em>), or from
             the <em>removed</em> list inside the series.
           </li>
           <li>
-            <strong>Add a transaction</strong> -- pins a specific charge into the series even if it would
+            <strong>Add a transaction</strong> -- pins a specific transaction into the series even if it would
             not match on its own.
           </li>
         </ul>
@@ -1281,7 +1281,7 @@ export const HELP_TOPICS = [
         <ul>
           <li>
             <strong>Ended</strong> is a real series that has stopped -- a canceled subscription. It is kept
-            as history and left out of what is coming up, but it is not blocked. If a matching charge turns
+            as history and left out of what is coming up, but it is not blocked. If a matching transaction turns
             up again, the same series resumes instead of a duplicate being created.
           </li>
           <li>
