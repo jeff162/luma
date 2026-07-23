@@ -52,6 +52,13 @@ delete the backlog file.
   correct for the orders+items pairing of one span but it also bundles unrelated years onto one card.
   Direction: batch by period/order-set, keeping same-period orders+items together. Amazon-specific — the
   CSV importer already batches per file.
+- [transaction-splits.md](transaction-splits.md) — **backlog, not started (2026-07-23).** Let a single
+  transaction's amount be split across several categories (a Costco run, an Amazon order with mixed items).
+  A **general** feature on any transaction, modeled as a `txn_split` allocation table (one ledger row, N
+  category/amount parts) with reporting routed through an "effective category rows" seam — deliberately not
+  the abandoned per-item-rows model. Amazon orders **pre-fill** the split by reallocating net cash across
+  items in proportion to list price (list prices exclude tax/shipping/discounts, so they can't be used
+  directly). Main cost is the cross-cutting reporting-expansion change.
 - [refactor-audits.md](refactor-audits.md) — **recurring process.** Periodically hunt duplication /
   shotgun-surgery smells (structural tools + a judgment pass), fix the safe ones. Records the first
   run's shipped items (`getFormControlStyle` in Dashboard, `TransactionListToolbar`, `useTags()`), the
