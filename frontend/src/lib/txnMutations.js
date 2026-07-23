@@ -112,6 +112,24 @@ export const txnMutations = {
   },
 }
 
+// Build the in-place row patch for an inline single-row category edit, so every categorize surface
+// (the ledger, the detail panels, the dashboard drills, the import-batch report, …) reconciles the
+// edited row identically instead of each hand-rolling the same object. `cat` is the resolved category
+// object being assigned, or null/undefined for the picker's "Uncategorized" clear. Assigning a category
+// clears `needs_review` to mirror the backend: a manual `override_category` sets `needs_review = 0`
+// (a hand edit counts as reviewing the row), so the amber `R` marker must drop from the row in place
+// rather than lingering until a Refresh. Clearing to uncategorized is NOT a review on the backend
+// (`clearOverride` leaves `needs_review` untouched), so the flag is left as-is in that case.
+export function categoryReconcilePatch(cat) {
+  return {
+    category_id: cat?.id ?? null,
+    category_name: cat?.name ?? null,
+    category_color: null,
+    category_overridden: 1,
+    ...(cat ? { needs_review: 0 } : {}),
+  }
+}
+
 // Reconcile an in-place transaction list after a rule was applied to existing rows. The rule's apply
 // returns the ids it changed (`transaction_ids`); here we re-fetch *only the affected rows that are
 // currently on screen* by id and merge them back in place. Replacing the scoped list query instead would

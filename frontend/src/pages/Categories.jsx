@@ -19,7 +19,7 @@ import { useAppSession } from '../lib/AppSessionContext.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
-import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler } from '../lib/txnMutations.js'
+import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
 import { usePagedTransactions } from '../components/detailShared.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import { TagGlyph } from '../components/TagUi.jsx'
@@ -1735,13 +1735,7 @@ export default function Categories() {
     // list on demand with the Refresh button. Applying a rule still sweeps rows immediately — undoing
     // that is heavier (edit the rule, restore the other affected txns), so it does not wait.
     setPagedMatchingTxns(prev => prev.map(txn =>
-      txn.id === txnId ? {
-        ...txn,
-        category_id: catId,
-        category_name: cat?.name ?? null,
-        category_color: null,
-        category_overridden: 1,
-      } : txn
+      txn.id === txnId ? { ...txn, ...categoryReconcilePatch(cat) } : txn
     ))
   }
 

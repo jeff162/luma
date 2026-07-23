@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { txnMutations } from '../lib/txnMutations.js'
+import { txnMutations, categoryReconcilePatch } from '../lib/txnMutations.js'
 import { formatDate } from '../lib/utils.js'
 import ImportBatchDetail from '../components/ImportBatchDetail.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
@@ -409,13 +409,7 @@ export default function Transactions() {
     setData(prev => ({
       ...prev,
       transactions: prev.transactions.map(t =>
-        t.id === txnId ? {
-          ...t,
-          category_id: cat?.id ?? null,
-          category_name: cat?.name ?? null,
-          category_color: null,
-          category_overridden: 1,
-        } : t
+        t.id === txnId ? { ...t, ...categoryReconcilePatch(cat) } : t
       ),
     }))
   }

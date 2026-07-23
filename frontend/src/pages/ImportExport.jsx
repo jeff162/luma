@@ -307,6 +307,11 @@ function ImportTab({ onAmazonDetected }) {
   const { openBatchDetail, panelsNode } = useBatchDetailPanels({
     categories,
     onAddCategory: category => setCategories(prev => prev.some(existing => existing.id === category.id) ? prev : [...prev, category]),
+    // Reconcile the file card's "N to review" pill when the batch-detail panel reports how many rows
+    // still need review after the user categorized/reviewed some inside it.
+    onReviewCountChange: (batchId, count) => setBatches(prev => prev.map(batch => (
+      batch.id === batchId && batch.needs_review_count !== count ? { ...batch, needs_review_count: count } : batch
+    ))),
   })
   const [duplicateImporting, setDuplicateImporting] = useState(false)
   const [pendingDuplicateImport, setPendingDuplicateImport] = useState(null)
@@ -4742,6 +4747,9 @@ function AmazonImportTab({ initialFiles }) {
   const { openBatchDetail, panelsNode } = useBatchDetailPanels({
     categories,
     onAddCategory: category => setCategories(prev => prev.some(existing => existing.id === category.id) ? prev : [...prev, category]),
+    onReviewCountChange: (batchId, count) => setAmazonBatches(prev => prev.map(batch => (
+      batch.id === batchId && batch.needs_review_count !== count ? { ...batch, needs_review_count: count } : batch
+    ))),
   })
   const markReviewed = async (batchId) => { await api.markBatchReviewed(batchId); await loadBatches() }
 

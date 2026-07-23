@@ -24,7 +24,7 @@ import { getTxnMerchantLabel } from '../components/TransactionRow.jsx'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
-import { txnMutations, makeRowReconciler } from '../lib/txnMutations.js'
+import { txnMutations, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { formatCurrency, formatDate } from '../lib/utils.js'
 import { getTransactionAmountColor } from '../lib/moneyDisplay.js'
@@ -668,15 +668,15 @@ export default function Recurring() {
     setReport(prev => (prev ? { ...prev, rows: typeof updater === 'function' ? updater(prev.rows) : updater } : prev))
   }, [])
 
-  const applyCategoryToRow = useCallback((txnId, catId, catName) => {
+  const applyCategoryToRow = useCallback((txnId, cat) => {
     setReportRows(prev => prev.map(t => (t.id === txnId
-      ? { ...t, category_id: catId ?? null, category_name: catName ?? null, category_color: null, category_overridden: 1 }
+      ? { ...t, ...categoryReconcilePatch(cat) }
       : t)))
   }, [setReportRows])
 
   const saveCategory = useCallback((txnId, catId, catObj) => {
-    const cat = catObj || categories.find(c => c.id === catId)
-    applyCategoryToRow(txnId, catId, cat?.name ?? null)
+    const cat = catObj || categories.find(c => c.id === catId) || null
+    applyCategoryToRow(txnId, cat)
     txnMutations.setCategory(txnId, catId)
   }, [categories, applyCategoryToRow])
 

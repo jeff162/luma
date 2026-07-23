@@ -7,7 +7,7 @@ import {
   BarChart, Bar, ComposedChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, ReferenceLine,
 } from 'recharts'
 import { api } from '../lib/api.js'
-import { txnMutations, reconcileRowsAfterRuleApply } from '../lib/txnMutations.js'
+import { txnMutations, reconcileRowsAfterRuleApply, categoryReconcilePatch } from '../lib/txnMutations.js'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import MonthDetail from '../components/MonthDetail.jsx'
 import TagDetail from '../components/TagDetail.jsx'
@@ -2575,13 +2575,7 @@ export default function Dashboard() {
                               {...selectedCatBulk.tableProps}
                               onCategorySave={(txnId, catId, catObj) => {
                                 const cat = catObj || categories.find(c => c.id === catId)
-                                setTxnData(prev => prev.map(x => x.id === txnId ? {
-                                  ...x,
-                                  category_id: catId,
-                                  category_name: cat?.name ?? null,
-                                  category_color: null,
-                                  category_overridden: 1,
-                                } : x))
+                                setTxnData(prev => prev.map(x => x.id === txnId ? { ...x, ...categoryReconcilePatch(cat) } : x))
                                 txnMutations.setCategory(txnId, catId)
                               }}
                               onRulePrompt={setRulePrompt}
@@ -2725,13 +2719,7 @@ export default function Dashboard() {
                     {...selectedGroupBulk.tableProps}
                     onCategorySave={(txnId, catId, catObj) => {
                       const cat = catObj || categories.find(c => c.id === catId)
-                      setGroupTxnData(prev => prev.map(x => x.id === txnId ? {
-                        ...x,
-                        category_id: catId,
-                        category_name: cat?.name ?? null,
-                        category_color: null,
-                        category_overridden: 1,
-                      } : x))
+                      setGroupTxnData(prev => prev.map(x => x.id === txnId ? { ...x, ...categoryReconcilePatch(cat) } : x))
                       txnMutations.setCategory(txnId, catId)
                     }}
                     onRulePrompt={setRulePrompt}

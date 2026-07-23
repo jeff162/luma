@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler } from '../lib/txnMutations.js'
+import { txnMutations, reconcileRowsAfterRuleApply, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
 import { formatCurrency } from '../lib/utils.js'
 import { AppConfirmDialog, Spinner } from './ui.jsx'
 import RuleActionModal from './RuleActionModal.jsx'
@@ -187,22 +187,10 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
   // Keep the visible month in sync with the just-saved override so the drawer reflects the manual fix immediately.
   function handleCatSaved(txnId, cat) {
     if (txnId === detailTxn.id) {
-      setDetailTxn(prev => ({
-        ...prev,
-        category_id: cat?.id ?? null,
-        category_name: cat?.name ?? null,
-        category_color: null,
-        category_overridden: 1,
-      }))
+      setDetailTxn(prev => ({ ...prev, ...categoryReconcilePatch(cat) }))
     }
     setMonthTxns(prev => prev.map(t =>
-      t.id !== txnId ? t : {
-        ...t,
-        category_id:    cat?.id    ?? null,
-        category_name:  cat?.name  ?? null,
-        category_color: null,
-        category_overridden: 1,
-      }
+      t.id !== txnId ? t : { ...t, ...categoryReconcilePatch(cat) }
     ))
   }
 
@@ -224,12 +212,7 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
     // Notify the host (e.g. the Transactions list) so it can reconcile the row that was
     // categorized from inside this panel — otherwise the change only lives in the panel's
     // local state and the page behind it stays stale.
-    onReconcile?.(txnId, {
-      category_id: resolvedCat?.id ?? null,
-      category_name: resolvedCat?.name ?? null,
-      category_color: null,
-      category_overridden: 1,
-    })
+    onReconcile?.(txnId, categoryReconcilePatch(resolvedCat || null))
   }
 
   const {

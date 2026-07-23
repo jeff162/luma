@@ -30,6 +30,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { api } from './api.js'
 import { useTags } from './useTags.js'
 import { useTransactionSelection } from './useTransactionSelection.js'
+import { categoryReconcilePatch } from './txnMutations.js'
 import BulkEditPanel from '../components/BulkEditPanel.jsx'
 import { AppConfirmDialog, AppNoticeDialog, Button } from '../components/ui.jsx'
 
@@ -100,13 +101,10 @@ export function useBulkTransactionEditing({
           switch (action.type) {
             case 'set_category': {
               const cat = categories.find(c => c.id === action.category_id)
-              return {
-                ...txn,
-                category_id: action.category_id || null,
-                category_name: cat?.name ?? null,
-                category_color: null,
-                category_overridden: 1,
-              }
+              // Bulk set_category always writes category_source='manual' and clears needs_review on the
+              // backend — even the null (bulk uncategorize) case — so force the marker off unconditionally
+              // rather than leaving the helper's assign-only clear to decide.
+              return { ...txn, ...categoryReconcilePatch(cat), needs_review: 0 }
             }
             case 'set_notes':
               return { ...txn, notes: action.notes || null }

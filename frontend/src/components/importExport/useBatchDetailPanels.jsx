@@ -12,7 +12,7 @@ const ImportBatchDetail = lazy(() => import('../ImportBatchDetail.jsx'))
 // the Import tab so every import surface (the CSV importer and each marketplace tab) opens the same
 // ledger. The hook owns the panel stack + its render; the caller keeps any surface-specific wiring
 // (e.g. the Import tab's duplicate-viewer drill-through / URL-param openers) by calling `openBatchDetail`.
-export function useBatchDetailPanels({ categories, onAddCategory }) {
+export function useBatchDetailPanels({ categories, onAddCategory, onReviewCountChange }) {
   const [batchDetailPanels, setBatchDetailPanels] = useState([])
 
   const openBatchDetail = useCallback((batch) => {
@@ -52,6 +52,7 @@ export function useBatchDetailPanels({ categories, onAddCategory }) {
           batch={batch}
           categories={categories}
           onAddCategory={onAddCategory}
+          onReviewCountChange={onReviewCountChange}
           onClose={() => closeBatchDetail(batch.id)}
           forceFloating
           stackIndex={index}

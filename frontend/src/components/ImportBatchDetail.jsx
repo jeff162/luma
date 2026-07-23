@@ -24,7 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
-import { txnMutations, makeRowReconciler } from '../lib/txnMutations.js'
+import { txnMutations, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
 import { formatMoneyMagnitude } from '../lib/moneyDisplay.js'
 import { Button, Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
@@ -55,6 +55,7 @@ export default function ImportBatchDetail({
   categories = [],
   onAddCategory,
   onClose,
+  onReviewCountChange,
   forceFloating = true,
   stackIndex = 0,
   isTopmost = true,
@@ -63,13 +64,30 @@ export default function ImportBatchDetail({
   const dateStart = dateFilter?.dateStart || null
   const dateEnd   = dateFilter?.dateEnd   || null
 
+  // Reviewing rows here (categorizing, bulk/row-menu "Mark reviewed", detail-panel edits) clears their
+  // needs_review flag, which the parent import card surfaces as its "N to review" pill. Those clears
+  // include rows past the loaded page (bulk "select all matching"), so rather than track a delta we
+  // re-query the batch's authoritative remaining count on close and hand it back, letting the card
+  // reconcile in place instead of only refreshing on a page revisit. The count is whole-batch — no
+  // date/search scope — since the pill counts the whole file regardless of any drill-through filter.
+  const reportReviewCount = useCallback(() => {
+    if (!onReviewCountChange) return
+    api.getTransactions({ import_batch_id: batch.id, needs_review: true, limit: 1 })
+      .then(result => onReviewCountChange(batch.id, Number(result?.total || 0)))
+      .catch(() => {})
+  }, [onReviewCountChange, batch.id])
+  const handleClose = useCallback(() => {
+    reportReviewCount()
+    onClose?.()
+  }, [reportReviewCount, onClose])
+
   const [filterInput, setFilterInput] = useState('')
   const [debouncedFilter, setDebouncedFilter] = useState('')
   useEffect(() => {
     const handle = setTimeout(() => setDebouncedFilter(filterInput.trim()), 250)
     return () => clearTimeout(handle)
   }, [filterInput])
-  const { pos, panelRef, onDragStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
+  const { pos, panelRef, onDragStart } = useDetailPanelChrome(handleClose, { forceFloating, stackIndex })
   const [totalCount, setTotalCount] = useState(0)
   const [countLoading, setCountLoading] = useState(true)
   const [payeeDetail, setPayeeDetail] = useState(null)
@@ -164,15 +182,7 @@ export default function ImportBatchDetail({
     await txnMutations.setCategory(txnId, categoryId)
     const resolvedCategory = categoryObj || categories.find(category => category.id === categoryId) || null
     setRows(prev => prev.map(txn => (
-      txn.id === txnId
-        ? {
-          ...txn,
-          category_id: categoryId,
-          category_name: resolvedCategory?.name ?? null,
-          category_color: null,
-          category_overridden: 1,
-        }
-        : txn
+      txn.id === txnId ? { ...txn, ...categoryReconcilePatch(resolvedCategory) } : txn
     )))
   }
 
@@ -199,7 +209,7 @@ export default function ImportBatchDetail({
       pos={pos}
       panelRef={panelRef}
       onDragStart={onDragStart}
-      onClose={onClose}
+      onClose={handleClose}
       header={header}
       isTopmost={isTopmost}
     >

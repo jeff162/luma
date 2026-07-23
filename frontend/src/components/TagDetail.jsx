@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
-import { txnMutations, makeRowReconciler } from '../lib/txnMutations.js'
+import { txnMutations, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
 import { formatCurrency } from '../lib/utils.js'
 import { Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
@@ -63,13 +63,7 @@ export default function TagDetail({
   function saveCategory(txnId, catId, catObj) {
     const cat = catObj || categories.find(c => c.id === catId)
     setTransactions(prev => prev.map(t => (
-      t.id === txnId ? {
-        ...t,
-        category_id: catId,
-        category_name: cat?.name ?? null,
-        category_color: null,
-        category_overridden: 1,
-      } : t
+      t.id === txnId ? { ...t, ...categoryReconcilePatch(cat) } : t
     )))
     txnMutations.setCategory(txnId, catId)
   }
