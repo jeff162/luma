@@ -331,6 +331,10 @@ export function MerchantCell({ txn, onOpenDetail, onRename, showReport = true })
         <RowTooltip
           content={<MerchantOriginHoverCard txn={txn} />}
           maxWidth={380}
+          // Interactive so the card's links (e.g. Amazon "View on Amazon") are reachable and clickable:
+          // pointer-events stay on, and a short close grace keeps the card open while the pointer crosses
+          // into it. See Tooltip's `interactive` in ui.jsx.
+          interactive
           triggerStyle={{ minWidth: 0, flex: '0 1 auto', maxWidth: '100%' }}
         >
           {labelSpan}

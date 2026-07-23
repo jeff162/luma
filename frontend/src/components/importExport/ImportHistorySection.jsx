@@ -342,10 +342,10 @@ export function ImportHistorySection({
                             <button
                               type="button"
                               onClick={() => onReviewMoneyMovement(row.profile.id)}
-                              title="Review which PayPal transaction types are money movement (deposits, withdrawals, holds…) and keep them out of spending totals"
+                              title="Review which PayPal transaction types are transfers (deposits, withdrawals, holds…) so they're excluded from spending and income totals"
                               style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}
                             >
-                              Money movement
+                              Review transfer classifications
                             </button>
                           ) : null}
                           {isManual && row.manualDraftRecord ? (

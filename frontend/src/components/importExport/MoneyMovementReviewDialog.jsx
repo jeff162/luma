@@ -40,12 +40,12 @@ export function MoneyMovementReviewDialog({ proposals = [], onApply, onClose, on
       <FloatingPanel style={{ width: 'min(600px, 100%)' }}>
         <FloatingPanelHeader style={{ padding: '16px 20px' }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 600 }}>PayPal money movement</div>
+            <div style={{ fontSize: 16, fontWeight: 600 }}>PayPal transfer classifications</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
-              Route the transaction types that are money movement — deposits, withdrawals, currency
-              conversions, holds — into the excluded <strong>Money movement</strong> category so they are
-              kept out of spending totals. Rules are scoped to this PayPal account and also apply to
-              matching transactions already in your ledger; unchecking a type removes its rule.
+              Classify which PayPal transaction types are transfers — deposits, withdrawals, currency
+              conversions, holds — so they go into the excluded <strong>Money movement</strong> category and
+              stay out of spending and income totals. These rules cover all your PayPal accounts and also
+              apply to matching transactions already in your ledger; unchecking a type removes its rule.
             </div>
           </div>
         </FloatingPanelHeader>
