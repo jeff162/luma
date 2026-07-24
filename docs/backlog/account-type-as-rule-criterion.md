@@ -93,4 +93,9 @@ reconciliation is inherited rather than re-implemented.
 
 - PayPal as `type` vs `subtype` vs a new `kind` dimension (and how it coexists with marketplace).
 - Whether to denormalize account type onto the transaction for cheap matching/search, vs join at read.
-- Free-text search: structured filter only, or commit to the `accttype:`/`acctname:` tag grammar.
+- Free-text search: structured filter only, or commit to the `accttype:`/`acctname:` tag grammar. If a
+  multi-term merchant search grammar (e.g. `:foo: :bar:` for "contains foo AND bar", reserving delimiters)
+  is ever built, it should compile into the **same** representation the rule matcher now uses —
+  `category_rule.match_expr` (`{op:"and", clauses:[{type:"contains", text}]}`) — and reuse the shared
+  `merchant_matcher_matches` predicate, rather than inventing a parallel matcher. The rule side (shipped
+  2026-07-24, AND-only / contains-only, ≤3 clauses) deliberately kept that shape forward-compatible.

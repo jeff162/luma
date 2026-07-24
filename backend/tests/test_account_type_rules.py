@@ -117,6 +117,28 @@ class AccountTypeCriterionTests(unittest.TestCase):
             c = create_rule_core(conn, RuleCreate(keyword="x", category_id=self.cat_type, account_type="paypal"))
             self.assertEqual(c["status"], "duplicate")
 
+    def test_rule_backed_recurring_membership_honors_account_type(self):
+        # A rule-backed recurring series owns exactly its rule's matches (shared rule_matches_row). The
+        # rule loader for recurring membership (_load_series_rules) must carry account_type, or a
+        # type-scoped recurring rule would wrongly claim rows of every account type.
+        from backend.services.recurring_detection import _load_series_rules, _candidate_members
+        with self._use_db(), get_db() as conn:
+            created = create_rule_core(conn, RuleCreate(keyword="fee", category_id=self.cat_type, account_type="paypal"))
+            rid = created["id"]
+        pool = [
+            {"display_name": "PayPal Fee", "merchant_name": "PayPal Fee", "raw_name": "PayPal Fee",
+             "amount": 5.0, "owner_id": SHARED_OWNER_ID, "effective_account_id": "pp",
+             "effective_account_type": "paypal", "id": "row-pp"},
+            {"display_name": "PayPal Fee", "merchant_name": "PayPal Fee", "raw_name": "PayPal Fee",
+             "amount": 5.0, "owner_id": SHARED_OWNER_ID, "effective_account_id": "chk",
+             "effective_account_type": "depository", "id": "row-chk"},
+        ]
+        series = {"source": "rule", "rule_id": rid}
+        with self._use_db(), get_db() as conn:
+            series_rules = _load_series_rules(conn, [series])
+        members = _candidate_members(pool, series, series_rules)
+        self.assertEqual({r["id"] for r in members}, {"row-pp"}, "only the paypal-type row is owned by the type-scoped rule")
+
 
 class AccountTypeMigrationTests(unittest.TestCase):
     """Migration 13 on a hand-built pre-v13 database: adds the column, backfills PayPal account types from

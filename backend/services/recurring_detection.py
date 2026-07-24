@@ -554,7 +554,7 @@ def _load_series_rules(conn: sqlite3.Connection, series_list) -> dict:
         return {}
     placeholders = ",".join("?" * len(rule_ids))
     rows = conn.execute(
-        f"""SELECT id, keyword, owner_id, account_id, amount_min, amount_max, debit_credit, match_source_text
+        f"""SELECT id, keyword, match_expr, owner_id, account_id, account_type, amount_min, amount_max, debit_credit, match_source_text
             FROM category_rule WHERE id IN ({placeholders})""",
         list(rule_ids),
     ).fetchall()

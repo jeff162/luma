@@ -309,6 +309,8 @@ Use compact pill-style controls for values like owner, account type, and other 
 
 - Opening a selector should not change row height or shift surrounding rows.
 
+- A condition that can hold **repeated sub-values** expands in place rather than opening a separate editor: the rule editor's *Merchant Name Contains* chip (`RuleForm`) starts as one text box and grows an "and contains" row per added clause (capped, with a per-extra-clause remove and a "＋ and contains…" affordance), reading as one AND'd condition. The chip summary and the Rule Summary line render the clauses joined with "and". Keep the first clause un-removable (clearing the whole chip is the chip's own ×) so the primary value always has a stable home, mirroring how the fluid primary column works elsewhere.
+
 For category assignment, prefer the shared category picker so transaction pages, import mapping, and any future category assignment flows behave the same way.
 
 - Category pickers and the Categories page should reflect the same persisted group order so users do not learn one structure in the editor and see another while categorizing transactions.

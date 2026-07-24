@@ -82,6 +82,80 @@ def _amount_rule_matches(amount: float, amount_min, amount_max, debit_credit: st
     return _amount_matches(abs(amount), amount_min, amount_max)
 
 
+# Multi-clause merchant matching (see category_rule.match_expr). v1 is AND-only / contains-only: a rule
+# with a match_expr matches only when *every* clause's text is a substring of the row's name text (or, for
+# match_source_text rules, its source text). MAX_MATCH_CLAUSES caps how many the UI/authoring may set.
+MAX_MATCH_CLAUSES = 3
+
+
+def normalize_match_clauses(clauses) -> list[str]:
+    """Canonicalize raw clause strings for an AND matcher: trim, lowercase, drop blanks, de-duplicate, and
+    sort. Order-independent (AND), so the sorted list is the canonical form used for both storage and
+    matcher identity. Capped at MAX_MATCH_CLAUSES."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for clause in (clauses or []):
+        text = str(clause).strip().lower()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    out.sort()
+    return out[:MAX_MATCH_CLAUSES]
+
+
+def build_match_expr(clauses) -> tuple[Optional[str], str]:
+    """From raw clause strings, produce ``(match_expr_json_or_None, derived_keyword)``:
+
+    - 0 clauses  -> ``(None, "")`` — caller falls back to its own keyword field
+    - 1 clause   -> ``(None, "<clause>")`` — an ordinary single-substring rule (no expr stored)
+    - 2..N       -> ``('{"op":"and",...}', "<clauses joined by space>")``
+
+    The derived keyword mirrors the canonical clause texts so it stays the LIKE-search target and its
+    LENGTH keeps driving specificity ordering (≈ summed clause length)."""
+    norm = normalize_match_clauses(clauses)
+    if len(norm) <= 1:
+        return None, (norm[0] if norm else "")
+    expr = {"op": "and", "clauses": [{"type": "contains", "text": text} for text in norm]}
+    return json.dumps(expr, separators=(",", ":")), " ".join(norm)
+
+
+def match_expr_clause_texts(match_expr) -> Optional[list[str]]:
+    """The clause texts (lowercased) from a stored match_expr JSON string, or None for a legacy keyword
+    rule (absent/blank/unparseable/empty-clauses expr — all fall back to the single-keyword path)."""
+    if not match_expr:
+        return None
+    try:
+        data = json.loads(match_expr)
+    except (ValueError, TypeError):
+        return None
+    raw = data.get("clauses") if isinstance(data, dict) else None
+    if not isinstance(raw, list):
+        return None
+    texts = [
+        str(clause.get("text", "")).strip().lower()
+        for clause in raw
+        if isinstance(clause, dict) and str(clause.get("text", "")).strip()
+    ]
+    return texts or None
+
+
+def merchant_matcher_matches(rule, text: str, source_text_lc: str, match_source_text) -> bool:
+    """Does the rule's merchant matcher fire on ``text`` (already lowercased, the joined name fields)?
+    A multi-clause rule (``match_expr`` set) requires *every* clause; a legacy rule uses its single
+    ``keyword``. A clause/keyword is satisfied when its text is a substring of ``text`` — or, when the rule
+    matches source text, of ``source_text_lc``. This is the one predicate every match site shares."""
+    clause_texts = match_expr_clause_texts(_dict_get(rule, "match_expr"))
+    if clause_texts is None:
+        clause_texts = [str(rule["keyword"]).lower()]
+    for needle in clause_texts:
+        in_name = bool(text) and needle in text
+        in_source = bool(match_source_text) and bool(source_text_lc) and needle in source_text_lc
+        if not (in_name or in_source):
+            return False
+    return True
+
+
 def rule_matches_row(rule, row) -> bool:
     """Does `rule` match transaction `row`? The one shared predicate behind rule apply
     (rules._apply_rule_to_existing) and rule-backed recurring-series membership
@@ -103,15 +177,13 @@ def rule_matches_row(rule, row) -> bool:
     if rule_account_type is not None and rule_account_type != _dict_get(row, "effective_account_type"):
         return False
     text = " ".join(filter(None, [row["display_name"], row["merchant_name"], row["raw_name"]])).lower()
-    keyword = rule["keyword"].lower()
-    matched = bool(text) and keyword in text
-    if not matched and rule["match_source_text"]:
+    source_text_lc = ""
+    if rule["match_source_text"]:
         try:
-            source_text = source_match_text_from_json(row["import_evidence_json"])
+            source_text_lc = source_match_text_from_json(row["import_evidence_json"])
         except (KeyError, IndexError):
-            source_text = ""
-        matched = bool(source_text) and keyword in source_text
-    if not matched:
+            source_text_lc = ""
+    if not merchant_matcher_matches(rule, text, source_text_lc, rule["match_source_text"]):
         return False
     return _amount_rule_matches(row["amount"], rule["amount_min"], rule["amount_max"], rule["debit_credit"])
 
@@ -171,7 +243,7 @@ def load_categorization_rules(conn: sqlite3.Connection) -> list:
     recategorize-preview calls vs ≈1s when the rules are loaded once).
     """
     return conn.execute(
-        """SELECT cr.id, cr.category_id, cr.keyword, cr.amount_min, cr.amount_max,
+        """SELECT cr.id, cr.category_id, cr.keyword, cr.match_expr, cr.amount_min, cr.amount_max,
                   cr.debit_credit, cr.owner_id, cr.account_id, cr.account_type, cr.clean_name, cr.match_source_text
            FROM   category_rule cr
            LEFT   JOIN category c ON c.id = cr.category_id
@@ -246,8 +318,7 @@ def categorize_transaction(
             continue
         if rule["account_type"] is not None and rule["account_type"] != resolved_effective_account_type:
             continue
-        keyword = rule["keyword"].lower()
-        if keyword not in text and not (rule["match_source_text"] and source_text_lc and keyword in source_text_lc):
+        if not merchant_matcher_matches(rule, text, source_text_lc, rule["match_source_text"]):
             continue
         if not _amount_rule_matches(amount, rule["amount_min"], rule["amount_max"], rule["debit_credit"]):
             continue

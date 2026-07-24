@@ -201,11 +201,21 @@ Reporting should not assume every transaction inside an expense or income branch
 
 ## Rules
 
-Rules are keyword-based categorization rules.
+Rules are keyword-based categorization rules (a single keyword, or a small AND of `contains` clauses).
 
 They can include:
 
-- merchant keyword
+- merchant matcher — either a single **keyword** (case-insensitive substring) or a **multi-clause**
+  matcher of up to 3 `contains` clauses AND'd together (`category_rule.match_expr`, JSON
+  `{"op":"and","clauses":[{"type":"contains","text":"…"}, …]}`; v1 is AND-only / contains-only). A
+  multi-clause rule matches a row only when *every* clause's text appears in the row's name text (or, for
+  `match_source_text` rules, its source text) — **order-independent**, so `{amazon, flash}` matches
+  "FLASH sale at Amazon". Adding a clause only ever *narrows* what matches (AND is self-limiting). When a
+  `match_expr` is present the stored `keyword` is **derived** from the clause texts (sorted, lowercased,
+  space-joined) so it stays the `keyword LIKE` search target and its `LENGTH` keeps driving specificity
+  ordering (see below). `match_expr` is NULL for an ordinary single-keyword rule, evaluated exactly as
+  before. The `/rules` API accepts a `clauses` list and the backend owns canonicalization + keyword
+  derivation (`build_match_expr`); every match site shares one predicate (`merchant_matcher_matches`).
 
 - amount conditions
 
@@ -239,13 +249,20 @@ Important behavior:
 
 - rule priority is automatic, not manually curated
 
-- more specific rules beat more general ones
+- more specific rules beat more general ones. The text-specificity signal is `LENGTH(keyword)` — and
+  because a multi-clause rule's derived keyword is its clause texts joined, that is effectively the
+  **summed clause length**. This has the right property: a rule whose clauses are a *superset* of
+  another's (`{amazon, prime}` vs `{amazon}`) always has a strictly greater total length, so the
+  narrower rule wins wherever both match. It reduces to exactly the single-keyword behavior for a
+  one-clause rule. Precedence between two *unrelated* matchers is a heuristic (it always was, even for
+  single keywords); summed length is the metric, and scope + the one-rule-per-matcher conflict surfacing
+  remain the explicit levers. This stays a **static, computed-once rule ordering** — no per-row scoring.
 
 - amount comparisons use absolute values, with debit/credit scope applied separately through transaction sign when a rule is limited to one side
 
 - owner-scoped rules beat global rules when otherwise similar
 
-- at most one rule per *matcher* (keyword + owner + account + account **type** + amount range + debit/credit + the `match\_source\_text` flag — two rules differing only by whether they also match source text, or only by account type, target different rows, so they are distinct matchers). Saving a rule whose matcher already exists does not fork a second copy — `create_rule` classifies the collision and reconciles instead: a **duplicate** (adds nothing) is reported, not written; a **mergeable** save (adds a category/rename the existing rule lacks, or new tags) folds additively into the existing rule; a **conflict** (a category/rename that disagrees with the existing rule) is surfaced rather than silently resolved. A genuinely different matcher is not a collision and is created normally. A single manual save prompts the user on collision; the bulk Generate Rules flow auto-merges mergeable saves, skips duplicates, and surfaces conflicts in a summary. In the rule-suggestions UI that conflict summary names the colliding rule's category and resolves each in place without leaving the review: **Replace** overwrites the existing rule's action with the suggestion's — preserving the rule's id and tags — and accepts the suggestion against it, while **Keep** leaves the existing rule untouched and defers the suggestion; the conflict response carries the existing rule's category/rename so the summary can show both sides in one round trip. Because a merge or replace changes a rule that may already govern transactions (unlike accepting a brand-new rule), that summary then offers to re-categorize the rows the changed rule already matches, using a **preserve-manual** apply: it reclaims rows the rule should own — including import-locked ones — but leaves a deliberate manual per-transaction edit as the final say. Tags still union across *different* matching rules; only a same-matcher tag addition becomes a merge into the one rule.
+- at most one rule per *matcher* (keyword + the `match\_expr` clause set + owner + account + account **type** + amount range + debit/credit + the `match\_source\_text` flag — two rules differing only by whether they also match source text, or only by account type, target different rows, so they are distinct matchers). The `match\_expr` is canonicalized (clauses sorted) so reordering clauses never forks a phantom duplicate, and a multi-clause rule is a *distinct* matcher from a single-keyword rule that happens to share the derived keyword (`contains "amazon flash"` ≠ `{contains "amazon", contains "flash"}`). Saving a rule whose matcher already exists does not fork a second copy — `create_rule` classifies the collision and reconciles instead: a **duplicate** (adds nothing) is reported, not written; a **mergeable** save (adds a category/rename the existing rule lacks, or new tags) folds additively into the existing rule; a **conflict** (a category/rename that disagrees with the existing rule) is surfaced rather than silently resolved. A genuinely different matcher is not a collision and is created normally. A single manual save prompts the user on collision; the bulk Generate Rules flow auto-merges mergeable saves, skips duplicates, and surfaces conflicts in a summary. In the rule-suggestions UI that conflict summary names the colliding rule's category and resolves each in place without leaving the review: **Replace** overwrites the existing rule's action with the suggestion's — preserving the rule's id and tags — and accepts the suggestion against it, while **Keep** leaves the existing rule untouched and defers the suggestion; the conflict response carries the existing rule's category/rename so the summary can show both sides in one round trip. Because a merge or replace changes a rule that may already govern transactions (unlike accepting a brand-new rule), that summary then offers to re-categorize the rows the changed rule already matches, using a **preserve-manual** apply: it reclaims rows the rule should own — including import-locked ones — but leaves a deliberate manual per-transaction edit as the final say. Tags still union across *different* matching rules; only a same-matcher tag addition becomes a merge into the one rule.
 
 - a rule must target an **active** category. Deleting a category deletes every rule pointing into the deactivated branch, and the categorizer skips any rule whose target category is inactive — so a stale rule can never re-categorize new rows into a deleted category. Tag-only rules (no category) are unaffected.
 

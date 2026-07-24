@@ -12,7 +12,15 @@ from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 from typing import Literal, Optional
 from backend.db.database import get_db
-from backend.services.categorizer import _amount_rule_matches, rule_matches_row, recategorize_all, source_match_text_from_json
+from backend.services.categorizer import (
+    _amount_rule_matches,
+    rule_matches_row,
+    recategorize_all,
+    source_match_text_from_json,
+    build_match_expr,
+    merchant_matcher_matches,
+    match_expr_clause_texts,
+)
 from backend.services.recurring_detection import CADENCES, link_series_members, _normalize_payee
 from backend.services.transaction_tags import sync_rule_tags_for_transaction, would_sync_rule_tags_change, get_visible_transaction_tag_map
 
@@ -139,7 +147,7 @@ def _find_matching_rule(conn, txn):
     for rule in rules:
         full_rule = conn.execute(
             """
-            SELECT id, keyword, amount_min, amount_max, debit_credit, owner_id, account_id, account_type, category_id, clean_name, match_source_text
+            SELECT id, keyword, match_expr, amount_min, amount_max, debit_credit, owner_id, account_id, account_type, category_id, clean_name, match_source_text
             FROM category_rule
             WHERE id = ?
             """,
@@ -151,8 +159,7 @@ def _find_matching_rule(conn, txn):
             continue
         if full_rule["account_type"] is not None and full_rule["account_type"] != txn["effective_account_type"]:
             continue
-        keyword = full_rule["keyword"].lower()
-        if keyword not in text and not (full_rule["match_source_text"] and source_text and keyword in source_text):
+        if not merchant_matcher_matches(full_rule, text, source_text, full_rule["match_source_text"]):
             continue
         if not _amount_rule_matches(txn["amount"], full_rule["amount_min"], full_rule["amount_max"], full_rule["debit_credit"]):
             continue
@@ -199,7 +206,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     # when accepting an import-rule suggestion so the rule's outputs land on exactly the rows that
     # generated it, leaving conflicting rows for other suggestions alone.
     rule = conn.execute(
-        """SELECT id, keyword, category_id, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, account_type, match_source_text
+        """SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, account_type, match_source_text
            FROM category_rule
            WHERE id = ?""",
         (rule_id,),
@@ -305,6 +312,9 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
 
 class RulePreview(BaseModel):
     keyword:      str
+    # Optional multi-clause (AND / contains) merchant matcher; when it resolves to >= 2 clauses it
+    # supersedes `keyword` (which the backend then derives from the clause texts). See build_match_expr.
+    clauses:      Optional[list[str]] = None
     category_id:  Optional[str] = None
     amount_min:   Optional[float] = None
     amount_max:   Optional[float] = None
@@ -320,8 +330,10 @@ class RulePreview(BaseModel):
 @router.post("/preview")
 def preview_rule(body: RulePreview):
     """Return transactions that would actually change if this rule were applied."""
+    keyword, match_expr = _resolve_matcher(body.clauses, body.keyword)
     rule = {
-        "keyword":     (body.keyword or "").lower().strip(),
+        "keyword":     keyword,
+        "match_expr":  match_expr,
         "category_id": body.category_id,
         "amount_min":  body.amount_min,
         "amount_max":  body.amount_max,
@@ -399,6 +411,9 @@ def preview_rule(body: RulePreview):
 
 class RuleCreate(BaseModel):
     keyword:     str
+    # Optional multi-clause (AND / contains) merchant matcher; a request that resolves to >= 2 clauses
+    # supersedes `keyword` and the stored keyword is derived from the clause texts (see build_match_expr).
+    clauses:     Optional[list[str]] = None
     category_id: Optional[str] = None
     amount_min:  Optional[float] = None
     amount_max:  Optional[float] = None
@@ -417,6 +432,9 @@ class RuleCreate(BaseModel):
 
 class RuleUpdate(BaseModel):
     keyword:     Optional[str]   = None
+    # When provided, replaces the merchant matcher: >= 2 clauses store a match_expr (keyword derived from
+    # them); 0/1 clause clears any existing match_expr back to a plain keyword. None leaves it unchanged.
+    clauses:     Optional[list[str]] = None
     category_id: Optional[str]   = None
     amount_min:  Optional[float] = None
     amount_max:  Optional[float] = None
@@ -445,7 +463,7 @@ def list_rules(search: Optional[str] = Query(None)):
         rows = conn.execute(
             f"""
             SELECT
-                cr.id, cr.keyword,
+                cr.id, cr.keyword, cr.match_expr,
                 cr.amount_min, cr.amount_max, cr.debit_credit, cr.clean_name,
                 cr.category_id,
                 cr.owner_id,
@@ -487,6 +505,11 @@ def list_rules(search: Optional[str] = Query(None)):
         for rule in rules:
             rule["tags"] = tag_map.get(rule["id"], [])
             rule["tag_ids"] = [tag["id"] for tag in rule["tags"]]
+            # A uniform clause list for the client: the multi-clause texts when match_expr is set, else the
+            # single keyword as a one-element list (so the editor and list render one way for both shapes).
+            rule["clauses"] = match_expr_clause_texts(rule.get("match_expr")) or (
+                [rule["keyword"]] if rule["keyword"] else []
+            )
     return rules
 
 
@@ -523,14 +546,27 @@ def _normalize_clean_name(value: Optional[str]) -> str:
     return " ".join((value or "").strip().split()).lower()
 
 
-def _existing_rule_for_matcher(conn, keyword: str, body: "RuleCreate"):
-    # The matcher is keyword + the full scope (owner, account, account *type*, amount range, direction) +
-    # whether the rule also matches source text — two rules that differ only by `match_source_text` (or by
-    # account_type) target different rows, so they are distinct matchers. `IS` is SQLite's null-safe
-    # comparison for the nullable scope.
+def _resolve_matcher(clauses, keyword_field) -> tuple[str, Optional[str]]:
+    """Resolve a request's `(keyword_to_store, match_expr_json_or_None)` from its optional `clauses` list and
+    its plain `keyword` field. >= 2 clauses derive the keyword from the canonical clause texts and store a
+    match_expr; 0/1 clause (or no `clauses` at all) is a plain single-substring rule with no expr."""
+    if clauses is not None:
+        match_expr, derived = build_match_expr(clauses)
+        if match_expr is not None:
+            return derived, match_expr
+        return (derived or (keyword_field or "").lower().strip()), None
+    return (keyword_field or "").lower().strip(), None
+
+
+def _existing_rule_for_matcher(conn, keyword: str, match_expr: Optional[str], body: "RuleCreate"):
+    # The matcher is keyword + match_expr + the full scope (owner, account, account *type*, amount range,
+    # direction) + whether the rule also matches source text. match_expr distinguishes a multi-clause rule
+    # from a single-keyword one that happens to share the derived keyword; it is a canonical JSON string
+    # (clauses sorted) so clause order never forks a phantom duplicate. `IS` is SQLite's null-safe compare.
     return conn.execute(
         """SELECT id, category_id, clean_name FROM category_rule
            WHERE keyword = ?
+             AND match_expr   IS ?
              AND owner_id     IS ?
              AND account_id   IS ?
              AND account_type IS ?
@@ -538,8 +574,8 @@ def _existing_rule_for_matcher(conn, keyword: str, body: "RuleCreate"):
              AND amount_max   IS ?
              AND debit_credit IS ?
              AND match_source_text IS ?""",
-        (keyword, body.owner_id, body.account_id, body.account_type, body.amount_min, body.amount_max,
-         body.debit_credit, int(bool(body.match_source_text))),
+        (keyword, match_expr, body.owner_id, body.account_id, body.account_type, body.amount_min,
+         body.amount_max, body.debit_credit, int(bool(body.match_source_text))),
     ).fetchone()
 
 
@@ -599,8 +635,10 @@ def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject") -> d
     """
     if not body.category_id and not (body.clean_name or "").strip() and not body.tag_ids and not body.is_recurring:
         raise HTTPException(status_code=400, detail="Rules need at least one action: category, rename, tag, or recurring")
-    keyword = body.keyword.lower().strip()
-    existing = _existing_rule_for_matcher(conn, keyword, body)
+    keyword, match_expr = _resolve_matcher(body.clauses, body.keyword)
+    if not keyword:
+        raise HTTPException(status_code=400, detail="Rules need a merchant keyword or at least one match clause")
+    existing = _existing_rule_for_matcher(conn, keyword, match_expr, body)
     if existing:
         existing_tag_ids = {
             row["tag_id"] for row in
@@ -631,9 +669,9 @@ def create_rule_core(conn, body: "RuleCreate", on_existing: str = "reject") -> d
     rid = str(uuid.uuid4())
     conn.execute(
         """INSERT INTO category_rule
-           (id, category_id, keyword, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, account_type, match_source_text, is_recurring)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (rid, body.category_id, keyword,
+           (id, category_id, keyword, match_expr, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, account_type, match_source_text, is_recurring)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (rid, body.category_id, keyword, match_expr,
          body.amount_min, body.amount_max, body.debit_credit, body.clean_name, body.owner_id, body.account_id,
          body.account_type, int(bool(body.match_source_text)), int(bool(body.is_recurring))),
     )
@@ -655,11 +693,24 @@ def create_rule(body: RuleCreate, on_existing: Literal["reject", "merge"] = "rej
         return create_rule_core(conn, body, on_existing)
 
 
+def _resulting_matcher(current: dict, body: RuleUpdate) -> tuple[str, Optional[str]]:
+    """The `(keyword, match_expr)` the rule will have after the patch: a provided `clauses` list replaces
+    the merchant matcher; an explicit `keyword` with no `clauses` becomes a plain single-substring matcher
+    (clearing any existing expr); otherwise both are left as they are."""
+    if body.clauses is not None:
+        return _resolve_matcher(body.clauses, body.keyword)
+    if body.keyword is not None:
+        return body.keyword.lower().strip(), None
+    return current["keyword"], current["match_expr"]
+
+
 def _resulting_rule_state(current: dict, body: RuleUpdate) -> dict:
     """The rule's field values after applying the patch — used to detect an edit-induced collision
     before writing. Mirrors update_rule's precedence below, where the clear_* flags win."""
+    resulting_keyword, resulting_match_expr = _resulting_matcher(current, body)
     return {
-        "keyword":      body.keyword.lower().strip() if body.keyword is not None else current["keyword"],
+        "keyword":      resulting_keyword,
+        "match_expr":   resulting_match_expr,
         "owner_id":     None if body.clear_owner      else (body.owner_id   if body.owner_id   is not None else current["owner_id"]),
         "account_id":   None if body.clear_account    else (body.account_id if body.account_id is not None else current["account_id"]),
         "account_type": None if body.clear_account_type else (body.account_type if body.account_type is not None else current["account_type"]),
@@ -692,7 +743,7 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
     """
     with get_db() as conn:
         current = conn.execute(
-            """SELECT id, keyword, category_id, clean_name, owner_id, account_id, account_type,
+            """SELECT id, keyword, match_expr, category_id, clean_name, owner_id, account_id, account_type,
                       amount_min, amount_max, debit_credit, match_source_text, is_recurring
                FROM category_rule WHERE id = ?""",
             (rule_id,),
@@ -714,6 +765,7 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
             """SELECT id, category_id, clean_name FROM category_rule
                WHERE id != ?
                  AND keyword = ?
+                 AND match_expr   IS ?
                  AND owner_id     IS ?
                  AND account_id   IS ?
                  AND account_type IS ?
@@ -721,7 +773,7 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
                  AND amount_max   IS ?
                  AND debit_credit IS ?
                  AND match_source_text IS ?""",
-            (rule_id, resulting["keyword"], resulting["owner_id"], resulting["account_id"],
+            (rule_id, resulting["keyword"], resulting["match_expr"], resulting["owner_id"], resulting["account_id"],
              resulting["account_type"], resulting["amount_min"], resulting["amount_max"],
              resulting["debit_credit"], resulting["match_source_text"]),
         ).fetchone()
@@ -755,7 +807,12 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
 
         # No collision — apply the patch.
         fields, params = [], []
-        if body.keyword     is not None: fields.append("keyword = ?");     params.append(resulting["keyword"])
+        # `clauses` or `keyword` redefines the merchant matcher; write keyword + match_expr together so the
+        # derived keyword and the stored expr can never drift (a clauses→single or single→clauses edit flips
+        # match_expr on or off). `resulting` already resolved both under _resulting_matcher's precedence.
+        if body.clauses is not None or body.keyword is not None:
+            fields.append("keyword = ?");    params.append(resulting["keyword"])
+            fields.append("match_expr = ?"); params.append(resulting["match_expr"])
         if body.category_id is not None: fields.append("category_id = ?"); params.append(body.category_id)
         if body.amount_min  is not None: fields.append("amount_min = ?");  params.append(body.amount_min)
         if body.amount_max  is not None: fields.append("amount_max = ?");  params.append(body.amount_max)
@@ -807,7 +864,7 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
         if reconcile:
             affected_ids = set(affected)
             post_rule = conn.execute(
-                """SELECT id, keyword, category_id, amount_min, amount_max, debit_credit, clean_name,
+                """SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name,
                           owner_id, account_id, account_type, match_source_text
                    FROM category_rule WHERE id = ?""",
                 (rule_id,),
@@ -860,7 +917,7 @@ def delete_rule(rule_id: str, reconcile: bool = False):
         affected: list[str] = []
         if reconcile:
             rule = conn.execute(
-                """SELECT id, keyword, category_id, amount_min, amount_max, debit_credit, clean_name,
+                """SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name,
                           owner_id, account_id, account_type, match_source_text
                    FROM category_rule WHERE id = ?""",
                 (rule_id,),

@@ -102,8 +102,9 @@ def get_db(db_path: str | None = None):
 # (the recurring_series table itself is created by init_db's CREATE TABLE IF NOT EXISTS script), v5 adds
 # rule-backed recurring series (`category_rule.is_recurring` + `recurring_series.rule_id`; the
 # `recurring_membership_override` table is created by the same CREATE TABLE IF NOT EXISTS script).
+# v14 adds `category_rule.match_expr` (multi-clause AND/contains merchant matcher).
 
-CURRENT_VERSION = 13
+CURRENT_VERSION = 14
 
 MIGRATIONS = {}
 
@@ -346,6 +347,19 @@ def _add_rule_account_type(conn):
         )
 
 
+@migration(14)
+def _add_rule_match_expr(conn):
+    # Multi-clause merchant matching: an optional JSON expression that supersedes the single-substring
+    # `keyword` when present. Shape `{"op":"and","clauses":[{"type":"contains","text":"…"}, …]}` — v1 fixes
+    # op='and' and type='contains' (AND-only, contains-only). A rule with match_expr matches a row only
+    # when *every* clause's text is a substring of the row's name text (or, for match_source_text rules, of
+    # its source text). `keyword` stays populated as the sorted, space-joined clause texts so it remains the
+    # LIKE-search target and its LENGTH keeps driving specificity ordering (≈ summed clause length, which
+    # still ranks a subsuming rule above the one it subsumes). NULL = an ordinary single-keyword rule,
+    # evaluated exactly as before. Fresh installs get the column from the category_rule baseline CREATE TABLE.
+    conn.execute("ALTER TABLE category_rule ADD COLUMN match_expr TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -516,6 +530,12 @@ def init_db(db_path: str | None = None):
                 -- (description + extra evidence fields like "Original Statement"), not just the
                 -- merchant/raw/display name. Opt-in per rule; part of the rule's matcher identity.
                 match_source_text INTEGER NOT NULL DEFAULT 0,
+                -- Optional multi-clause merchant matcher (JSON) that supersedes the single-substring
+                -- `keyword` when present: {"op":"and","clauses":[{"type":"contains","text":"…"}, …]}.
+                -- v1 is AND-only / contains-only — every clause's text must be a substring of the row's
+                -- name (or source text). `keyword` mirrors the sorted, joined clause texts so search and
+                -- LENGTH-based specificity ordering keep working; NULL match_expr = a plain keyword rule.
+                match_expr TEXT,
                 -- 1 = this rule declares a recurring series: its matches are members of the
                 -- recurring_series row that points back here via rule_id (see recurring_series).
                 is_recurring INTEGER NOT NULL DEFAULT 0

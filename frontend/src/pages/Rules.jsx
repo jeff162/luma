@@ -71,8 +71,15 @@ function RuleRow({ rule, owners, accounts, onSave, onDelete, gridTemplateColumns
       borderBottom: '1px solid var(--border)', gap: 12,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, overflow: 'hidden' }}>
-        <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 500, flexShrink: 0, whiteSpace: 'nowrap' }}>
-          {rule.keyword}
+        {/* A multi-clause rule (match_expr) lists its AND'd contains-clauses; a plain rule shows its
+            single keyword. The backend supplies `clauses` for both shapes. */}
+        <span style={{ flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+          {(rule.clauses && rule.clauses.length ? rule.clauses : [rule.keyword]).map((clause, i) => (
+            <span key={i}>
+              {i > 0 ? <span style={{ color: 'var(--muted)', fontWeight: 400, margin: '0 5px' }}>and</span> : null}
+              <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 500 }}>{clause}</span>
+            </span>
+          ))}
         </span>
         {hasConditions && (
           <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--muted)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -262,6 +269,7 @@ function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel 
             ref={formRef}
             initialValues={{
               keyword: rule.keyword,
+              clauses: rule.clauses,
               amount_min: rule.amount_min ?? null,
               amount_max: rule.amount_max ?? null,
               debit_credit: rule.debit_credit || 'both',

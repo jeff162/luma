@@ -410,14 +410,16 @@ function RulePreviewDetail({ transactions, categories, onClose }) {
   )
 }
 
-function MatchCountInline({ keyword, amtLow, amtHigh, amtSide, ownerId, accountId, matchSourceText, onCountChange }) {
+function MatchCountInline({ keyword, multiClause = false, amtLow, amtHigh, amtSide, ownerId, accountId, matchSourceText, onCountChange }) {
   const [count, setCount] = useState(null)
   const [loading, setLoading] = useState(false)
   const debounceRef = useRef(null)
 
   const hasKeyword = keyword.trim().length >= 2
   const hasAmount = amtLow != null || amtHigh != null
-  const canSearch = !matchSourceText && (hasKeyword || hasAmount)
+  // The lightweight hint searches a single keyword server-side; a multi-clause (AND) matcher can't be
+  // resolved that way, so it defers to the authoritative previewRule count in the footer.
+  const canSearch = !matchSourceText && !multiClause && (hasKeyword || hasAmount)
 
   useEffect(() => {
     if (!canSearch) {
@@ -530,7 +532,38 @@ const RuleForm = forwardRef(function RuleForm({
   const transactionDefaults = getTransactionAmountState()
   const initialAmount = getInitialAmountState()
 
-  const [keyword, setKeyword] = useState(initialValues.keyword ?? '')
+  // The merchant matcher is a list of AND'd "contains" clauses (up to MAX_CLAUSES). A legacy/generated
+  // rule arrives as a single `keyword`; the rules list supplies a `clauses` array. Either seeds the list.
+  const MAX_CLAUSES = 3
+  const initialClauses = (
+    Array.isArray(initialValues.clauses) && initialValues.clauses.length
+      ? initialValues.clauses
+      : (initialValues.keyword ? [initialValues.keyword] : [])
+  )
+  const [clauses, setClauses] = useState(initialClauses)
+  // Non-empty, trimmed clauses — the actual matcher. An empty trailing clause box is ignored.
+  const trimmedClauses = (clauses.length ? clauses : []).map(c => c.trim()).filter(Boolean)
+  const hasMerchantMatcher = trimmedClauses.length > 0
+  const isMultiClause = trimmedClauses.length > 1
+  // Stable dependency key for effects that must re-run when any clause text changes.
+  const clausesKey = trimmedClauses.join(' ')
+
+  function updateClauseAt(index, value) {
+    setClauses(prev => {
+      const base = prev.length ? [...prev] : ['']
+      base[index] = value
+      return base
+    })
+  }
+  function addClause() {
+    setClauses(prev => {
+      const base = prev.length ? prev : ['']
+      return base.length < MAX_CLAUSES ? [...base, ''] : base
+    })
+  }
+  function removeClauseAt(index) {
+    setClauses(prev => (prev.length ? prev : ['']).filter((_, i) => i !== index))
+  }
   const [amtLow, setAmtLow] = useState(initialAmount.amtLow)
   const [amtLowOp, setAmtLowOp] = useState(initialAmount.amtLowOp)
   const [amtHigh, setAmtHigh] = useState(initialAmount.amtHigh)
@@ -547,7 +580,7 @@ const RuleForm = forwardRef(function RuleForm({
   const [isRecurring, setIsRecurring] = useState(!!(initialValues.isRecurring ?? initialValues.is_recurring ?? false))
   const [cadence, setCadence] = useState(initialValues.cadence ?? 'monthly')
 
-  const [kwOpen, setKwOpen] = useState(!!initialValues.keyword)
+  const [kwOpen, setKwOpen] = useState(initialClauses.length > 0)
   const [amtOpen, setAmtOpen] = useState(!!(initialAmount.amtLow != null || initialAmount.amtHigh != null || initialAmount.amtSide !== 'both'))
   const [ownOpen, setOwnOpen] = useState(!!(initialValues.ownerId ?? initialValues.owner_id))
   const [accOpen, setAccOpen] = useState(!!(initialValues.accountId ?? initialValues.account_id))
@@ -577,8 +610,8 @@ const RuleForm = forwardRef(function RuleForm({
   const keywordConditionTriggerRef = useRef(null)
   const renameConditionTriggerRef = useRef(null)
   const keywordEditSnapshotRef = useRef({
-    value: initialValues.keyword ?? '',
-    open: !!initialValues.keyword,
+    clauses: initialClauses,
+    open: initialClauses.length > 0,
   })
   const renameEditSnapshotRef = useRef({
     value: initialValues.cleanName ?? '',
@@ -609,7 +642,7 @@ const RuleForm = forwardRef(function RuleForm({
   const selectedTags = availableTags.filter(tag => tagIds.includes(tag.id))
   const matchOnly = mode === 'match-only'
   const hasAction = Boolean(catId || cleanName.trim() || tagIds.length > 0 || isRecurring)
-  const canSave = matchOnly ? keyword.trim().length > 0 : (keyword.trim().length > 0 && hasAction)
+  const canSave = matchOnly ? hasMerchantMatcher : (hasMerchantMatcher && hasAction)
 
   useEffect(() => {
     if (matchOnly) {
@@ -620,7 +653,7 @@ const RuleForm = forwardRef(function RuleForm({
       setPreviewDetailOpen(false)
       return undefined
     }
-    const hasKeyword = keyword.trim().length >= 2
+    const hasKeyword = trimmedClauses.some(c => c.length >= 2)
     const hasAmount = amtLow != null || amtHigh != null
     if ((!hasKeyword && !hasAmount) || (!matchOnly && !hasAction)) {
       clearTimeout(changeDebounceRef.current)
@@ -634,7 +667,8 @@ const RuleForm = forwardRef(function RuleForm({
     changeDebounceRef.current = setTimeout(async () => {
       try {
         const result = await api.previewRule({
-          keyword: keyword.trim(),
+          keyword: trimmedClauses[0] || '',
+          clauses: trimmedClauses,
           category_id: catId || null,
           amount_min: amtLow,
           amount_max: amtHigh,
@@ -658,10 +692,12 @@ const RuleForm = forwardRef(function RuleForm({
       }
     }, 700)
     return () => clearTimeout(changeDebounceRef.current)
-  }, [keyword, amtLow, amtHigh, amtSide, ownerId, accountId, accountType, catId, cleanName, tagIds, matchSourceText, hasAction, matchOnly])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clausesKey, amtLow, amtHigh, amtSide, ownerId, accountId, accountType, catId, cleanName, tagIds, matchSourceText, hasAction, matchOnly])
 
   const buildDraftPayload = useCallback(() => ({
-    keyword: keyword.trim(),
+    keyword: trimmedClauses[0] || '',
+    clauses: trimmedClauses,
     category_id: catId || null,
     amount_min: amtLow,
     amount_max: amtHigh,
@@ -681,7 +717,8 @@ const RuleForm = forwardRef(function RuleForm({
     clear_account: !accountId,
     clear_account_type: !accountType,
     applyToExisting,
-  }), [keyword, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, accountType, tagIds, matchSourceText, isRecurring, cadence, applyToExisting])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [clausesKey, catId, amtLow, amtHigh, amtSide, cleanName, ownerId, accountId, accountType, tagIds, matchSourceText, isRecurring, cadence, applyToExisting])
 
   const getDraftState = useCallback(() => ({
     data: buildDraftPayload(),
@@ -707,13 +744,13 @@ const RuleForm = forwardRef(function RuleForm({
 
   function captureKeywordEditState() {
     keywordEditSnapshotRef.current = {
-      value: keyword,
+      clauses,
       open: kwOpen,
     }
   }
 
   function cancelKeywordEdit(target, focusRef = null, closeEditor = false) {
-    setKeyword(keywordEditSnapshotRef.current.value)
+    setClauses(keywordEditSnapshotRef.current.clauses)
     setKwOpen(closeEditor ? false : keywordEditSnapshotRef.current.open)
     setTimeout(() => {
       if (closeEditor && keywordConditionTriggerRef.current) {
@@ -831,31 +868,61 @@ const RuleForm = forwardRef(function RuleForm({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <ConditionChip
             label="Merchant Name Contains"
-            summary={kwOpen && keyword.trim() ? `"${keyword}"` : null}
+            summary={kwOpen && trimmedClauses.length ? trimmedClauses.map(c => `"${c}"`).join(' and ') : null}
             active={kwOpen}
             onActivate={() => setKwOpen(true)}
-            onClear={() => { setKeyword(''); setKwOpen(false) }}
+            onClear={() => { setClauses([]); setKwOpen(false) }}
             containerRef={keywordConditionRef}
             triggerRef={keywordConditionTriggerRef}
           >
-            <input
-              id={`${fieldIdBase}-keyword`}
-              name="rule-keyword"
-              aria-label="Rule merchant keyword"
-              autoFocus={kwOpen && !initialValues.keyword}
-              value={keyword}
-              onFocus={captureKeywordEditState}
-              onChange={e => setKeyword(e.target.value)}
-              onKeyDown={event => {
-                if (event.key !== 'Escape') return
-                event.stopPropagation()
-                event.preventDefault()
-                cancelKeywordEdit(event.currentTarget, keywordConditionRef, true)
-              }}
-              placeholder="e.g. starbucks"
-              style={{ width: '100%', boxSizing: 'border-box', ...getFormControlStyle({ size: 'md' }) }}
-            />
-            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>Case-insensitive substring match</div>
+            {/* One or more AND'd "contains" clauses. The first is the primary; extra clauses each add an
+                "and contains" row that must also appear in the merchant text (in any order). */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {(clauses.length ? clauses : ['']).map((clauseValue, index) => (
+                <div key={index} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {index > 0 ? (
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap', minWidth: 68 }}>and contains</span>
+                  ) : null}
+                  <input
+                    id={index === 0 ? `${fieldIdBase}-keyword` : undefined}
+                    name={index === 0 ? 'rule-keyword' : `rule-keyword-${index}`}
+                    aria-label={index === 0 ? 'Rule merchant keyword' : `Rule merchant keyword clause ${index + 1}`}
+                    autoFocus={index === 0 && kwOpen && !initialClauses.length}
+                    value={clauseValue}
+                    onFocus={captureKeywordEditState}
+                    onChange={e => updateClauseAt(index, e.target.value)}
+                    onKeyDown={event => {
+                      if (event.key !== 'Escape') return
+                      event.stopPropagation()
+                      event.preventDefault()
+                      cancelKeywordEdit(event.currentTarget, keywordConditionRef, true)
+                    }}
+                    placeholder={index === 0 ? 'e.g. starbucks' : 'another word'}
+                    style={{ width: '100%', boxSizing: 'border-box', ...getFormControlStyle({ size: 'md' }) }}
+                  />
+                  {index > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => removeClauseAt(index)}
+                      title="Remove this clause"
+                      style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}
+                    >×</button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+            {(clauses.length ? clauses : ['']).length < MAX_CLAUSES ? (
+              <button
+                type="button"
+                onClick={addClause}
+                style={{ marginTop: 7, background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', fontSize: 12 }}
+              >＋ and contains…</button>
+            ) : null}
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5 }}>
+              {isMultiClause
+                ? 'Case-insensitive — every word must appear in the merchant text, in any order'
+                : 'Case-insensitive substring match'}
+            </div>
             <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 9, cursor: 'pointer' }}>
               <input
                 type="checkbox"
@@ -1071,10 +1138,15 @@ const RuleForm = forwardRef(function RuleForm({
       <div style={{ padding: '14px 20px', borderBottom: hideFooter ? 'none' : '2px solid var(--border)' }}>
         <div style={sectionHeadStyle}>{matchOnly ? 'Match Summary' : 'Rule Summary'}</div>
         <div style={{ fontSize: 13, lineHeight: 1.5 }}>
-          {keyword.trim() ? (
+          {hasMerchantMatcher ? (
             <>
               Merchant {matchSourceText ? 'name or source text' : 'name'} contains{' '}
-              <strong>&ldquo;{keyword.trim()}&rdquo;</strong>
+              {trimmedClauses.map((clause, index) => (
+                <span key={index}>
+                  {index > 0 ? <span style={{ color: 'var(--muted)' }}> and </span> : null}
+                  <strong>&ldquo;{clause}&rdquo;</strong>
+                </span>
+              ))}
               {amtSummary ? <span style={{ color: 'var(--muted)' }}> · {amtSummary}</span> : null}
               {ownerId ? <span style={{ color: 'var(--muted)' }}> · owner {owners.find(o => o.id === ownerId)?.name}</span> : null}
               {accountId ? <span style={{ color: 'var(--muted)' }}> · account {accounts.find(a => a.id === accountId)?.name}</span> : null}
@@ -1092,7 +1164,8 @@ const RuleForm = forwardRef(function RuleForm({
         {!hideMatchCount ? (
           <div style={{ marginTop: 8 }}>
             <MatchCountInline
-              keyword={keyword}
+              keyword={trimmedClauses[0] || ''}
+              multiClause={isMultiClause}
               amtLow={amtLow}
               amtHigh={amtHigh}
               amtSide={amtSide}
