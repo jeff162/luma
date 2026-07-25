@@ -1,28 +1,35 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState, useEffect, useCallback, useId, useRef } from 'react'
+import { useState, useEffect, useCallback, useId, useRef, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState, AppDialog } from '../components/ui.jsx'
-import PillGridTable from '../components/PillGridTable.jsx'
+import WindowedRows from '../components/WindowedRows.jsx'
 import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
 import RuleForm, { amountConditionSummary } from '../components/RuleForm.jsx'
+import RulesFilterPopover from '../components/RulesFilterPopover.jsx'
 import { ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
 import { TagBadge } from '../components/TagUi.jsx'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
 import { countPendingRuleSuggestions, hasRuleSuggestionWork } from '../lib/importExport/ruleSuggestionWork.js'
+import {
+  RAIL_LETTERS, emptyRulesFacets, activeRulesFacetCount, filterRules,
+  buildSectionedRuleItems, presentSectionLetters, ruleSectionLetter, sectionHeaderIndexByLetter,
+} from '../lib/rulesFilter.js'
 
-// Static, non-interactive columns: the rules list isn't sorted/reordered/resized by the user,
-// it just needs the consistent table chrome and a pinned header. Sticky header is wired below
-// via PillGridTable's `headerStyle`.
-const RULE_COLUMNS = [
-  { key: 'keyword', label: 'Keyword + Condition', width: 360, sortable: false, draggable: false, resizable: false },
-  { key: 'action',  label: 'Action',              width: '1fr', sortable: false, draggable: false, resizable: false },
-  { key: 'rowActions', label: '',                 width: 80,  sortable: false, draggable: false, resizable: false },
-]
+// Search text + facet selections are session-scoped (persist while the app is open, reset on next launch)
+// — deliberately independent of the app-wide, cross-page FilterContext. Mirrors the Transactions
+// quickFilter's session persistence.
+const RULES_SESSION_KEY = 'rules.viewState'
+function loadRulesSession() {
+  try { return JSON.parse(sessionStorage.getItem(RULES_SESSION_KEY)) || {} } catch { return {} }
+}
+function saveRulesSession(state) {
+  try { sessionStorage.setItem(RULES_SESSION_KEY, JSON.stringify(state)) } catch { /* storage may be unavailable */ }
+}
 
 function describeRule(rule, owners, accounts) {
   const parts = []
@@ -55,66 +62,57 @@ function describeRule(rule, owners, accounts) {
   return parts
 }
 
-function RuleRow({ rule, owners, accounts, onSave, onDelete, gridTemplateColumns }) {
+// Two-line rule row: matcher (clauses + conditions) on line 1, actions on line 2. Both lines wrap
+// freely and share the same treatment — so a rule with many tags and a truncated keyword can no longer
+// read as two mismatched sides (the old table clipped the keyword cell while the action cell wrapped).
+function RuleRow({ rule, owners, accounts, onEdit, onDelete }) {
   const [confirmDel,  setConfirmDel]  = useState(false)
   // Opt-in (off by default): also re-evaluate the transactions this rule categorized so they revert
   // instead of retaining the deleted rule's category. Reset whenever the confirm is dismissed.
   const [reconcileDel, setReconcileDel] = useState(false)
 
   const conditions = describeRule(rule, owners, accounts)
-  const hasConditions = conditions.length > 0
+  const clauses = rule.clauses && rule.clauses.length ? rule.clauses : [rule.keyword]
+  const hasAction = rule.category_name || rule.clean_name || (rule.tags && rule.tags.length) || rule.is_recurring
 
   return (
     <div style={{
-      display: 'grid', gridTemplateColumns,
-      padding: '10px 16px', alignItems: 'center',
-      borderBottom: '1px solid var(--border)', gap: 12,
+      display: 'flex', alignItems: 'flex-start', gap: 12,
+      padding: '9px 16px', borderBottom: '1px solid var(--border)',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, overflow: 'hidden' }}>
-        {/* A multi-clause rule (match_expr) lists its AND'd contains-clauses; a plain rule shows its
-            single keyword. The backend supplies `clauses` for both shapes. */}
-        <span style={{ flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
-          {(rule.clauses && rule.clauses.length ? rule.clauses : [rule.keyword]).map((clause, i) => (
-            <span key={i}>
-              {i > 0 ? <span style={{ color: 'var(--muted)', fontWeight: 400, margin: '0 5px' }}>and</span> : null}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Line 1 — the matcher: AND'd clauses (or single keyword) plus scope conditions. */}
+        <div style={{ fontSize: 13, lineHeight: 1.5, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' }}>
+          {clauses.map((clause, i) => (
+            <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              {i > 0 ? <span style={{ color: 'var(--muted)', fontWeight: 400 }}>and</span> : null}
               <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 500 }}>{clause}</span>
             </span>
           ))}
-        </span>
-        {hasConditions && (
-          <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--muted)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {conditions.map((c, i) => (
-              <span key={i}>
-                {i > 0 && <span style={{ color: 'var(--border)', margin: '0 4px' }}>&</span>}
-                {c}
-              </span>
-            ))}
-          </div>
-        )}
+          {conditions.map((c, i) => (
+            <span key={i} style={{ color: 'var(--muted)' }}>· {c}</span>
+          ))}
+        </div>
+        {/* Line 2 — the actions this rule applies. */}
+        <div style={{ fontSize: 13, lineHeight: 1.5, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '3px 6px', marginTop: 3, color: 'var(--muted)' }}>
+          <span style={{ opacity: 0.45 }}>→</span>
+          {rule.category_name ? (
+            <Badge label={rule.category_name} toneKey={rule.category_id || rule.category_name} />
+          ) : null}
+          {rule.clean_name ? (
+            <span>rename to <span style={{ color: 'var(--text)', fontStyle: 'italic' }}>{rule.clean_name}</span></span>
+          ) : null}
+          {Array.isArray(rule.tags) && rule.tags.map(tag => (
+            <TagBadge key={tag.id} tag={tag} />
+          ))}
+          {rule.is_recurring ? <span title="Tracked as a recurring series">↻ recurring</span> : null}
+          {!hasAction ? <span style={{ fontStyle: 'italic' }}>no action</span> : null}
+        </div>
       </div>
 
-      <div style={{ fontSize: 13, lineHeight: 1.5, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' }}>
-        <span style={{ color: 'var(--muted)', opacity: 0.4, margin: '0 2px' }}>→</span>
-        {rule.category_name ? (
-          <Badge
-            label={rule.category_name}
-            toneKey={rule.category_id || rule.category_name}
-          />
-        ) : null}
-
-        {rule.clean_name && (
-          <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-            · rename to <span style={{ color: 'var(--text)', fontStyle: 'italic' }}>{rule.clean_name}</span>
-          </span>
-        )}
-        {Array.isArray(rule.tags) && rule.tags.map(tag => (
-          <TagBadge key={tag.id} tag={tag} />
-        ))}
-      </div>
-
-      <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+      <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center', paddingTop: 1 }}>
         <button
-          onClick={() => onSave(rule.id)}
+          onClick={() => onEdit(rule.id)}
           style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 12, padding: '2px 6px', borderRadius: 4 }}
           title="Edit rule"
         >✎</button>
@@ -144,6 +142,58 @@ function RuleRow({ rule, owners, accounts, onSave, onDelete, gridTemplateColumns
           >×</button>
         )}
       </div>
+    </div>
+  )
+}
+
+// A lightweight (non-sticky) alphabetical divider between letter sections. Sticky-in-a-virtualizer is
+// deliberately avoided; the A–Z rail's current-letter highlight provides the running orientation.
+function SectionHeader({ letter }) {
+  return (
+    <div style={{
+      padding: '5px 16px', fontSize: 11, fontWeight: 700, letterSpacing: '0.05em',
+      color: 'var(--accent2)', background: 'color-mix(in srgb, var(--surface2) 55%, var(--surface))',
+      borderBottom: '1px solid var(--border)', borderTop: '1px solid var(--border)',
+    }}>
+      {letter}
+    </div>
+  )
+}
+
+// The A–Z jump strip: a horizontal "Jump to:" row under the search box. Every letter is always shown;
+// present letters are active (click to jump), absent ones dim, and the letter currently at the top of the
+// viewport is highlighted. It rides in the fixed header region so it stays put while the list scrolls.
+function AlphaRail({ present, current, onJump }) {
+  return (
+    <div style={{
+      flexShrink: 0, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '2px 0',
+      padding: '5px 32px', borderBottom: '1px solid var(--border)', background: 'var(--surface)',
+      userSelect: 'none',
+    }}>
+      <span style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 500, marginRight: 6 }}>Jump to:</span>
+      {RAIL_LETTERS.map(letter => {
+        const active = present.has(letter)
+        const isCurrent = current === letter
+        return (
+          <button
+            key={letter}
+            type="button"
+            disabled={!active}
+            onClick={() => onJump(letter)}
+            title={active ? `Jump to ${letter}` : undefined}
+            style={{
+              background: 'none', border: 'none', padding: '1px 5px', lineHeight: 1.2,
+              fontSize: 12, fontWeight: isCurrent ? 700 : 500,
+              cursor: active ? 'pointer' : 'default',
+              color: isCurrent ? 'var(--accent2)'
+                : active ? 'var(--muted)'
+                : 'color-mix(in srgb, var(--muted) 30%, transparent)',
+            }}
+          >
+            {letter}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -306,7 +356,13 @@ export default function Rules() {
   // pending-suggestion count and dim state — the review itself lives on the Import / Export route.
   const [batches,    setBatches]    = useState([])
   const [loading,    setLoading]    = useState(true)
-  const [search,     setSearch]     = useState('')
+  const sessionInit = useRef(loadRulesSession()).current
+  const [search,     setSearch]     = useState(sessionInit.search || '')
+  const [facets,     setFacets]     = useState(() => ({ ...emptyRulesFacets(), ...(sessionInit.facets || {}) }))
+  const [showFilter, setShowFilter] = useState(false)
+  const [currentLetter, setCurrentLetter] = useState(null)
+  const scrollRef = useRef(null)
+  const windowApiRef = useRef(null)
   const searchId = useId()
   const [showAdd,    setShowAdd]    = useState(false)
   const [showStarterRules, setShowStarterRules] = useState(false)
@@ -324,9 +380,12 @@ export default function Rules() {
     dismissResult: dismissRecategorizeResult,
   } = useRecategorize()
 
+  // Load the whole rule set once; search + facet filtering and A–Z sectioning are done client-side (the
+  // set is bounded and fully in memory), so keystrokes and facet toggles never re-hit the server, and the
+  // rail/count can reflect the full set. The windowed list keeps the DOM cost bounded regardless of size.
   const loadRules = useCallback(() => {
-    api.getRules(search || undefined).then(r => { setRules(r); setLoading(false) })
-  }, [search])
+    api.getRules().then(r => { setRules(r); setLoading(false) })
+  }, [])
   const loadCategories = useCallback(() => { api.getCategories().then(setCategories) }, [])
 
   useEffect(() => { loadRules() },      [loadRules])
@@ -335,8 +394,100 @@ export default function Rules() {
   useEffect(() => { api.getAccounts().then(setAccounts) }, [])
   useEffect(() => { api.listBatches().then(setBatches).catch(() => setBatches([])) }, [])
 
+  // Persist the search + facets for the session (survives navigation, resets on next app launch).
+  useEffect(() => { saveRulesSession({ search, facets }) }, [search, facets])
+
   const importedRuleSuggestionCount = countPendingRuleSuggestions(batches)
   const hasImportedRuleSuggestionWork = hasRuleSuggestionWork(batches)
+
+  // Leaf category ids per parent group, so a selected *group* facet expands to match any rule assigning a
+  // leaf under it.
+  const leafIdsByGroup = useMemo(() => {
+    const map = {}
+    for (const c of categories) if (c.parent_id) (map[c.parent_id] ||= []).push(c.id)
+    return map
+  }, [categories])
+
+  const filteredRules = useMemo(() => {
+    // Expand group selections to their leaf ids and union with directly-selected leaves — so the pure
+    // matcher only deals with leaf categoryIds while the UI keeps groups and leaves distinct.
+    const effectiveCategoryIds = new Set(facets.categoryIds)
+    for (const gid of facets.groupIds) for (const lid of (leafIdsByGroup[gid] || [])) effectiveCategoryIds.add(lid)
+    return filterRules(rules, search, { ...facets, categoryIds: [...effectiveCategoryIds] })
+  }, [rules, search, facets, leafIdsByGroup])
+  const sectionItems = useMemo(() => buildSectionedRuleItems(filteredRules), [filteredRules])
+  const presentLetters = useMemo(() => presentSectionLetters(filteredRules), [filteredRules])
+  const headerIndexByLetter = useMemo(() => sectionHeaderIndexByLetter(sectionItems), [sectionItems])
+  const activeFacetCount = activeRulesFacetCount(facets)
+
+  // Facet option lists, drawn only from values actually used by some rule (so the filter never offers a
+  // facet that would match nothing). Labels come straight off the rule rows the list endpoint returns;
+  // categories are additionally grouped under their parent (from the categories tree) for the picker.
+  const facetOptions = useMemo(() => {
+    const catName = new Map(), tags = new Map(), owns = new Map(), accts = new Map(), types = new Map()
+    const usedCat = new Set()
+    for (const r of rules) {
+      if (r.category_id) { usedCat.add(r.category_id); if (!catName.has(r.category_id)) catName.set(r.category_id, r.category_name || r.category_id) }
+      for (const tag of (r.tags || [])) if (!tags.has(tag.id)) tags.set(tag.id, tag)
+      if (r.owner_id && !owns.has(r.owner_id)) owns.set(r.owner_id, r.owner_name || r.owner_id)
+      if (r.account_id && !accts.has(r.account_id)) accts.set(r.account_id, r.account_mask ? `${r.account_name} ···${r.account_mask}` : (r.account_name || r.account_id))
+      if (r.account_type && !types.has(r.account_type)) types.set(r.account_type, ACCOUNT_TYPE_LABEL[r.account_type] ?? r.account_type)
+    }
+    const byLabel = (a, b) => a.label.localeCompare(b.label)
+    // Group the used leaf categories under their parent group.
+    const catById = new Map(categories.map(c => [c.id, c]))
+    const groupName = new Map(categories.filter(c => !c.parent_id).map(g => [g.id, g.name]))
+    const OTHER = '__other__'
+    const leavesByGroup = new Map()
+    for (const cid of usedCat) {
+      const gid = catById.get(cid)?.parent_id || OTHER
+      if (!leavesByGroup.has(gid)) leavesByGroup.set(gid, [])
+      leavesByGroup.get(gid).push({ id: cid, label: catName.get(cid) })
+    }
+    const categoryGroups = [...leavesByGroup.entries()]
+      .map(([gid, leaves]) => ({ groupId: gid, groupLabel: gid === OTHER ? 'Other' : (groupName.get(gid) || 'Other'), leaves: leaves.sort(byLabel) }))
+      .sort((a, b) => a.groupLabel.localeCompare(b.groupLabel))
+    return {
+      categories: [...catName].map(([id, label]) => ({ id, label })).sort(byLabel), // flat, for chip labels
+      categoryGroups,
+      groups: categoryGroups.map(g => ({ id: g.groupId, label: g.groupLabel })),
+      tags: [...tags.values()].map(t => ({ id: t.id, label: t.name, color: t.color })).sort(byLabel),
+      owners: [...owns].map(([id, label]) => ({ id, label })).sort(byLabel),
+      accounts: [...accts].map(([id, label]) => ({ id, label })).sort(byLabel),
+      accountTypes: [...types].map(([id, label]) => ({ id, label })).sort(byLabel),
+    }
+  }, [rules, categories])
+
+  const updateFacet = (key, value) => setFacets(f => ({ ...f, [key]: value }))
+  const clearFacets = () => setFacets(emptyRulesFacets())
+
+  const jumpToLetter = useCallback(letter => {
+    const idx = headerIndexByLetter[letter]
+    if (idx != null) windowApiRef.current?.scrollToIndex(idx, { align: 'start' })
+  }, [headerIndexByLetter])
+
+  const handleTopIndexChange = useCallback(idx => {
+    const item = sectionItems[idx]
+    if (!item) return
+    setCurrentLetter(item.type === 'header' ? item.letter : ruleSectionLetter(item.rule))
+  }, [sectionItems])
+
+  // Active-facet chips (removable) shown under the toolbar.
+  const facetChips = useMemo(() => {
+    const chips = []
+    const label = (opts, id) => opts.find(o => o.id === id)?.label ?? id
+    facets.groupIds.forEach(id => chips.push({ key: `grp:${id}`, text: `Group: ${label(facetOptions.groups, id)}`, remove: () => updateFacet('groupIds', facets.groupIds.filter(x => x !== id)) }))
+    facets.categoryIds.forEach(id => chips.push({ key: `cat:${id}`, text: `Category: ${label(facetOptions.categories, id)}`, remove: () => updateFacet('categoryIds', facets.categoryIds.filter(x => x !== id)) }))
+    facets.tagIds.forEach(id => chips.push({ key: `tag:${id}`, text: `Tag: ${label(facetOptions.tags, id)}`, remove: () => updateFacet('tagIds', facets.tagIds.filter(x => x !== id)) }))
+    facets.ownerIds.forEach(id => chips.push({ key: `own:${id}`, text: `Owner: ${label(facetOptions.owners, id)}`, remove: () => updateFacet('ownerIds', facets.ownerIds.filter(x => x !== id)) }))
+    facets.accountIds.forEach(id => chips.push({ key: `acc:${id}`, text: `Account: ${label(facetOptions.accounts, id)}`, remove: () => updateFacet('accountIds', facets.accountIds.filter(x => x !== id)) }))
+    facets.accountTypes.forEach(id => chips.push({ key: `typ:${id}`, text: `Type: ${label(facetOptions.accountTypes, id)}`, remove: () => updateFacet('accountTypes', facets.accountTypes.filter(x => x !== id)) }))
+    if (facets.recurring) chips.push({ key: 'recurring', text: 'Recurring', remove: () => updateFacet('recurring', false) })
+    if (facets.hasRename) chips.push({ key: 'rename', text: 'Has rename', remove: () => updateFacet('hasRename', false) })
+    if (facets.matchSourceText) chips.push({ key: 'mst', text: 'Matches source text', remove: () => updateFacet('matchSourceText', false) })
+    if (facets.noCategory) chips.push({ key: 'nocat', text: 'No category', remove: () => updateFacet('noCategory', false) })
+    return chips
+  }, [facets, facetOptions])
 
   async function handleAdd(data) {
     const { applyToExisting, ...ruleData } = data
@@ -527,7 +678,7 @@ export default function Rules() {
         padding: '8px 32px', flexShrink: 0,
         borderBottom: '1px solid var(--border)',
         background: 'var(--surface)',
-        display: 'flex', alignItems: 'center', gap: 12,
+        display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px 12px',
       }}>
         {/* Visually-hidden but real <label htmlFor> — Chrome's "no label associated" check wants an
             actual label association (a placeholder/aria-label alone doesn't satisfy it). */}
@@ -535,20 +686,75 @@ export default function Rules() {
           position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
           overflow: 'hidden', clip: 'rect(0, 0, 0, 0)', whiteSpace: 'nowrap', border: 0,
         }}>
-          Filter rules by keyword
+          Search rules by merchant
         </label>
-        <Input id={searchId} value={search} onChange={setSearch} placeholder="Filter by keyword…" style={{ width: 280 }} />
+        <Input id={searchId} value={search} onChange={setSearch} placeholder="Search merchant…" style={{ width: 260 }} />
+
+        {/* Structured facet filter — page-local, session-scoped (never touches the app-wide FilterContext). */}
+        <div style={{ position: 'relative' }}>
+          <Button
+            small
+            variant="ghost"
+            onClick={() => setShowFilter(o => !o)}
+            style={activeFacetCount > 0 ? {
+              background: 'color-mix(in srgb, var(--accent) 12%, var(--surface2))',
+              border: '1px solid color-mix(in srgb, var(--accent2) 30%, var(--border))',
+            } : undefined}
+          >
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              Filter{activeFacetCount > 0 ? <ActionCountBadge count={activeFacetCount} /> : null}
+            </span>
+          </Button>
+          {showFilter ? (
+            <RulesFilterPopover
+              facets={facets}
+              onChange={setFacets}
+              options={facetOptions}
+              onClose={() => setShowFilter(false)}
+              onClear={clearFacets}
+            />
+          ) : null}
+        </div>
+
+        {facetChips.map(chip => (
+          <span
+            key={chip.key}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12,
+              padding: '3px 6px 3px 9px', borderRadius: 20,
+              background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
+              border: '1px solid color-mix(in srgb, var(--accent2) 20%, var(--border))',
+              color: 'var(--text)',
+            }}
+          >
+            {chip.text}
+            <button
+              type="button"
+              onClick={chip.remove}
+              title="Remove filter"
+              style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0 }}
+            >×</button>
+          </span>
+        ))}
+
         <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 'auto' }}>
-          {rules.length} rule{rules.length !== 1 ? 's' : ''}
+          {filteredRules.length === rules.length
+            ? `${rules.length} rule${rules.length !== 1 ? 's' : ''}`
+            : `${filteredRules.length} of ${rules.length} rules`}
         </span>
       </div>
 
-      {/* No padding-top on this scroll container — the rules Card's sticky header references
-          top: 0 of the scrollport, and any padding-top here would leave a band above the
-          pinned header where scrolling rows are visible. */}
-      <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
-        {showCreateForm && (
-          <Card style={{ padding: 0, overflow: 'hidden', marginBottom: 20 }}>
+      {/* Horizontal A–Z jump strip, directly under the search box (fixed region, stays put while scrolling). */}
+      {!loading && filteredRules.length > 0 ? (
+        <AlphaRail present={presentLetters} current={currentLetter} onJump={jumpToLetter} />
+      ) : null}
+
+      {/* Create form sits above the list in its own fixed region (its own scroll if tall) so the windowed
+          list below owns a clean scroll container — a virtualizer doesn't want unrelated content sharing
+          its scrollport. */}
+      {showCreateForm ? (
+        <div style={{ flexShrink: 0, padding: '12px 32px 0', maxHeight: '58vh', overflowY: 'auto' }}>
+          <Card style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)', fontSize: 14, fontWeight: 600 }}>
               New rule
             </div>
@@ -563,46 +769,44 @@ export default function Rules() {
               transactionData={createTransactionData}
             />
           </Card>
-        )}
+        </div>
+      ) : null}
 
-        <Card style={{ padding: 0 }}>
-          <PillGridTable
-            columns={RULE_COLUMNS}
-            headerStyle={{
-              padding: '8px 16px',
-              background: 'var(--surface)',
-              borderBottom: '1px solid var(--border)',
-              position: 'sticky',
-              top: 0,
-              zIndex: 2,
-            }}
-            renderBody={({ gridTemplateColumns }) => (
-              loading ? <Spinner /> : rules.length === 0 ? (
-                <EmptyState message={search ? 'No rules match that keyword' : 'No rules yet — click "Add rule" to create one'} />
-              ) : (
-                <div>
-                  {rules.map(rule => (
+      <div ref={scrollRef} data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 24px' }}>
+        {loading ? (
+            <div style={{ padding: 24 }}><Spinner /></div>
+          ) : rules.length === 0 ? (
+            <EmptyState message='No rules yet — click "Add rule" to create one' />
+          ) : filteredRules.length === 0 ? (
+            <EmptyState message="No rules match your search or filters" />
+          ) : (
+            <WindowedRows
+              scrollRef={scrollRef}
+              apiRef={windowApiRef}
+              items={sectionItems}
+              getItemKey={item => (item.type === 'header' ? `h:${item.letter}` : `r:${item.rule.id}`)}
+              estimateSize={52}
+              onTopIndexChange={handleTopIndexChange}
+              renderRow={item => (
+                item.type === 'header'
+                  ? <SectionHeader letter={item.letter} />
+                  : (
                     <RuleRow
-                      key={rule.id}
-                      rule={rule}
+                      rule={item.rule}
                       owners={owners}
                       accounts={accounts}
-                      onSave={openEditForm}
+                      onEdit={openEditForm}
                       onDelete={handleDelete}
-                      gridTemplateColumns={gridTemplateColumns}
                     />
-                  ))}
-                </div>
-              )
-            )}
-          />
-        </Card>
-        <p style={{ marginTop: 12, fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
-          Rules are evaluated most-specific first: longer keywords beat shorter ones,
-          and rules with more conditions beat those with fewer. Owner-scoped rules always
-          beat global ones. The list shows rules in the reverse order — general rules
-          at the top, specific overrides at the bottom.
-        </p>
+                  )
+              )}
+            />
+          )}
+      </div>
+
+      <div style={{ flexShrink: 0, padding: '7px 32px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.5 }}>
+        Rules are evaluated most-specific first (longer keywords and more conditions win; owner-scoped beats
+        global). The list is alphabetical by merchant — use the “Jump to” strip above to skip around.
       </div>
 
       <EditRuleOverlay

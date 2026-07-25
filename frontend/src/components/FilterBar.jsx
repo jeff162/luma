@@ -6,7 +6,7 @@
  * interpret the same active chips through its own API calls while the user's current slice survives navigation.
  */
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { format, subDays, subMonths, subYears, startOfMonth, endOfMonth,
          startOfYear, endOfYear } from 'date-fns'
 import { useFilters } from '../lib/FilterContext.jsx'
@@ -157,7 +157,7 @@ function DatePickerPopover({ onClose }) {
 
 const FILTER_TABS = [
   { id: 'accounts',   label: 'Accounts'   },
-  { id: 'groups',     label: 'Groups'     },
+  // Groups and Categories are one collapsible tree now — the old standalone Groups tab folded in here.
   { id: 'categories', label: 'Categories' },
   { id: 'tags',       label: 'Tags'       },
   { id: 'owners',     label: 'Owners'     },
@@ -173,6 +173,9 @@ function FilterPopover({ onClose }) {
   const [tags, setTags]                     = useState([])
   const [payeeSearch, setPayeeSearch]       = useState('')
   const [payeeSuggestions, setPayeeSuggestions] = useState([])
+  // Category tree UI state (the merged Groups+Categories tab): per-group collapse + a type-to-filter box.
+  const [catSearch, setCatSearch]           = useState('')
+  const [expandedGroups, setExpandedGroups] = useState(() => new Set())
 
   useEffect(() => {
     api.getCategories().then(setCategories)
@@ -198,14 +201,52 @@ function FilterPopover({ onClose }) {
     })
   }, [payeeSearch])
 
-  const groups = categories.filter(c => !c.parent_id)
-  const leaves = categories.filter(c =>  c.parent_id)
   const isSelected = id => !!filters.selections.find(s => s.id === id)
 
   function toggle(sel) {
     if (isSelected(sel.id)) removeSelection(sel.id)
     else addSelection(sel)
   }
+
+  function toggleGroupExpanded(groupId) {
+    setExpandedGroups(prev => {
+      const next = new Set(prev)
+      if (next.has(groupId)) next.delete(groupId)
+      else next.add(groupId)
+      return next
+    })
+  }
+
+  // The unified category tree behind the merged tab: every real group with its leaves (the Unassigned
+  // *expense* group gains the synthetic "Uncategorized" leaf), plus a synthetic Unassigned-*income* group
+  // node carrying the "Other Income" leaf — so both group- and leaf-level selection (including the NULL
+  // buckets) live in one selectable/collapsible tree instead of two separate tabs.
+  const categoryTree = useMemo(() => {
+    const grps = categories.filter(c => !c.parent_id)
+    const lvs = categories.filter(c => c.parent_id)
+    const nodes = grps.map(g => {
+      const syntheticLeaf = g.system_key === UNASSIGNED_SYSTEM_KEY
+        ? [{ id: UNCATEGORIZED_EXPENSE_ID, name: 'Uncategorized', _synthetic: true }]
+        : []
+      return {
+        groupId: g.id,
+        groupName: g.name,
+        // A top-level group is income or expense (NULL defaults to expense, matching the backend) — this
+        // is what nests each group under the right super-category in the tree.
+        categoryType: g.category_type === 'income' ? 'income' : 'expense',
+        groupSel: { type: 'group', id: g.id, label: g.name },
+        leaves: [...lvs.filter(c => c.parent_id === g.id), ...syntheticLeaf],
+      }
+    })
+    nodes.push({
+      groupId: SYNTHETIC_UNASSIGNED_INCOME_GROUP_ID,
+      groupName: 'Unassigned (income)',
+      categoryType: 'income',
+      groupSel: { type: 'group', id: SYNTHETIC_UNASSIGNED_INCOME_GROUP_ID, label: 'Unassigned (income)' },
+      leaves: [{ id: UNCATEGORIZED_INCOME_ID, name: 'Other Income', _synthetic: true }],
+    })
+    return nodes
+  }, [categories])
 
   return (
     <Popover onClose={onClose} style={{ minWidth: 300 }}>
@@ -245,150 +286,97 @@ function FilterPopover({ onClose }) {
           )
         })}
 
-        {tab === 'groups' && [
-          // Super-group rows let the user select every income or expense top-level group at once.
-          // They live above the regular rows; bracketed italic labels distinguish them from
-          // user-named groups (a literal "Income" group, for example).
-          { typeKey: 'income', label: '[Income]' },
-          { typeKey: 'expense', label: '[Expense]' },
-        ].map(superGroup => {
-          const members = groups.filter(g => g.category_type === superGroup.typeKey)
-          if (members.length === 0) return null
-          const memberIds = members.map(m => m.id)
-          const allSelected = memberIds.every(id => isSelected(id))
-          const someSelected = !allSelected && memberIds.some(id => isSelected(id))
-          return (
-            <div key={superGroup.label} onClick={() => {
-              if (allSelected) {
-                removeSelections(memberIds)
-              } else {
-                addSelections(members.map(m => ({ type: 'group', id: m.id, label: m.name })))
-              }
-            }} style={{
-              ...rowStyle,
-              background: allSelected ? SELECTED_ROW_BG : 'transparent',
-              justifyContent: 'space-between',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <CategoryMarker kind="group" />
-                <span style={{ fontSize: 13, fontStyle: 'italic', color: 'var(--muted)' }}>
-                  {superGroup.label}
-                </span>
-              </div>
-              {allSelected
-                ? <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>
-                : someSelected
-                  ? <span style={{ color: 'var(--muted)', fontSize: 11 }}>·</span>
-                  : null}
-            </div>
-          )
-        })}
+        {tab === 'categories' && (() => {
+          const q = catSearch.trim().toLowerCase()
+          const nodeVisible = node => !q || node.groupName.toLowerCase().includes(q) || node.leaves.some(l => l.name.toLowerCase().includes(q))
 
-        {tab === 'groups' && groups.map(g => {
-          const sel = { type: 'group', id: g.id, label: g.name }
-          return (
-            <div key={g.id} onClick={() => toggle(sel)} style={{
-              ...rowStyle,
-              background: isSelected(g.id) ? SELECTED_ROW_BG : 'transparent',
-              justifyContent: 'space-between',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <CategoryMarker kind="group" />
-                <span style={{ fontSize: 13 }}>{g.name}</span>
-              </div>
-              {isSelected(g.id) && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
-            </div>
-          )
-        })}
-
-        {/* Synthetic "Unassigned" group for income transactions without a category. Mirrors what
-            the Categories page renders so the filter picker can scope to income placeholders the
-            same way you can scope to expense ones (via the real Unassigned group). */}
-        {tab === 'groups' && (() => {
-          const sel = {
-            type: 'group',
-            id: SYNTHETIC_UNASSIGNED_INCOME_GROUP_ID,
-            label: 'Unassigned (income)',
-          }
-          return (
-            <div key={SYNTHETIC_UNASSIGNED_INCOME_GROUP_ID}
-              onClick={() => toggle(sel)} style={{
-                ...rowStyle,
-                background: isSelected(sel.id) ? SELECTED_ROW_BG : 'transparent',
-                justifyContent: 'space-between',
-              }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <CategoryMarker kind="group" />
-                <span style={{ fontSize: 13, fontStyle: 'italic' }}>Unassigned <span style={{ color: 'var(--muted)' }}>(income)</span></span>
-              </div>
-              {isSelected(sel.id) && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
-            </div>
-          )
-        })()}
-
-        {tab === 'categories' && groups.map(g => {
-          const isUnassignedExpense = g.system_key === UNASSIGNED_SYSTEM_KEY
-          // For the real expense Unassigned group, fold in a synthetic "Uncategorized" leaf so
-          // users can target the NULL-category bucket the same way they would any real category.
-          const syntheticExpenseLeaf = isUnassignedExpense
-            ? [{ id: UNCATEGORIZED_EXPENSE_ID, parent_id: g.id, name: 'Uncategorized', _synthetic: true }]
-            : []
-          const groupLeaves = [...leaves.filter(c => c.parent_id === g.id), ...syntheticExpenseLeaf]
-          return (
-            <div key={g.id}>
-              <div style={{ padding: '6px 16px 2px', fontSize: 11, fontWeight: 600,
-                color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 8 }}>
-                <CategoryMarker kind="group" />
-                <span>{g.name}</span>
-              </div>
-              {groupLeaves.map(c => {
-                const sel = { type: 'category', id: c.id, label: c.name }
-                return (
-                  <div key={c.id} onClick={() => toggle(sel)} style={{
-                    ...rowStyle, paddingLeft: 28,
-                    background: isSelected(c.id) ? SELECTED_ROW_BG : 'transparent',
-                    justifyContent: 'space-between',
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <CategoryMarker kind="category" />
-                      <span style={{ fontSize: 13, fontStyle: c._synthetic ? 'italic' : 'normal' }}>{c.name}</span>
+          // One group node: a collapse chevron, a selectable group row, and (when expanded) its leaves.
+          const renderNode = node => {
+            const groupMatch = node.groupName.toLowerCase().includes(q)
+            const shownLeaves = (q && !groupMatch) ? node.leaves.filter(l => l.name.toLowerCase().includes(q)) : node.leaves
+            const expanded = q ? true : expandedGroups.has(node.groupId)
+            const groupSelected = isSelected(node.groupId)
+            return (
+              <div key={node.groupId}>
+                <div style={{ ...rowStyle, background: groupSelected ? SELECTED_ROW_BG : 'transparent', justifyContent: 'space-between', gap: 6, paddingLeft: 16 }}>
+                  <button
+                    type="button"
+                    onClick={e => { e.stopPropagation(); toggleGroupExpanded(node.groupId) }}
+                    aria-label={expanded ? 'Collapse group' : 'Expand group'}
+                    title={expanded ? 'Collapse' : 'Expand'}
+                    disabled={node.leaves.length === 0}
+                    style={{ background: 'none', border: 'none', cursor: node.leaves.length ? 'pointer' : 'default', color: 'var(--muted)', fontSize: 10, width: 14, padding: 0, flexShrink: 0, transform: expanded ? 'rotate(90deg)' : 'none', transition: 'transform 100ms', opacity: node.leaves.length ? 1 : 0.25 }}
+                  >▶</button>
+                  <div onClick={() => toggle(node.groupSel)} style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, cursor: 'pointer' }}>
+                    <CategoryMarker kind="group" />
+                    <span style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.groupName}</span>
+                  </div>
+                  {groupSelected && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
+                </div>
+                {expanded && shownLeaves.map(c => {
+                  const sel = { type: 'category', id: c.id, label: c.name }
+                  const leafSelected = isSelected(c.id)
+                  return (
+                    <div key={c.id} onClick={() => toggle(sel)} style={{ ...rowStyle, paddingLeft: 46, background: leafSelected ? SELECTED_ROW_BG : 'transparent', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <CategoryMarker kind="category" />
+                        <span style={{ fontSize: 13, fontStyle: c._synthetic ? 'italic' : 'normal', color: groupSelected ? 'var(--muted)' : undefined }}>{c.name}</span>
+                      </div>
+                      {leafSelected && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
                     </div>
-                    {isSelected(c.id) && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
+                  )
+                })}
+              </div>
+            )
+          }
+
+          return (
+            <div>
+              <div style={{ padding: '6px 12px 8px' }}>
+                <input
+                  name="filter-category-search"
+                  value={catSearch}
+                  onChange={e => setCatSearch(e.target.value)}
+                  placeholder="Filter categories…"
+                  aria-label="Filter categories"
+                  style={{ ...inputStyle, width: '100%' }}
+                />
+              </div>
+
+              {/* Two super-categories (income / expense); each group nests under the one its type says.
+                  The super-category header itself selects every group of that type (the old super-group
+                  select-all), and the ✓/· shows how much of it is selected. */}
+              {[{ typeKey: 'income', label: 'Income' }, { typeKey: 'expense', label: 'Expense' }].map(sc => {
+                // Membership is *every* group node shown under this super-category — including synthetic
+                // ones like Unassigned (income) — so "select all" and its ✓/· indicator stay honest.
+                const allTypeNodes = categoryTree.filter(n => n.categoryType === sc.typeKey)
+                const visibleNodes = allTypeNodes.filter(nodeVisible)
+                if (visibleNodes.length === 0) return null
+                const memberIds = allTypeNodes.map(n => n.groupId)
+                const allSelected = memberIds.length > 0 && memberIds.every(id => isSelected(id))
+                const someSelected = !allSelected && memberIds.some(id => isSelected(id))
+                return (
+                  <div key={sc.typeKey}>
+                    <div
+                      onClick={() => {
+                        if (allSelected) removeSelections(memberIds)
+                        else addSelections(allTypeNodes.map(n => n.groupSel))
+                      }}
+                      title={`Select all ${sc.label.toLowerCase()} groups`}
+                      style={{ ...rowStyle, padding: '6px 16px 4px', background: allSelected ? SELECTED_ROW_BG : 'transparent', justifyContent: 'space-between', borderTop: '1px solid var(--border)' }}
+                    >
+                      <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent2)' }}>{sc.label}</span>
+                      {allSelected
+                        ? <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓ all</span>
+                        : someSelected ? <span style={{ color: 'var(--muted)', fontSize: 11 }}>·</span> : null}
+                    </div>
+                    {visibleNodes.map(renderNode)}
                   </div>
                 )
               })}
             </div>
           )
-        })}
-
-        {/* Synthetic Unassigned-income section in the Categories tab — pairs with the synthetic
-            group entry in the Groups tab. The leaf's id is the backend-recognized
-            `__uncategorized_income__` token so it filters NULL-category income transactions. */}
-        {tab === 'categories' && (
-          <div key={SYNTHETIC_UNASSIGNED_INCOME_GROUP_ID}>
-            <div style={{ padding: '6px 16px 2px', fontSize: 11, fontWeight: 600,
-              color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <CategoryMarker kind="group" />
-              <span style={{ fontStyle: 'italic' }}>Unassigned (income)</span>
-            </div>
-            {(() => {
-              const sel = { type: 'category', id: UNCATEGORIZED_INCOME_ID, label: 'Other Income' }
-              return (
-                <div onClick={() => toggle(sel)} style={{
-                  ...rowStyle, paddingLeft: 28,
-                  background: isSelected(sel.id) ? SELECTED_ROW_BG : 'transparent',
-                  justifyContent: 'space-between',
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <CategoryMarker kind="category" />
-                    <span style={{ fontSize: 13, fontStyle: 'italic' }}>Other Income</span>
-                  </div>
-                  {isSelected(sel.id) && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
-                </div>
-              )
-            })()}
-          </div>
-        )}
+        })()}
 
         {tab === 'owners' && (
           owners.length === 0 ? (

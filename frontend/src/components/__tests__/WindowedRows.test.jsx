@@ -34,7 +34,7 @@ beforeAll(() => {
 
 afterEach(cleanup)
 
-function Harness({ items, getItemKey = item => item.id, renderRow, estimateSize = ROW_HEIGHT }) {
+function Harness({ items, getItemKey = item => item.id, renderRow, estimateSize = ROW_HEIGHT, apiRef, onTopIndexChange }) {
   const scrollRef = useRef(null)
   return (
     <div ref={scrollRef} style={{ overflow: 'auto', height: VIEWPORT_HEIGHT }}>
@@ -43,6 +43,8 @@ function Harness({ items, getItemKey = item => item.id, renderRow, estimateSize 
         items={items}
         getItemKey={getItemKey}
         estimateSize={estimateSize}
+        apiRef={apiRef}
+        onTopIndexChange={onTopIndexChange}
         renderRow={renderRow ?? (item => <div>{item.label}</div>)}
       />
     </div>
@@ -99,5 +101,24 @@ describe('WindowedRows', () => {
     const { container } = render(<Harness items={[]} />)
 
     expect(rows(container).length).toBe(0)
+  })
+
+  it('exposes scrollToIndex through apiRef for a jump-nav', () => {
+    const apiRef = { current: null }
+    render(<Harness items={makeItems(200)} apiRef={apiRef} />)
+
+    expect(apiRef.current).not.toBeNull()
+    expect(typeof apiRef.current.scrollToIndex).toBe('function')
+    expect(() => apiRef.current.scrollToIndex(120, { align: 'start' })).not.toThrow()
+  })
+
+  it('reports the top item index via onTopIndexChange', () => {
+    const onTopIndexChange = vi.fn()
+    render(<Harness items={makeItems(200)} onTopIndexChange={onTopIndexChange} />)
+
+    expect(onTopIndexChange).toHaveBeenCalled()
+    expect(onTopIndexChange.mock.calls.every(call => typeof call[0] === 'number')).toBe(true)
+    // At rest (scrollOffset 0) the topmost item is index 0.
+    expect(onTopIndexChange.mock.calls[0][0]).toBe(0)
   })
 })

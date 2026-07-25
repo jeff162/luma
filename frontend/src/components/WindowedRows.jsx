@@ -22,7 +22,7 @@
  *     layout entirely.
  */
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 
 export default function WindowedRows({
@@ -36,6 +36,13 @@ export default function WindowedRows({
   // the usual one) to drop the cached measurements.
   measureKey = '',
   renderRow,
+  // Optional imperative handle: `apiRef.current.scrollToIndex(index, { align })` scrolls a given item
+  // into view even when it isn't currently mounted (a jump-nav can't rely on scrollIntoView, because the
+  // target row may not be in the DOM). Used by the Rules page A–Z rail.
+  apiRef = null,
+  // Optional: reports the index of the topmost item at the viewport edge as the user scrolls, so a caller
+  // can highlight the current section. Fired only when the top index changes.
+  onTopIndexChange = null,
 }) {
   const virtualizer = useVirtualizer({
     count: items.length,
@@ -51,7 +58,28 @@ export default function WindowedRows({
     virtualizer.measure()
   }, [measureKey, virtualizer])
 
+  useEffect(() => {
+    if (!apiRef) return undefined
+    apiRef.current = {
+      scrollToIndex: (index, options = { align: 'start' }) => virtualizer.scrollToIndex(index, options),
+    }
+    return () => { apiRef.current = null }
+  }, [apiRef, virtualizer])
+
   const virtualRows = virtualizer.getVirtualItems()
+
+  // Track the topmost item at the viewport edge (past overscan) for the current-section highlight.
+  const lastTopIndexRef = useRef(null)
+  useEffect(() => {
+    if (!onTopIndexChange) return
+    const offset = virtualizer.scrollOffset ?? 0
+    const top = virtualRows.find(r => r.start + r.size > offset + 1) ?? virtualRows[0]
+    const topIndex = top?.index ?? null
+    if (topIndex != null && topIndex !== lastTopIndexRef.current) {
+      lastTopIndexRef.current = topIndex
+      onTopIndexChange(topIndex)
+    }
+  })
 
   return (
     // The spacer carries the full scroll height so the scrollbar reflects the whole list; the inner
