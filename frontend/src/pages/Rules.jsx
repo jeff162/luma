@@ -12,6 +12,7 @@ import RuleForm, { amountConditionSummary } from '../components/RuleForm.jsx'
 import RulesFilterPopover from '../components/RulesFilterPopover.jsx'
 import { ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
 import { TagBadge } from '../components/TagUi.jsx'
+import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
 import { countPendingRuleSuggestions, hasRuleSuggestionWork } from '../lib/importExport/ruleSuggestionWork.js'
@@ -70,6 +71,12 @@ function RuleRow({ rule, owners, accounts, onEdit, onDelete }) {
   // Opt-in (off by default): also re-evaluate the transactions this rule categorized so they revert
   // instead of retaining the deleted rule's category. Reset whenever the confirm is dismissed.
   const [reconcileDel, setReconcileDel] = useState(false)
+  const confirmRef = useRef(null)
+
+  // The inline delete-confirm is a transient local edit: dismiss it on an outside click or Escape so it
+  // never lingers open (e.g. after opening a different rule's editor). Leaving the page unmounts the row.
+  const dismissConfirm = () => { setConfirmDel(false); setReconcileDel(false) }
+  useDismissibleLayer({ open: confirmDel, onClose: dismissConfirm, refs: [confirmRef] })
 
   const conditions = describeRule(rule, owners, accounts)
   const clauses = rule.clauses && rule.clauses.length ? rule.clauses : [rule.keyword]
@@ -117,7 +124,7 @@ function RuleRow({ rule, owners, accounts, onEdit, onDelete }) {
           title="Edit rule"
         >✎</button>
         {confirmDel ? (
-          <>
+          <span ref={confirmRef} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <label
               title="Also re-evaluate the transactions this rule categorized, so they revert (to another matching rule or uncategorized) instead of keeping this rule's category. Off keeps them as they are."
               style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}
@@ -130,10 +137,10 @@ function RuleRow({ rule, owners, accounts, onEdit, onDelete }) {
               style={{ background: 'var(--danger)', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 7px', fontSize: 11, cursor: 'pointer', fontWeight: 600 }}
             >Del</button>
             <button
-              onClick={() => { setConfirmDel(false); setReconcileDel(false) }}
+              onClick={dismissConfirm}
               style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--muted)', borderRadius: 4, padding: '2px 6px', fontSize: 11, cursor: 'pointer' }}
             >✕</button>
-          </>
+          </span>
         ) : (
           <button
             onClick={() => setConfirmDel(true)}

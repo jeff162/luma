@@ -63,6 +63,10 @@ delete the backlog file.
   shotgun-surgery smells (structural tools + a judgment pass), fix the safe ones. Records the first
   run's shipped items (`getFormControlStyle` in Dashboard, `TransactionListToolbar`, `useTags()`), the
   deferred candidates (row-patch util, the four drill panels), and the next scope (**backend audit**).
+- [help-topic-search.md](help-topic-search.md) — **parked, not started (2026-07-25).** A search box on the
+  `/help` topic index (in the sticky header) to find articles by typing. Parked because it's of limited
+  use until the match reaches article *body* text, not just titles/summaries — and bodies are JSX, so
+  that needs a per-topic `keywords` field (ongoing authoring) rather than free full-text search.
 
 ## Related (already tracked elsewhere)
 
