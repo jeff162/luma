@@ -799,62 +799,91 @@ export const HELP_TOPICS = [
   {
     id: 'amazon-import',
     section: 'importing',
-    title: 'Importing Amazon orders (AZAD)',
+    title: 'Importing Amazon order detail (AZAD Chrome extension)',
     surfaces: ['Import / Export — Amazon'],
-    summary: 'Amazon purchases arrive on your card as bare AMAZON.COM charges. The AZAD browser extension exports your order history as CSVs; upload the Orders file on the Amazon tab to turn each charge into a described purchase in an Amazon account. The Items file is optional extra detail.',
+    summary: 'Capture Amazon order detail using a Chrome browser extension to export order history. The item detail can be captured as well to provide categorization information if that is interesting. The existing Amazon charges are categorized as money movement to avoid double counting the charges.',
     body: () => (
       <>
         <p>
-          Amazon purchases hit your card statement as bare <strong>AMAZON.COM</strong> charges with no hint
-          of what was bought. The open-source <strong>AZAD</strong> (Amazon Order History Reporter) browser
-          extension exports your own order history as spreadsheets; {APP_NAME} reads the <strong>Orders</strong>{' '}
-          file to create one transaction per order in an Amazon account &mdash; described by what you bought &mdash;
-          then finds the matching card charge, links it, and excludes it from totals so nothing is counted twice.
-          You categorize those Amazon transactions with your own rules.
+          Amazon purchases appear in the funding account as some form of <strong>AMAZON.COM</strong> and the amount with no hint
+          of what was bought. The open-source <strong>AZAD</strong> (Amazon Order History Reporter) Chrome browser
+          extension exports the Amazon order history as CSV files; {APP_NAME} reads the <strong>Orders</strong>{' '}
+          file to create one transaction per order in an Amazon account, links
+          it to the matching Amazon charge in the transaction ledger, and excludes it from totals so it is not
+          counted twice. 
         </p>
-        <p>
-          <strong>Install the extension</strong> from the{' '}
+        <p><strong>Installation:</strong></p>
+        <ul>
+         <li>
+          From a Chrome browser, open this page {' '}
           <a href="https://chromewebstore.google.com/detail/amazon-order-history-repo/mgkilgclilajckgnedgjgnfdokkgnibi" target="_blank" rel="noreferrer">Chrome Web Store</a>{' '}
-          (details and other browsers are on the{' '}
+          and install the extension in your browser. (details are on the{' '}
           <a href="https://github.com/philipmulcahy/azad" target="_blank" rel="noreferrer">AZAD project page</a>).
-          The default install is all you need &mdash; <em>preview / premium features</em> do not have to be
-          enabled.
-        </p>
-        <p><strong>Export each year — the Orders file is what you need:</strong></p>
+         </li><li>
+          The default install is all that is needed &mdash; <em>preview / premium features</em> do not have to be
+          enabled. 
+         </li><li>
+          After you install it, the first time you browse to Amazon.com and log in, it will be running on the
+          top of the page. Eventually it will finish and close. The tool is launched via the extension browser (or the tool icon if
+          pinned to the toobar). 
+         </li>
+        </ul>
+        <p><strong>Export each year — the Orders file:</strong></p>
         <ol>
           <li>
-            Sign in to Amazon, then open the AZAD extension. Leave <strong>Show totals in csv downloads</strong>{' '}
-            checked.
+            Sign in to Amazon, load the orders page and then open the AZAD extension. 
+            Check <strong>Show totals in csv downloads</strong>{' '}. If other fields are checked, their
+            information will be captured as well.
           </li>
           <li>Select the <strong>Orders</strong> option and click the <strong>year</strong> you want.</li>
+          <li>
+            A tab may open with a Page Not Found error, something like <i>SORRY we couldn&apos;t find that page, Try searching or go to
+            Amazon&apos;s home page</i>. Just close this tab. The results are on the prior tab where the order page had been opened.
+          </li>
           <li>
             When the table finishes loading, change <strong>Show 10 entries</strong> to <strong>All</strong>,
             then click <strong>download spreadsheet (&apos;.csv&apos;)</strong>.
           </li>
           <li>
-            <em>Optional:</em> for extra reference detail (product links, list prices) on those transactions,
-            also export the <strong>Items</strong> file for the same year the same way &mdash; save it under a
-            different name. It is not required.
+            <em>Optional:</em> The AZAD extension can export both order data and item data. 
+            The <strong>Orders file</strong> provides transaction-level financial totals and 
+            the <strong>Items file</strong> adds the following additional detail:
+            <p>
+             <ul>
+              <li><strong>Line-Item Granularity:</strong> Expands multi-item purchases into individual rows so products can be analyzed independently.</li>
+              <li><strong>Product Identifiers:</strong> The <strong>ASIN</strong> (Amazon Standard Identification Number) and direct <strong>Item URLs</strong>.</li>
+              <li><strong>Unit Pricing &amp; Quantities:</strong> Shows individual item prices (pre-tax/shipping) and item quantities rather than order totals.</li>
+              <li><strong>Subscription Status:</strong> Includes a <strong>Subscribe &amp; Save</strong> flag for recurring purchases.</li>
+              <li><strong>Categorization:</strong> Includes a <strong>Category</strong> field for item classification.</li>
+             </ul>
+             </p>
+             If this additional information is desired (the per-item pricing can be especially useful) select the <strong>Items</strong> report
+             and run the export again for the same year. Select all rows and save it under a
+            different name. Import both files.
           </li>
           <li>Repeat for each year you want to bring in.</li>
         </ol>
         <p>
-          Drop the files on the <strong>Amazon</strong> tab &mdash; any number of years in one go; each file is
-          recognized by its columns, so upload order and file names do not matter. The tab then shows a
+          Drop the files on the CSV importer or click on the CSV importer to browse to the files to load. It does not
+          matter whether it is the csv importer on the <strong>Import</strong> tab or on the <strong>Amazon</strong> tab.
+          Provide any number of years at one time. The items and orders files are 
+          recognized by their columns and the files are recognized by the date ranges so 
+           upload order and file names do not matter. The tab then shows a
           <strong> mapping screen</strong> (like the CSV importer): pick the <strong>account</strong> to import
-          into, confirm the <strong>category</strong> the matched card charges are excluded into, and map each
-          <strong> payment card</strong> the files use to the account it charges (a card you&apos;ve mapped
-          before is filled in automatically). <strong>Import</strong> lights up once every card has an account
+          into, confirm the <strong>category</strong> used for categorizing the the matched card charges, and map each
+          new <strong>payment card</strong> from the import to a payment account. <strong>Import</strong> lights up once every card has an account
           (or is marked <em>Untracked</em>). An <strong>Items</strong> file adds its detail to the matching
           orders you have imported; if its Orders file isn&apos;t in yet, that detail is set aside &mdash; import
           the Orders file first, then re-import the Items file. Afterwards you only need to export the
-          <strong> current year</strong> now and then to pull in recent purchases.
+          <strong> current year</strong> now and then to pull in recent purchases. 
         </p>
         <p>
-          Re-importing is always safe: files are recognized by <em>content</em>, so a file a completed import
-          already took is announced as “already imported” and dropped from the selection rather than
-          re-processed &mdash; and orders are keyed on their Amazon order id, so overlapping exports never
-          double anything.
+          Periodically run the export again for the current year and import the result to bring in information
+          for recent purchases.
+        </p>
+        <p>
+          Re-importing is always safe: files are recognized by <em>content</em>. Orders are keyed using their Amazon 
+          order id, so overlapping exports are handled correctly.
         </p>
       </>
     ),
