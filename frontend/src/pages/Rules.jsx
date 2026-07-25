@@ -228,6 +228,10 @@ function EditRuleOverlay({ rule, categories, owners, accounts, onSave, onCancel 
       await onSave({ ...currentDraftState.data, reconcile })
     } catch (err) {
       setError(err.message || 'Failed to save rule')
+    } finally {
+      // Always clear the saving flag once onSave settles. On success the overlay closes; on a collision
+      // it stays open. Previously `working` leaked true (it was only reset on error), which wedged the
+      // Save button — visible on reopen because this overlay renders null instead of unmounting.
       setWorking(false)
     }
   }
@@ -816,14 +820,18 @@ export default function Rules() {
         global). The list is alphabetical by merchant — use the “Jump to” strip above to skip around.
       </div>
 
-      <EditRuleOverlay
-        rule={editingRule}
-        categories={categories}
-        owners={owners}
-        accounts={accounts}
-        onSave={handleEditSave}
-        onCancel={closeForm}
-      />
+      {/* Mounted only while open, so its local working/error/reconcile state can't leak into the next
+          edit session (the component otherwise renders null but stays mounted). */}
+      {editingRule ? (
+        <EditRuleOverlay
+          rule={editingRule}
+          categories={categories}
+          owners={owners}
+          accounts={accounts}
+          onSave={handleEditSave}
+          onCancel={closeForm}
+        />
+      ) : null}
 
       {collision ? (
         <AppDialog

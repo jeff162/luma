@@ -796,6 +796,9 @@ const RuleForm = forwardRef(function RuleForm({
       await onSave(buildDraftPayload())
     } catch (e) {
       setError(e.message || 'Failed to save rule')
+    } finally {
+      // Always clear the saving flag: on success the host closes this form, but on a same-matcher
+      // collision it stays open, where a leaked `saving` would wedge the Save button.
       setSaving(false)
     }
   }
