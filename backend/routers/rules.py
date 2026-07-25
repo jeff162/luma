@@ -327,6 +327,41 @@ class RulePreview(BaseModel):
     match_source_text: bool = False
 
 
+# The candidate-row query shared by the preview (would-change) and matches (all matcher hits) endpoints:
+# every field `_rule_matches_txn` needs plus the columns the rules-page transaction report renders. Ordered
+# newest-first so a capped matches result keeps the most recent rows.
+_RULE_PREVIEW_ROW_SQL = """
+    SELECT
+        t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
+        t.is_pending, t.category_overridden, t.notes, t.import_evidence_json,
+        COALESCE(a.parent_account_id, a.id) AS account_id,
+        t.owner_id,
+        COALESCE(a.display_name, a.name) AS account_name,
+        COALESCE(p.mask, a.mask)         AS account_mask,
+        t.import_batch_id,
+        t.category_id,
+        c.name        AS category_name,
+        NULL          AS category_color,
+        b.filename    AS import_batch_filename,
+        b.imported_at AS import_batch_imported_at,
+        o.name        AS owner_name,
+        o.color       AS owner_color,
+        COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
+        COALESCE(p.type, a.type) AS effective_account_type
+    FROM txn t
+    JOIN account a ON a.id = t.account_id
+    LEFT JOIN account p ON p.id = a.parent_account_id
+    LEFT JOIN category c ON c.id = t.category_id
+    LEFT JOIN import_batch b ON b.id = t.import_batch_id
+    LEFT JOIN owner o ON o.id = t.owner_id
+    ORDER BY t.date DESC
+"""
+
+# Cap the rows a matches report returns (the true count is always reported separately) so a broad rule's
+# hover/report can't pull a multi-thousand-row payload; newest rows win via the query's ORDER BY.
+_RULE_MATCHES_ROW_LIMIT = 500
+
+
 @router.post("/preview")
 def preview_rule(body: RulePreview):
     """Return transactions that would actually change if this rule were applied."""
@@ -347,34 +382,7 @@ def preview_rule(body: RulePreview):
     rule_tag_ids = set(body.tag_ids)
 
     with get_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                t.id, t.date, t.amount, t.merchant_name, t.display_name, t.raw_name,
-                t.is_pending, t.category_overridden, t.notes, t.import_evidence_json,
-                COALESCE(a.parent_account_id, a.id) AS account_id,
-                t.owner_id,
-                COALESCE(a.display_name, a.name) AS account_name,
-                COALESCE(p.mask, a.mask)         AS account_mask,
-                t.import_batch_id,
-                t.category_id,
-                c.name        AS category_name,
-                NULL          AS category_color,
-                b.filename    AS import_batch_filename,
-                b.imported_at AS import_batch_imported_at,
-                o.name        AS owner_name,
-                o.color       AS owner_color,
-                COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
-                COALESCE(p.type, a.type) AS effective_account_type
-            FROM txn t
-            JOIN account a ON a.id = t.account_id
-            LEFT JOIN account p ON p.id = a.parent_account_id
-            LEFT JOIN category c ON c.id = t.category_id
-            LEFT JOIN import_batch b ON b.id = t.import_batch_id
-            LEFT JOIN owner o ON o.id = t.owner_id
-            ORDER BY t.date DESC
-            """
-        ).fetchall()
+        rows = conn.execute(_RULE_PREVIEW_ROW_SQL).fetchall()
 
         affected = []
         for row in rows:
@@ -407,6 +415,37 @@ def preview_rule(body: RulePreview):
             txn["tags"] = tag_map.get(txn["id"], [])
 
     return {"count": len(affected), "transactions": affected}
+
+
+@router.get("/{rule_id}/matches")
+def rule_matches(rule_id: str):
+    """Existing transactions this rule's matcher currently matches — *every* match, not only the rows an
+    apply would change (that's `/preview`). Read-only; powers the per-rule count + report on the Rules
+    page. Returns the true total `count` plus up to `_RULE_MATCHES_ROW_LIMIT` of the newest matched rows."""
+    with get_db() as conn:
+        rule = conn.execute(
+            """SELECT id, keyword, match_expr, amount_min, amount_max, debit_credit, owner_id, account_id,
+                      account_type, category_id, clean_name, match_source_text
+               FROM category_rule WHERE id = ?""",
+            (rule_id,),
+        ).fetchone()
+        if not rule:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        rows = conn.execute(_RULE_PREVIEW_ROW_SQL).fetchall()
+        matched = []
+        count = 0
+        for row in rows:
+            txn = dict(row)
+            if not _rule_matches_txn(rule, txn):
+                continue
+            count += 1
+            if len(matched) < _RULE_MATCHES_ROW_LIMIT:
+                txn.pop("effective_account_id", None)
+                matched.append(txn)
+        tag_map = get_visible_transaction_tag_map(conn, [t["id"] for t in matched]) if matched else {}
+        for txn in matched:
+            txn["tags"] = tag_map.get(txn["id"], [])
+    return {"count": count, "transactions": matched}
 
 
 class RuleCreate(BaseModel):

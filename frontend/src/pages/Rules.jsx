@@ -5,10 +5,10 @@ import { useState, useEffect, useCallback, useId, useRef, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState, AppDialog } from '../components/ui.jsx'
+import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState, AppDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS } from '../components/ui.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
-import RuleForm, { amountConditionSummary } from '../components/RuleForm.jsx'
+import RuleForm, { amountConditionSummary, RulePreviewDetail } from '../components/RuleForm.jsx'
 import RulesFilterPopover from '../components/RulesFilterPopover.jsx'
 import { ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
 import { TagBadge } from '../components/TagUi.jsx'
@@ -66,7 +66,7 @@ function describeRule(rule, owners, accounts) {
 // Two-line rule row: matcher (clauses + conditions) on line 1, actions on line 2. Both lines wrap
 // freely and share the same treatment — so a rule with many tags and a truncated keyword can no longer
 // read as two mismatched sides (the old table clipped the keyword cell while the action cell wrapped).
-function RuleRow({ rule, owners, accounts, onEdit, onDelete }) {
+function RuleRow({ rule, owners, accounts, onEdit, onDelete, matchesCache, matchCacheVersion, onOpenReport }) {
   const [confirmDel,  setConfirmDel]  = useState(false)
   // Opt-in (off by default): also re-evaluate the transactions this rule categorized so they revert
   // instead of retaining the deleted rule's category. Reset whenever the confirm is dismissed.
@@ -77,6 +77,44 @@ function RuleRow({ rule, owners, accounts, onEdit, onDelete }) {
   // never lingers open (e.g. after opening a different rule's editor). Leaving the page unmounts the row.
   const dismissConfirm = () => { setConfirmDel(false); setReconcileDel(false) }
   useDismissibleLayer({ open: confirmDel, onClose: dismissConfirm, refs: [confirmRef] })
+
+  // Per-rule matcher matches (count + rows), fetched lazily on first hover of the ↗ and cached for the
+  // page visit (nothing is fetched for rules you never hover). matchCacheVersion bumps when the cache is
+  // cleared (after any rule mutation), so a row drops its stale count and refetches on next hover.
+  const [matchState, setMatchState] = useState(() => matchesCache.get(rule.id) || null)
+  const [matchLoading, setMatchLoading] = useState(false)
+  const hoverTimerRef = useRef(null)
+  useEffect(() => {
+    setMatchState(matchesCache.get(rule.id) || null)
+    setMatchLoading(false)
+  }, [matchCacheVersion, rule.id, matchesCache])
+  useEffect(() => () => clearTimeout(hoverTimerRef.current), [])
+
+  const fetchMatches = useCallback(() => {
+    const cached = matchesCache.get(rule.id)
+    if (cached) { setMatchState(cached); return Promise.resolve(cached) }
+    setMatchLoading(true)
+    return api.getRuleMatches(rule.id)
+      .then(res => { matchesCache.set(rule.id, res); setMatchState(res); return res })
+      .catch(() => null)
+      .finally(() => setMatchLoading(false))
+  }, [rule.id, matchesCache])
+
+  function armHoverFetch() {
+    if (matchState || matchLoading) return
+    clearTimeout(hoverTimerRef.current)
+    hoverTimerRef.current = setTimeout(fetchMatches, 200)
+  }
+  function cancelHoverFetch() { clearTimeout(hoverTimerRef.current) }
+  function openReport() {
+    if (matchState) { onOpenReport(rule, matchState); return }
+    fetchMatches().then(res => { if (res) onOpenReport(rule, res) })
+  }
+  const matchTip = matchLoading
+    ? 'Counting matches…'
+    : matchState
+      ? `${matchState.count} transaction${matchState.count !== 1 ? 's' : ''} match — click to view`
+      : 'Show transactions this rule matches'
 
   const conditions = describeRule(rule, owners, accounts)
   const clauses = rule.clauses && rule.clauses.length ? rule.clauses : [rule.keyword]
@@ -118,6 +156,18 @@ function RuleRow({ rule, owners, accounts, onEdit, onDelete }) {
       </div>
 
       <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center', paddingTop: 1 }}>
+        {/* Hover to count the transactions this rule matches (lazy, cached); click to open the report. */}
+        <Tooltip content={matchTip} openDelay={ROW_HOVER_OPEN_DELAY_MS}>
+          <button
+            type="button"
+            onMouseEnter={armHoverFetch}
+            onMouseLeave={cancelHoverFetch}
+            onFocus={armHoverFetch}
+            onClick={openReport}
+            aria-label="Show transactions this rule matches"
+            style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 13, padding: '2px 6px', borderRadius: 4 }}
+          >↗</button>
+        </Tooltip>
         <button
           onClick={() => onEdit(rule.id)}
           style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 12, padding: '2px 6px', borderRadius: 4 }}
@@ -383,6 +433,11 @@ export default function Rules() {
   const [collision, setCollision] = useState(null)
   const [createInitialValues, setCreateInitialValues] = useState({})
   const [createTransactionData, setCreateTransactionData] = useState(null)
+  // Page-visit cache of per-rule matcher matches (rule_id → { count, transactions }); version bumps to tell
+  // rows to drop stale entries after a rule mutation. matchReport is the open matched-rows dialog.
+  const matchesCacheRef = useRef(new Map())
+  const [matchCacheVersion, setMatchCacheVersion] = useState(0)
+  const [matchReport, setMatchReport] = useState(null) // { rule, data }
   const {
     pendingCount: recategorizePendingCount,
     result: recategorizeResult,
@@ -395,6 +450,9 @@ export default function Rules() {
   // set is bounded and fully in memory), so keystrokes and facet toggles never re-hit the server, and the
   // rail/count can reflect the full set. The windowed list keeps the DOM cost bounded regardless of size.
   const loadRules = useCallback(() => {
+    // Any reload follows a possible rule/data change, so drop the match-count cache and tell rows to refetch.
+    matchesCacheRef.current.clear()
+    setMatchCacheVersion(v => v + 1)
     api.getRules().then(r => { setRules(r); setLoading(false) })
   }, [])
   const loadCategories = useCallback(() => { api.getCategories().then(setCategories) }, [])
@@ -808,6 +866,9 @@ export default function Rules() {
                       accounts={accounts}
                       onEdit={openEditForm}
                       onDelete={handleDelete}
+                      matchesCache={matchesCacheRef.current}
+                      matchCacheVersion={matchCacheVersion}
+                      onOpenReport={(rule, data) => setMatchReport({ rule, data })}
                     />
                   )
               )}
@@ -870,6 +931,20 @@ export default function Rules() {
             loadRules()
             loadRecategorizePreview()
           }}
+        />
+      ) : null}
+
+      {matchReport ? (
+        <RulePreviewDetail
+          transactions={matchReport.data.transactions}
+          categories={categories}
+          title={`Transactions matching “${(matchReport.rule.clauses && matchReport.rule.clauses.length ? matchReport.rule.clauses.join(' + ') : matchReport.rule.keyword)}”`}
+          subtitle={
+            matchReport.data.count > matchReport.data.transactions.length
+              ? `${matchReport.data.count} matching · showing the ${matchReport.data.transactions.length} most recent`
+              : `${matchReport.data.count} matching transaction${matchReport.data.count !== 1 ? 's' : ''}`
+          }
+          onClose={() => setMatchReport(null)}
         />
       ) : null}
     </div>

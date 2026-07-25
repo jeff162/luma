@@ -281,7 +281,13 @@ function ConditionChip({ label, summary, active, expanded = true, onActivate, on
  * width from the grid's last column and clip the Amount cell when the scrollbar appears, so new column
  * previews or similar modals should keep this shape rather than wrapping a fillHeight table.
  */
-function RulePreviewDetail({ transactions, categories, onClose }) {
+export function RulePreviewDetail({
+  transactions,
+  categories,
+  onClose,
+  title = 'Transactions Affected by This Rule',
+  subtitle,
+}) {
   const [savedColumns, setSavedColumns] = useUserPreference(RULE_PREVIEW_COLUMNS_PREF_KEY, [])
   const [columns, setColumns] = useState(() => normalizeRulePreviewColumnConfig(savedColumns, RULE_PREVIEW_DEFAULT_COLUMNS))
 
@@ -339,9 +345,9 @@ function RulePreviewDetail({ transactions, categories, onClose }) {
       <FloatingPanel style={{ width: 'min(960px, 100%)', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
         <FloatingPanelHeader style={{ padding: '16px 20px 14px' }}>
           <div>
-            <div style={{ fontSize: 17, fontWeight: 600 }}>Transactions Affected by This Rule</div>
+            <div style={{ fontSize: 17, fontWeight: 600 }}>{title}</div>
             <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
-              {transactions.length} transaction{transactions.length !== 1 ? 's' : ''} where applying this rule would make a change
+              {subtitle ?? `${transactions.length} transaction${transactions.length !== 1 ? 's' : ''} where applying this rule would make a change`}
             </div>
           </div>
           <button
@@ -412,64 +418,6 @@ function RulePreviewDetail({ transactions, categories, onClose }) {
   )
 }
 
-function MatchCountInline({ keyword, multiClause = false, amtLow, amtHigh, amtSide, ownerId, accountId, matchSourceText, onCountChange }) {
-  const [count, setCount] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const debounceRef = useRef(null)
-
-  const hasKeyword = keyword.trim().length >= 2
-  const hasAmount = amtLow != null || amtHigh != null
-  // The lightweight hint searches a single keyword server-side; a multi-clause (AND) matcher can't be
-  // resolved that way, so it defers to the authoritative previewRule count in the footer.
-  const canSearch = !matchSourceText && !multiClause && (hasKeyword || hasAmount)
-
-  useEffect(() => {
-    if (!canSearch) {
-      setCount(null)
-      onCountChange(0)
-      return
-    }
-    clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(async () => {
-      setLoading(true)
-      try {
-        const resp = await api.getTransactions({
-          limit: 500,
-          ...(hasKeyword ? { search: keyword.trim() } : {}),
-          ...(ownerId ? { owner_ids: ownerId } : {}),
-          ...(accountId ? { account_ids: accountId } : {}),
-        })
-        const matched = resp.transactions.filter(t => {
-          const abs = Math.abs(t.amount)
-          if (amtSide === 'debit' && !(t.amount > 0)) return false
-          if (amtSide === 'credit' && !(t.amount < 0)) return false
-          if (amtLow != null && abs < amtLow) return false
-          if (amtHigh != null && abs > amtHigh) return false
-          return true
-        })
-        setCount(matched.length)
-        onCountChange(matched.length)
-      } catch {
-        setCount(null)
-        onCountChange(0)
-      } finally {
-        setLoading(false)
-      }
-    }, 600)
-    return () => clearTimeout(debounceRef.current)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keyword, amtLow, amtHigh, amtSide, ownerId, accountId, matchSourceText, canSearch])
-
-  if (!canSearch) return null
-  if (loading) return <span style={{ fontSize: 12, color: 'var(--muted)' }}>checking matches…</span>
-  if (count == null || count === 0) return null
-  return (
-    <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
-      {count} matching row{count === 1 ? '' : 's'}
-    </span>
-  )
-}
-
 /*
  * The form is organized around a "read the rule as a sentence" model: the header mirrors the live draft while
  * each chip expands into one condition or action editor. Transaction context can prefill the amount rule, but
@@ -491,7 +439,6 @@ const RuleForm = forwardRef(function RuleForm({
   showApplyToExisting = true,
   hideFooter = false,
   hideFooterActions = false,
-  hideMatchCount = false,
   onDraftChange,
   onCategoriesChanged,
   onTagCreated,
@@ -596,7 +543,6 @@ const RuleForm = forwardRef(function RuleForm({
   const [tagsOpen, setTagsOpen] = useState(!!((initialValues.tagIds ?? initialValues.tag_ids ?? []).length))
   const { tags: availableTags, addTag } = useTags()
 
-  const [, setMatchCount] = useState(0)
   const [applyToExisting, setApplyToExisting] = useState(false)
   const [changeCount, setChangeCount] = useState(0)
   const [changeTransactions, setChangeTransactions] = useState([])
@@ -842,7 +788,28 @@ const RuleForm = forwardRef(function RuleForm({
       ) : null}
 
       <div style={{ padding: '16px 20px', borderBottom: '2px solid var(--border)' }}>
-        <div style={sectionHeadStyle}>If The Transaction Matches…</div>
+        {/* Live "would change" count + report launcher, at the top by the criteria so it's visible while
+            editing. Counts the existing transactions applying this rule would actually alter (the same
+            preview the apply-to-existing footer uses), not the raw matcher hits. */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+          <span style={{ ...sectionHeadStyle, marginBottom: 0 }}>If The Transaction Matches…</span>
+          {!matchOnly && changeCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => setPreviewDetailOpen(true)}
+              title="See the existing transactions this rule would change"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
+                background: 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
+                border: '1px solid color-mix(in srgb, var(--accent2) 22%, var(--border))',
+                color: 'var(--accent2)', borderRadius: 999, padding: '3px 10px',
+                fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+              }}
+            >
+              {changeCount} would change ↗
+            </button>
+          ) : null}
+        </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <ConditionChip
             label="Merchant Name Contains"
@@ -1108,7 +1075,7 @@ const RuleForm = forwardRef(function RuleForm({
       )}
 
       {/* Read-only readout of the rule being built — the edits live in the sections above. Always
-          rendered (even when the footer is hidden) so the matching-row count is never lost. */}
+          rendered (even when the footer is hidden) so the rule always reads back as a sentence. */}
       <div style={{ padding: '14px 20px', borderBottom: hideFooter ? 'none' : '2px solid var(--border)' }}>
         <div style={sectionHeadStyle}>{matchOnly ? 'Match Summary' : 'Rule Summary'}</div>
         <div style={{ fontSize: 13, lineHeight: 1.5 }}>
@@ -1133,21 +1100,6 @@ const RuleForm = forwardRef(function RuleForm({
         {actionSummaryLabels.length > 0 ? (
           <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 6 }}>
             {actionSummaryLabels.join(' · ')}
-          </div>
-        ) : null}
-        {!hideMatchCount ? (
-          <div style={{ marginTop: 8 }}>
-            <MatchCountInline
-              keyword={trimmedClauses[0] || ''}
-              multiClause={isMultiClause}
-              amtLow={amtLow}
-              amtHigh={amtHigh}
-              amtSide={amtSide}
-              ownerId={ownerId}
-              accountId={accountId}
-              matchSourceText={matchSourceText}
-              onCountChange={n => { setMatchCount(n); if (n === 0) setApplyToExisting(false) }}
-            />
           </div>
         ) : null}
       </div>

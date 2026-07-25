@@ -339,7 +339,6 @@ export function RuleEditorModal({
             onCategoriesChanged={onCategoriesChanged}
             onTagCreated={onTagCreated}
             mode={matchOnly ? 'match-only' : 'full'}
-            hideMatchCount={matchOnly}
           />
 
           {matchingRowsPanel ? (

@@ -325,6 +325,9 @@ export const api = {
     return request(`/rules${q}`)
   },
   getMatchingRuleForTransaction: (txnId) => request(`/rules/match/transaction/${txnId}`),
+  // Existing transactions a rule's matcher currently matches: { count (true total), transactions (capped) }.
+  // Drives the per-rule hover count + report on the Rules page.
+  getRuleMatches: (id) => request(`/rules/${id}/matches`),
   previewRule: (data) => request('/rules/preview', { method: 'POST', body: JSON.stringify(data) }),
   // `onExisting`: how to reconcile a same-matcher collision. Default (omitted) classifies and reports
   // without writing (status: duplicate|mergeable|conflict); 'merge' folds a mergeable/duplicate save

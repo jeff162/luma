@@ -225,6 +225,29 @@ class MultiClauseMatchTests(unittest.TestCase):
             update_rule(created["id"], RuleUpdate(clauses=["amazon"]))
         self.assertIsNone(self._stored_match_expr(created["id"]), "back to one clause clears the expr")
 
+    # --- the /rules/{id}/matches endpoint (per-rule count + report rows) -------
+
+    def test_matches_endpoint_counts_all_matcher_hits(self):
+        from backend.routers.rules import rule_matches
+        self._txn("Amazon Prime")
+        self._txn("Amazon Fresh")
+        self._txn("Starbucks")  # non-match
+        created = self._rule(["amazon"], self.cat_a)
+        with self._use_db():
+            res = rule_matches(created["id"])
+        self.assertEqual(res["count"], 2)
+        self.assertEqual({t["merchant_name"] for t in res["transactions"]}, {"Amazon Prime", "Amazon Fresh"})
+
+    def test_matches_endpoint_counts_and_matcher_hits(self):
+        from backend.routers.rules import rule_matches
+        self._txn("Amazon Prime Video")   # amazon AND prime
+        self._txn("Amazon Fresh")         # amazon only — excluded by the AND matcher
+        created = self._rule(["amazon", "prime"], self.cat_b)
+        with self._use_db():
+            res = rule_matches(created["id"])
+        self.assertEqual(res["count"], 1)
+        self.assertEqual(res["transactions"][0]["merchant_name"], "Amazon Prime Video")
+
 
 if __name__ == "__main__":
     unittest.main()
