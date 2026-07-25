@@ -238,6 +238,31 @@ The one deliberate exception is the payee rename in the transaction detail panel
 (`TransactionDetail.jsx`), which keeps explicit Save/Cancel buttons; commit-on-blur there would
 make Cancel dead, so it stays button-driven even though it edits the same field as the row.
 
+#### Escape cancels the local edit — and only that
+
+Across the app, `Esc` follows one rule: it **cancels the current local edit, restores the pre-edit
+value, and does not bubble up to close the surrounding popover, dialog, or page**. If there is no
+active local edit, `Esc` does nothing at that layer. This is enforced by the shared primitives, not
+per-page handlers:
+
+- **`TransientTextInput`** owns Escape for a focused field: it `stopPropagation()`s so the key never
+  reaches a container's Escape handler, then either reverts-and-blurs (`CANCEL_EDIT`, the default) or
+  reverts-and-returns-focus-to-its-trigger (`REVERT_DRAFT_AND_RESTORE_FOCUS` + `restoreFocusRef`, for a
+  chip/expanding editor). A container that *should* close on the same Escape does so through the
+  editor's `onCancel` callback — never by catching the raw bubbling event.
+- **`useDismissibleLayer` / `useDismissiblePopup`** own Escape for a popover/menu/picker (close on
+  Escape). A layer that wraps a *raw* editable field (not a `TransientTextInput`) and must not close
+  mid-edit passes `ignoreEditableTarget: true`.
+- **Chip / expanding editors that revert component state** (open/collapsed) or a **non-scalar draft**
+  (e.g. the Rules editor's multi-clause keyword list, which reverts a whole array snapshot) can't be
+  modeled by the single-field primitive, so they orchestrate their own Escape — but to the same
+  contract: capture a snapshot on open, revert + restore focus to the trigger + `stopPropagation` on
+  Escape. `RuleForm`'s clause chip is the reference; its single-value *rename* chip uses
+  `TransientTextInput`'s `REVERT_DRAFT_AND_RESTORE_FOCUS` directly.
+
+Never add an app-wide/global `Esc` listener for this — each editor or layer owns its own Escape, gated
+on being open/active, so legitimate behaviors elsewhere are never disturbed.
+
 ## Transaction rows
 
 Transaction tables should share the same row-level metadata treatment.

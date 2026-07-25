@@ -7,10 +7,11 @@
 // (keydown/blur/focus) need a DOM, so this runs under jsdom rather than the node helper suite.
 
 import { afterEach, describe, it, expect, vi } from 'vitest'
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import TransientTextInput from '../TransientTextInput.jsx'
+import { ESCAPE_BEHAVIOR } from '../../lib/uiInteractions.js'
 
 afterEach(cleanup)
 
@@ -73,5 +74,52 @@ describe('TransientTextInput inline-edit contract', () => {
     await user.click(field)
     await user.keyboard('{Enter}')
     expect(onCommit).not.toHaveBeenCalled()
+  })
+
+  it('stops Escape from bubbling to a container/window handler', async () => {
+    const user = userEvent.setup()
+    // A window-level Escape listener is exactly how dismissible layers close (useEscapeAction). The
+    // focused field must consume its Escape so the surface behind it never closes underneath the edit.
+    const windowEscape = vi.fn(e => { if (e.key === 'Escape') windowEscape.escapes = (windowEscape.escapes || 0) + 1 })
+    window.addEventListener('keydown', windowEscape)
+    render(<Harness initial="x" restoreOnEscape blurOnEscape={false} />)
+    const input = screen.getByLabelText('field')
+    await user.click(input)
+    await user.keyboard('{Escape}')
+    window.removeEventListener('keydown', windowEscape)
+    expect(windowEscape.escapes || 0).toBe(0)
+  })
+
+  it('reverts and restores focus to the trigger (REVERT_DRAFT_AND_RESTORE_FOCUS)', async () => {
+    const user = userEvent.setup()
+    // Focus is restored on the next animation frame; run rAF synchronously so the assertion is stable.
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(cb => { cb(); return 0 })
+    function Host() {
+      const triggerRef = useRef(null)
+      const [value, setValue] = useState('orig')
+      return (
+        <>
+          <button ref={triggerRef} type="button">trigger</button>
+          <TransientTextInput
+            aria-label="field"
+            autoFocus={false}
+            value={value}
+            onChange={setValue}
+            restoreOnEscape
+            escapeBehavior={ESCAPE_BEHAVIOR.REVERT_DRAFT_AND_RESTORE_FOCUS}
+            restoreFocusRef={triggerRef}
+          />
+        </>
+      )
+    }
+    render(<Host />)
+    const input = screen.getByLabelText('field')
+    await user.click(input)
+    await user.type(input, 'ZZ')
+    expect(input.value).toBe('origZZ')
+    await user.keyboard('{Escape}')
+    expect(input.value).toBe('orig')
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'trigger' }))
+    rafSpy.mockRestore()
   })
 })

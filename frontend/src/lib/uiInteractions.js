@@ -173,6 +173,11 @@ export function useDismissibleLayer({
   closeOnEscape = true,
   blurOnEscape = true,
   escapeBehavior = ESCAPE_BEHAVIOR.DISMISS_POPUP,
+  // When true, Escape does NOT close the layer while focus is in a raw editable field it contains — the
+  // field's own Escape (e.g. a cancel-edit) should win first. Shared `TransientTextInput`s already
+  // stopPropagation on Escape, so this is only needed for layers wrapping plain inputs/textareas that
+  // shouldn't be dismissed mid-edit. Default false preserves the usual "Escape closes the popover".
+  ignoreEditableTarget = false,
   closeOnBlur = false,
   closeOnScrollResize = false,
 } = {}) {
@@ -198,7 +203,7 @@ export function useDismissibleLayer({
       blurActiveElementIfContained(refs)
     }
     onClose?.(event)
-  }, { enabled: open, escapeBehavior })
+  }, { enabled: open, escapeBehavior, ignoreEditableTarget })
 
   useEffect(() => {
     if (!open || !closeOnBlur) return undefined

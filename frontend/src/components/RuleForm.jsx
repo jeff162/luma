@@ -16,6 +16,8 @@ import {
   getFormControlStyle,
 } from './ui.jsx'
 import TagPickerWithCreate from './TagPickerWithCreate.jsx'
+import TransientTextInput from './TransientTextInput.jsx'
+import { ESCAPE_BEHAVIOR } from '../lib/uiInteractions.js'
 import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
 import { useTags } from '../lib/useTags.js'
 import PillGridTable from './PillGridTable.jsx'
@@ -609,15 +611,13 @@ const RuleForm = forwardRef(function RuleForm({
   const renameInputRef = useRef(null)
   const keywordConditionTriggerRef = useRef(null)
   const renameConditionTriggerRef = useRef(null)
+  // The clause list's Escape-restore snapshots the whole clauses array + open state (an array/chip-state
+  // revert the single-field TransientTextInput can't model); the rename chip uses TransientTextInput's
+  // shared restore-and-refocus behavior directly.
   const keywordEditSnapshotRef = useRef({
     clauses: initialClauses,
     open: initialClauses.length > 0,
   })
-  const renameEditSnapshotRef = useRef({
-    value: initialValues.cleanName ?? '',
-    open: !!initialValues.cleanName,
-  })
-  // Keyword and rename Escape-restore to whichever value/open state the edit started from.
   // The read-only source panel's collapsed state is remembered per user so it stays out of the way.
   const [sourcePanelOpen, setSourcePanelOpen] = useUserPreference('ui.ruleForm.sourcePanelOpen', true)
 
@@ -755,31 +755,6 @@ const RuleForm = forwardRef(function RuleForm({
     setTimeout(() => {
       if (closeEditor && keywordConditionTriggerRef.current) {
         keywordConditionTriggerRef.current.focus()
-        return
-      }
-      if (focusRef?.current) {
-        focusRef.current.focus()
-        return
-      }
-      target?.focus?.()
-      target?.select?.()
-    }, 0)
-  }
-
-  function captureRenameEditState() {
-    renameEditSnapshotRef.current = {
-      value: cleanName,
-      open: renameOpen,
-    }
-  }
-
-  function cancelRenameEdit(target, focusRef = null, closeEditor = false) {
-    setCleanName(renameEditSnapshotRef.current.value)
-    setRenameOpen(closeEditor ? false : renameEditSnapshotRef.current.open)
-    setRenameExpanded(closeEditor ? false : renameEditSnapshotRef.current.open)
-    setTimeout(() => {
-      if (closeEditor && renameConditionTriggerRef.current) {
-        renameConditionTriggerRef.current.focus()
         return
       }
       if (focusRef?.current) {
@@ -1031,27 +1006,23 @@ const RuleForm = forwardRef(function RuleForm({
               containerRef={renameConditionRef}
               triggerRef={renameConditionTriggerRef}
             >
-              <input
+              {/* Single-value chip editor on the shared primitive: Enter commits (and collapses the chip),
+                  Escape reverts the draft and returns focus to the chip trigger without bubbling to close
+                  the form; blur does not commit (the chip carries its own commit/clear). */}
+              <TransientTextInput
                 ref={renameInputRef}
                 id={`${fieldIdBase}-rename`}
                 name="rule-clean-merchant-name"
                 aria-label="Rename merchant to"
+                autoFocus={false}
                 value={cleanName}
-                onFocus={captureRenameEditState}
-                onChange={e => setCleanName(e.target.value)}
-                onKeyDown={event => {
-                  if (event.key === 'Enter') {
-                    event.stopPropagation()
-                    event.preventDefault()
-                    commitRenameEditor()
-                    return
-                  }
-                  if (event.key === 'Escape') {
-                    event.stopPropagation()
-                    event.preventDefault()
-                    cancelRenameEdit(event.currentTarget, renameConditionRef, true)
-                  }
-                }}
+                onChange={setCleanName}
+                onCommit={commitRenameEditor}
+                onBlurCommit={false}
+                restoreOnEscape
+                escapeBehavior={ESCAPE_BEHAVIOR.REVERT_DRAFT_AND_RESTORE_FOCUS}
+                restoreFocusRef={renameConditionTriggerRef}
+                onCancel={() => { setRenameOpen(false); setRenameExpanded(false) }}
                 placeholder="Clean display name, e.g. Whole Foods"
                 style={{ width: '100%', boxSizing: 'border-box', ...getFormControlStyle({ size: 'md' }) }}
               />

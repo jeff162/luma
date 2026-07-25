@@ -14,6 +14,7 @@ import TagDetail from '../components/TagDetail.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
+import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { formatCurrency, monthLabel, lastNMonths } from '../lib/utils.js'
 import {
   CHART_TOOLTIP_CONTENT_STYLE,
@@ -817,20 +818,8 @@ function MissingTagsToast({ reportName, onDismiss, onSuppress }) {
 function PickerManageMenu({ anchorRect, onRename, onDelete, onClose }) {
   const ref = useRef(null)
 
-  useEffect(() => {
-    function onDocMouseDown(e) {
-      if (ref.current && !ref.current.contains(e.target)) onClose()
-    }
-    function onKeyDown(e) {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('mousedown', onDocMouseDown)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('mousedown', onDocMouseDown)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [onClose])
+  // Shared dismissal (outside-click + Escape), replacing a bespoke document-listener pair.
+  useDismissibleLayer({ open: true, onClose, refs: [ref] })
 
   if (!anchorRect) return null
   const top = anchorRect.bottom + 4
