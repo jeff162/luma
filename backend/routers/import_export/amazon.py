@@ -1153,6 +1153,20 @@ def _distinct_charge_pairs(conn: sqlite3.Connection, ids: list) -> set:
     return {(r["txn_id_low"], r["txn_id_high"]) for r in rows}
 
 
+def _reviewed_charge_ids(conn: sqlite3.Connection, ids: list) -> set:
+    """The subset of ``ids`` the user acknowledged via **Mark reviewed** on the reconciliation report's
+    reverse-scan ('Unaccounted charge') bucket (see ``amazon_charge_reviewed``). An acknowledged charge
+    stays listed in the bucket but drops out of the batch's attention count — the escape valve that lets
+    the informational bucket be surfaced for a look without nagging forever."""
+    if not ids:
+        return set()
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"SELECT txn_id FROM amazon_charge_reviewed WHERE txn_id IN ({placeholders})", list(ids)
+    ).fetchall()
+    return {r["txn_id"] for r in rows}
+
+
 def _charges_marked_distinct(conn: sqlite3.Connection, ids: list) -> bool:
     """True when *every* pair among ``ids`` carries a user "Not duplicates" assertion — the group is
     settled as distinct purchases, so the report must not re-flag it as a duplicate. A partially
@@ -1310,8 +1324,12 @@ def amazon_reconciliation(conn: sqlite3.Connection, batch_id: str) -> dict:
         in-window duplicate's do. Kept out of the plain duplicate bucket so each copy gets eyeballed
         before Merge/Discard.
       * **amazon_unmatched**  — a cash order with *no* candidate charge at all (untracked card / a real miss);
-        surfaced for a manual link.
+        surfaced for a manual link, and counts toward attention until acknowledged. Carries ``reviewed``
+        (from the link's ``no_charge_reviewed`` flag): an acknowledged order stays in the bucket but drops
+        out of the attention count.
       * **payment_unmatched** — Amazon-looking ledger charges the export didn't account for (reverse scan).
+        Each carries ``reviewed`` (from ``amazon_charge_reviewed``): counts toward attention until the user
+        acknowledges it, after which it stays listed but leaves the count.
       * **unaccounted_duplicate** — reverse-scan charges that look like *copies of each other* (same
         account + amount, dates within ±3 days) with no order accounting for either — the double import
         the general dedupe can't catch (different post dates / payee text). Carved out of
@@ -1429,12 +1447,22 @@ def amazon_reconciliation(conn: sqlite3.Connection, batch_id: str) -> dict:
             matched_review.append({"link_id": link_id, "order": order, **suggestion})
             consumed.update(c["id"] for c in suggestion["charges"])
         else:
-            amazon_unmatched.append({"link_id": link_id, "order": order})
+            # No charge to resolve — an untracked card or a genuine miss. Surfaced for attention so a real
+            # anomaly can't hide in a silent pile, but acknowledgeable: `no_charge_reviewed` (set via
+            # mark_orders_no_charge_reviewed) drops it out of the attention count while it stays in the report.
+            amazon_unmatched.append(
+                {"link_id": link_id, "order": order, "reviewed": bool(meta.get("no_charge_reviewed"))})
 
     # ±7-day informational scan, minus anything shown in a duplicate group or consumed by a suggestion —
     # then carve out same-account same-amount near-date clusters as suspected double imports.
     unaccounted, unaccounted_duplicate = _group_unaccounted_duplicates(
         conn, _reverse_scan(conn, order_dates, charge_accounts, consumed))
+    # Tag each plain unaccounted charge with whether the user has acknowledged it (Mark reviewed) — an
+    # acknowledged one stays listed but leaves the attention count. The clustered duplicate bucket resolves
+    # by merge/discard/not-duplicates, so it carries no such flag.
+    reviewed_ids = _reviewed_charge_ids(conn, [c["id"] for c in unaccounted])
+    for c in unaccounted:
+        c["reviewed"] = c["id"] in reviewed_ids
     return {
         "matched": matched,
         "matched_review": matched_review,
@@ -1447,14 +1475,18 @@ def amazon_reconciliation(conn: sqlite3.Connection, batch_id: str) -> dict:
 
 
 def _compute_reconciliation_attention(conn: sqlite3.Connection, batch_id: str) -> int:
-    """How many of a batch's orders need the user to *act* — a duplicate charge to merge/discard, or a
-    Matched·review split suggestion to accept/dismiss. Deliberately excludes plain 'No charge found'
-    (usually an untracked card / pre-coverage gap with nothing to resolve, so it would nag forever). Runs
-    the full reconciliation, so it is the expensive path the cache in
+    """How much of a batch needs the user's eyes — a duplicate charge to merge/discard, a Matched·review
+    split suggestion to accept/dismiss, an *unacknowledged* 'No charge found' order, or an *unacknowledged*
+    'Unaccounted charge' (reverse-scan) charge. Both of the last two are often benign (an untracked card, a
+    purchase the export didn't cover), but a real anomaly — e.g. a stray duplicate — can hide in either
+    pile, so each is surfaced until the user acknowledges it (Mark reviewed; the escape valve that keeps it
+    from nagging forever). Runs the full reconciliation, so it is the expensive path the cache in
     :func:`reconciliation_attention_count` fronts."""
     recon = amazon_reconciliation(conn, batch_id)
     return (len(recon["duplicate"]) + len(recon["duplicate_review"])
-            + len(recon["matched_review"]) + len(recon["unaccounted_duplicate"]))
+            + len(recon["matched_review"]) + len(recon["unaccounted_duplicate"])
+            + sum(1 for u in recon["amazon_unmatched"] if not u.get("reviewed"))
+            + sum(1 for c in recon["payment_unmatched"] if not c.get("reviewed")))
 
 
 def _recon_epoch(conn: sqlite3.Connection) -> int:
@@ -1624,9 +1656,13 @@ def link_amazon_charges(conn: sqlite3.Connection, link_id: str, charge_txn_ids) 
     for cid in ids:
         priors[cid] = _exclude_charge(conn, cid)
         txn_links.add_member(conn, link_id, cid, "charge")
+        # A charge being linked leaves the reverse-scan bucket, so drop any stale "reviewed" acknowledgment
+        # it carried there — if it ever returns to unaccounted (unlinked), it deserves a fresh look.
+        conn.execute("DELETE FROM amazon_charge_reviewed WHERE txn_id = ?", (cid,))
     meta["charge_priors"] = priors
     meta["charge_linked_manually"] = True
     meta.pop("split_suggestion_dismissed", None)   # the order is reconciled now — clear any stale dismissal
+    meta.pop("no_charge_reviewed", None)           # ...and any stale no-charge-found acknowledgment
     txn_links.set_metadata(conn, link_id, meta)
     return {"status": "linked", "count": len(ids)}
 
@@ -1690,6 +1726,40 @@ async def amazon_dismiss_split_suggestion_endpoint(body: DismissSplitSuggestionR
             return dismiss_split_suggestion(conn, body.link_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+
+def mark_orders_no_charge_reviewed(conn: sqlite3.Connection, link_ids, reviewed: bool = True) -> dict:
+    """Acknowledge (or un-acknowledge) 'No charge found' orders. Sets/clears `no_charge_reviewed` in each
+    order link's metadata so the order leaves (or rejoins) the reconciliation attention count — the escape
+    valve for the untracked-card orders that have nothing to link. The order stays in the report either way;
+    only its attention weight changes. Mirrors the CSV advisory-reject `reviewed_at` acknowledgment. Each
+    metadata write bumps the recon epoch (txn_link trigger), so the cached attention count re-derives."""
+    updated = 0
+    for link_id in link_ids or []:
+        link = txn_links.get_link(conn, link_id)
+        if not link or link.get("kind") != LINK_KIND:
+            continue
+        meta = link.get("metadata") or {}
+        if reviewed:
+            meta["no_charge_reviewed"] = True
+        else:
+            meta.pop("no_charge_reviewed", None)
+        txn_links.set_metadata(conn, link_id, meta)
+        updated += 1
+    return {"updated": updated, "reviewed": reviewed}
+
+
+class MarkNoChargeReviewedRequest(BaseModel):
+    link_ids: list[str]
+    reviewed: bool = True
+
+
+@router.post("/amazon/mark-no-charge-reviewed")
+async def amazon_mark_no_charge_reviewed_endpoint(body: MarkNoChargeReviewedRequest):
+    """Acknowledge (or un-acknowledge) a set of 'No charge found' orders so they drop out of (or rejoin) the
+    reconciliation attention count. Bulk by `link_ids`; `reviewed=false` un-acknowledges."""
+    with get_db() as conn:
+        return mark_orders_no_charge_reviewed(conn, body.link_ids, body.reviewed)
 
 
 def _charge_prior_for(meta: dict, charge_id: str) -> Optional[dict]:
@@ -2167,6 +2237,41 @@ async def amazon_charges_not_duplicates_endpoint(body: MarkChargesDistinctReques
             return mark_charges_distinct(conn, body.charge_txn_ids)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+
+def mark_unaccounted_charges_reviewed(conn: sqlite3.Connection, charge_txn_ids, reviewed: bool = True) -> dict:
+    """Acknowledge (or un-acknowledge) 'Unaccounted charge' reverse-scan charges. Sets/clears a row in
+    ``amazon_charge_reviewed`` so the charge leaves (or rejoins) the reconciliation attention count — the
+    escape valve for the informational bucket. The charge stays listed in the report either way; only its
+    attention weight changes. Each write bumps the recon epoch (amazon_charge_reviewed trigger), so the
+    cached attention count re-derives."""
+    updated = 0
+    for cid in charge_txn_ids or []:
+        if not conn.execute("SELECT 1 FROM txn WHERE id = ?", (cid,)).fetchone():
+            continue
+        if reviewed:
+            conn.execute(
+                """INSERT OR IGNORE INTO amazon_charge_reviewed (txn_id, reviewed_at)
+                   VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))""",
+                (cid,),
+            )
+        else:
+            conn.execute("DELETE FROM amazon_charge_reviewed WHERE txn_id = ?", (cid,))
+        updated += 1
+    return {"updated": updated, "reviewed": reviewed}
+
+
+class MarkUnaccountedReviewedRequest(BaseModel):
+    txn_ids: list[str]
+    reviewed: bool = True
+
+
+@router.post("/amazon/mark-unaccounted-reviewed")
+async def amazon_mark_unaccounted_reviewed_endpoint(body: MarkUnaccountedReviewedRequest):
+    """Acknowledge (or un-acknowledge) a set of 'Unaccounted charge' reverse-scan charges so they drop out
+    of (or rejoin) the reconciliation attention count. Bulk by `txn_ids`; `reviewed=false` un-acknowledges."""
+    with get_db() as conn:
+        return mark_unaccounted_charges_reviewed(conn, body.txn_ids, body.reviewed)
 
 
 class MergeUnaccountedChargesRequest(BaseModel):

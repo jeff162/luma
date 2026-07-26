@@ -969,7 +969,10 @@ export const HELP_TOPICS = [
             doesn&rsquo;t read as Amazon, or a miss). <strong>Link charges…</strong> opens a picker
             over the unaccounted charges with a running sum against the order total &mdash; check the charge(s)
             that paid for it (several, if the order was split) and link them. A mismatched sum warns but doesn’t
-            block.</li>
+            block. These orders count toward the import&rsquo;s needs-attention total so a stray one gets a look;
+            when there&rsquo;s genuinely nothing to link (an untracked card), <strong>Mark reviewed</strong>
+            acknowledges it &mdash; it stays listed here but drops out of the attention count so it won&rsquo;t
+            keep nagging (Undo puts it back). Works per row or on a bulk selection.</li>
           <li><strong>Matched · review</strong> &mdash; no single charge equals the order total, but a unique set
             of unaccounted charges sums to it: Amazon billed the order per shipment. <strong>Accept</strong> links
             the whole set; <strong>Dismiss</strong> if it’s not a match (it won’t be re-suggested). A set spanning
@@ -985,13 +988,17 @@ export const HELP_TOPICS = [
             A merged-away or discarded copy is recoverable from Settings → Trash’s <em>Duplicate
             transactions</em> section, grouped by the file it came from.</li>
           <li><strong>Unaccounted charge</strong> &mdash; ledger charges that look like Amazon, on the cards Amazon
-            uses, in this import’s date range, that no order accounts for. Best-effort and informational.
-            <strong>Trash</strong> sends one to Trash &mdash; the escape hatch for a duplicate the report failed
-            to pair up. It acts on the whole row, so it also works in bulk (<strong>Move to trash</strong>);
-            the per-copy <strong>Discard</strong> on a stacked duplicate row names one copy instead, which is
-            why only Trash has a bulk form. They also file differently: Discard is a dedupe resolution and
-            lands under Settings → Trash&rsquo;s <em>Duplicate transactions</em>, while Trash is an ordinary
-            delete and lands under <em>Transactions</em>.</li>
+            uses, in this import’s date range, that no order accounts for. Best-effort, but surfaced for a look:
+            these count toward the import&rsquo;s needs-attention total so a stray one (say, a duplicate the
+            report couldn&rsquo;t pair) gets noticed. <strong>Trash</strong> sends one to Trash &mdash; the escape
+            hatch for that unpaired duplicate. It acts on the whole row, so it also works in bulk
+            (<strong>Move to trash</strong>); the per-copy <strong>Discard</strong> on a stacked duplicate row
+            names one copy instead, which is why only Trash has a bulk form. They also file differently: Discard
+            is a dedupe resolution and lands under Settings → Trash&rsquo;s <em>Duplicate transactions</em>,
+            while Trash is an ordinary delete and lands under <em>Transactions</em>. When a charge is just a
+            purchase the export didn&rsquo;t cover (nothing to fix), <strong>Mark reviewed</strong> acknowledges
+            it so it drops out of the attention count without trashing it (Undo puts it back) &mdash; per row or
+            on a bulk selection.</li>
           <li><strong>Matched</strong> &mdash; the order and the charge(s) it excluded. If a pairing is wrong
             (a coincidental same-amount charge, or a suggestion you accepted that turned out not to be this
             order&rsquo;s), <strong>Unlink</strong> detaches the charge &mdash; its original category is

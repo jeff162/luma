@@ -32,6 +32,8 @@ from backend.routers.import_export.amazon import (
     link_amazon_charges,
     manual_link_charge,
     mark_charges_distinct,
+    mark_orders_no_charge_reviewed,
+    mark_unaccounted_charges_reviewed,
     unlink_order_charges,
     merge_duplicate_charges,
     merge_unaccounted_charges,
@@ -878,6 +880,48 @@ class AmazonOrdersTests(unittest.TestCase):
         # The second cash order found no card charge → surfaced for a manual link.
         self.assertEqual(len(recon["amazon_unmatched"]), 1)
         self.assertEqual(recon["amazon_unmatched"][0]["order"]["amount"], 12.00)
+        # It defaults to unreviewed, so it counts toward the batch's attention tally.
+        self.assertFalse(recon["amazon_unmatched"][0]["reviewed"])
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(reconciliation_attention_count(conn, summary["batch_id"]), 1)
+
+    def test_no_charge_found_acknowledgment_drops_out_of_attention(self):
+        # A no-charge-found order counts toward attention until acknowledged; Mark reviewed keeps it in the
+        # bucket but clears its attention weight, and un-acknowledging restores it.
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(
+                conn, [_cash_order(order_id="no-charge", last4="9999", amount=12.00)],
+                account_id="amazon", filename="orders.csv")
+            batch_id = summary["batch_id"]
+            link_id = amazon_reconciliation(conn, batch_id)["amazon_unmatched"][0]["link_id"]
+            self.assertEqual(reconciliation_attention_count(conn, batch_id), 1)
+
+            mark_orders_no_charge_reviewed(conn, [link_id])
+            recon = amazon_reconciliation(conn, batch_id)
+            self.assertEqual(len(recon["amazon_unmatched"]), 1, "acknowledged order stays visible in the bucket")
+            self.assertTrue(recon["amazon_unmatched"][0]["reviewed"])
+            self.assertEqual(reconciliation_attention_count(conn, batch_id), 0, "acknowledged → no attention")
+
+            mark_orders_no_charge_reviewed(conn, [link_id], reviewed=False)
+            self.assertFalse(amazon_reconciliation(conn, batch_id)["amazon_unmatched"][0]["reviewed"])
+            self.assertEqual(reconciliation_attention_count(conn, batch_id), 1, "un-acknowledged → back to attention")
+
+    def test_linking_a_charge_clears_a_no_charge_acknowledgment(self):
+        # Acknowledging then hand-linking a charge leaves the order matched, and the stale acknowledgment is
+        # cleared — so if the charge is ever unlinked the order re-surfaces for a fresh review.
+        stray = self._add_card_charge(12.00, date="2024-11-05")  # AMAZON.COM, no order — a link candidate
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(
+                conn, [_cash_order(order_id="no-charge", last4="9999", amount=12.00)],
+                account_id="amazon", filename="orders.csv")
+            batch_id = summary["batch_id"]
+            link_id = amazon_reconciliation(conn, batch_id)["amazon_unmatched"][0]["link_id"]
+            mark_orders_no_charge_reviewed(conn, [link_id])
+            manual_link_charge(conn, link_id, stray)
+            unlink_order_charges(conn, link_id)   # order returns to no-charge-found
+            recon = amazon_reconciliation(conn, batch_id)
+            self.assertEqual(len(recon["amazon_unmatched"]), 1)
+            self.assertFalse(recon["amazon_unmatched"][0]["reviewed"], "linking cleared the stale acknowledgment")
 
     def test_reconciliation_reverse_scan_finds_unaccounted_amazon_charge(self):
         # One order matches its charge; a *second* Amazon charge on the same card in range is accounted
@@ -891,6 +935,53 @@ class AmazonOrdersTests(unittest.TestCase):
         self.assertIn(stray, ids)
         # The matched charge is not double-reported in the reverse scan (it's linked).
         self.assertEqual(len(recon["payment_unmatched"]), 1)
+
+    def test_unaccounted_charge_counts_toward_attention_until_reviewed(self):
+        # A reverse-scan ('Unaccounted charge') charge counts toward attention until acknowledged; Mark
+        # reviewed keeps it listed but clears its attention weight, and un-acknowledging restores it.
+        self._add_card_charge(37.32)                              # matches the order
+        stray = self._add_card_charge(19.99, date="2024-11-20")  # AMAZON.COM, no order → reverse scan
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, [_cash_order()], account_id="amazon", filename="orders.csv")
+            batch_id = summary["batch_id"]
+            recon = amazon_reconciliation(conn, batch_id)
+            self.assertEqual(len(recon["payment_unmatched"]), 1)
+            self.assertFalse(recon["payment_unmatched"][0]["reviewed"])
+            self.assertEqual(reconciliation_attention_count(conn, batch_id), 1)
+
+            mark_unaccounted_charges_reviewed(conn, [stray])
+            recon = amazon_reconciliation(conn, batch_id)
+            self.assertEqual(len(recon["payment_unmatched"]), 1, "acknowledged charge stays listed")
+            self.assertTrue(recon["payment_unmatched"][0]["reviewed"])
+            self.assertEqual(reconciliation_attention_count(conn, batch_id), 0, "acknowledged → no attention")
+
+            mark_unaccounted_charges_reviewed(conn, [stray], reviewed=False)
+            self.assertFalse(amazon_reconciliation(conn, batch_id)["payment_unmatched"][0]["reviewed"])
+            self.assertEqual(reconciliation_attention_count(conn, batch_id), 1, "un-acknowledged → back to attention")
+
+    def test_linking_an_unaccounted_charge_clears_its_review(self):
+        # Acknowledge a reverse-scan charge, then hand-link it to a no-charge-found order: it leaves the
+        # reverse scan, and its stale acknowledgment is cleared so an unlink returns it for a fresh look.
+        # The stray's amount (19.99) differs from the order's (12.00) so it isn't an auto-match candidate —
+        # it stays a reverse-scan charge until we link it by hand.
+        self._add_card_charge(37.32)                             # matches _cash_order(), seeds the reverse scan's account
+        stray = self._add_card_charge(19.99, date="2024-11-20")  # AMAZON.COM, in window, no order
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(
+                conn, [_cash_order(), _cash_order(order_id="no-charge", last4="9999", amount=12.00)],
+                account_id="amazon", filename="orders.csv")
+            batch_id = summary["batch_id"]
+            self.assertEqual({c["id"] for c in amazon_reconciliation(conn, batch_id)["payment_unmatched"]}, {stray})
+            mark_unaccounted_charges_reviewed(conn, [stray])
+            self.assertTrue(conn.execute("SELECT 1 FROM amazon_charge_reviewed WHERE txn_id = ?", (stray,)).fetchone())
+            link_id = amazon_reconciliation(conn, batch_id)["amazon_unmatched"][0]["link_id"]
+            manual_link_charge(conn, link_id, stray)   # sum mismatch warns but is allowed
+            self.assertIsNone(conn.execute("SELECT 1 FROM amazon_charge_reviewed WHERE txn_id = ?", (stray,)).fetchone(),
+                              "linking cleared the stale acknowledgment")
+            unlink_order_charges(conn, link_id)
+            recon = amazon_reconciliation(conn, batch_id)
+            self.assertEqual(len(recon["payment_unmatched"]), 1)
+            self.assertFalse(recon["payment_unmatched"][0]["reviewed"])
 
     def test_zero_dollar_order_never_shows_no_charge_found(self):
         # A free/promo order (its cash legs sum to $0.00) is classified non-cash: recorded but not counted,
@@ -923,7 +1014,8 @@ class AmazonOrdersTests(unittest.TestCase):
     def test_unaccounted_copies_group_as_duplicates(self):
         # Two same-amount strays a day apart on one card (bank post-date vs. aggregator date) group as
         # Unaccounted·duplicate; a same-amount stray too far off stays informational, as does a different
-        # amount. Groups need a look, so they count toward the attention tally.
+        # amount. Attention = the 1 duplicate group + the 2 unacknowledged informational singles (far, lone),
+        # which now each count until Mark reviewed'd.
         self._add_card_charge(37.32)   # matches _cash_order(), seeds the account
         a = self._add_card_charge(12.50, date="2024-11-20")
         b = self._add_card_charge(12.50, date="2024-11-21")
@@ -932,7 +1024,7 @@ class AmazonOrdersTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             summary = run_amazon_import(conn, [_cash_order()], account_id="amazon", filename="orders.csv")
             recon = amazon_reconciliation(conn, summary["batch_id"])
-            self.assertEqual(reconciliation_attention_count(conn, summary["batch_id"]), 1)
+            self.assertEqual(reconciliation_attention_count(conn, summary["batch_id"]), 3)
         self.assertEqual(len(recon["unaccounted_duplicate"]), 1)
         self.assertEqual({c["id"] for c in recon["unaccounted_duplicate"][0]["charges"]}, {a, b})
         self.assertEqual({c["id"] for c in recon["payment_unmatched"]}, {far, lone})
@@ -1767,9 +1859,11 @@ class AmazonOrdersTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             self.assertEqual(reconciliation_attention_count(conn, batch_id), 1)
         epoch_before = self._recon_epoch()
-        # Resolve the ambiguity by trashing the duplicate copy — a txn edit, which bumps the epoch.
+        # Resolve the ambiguity through the report's Discard: it trashes the redundant copy (a txn edit that
+        # bumps the epoch) and re-runs the pairing pass so the order links to the survivor — now matched.
         with self._use_db_path(), get_db() as conn:
-            conn.execute("UPDATE txn SET trashed_at = '2026-01-01T00:00:00Z' WHERE id = ?", (dup,))
+            link_id = amazon_reconciliation(conn, batch_id)["duplicate"][0]["link_id"]
+            trash_duplicate_charge(conn, dup, link_id)
         self.assertGreater(self._recon_epoch(), epoch_before, "a charge edit must advance the epoch")
         # The stale cache is recomputed on the next read: the order now matches cleanly, attention 0.
         with self._use_db_path(), get_db() as conn:

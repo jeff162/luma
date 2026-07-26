@@ -626,6 +626,9 @@ def build_backup_data(conn) -> dict:
             # User's "these two charges are distinct" assertions from the Amazon reconciliation's
             # unaccounted-duplicate grouping — same accumulated-filter role, charge-level.
             "amazon_charge_distinct": dump("amazon_charge_distinct"),
+            # User "Mark reviewed" acknowledgments on the reconciliation report's reverse-scan bucket, so a
+            # restore keeps unaccounted charges the user already cleared out of the attention count.
+            "amazon_charge_reviewed": dump("amazon_charge_reviewed"),
             # Amazon items parked awaiting their orders file (per-item detail retained so a later orders
             # import auto-attaches it). Without these a restore would strand a not-yet-matched items import.
             "amazon_pending_items": dump("amazon_pending_item"),
@@ -746,6 +749,7 @@ def _wipe_user_data_tables(conn):
     conn.execute("DELETE FROM rule_tag")
     conn.execute("DELETE FROM account_pair_distinct")
     conn.execute("DELETE FROM amazon_charge_distinct")
+    conn.execute("DELETE FROM amazon_charge_reviewed")
     # Parked Amazon items (awaiting their orders file) have no FK to cascade them, so the wipe must clear
     # them explicitly — otherwise pre-restore parked rows would linger and wrongly auto-attach to restored
     # orders. (They are restored from the backup payload right after, like every other data table.)
@@ -849,6 +853,7 @@ def restore_backup(body: RestoreRequest):
     rule_tags = [dict(row) for row in d.get("rule_tags", [])]
     account_pair_distinct = [dict(row) for row in d.get("account_pair_distinct", [])]
     amazon_charge_distinct = [dict(row) for row in d.get("amazon_charge_distinct", [])]
+    amazon_charge_reviewed = [dict(row) for row in d.get("amazon_charge_reviewed", [])]
     amazon_pending_items = [dict(row) for row in d.get("amazon_pending_items", [])]
     ui_preferences = [dict(row) for row in d.get("ui_preferences", [])]
     recurring_series = [dict(row) for row in d.get("recurring_series", [])]
@@ -935,6 +940,9 @@ def restore_backup(body: RestoreRequest):
         r for r in amazon_charge_distinct
         if r.get("txn_id_low") in txn_ids and r.get("txn_id_high") in txn_ids
     ]
+    amazon_charge_reviewed = [
+        r for r in amazon_charge_reviewed if r.get("txn_id") in txn_ids
+    ]
     # A parked-items row is kept only if the import that parked it survived (an orphan without its batch is
     # unreachable). order_id is an external Amazon reference, so it carries no ledger FK to check.
     amazon_pending_items = [
@@ -1020,6 +1028,8 @@ def restore_backup(body: RestoreRequest):
         insert_rows("txn_link_member", txn_link_members)
         # References txn only (both FKs), so after txn.
         insert_rows("amazon_charge_distinct", amazon_charge_distinct)
+        # References txn only; after txn.
+        insert_rows("amazon_charge_reviewed", amazon_charge_reviewed)
         # References import_batch via parked_batch_id (no hard FK); after import_batch anyway.
         insert_rows("amazon_pending_item", amazon_pending_items)
         # References account only (both FKs); with deferred FK checks the order is flexible anyway.
@@ -1073,6 +1083,7 @@ def restore_backup(body: RestoreRequest):
             "rule_tags": len(rule_tags),
             "account_pair_distinct": len(account_pair_distinct),
             "amazon_charge_distinct": len(amazon_charge_distinct),
+            "amazon_charge_reviewed": len(amazon_charge_reviewed),
             "ui_preferences": len(ui_preferences),
             "recurring_series": len(recurring_series),
             "recurring_membership_overrides": len(recurring_membership_overrides),

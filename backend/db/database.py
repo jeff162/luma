@@ -113,7 +113,7 @@ def get_db(db_path: str | None = None):
 # v14 adds `category_rule.match_expr` (multi-clause AND/contains merchant matcher). v15 adds
 # `category_rule.last_effect_date` (stale-rule signal) + `category_rule.deleted_at` (rules trash).
 
-CURRENT_VERSION = 16
+CURRENT_VERSION = 17
 
 MIGRATIONS = {}
 
@@ -516,6 +516,19 @@ def _add_amazon_pending_item(conn):
     """)
 
 
+@migration(17)
+def _add_amazon_charge_reviewed(conn):
+    # Acknowledgments for the reconciliation report's reverse-scan ("Unaccounted charge") bucket: a charge the
+    # user marked reviewed drops out of the batch's attention count while staying listed. One row per charge.
+    # Fresh installs get the table from the baseline CREATE in init_db.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS amazon_charge_reviewed (
+            txn_id      TEXT PRIMARY KEY REFERENCES txn(id) ON DELETE CASCADE,
+            reviewed_at TEXT NOT NULL
+        )
+    """)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -872,6 +885,16 @@ def init_db(db_path: str | None = None):
 
             CREATE INDEX IF NOT EXISTS idx_amazon_charge_distinct_high ON amazon_charge_distinct(txn_id_high);
 
+            -- Unaccounted charges the user acknowledged ("Mark reviewed") on the Amazon reconciliation
+            -- report's reverse-scan bucket: an Amazon-looking ledger charge no order accounts for that the
+            -- user has looked at and is fine with. The reconciliation report drops acknowledged charges out
+            -- of its attention count (they stay listed), so the informational bucket can be surfaced for a
+            -- look without nagging forever. One row per charge; cascades away if the charge is hard-deleted.
+            CREATE TABLE IF NOT EXISTS amazon_charge_reviewed (
+                txn_id      TEXT PRIMARY KEY REFERENCES txn(id) ON DELETE CASCADE,
+                reviewed_at TEXT NOT NULL
+            );
+
             -- Per-item detail from an Amazon items file imported *before* its orders file: parked here
             -- (keyed by order id) instead of being discarded, so importing the matching orders file later
             -- auto-attaches it. `parked_batch_id` ties the row to the orphan import that created it, so
@@ -1158,14 +1181,15 @@ _RECON_EPOCH_SOURCE_TABLES = {
     "account":                ("INSERT", "UPDATE", "DELETE"),
     "amazon_funding_map":     ("INSERT", "UPDATE", "DELETE"),
     "amazon_charge_distinct": ("INSERT", "DELETE"),
+    "amazon_charge_reviewed": ("INSERT", "DELETE"),
 }
 
 
 def _create_recon_epoch_triggers(conn: sqlite3.Connection) -> None:
     """Create (idempotently) the triggers that bump db_meta 'recon_epoch' on any write to a table the
     Amazon reconciliation reads. Runs after run_migrations so every referenced table — including the ones a
-    migration adds (amazon_funding_map, amazon_charge_distinct) — and db_meta exist on both fresh and
-    migrated databases."""
+    migration adds (amazon_funding_map, amazon_charge_distinct, amazon_charge_reviewed) — and db_meta exist
+    on both fresh and migrated databases."""
     for table, events in _RECON_EPOCH_SOURCE_TABLES.items():
         for event in events:
             conn.execute(f"""

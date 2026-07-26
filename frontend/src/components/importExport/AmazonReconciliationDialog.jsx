@@ -24,8 +24,10 @@ const AMAZON_RECON_PANEL_PREF_KEY = 'ui.amazonReconciliation.panel'
 //   • duplicate          — an order whose charge is duplicated (≥2 identical charges → ambiguous, so it
 //                          couldn't auto-match). Carries every copy with a per-charge Trash: remove the
 //                          redundant one (usually a double import) and the order matches the survivor.
-//   • amazon_unmatched   — a cash order with no candidate charge at all (link charges to it by hand)
-//   • payment_unmatched  — Amazon-looking ledger charges no order accounts for (heuristic reverse scan)
+//   • amazon_unmatched   — a cash order with no candidate charge at all (link charges by hand, or Mark
+//                          reviewed to acknowledge an untracked card so it leaves the attention count)
+//   • payment_unmatched  — Amazon-looking ledger charges no order accounts for (heuristic reverse scan);
+//                          Trash a stray, or Mark reviewed to acknowledge one so it leaves the attention count
 // It renders through the shared MatchReport table — the same visual format as the duplicate-detection
 // report — with the buckets flattened into one kind-grouped list.
 
@@ -92,13 +94,13 @@ const KIND_META = {
   duplicate_review: { rank: 1, label: 'Duplicate · review', stripe: '#fb7185', review: true,
     help: "Same-amount charges near this order, but outside the strict ±3-day match window — likely still a double import, but the dates don't corroborate it. Examine each copy (hover for its origin detail), then Merge, Discard, or Not duplicates — per row, or select the rows you've checked and bulk-Merge. A merged-away copy is restorable from Settings → Trash." },
   unmatched: { rank: 2, label: 'No charge found', stripe: '#f59e0b', warn: true,
-    help: 'These orders are counted, but no matching charge was found to exclude — an untracked card, or a match we missed. Check your funding sources, or link the charges by hand from the unaccounted list.' },
+    help: "These orders are counted, but no matching charge was found to exclude — an untracked card, or a match we missed. Check your funding sources, or link the charges by hand from the unaccounted list. If there's genuinely nothing to link (an untracked card), Mark reviewed acknowledges it — it stays here but drops out of the attention count so it won't nag." },
   matched_review: { rank: 3, label: 'Matched · review', stripe: '#14b8a6', review: true,
     help: 'No single charge matched this order, but a set of unaccounted charges sums to its total — likely a split shipment. Review and Accept to link them (each is excluded), or Dismiss to keep it as no-charge-found.' },
   unaccounted_duplicate: { rank: 4, label: 'Unaccounted · duplicate', stripe: '#f472b6', review: true,
     help: "Unaccounted charges that look like copies of each other — same account and amount, days apart — with no order accounting for either: the double import the general dedupe can't catch. Check each copy's origin (hover), then Discard a copy, Merge → keep one (the survivor keeps the richest detail and returns to the unaccounted list), or Not duplicates. Merge works per row or in bulk on selected rows; a merged-away copy is restorable from Settings → Trash." },
   reverse: { rank: 5, label: 'Unaccounted charge', stripe: '#94a3b8',
-    help: "Charges in your ledger that look like Amazon, on the cards Amazon uses, in this import's date range, that no imported order accounts for. Possibly purchases the export didn't cover — informational. Discard sends one to Trash, for a duplicate the report failed to pair." },
+    help: "Charges in your ledger that look like Amazon, on the cards Amazon uses, in this import's date range, that no imported order accounts for. Possibly purchases the export didn't cover. These count toward the needs-attention total so a stray one (e.g. an unpaired duplicate) gets a look; Trash sends one to Trash (for a duplicate the report failed to pair), or Mark reviewed acknowledges a legitimately-uncovered charge so it drops out of the count without trashing it (Undo puts it back)." },
   matched: { rank: 6, label: 'Matched', stripe: 'var(--success, #22c55e)',
     help: 'Each order was linked to the card charge(s) it paid, and those are excluded from totals.' },
 }
@@ -221,7 +223,12 @@ function rowActionsFor(entry) {
   if (entry.kind === 'unaccounted_duplicate') return { merge: true }
   if (entry.kind === 'matched_review') return { accept: true, dismiss: true }
   if (entry.kind === 'matched') return { unlink: true }
-  if (entry.kind === 'reverse') return { trash: true }
+  // An unaccounted reverse-scan charge can be trashed, and — like a no-charge-found order — acknowledged so
+  // it drops out of the attention count (or un-acknowledged back into it).
+  if (entry.kind === 'reverse') return entry.reviewed ? { trash: true, unreview: true } : { trash: true, mark_reviewed: true }
+  // A no-charge-found order can be acknowledged (Mark reviewed) so it drops out of the attention count,
+  // or un-acknowledged back into it — both are whole-row, so they bulk cleanly.
+  if (entry.kind === 'unmatched') return entry.reviewed ? { unreview: true } : { mark_reviewed: true }
   return {}
 }
 
@@ -272,8 +279,8 @@ export function AmazonReconciliationDialog({
       ...matchedReview.map(r => ({ id: `r:${r.link_id}`, kind: 'matched_review', linkId: r.link_id, order: r.order, orderUrl: orderSourceUrl(r.order), charges: r.charges || [], total: r.total, spansDays: r.spans_days, reason: r.reason })),
       ...duplicate.map(d => ({ id: `d:${d.link_id}`, kind: 'duplicate', linkId: d.link_id, order: d.order, orderUrl: orderSourceUrl(d.order), charges: d.charges, mergeable: d.mergeable })),
       ...duplicateReview.map(d => ({ id: `dr:${d.link_id}`, kind: 'duplicate_review', linkId: d.link_id, order: d.order, orderUrl: orderSourceUrl(d.order), charges: d.charges, mergeable: d.mergeable })),
-      ...amazonUnmatched.map(m => ({ id: `u:${m.link_id}`, kind: 'unmatched', linkId: m.link_id, order: m.order, orderUrl: orderSourceUrl(m.order), charges: null })),
-      ...paymentUnmatched.map(t => ({ id: `p:${t.id}`, kind: 'reverse', linkId: null, order: null, charge: t })),
+      ...amazonUnmatched.map(m => ({ id: `u:${m.link_id}`, kind: 'unmatched', linkId: m.link_id, order: m.order, orderUrl: orderSourceUrl(m.order), charges: null, reviewed: !!m.reviewed })),
+      ...paymentUnmatched.map(t => ({ id: `p:${t.id}`, kind: 'reverse', linkId: null, order: null, charge: t, reviewed: !!t.reviewed })),
       ...unaccountedDuplicate.map(g => ({ id: `ud:${g.charges[0]?.id}`, kind: 'unaccounted_duplicate', linkId: null, order: null, charges: g.charges })),
     ]
     return rows.sort((a, b) =>
@@ -303,7 +310,7 @@ export function AmazonReconciliationDialog({
   })
   // The intersection of bulk actions across the selected rows — each button shows its applicable count.
   const selectionSummary = useMemo(() => {
-    const s = { total: 0, merge: 0, accept: 0, dismiss: 0, unlink: 0, trash: 0 }
+    const s = { total: 0, merge: 0, accept: 0, dismiss: 0, unlink: 0, trash: 0, mark_reviewed: 0, unreview: 0 }
     for (const e of visibleEntries) {
       if (!selectedIds.has(e.id)) continue
       s.total += 1
@@ -313,6 +320,8 @@ export function AmazonReconciliationDialog({
       if (a.dismiss) s.dismiss += 1
       if (a.unlink) s.unlink += 1
       if (a.trash) s.trash += 1
+      if (a.mark_reviewed) s.mark_reviewed += 1
+      if (a.unreview) s.unreview += 1
     }
     return s
   }, [visibleEntries, selectedIds])
@@ -339,6 +348,30 @@ export function AmazonReconciliationDialog({
       onReload?.()
     } catch (e) {
       setActionError(e?.message || 'Could not dismiss the suggestion')
+    } finally {
+      setBusyTrash(false)
+    }
+  }
+
+  // The right review-toggle call for an entry: a no-charge-found order acknowledges by its order link id; an
+  // unaccounted reverse-scan charge acknowledges by its txn id (it has no order link). Shared by the per-row
+  // buttons and the bulk bar so both buckets clear the same way.
+  const reviewCallFor = (entry, reviewed) => (
+    entry.kind === 'reverse'
+      ? api.markAmazonUnaccountedReviewed({ txn_ids: [entry.charge.id], reviewed })
+      : api.markAmazonOrdersReviewed({ link_ids: [entry.linkId], reviewed })
+  )
+
+  // Acknowledge (or un-acknowledge) an order/charge — it stays in the report but drops out of the attention
+  // count / Tasks nag once reviewed. The escape valve for benign items with nothing left to resolve.
+  const setEntryReviewed = async (entry, reviewed) => {
+    setBusyTrash(true)
+    setActionError('')
+    try {
+      await reviewCallFor(entry, reviewed)
+      onReload?.()
+    } catch (e) {
+      setActionError(e?.message || 'Could not update the review state')
     } finally {
       setBusyTrash(false)
     }
@@ -449,6 +482,8 @@ export function AmazonReconciliationDialog({
         if (action === 'accept') return api.linkAmazonCharges({ link_id: entry.linkId, charge_txn_ids: (entry.charges || []).map(c => c.id) })
         if (action === 'dismiss') return api.dismissAmazonSplitSuggestion({ link_id: entry.linkId })
         if (action === 'unlink') return api.unlinkAmazonOrderCharges({ order_link_id: entry.linkId })
+        if (action === 'mark_reviewed') return reviewCallFor(entry, true)
+        if (action === 'unreview') return reviewCallFor(entry, false)
         // A reverse-scan row owns exactly one charge and no order link, so trashing it is independent
         // of every other selected row (no re-pairing pass runs) — safe to fire in parallel.
         if (action === 'trash') return api.trashAmazonDuplicateCharge({ charge_txn_id: entry.charge?.id, order_link_id: null, as_duplicate: false })
@@ -478,9 +513,12 @@ export function AmazonReconciliationDialog({
   const columns = [
     { key: 'kind', label: 'Kind', width: 150, render: (entry) => {
       const meta = KIND_META[entry.kind]
-      const color = meta.warn ? 'var(--warning, #f59e0b)' : meta.review ? meta.stripe : 'var(--muted)'
+      // An acknowledged no-charge-found order or unaccounted charge no longer needs attention, so it drops
+      // the warn emphasis and reads muted (the green ✓ marker lives in the Actions column).
+      const handled = entry.reviewed && (entry.kind === 'unmatched' || entry.kind === 'reverse')
+      const color = handled ? 'var(--muted)' : meta.warn ? 'var(--warning, #f59e0b)' : meta.review ? meta.stripe : 'var(--muted)'
       return (
-        <span style={{ whiteSpace: 'nowrap', color, fontWeight: meta.warn || meta.review ? 600 : 400 }} title={meta.help}>
+        <span style={{ whiteSpace: 'nowrap', color, fontWeight: !handled && (meta.warn || meta.review) ? 600 : 400 }} title={meta.help}>
           {meta.label}
         </span>
       )
@@ -536,15 +574,27 @@ export function AmazonReconciliationDialog({
         )
       }
       if (entry.kind === 'reverse') {
-        // The escape hatch for a duplicate the grouping failed to pair. Labelled "Trash" rather than
-        // "Discard" because it acts on the whole row (this row owns one charge), which is also what makes
-        // it bulk-able — unlike the per-copy Discard on a stacked duplicate row, which names one copy.
+        // Informational, but surfaced for a look: Trash it (a duplicate the grouping failed to pair — labelled
+        // "Trash" rather than "Discard" because it acts on the whole one-charge row, which is what makes it
+        // bulk-able), or Mark reviewed to acknowledge a legitimately-uncovered charge so it leaves the
+        // attention count. A reviewed one shows a green ✓ with an Undo.
         return (
-          <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             <Button small variant="ghost" disabled={busy} onClick={() => discardCharge(entry.charge, entry)}
               title="Send this charge to Trash — for a duplicate copy the report failed to pair up (recoverable from Settings → Trash)">
               Trash
             </Button>
+            {entry.reviewed ? (
+              <>
+                <span style={{ fontSize: 11, color: 'var(--success)', fontWeight: 600, whiteSpace: 'nowrap' }} title="Acknowledged — not counted toward the attention total">✓ Reviewed</span>
+                <Button small variant="ghost" disabled={busy} onClick={() => setEntryReviewed(entry, false)} title="Un-acknowledge — return this charge to the attention count">Undo</Button>
+              </>
+            ) : (
+              <Button small variant="ghost" disabled={busy} onClick={() => setEntryReviewed(entry, true)}
+                title="Acknowledge this charge — a purchase the export didn't cover, or otherwise fine — so it leaves the attention count without trashing it">
+                Mark reviewed
+              </Button>
+            )}
           </div>
         )
       }
@@ -592,13 +642,27 @@ export function AmazonReconciliationDialog({
           </div>
         )
       }
+      // No charge found: link a charge by hand, or acknowledge it (Mark reviewed) so it drops out of the
+      // attention count — the escape valve for an untracked card with nothing to link. A reviewed order
+      // shows a green ✓ with an Undo to put it back.
       if (entry.kind !== 'unmatched') return null
       return (
-        <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <Button small variant="ghost" disabled={busy || !paymentUnmatched.length} onClick={() => setLinkTarget(entry)}
             title={paymentUnmatched.length ? 'Pick the card charge(s) that paid for this order' : 'No unaccounted charges to link'}>
             Link charges…
           </Button>
+          {entry.reviewed ? (
+            <>
+              <span style={{ fontSize: 11, color: 'var(--success)', fontWeight: 600, whiteSpace: 'nowrap' }} title="Acknowledged — not counted toward the attention total">✓ Reviewed</span>
+              <Button small variant="ghost" disabled={busy} onClick={() => setEntryReviewed(entry, false)} title="Un-acknowledge — return this order to the attention count">Undo</Button>
+            </>
+          ) : (
+            <Button small variant="ghost" disabled={busy} onClick={() => setEntryReviewed(entry, true)}
+              title="Acknowledge this order — clears it from the attention count without linking a charge (for an untracked card with nothing to link)">
+              Mark reviewed
+            </Button>
+          )}
         </div>
       )
     } },
@@ -711,6 +775,14 @@ export function AmazonReconciliationDialog({
               onClick={() => runBulk('trash')} title="Send each selected unaccounted charge to Trash (recoverable from Settings → Trash)">
               Move to trash ({selectionSummary.trash})
             </Button>
+            <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk || selectionSummary.mark_reviewed === 0}
+              onClick={() => runBulk('mark_reviewed')} title="Acknowledge each selected 'No charge found' order or unaccounted charge — clears them from the attention count without resolving them further">
+              Mark reviewed ({selectionSummary.mark_reviewed})
+            </Button>
+            <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk || selectionSummary.unreview === 0}
+              onClick={() => runBulk('unreview')} title="Un-acknowledge each selected reviewed row — returns it to the attention count">
+              Undo review ({selectionSummary.unreview})
+            </Button>
             <span style={{ flex: 1 }} />
             <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => setSelectedIds(new Set())}>
               Clear
@@ -723,7 +795,9 @@ export function AmazonReconciliationDialog({
             columns={columns}
             entries={visibleEntries}
             getRowId={(entry) => entry.id}
-            getRowStripe={(entry) => KIND_META[entry.kind].stripe}
+            getRowStripe={(entry) => (entry.reviewed && (entry.kind === 'unmatched' || entry.kind === 'reverse')
+              ? 'color-mix(in srgb, var(--success) 40%, var(--border))'
+              : KIND_META[entry.kind].stripe)}
             selectable
             selectedIds={selectedIds}
             onToggleRow={toggleEntry}

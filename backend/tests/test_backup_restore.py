@@ -56,6 +56,7 @@ TABLE_TO_SECTION = {
     "rule_tag": "rule_tags",
     "account_pair_distinct": "account_pair_distinct",
     "amazon_charge_distinct": "amazon_charge_distinct",
+    "amazon_charge_reviewed": "amazon_charge_reviewed",
     "amazon_pending_item": "amazon_pending_items",
     "ui_preference": "ui_preferences",
     "recurring_series": "recurring_series",
@@ -132,6 +133,9 @@ class BackupRestoreTests(unittest.TestCase):
                 )
                 t_low, t_high = sorted([txn, txn2])
                 conn.execute("INSERT INTO amazon_charge_distinct (txn_id_low, txn_id_high, asserted_at) VALUES (?, ?, '2026-04-16')", (t_low, t_high))
+                # A reconciliation reverse-scan "Mark reviewed" acknowledgment, so the round trip covers
+                # amazon_charge_reviewed (references txn).
+                conn.execute("INSERT INTO amazon_charge_reviewed (txn_id, reviewed_at) VALUES (?, '2026-04-16')", (txn2,))
                 conn.execute("INSERT INTO ui_preference (scope_id, pref_key, pref_value, updated_at) VALUES ('profile-1', 'ui.dashboard.tagReports', '[{\"id\":\"r1\"}]', '2026-04-15')")
 
                 # Import history + an imported category that forward-references its batch.
