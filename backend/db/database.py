@@ -113,7 +113,7 @@ def get_db(db_path: str | None = None):
 # v14 adds `category_rule.match_expr` (multi-clause AND/contains merchant matcher). v15 adds
 # `category_rule.last_effect_date` (stale-rule signal) + `category_rule.deleted_at` (rules trash).
 
-CURRENT_VERSION = 15
+CURRENT_VERSION = 16
 
 MIGRATIONS = {}
 
@@ -497,6 +497,25 @@ def _backfill_rule_last_effect_date(conn):
         conn.execute("UPDATE category_rule SET last_effect_date = ? WHERE id = ?", (date, rid))
 
 
+@migration(16)
+def _add_amazon_pending_item(conn):
+    # Amazon items imported *before* their orders file: instead of discarding them, their per-item detail is
+    # parked here keyed by order id, so a later import of the matching orders file auto-attaches it (no manual
+    # re-import). One row per order id (upserted), holding the items as JSON. `parked_batch_id` ties the row
+    # to the orphan import that created it, so undoing that import removes its parked items. Fresh installs get
+    # the table from the baseline CREATE in init_db.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS amazon_pending_item (
+            order_id         TEXT PRIMARY KEY,
+            items_json       TEXT NOT NULL,
+            source_file      TEXT,
+            source_file_hash TEXT,
+            parked_batch_id  TEXT,
+            created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -852,6 +871,19 @@ def init_db(db_path: str | None = None):
             );
 
             CREATE INDEX IF NOT EXISTS idx_amazon_charge_distinct_high ON amazon_charge_distinct(txn_id_high);
+
+            -- Per-item detail from an Amazon items file imported *before* its orders file: parked here
+            -- (keyed by order id) instead of being discarded, so importing the matching orders file later
+            -- auto-attaches it. `parked_batch_id` ties the row to the orphan import that created it, so
+            -- undoing that import removes its parked items. See routers/import_export/amazon.py.
+            CREATE TABLE IF NOT EXISTS amazon_pending_item (
+                order_id         TEXT PRIMARY KEY,
+                items_json       TEXT NOT NULL,
+                source_file      TEXT,
+                source_file_hash TEXT,
+                parked_batch_id  TEXT,
+                created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+            );
 
             -- Non-sensitive UI/layout preferences, keyed by scope_id (auth user id or local
             -- preference-profile id). Lives in the data DB so it travels with the data it describes

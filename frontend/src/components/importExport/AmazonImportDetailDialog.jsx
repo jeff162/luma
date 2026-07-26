@@ -69,7 +69,7 @@ const CATEGORIES = [
     getRowId: (e, i) => e.id || `ae:${i}`,
   },
   {
-    key: 'items_discarded', label: 'Items discarded', warn: true, rows: (d) => d.items_discarded || [],
+    key: 'items_discarded', label: 'No matching order', warn: true, rows: (d) => d.items_discarded || [],
     columns: [
       { key: 'order_id', label: 'Order id', width: 220, render: (e) => <span style={{ fontSize: 12 }}>{e.order_id}</span> },
       { key: 'desc', label: 'Item', render: (e) => <span style={{ fontSize: 12 }}>{e.description || '—'}</span> },
@@ -102,7 +102,7 @@ const CATEGORY_HELP = {
   orders: 'Every order this import created, with the file it came from.',
   items_matched: 'Orders whose per-item detail (from an items file) was folded into them.',
   already_enriched: 'Item rows whose order already had item detail — a re-imported items file, so nothing new was added.',
-  items_discarded: 'Item rows whose order was never imported, so there was nothing to attach them to — import the matching orders file, then re-import the items.',
+  items_discarded: 'Item rows whose orders file hasn’t been imported yet. Their detail is saved (parked), so importing the matching orders file later attaches it automatically — no need to re-import this items file.',
   duplicates: 'Orders that were already imported, so this file added nothing new.',
   payments: 'The matched card charges, tallied by the ledger account they landed on.',
 }

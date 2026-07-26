@@ -873,9 +873,10 @@ export const HELP_TOPICS = [
           into, confirm the <strong>category</strong> used for categorizing the the matched card charges, and map each
           new <strong>payment card</strong> from the import to a payment account. <strong>Import</strong> lights up once every card has an account
           (or is marked <em>Untracked</em>). An <strong>Items</strong> file adds its detail to the matching
-          orders you have imported; if its Orders file isn&apos;t in yet, that detail is set aside &mdash; import
-          the Orders file first, then re-import the Items file. Afterwards you only need to export the
-          <strong> current year</strong> now and then to pull in recent purchases. 
+          orders you have imported; if its Orders file isn&apos;t in yet, that detail is set aside and
+          attaches automatically when you later import the Orders file &mdash; no need to re-import the Items
+          file. Afterwards you only need to export the
+          <strong> current year</strong> now and then to pull in recent purchases.
         </p>
         <p>
           Periodically run the export again for the current year and import the result to bring in information
@@ -1020,22 +1021,22 @@ export const HELP_TOPICS = [
     id: 'amazon-import-detail',
     section: 'importing',
     title: 'Amazon import detail report',
-    surfaces: ['Import history — outcome pills (orders / items matched / discarded / …)'],
-    summary: 'The outcome pills on an Amazon file card open a report of what that import actually did — the orders it created, items matched into orders, items discarded, duplicates, and payments — each row showing which file it came from.',
+    surfaces: ['Import history — outcome pills (orders / items matched / no match / …)'],
+    summary: 'The outcome pills on an Amazon file card open a report of what that import actually did — the orders it created, items matched into orders, items with no matching order yet, duplicates, and payments — each row showing which file it came from.',
     body: () => (
       <>
         <p>
           Each Amazon file card carries outcome pills &mdash; <strong>orders</strong>, <strong>items
-          matched</strong>, <strong>already enriched</strong>, <strong>discarded</strong>,{' '}
+          matched</strong>, <strong>already enriched</strong>, <strong>no match</strong>,{' '}
           <strong>duplicates</strong>, <strong>payments</strong> &mdash; and clicking one opens the{' '}
           <strong>import detail report</strong> on that view. Every row shows the <strong>source file</strong> it
           came from, which is what makes file mix-ups diagnosable:
         </p>
         <ul>
-          <li><strong>Discarded</strong> items had no matching order &mdash; usually the items file was imported
-            before its orders file. The file shows struck through on its card (nothing was loaded from it), and
-            it can be re-imported after the orders file &mdash; it is deliberately not treated as “already
-            imported.”</li>
+          <li><strong>No match</strong> items had no order to attach to &mdash; usually the items file was
+            imported before its orders file. Their detail is <em>saved</em>, not lost: importing the matching
+            orders file later attaches it automatically (no need to re-import the items file), and the pill flips
+            to <strong>attached to orders</strong> once that happens.</li>
           <li><strong>Duplicates</strong> are orders a previous import already brought in &mdash; the file added
             nothing new. <strong>Already enriched</strong> is the items-file flavor of the same thing.</li>
           <li><strong>Payments</strong> tallies the matched card charges by the account they landed on.</li>

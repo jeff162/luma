@@ -56,6 +56,7 @@ TABLE_TO_SECTION = {
     "rule_tag": "rule_tags",
     "account_pair_distinct": "account_pair_distinct",
     "amazon_charge_distinct": "amazon_charge_distinct",
+    "amazon_pending_item": "amazon_pending_items",
     "ui_preference": "ui_preferences",
     "recurring_series": "recurring_series",
     "recurring_membership_override": "recurring_membership_overrides",
@@ -139,6 +140,12 @@ class BackupRestoreTests(unittest.TestCase):
                 batch = str(uuid.uuid4())
                 conn.execute("INSERT INTO import_batch (id, profile_id, filename) VALUES (?, ?, 'fixture.csv')", (batch, profile))
                 conn.execute("INSERT INTO import_batch_account (batch_id, csv_value, account_id, row_count) VALUES (?, 'Checking', ?, 1)", (batch, a1))
+                # Amazon items parked awaiting their orders file, tied to this batch — so the round trip
+                # covers amazon_pending_item (references import_batch via parked_batch_id).
+                conn.execute(
+                    "INSERT INTO amazon_pending_item (order_id, items_json, source_file, source_file_hash, parked_batch_id) VALUES ('111-9', '[{\"description\":\"Air Widget\",\"asin\":\"B0AAA\"}]', 'items.csv', 'H-ITEMS', ?)",
+                    (batch,),
+                )
                 conn.execute("INSERT INTO import_batch_duplicate (batch_id, row_number, reason) VALUES (?, 1, 'exact')", (batch,))
                 unassigned = conn.execute("SELECT id FROM category WHERE system_key = 'unassigned'").fetchone()["id"]
                 conn.execute(

@@ -4576,7 +4576,7 @@ def list_batches():
         """).fetchall()
 
         # Lazy import: amazon.py imports from this module, so a top-level import would be circular.
-        from .amazon import BATCH_SOURCE_KIND, reconciliation_attention_count
+        from .amazon import BATCH_SOURCE_KIND, reconciliation_attention_count, unmatched_parked_order_count
 
         result = []
         for b in batches:
@@ -4652,6 +4652,21 @@ def list_batches():
             # split suggestion to accept/dismiss) so the card can warn without opening the report.
             if d.get("source_kind") == BATCH_SOURCE_KIND:
                 d["recon_attention_count"] = reconciliation_attention_count(conn, b["id"])
+                # Live "still waiting for its orders file" count for an items-before-orders card, so its
+                # "no match" pill resolves to zero once a later orders import attaches the parked items.
+                d["unmatched_item_count"] = unmatched_parked_order_count(conn, d.get("import_summary"))
+                # Newest transaction date the card covers, so the history can order marketplace cards by
+                # data recency (most recent first) rather than import time — a multi-year historical drop
+                # then reads the way it would have if each year had been imported as it happened. Falls back
+                # to the newest date among an orphan items-only card's still-waiting rows (it has no txns).
+                newest = conn.execute(
+                    "SELECT MAX(date) AS d FROM txn WHERE import_batch_id = ? AND trashed_at IS NULL", (b["id"],)
+                ).fetchone()["d"]
+                if not newest:
+                    dates = [x.get("date") for x in (d.get("import_summary") or {}).get("discarded_items") or []
+                             if isinstance(x, dict) and x.get("date")]
+                    newest = max(dates) if dates else None
+                d["newest_txn_date"] = newest
             result.append(d)
         return result
 

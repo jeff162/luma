@@ -440,6 +440,56 @@ def _instrument_of(disposition) -> Optional[dict]:
     return None
 
 
+# Item fields worth retaining for a parked (orders-file-not-yet-imported) item — the detail `_order_evidence`
+# folds into an order row. Amazon's own category is deliberately omitted (the user categorizes their own way).
+_PENDING_ITEM_FIELDS = ("description", "price", "asin", "quantity", "item_url", "order_date")
+
+
+def _park_items(conn: sqlite3.Connection, order: AmazonOrder, batch_id: str) -> None:
+    """Retain an items-only order's per-item detail (its orders file hasn't been imported yet), keyed by order
+    id, so importing the matching orders file later auto-attaches it instead of the user re-importing the items
+    file. Upsert by order id so a re-imported items file refreshes the parked detail rather than duplicating
+    it. See :func:`_take_parked_items` (the consume side) and ``amazon_pending_item``."""
+    if not order.items:
+        return
+    payload = [{f: getattr(item, f, None) for f in _PENDING_ITEM_FIELDS} for item in order.items]
+    conn.execute(
+        """INSERT INTO amazon_pending_item (order_id, items_json, source_file, source_file_hash, parked_batch_id)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(order_id) DO UPDATE SET
+               items_json       = excluded.items_json,
+               source_file      = excluded.source_file,
+               source_file_hash = excluded.source_file_hash,
+               parked_batch_id  = excluded.parked_batch_id""",
+        (order.order_id, json.dumps(payload), order.source_file, order.source_file_hash, batch_id),
+    )
+
+
+def _take_parked_items(conn: sqlite3.Connection, order_id: str) -> tuple[list[AmazonItem], Optional[dict]]:
+    """Pop any items parked for this order id (an items file imported before this orders file), rebuilt as
+    ``AmazonItem``s, and remove the parked row — consumed. Returns ``(items, source)`` where ``source`` is the
+    parked row's ``{batch_id, source_file, source_file_hash}`` (so the caller can fold that items-file card
+    into the orders card), or ``([], None)`` when none are parked."""
+    row = conn.execute(
+        "SELECT items_json, source_file, source_file_hash, parked_batch_id FROM amazon_pending_item WHERE order_id = ?",
+        (order_id,)).fetchone()
+    if not row:
+        return [], None
+    conn.execute("DELETE FROM amazon_pending_item WHERE order_id = ?", (order_id,))
+    source = {"batch_id": row["parked_batch_id"], "source_file": row["source_file"],
+              "source_file_hash": row["source_file_hash"]}
+    try:
+        payload = json.loads(row["items_json"]) or []
+    except (TypeError, ValueError):
+        return [], source
+    items = [
+        AmazonItem(description=d.get("description") or "", price=d.get("price"), asin=d.get("asin"),
+                   quantity=d.get("quantity") or 1, item_url=d.get("item_url"), order_date=d.get("order_date"))
+        for d in payload if isinstance(d, dict)
+    ]
+    return items, source
+
+
 def apply_amazon_order(
     conn: sqlite3.Connection,
     order: AmazonOrder,
@@ -456,9 +506,11 @@ def apply_amazon_order(
         detail (a re-imported items file); a bare re-import with no new item detail is ``already_applied``.
         The card charge is matched once, at first import — a mapping added later is not applied
         retroactively (like the category setting, it affects future imports only).
-      * **Items-only, no existing order** → nothing to attach to, so it's discarded (``items_discarded``);
-        reported so the user can re-import after the orders file.
-      * **Order detail present** → create the order transaction, match + exclude + link the card charge.
+      * **Items-only, no existing order** → no order row to attach to, so the items are **parked** by order
+        id (``items_discarded``) rather than dropped; importing the matching orders file later auto-attaches
+        them (see ``amazon_pending_item`` / :func:`_park_items`).
+      * **Order detail present** → create the order transaction, match + exclude + link the card charge; if
+        items for this order were parked by an earlier items-only import, attach that detail on the spot.
     """
     existing = txn_links.find_link(conn, LINK_KIND, order.order_id)
     if existing:
@@ -472,9 +524,10 @@ def apply_amazon_order(
                 return {"order_id": order.order_id, "status": "already_enriched", "enriched_txn_id": enriched_txn_id}
         return {"order_id": order.order_id, "status": "already_applied"}
 
-    # Items file rows whose order was never imported: no order transaction to enrich. Discard (reported;
-    # the user re-imports once the orders file is in). Nothing incomplete enters the ledger.
+    # Items file rows whose orders file hasn't been imported yet: park their detail (keyed by order id) so a
+    # later import of the orders file auto-attaches it — no manual re-import. Nothing enters the ledger now.
     if not order.has_order_detail:
+        _park_items(conn, order, batch_id)
         return {"order_id": order.order_id, "status": "items_discarded"}
 
     disposition = classify_order(order)
@@ -483,6 +536,17 @@ def apply_amazon_order(
     disposition = _resolve_bare_card_order(conn, order, account_id, disposition)
     owner_id = _account_owner(conn, account_id)
     non_cash = disposition.kind == "non_cash"
+
+    # Items parked by an earlier items-only import of this order attach now, so the order row is created
+    # already enriched. A same-drop items file (order already carries item detail) supersedes them, but the
+    # obsolete parked row is still consumed. `parked_source` (which items-file card parked them) is reported
+    # whenever a parked row was consumed — used to fold that card into this orders card.
+    parked_items, parked_source = _take_parked_items(conn, order.order_id)
+    attached_from_parked = False
+    if parked_items and not order.items:
+        order.items = parked_items
+        order.has_item_detail = True
+        attached_from_parked = True
 
     # A cash order counts (its net cash, categorized by the user's rules); a non-cash order (points /
     # gift-card funded) is recorded in the excluded category so it doesn't inflate spending.
@@ -522,6 +586,8 @@ def apply_amazon_order(
         "disposition": disposition.kind,
         "charge_linked": bool(charge_id),
         "has_items": bool(order.items),
+        "attached_from_parked": attached_from_parked,
+        "parked_source": parked_source,   # the items-file card this order drew parked detail from (or None)
         "funding_state": funding_state,
         "instrument": _instrument_of(disposition),
     }
@@ -607,28 +673,43 @@ def _categorize_batch_orders(conn: sqlite3.Connection, batch_id: str) -> None:
         sync_rule_tags_for_transaction(conn, row["id"], result.get("tag_ids", []))
 
 
-def run_amazon_import(
+_COUNT_KEYS = ("orders_imported", "non_cash", "charges_matched",
+               "items_enriched", "already_enriched", "items_discarded", "already_applied",
+               "items_attached_from_parked")
+
+
+def _group_label(group_orders: list[AmazonOrder], fallback: str) -> str:
+    """The card label for a source-file group: the distinct files that fed it — the orders file plus any
+    items file whose rows folded into these orders — in first-seen order, so a paired drop reads
+    ``"2023-orders.csv, 2023-items.csv"`` and an orphan items card reads just its own name. Falls back to the
+    run-level filename when the orders carry no source file (in-process callers / tests)."""
+    seen: list[str] = []
+    for order in group_orders:
+        for sf in [order.source_file, *(item.source_file for item in order.items)]:
+            if sf and sf not in seen:
+                seen.append(sf)
+    return ", ".join(seen) or fallback
+
+
+def _import_group_to_batch(
     conn: sqlite3.Connection,
     orders: list[AmazonOrder],
     *,
     account_id: str,
-    filename: str = "amazon.csv",
-    apply_categorization: bool = True,
-    file_hashes: Optional[list[dict]] = None,
+    filename: str,
+    apply_categorization: bool,
 ) -> dict:
-    """Create an import batch and apply every parsed order into it. Returns a summary with the batch id,
-    the per-outcome counts (orders imported, charges matched, item-files enriched, items discarded,
-    already applied), and the instruments seen with their funding-map state. When ``apply_categorization``
-    is set (the default), the user's category rules are run over the newly-created order rows.
-    ``file_hashes`` (``{filename, hash}`` per taken file) is persisted so a later upload of the same file is
-    recognized and skipped (see ``_imported_amazon_file_hashes``)."""
+    """Create one import batch (one card) and apply every order of a *single source-file group* into it — the
+    per-file unit the orchestrator splits a drop into. Returns the batch's counts, investigable detail, the
+    instruments it saw, and its per-file outcomes (keyed by content hash), leaving the config-snapshot /
+    file-hash persistence to :func:`run_amazon_import`, which needs the whole drop's outcomes to decide which
+    files are re-importable."""
     batch_id = str(uuid.uuid4())
     conn.execute(
         "INSERT INTO import_batch (id, filename, status, source_kind) VALUES (?, ?, 'completed', ?)",
         (batch_id, filename, BATCH_SOURCE_KIND),
     )
-    counts = {"orders_imported": 0, "non_cash": 0, "charges_matched": 0,
-              "items_enriched": 0, "already_enriched": 0, "items_discarded": 0, "already_applied": 0}
+    counts = {k: 0 for k in _COUNT_KEYS}
     # Investigable detail for the import-detail report: item rows that enriched an order (which usually lives
     # in the orders file's batch, so they can't be found from this batch's transactions), item rows whose
     # order was already enriched, item rows with no matching order (discarded), and orders already imported —
@@ -637,17 +718,27 @@ def run_amazon_import(
     already_enriched_items: list[dict] = []
     discarded_items: list[dict] = []
     duplicate_orders: list[dict] = []
+    # Items-file cards (prior items-only imports) whose parked detail this batch's orders consumed, keyed by
+    # that card's batch id → its {source_file, source_file_hash}. The orchestrator folds a fully-consumed one
+    # into this card, so a split items-then-orders import ends on a single card like a combined drop would.
+    consumed_sources: dict[str, dict] = {}
+    # Order transactions this batch *enriched* (an items file attaching to already-imported orders). Their
+    # batches are the orders cards this items-only card belongs with — the mirror of `consumed_sources`, so the
+    # orchestrator can fold an enrichment-only items card into the orders card it enriched (orders-then-items).
+    enriched_txn_ids: list[str] = []
     # Distinct instruments seen this run, keyed on (last4, network), each carrying its current map state
     # so the UI can prompt to map the ones that are still `unmapped`.
     instruments: dict[tuple, dict] = {}
-    # Outcome kinds per source file, driving two decisions below: a file with any *discarded* rows keeps its
-    # hash un-persisted (so it can be re-imported once the missing orders file is in), and a file that was
-    # *only* discards is listed in `skipped_files` (nothing loaded — the card strikes it through).
-    file_outcomes: dict[str, set] = {}
+    # Outcome kinds per source *file hash* (carrying the filename), so the orchestrator can decide, across the
+    # whole drop, which files are re-importable: a file with any *discarded* rows keeps its hash un-persisted
+    # (once the missing orders file is in, a re-import attaches the previously-discarded items). Keyed by hash
+    # rather than name so two different files that share a name are still told apart.
+    file_outcomes: dict[str, dict] = {}
 
-    def _note_outcome(source_file, kind):
-        if source_file:
-            file_outcomes.setdefault(source_file, set()).add(kind)
+    def _note_outcome(source_file, source_file_hash, kind):
+        if source_file_hash:
+            entry = file_outcomes.setdefault(source_file_hash, {"filename": source_file, "kinds": set()})
+            entry["kinds"].add(kind)
 
     for order in orders:
         result = apply_amazon_order(conn, order, account_id=account_id, batch_id=batch_id)
@@ -655,7 +746,7 @@ def run_amazon_import(
         if status == "already_applied":
             counts["already_applied"] += 1
             duplicate_orders.append({"order_id": order.order_id, "date": order.order_date, "source_file": order.source_file})
-            _note_outcome(order.source_file, "already")
+            _note_outcome(order.source_file, order.source_file_hash, "already")
             continue
         if status in ("enriched", "already_enriched"):
             bucket = "items_enriched" if status == "enriched" else "already_enriched"
@@ -663,22 +754,34 @@ def run_amazon_import(
             detail = {"order_id": order.order_id, "txn_id": result.get("enriched_txn_id"),
                       "description": _order_label(order), "source_file": order.source_file}
             (enriched_items if status == "enriched" else already_enriched_items).append(detail)
-            _note_outcome(order.source_file, "enriched" if status == "enriched" else "already")
+            _note_outcome(order.source_file, order.source_file_hash, "enriched" if status == "enriched" else "already")
+            if result.get("enriched_txn_id"):
+                enriched_txn_ids.append(result["enriched_txn_id"])
             continue
         # Items file rows with no imported order to attach to — discarded, not staged (re-import later).
         if status == "items_discarded":
             counts["items_discarded"] += 1
             discarded_items.append({"order_id": order.order_id, "description": _order_label(order),
                                     "date": order.order_date, "source_file": order.source_file})
-            _note_outcome(order.source_file, "discarded")
+            _note_outcome(order.source_file, order.source_file_hash, "discarded")
             continue
-        _note_outcome(order.source_file, "taken")
+        _note_outcome(order.source_file, order.source_file_hash, "taken")
+        # An items file whose rows folded into this order (an orders+items paired drop) contributed to the card
+        # too — record it as taken so its hash is remembered, even though its detail rides inside the order row.
+        for item in order.items:
+            _note_outcome(item.source_file, item.source_file_hash, "taken")
         inst = result.get("instrument")
         if inst:
             key = (inst["last4"], inst["network"])
             instruments.setdefault(key, {**inst, "state": result.get("funding_state") or "unmapped"})
         if result.get("charge_linked"):
             counts["charges_matched"] += 1
+        if result.get("attached_from_parked"):
+            counts["items_attached_from_parked"] += 1
+        src = result.get("parked_source")
+        if src and src.get("batch_id"):
+            consumed_sources[src["batch_id"]] = {"source_file": src.get("source_file"),
+                                                 "source_file_hash": src.get("source_file_hash")}
         if result.get("disposition") == "non_cash":
             counts["non_cash"] += 1
         else:
@@ -692,40 +795,240 @@ def run_amazon_import(
     if apply_categorization:
         _categorize_batch_orders(conn, batch_id)
 
-    total = len(orders)
     conn.execute(
         "UPDATE import_batch SET row_count = ? WHERE id = ?",
         (counts["orders_imported"] + counts["non_cash"], batch_id),
     )
-    # A file with any discarded rows stays re-importable (its hash is NOT persisted): once the missing
-    # orders file is in, a re-import attaches the previously-discarded items (the rest no-op). A file whose
-    # rows were *only* discards loaded nothing at all → listed so the card can strike it through.
-    files_with_discards = {f for f, kinds in file_outcomes.items() if "discarded" in kinds}
-    skipped_files = sorted(f for f, kinds in file_outcomes.items() if kinds == {"discarded"})
-    persistable_hashes = [f for f in (file_hashes or []) if f.get("filename") not in files_with_discards]
-
-    # Persist the outcome + investigable detail so the file card and the import-detail report can show it on
-    # a later page load (the counts otherwise live only in this return value → the live completion screen).
-    conn.execute(
-        "UPDATE import_batch SET config_snapshot = ? WHERE id = ?",
-        (json.dumps({IMPORT_SUMMARY_KEY: {**counts,
-                                          "enriched_items": enriched_items,
-                                          "already_enriched_items": already_enriched_items,
-                                          "discarded_items": discarded_items,
-                                          "duplicate_orders": duplicate_orders,
-                                          "skipped_files": skipped_files},
-                     # Per-file content hashes (kept out of import_summary — provenance, not outcome), so a
-                     # re-uploaded file is recognized and skipped instead of re-processed as all-duplicates.
-                     "amazon_file_hashes": persistable_hashes}), batch_id),
-    )
+    # The orders cards this items-only card enriched (distinct batches of the order rows it attached to) — the
+    # orchestrator folds this card into that orders card when they're all one.
+    enriched_into_batches: set = set()
+    if enriched_txn_ids:
+        placeholders = ",".join("?" * len(enriched_txn_ids))
+        for row in conn.execute(
+            f"SELECT DISTINCT import_batch_id FROM txn WHERE id IN ({placeholders})", enriched_txn_ids):
+            if row["import_batch_id"]:
+                enriched_into_batches.add(row["import_batch_id"])
     return {
         "batch_id": batch_id,
-        "order_count": total,
+        "filename": filename,
+        "order_count": len(orders),
         "counts": counts,
-        # Instruments seen this run with their current map state, so the UI can prompt to map the unmapped
-        # ones inline (already-mapped/untracked resolve silently).
+        "instruments": list(instruments.values()),
+        "enriched_items": enriched_items,
+        "already_enriched_items": already_enriched_items,
+        "discarded_items": discarded_items,
+        "duplicate_orders": duplicate_orders,
+        "file_outcomes": file_outcomes,
+        "consumed_sources": consumed_sources,
+        "enriched_into_batches": enriched_into_batches,
+    }
+
+
+def run_amazon_import(
+    conn: sqlite3.Connection,
+    orders: list[AmazonOrder],
+    *,
+    account_id: str,
+    filename: str = "amazon.csv",
+    apply_categorization: bool = True,
+    file_hashes: Optional[list[dict]] = None,
+) -> dict:
+    """Import a drop of parsed Amazon orders, split into **one batch (card) per source file** rather than one
+    card for the whole drop: orders are grouped by the file they came from (``source_file_hash``), and each
+    group becomes its own reversible batch — with an orders file's items folded into that same card, and an
+    items file dropped without its orders file surfacing as its own card of discards. This makes a drop of
+    several order-history periods behave exactly as if each file had been imported one at a time (independent
+    coverage / undo / reconciliation), instead of bundling unrelated periods onto one card.
+
+    Returns a summary carrying every batch created (``batches``) plus drop-level aggregates — the total order
+    count, summed counts, and the union of instruments seen — and, for the common single-file drop, the
+    single ``batch_id`` at top level (``None`` when the drop produced several cards). ``file_hashes``
+    (``{filename, hash}`` per taken file) is persisted per card so a later upload of the same file is
+    recognized and skipped (see ``_imported_amazon_file_hashes``); a file with any discarded rows is left
+    re-importable across the whole drop, not just within one card."""
+    # Group by the source file's content hash, preserving first-seen order so cards list in upload order.
+    groups: dict = {}
+    for order in orders:
+        groups.setdefault(order.source_file_hash, []).append(order)
+    if not groups:
+        groups = {None: []}   # an empty drop still yields one (empty) batch, as before
+
+    batch_results = [
+        _import_group_to_batch(conn, group_orders, account_id=account_id,
+                               filename=_group_label(group_orders, filename),
+                               apply_categorization=apply_categorization)
+        for group_orders in groups.values()
+    ]
+
+    # A file with any discarded rows stays re-importable (its hash is NOT persisted) — decided across the
+    # *whole drop*, since one items file can fold into an orders card here yet leave orphans on its own card.
+    discard_hashes = {h for res in batch_results for h, info in res["file_outcomes"].items()
+                      if "discarded" in info["kinds"]}
+    persistable = [f for f in (file_hashes or []) if f.get("hash") and f["hash"] not in discard_hashes]
+
+    for res in batch_results:
+        touched = set(res["file_outcomes"].keys())
+        # Persist each taken file's hash on every card its rows fed (so undoing a card frees exactly the files
+        # it took); a hash matched to no card is pinned to the first so the drop as a whole still remembers it.
+        attributed = [f for f in persistable if f["hash"] in touched]
+        _persist_batch_snapshot(conn, res, attributed)
+    orphans = [f for f in persistable if not any(f["hash"] in res["file_outcomes"] for res in batch_results)]
+    if orphans and batch_results:
+        _persist_batch_snapshot(conn, batch_results[0], orphans, append=True)
+
+    # Fold an empty items-only card into the orders card that holds its matching orders — so a split
+    # items↔orders import ends on one card, labeled with both files, exactly as a combined drop would. Both
+    # import orderings are handled, each only when a *single* orders card is involved:
+    #   * items-before-orders (parked) — a prior items-only card whose parked detail this drop's orders
+    #     consumed folds into this drop's orders card (`consumed_sources`).
+    #   * orders-before-items (enrichment) — this drop's items-only card, which only enriched already-imported
+    #     orders, folds into the (prior) orders card it enriched (`enriched_into_batches`).
+    res_by_id = {res["batch_id"]: res for res in batch_results}
+    source_to_order_batches: dict[str, set] = {}
+    source_info: dict[str, dict] = {}
+    for res in batch_results:
+        for src_id, info in res["consumed_sources"].items():
+            source_to_order_batches.setdefault(src_id, set()).add(res["batch_id"])
+            source_info[src_id] = info
+    for src_id, into_ids in source_to_order_batches.items():
+        if len(into_ids) == 1:
+            into_res = res_by_id[next(iter(into_ids))]
+            info = source_info[src_id]
+            merged = _merge_items_card_into_orders(
+                conn, items_card_id=src_id, items_filename=info.get("source_file"),
+                items_hash=info.get("source_file_hash"), orders_card_id=into_res["batch_id"])
+            if merged:
+                into_res["filename"] = merged
+
+    for res in batch_results:
+        c = res["counts"]
+        into_batches = res.get("enriched_into_batches") or set()
+        # An enrichment-only card: it created no orders of its own and parked nothing (everything it carried
+        # attached to existing orders), and all those orders live in one prior orders card.
+        enrichment_only = (c["orders_imported"] == 0 and c["non_cash"] == 0 and c["items_discarded"] == 0
+                           and c["items_attached_from_parked"] == 0
+                           and (c["items_enriched"] > 0 or c["already_enriched"] > 0))
+        if enrichment_only and len(into_batches) == 1:
+            orders_card_id = next(iter(into_batches))
+            items_file = next(iter(res["file_outcomes"].values()), {})
+            items_hash = next(iter(res["file_outcomes"].keys()), None)
+            merged = _merge_items_card_into_orders(
+                conn, items_card_id=res["batch_id"], items_filename=items_file.get("filename") or res["filename"],
+                items_hash=items_hash, orders_card_id=orders_card_id)
+            if merged:
+                # This card is now deleted; repoint its completion-screen entry at the surviving orders card
+                # (so its "N matched" line links to the merged card rather than a deleted one).
+                res["batch_id"], res["filename"] = orders_card_id, merged
+
+    agg = {k: sum(res["counts"][k] for res in batch_results) for k in _COUNT_KEYS}
+    instruments: dict[tuple, dict] = {}
+    for res in batch_results:
+        for inst in res["instruments"]:
+            instruments.setdefault((inst["last4"], inst["network"]), inst)
+    return {
+        "batches": [{k: res[k] for k in ("batch_id", "filename", "order_count", "counts", "instruments")}
+                    for res in batch_results],
+        # Back-compatible single-batch fields: the lone card's id for a one-file drop (else None), the drop's
+        # total order count, its summed counts, and the union of instruments seen across cards.
+        "batch_id": batch_results[0]["batch_id"] if len(batch_results) == 1 else None,
+        "order_count": sum(res["order_count"] for res in batch_results),
+        "counts": agg,
         "instruments": list(instruments.values()),
     }
+
+
+def _persist_batch_snapshot(conn: sqlite3.Connection, res: dict, file_hashes: list[dict], *, append: bool = False) -> None:
+    """Persist a card's investigable ``import_summary`` + the per-file content hashes it took, so the file
+    card and the import-detail report can show the outcome on a later page load (the counts otherwise live
+    only in the endpoint's return value → the live completion screen). ``append`` merges extra hashes into an
+    already-written snapshot (for a file that fed no card's rows but still belongs to the drop)."""
+    if append:
+        row = conn.execute("SELECT config_snapshot FROM import_batch WHERE id = ?", (res["batch_id"],)).fetchone()
+        snap = json.loads(row["config_snapshot"]) if row and row["config_snapshot"] else {}
+        existing = snap.get("amazon_file_hashes") or []
+        seen = {f["hash"] for f in existing}
+        snap["amazon_file_hashes"] = existing + [f for f in file_hashes if f["hash"] not in seen]
+    else:
+        snap = {IMPORT_SUMMARY_KEY: {**res["counts"],
+                                     "enriched_items": res["enriched_items"],
+                                     "already_enriched_items": res["already_enriched_items"],
+                                     "discarded_items": res["discarded_items"],
+                                     "duplicate_orders": res["duplicate_orders"]},
+                # Per-file content hashes (kept out of import_summary — provenance, not outcome), so a
+                # re-uploaded file is recognized and skipped instead of re-processed as all-duplicates.
+                "amazon_file_hashes": [{"filename": f["filename"], "hash": f["hash"]} for f in file_hashes]}
+    conn.execute("UPDATE import_batch SET config_snapshot = ? WHERE id = ?", (json.dumps(snap), res["batch_id"]))
+
+
+def _merge_items_card_into_orders(conn: sqlite3.Connection, *, items_card_id: str, items_filename: Optional[str],
+                                  items_hash: Optional[str], orders_card_id: str) -> Optional[str]:
+    """Fold an empty items-only card into the orders card that holds its matching orders — the single-card
+    result a combined drop produces. Used for both import orderings (items-before-orders parking and
+    orders-before-items enrichment): in each the *items* card carries no ledger rows of its own (its detail
+    rides on the orders card's rows), so deleting it loses nothing. Moves the items file's name + hash onto
+    the orders card (so a later re-drop of it is recognized as already imported) and returns the orders
+    card's new filename, or ``None`` if a guard blocked the merge (items card not empty, either card missing
+    or not a marketplace batch, or the two are the same card)."""
+    if not orders_card_id or items_card_id == orders_card_id:
+        return None
+    if conn.execute("SELECT 1 FROM amazon_pending_item WHERE parked_batch_id = ? LIMIT 1", (items_card_id,)).fetchone():
+        return None   # still has items waiting — not fully resolved, keep its own card
+    items_card = conn.execute(
+        "SELECT row_count, source_kind, config_snapshot FROM import_batch WHERE id = ?", (items_card_id,)).fetchone()
+    if (not items_card or items_card["source_kind"] != BATCH_SOURCE_KIND or (items_card["row_count"] or 0) > 0
+            or conn.execute("SELECT 1 FROM txn WHERE import_batch_id = ? LIMIT 1", (items_card_id,)).fetchone()):
+        return None   # defensive: only an empty items-only card is safe to delete
+    orders_card = conn.execute(
+        "SELECT filename, source_kind, config_snapshot FROM import_batch WHERE id = ?", (orders_card_id,)).fetchone()
+    if not orders_card or orders_card["source_kind"] != BATCH_SOURCE_KIND:
+        return None
+
+    names = [n for n in (orders_card["filename"] or "").split(", ") if n]
+    for name in (items_filename or "").split(", "):
+        if name and name not in names:
+            names.append(name)
+    merged_filename = ", ".join(names)
+
+    snap = json.loads(orders_card["config_snapshot"]) if orders_card["config_snapshot"] else {}
+    hashes = snap.get("amazon_file_hashes") or []
+    if items_hash and not any(h.get("hash") == items_hash for h in hashes):
+        hashes.append({"filename": items_filename, "hash": items_hash})
+        snap["amazon_file_hashes"] = hashes
+    # Carry the items card's *enrichment* summary onto the orders card, so the merged card's import-detail
+    # report still shows which orders the items file matched (and its "N matched" pill) — otherwise deleting
+    # the items card would drop that provenance. A no-op for the parked direction (a parked card enriched
+    # nothing); the resolved discards / order counts are deliberately not carried (the orders card owns them).
+    _merge_enrichment_summary(snap, _summary_of(items_card["config_snapshot"]))
+    conn.execute("UPDATE import_batch SET filename = ?, config_snapshot = ? WHERE id = ?",
+                 (merged_filename, json.dumps(snap), orders_card_id))
+    conn.execute("DELETE FROM import_batch WHERE id = ?", (items_card_id,))
+    return merged_filename
+
+
+def _summary_of(config_snapshot: Optional[str]) -> dict:
+    """The ``import_summary`` dict from a batch's ``config_snapshot`` JSON, or ``{}``."""
+    try:
+        snap = json.loads(config_snapshot) if config_snapshot else {}
+    except (TypeError, ValueError):
+        return {}
+    summary = snap.get(IMPORT_SUMMARY_KEY) if isinstance(snap, dict) else {}
+    return summary if isinstance(summary, dict) else {}
+
+
+def _merge_enrichment_summary(orders_snap: dict, items_summary: dict) -> None:
+    """Fold an items card's enrichment counts + detail into the orders card's ``import_summary`` in place."""
+    orders_summary = orders_snap.get(IMPORT_SUMMARY_KEY)
+    orders_summary = orders_summary if isinstance(orders_summary, dict) else {}
+    for key in ("items_enriched", "already_enriched"):
+        moved = int(items_summary.get(key) or 0)
+        if moved:
+            orders_summary[key] = int(orders_summary.get(key) or 0) + moved
+    for key in ("enriched_items", "already_enriched_items"):
+        extra = items_summary.get(key) or []
+        if extra:
+            orders_summary[key] = (orders_summary.get(key) or []) + extra
+    if orders_summary:
+        orders_snap[IMPORT_SUMMARY_KEY] = orders_summary
 
 
 _REVERSE_SCAN_WINDOW_DAYS = 7
@@ -1897,6 +2200,25 @@ async def amazon_merge_duplicate_charges_endpoint(body: MergeDuplicateChargesReq
             raise HTTPException(status_code=400, detail=str(exc))
 
 
+def unmatched_parked_order_count(conn: sqlite3.Connection, import_summary: Optional[dict]) -> int:
+    """How many of an orphan (items-before-orders) batch's discarded orders are *still* waiting — their order
+    id has no Amazon order in the ledger yet. Derived live from the ledger rather than the static snapshot
+    count, so the card's "no match" resolves to zero once a later orders import attaches the items (and
+    re-flags if that import is undone). Zero for a batch that discarded nothing."""
+    discarded = (import_summary or {}).get("discarded_items") or []
+    order_ids = list({d.get("order_id") for d in discarded if isinstance(d, dict) and d.get("order_id")})
+    if not order_ids:
+        return 0
+    placeholders = ",".join("?" * len(order_ids))
+    linked = {
+        r["external_ref"] for r in conn.execute(
+            f"SELECT DISTINCT external_ref FROM txn_link WHERE kind = ? AND external_ref IN ({placeholders})",
+            (LINK_KIND, *order_ids),
+        ).fetchall()
+    }
+    return sum(1 for oid in order_ids if oid not in linked)
+
+
 def reverse_batch_amazon_links(conn: sqlite3.Connection, batch_id: str) -> int:
     """Undo the Amazon links a batch created, restoring each matched charge's prior category from the
     link metadata and deleting the link. Mirrors `reverse_batch_enrichments`: it must run *before* the
@@ -1926,6 +2248,9 @@ def reverse_batch_amazon_links(conn: sqlite3.Connection, batch_id: str) -> int:
                      int(prior.get("category_overridden") or 0), charge_id),
                 )
         txn_links.delete_link(conn, link_id)
+    # An items-only import parks its per-item detail for a later orders file; undoing that import must remove
+    # what it parked (an orphan/parking batch creates no links, so this is its only undo effect).
+    conn.execute("DELETE FROM amazon_pending_item WHERE parked_batch_id = ?", (batch_id,))
     return len(link_ids)
 
 
@@ -1983,11 +2308,13 @@ async def _read_amazon_uploads(files, known_hashes: "set | frozenset" = frozense
             parsed = parse_order_rows(rows)
             for order in parsed:
                 order.source_file = filename
+                order.source_file_hash = content_hash
             orders.extend(parsed)
         elif kind == "items":
             for order_id, items in parse_item_rows(rows).items():
                 for item in items:
                     item.source_file = filename
+                    item.source_file_hash = content_hash
                 items_by_order.setdefault(order_id, []).extend(items)
         else:
             unrecognized.append(upload.filename or "(unnamed)")
@@ -2100,7 +2427,7 @@ async def amazon_import_endpoint(
         if already_imported:
             # Every usable file was already imported — nothing to do, and deliberately *no new batch* (the
             # files already have their cards). The completion screen reports it from this summary.
-            return {"batch_id": None, "order_count": 0, "counts": {}, "instruments": [],
+            return {"batch_id": None, "batches": [], "order_count": 0, "counts": {}, "instruments": [],
                     "already_imported_files": already_imported, "unrecognized_files": unrecognized}
         raise HTTPException(status_code=400, detail={
             "code": "unrecognized_files",

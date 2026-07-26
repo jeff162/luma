@@ -669,14 +669,15 @@ class AmazonOrdersTests(unittest.TestCase):
         self.assertEqual(already, ["a (1).csv"])
         self.assertEqual(len(hashes), 1)
 
-    def test_all_discarded_file_stays_reimportable(self):
-        # An items file imported before its orders file: every row discards, so its hash must NOT persist
-        # (a later re-import would otherwise be skipped as "already imported" and the items lost forever).
-        # It's recorded in `skipped_files` (nothing loaded → the card strikes it through). Once the orders
-        # file is in, re-importing the same items content enriches normally — and only then does it persist.
+    def test_items_before_orders_are_parked_and_auto_attached(self):
+        # An items file imported before its orders file: its per-item detail is **parked** (not lost), and its
+        # hash stays un-persisted so nothing is stranded. Importing the matching orders file later — *without*
+        # re-dropping the items file — auto-attaches the parked detail: the order row is created already
+        # enriched, and the parked row is consumed.
         from backend.routers.import_export.amazon import _imported_amazon_file_hashes
         oid = _cash_order().order_id
-        items_by_order = {oid: [AmazonItem(description="Air Widget", price=34.99, asin="B0AAA", source_file="2016-items.csv")]}
+        items_by_order = {oid: [AmazonItem(description="Air Widget", price=34.99, asin="B0AAA",
+                                           source_file="2016-items.csv", source_file_hash="H-ITEMS")]}
         items_hashes = [{"filename": "2016-items.csv", "hash": "H-ITEMS"}]
         orders_only = _cash_order()
         orders_only.items = []
@@ -684,20 +685,166 @@ class AmazonOrdersTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             first = run_amazon_import(conn, merge([], items_by_order), account_id="amazon",
                                       filename="2016-items.csv", file_hashes=items_hashes)
-            self.assertEqual(first["counts"]["items_discarded"], 1)
-            self.assertEqual(_imported_amazon_file_hashes(conn), set())
-            snap = json.loads(conn.execute(
-                "SELECT config_snapshot FROM import_batch WHERE id = ?", (first["batch_id"],)).fetchone()[0])
-            self.assertEqual(snap["import_summary"]["skipped_files"], ["2016-items.csv"])
+            self.assertEqual(first["counts"]["items_discarded"], 1)   # parked, shown as "no match" on its card
+            self.assertEqual([b["filename"] for b in first["batches"]], ["2016-items.csv"])
+            self.assertEqual(_imported_amazon_file_hashes(conn), set())   # items file stays re-importable
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM amazon_pending_item WHERE order_id = ?", (oid,)).fetchone()[0], 1)
 
-            run_amazon_import(conn, [orders_only], account_id="amazon", filename="2016-orders.csv",
-                              file_hashes=[{"filename": "2016-orders.csv", "hash": "H-ORDERS"}])
-            self.assertEqual(_imported_amazon_file_hashes(conn), {"H-ORDERS"})
+            # The orders file arrives (without the items file): the parked detail attaches automatically.
+            orders = run_amazon_import(conn, [orders_only], account_id="amazon", filename="2016-orders.csv",
+                                       file_hashes=[{"filename": "2016-orders.csv", "hash": "H-ORDERS"}])
+            self.assertEqual(orders["counts"]["items_attached_from_parked"], 1)
+            # Both files are now remembered (the items file's hash moved onto the orders card on consolidation).
+            self.assertEqual(_imported_amazon_file_hashes(conn), {"H-ORDERS", "H-ITEMS"})
+            row = conn.execute(
+                """SELECT t.import_evidence_json FROM txn t
+                   JOIN txn_link_member m ON m.txn_id = t.id
+                   JOIN txn_link l ON l.id = m.link_id
+                   WHERE l.kind = 'amazon_order' AND l.external_ref = ? AND m.role = 'order'""",
+                (oid,)).fetchone()
+            self.assertIn("B0AAA", row["import_evidence_json"])   # the parked item's ASIN folded into the order
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM amazon_pending_item").fetchone()[0], 0)
+            # The items-only card is folded into the orders card: one card, labeled with both files.
+            cards = conn.execute(
+                "SELECT filename FROM import_batch WHERE source_kind = ? ORDER BY imported_at", (BATCH_SOURCE_KIND,)
+            ).fetchall()
+            self.assertEqual([c["filename"] for c in cards], ["2016-orders.csv, 2016-items.csv"])
 
-            second = run_amazon_import(conn, merge([], items_by_order), account_id="amazon",
-                                       filename="2016-items.csv", file_hashes=items_hashes)
-            self.assertEqual(second["counts"]["items_enriched"], 1)
-            self.assertIn("H-ITEMS", _imported_amazon_file_hashes(conn))
+    def test_undo_parking_batch_removes_parked_items(self):
+        # Undoing the items-only (parking) import removes what it parked, so it can't later attach to an order.
+        from backend.routers.import_export.amazon import reverse_batch_amazon_links
+        oid = _cash_order().order_id
+        items_by_order = {oid: [AmazonItem(description="Air Widget", asin="B0AAA",
+                                           source_file="2016-items.csv", source_file_hash="H-ITEMS")]}
+        with self._use_db_path(), get_db() as conn:
+            first = run_amazon_import(conn, merge([], items_by_order), account_id="amazon", filename="2016-items.csv")
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM amazon_pending_item").fetchone()[0], 1)
+            reverse_batch_amazon_links(conn, first["batches"][0]["batch_id"])   # the undo hook
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM amazon_pending_item").fetchone()[0], 0)
+
+    def test_unmatched_count_resolves_after_orders_import(self):
+        # The orphan card's live "still waiting" count is zero once its parked items attach to a later orders
+        # import (and it re-flags if that import is undone) — derived from the ledger, not the static snapshot.
+        from backend.routers.import_export.amazon import unmatched_parked_order_count, reverse_batch_amazon_links
+        oid = _cash_order().order_id
+        items_by_order = {oid: [AmazonItem(description="Air Widget", asin="B0AAA",
+                                           source_file="2016-items.csv", source_file_hash="H-ITEMS")]}
+        orders_only = _cash_order(); orders_only.items = []; orders_only.has_item_detail = False
+        snapshot = {"discarded_items": [{"order_id": oid}]}
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, merge([], items_by_order), account_id="amazon", filename="2016-items.csv")
+            self.assertEqual(unmatched_parked_order_count(conn, snapshot), 1)   # waiting
+            orders = run_amazon_import(conn, [orders_only], account_id="amazon", filename="2016-orders.csv")
+            self.assertEqual(unmatched_parked_order_count(conn, snapshot), 0)   # resolved
+            reverse_batch_amazon_links(conn, orders["batches"][0]["batch_id"])   # undo the orders import
+            self.assertEqual(unmatched_parked_order_count(conn, snapshot), 1)   # re-flags
+
+    def test_list_batches_reports_newest_txn_date_per_card(self):
+        # Each marketplace card exposes its newest transaction date, so the history can order a multi-year
+        # drop by data recency (the frontend sorts on it) rather than by import time.
+        from backend.routers.import_export.core import list_batches
+        o_old = _cash_order(order_id="OLD"); o_old.order_date = "2019-03-01"
+        o_old.source_file = "2019.csv"; o_old.source_file_hash = "H19"
+        o_new = _cash_order(order_id="NEW"); o_new.order_date = "2021-07-01"
+        o_new.source_file = "2021.csv"; o_new.source_file_hash = "H21"
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, [o_old, o_new], account_id="amazon", filename="drop")
+        with self._use_db_path():
+            cards = {b["filename"]: b for b in list_batches() if b.get("source_kind") == BATCH_SOURCE_KIND}
+        self.assertEqual(cards["2019.csv"]["newest_txn_date"], "2019-03-01")
+        self.assertEqual(cards["2021.csv"]["newest_txn_date"], "2021-07-01")
+
+    def test_partial_consumption_keeps_the_items_card_separate(self):
+        # An items file covering two orders, only one later imported: the items card still has a waiting item,
+        # so it is NOT folded into the orders card (folding would hide the still-unresolved item).
+        items_by_order = {
+            "A-1": [AmazonItem(description="Widget One", asin="B01", source_file="items.csv", source_file_hash="H-I")],
+            "A-2": [AmazonItem(description="Widget Two", asin="B02", source_file="items.csv", source_file_hash="H-I")],
+        }
+        order1 = _cash_order(order_id="A-1"); order1.items = []; order1.has_item_detail = False
+        order1.source_file = "orders.csv"; order1.source_file_hash = "H-O"
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, merge([], items_by_order), account_id="amazon", filename="items.csv")
+            run_amazon_import(conn, [order1], account_id="amazon", filename="orders.csv")
+            cards = conn.execute(
+                "SELECT filename FROM import_batch WHERE source_kind = ?", (BATCH_SOURCE_KIND,)).fetchall()
+            self.assertEqual(sorted(c["filename"] for c in cards), ["items.csv", "orders.csv"])   # both remain
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM amazon_pending_item").fetchone()[0], 1)   # A-2 waits
+
+    def test_orders_then_items_folds_into_one_card(self):
+        # The mirror of the parked case: orders imported first, then a *separate* items file that enriches
+        # those existing orders. The empty items card folds into the orders card — one card, both files,
+        # both hashes remembered — the same end state as a combined drop.
+        from backend.routers.import_export.amazon import _imported_amazon_file_hashes
+        order = _cash_order(order_id="A-1"); order.items = []; order.has_item_detail = False
+        order.source_file = "orders.csv"; order.source_file_hash = "H-O"
+        items = {"A-1": [AmazonItem(description="Air Widget", asin="B0AAA", source_file="items.csv", source_file_hash="H-I")]}
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, [order], account_id="amazon", filename="orders.csv",
+                              file_hashes=[{"filename": "orders.csv", "hash": "H-O"}])
+            result = run_amazon_import(conn, merge([], items), account_id="amazon", filename="items.csv",
+                                       file_hashes=[{"filename": "items.csv", "hash": "H-I"}])
+            self.assertEqual(result["counts"]["items_enriched"], 1)
+            self.assertEqual([b["filename"] for b in result["batches"]], ["orders.csv, items.csv"])
+            cards = conn.execute("SELECT filename FROM import_batch WHERE source_kind = ?", (BATCH_SOURCE_KIND,)).fetchall()
+            self.assertEqual([c["filename"] for c in cards], ["orders.csv, items.csv"])   # one card
+            self.assertEqual(_imported_amazon_file_hashes(conn), {"H-O", "H-I"})   # both files remembered
+
+    def test_items_enriching_two_orders_cards_stays_separate(self):
+        # An items file that enriches orders spread across two separate orders cards can't be folded into a
+        # single one, so it keeps its own card (the multi-card guard, mirroring the parked partial case).
+        o1 = _cash_order(order_id="A-1"); o1.items = []; o1.has_item_detail = False; o1.source_file = "o1.csv"; o1.source_file_hash = "H1"
+        o2 = _cash_order(order_id="A-2"); o2.items = []; o2.has_item_detail = False; o2.source_file = "o2.csv"; o2.source_file_hash = "H2"
+        items = {"A-1": [AmazonItem(description="W1", source_file="items.csv", source_file_hash="HI")],
+                 "A-2": [AmazonItem(description="W2", source_file="items.csv", source_file_hash="HI")]}
+        with self._use_db_path(), get_db() as conn:
+            run_amazon_import(conn, [o1], account_id="amazon", filename="o1.csv")
+            run_amazon_import(conn, [o2], account_id="amazon", filename="o2.csv")
+            result = run_amazon_import(conn, merge([], items), account_id="amazon", filename="items.csv")
+            self.assertEqual(result["counts"]["items_enriched"], 2)
+            cards = sorted(c["filename"] for c in conn.execute(
+                "SELECT filename FROM import_batch WHERE source_kind = ?", (BATCH_SOURCE_KIND,)).fetchall())
+            self.assertEqual(cards, ["items.csv", "o1.csv", "o2.csv"])   # items card stays separate
+
+    def test_drop_splits_into_one_card_per_orders_file(self):
+        # Two orders files dropped at once land on their own cards — the same effect as importing each alone —
+        # so unrelated periods get independent coverage / undo instead of one bundled card, and each file's
+        # hash is remembered on its own card.
+        from backend.routers.import_export.amazon import _imported_amazon_file_hashes
+        o1 = _cash_order(order_id="A-1"); o1.source_file = "2016-orders.csv"; o1.source_file_hash = "H1"
+        o2 = _cash_order(order_id="B-2"); o2.source_file = "2017-orders.csv"; o2.source_file_hash = "H2"
+        file_hashes = [{"filename": "2016-orders.csv", "hash": "H1"}, {"filename": "2017-orders.csv", "hash": "H2"}]
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, [o1, o2], account_id="amazon", filename="two files", file_hashes=file_hashes)
+            rows = {b["filename"]: b for b in summary["batches"]}
+            row_counts = {f: conn.execute("SELECT COUNT(*) FROM txn WHERE import_batch_id = ?",
+                                          (b["batch_id"],)).fetchone()[0] for f, b in rows.items()}
+            known = _imported_amazon_file_hashes(conn)
+        self.assertEqual(set(rows), {"2016-orders.csv", "2017-orders.csv"})
+        self.assertIsNone(summary["batch_id"])   # a multi-card drop has no single top-level batch id
+        self.assertEqual(summary["order_count"], 2)
+        self.assertEqual(row_counts, {"2016-orders.csv": 1, "2017-orders.csv": 1})
+        self.assertEqual(known, {"H1", "H2"})
+
+    def test_orders_and_items_of_one_period_share_a_card(self):
+        # An orders file and its items file (same period) are two halves of one dataset — they fold into a
+        # single card (the order enriched with item detail), labeled with both files, with both hashes
+        # remembered there.
+        from backend.routers.import_export.amazon import _imported_amazon_file_hashes
+        order = _cash_order(order_id="A-1"); order.source_file = "2016-orders.csv"; order.source_file_hash = "H-O"
+        order.items = []; order.has_item_detail = False
+        items = {"A-1": [AmazonItem(description="Air Widget", price=34.99, asin="B0AAA",
+                                    source_file="2016-items.csv", source_file_hash="H-I")]}
+        merged = merge([order], items)
+        file_hashes = [{"filename": "2016-orders.csv", "hash": "H-O"}, {"filename": "2016-items.csv", "hash": "H-I"}]
+        with self._use_db_path(), get_db() as conn:
+            summary = run_amazon_import(conn, merged, account_id="amazon", filename="drop", file_hashes=file_hashes)
+            known = _imported_amazon_file_hashes(conn)
+        self.assertEqual(len(summary["batches"]), 1)
+        self.assertEqual(summary["batches"][0]["filename"], "2016-orders.csv, 2016-items.csv")
+        self.assertEqual(summary["counts"]["orders_imported"], 1)
+        self.assertEqual(known, {"H-O", "H-I"})
 
     # ---- batch-level run + undo -------------------------------------------------------------------
 
@@ -1315,19 +1462,28 @@ class AmazonOrdersTests(unittest.TestCase):
         # (a duplicate) and an items file for an order that was never imported (discarded) — each traceable
         # back to the file it came from.
         from backend.routers.import_export.amazon import amazon_import_detail
-        first = _cash_order(order_id="A-1"); first.source_file = "2016-orders.csv"
+        first = _cash_order(order_id="A-1"); first.source_file = "2016-orders.csv"; first.source_file_hash = "H-2016O"
         with self._use_db_path(), get_db() as conn:
             run_amazon_import(conn, [first], account_id="amazon", filename="2016-orders.csv")
-        dup = _cash_order(order_id="A-1"); dup.source_file = "2017-orders.csv"
+        # A drop mixing a bare re-import of an already-imported orders file (a duplicate) and an items file for
+        # an order that was never imported (a discard). Per-file batching splits them onto their own cards.
+        dup = _cash_order(order_id="A-1"); dup.source_file = "2017-orders.csv"; dup.source_file_hash = "H-2017O"
         dup.items = []; dup.has_item_detail = False   # a bare re-import, so it's already_applied not enriched
-        orphan = AmazonItem(description="Ghost Widget", order_date="2017-03-04", source_file="2017-items.csv")
+        orphan = AmazonItem(description="Ghost Widget", order_date="2017-03-04",
+                            source_file="2017-items.csv", source_file_hash="H-2017I")
         merged = merge([dup], {"A-2": [orphan]})
         with self._use_db_path(), get_db() as conn:
-            summary = run_amazon_import(conn, merged, account_id="amazon", filename="2017-orders.csv, 2017-items.csv")
-            detail = amazon_import_detail(conn, summary["batch_id"])
-        self.assertEqual([(d["order_id"], d["source_file"]) for d in detail["duplicate_orders"]], [("A-1", "2017-orders.csv")])
-        self.assertEqual([(d["order_id"], d["date"], d["source_file"]) for d in detail["items_discarded"]],
+            summary = run_amazon_import(conn, merged, account_id="amazon", filename="2017 drop")
+            by_file = {b["filename"]: b["batch_id"] for b in summary["batches"]}
+            orders_detail = amazon_import_detail(conn, by_file["2017-orders.csv"])
+            items_detail = amazon_import_detail(conn, by_file["2017-items.csv"])
+        self.assertEqual(set(by_file), {"2017-orders.csv", "2017-items.csv"})
+        # The duplicate lands on the orders-file card; the discard on the items-file card — each isolated.
+        self.assertEqual([(d["order_id"], d["source_file"]) for d in orders_detail["duplicate_orders"]], [("A-1", "2017-orders.csv")])
+        self.assertEqual(orders_detail["items_discarded"], [])
+        self.assertEqual([(d["order_id"], d["date"], d["source_file"]) for d in items_detail["items_discarded"]],
                          [("A-2", "2017-03-04", "2017-items.csv")])
+        self.assertEqual(items_detail["duplicate_orders"], [])
 
     def test_import_detail_orders_and_payments(self):
         # The orders view carries each order's source file + item-detail flag; the payments view tallies the

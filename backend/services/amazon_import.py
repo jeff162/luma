@@ -68,6 +68,7 @@ class AmazonItem:
     item_url: Optional[str] = None
     order_date: Optional[str] = None    # the items file's `order date` — promoted to an orphan order in merge
     source_file: Optional[str] = None   # which uploaded items file this row came from (import-detail provenance)
+    source_file_hash: Optional[str] = None  # content hash of that file — the per-file batching key (see AmazonOrder)
 
 
 @dataclass
@@ -93,6 +94,12 @@ class AmazonOrder:
     has_order_detail: bool = False
     has_item_detail: bool = False
     source_file: Optional[str] = None
+    # Content hash of the file this order's *order detail* came from (an orphan-item entry carries its items
+    # file's hash). This — not the filename — is the key the importer batches by: one card per source file,
+    # so distinct order-history periods land on their own cards instead of being bundled by drop. The hash
+    # rather than the name so two genuinely different files that share a name still split into two cards
+    # (identical content is already deduped away before batching).
+    source_file_hash: Optional[str] = None
 
 
 # --------------------------------------------------------------------------------------------------
@@ -295,6 +302,7 @@ def merge(
                 order_id=order_id,
                 order_date=next((i.order_date for i in items if i.order_date), None),
                 source_file=next((i.source_file for i in items if i.source_file), None),
+                source_file_hash=next((i.source_file_hash for i in items if i.source_file_hash), None),
             )
             by_id[order_id] = order
         order.items = items

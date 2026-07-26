@@ -47,11 +47,6 @@ delete the backlog file.
   account-scoped, bidirectional `Type` → *Money movement* rules all landed (2026-07-20) and are folded into
   the main docs. What remains: fold the dedicated review into the generic rule-suggestion engine (cluster by
   `Type`), and migrate the rules from account-id to account-type scope once that axis exists.
-- [amazon-batch-by-period.md](amazon-batch-by-period.md) — **noted, not started (2026-07-19).** Amazon
-  import batches by *drop* (one card per upload, any number of periods) rather than by *coherent period*;
-  correct for the orders+items pairing of one span but it also bundles unrelated years onto one card.
-  Direction: batch by period/order-set, keeping same-period orders+items together. Amazon-specific — the
-  CSV importer already batches per file.
 - [transaction-splits.md](transaction-splits.md) — **backlog, not started (2026-07-23).** Let a single
   transaction's amount be split across several categories (a Costco run, an Amazon order with mixed items).
   A **general** feature on any transaction, modeled as a `txn_split` allocation table (one ledger row, N

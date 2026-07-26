@@ -151,6 +151,16 @@ function clampFloatingPanelPosition(pos, size, viewport = { width: window.innerW
 //   Closed (account mode): "AccountName ···mask"
 //   Open list:             plain "AccountName" and plain "HeaderName" (no prefix)
 
+// Order marketplace file cards by the data they cover — newest transaction first — so a multi-year
+// historical drop reads as if each file had been imported when its purchases happened, rather than by
+// import time (which ties within one drop). A card with no dated rows ('') sorts last; ties break on the
+// most-recent import so a same-period re-import still leads.
+function byMarketplaceCardRecency(a, b) {
+  const ka = a.newest_txn_date || '', kb = b.newest_txn_date || ''
+  if (ka !== kb) return ka < kb ? 1 : -1
+  return String(a.imported_at || '') < String(b.imported_at || '') ? 1 : -1
+}
+
 // Keep the import UI recoverable if a preview or mapping render crashes.
 function ImportTab({ onAmazonDetected }) {
   const navigate = useNavigate()
@@ -722,16 +732,18 @@ function ImportTab({ onAmazonDetected }) {
       marketplaceByVendor.get(vendor).push(batch)
     }
     for (const [vendor, vendorBatches] of marketplaceByVendor) {
-      const sorted = vendorBatches.sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
+      const byImport = vendorBatches.sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
+      // Cards ordered by data recency (see byMarketplaceCardRecency); latestBatch stays the most recently
+      // imported so "Last used" is unaffected.
       savedSourceRows.push({
         key: `marketplace:${vendor}`,
         kind: 'marketplace',
         vendor,
         label: vendor.charAt(0).toUpperCase() + vendor.slice(1),
         profile: null,
-        hasImportedCategories: sorted.some(b => b.has_imported_categories),
-        batches: sorted,
-        latestBatch: sorted[0],
+        hasImportedCategories: byImport.some(b => b.has_imported_categories),
+        batches: [...byImport].sort(byMarketplaceCardRecency),
+        latestBatch: byImport[0],
         manualDraftRecord: null,
       })
     }
@@ -4869,9 +4881,17 @@ function AmazonImportTab({ initialFiles }) {
     : unresolved.length ? `Map the card ${formatInstrumentLabel(unresolved[0].last4, unresolved[0].network)} (or mark it untracked)`
     : ''
   const c = summary?.counts || {}
+  // A drop is split into one card per source file (an orders file + its items folds into one card; an items
+  // file with no orders file becomes its own card of discards). The completion screen totals the drop, then
+  // lists each card so the user can open its own reconciliation report.
+  const importedBatches = summary?.batches || []
   // This tab's recent Amazon imports, shown below the file chooser (where the user lands after an import),
-  // rendered through the shared marketplace history section.
-  const amazonHistoryRow = { key: 'marketplace:amazon', vendor: 'amazon', label: 'Amazon', batches: amazonBatches, latestBatch: amazonBatches[0] || null }
+  // rendered through the shared marketplace history section. Cards are ordered by the *data* they cover
+  // (newest transaction first), so a multi-year historical drop reads the way it would have if each file
+  // had been imported as its purchases happened — not by import time (which ties for one drop). `latestBatch`
+  // stays the most-recently-*imported* one (the source list is imported_at-DESC) so "Last used" is unaffected.
+  const amazonBatchesByRecency = useMemo(() => [...amazonBatches].sort(byMarketplaceCardRecency), [amazonBatches])
+  const amazonHistoryRow = { key: 'marketplace:amazon', vendor: 'amazon', label: 'Amazon', batches: amazonBatchesByRecency, latestBatch: amazonBatches[0] || null }
 
   return (
     <div style={{ maxWidth: 640 }}>
@@ -5010,14 +5030,15 @@ function AmazonImportTab({ initialFiles }) {
       {summary && (
         <Card style={{ marginTop: 16, fontSize: 13, lineHeight: 1.7 }}>
           <div style={{ fontWeight: 600, marginBottom: 8, color: 'var(--text)' }}>
-            {summary.batch_id
-              ? `Imported ${summary.order_count} order${summary.order_count === 1 ? '' : 's'}.`
+            {importedBatches.length
+              ? `Imported ${summary.order_count} order${summary.order_count === 1 ? '' : 's'}${importedBatches.length > 1 ? ` across ${importedBatches.length} files` : ''}.`
               : 'Nothing new to import.'}
           </div>
           <div style={{ color: 'var(--muted)' }}>
             {c.orders_imported ? <div>{c.orders_imported} order{c.orders_imported === 1 ? '' : 's'} imported</div> : null}
             {c.charges_matched ? <div>{c.charges_matched} card charge{c.charges_matched === 1 ? '' : 's'} matched and excluded from totals</div> : null}
             {c.items_enriched ? <div>{c.items_enriched} order{c.items_enriched === 1 ? '' : 's'} enriched with item detail</div> : null}
+            {c.items_attached_from_parked ? <div>{c.items_attached_from_parked} order{c.items_attached_from_parked === 1 ? '' : 's'} matched to item detail from an earlier items import</div> : null}
             {c.already_enriched ? <div>{c.already_enriched} item row{c.already_enriched === 1 ? '' : 's'} already enriched (skipped)</div> : null}
             {c.non_cash ? <div>{c.non_cash} non-cash (points / gift-card) — recorded, not counted</div> : null}
             {c.already_applied ? <div>{c.already_applied} already imported (skipped)</div> : null}
@@ -5042,10 +5063,36 @@ function AmazonImportTab({ initialFiles }) {
               </div>
             </div>
           ) : null}
+          {importedBatches.length > 1 ? (
+            <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+              <div style={{ color: 'var(--muted)', marginBottom: 6 }}>
+                Split into {importedBatches.length} files — each is its own card you can review and undo separately:
+              </div>
+              {importedBatches.map(b => {
+                const orphan = Number(b.counts?.items_discarded || 0) > 0
+                  && Number(b.counts?.orders_imported || 0) === 0 && Number(b.counts?.non_cash || 0) === 0
+                return (
+                  <div key={b.batch_id} style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 2 }}>
+                    <button
+                      onClick={() => amazonReconciliationViewer.open({ batchId: b.batch_id, title: b.filename })}
+                      style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent2)', fontSize: 13, textAlign: 'left' }}
+                    >
+                      {b.filename} →
+                    </button>
+                    <span style={{ color: orphan ? 'var(--warning)' : 'var(--muted)', fontSize: 12 }}>
+                      {orphan
+                        ? 'items file — its orders file isn’t here yet; detail is saved and attaches automatically when you import it'
+                        : `${b.counts?.orders_imported || 0} order${(b.counts?.orders_imported || 0) === 1 ? '' : 's'}`}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          ) : null}
           <div style={{ marginTop: 12, display: 'flex', gap: 16 }}>
-            {summary.batch_id ? (
+            {importedBatches.length === 1 ? (
               <button
-                onClick={() => amazonReconciliationViewer.open({ batchId: summary.batch_id, title: summary.filename })}
+                onClick={() => amazonReconciliationViewer.open({ batchId: importedBatches[0].batch_id, title: importedBatches[0].filename })}
                 style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent2)', fontSize: 13 }}
               >
                 View reconciliation report →

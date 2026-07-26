@@ -626,6 +626,9 @@ def build_backup_data(conn) -> dict:
             # User's "these two charges are distinct" assertions from the Amazon reconciliation's
             # unaccounted-duplicate grouping — same accumulated-filter role, charge-level.
             "amazon_charge_distinct": dump("amazon_charge_distinct"),
+            # Amazon items parked awaiting their orders file (per-item detail retained so a later orders
+            # import auto-attaches it). Without these a restore would strand a not-yet-matched items import.
+            "amazon_pending_items": dump("amazon_pending_item"),
             # UI/layout preferences (page layouts, dashboard tag reports, …), keyed by scope_id.
             "ui_preferences": dump("ui_preference"),
     })
@@ -743,6 +746,10 @@ def _wipe_user_data_tables(conn):
     conn.execute("DELETE FROM rule_tag")
     conn.execute("DELETE FROM account_pair_distinct")
     conn.execute("DELETE FROM amazon_charge_distinct")
+    # Parked Amazon items (awaiting their orders file) have no FK to cascade them, so the wipe must clear
+    # them explicitly — otherwise pre-restore parked rows would linger and wrongly auto-attach to restored
+    # orders. (They are restored from the backup payload right after, like every other data table.)
+    conn.execute("DELETE FROM amazon_pending_item")
     conn.execute("DELETE FROM ui_preference")
     conn.execute("DELETE FROM tag")
     # Membership overrides reference both txn and recurring_series, so clear them before either.
@@ -842,6 +849,7 @@ def restore_backup(body: RestoreRequest):
     rule_tags = [dict(row) for row in d.get("rule_tags", [])]
     account_pair_distinct = [dict(row) for row in d.get("account_pair_distinct", [])]
     amazon_charge_distinct = [dict(row) for row in d.get("amazon_charge_distinct", [])]
+    amazon_pending_items = [dict(row) for row in d.get("amazon_pending_items", [])]
     ui_preferences = [dict(row) for row in d.get("ui_preferences", [])]
     recurring_series = [dict(row) for row in d.get("recurring_series", [])]
     recurring_membership_overrides = [dict(row) for row in d.get("recurring_membership_overrides", [])]
@@ -927,6 +935,12 @@ def restore_backup(body: RestoreRequest):
         r for r in amazon_charge_distinct
         if r.get("txn_id_low") in txn_ids and r.get("txn_id_high") in txn_ids
     ]
+    # A parked-items row is kept only if the import that parked it survived (an orphan without its batch is
+    # unreachable). order_id is an external Amazon reference, so it carries no ledger FK to check.
+    amazon_pending_items = [
+        r for r in amazon_pending_items
+        if not r.get("parked_batch_id") or r.get("parked_batch_id") in import_batch_ids
+    ]
     # A pin/exclude override is meaningful only if both its transaction and its series survived.
     recurring_membership_overrides = [
         r for r in recurring_membership_overrides
@@ -1006,6 +1020,8 @@ def restore_backup(body: RestoreRequest):
         insert_rows("txn_link_member", txn_link_members)
         # References txn only (both FKs), so after txn.
         insert_rows("amazon_charge_distinct", amazon_charge_distinct)
+        # References import_batch via parked_batch_id (no hard FK); after import_batch anyway.
+        insert_rows("amazon_pending_item", amazon_pending_items)
         # References account only (both FKs); with deferred FK checks the order is flexible anyway.
         insert_rows("amazon_funding_map", amazon_funding_map)
         insert_rows("txn_tag",      txn_tags)

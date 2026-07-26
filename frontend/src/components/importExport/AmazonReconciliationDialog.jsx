@@ -519,7 +519,7 @@ export function AmazonReconciliationDialog({
       }
       return <ChargeCell txn={entry.charge} />
     } },
-    { key: 'action', label: '', width: 240, render: (entry) => {
+    { key: 'action', label: 'Actions', width: 240, sortable: false, render: (entry) => {
       // The duplicate group's recommended one-click resolution: keep the richest copy, fold in the
       // others' detail, trash the rest. It lives here (the right-edge Actions column) rather than under
       // the stacked charges, so it reads as the row-level action and doesn't sit beneath the charge text.

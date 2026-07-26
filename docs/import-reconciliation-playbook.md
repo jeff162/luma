@@ -242,11 +242,15 @@ that paid for it (several, if it was split) and link them. A mismatched sum warn
 
 ### I imported the Amazon items file before its orders file
 
-The items had no orders to attach to, so they were **discarded** (nothing entered the ledger) — the
-file shows struck-through on its card, and the import-detail report lists exactly which order ids were
-skipped and from which file. Import the orders file, then re-import the same items file: it is *not*
-blocked as "already imported" (a file with discarded rows is deliberately not remembered), and its
-items attach normally.
+The items had no orders to attach to yet, so their per-item detail is **parked** (kept, keyed by order
+id) rather than discarded — the items file gets its own card with a **no match** pill, and the
+import-detail report lists exactly which order ids are waiting and from which file. Just import the
+orders file whenever you have it: the parked detail **attaches automatically** to the new order rows —
+no need to re-import the items file. Once every parked item has attached, the items-only card **folds into
+the orders card** (which now lists both files), so you end up with a single card, exactly as if you'd
+imported the two files together; a partly-matched items card stays until the rest of its orders arrive.
+(Undoing the items-only import discards its parked detail; undoing the orders import returns those items to
+waiting.)
 
 ### I re-imported an Amazon file (or uploaded the same file twice)
 
