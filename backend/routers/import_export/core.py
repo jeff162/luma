@@ -59,6 +59,8 @@ from backend.services.categorizer import (
     recategorize_all,
     rule_scalar_effects,
     source_match_text_from_json,
+    effect_rule_ids,
+    bump_rule_effect_dates,
 )
 from backend.services.recurring_detection import payee_keys_for_ids, scan_imported_payees
 from backend.services.duplicate_detection import (
@@ -2787,6 +2789,44 @@ def _remove_imported_batch_categories(conn, batch_id: str) -> None:
         )
 
 
+def stamp_batch_rule_effects(conn, batch_id: str) -> None:
+    """Advance category_rule.last_effect_date for the rules that own a live effect on this batch's rows
+    (the newest owned transaction date). Bounded to one batch, so cheap — called after the per-batch
+    re-categorization paths that don't stamp inline (the imported-categories toggle and the mapping apply),
+    so those keep the stale-rule signal current without waiting for a Run categorization."""
+    rules = load_categorization_rules(conn)
+    if not rules:
+        return
+    rules_by_id = {r["id"]: r for r in rules}
+    rule_tags_by_id = load_rule_tags_by_id(conn)
+    needs_source_text = any(r["match_source_text"] for r in rules)
+    rows = conn.execute(
+        """SELECT t.id, t.date, t.merchant_name, t.display_name, t.raw_name, t.amount, t.owner_id, t.account_id,
+                  t.import_evidence_json, COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
+                  COALESCE(p.type, a.type) AS effective_account_type
+           FROM   txn t
+           JOIN   account a ON a.id = t.account_id
+           LEFT   JOIN account p ON p.id = a.parent_account_id
+           WHERE  t.import_batch_id = ?""",
+        (batch_id,),
+    ).fetchall()
+    effect_dates: dict = {}
+    for row in rows:
+        if not row["date"]:
+            continue
+        source_text = source_match_text_from_json(row["import_evidence_json"]) if needs_source_text else None
+        result = categorize_transaction(
+            row["merchant_name"], row["raw_name"], row["display_name"], row["amount"], conn,
+            owner_id=row["owner_id"], account_id=row["account_id"], effective_account_id=row["effective_account_id"],
+            effective_account_type=row["effective_account_type"], rules=rules, rule_tags_by_id=rule_tags_by_id,
+            source_text=source_text,
+        )
+        for rid in effect_rule_ids(result, rules_by_id, rule_tags_by_id):
+            if rid not in effect_dates or row["date"] > effect_dates[rid]:
+                effect_dates[rid] = row["date"]
+    bump_rule_effect_dates(conn, effect_dates)
+
+
 def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) -> None:
     batch = conn.execute(
         "SELECT config_snapshot FROM import_batch WHERE id = ?",
@@ -2908,6 +2948,7 @@ def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) ->
                 )
                 sync_rule_tags_for_transaction(conn, row["id"], rule_tag_ids)
         _remove_imported_batch_categories(conn, batch_id)
+        stamp_batch_rule_effects(conn, batch_id)
 
 
 def sanitize_rule_merchant_text(value: str) -> str:
@@ -3684,6 +3725,10 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         # Rules are stable across an import; load once so the per-row matcher below doesn't re-query them.
         rules = load_categorization_rules(conn)
         rule_tags_by_id = load_rule_tags_by_id(conn)
+        # Accumulate the newest transaction date each rule supplies an effect for, flushed after the row
+        # loop so imports keep category_rule.last_effect_date current (drives the stale-rule cleanup).
+        _rules_by_id = {r["id"]: r for r in rules}
+        _rule_effect_dates: dict = {}
         # Which columns to capture as evidence, and each one's role, is a file-level decision (roles come
         # from cardinality across the whole file) — compute once, then apply per row.
         evidence_plan = _build_evidence_column_plan(data_rows, headers, col)
@@ -3893,6 +3938,10 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
 
             txn_id = _insert_imported_transaction(conn, batch_id, txn_payload)
             sync_rule_tags_for_transaction(conn, txn_id, rule_tag_ids)
+            if parsed_date:
+                for _rid in effect_rule_ids(rule_result, _rules_by_id, rule_tags_by_id):
+                    if _rid not in _rule_effect_dates or parsed_date > _rule_effect_dates[_rid]:
+                        _rule_effect_dates[_rid] = parsed_date
             if is_pending:
                 existing_pending_rows[pending_match_key] = {"id": txn_id, "content_hash": content_hash}
             imported += 1
@@ -3919,6 +3968,8 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                 invalid_rows_message = (
                     f"Rows {first_error_row} onward contain validation errors. The file viewer has been opened so you can inspect the bad rows."
                 )
+
+        bump_rule_effect_dates(conn, _rule_effect_dates)
 
         conn.execute(
             "UPDATE import_batch SET row_count = ?, skipped_count = ?, deduped_count = ? WHERE id = ?",
@@ -4789,6 +4840,7 @@ def apply_batch_category_mappings(batch_id: str, body: BatchCategoryMappingApply
                     )
                     categorized_by_rules += 1
                 sync_rule_tags_for_transaction(conn, row["id"], rule_tag_ids)
+            stamp_batch_rule_effects(conn, batch_id)
 
     return {
         "ok": True,

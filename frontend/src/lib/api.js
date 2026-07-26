@@ -328,6 +328,16 @@ export const api = {
   // Existing transactions a rule's matcher currently matches: { count (true total), transactions (capped) }.
   // Drives the per-rule hover count + report on the Rules page.
   getRuleMatches: (id) => request(`/rules/${id}/matches`),
+  // Stale-rule cleanup + trash.
+  getRuleTrash: () => request('/rules/trash'),
+  restoreRule: (id) => request(`/rules/${id}/restore`, { method: 'POST' }),
+  purgeRule: (id) => request(`/rules/${id}/purge`, { method: 'DELETE' }),
+  purgeAllTrashedRules: () => request('/rules/trash/purge-all', { method: 'POST' }),
+  // Active, non-managed rules whose newest applied effect is older than `before` (YYYY-MM-DD) or never set.
+  getRuleCleanupCandidates: (before) => request(`/rules/cleanup-candidates?before=${encodeURIComponent(before)}`),
+  // Bulk-trash a reviewed set of stale rules. `reconcile` (default off) also reverts their categorizations.
+  cleanupRules: (ruleIds, { reconcile = false } = {}) =>
+    request('/rules/cleanup', { method: 'POST', body: JSON.stringify({ rule_ids: ruleIds, reconcile }) }),
   previewRule: (data) => request('/rules/preview', { method: 'POST', body: JSON.stringify(data) }),
   // `onExisting`: how to reconcile a same-matcher collision. Default (omitted) classifies and reports
   // without writing (status: duplicate|mergeable|conflict); 'merge' folds a mergeable/duplicate save

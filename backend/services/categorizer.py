@@ -249,7 +249,8 @@ def load_categorization_rules(conn: sqlite3.Connection) -> list:
            LEFT   JOIN category c ON c.id = cr.category_id
            -- Deactivating a category prunes its rules, but stay defensive: a rule must never
            -- categorize into an inactive category. Tag-only rules (category_id NULL) still apply.
-           WHERE  cr.category_id IS NULL OR c.is_active = 1
+           -- A trashed rule (deleted_at set) is excluded so it stops categorizing while recoverable.
+           WHERE  (cr.category_id IS NULL OR c.is_active = 1) AND cr.deleted_at IS NULL
            -- Precedence: a specific account beats an account *type* beats global; then longer keyword,
            -- then more conditions. (account_id > account_type: a rule pinned to one account is more
            -- specific than one covering every account of a type.)
@@ -373,6 +374,50 @@ def rule_scalar_effects(result, *, fallback_name: str) -> dict:
     return {"display_name": clean_name or fallback_name, "renamed_by_rule": bool(clean_name)}
 
 
+def effect_rule_ids(result, rules_by_id, rule_tags_by_id=None) -> set:
+    """Rule ids that supply a *live effect* for a categorize `result` on a row — the signal `last_effect_date`
+    tracks. That's the winning category rule (the first matched rule whose category equals the winning one),
+    the winning rename rule (first matched rule whose clean_name equals the winning one), and every matched
+    rule that contributes a tag. `rules_by_id` maps id → rule row/dict; `result` is what categorize_transaction
+    returns (or None). Used by apply sites to stamp which rules just did something, and by the backfill."""
+    if not isinstance(result, dict):
+        return set()
+    matched = result.get("matched_rule_ids") or []
+    ids: set = set()
+    cat = result.get("category_id")
+    if cat:
+        for rid in matched:
+            rule = rules_by_id.get(rid)
+            if rule is not None and rule["category_id"] == cat:
+                ids.add(rid)
+                break
+    clean = result.get("clean_name")
+    if clean:
+        target = str(clean).strip().lower()
+        for rid in matched:
+            rule = rules_by_id.get(rid)
+            if rule is not None and (rule["clean_name"] or "").strip().lower() == target:
+                ids.add(rid)
+                break
+    if rule_tags_by_id:
+        for rid in matched:
+            if rule_tags_by_id.get(rid):
+                ids.add(rid)
+    return ids
+
+
+def bump_rule_effect_dates(conn, dates_by_rule) -> None:
+    """Advance each rule's `last_effect_date` to the given transaction date if newer (monotonic max). Called
+    at apply sites with a `{rule_id: newest_txn_date_it_affected}` map accumulated over a pass."""
+    for rule_id, date in (dates_by_rule or {}).items():
+        if not date:
+            continue
+        conn.execute(
+            "UPDATE category_rule SET last_effect_date = ? WHERE id = ? AND (last_effect_date IS NULL OR last_effect_date < ?)",
+            (date, rule_id, date),
+        )
+
+
 def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] = None,
                      retain_unmatched: bool = True) -> int:
     """Re-run the rules over the `category_overridden = 0` rows (so manual and import edits — the locked
@@ -407,6 +452,7 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
     txns = conn.execute(
         f"""SELECT
                t.id,
+               t.date,
                t.merchant_name,
                t.display_name,
                t.raw_name,
@@ -427,12 +473,14 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
     ).fetchall()
 
     rules = load_categorization_rules(conn)
+    rules_by_id = {rule["id"]: rule for rule in rules}
     rule_tags_by_id = load_rule_tags_by_id(conn)
     tag_rows_by_txn = load_rule_tag_sync_rows(conn)
     # Only pay the per-row evidence parse when at least one rule actually opts into source-text
     # matching; the common case (no such rules) stays exactly as cheap as before.
     needs_source_text = any(rule["match_source_text"] for rule in rules)
     updated = 0
+    effect_dates: dict = {}  # rule_id -> newest txn date it supplies a live effect for (last_effect_date)
     for txn in txns:
         source_text = source_match_text_from_json(txn["import_evidence_json"]) if needs_source_text else None
         result = categorize_transaction(
@@ -491,6 +539,15 @@ def recategorize_all(conn: sqlite3.Connection, *, txn_ids: Optional[list[str]] =
         if category_changed or display_name_changed or tags_changed:
             updated += 1
 
+        # Advance last_effect_date for every rule that supplies a live effect on this row (whether or not
+        # this pass changed it) — the newest transaction date the rule owns.
+        txn_date = txn["date"]
+        if txn_date:
+            for rid in effect_rule_ids(result, rules_by_id, rule_tags_by_id):
+                if rid not in effect_dates or txn_date > effect_dates[rid]:
+                    effect_dates[rid] = txn_date
+
+    bump_rule_effect_dates(conn, effect_dates)
     return updated
 
 

@@ -289,6 +289,10 @@ def create_money_movement_rules(conn: sqlite3.Connection, type_values) -> int:
             RuleCreate(keyword=keyword, category_id=category_id, account_type=PAYPAL_ACCOUNT_TYPE, match_source_text=True),
             on_existing="merge",
         )
+        # Flag as app-managed so the stale-rule cleanup never sweeps it (these are infrastructure the app
+        # maintains, and may legitimately match only old data).
+        if result.get("status") in ("created", "merged") and result.get("id"):
+            conn.execute("UPDATE category_rule SET is_managed = 1 WHERE id = ?", (result["id"],))
         # A brand-new rule, or a merge that actually added the category to a rule that lacked it, is a
         # change worth recategorizing for; a no-op duplicate/conflict is not.
         if result["status"] == "created" or (result["status"] == "merged" and result.get("relation") == "mergeable"):

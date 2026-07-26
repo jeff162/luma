@@ -350,7 +350,7 @@ Where commands differ, the repo should provide script wrappers or document the 
 
 - **New API behavior:** add or update a router in `backend/routers/`
 
-- **Schema changes:** update `init_db` in `backend/db/database.py` (see "Schema evolution" in `docs/data-model.md` — there is currently no in-place migration path)
+- **Schema changes:** update `init_db` **and** register a `@migration(N)` (plus a `POST_RESTORE_DATA_INIT[N]` step when the migration *derives* data from existing rows) in `backend/db/database.py` — see "Schema evolution" in `docs/data-model.md` for the full checklist and the migrations' two-halves / post-restore-data-init contract
 
 - **Shared transaction editing/display behavior:** update `TransactionRow.jsx`
 

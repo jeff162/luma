@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useId, useRef, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
-import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState, AppDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS } from '../components/ui.jsx'
+import { Card, PageHeader, Button, Input, Badge, Spinner, EmptyState, AppDialog, Tooltip, ROW_HOVER_OPEN_DELAY_MS, getFormControlStyle } from '../components/ui.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 import StarterRulesDialog from '../components/StarterRulesDialog.jsx'
 import RuleForm, { amountConditionSummary, RulePreviewDetail } from '../components/RuleForm.jsx'
@@ -13,6 +13,9 @@ import RulesFilterPopover from '../components/RulesFilterPopover.jsx'
 import { ACCOUNT_TYPE_LABEL } from '../lib/accountTypes.js'
 import { TagBadge } from '../components/TagUi.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
+import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import RuleCleanupDialog from '../components/RuleCleanupDialog.jsx'
+import { formatDate } from '../lib/utils.js'
 import { useRecategorize, RecategorizeButton, RecategorizeResultBanner } from '../components/RecategorizeControl.jsx'
 import { ActionCountBadge } from '../components/importExport/importPresentational.jsx'
 import { countPendingRuleSuggestions, hasRuleSuggestionWork } from '../lib/importExport/ruleSuggestionWork.js'
@@ -110,10 +113,13 @@ function RuleRow({ rule, owners, accounts, onEdit, onDelete, matchesCache, match
     if (matchState) { onOpenReport(rule, matchState); return }
     fetchMatches().then(res => { if (res) onOpenReport(rule, res) })
   }
-  const matchTip = matchLoading
-    ? 'Counting matches…'
-    : matchState
-      ? `${matchState.count} transaction${matchState.count !== 1 ? 's' : ''} match — click to view`
+  // While the lazy count is in flight, render no tooltip (empty content → the Tooltip shows nothing) rather
+  // than a "Counting…" flash: the box first appears already populated with the result. openDelay (300ms) is
+  // longer than the 200ms hover-fetch arm, so a fresh hover's box normally opens straight to the count.
+  const matchTip = matchState
+    ? `${matchState.count} transaction${matchState.count !== 1 ? 's' : ''} match — click to view`
+    : matchLoading
+      ? ''
       : 'Show transactions this rule matches'
 
   const conditions = describeRule(rule, owners, accounts)
@@ -152,6 +158,12 @@ function RuleRow({ rule, owners, accounts, onEdit, onDelete, matchesCache, match
           ))}
           {rule.is_recurring ? <span title="Tracked as a recurring series">↻ recurring</span> : null}
           {!hasAction ? <span style={{ fontStyle: 'italic' }}>no action</span> : null}
+          <span
+            title="The newest transaction date this rule has categorized"
+            style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--muted)', opacity: 0.85, whiteSpace: 'nowrap', paddingLeft: 8 }}
+          >
+            {rule.last_effect_date ? `used ${formatDate(rule.last_effect_date)}` : 'never used'}
+          </span>
         </div>
       </div>
 
@@ -438,6 +450,11 @@ export default function Rules() {
   const matchesCacheRef = useRef(new Map())
   const [matchCacheVersion, setMatchCacheVersion] = useState(0)
   const [matchReport, setMatchReport] = useState(null) // { rule, data }
+  // View + stale-rule cleanup. sortMode swaps the A–Z sectioned view for a stalest-first chronological one.
+  // The cleanup timeframe is a durable per-user preference; '' = none selected (nothing swept).
+  const [sortMode, setSortMode] = useState('alpha') // 'alpha' | 'lastUsed'
+  const [cleanupWindow, setCleanupWindow] = useUserPreference('ui.rules.cleanupWindow', '')
+  const [cleanupOpen, setCleanupOpen] = useState(false)
   const {
     pendingCount: recategorizePendingCount,
     result: recategorizeResult,
@@ -484,10 +501,44 @@ export default function Rules() {
     for (const gid of facets.groupIds) for (const lid of (leafIdsByGroup[gid] || [])) effectiveCategoryIds.add(lid)
     return filterRules(rules, search, { ...facets, categoryIds: [...effectiveCategoryIds] })
   }, [rules, search, facets, leafIdsByGroup])
-  const sectionItems = useMemo(() => buildSectionedRuleItems(filteredRules), [filteredRules])
+  // Alphabetical → A–Z sections; "Last used" → a flat, stalest-first list (never-used rules on top).
+  const sectionItems = useMemo(() => {
+    if (sortMode === 'lastUsed') {
+      return [...filteredRules]
+        .sort((a, b) => (a.last_effect_date || '').localeCompare(b.last_effect_date || '') || a.keyword.localeCompare(b.keyword))
+        .map(rule => ({ type: 'rule', rule }))
+    }
+    return buildSectionedRuleItems(filteredRules)
+  }, [filteredRules, sortMode])
+  const alphaMode = sortMode === 'alpha'
   const presentLetters = useMemo(() => presentSectionLetters(filteredRules), [filteredRules])
   const headerIndexByLetter = useMemo(() => sectionHeaderIndexByLetter(sectionItems), [sectionItems])
   const activeFacetCount = activeRulesFacetCount(facets)
+
+  // The stale-rule cleanup threshold date (today minus the chosen window), or null when none is selected.
+  const cleanupBeforeDate = useMemo(() => {
+    if (!cleanupWindow) return null
+    const [n, unit] = cleanupWindow.split(':')
+    const d = new Date()
+    if (unit === 'years') d.setFullYear(d.getFullYear() - Number(n))
+    else d.setMonth(d.getMonth() - Number(n))
+    return d.toISOString().slice(0, 10)
+  }, [cleanupWindow])
+
+  // How many rules the current timeframe would sweep — shown on the cleanup button. null = counting (or no
+  // window). Re-fetched when the threshold changes and via cleanupCountKey after a cleanup runs (so the
+  // count drops to reflect what was trashed). The ignore guard drops a stale response if the window changes.
+  const [cleanupCount, setCleanupCount] = useState(null)
+  const [cleanupCountKey, setCleanupCountKey] = useState(0)
+  useEffect(() => {
+    if (!cleanupBeforeDate) { setCleanupCount(null); return }
+    let ignore = false
+    setCleanupCount(null)
+    api.getRuleCleanupCandidates(cleanupBeforeDate)
+      .then(res => { if (!ignore) setCleanupCount(res.count) })
+      .catch(() => { if (!ignore) setCleanupCount(null) })
+    return () => { ignore = true }
+  }, [cleanupBeforeDate, cleanupCountKey])
 
   // Facet option lists, drawn only from values actually used by some rule (so the filter never offers a
   // facet that would match nothing). Labels come straight off the rule rows the list endpoint returns;
@@ -692,7 +743,10 @@ export default function Rules() {
 
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
         <PageHeader title="Rules">
-          <RecategorizeButton pendingCount={recategorizePendingCount} onRun={runRecategorize} />
+          <RecategorizeButton
+            pendingCount={recategorizePendingCount}
+            onRun={async () => { await runRecategorize(); loadRules() }}
+          />
           <Button
             small
             variant="ghost"
@@ -806,15 +860,67 @@ export default function Rules() {
           </span>
         ))}
 
-        <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 'auto' }}>
-          {filteredRules.length === rules.length
-            ? `${rules.length} rule${rules.length !== 1 ? 's' : ''}`
-            : `${filteredRules.length} of ${rules.length} rules`}
-        </span>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          {/* Stale-rule cleanup: pick a window (starts at "—" = off), see the count, review before trashing. */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
+            Unused for
+            <select
+              value={cleanupWindow}
+              onChange={e => setCleanupWindow(e.target.value)}
+              aria-label="Clean up rules unused for"
+              style={{ ...getFormControlStyle({ size: 'sm', clickable: true }) }}
+            >
+              <option value="">—</option>
+              <option value="6:months">6 months</option>
+              <option value="1:years">1 year</option>
+              <option value="2:years">2 years</option>
+              <option value="3:years">3 years</option>
+              <option value="5:years">5 years</option>
+            </select>
+          </label>
+          {cleanupBeforeDate ? (
+            <Button
+              small
+              variant="ghost"
+              disabled={cleanupCount === 0}
+              onClick={() => setCleanupOpen(true)}
+              title="Review and clean out rules that haven't categorized anything recently"
+            >
+              {cleanupCount === null
+                ? 'Counting…'
+                : cleanupCount === 0
+                  ? 'No rules match this timeframe'
+                  : `Select ${cleanupCount} rule${cleanupCount === 1 ? '' : 's'}`}
+            </Button>
+          ) : null}
+
+          {/* Sort toggle: alphabetical (A–Z sections) vs stalest-first by last-used date. */}
+          <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+            {[['alpha', 'A–Z'], ['lastUsed', 'Last used']].map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setSortMode(mode)}
+                style={{
+                  border: 'none', padding: '4px 9px', fontSize: 12, cursor: 'pointer',
+                  background: sortMode === mode ? 'color-mix(in srgb, var(--accent) 14%, var(--surface2))' : 'var(--surface)',
+                  color: sortMode === mode ? 'var(--accent2)' : 'var(--muted)',
+                  fontWeight: sortMode === mode ? 600 : 400,
+                }}
+              >{label}</button>
+            ))}
+          </div>
+
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+            {filteredRules.length === rules.length
+              ? `${rules.length} rule${rules.length !== 1 ? 's' : ''}`
+              : `${filteredRules.length} of ${rules.length} rules`}
+          </span>
+        </div>
       </div>
 
-      {/* Horizontal A–Z jump strip, directly under the search box (fixed region, stays put while scrolling). */}
-      {!loading && filteredRules.length > 0 ? (
+      {/* Horizontal A–Z jump strip (alphabetical sort only; the "Last used" order isn't letter-sectioned). */}
+      {!loading && alphaMode && filteredRules.length > 0 ? (
         <AlphaRail present={presentLetters} current={currentLetter} onJump={jumpToLetter} />
       ) : null}
 
@@ -931,6 +1037,17 @@ export default function Rules() {
             loadRules()
             loadRecategorizePreview()
           }}
+        />
+      ) : null}
+
+      {cleanupOpen && cleanupBeforeDate ? (
+        <RuleCleanupDialog
+          before={cleanupBeforeDate}
+          windowLabel={{ '6:months': '6 months', '1:years': '1 year', '2:years': '2 years', '3:years': '3 years', '5:years': '5 years' }[cleanupWindow] || ''}
+          owners={owners}
+          accounts={accounts}
+          onClose={() => setCleanupOpen(false)}
+          onDone={() => { setCleanupOpen(false); loadRules(); loadRecategorizePreview(); setCleanupCountKey(k => k + 1) }}
         />
       ) : null}
 

@@ -95,6 +95,14 @@ def get_db(db_path: str | None = None):
 # stamped there without replaying migrations. Existing databases are advanced in place by
 # `run_migrations`, which applies every registered migration newer than the DB's recorded version.
 #
+# A migration has two halves: a *schema* change (ALTER/CREATE) and, for some, a *data-init* step that
+# derives new fields from existing data (e.g. v6 display_name_source, v13 account types + money-movement
+# consolidation, v15 last_effect_date + is_managed). These data-init steps are registered in
+# `POST_RESTORE_DATA_INIT` and run again by `run_post_restore_data_init` after a **backup restore**: a
+# restore loads the backup's rows into the already-current schema, so the schema half is a no-op, but the
+# data-init half of every migration *newer than the backup* would otherwise be skipped — leaving derived
+# fields empty. So restore runs exactly those (gated on the backup's recorded `schema_version`), in order.
+#
 # The migration chain was *reset* at the Luma rebrand: the historical v1..v32 migrations were dropped
 # (there is no in-place upgrade path off a pre-rebrand database — those come across via backup/restore)
 # and the baseline is `1`. Post-rebrand migrations register from v2 upward: v2 adds
@@ -102,9 +110,10 @@ def get_db(db_path: str | None = None):
 # (the recurring_series table itself is created by init_db's CREATE TABLE IF NOT EXISTS script), v5 adds
 # rule-backed recurring series (`category_rule.is_recurring` + `recurring_series.rule_id`; the
 # `recurring_membership_override` table is created by the same CREATE TABLE IF NOT EXISTS script).
-# v14 adds `category_rule.match_expr` (multi-clause AND/contains merchant matcher).
+# v14 adds `category_rule.match_expr` (multi-clause AND/contains merchant matcher). v15 adds
+# `category_rule.last_effect_date` (stale-rule signal) + `category_rule.deleted_at` (rules trash).
 
-CURRENT_VERSION = 14
+CURRENT_VERSION = 15
 
 MIGRATIONS = {}
 
@@ -306,7 +315,14 @@ def _add_rule_account_type(conn):
     #   2. consolidate the existing per-account money-movement rules onto a single account_type='paypal'
     #      scope (dedup by keyword), the rule shape create_money_movement_rules now produces.
     conn.execute("ALTER TABLE category_rule ADD COLUMN account_type TEXT")
+    _backfill_account_types_and_money_movement(conn)
 
+
+def _backfill_account_types_and_money_movement(conn):
+    # The *data* half of migration 13 (the ALTER lives in the migration). Also re-run after restoring a
+    # backup older than v13, so pre-v13 data gets the same one-time transform. Idempotent-enough to run
+    # once per DB: the type backfill only touches generic types, and the consolidation collapses per-account
+    # money-movement rules to one per keyword (a no-op once already consolidated).
     # 1. Backfill PayPal account types from PayPal import provenance.
     conn.execute(
         """
@@ -360,6 +376,127 @@ def _add_rule_match_expr(conn):
     conn.execute("ALTER TABLE category_rule ADD COLUMN match_expr TEXT")
 
 
+@migration(15)
+def _add_rule_last_effect_and_trash(conn):
+    # Two columns supporting stale-rule cleanup:
+    #   last_effect_date — the newest transaction *date* this rule has applied a live effect (category /
+    #     rename / tag) to. A monotonic-forward "is this rule still doing anything" signal that drives the
+    #     cleanup sweep and sort. Maintained incrementally at the apply sites going forward; seeded once
+    #     here from the current owned state.
+    #   deleted_at — soft-delete marker for the rules trash: a trashed rule is recoverable and is ignored by
+    #     the categorizer and by matcher-identity, but its row (and rule_tag) survive for restore.
+    #   is_managed — 1 = an app-managed rule (the auto-created PayPal money-movement Type rules), which the
+    #     stale-rule cleanup pre-excludes so a sweep can't quietly remove infrastructure the app maintains.
+    # Fresh installs get all three from the category_rule baseline CREATE TABLE.
+    #
+    # The ALTERs are guarded add-if-missing so this migration is *safe to re-run* — the migration runner only
+    # stamps the version after this returns, so a mid-way failure re-runs cleanly on the next boot.
+    existing = {r["name"] for r in conn.execute("PRAGMA table_info(category_rule)")}
+    if "last_effect_date" not in existing:
+        conn.execute("ALTER TABLE category_rule ADD COLUMN last_effect_date TEXT")
+    if "deleted_at" not in existing:
+        conn.execute("ALTER TABLE category_rule ADD COLUMN deleted_at TEXT")
+    if "is_managed" not in existing:
+        conn.execute("ALTER TABLE category_rule ADD COLUMN is_managed INTEGER NOT NULL DEFAULT 0")
+    _seed_rule_cleanup_data(conn)
+
+
+def _seed_rule_cleanup_data(conn):
+    # The *data* half of migration 15 (the ALTERs live in the migration). Also re-run after restoring a
+    # backup older than v15, so restored data gets the same managed-flagging + last_effect_date seed.
+    # Flag existing money-movement rules as managed (match_source_text, account_type-scoped, pointing at the
+    # seeded Transfers → Money movement leaf) so they're excluded from cleanup like newly-created ones.
+    mm_leaf = conn.execute(
+        """SELECT c.id FROM category c JOIN category p ON p.id = c.parent_id
+           WHERE c.name = 'Money movement' AND p.name = 'Transfers' AND p.parent_id IS NULL"""
+    ).fetchone()
+    if mm_leaf:
+        conn.execute(
+            "UPDATE category_rule SET is_managed = 1 WHERE match_source_text = 1 AND account_type IS NOT NULL AND category_id = ?",
+            (mm_leaf["id"],),
+        )
+    # The seed is *best-effort*: a hiccup deriving the initial dates must never leave the migration
+    # half-applied. A skipped seed self-heals — forward stamping and the next Run categorization populate
+    # last_effect_date. NULL dates just read as "never used" until then.
+    try:
+        _backfill_rule_last_effect_date(conn)
+    except Exception as exc:  # noqa: BLE001 — best-effort seed; the columns are what must land
+        log_info(f"[db] rule last_effect_date backfill skipped ({exc}); will populate on next categorization")
+
+
+def _backfill_rule_last_effect_date(conn):
+    # Seed last_effect_date once: for each transaction, attribute its date to the rule(s) currently supplying
+    # a *live* effect on it — the winning category rule (row is category_source='rule' and matches), the
+    # winning rename rule (display_name_source='rule'), and any rule contributing a live tag — keeping the max
+    # date per rule. Reuses the live categorizer so attribution matches what an apply would do (no drift).
+    # One-time (only when advancing past v15); O(txns × rules), acceptable as an upgrade step.
+    from backend.services.categorizer import (
+        categorize_transaction,
+        effect_rule_ids,
+        load_categorization_rules,
+        load_rule_tags_by_id,
+        source_match_text_from_json,
+    )
+
+    # Skip on a partial/legacy schema (the isolated per-migration unit tests hand-build minimal tables):
+    # the derived seed needs the full modern columns. A skipped seed is safe — forward stamping and the
+    # next Run categorization populate last_effect_date anyway.
+    txn_cols = {r["name"] for r in conn.execute("PRAGMA table_info(txn)")}
+    rule_cols = {r["name"] for r in conn.execute("PRAGMA table_info(category_rule)")}
+    required_txn = {"date", "merchant_name", "display_name", "raw_name", "amount", "owner_id",
+                    "account_id", "category_id", "category_source", "display_name_source", "import_evidence_json"}
+    required_rule = {"amount_min", "amount_max", "debit_credit", "owner_id", "clean_name", "account_type", "match_expr"}
+    if not (required_txn <= txn_cols and required_rule <= rule_cols):
+        return
+
+    rules = load_categorization_rules(conn)
+    if not rules:
+        return
+    rules_by_id = {r["id"]: r for r in rules}
+    rule_tags_by_id = load_rule_tags_by_id(conn)
+    needs_source_text = any(r["match_source_text"] for r in rules)
+
+    rows = conn.execute(
+        """SELECT t.id, t.date, t.merchant_name, t.display_name, t.raw_name, t.amount, t.owner_id,
+                  t.account_id, t.category_id, t.category_source, t.display_name_source, t.import_evidence_json,
+                  COALESCE(a.parent_account_id, t.account_id) AS effective_account_id,
+                  COALESCE(p.type, a.type) AS effective_account_type
+           FROM   txn t
+           JOIN   account a ON a.id = t.account_id
+           LEFT   JOIN account p ON p.id = a.parent_account_id"""
+    ).fetchall()
+
+    max_date: dict = {}
+
+    def bump(rule_id, date):
+        if date and (rule_id not in max_date or date > max_date[rule_id]):
+            max_date[rule_id] = date
+
+    for row in rows:
+        date = row["date"]
+        if not date:
+            continue
+        source_text = source_match_text_from_json(row["import_evidence_json"]) if needs_source_text else None
+        result = categorize_transaction(
+            row["merchant_name"], row["raw_name"], row["display_name"], row["amount"], conn,
+            owner_id=row["owner_id"], account_id=row["account_id"],
+            effective_account_id=row["effective_account_id"], effective_account_type=row["effective_account_type"],
+            rules=rules, rule_tags_by_id=rule_tags_by_id, source_text=source_text,
+        )
+        if not result:
+            continue
+        # Credit the rule(s) that *win* this row — the same "would this rule supply the effect" attribution
+        # every live apply/import path uses (effect_rule_ids), so the seed agrees with incremental stamping.
+        # Crucially this credits a row the rule wins even when import or an earlier manual set currently holds
+        # the category/name (category_source != 'rule'): the rule is still what categorizes that merchant, so
+        # it isn't stale. A row shadowed by a more-specific rule credits that winner, not this rule.
+        for rid in effect_rule_ids(result, rules_by_id, rule_tags_by_id):
+            bump(rid, date)
+
+    for rid, date in max_date.items():
+        conn.execute("UPDATE category_rule SET last_effect_date = ? WHERE id = ?", (date, rid))
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -382,6 +519,35 @@ def set_db_version(conn, version: int):
         "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('version', ?)",
         (str(version),)
     )
+
+
+# The *data-initialization* half of each migration that transforms data (as opposed to migrations that only
+# add columns/tables with sensible defaults), keyed by migration version. A migration runs its own entry
+# after its schema change; a restore runs the entries newer than the backup (see run_post_restore_data_init).
+# Order matters — later steps may depend on earlier ones' output (e.g. v15's date seed reads the rename
+# provenance v6 sets) — so callers iterate in ascending version order.
+POST_RESTORE_DATA_INIT = {
+    6:  _backfill_display_name_source,
+    13: _backfill_account_types_and_money_movement,
+    15: _seed_rule_cleanup_data,
+}
+
+
+def run_post_restore_data_init(conn, backup_schema_version) -> None:
+    """After a backup is restored into the current schema, run the data-init half of every migration newer
+    than the backup, in ascending order — so derived fields the backup predates (rename provenance,
+    account types + money-movement consolidation, last_effect_date + is_managed) get computed against the
+    restored data. The schema DDL is skipped: the target is already at CURRENT_VERSION, so those ALTERs
+    would be no-ops; only the data transforms are missing.
+
+    A backup with no/unknown `schema_version` — including pre-rebrand backups, per the design decision to
+    treat those as Luma v1 — runs *all* registered (post-rebrand) steps. A backup newer than us runs none
+    (empty range). Each step is written to be safe to run once on data that predates it, which is exactly
+    when it runs here."""
+    effective = backup_schema_version if isinstance(backup_schema_version, int) and backup_schema_version >= 1 else 1
+    for version in sorted(POST_RESTORE_DATA_INIT):
+        if version > effective:
+            POST_RESTORE_DATA_INIT[version](conn)
 
 
 def run_migrations(conn):
@@ -538,7 +704,15 @@ def init_db(db_path: str | None = None):
                 match_expr TEXT,
                 -- 1 = this rule declares a recurring series: its matches are members of the
                 -- recurring_series row that points back here via rule_id (see recurring_series).
-                is_recurring INTEGER NOT NULL DEFAULT 0
+                is_recurring INTEGER NOT NULL DEFAULT 0,
+                -- The newest transaction *date* this rule has applied a live effect (category/rename/tag) to,
+                -- kept as a monotonic-forward max. Powers the stale-rule cleanup + sort. NULL = never applied.
+                last_effect_date TEXT,
+                -- Soft-delete marker for the rules trash: non-NULL = trashed (recoverable). The categorizer
+                -- and matcher-identity ignore trashed rules; the row survives for restore/purge.
+                deleted_at TEXT,
+                -- 1 = app-managed rule (auto-created money-movement Type rules); excluded from stale-rule cleanup.
+                is_managed INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS owner (

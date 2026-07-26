@@ -1734,6 +1734,109 @@ function DeveloperOptionsSection({ authEnabled }) {
   )
 }
 
+function RulesTrashSection() {
+  // Trashed categorization rules (from the Rules page delete / stale-rule cleanup). Restore brings a rule
+  // back to active (refused if an active rule now shares its matcher); purge removes it for good.
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [workingId, setWorkingId] = useState('')
+  const [emptying, setEmptying] = useState(false)
+  const [error, setError] = useState('')
+  const [confirmEmpty, setConfirmEmpty] = useState(false)
+
+  async function load() {
+    setLoading(true)
+    try {
+      setItems(await api.getRuleTrash())
+      setError('')
+    } catch (err) {
+      setError(err.message || 'Failed to load rules trash')
+    } finally {
+      setLoading(false)
+    }
+  }
+  useEffect(() => { load() }, [])
+
+  async function restore(id) {
+    setWorkingId(id); setError('')
+    try { await api.restoreRule(id); await load() }
+    catch (err) { setError(err.message || 'Failed to restore rule') }
+    finally { setWorkingId('') }
+  }
+  async function purge(id) {
+    setWorkingId(id); setError('')
+    try { await api.purgeRule(id); await load() }
+    catch (err) { setError(err.message || 'Failed to remove rule') }
+    finally { setWorkingId('') }
+  }
+  async function emptyTrash() {
+    setConfirmEmpty(false); setEmptying(true); setError('')
+    try { await api.purgeAllTrashedRules(); await load() }
+    catch (err) { setError(err.message || 'Failed to empty rules trash') }
+    finally { setEmptying(false) }
+  }
+
+  return (
+    <>
+      {confirmEmpty ? (
+        <AppConfirmDialog
+          title="Empty rules trash?"
+          description="This permanently deletes every trashed rule. Their past categorizations stay as they are; the rules themselves can’t be restored afterward."
+          confirmLabel="Empty rules trash"
+          confirmVariant="danger"
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={emptyTrash}
+          onCancel={() => setConfirmEmpty(false)}
+          width="min(620px, 100%)"
+        />
+      ) : null}
+
+      <Card style={{ display: 'grid', gap: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, maxWidth: 620 }}>
+            Rules removed from the Rules page (or by the stale-rule cleanup) can be restored here, or removed for good.
+          </div>
+          <Button small variant="ghost" onClick={() => setConfirmEmpty(true)} disabled={emptying || loading || items.length === 0}>
+            {emptying ? 'Emptying…' : 'Empty rules trash'}
+          </Button>
+        </div>
+        {error ? <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div> : null}
+        {loading ? <Spinner /> : items.length === 0 ? (
+          <EmptyState message="No trashed rules." />
+        ) : (
+          <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+            {items.map((rule, index) => {
+              const clauses = rule.clauses && rule.clauses.length ? rule.clauses : [rule.keyword]
+              return (
+                <div key={rule.id} style={{
+                  display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 16, alignItems: 'center',
+                  padding: '10px 14px', borderTop: index === 0 ? 'none' : '1px solid var(--border)', background: 'var(--surface2)',
+                }}>
+                  <div style={{ minWidth: 0, fontSize: 13, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' }}>
+                    {clauses.map((c, i) => (
+                      <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        {i > 0 ? <span style={{ color: 'var(--muted)', fontWeight: 400 }}>and</span> : null}
+                        <span style={{ fontFamily: 'monospace', fontWeight: 500 }}>{c}</span>
+                      </span>
+                    ))}
+                    {rule.category_name ? <span style={{ color: 'var(--muted)' }}>→ {rule.category_name}</span> : null}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    <Button small variant="ghost" onClick={() => restore(rule.id)} disabled={workingId === rule.id}>Restore</Button>
+                    <Button small variant="ghost" onClick={() => purge(rule.id)} disabled={workingId === rule.id}
+                      style={{ color: 'var(--danger)' }}>Remove</Button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </Card>
+    </>
+  )
+}
+
+
 function TrashSection() {
   /*
    * The account trash keeps reversible account cleanup separate from the irreversible final delete.
@@ -2330,6 +2433,12 @@ export default function Settings() {
                   Duplicate transactions
                 </div>
                 <DuplicateTransactionsTrashSection />
+              </div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
+                  Rules
+                </div>
+                <RulesTrashSection />
               </div>
             </div>
           </StickySection>

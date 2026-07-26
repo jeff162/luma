@@ -20,6 +20,7 @@ from backend.services.categorizer import (
     build_match_expr,
     merchant_matcher_matches,
     match_expr_clause_texts,
+    bump_rule_effect_dates,
 )
 from backend.services.recurring_detection import CADENCES, link_series_members, _normalize_payee
 from backend.services.transaction_tags import sync_rule_tags_for_transaction, would_sync_rule_tags_change, get_visible_transaction_tag_map
@@ -129,6 +130,7 @@ def _find_matching_rule(conn, txn):
         """
         SELECT id
         FROM   category_rule
+        WHERE  deleted_at IS NULL
         ORDER  BY
             CASE WHEN owner_id IS NOT NULL THEN 1 ELSE 0 END DESC,
             CASE WHEN account_id IS NOT NULL THEN 1 ELSE 0 END DESC,
@@ -233,6 +235,7 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     txns = conn.execute(
         f"""SELECT
                t.id,
+               t.date,
                t.merchant_name,
                t.display_name,
                t.raw_name,
@@ -261,9 +264,12 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     ]
 
     affected_ids: list[str] = []
+    effect_max_date = None  # newest date this rule applies an effect to (for last_effect_date)
     for txn in txns:
         if not _rule_matches_txn(rule, txn):
             continue
+        if txn["date"] and (effect_max_date is None or txn["date"] > effect_max_date):
+            effect_max_date = txn["date"]
         row_changed = False
         if rule["category_id"] is not None or rule["clean_name"]:
             params = []
@@ -307,6 +313,9 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
         if row_changed:
             affected_ids.append(txn["id"])
 
+    # The rule just applied its effect across these matches — advance its last_effect_date to the newest.
+    if effect_max_date:
+        bump_rule_effect_dates(conn, {rule_id: effect_max_date})
     return affected_ids
 
 
@@ -496,7 +505,8 @@ class RuleUpdate(BaseModel):
 
 @router.get("")
 def list_rules(search: Optional[str] = Query(None)):
-    where  = "WHERE cr.keyword LIKE ?" if search else ""
+    # Active (non-trashed) rules only; trashed rules live behind /rules/trash.
+    where  = "WHERE cr.deleted_at IS NULL" + (" AND cr.keyword LIKE ?" if search else "")
     params = [f"%{search}%"] if search else []
     with get_db() as conn:
         rows = conn.execute(
@@ -510,6 +520,8 @@ def list_rules(search: Optional[str] = Query(None)):
                 cr.account_type,
                 cr.match_source_text,
                 cr.is_recurring,
+                cr.last_effect_date,
+                cr.is_managed,
                 (SELECT rs.cadence FROM recurring_series rs WHERE rs.rule_id = cr.id) AS recurring_cadence,
                 c.name  AS category_name,
                 NULL    AS category_color,
@@ -612,7 +624,8 @@ def _existing_rule_for_matcher(conn, keyword: str, match_expr: Optional[str], bo
              AND amount_min   IS ?
              AND amount_max   IS ?
              AND debit_credit IS ?
-             AND match_source_text IS ?""",
+             AND match_source_text IS ?
+             AND deleted_at IS NULL""",
         (keyword, match_expr, body.owner_id, body.account_id, body.account_type, body.amount_min,
          body.amount_max, body.debit_credit, int(bool(body.match_source_text))),
     ).fetchone()
@@ -811,7 +824,8 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
                  AND amount_min   IS ?
                  AND amount_max   IS ?
                  AND debit_credit IS ?
-                 AND match_source_text IS ?""",
+                 AND match_source_text IS ?
+                 AND deleted_at IS NULL""",
             (rule_id, resulting["keyword"], resulting["match_expr"], resulting["owner_id"], resulting["account_id"],
              resulting["account_type"], resulting["amount_min"], resulting["amount_max"],
              resulting["debit_credit"], resulting["match_source_text"]),
@@ -946,27 +960,161 @@ def apply_rule_to_transactions(rule_id: str, body: ApplyToTransactionsBody):
 
 @router.delete("/{rule_id}")
 def delete_rule(rule_id: str, reconcile: bool = False):
-    """Delete a rule. `reconcile` (opt-in, default off) additionally re-evaluates the transactions this
-    rule categorized: because `recategorize_all` now retains a category when no rule matches, deleting a
-    rule normally leaves its past categorizations in place. Passing `reconcile=true` is the "this rule was
-    wrong — revert its rows" path: the rows it matched are recomputed against the remaining rules (falling
-    to another matching rule or to uncategorized). Scoped to this rule's rows, so it never touches
-    categorizations left behind by other rules."""
+    """Move a rule to the trash (soft-delete: recoverable from Settings until purged), so it stops
+    categorizing while it can still be restored. `reconcile` (opt-in, default off) additionally
+    re-evaluates the transactions this rule categorized: because `recategorize_all` retains a category
+    when no rule matches, trashing a rule normally leaves its past categorizations in place. Passing
+    `reconcile=true` is the "this rule was wrong — revert its rows" path: the rows it matched are recomputed
+    against the remaining rules (falling to another matching rule or to uncategorized). Scoped to this
+    rule's rows, so it never touches categorizations left behind by other rules."""
     with get_db() as conn:
-        affected: list[str] = []
-        if reconcile:
-            rule = conn.execute(
-                """SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name,
-                          owner_id, account_id, account_type, match_source_text
-                   FROM category_rule WHERE id = ?""",
-                (rule_id,),
-            ).fetchone()
-            if rule:
-                affected = _rule_affected_txn_ids(conn, rule)
-        # A rule-backed recurring series has no matcher without its rule, so deleting the rule removes it
-        # (and unlinks its members) rather than leaving an orphan on the Recurring page.
+        _trash_rule(conn, rule_id, reconcile=reconcile)
+    return {"ok": True}
+
+
+def _trash_rule(conn, rule_id: str, *, reconcile: bool = False) -> None:
+    """Soft-delete one rule (shared by the single delete and the bulk cleanup). The row and its rule_tag
+    survive for restore; the categorizer/matcher-identity already ignore a `deleted_at` row. A rule-backed
+    recurring series is dropped (it has no matcher without its rule) and re-created on restore."""
+    affected: list[str] = []
+    if reconcile:
+        rule = conn.execute(
+            """SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name,
+                      owner_id, account_id, account_type, match_source_text
+               FROM category_rule WHERE id = ? AND deleted_at IS NULL""",
+            (rule_id,),
+        ).fetchone()
+        if rule:
+            affected = _rule_affected_txn_ids(conn, rule)
+    _drop_recurring_series_for_rule(conn, rule_id)
+    conn.execute("UPDATE category_rule SET deleted_at = datetime('now') WHERE id = ? AND deleted_at IS NULL", (rule_id,))
+    if reconcile and affected:
+        recategorize_all(conn, txn_ids=affected, retain_unmatched=False)
+
+
+_TRASH_DISPLAY_SQL = """
+    SELECT cr.id, cr.keyword, cr.match_expr, cr.amount_min, cr.amount_max, cr.debit_credit, cr.clean_name,
+           cr.category_id, cr.owner_id, cr.account_id, cr.account_type, cr.match_source_text, cr.is_recurring,
+           cr.last_effect_date, cr.is_managed, cr.deleted_at,
+           c.name AS category_name, NULL AS category_color, p.name AS parent_name,
+           o.name AS owner_name, o.color AS owner_color,
+           COALESCE(a.display_name, a.name) AS account_name, COALESCE(ap.mask, a.mask) AS account_mask
+    FROM   category_rule cr
+    LEFT JOIN category c  ON c.id  = cr.category_id
+    LEFT JOIN category p  ON p.id  = c.parent_id
+    LEFT JOIN owner    o  ON o.id  = cr.owner_id
+    LEFT JOIN account  a  ON a.id  = cr.account_id
+    LEFT JOIN account  ap ON ap.id = a.parent_account_id
+"""
+
+
+def _decorate_rule_rows(conn, rows):
+    rules = [dict(r) for r in rows]
+    tag_map = _load_rule_tag_map(conn, [rule["id"] for rule in rules])
+    for rule in rules:
+        rule["tags"] = tag_map.get(rule["id"], [])
+        rule["tag_ids"] = [tag["id"] for tag in rule["tags"]]
+        rule["clauses"] = match_expr_clause_texts(rule.get("match_expr")) or ([rule["keyword"]] if rule["keyword"] else [])
+    return rules
+
+
+@router.get("/trash")
+def list_trashed_rules():
+    """Trashed (soft-deleted) rules, newest-trashed first — the rules bucket in the app trash."""
+    with get_db() as conn:
+        rows = conn.execute(_TRASH_DISPLAY_SQL + " WHERE cr.deleted_at IS NOT NULL ORDER BY cr.deleted_at DESC").fetchall()
+        return _decorate_rule_rows(conn, rows)
+
+
+@router.post("/{rule_id}/restore")
+def restore_rule(rule_id: str):
+    """Restore a trashed rule. Refused if an *active* rule now shares its matcher (restoring would violate
+    one-rule-per-matcher); the user resolves that by editing or purging."""
+    with get_db() as conn:
+        rule = conn.execute(
+            """SELECT id, keyword, match_expr, owner_id, account_id, account_type, amount_min, amount_max,
+                      debit_credit, match_source_text, is_recurring
+               FROM category_rule WHERE id = ? AND deleted_at IS NOT NULL""",
+            (rule_id,),
+        ).fetchone()
+        if not rule:
+            raise HTTPException(status_code=404, detail="Trashed rule not found")
+        clash = conn.execute(
+            """SELECT id FROM category_rule
+               WHERE id != ? AND deleted_at IS NULL
+                 AND keyword = ? AND match_expr IS ? AND owner_id IS ? AND account_id IS ?
+                 AND account_type IS ? AND amount_min IS ? AND amount_max IS ? AND debit_credit IS ?
+                 AND match_source_text IS ?""",
+            (rule_id, rule["keyword"], rule["match_expr"], rule["owner_id"], rule["account_id"],
+             rule["account_type"], rule["amount_min"], rule["amount_max"], rule["debit_credit"], rule["match_source_text"]),
+        ).fetchone()
+        if clash:
+            raise HTTPException(status_code=409, detail="An active rule with the same matcher already exists")
+        conn.execute("UPDATE category_rule SET deleted_at = NULL WHERE id = ?", (rule_id,))
+        if rule["is_recurring"]:
+            # The rule-backed series was dropped on trash; re-create it. The exact cadence isn't preserved
+            # across a trash/restore (a minor edge) — it resets to monthly and the user can adjust.
+            _ensure_recurring_series(conn, rule_id, "monthly")
+    return {"ok": True}
+
+
+@router.delete("/{rule_id}/purge")
+def purge_rule(rule_id: str):
+    """Permanently delete a trashed rule (hard delete; rule_tag cascades). Only a trashed rule can be purged."""
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM category_rule WHERE id = ? AND deleted_at IS NOT NULL", (rule_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Trashed rule not found")
         _drop_recurring_series_for_rule(conn, rule_id)
         conn.execute("DELETE FROM category_rule WHERE id = ?", (rule_id,))
-        if reconcile and affected:
-            recategorize_all(conn, txn_ids=affected, retain_unmatched=False)
     return {"ok": True}
+
+
+@router.post("/trash/purge-all")
+def purge_all_trashed_rules():
+    """Permanently delete every trashed rule."""
+    with get_db() as conn:
+        ids = [r["id"] for r in conn.execute("SELECT id FROM category_rule WHERE deleted_at IS NOT NULL").fetchall()]
+        for rid in ids:
+            _drop_recurring_series_for_rule(conn, rid)
+        conn.execute("DELETE FROM category_rule WHERE deleted_at IS NOT NULL")
+    return {"purged": len(ids)}
+
+
+@router.get("/cleanup-candidates")
+def cleanup_candidates(before: str = Query(...)):
+    """Active, non-managed rules whose newest applied effect is older than `before` (YYYY-MM-DD) — or that
+    never applied one — i.e. the stale-rule cleanup set. App-managed (money-movement) and trashed rules are
+    excluded. Same row shape as the rules list, oldest/never-used first."""
+    with get_db() as conn:
+        rows = conn.execute(
+            _TRASH_DISPLAY_SQL + """
+            WHERE cr.deleted_at IS NULL AND cr.is_managed = 0
+              AND (cr.last_effect_date IS NULL OR cr.last_effect_date < ?)
+            ORDER BY (cr.last_effect_date IS NULL) DESC, cr.last_effect_date ASC, cr.keyword ASC""",
+            (before,),
+        ).fetchall()
+        rules = _decorate_rule_rows(conn, rows)
+    return {"count": len(rules), "rules": rules}
+
+
+class RuleCleanupBody(BaseModel):
+    rule_ids: list[str] = []
+    # Default off: cleanup's intent is to remove obsolete rules while *leaving their categorizations alone*.
+    # On = also revert each rule's rows (the "these rules were wrong" batch variant).
+    reconcile: bool = False
+
+
+@router.post("/cleanup")
+def cleanup_rules(body: RuleCleanupBody):
+    """Trash a reviewed set of stale rules at once (soft-delete; recoverable). Managed rules are skipped
+    even if an id is passed."""
+    trashed = 0
+    with get_db() as conn:
+        for rid in body.rule_ids:
+            row = conn.execute("SELECT is_managed FROM category_rule WHERE id = ? AND deleted_at IS NULL", (rid,)).fetchone()
+            if not row or row["is_managed"]:
+                continue
+            _trash_rule(conn, rid, reconcile=body.reconcile)
+            trashed += 1
+    return {"trashed": trashed}

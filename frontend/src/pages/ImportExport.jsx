@@ -4884,7 +4884,7 @@ function AmazonImportTab({ initialFiles }) {
         {files.length === 0 ? (
           <>
             <p style={{ color: 'var(--muted)', fontSize: 14, lineHeight: 1.6, margin: '0 0 12px' }}>
-              Import an Amazon order history exported by the <strong>AZAD</strong> browser extension. Drop the
+              Import an Amazon order history exported by the <strong>AZAD</strong> Chrome browser extension. Drop the
               <strong> orders</strong> file (the <strong>items</strong> file is optional extra detail) — each is
               recognized by its columns, so upload order does not matter.
             </p>

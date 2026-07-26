@@ -48,7 +48,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from backend.db.database import CURRENT_VERSION, get_db, get_db_instance_id, get_db_version
+from backend.db.database import CURRENT_VERSION, get_db, get_db_instance_id, get_db_version, run_post_restore_data_init
 from backend.db.demo_data import is_demo_data_loaded
 from backend.db.control_database import auth_required
 from backend.time_utils import utcnow_iso
@@ -1026,6 +1026,14 @@ def restore_backup(body: RestoreRequest):
                 "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('instance_id', ?)",
                 (str(backup_instance_id),),
             )
+
+        # The data restored verbatim, but it's only as migrated as the backup was. The target schema is
+        # already current, so re-running migrations would be schema-only no-ops — what's missing is the
+        # *data-init* half of every migration newer than the backup (rename provenance, account types +
+        # money-movement consolidation, last_effect_date + is_managed). Run exactly those, in order, so
+        # restored data ends up equivalent to an in-place upgrade. A backup with no/unknown schema_version
+        # (incl. pre-rebrand) is treated as Luma v1 → all post-rebrand data-init runs.
+        run_post_restore_data_init(conn, d.get("schema_version"))
 
     return {
         "ok": True,
