@@ -62,6 +62,10 @@ delete the backlog file.
   `/help` topic index (in the sticky header) to find articles by typing. Parked because it's of limited
   use until the match reaches article *body* text, not just titles/summaries — and bodies are JSX, so
   that needs a per-topic `keywords` field (ongoing authoring) rather than free full-text search.
+- [tag-report-exclude-warning.md](tag-report-exclude-warning.md) — **parked, not started (2026-07-26).**
+  A small inline note on the Dashboard tag-report view when a filter chip references a tag the active
+  report is built from (the exclude is honored, not suppressed — the note just explains the subset).
+  Parked for a larger tag-report pass rather than a one-off; the behavior is already correct without it.
 
 ## Related (already tracked elsewhere)
 

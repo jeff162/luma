@@ -35,19 +35,25 @@ function ExportTabContent() {
   }
 
   function downloadCsv() {
-    const accountSel = filters.selections.filter(s => s.type === 'account').map(s => s.id)
-    const ownerSel = filters.selections.filter(s => s.type === 'owner').map(s => s.id)
-    const groupSel = filters.selections.filter(s => s.type === 'group').map(s => s.id)
-    const categorySel = filters.selections.filter(s => s.type === 'category').map(s => s.id)
-    const tagSel = filters.selections.filter(s => s.type === 'tag').map(s => s.id)
+    // Include vs exclude ('is not') mode splits each facet into its include param and its exclude_*
+    // mirror. Payee is not an export facet (never was).
+    const idsOf = (type, exclude) => filters.selections
+      .filter(s => s.type === type && (exclude ? s.mode === 'exclude' : s.mode !== 'exclude'))
+      .map(s => s.id)
+    const join = arr => (arr.length ? arr.join(',') : undefined)
     window.open(api.exportTransactionsCsv({
       columns: [...selectedCols].join(','),
       date_start: filters.date?.start || undefined, date_end: filters.date?.end || undefined,
-      account_ids: accountSel.length ? accountSel.join(',') : undefined,
-      owner_ids: ownerSel.length ? ownerSel.join(',') : undefined,
-      group_ids: groupSel.length ? groupSel.join(',') : undefined,
-      category_ids: categorySel.length ? categorySel.join(',') : undefined,
-      tag_ids: tagSel.length ? tagSel.join(',') : undefined,
+      account_ids: join(idsOf('account')),
+      owner_ids: join(idsOf('owner')),
+      group_ids: join(idsOf('group')),
+      category_ids: join(idsOf('category')),
+      tag_ids: join(idsOf('tag')),
+      exclude_account_ids: join(idsOf('account', true)),
+      exclude_owner_ids: join(idsOf('owner', true)),
+      exclude_group_ids: join(idsOf('group', true)),
+      exclude_category_ids: join(idsOf('category', true)),
+      exclude_tag_ids: join(idsOf('tag', true)),
     }), '_blank')
   }
 

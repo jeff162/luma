@@ -257,13 +257,23 @@ export default function Transactions() {
   // onReload) rather than patching rows in place.
   const currentFilterParams = useMemo(() => {
     const sel = filters.selections || []
-    const ofType = (type, key = 'id') => sel.filter(s => s.type === type).map(s => s[key])
+    // Include vs exclude mode splits each facet into its include param and its exclude_* mirror, so a
+    // bulk "select all matching" resolves the exact same rows the list shows (exclusions and all).
+    const ofType = (type, exclude, key = 'id') => sel
+      .filter(s => s.type === type && (exclude ? s.mode === 'exclude' : s.mode !== 'exclude'))
+      .map(s => s[key])
     const accountSel = ofType('account')
     const groupSel = ofType('group')
     const categorySel = ofType('category')
     const tagSel = ofType('tag')
-    const payeeSel = ofType('payee', 'label')
+    const payeeSel = ofType('payee', false, 'label')
     const ownerSel = ofType('owner')
+    const exAccountSel = ofType('account', true)
+    const exGroupSel = ofType('group', true)
+    const exCategorySel = ofType('category', true)
+    const exTagSel = ofType('tag', true)
+    const exPayeeSel = ofType('payee', true, 'label')
+    const exOwnerSel = ofType('owner', true)
     return {
       date_start: filters.date?.start || undefined,
       date_end: filters.date?.end || undefined,
@@ -274,6 +284,12 @@ export default function Transactions() {
       tag_ids: tagSel.length ? tagSel.join(',') : undefined,
       payees: payeeSel.length ? payeeSel.join('|') : undefined,
       owner_ids: ownerSel.length ? ownerSel.join(',') : undefined,
+      exclude_account_ids: exAccountSel.length ? exAccountSel.join(',') : undefined,
+      exclude_group_ids: exGroupSel.length ? exGroupSel.join(',') : undefined,
+      exclude_category_ids: exCategorySel.length ? exCategorySel.join(',') : undefined,
+      exclude_tag_ids: exTagSel.length ? exTagSel.join(',') : undefined,
+      exclude_payees: exPayeeSel.length ? exPayeeSel.join('|') : undefined,
+      exclude_owner_ids: exOwnerSel.length ? exOwnerSel.join(',') : undefined,
       quick_filter: debouncedQuickFilter || undefined,
       needs_review: needsReviewOnly ? true : undefined,
     }
@@ -306,12 +322,23 @@ export default function Transactions() {
   }, [quickFilter, sortState])
 
   const load = useCallback(async ({ append = false, offsetOverride = 0 } = {}) => {
-    const accountSel = filters.selections.filter(s => s.type === 'account').map(s => s.id)
-    const groupSel = filters.selections.filter(s => s.type === 'group').map(s => s.id)
-    const categorySel = filters.selections.filter(s => s.type === 'category').map(s => s.id)
-    const tagSel = filters.selections.filter(s => s.type === 'tag').map(s => s.id)
-    const payeeSel = filters.selections.filter(s => s.type === 'payee').map(s => s.label)
-    const ownerSel = filters.selections.filter(s => s.type === 'owner').map(s => s.id)
+    // Selections split by facet *and* mode: include-mode drives the historical params, exclude-mode
+    // ('is not') drives the parallel exclude_* params. Tags are include-only (see FilterBar).
+    const selBy = (type, exclude) => filters.selections.filter(
+      s => s.type === type && (exclude ? s.mode === 'exclude' : s.mode !== 'exclude'),
+    )
+    const accountSel = selBy('account').map(s => s.id)
+    const groupSel = selBy('group').map(s => s.id)
+    const categorySel = selBy('category').map(s => s.id)
+    const tagSel = selBy('tag').map(s => s.id)
+    const payeeSel = selBy('payee').map(s => s.label)
+    const ownerSel = selBy('owner').map(s => s.id)
+    const exAccountSel = selBy('account', true).map(s => s.id)
+    const exGroupSel = selBy('group', true).map(s => s.id)
+    const exCategorySel = selBy('category', true).map(s => s.id)
+    const exTagSel = selBy('tag', true).map(s => s.id)
+    const exPayeeSel = selBy('payee', true).map(s => s.label)
+    const exOwnerSel = selBy('owner', true).map(s => s.id)
     const offset = append ? offsetOverride : 0
     const pageSize = getTransactionsPageSize(offset)
     const requestKey = JSON.stringify({
@@ -321,6 +348,12 @@ export default function Transactions() {
       tagSel,
       payeeSel,
       ownerSel,
+      exAccountSel,
+      exGroupSel,
+      exCategorySel,
+      exTagSel,
+      exPayeeSel,
+      exOwnerSel,
       uncategorizedOnly,
       needsReviewOnly,
       dateStart: filters.date?.start || '',
@@ -348,6 +381,12 @@ export default function Transactions() {
       tag_ids: tagSel.length ? tagSel.join(',') : undefined,
       payees: payeeSel.length ? payeeSel.join('|') : undefined,
       owner_ids: ownerSel.length ? ownerSel.join(',') : undefined,
+      exclude_account_ids: exAccountSel.length ? exAccountSel.join(',') : undefined,
+      exclude_group_ids: exGroupSel.length ? exGroupSel.join(',') : undefined,
+      exclude_category_ids: exCategorySel.length ? exCategorySel.join(',') : undefined,
+      exclude_tag_ids: exTagSel.length ? exTagSel.join(',') : undefined,
+      exclude_payees: exPayeeSel.length ? exPayeeSel.join('|') : undefined,
+      exclude_owner_ids: exOwnerSel.length ? exOwnerSel.join(',') : undefined,
       quick_filter: debouncedQuickFilter || undefined,
       needs_review: needsReviewOnly || undefined,
       sort_by: sortState.key,

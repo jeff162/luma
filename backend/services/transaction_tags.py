@@ -38,6 +38,79 @@ _SOURCE_PRIORITY = {"account": 0, "group": 1, "category": 2, "direct": 3}
 _EFFECTIVE_ACCOUNT_ID_SQL = "COALESCE((SELECT parent_account_id FROM account WHERE id = t.account_id), t.account_id)"
 
 
+# Synthetic tag-filter selection: "rows with no effective tag at all" (the complement of having any
+# tag). Recognized by tag_filter_membership_sql the way the category filter recognizes its synthetic
+# Uncategorized ids and the owner filter recognizes 'unassigned'.
+UNTAGGED_FILTER_ID = "__untagged__"
+
+# A transaction's *effective* tags: unioned across the four paths a tag reaches a row — direct (a
+# visible `txn_tag`), inherited from its leaf category, that category's parent group, or its effective
+# (top-level) account. `{extra}` is spliced into the eff WHERE so callers can add a tag-set restriction;
+# the block filter (a tag hidden on the row via `manual_state = -1` does not count) is always applied.
+def _effective_tag_exists_sql(extra: str = "") -> str:
+    return f"""
+        EXISTS (
+            SELECT 1
+            FROM (
+                SELECT tt.tag_id AS tag_id
+                FROM txn_tag tt
+                WHERE tt.txn_id = t.id AND {VISIBLE_TXN_TAG_SQL}
+                UNION
+                SELECT ct.tag_id
+                FROM category_tag ct
+                JOIN category cc ON cc.id = t.category_id
+                WHERE ct.category_id = cc.id OR ct.category_id = cc.parent_id
+                UNION
+                SELECT atag.tag_id
+                FROM account_tag atag
+                WHERE atag.account_id = {_EFFECTIVE_ACCOUNT_ID_SQL}
+            ) eff
+            WHERE {extra}NOT EXISTS (
+                  SELECT 1 FROM txn_tag b
+                  WHERE b.txn_id = t.id AND b.tag_id = eff.tag_id AND b.manual_state = -1
+              )
+        )
+    """
+
+
+def effective_tag_match_sql(placeholder_count: int) -> str:
+    """A SQL boolean matching a transaction (which must be aliased `t` in the caller's query) against a
+    set of tag ids supplied as `placeholder_count` positional `?` params. True when the txn's *effective*
+    tags (see `_effective_tag_exists_sql`) include any of them. This is the single definition of "has
+    this tag" shared by the transaction filter/summaries and the CSV export. For exclusion ("is not")
+    wrap it in `NOT (...)`: `EXISTS` never yields NULL, so no COALESCE guard is needed."""
+    placeholders = ",".join("?" * placeholder_count)
+    return _effective_tag_exists_sql(f"eff.tag_id IN ({placeholders})\n              AND ")
+
+
+def effective_tag_any_sql() -> str:
+    """True when the transaction has ANY effective tag (block-aware). Its negation `NOT (...)` is the
+    'Untagged' bucket — a row with no direct or inherited tag at all."""
+    return _effective_tag_exists_sql()
+
+
+def tag_filter_membership_sql(ids: list[str]) -> tuple[str, list] | None:
+    """Build one membership expression for a tag-filter selection that may mix real tag ids with the
+    synthetic UNTAGGED_FILTER_ID. Real ids match via `effective_tag_match_sql`; UNTAGGED matches rows
+    with no effective tag (`NOT effective_tag_any_sql`). The parts OR together (within-facet OR), exactly
+    as the category filter ORs real categories with its synthetic Uncategorized buckets. Returns
+    `(expr, params)` or None when nothing is selected. Callers append `expr` for include and
+    `NOT (expr)` for exclude, so include/exclude share one definition. One builder feeds the list feed,
+    the summaries, and the CSV export so a tag chip means the same thing on every surface."""
+    real = [i for i in ids if i and i != UNTAGGED_FILTER_ID]
+    want_untagged = UNTAGGED_FILTER_ID in ids
+    parts: list[str] = []
+    params: list = []
+    if real:
+        parts.append(effective_tag_match_sql(len(real)))
+        params.extend(real)
+    if want_untagged:
+        parts.append(f"NOT ({effective_tag_any_sql()})")
+    if not parts:
+        return None
+    return f"({' OR '.join(parts)})", params
+
+
 def get_visible_transaction_tag_map(
     conn: sqlite3.Connection,
     txn_ids: Iterable[str],

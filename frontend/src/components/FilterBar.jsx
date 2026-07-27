@@ -50,6 +50,34 @@ const rowStyle = {
 // The previous `var(--surface2)` shade blended into the popover surface, so we lift it with an
 // accent mix for visibility.
 const SELECTED_ROW_BG = 'color-mix(in srgb, var(--accent) 22%, var(--surface2))'
+// Exclude ("is not") rows/chips read in the danger hue so include vs exclude is legible at a glance.
+const EXCLUDED_ROW_BG = 'color-mix(in srgb, var(--danger) 20%, var(--surface2))'
+
+// Every facet except tags can be picked as include (primary row click) or exclude ("is not"). The
+// exclude affordance is a single, quiet, always-present `≠` on the row's right edge — persistent so
+// the option is discoverable, but visually secondary so it never competes with the primary click.
+// A `✓` marks an included row; the `≠` itself turns danger-colored to mark an excluded one.
+function RowTrailing({ mode, excludable, onExclude }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+      {mode === 'include' && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
+      {excludable && (
+        <button
+          type="button"
+          onClick={e => { e.stopPropagation(); onExclude() }}
+          title={mode === 'exclude' ? 'Excluded (is not) — click to clear' : 'Exclude (is not)'}
+          aria-label={mode === 'exclude' ? 'Clear exclusion' : 'Exclude from results'}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', lineHeight: 1,
+            fontSize: 14, fontWeight: mode === 'exclude' ? 700 : 400,
+            color: mode === 'exclude' ? 'var(--danger)' : 'var(--muted)',
+            opacity: mode === 'exclude' ? 1 : 0.5,
+          }}
+        >≠</button>
+      )}
+    </span>
+  )
+}
 
 // Synthetic filter targets for transactions with no category at all. The backend's
 // `_build_uncategorized_multi_filter` recognizes these special ids in both `group_ids` and
@@ -58,6 +86,10 @@ const UNASSIGNED_SYSTEM_KEY = 'unassigned'
 const UNCATEGORIZED_EXPENSE_ID = '__uncategorized_expense__'
 const UNCATEGORIZED_INCOME_ID = '__uncategorized_income__'
 const SYNTHETIC_UNASSIGNED_INCOME_GROUP_ID = '__uncategorized_income_group__'
+// Synthetic tag selection for "rows with no effective tag at all"; the backend's
+// tag_filter_membership_sql recognizes this id as the untagged bucket. Mirrors the category filter's
+// synthetic Uncategorized ids and the owner filter's 'unassigned'.
+const UNTAGGED_TAG_ID = '__untagged__'
 
 function Popover({ children, onClose, style }) {
   const ref = useRef(null)
@@ -201,11 +233,26 @@ function FilterPopover({ onClose }) {
     })
   }, [payeeSearch])
 
-  const isSelected = id => !!filters.selections.find(s => s.id === id)
+  const selectionOf = id => filters.selections.find(s => s.id === id)
+  const isSelected = id => !!selectionOf(id)
+  const isIncluded = id => selectionOf(id)?.mode === 'include'
+  const rowBg = id => {
+    const s = selectionOf(id)
+    if (!s) return 'transparent'
+    return s.mode === 'exclude' ? EXCLUDED_ROW_BG : SELECTED_ROW_BG
+  }
 
-  function toggle(sel) {
-    if (isSelected(sel.id)) removeSelection(sel.id)
-    else addSelection(sel)
+  // Primary row click means "include this" (add, or flip an excluded chip to include, or clear an
+  // already-included one). The `≠` affordance is the mirror for "exclude this". Both dedupe by id.
+  function pickInclude(sel) {
+    const s = selectionOf(sel.id)
+    if (s && s.mode === 'include') removeSelection(sel.id)
+    else addSelection({ ...sel, mode: 'include' })
+  }
+  function pickExclude(sel) {
+    const s = selectionOf(sel.id)
+    if (s && s.mode === 'exclude') removeSelection(sel.id)
+    else addSelection({ ...sel, mode: 'exclude' })
   }
 
   function toggleGroupExpanded(groupId) {
@@ -267,9 +314,9 @@ function FilterPopover({ onClose }) {
         {tab === 'accounts' && accounts.map(a => {
           const sel = { type: 'account', id: a.id, label: `${a.name}${a.mask ? ` ···${a.mask}` : ''}` }
           return (
-            <div key={a.id} onClick={() => toggle(sel)} style={{
+            <div key={a.id} onClick={() => pickInclude(sel)} style={{
               ...rowStyle,
-              background: isSelected(a.id) ? SELECTED_ROW_BG : 'transparent',
+              background: rowBg(a.id),
               justifyContent: 'space-between',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -281,7 +328,7 @@ function FilterPopover({ onClose }) {
                   {a.mask && <div style={{ fontSize: 11, color: 'var(--muted)' }}>···{a.mask}</div>}
                 </div>
               </div>
-              {isSelected(a.id) && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
+              <RowTrailing mode={selectionOf(a.id)?.mode} excludable onExclude={() => pickExclude(sel)} />
             </div>
           )
         })}
@@ -298,7 +345,7 @@ function FilterPopover({ onClose }) {
             const groupSelected = isSelected(node.groupId)
             return (
               <div key={node.groupId}>
-                <div style={{ ...rowStyle, background: groupSelected ? SELECTED_ROW_BG : 'transparent', justifyContent: 'space-between', gap: 6, paddingLeft: 16 }}>
+                <div style={{ ...rowStyle, background: rowBg(node.groupId), justifyContent: 'space-between', gap: 6, paddingLeft: 16 }}>
                   <button
                     type="button"
                     onClick={e => { e.stopPropagation(); toggleGroupExpanded(node.groupId) }}
@@ -307,22 +354,21 @@ function FilterPopover({ onClose }) {
                     disabled={node.leaves.length === 0}
                     style={{ background: 'none', border: 'none', cursor: node.leaves.length ? 'pointer' : 'default', color: 'var(--muted)', fontSize: 10, width: 14, padding: 0, flexShrink: 0, transform: expanded ? 'rotate(90deg)' : 'none', transition: 'transform 100ms', opacity: node.leaves.length ? 1 : 0.25 }}
                   >▶</button>
-                  <div onClick={() => toggle(node.groupSel)} style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, cursor: 'pointer' }}>
+                  <div onClick={() => pickInclude(node.groupSel)} style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, cursor: 'pointer' }}>
                     <CategoryMarker kind="group" />
                     <span style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.groupName}</span>
                   </div>
-                  {groupSelected && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
+                  <RowTrailing mode={selectionOf(node.groupId)?.mode} excludable onExclude={() => pickExclude(node.groupSel)} />
                 </div>
                 {expanded && shownLeaves.map(c => {
                   const sel = { type: 'category', id: c.id, label: c.name }
-                  const leafSelected = isSelected(c.id)
                   return (
-                    <div key={c.id} onClick={() => toggle(sel)} style={{ ...rowStyle, paddingLeft: 46, background: leafSelected ? SELECTED_ROW_BG : 'transparent', justifyContent: 'space-between' }}>
+                    <div key={c.id} onClick={() => pickInclude(sel)} style={{ ...rowStyle, paddingLeft: 46, background: rowBg(c.id), justifyContent: 'space-between' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <CategoryMarker kind="category" />
                         <span style={{ fontSize: 13, fontStyle: c._synthetic ? 'italic' : 'normal', color: groupSelected ? 'var(--muted)' : undefined }}>{c.name}</span>
                       </div>
-                      {leafSelected && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
+                      <RowTrailing mode={selectionOf(c.id)?.mode} excludable onExclude={() => pickExclude(sel)} />
                     </div>
                   )
                 })}
@@ -353,8 +399,8 @@ function FilterPopover({ onClose }) {
                 const visibleNodes = allTypeNodes.filter(nodeVisible)
                 if (visibleNodes.length === 0) return null
                 const memberIds = allTypeNodes.map(n => n.groupId)
-                const allSelected = memberIds.length > 0 && memberIds.every(id => isSelected(id))
-                const someSelected = !allSelected && memberIds.some(id => isSelected(id))
+                const allSelected = memberIds.length > 0 && memberIds.every(id => isIncluded(id))
+                const someSelected = !allSelected && memberIds.some(id => isIncluded(id))
                 return (
                   <div key={sc.typeKey}>
                     <div
@@ -386,42 +432,58 @@ function FilterPopover({ onClose }) {
           ) : owners.map(o => {
             const sel = { type: 'owner', id: o.id, label: o.name }
             return (
-              <div key={o.id} onClick={() => toggle(sel)} style={{
+              <div key={o.id} onClick={() => pickInclude(sel)} style={{
                 ...rowStyle,
-                background: isSelected(o.id) ? SELECTED_ROW_BG : 'transparent',
+                background: rowBg(o.id),
                 justifyContent: 'space-between',
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: 13 }}>{o.name}</span>
                 </div>
-                {isSelected(o.id) && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
+                <RowTrailing mode={selectionOf(o.id)?.mode} excludable onExclude={() => pickExclude(sel)} />
               </div>
             )
           })
         )}
 
-        {tab === 'tags' && (
-          tags.length === 0 ? (
-            <div style={{ padding: '12px 16px', fontSize: 13, color: 'var(--muted)' }}>
-              No tags yet — create them in Settings.
-            </div>
-          ) : tags.map(tag => {
-            const sel = { type: 'tag', id: tag.id, label: tag.name, color: tag.color }
-            return (
-              <div key={tag.id} onClick={() => toggle(sel)} style={{
+        {tab === 'tags' && (() => {
+          // The synthetic "Untagged" bucket (rows with no effective tag) leads the list and is always
+          // available even before any tags exist — it's a filter over the absence of tags, not a tag.
+          const untaggedSel = { type: 'tag', id: UNTAGGED_TAG_ID, label: 'Untagged' }
+          return (
+            <>
+              <div onClick={() => pickInclude(untaggedSel)} style={{
                 ...rowStyle,
-                background: isSelected(tag.id) ? SELECTED_ROW_BG : 'transparent',
+                background: rowBg(UNTAGGED_TAG_ID),
                 justifyContent: 'space-between',
+                borderBottom: '1px solid var(--border)',
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <TagGlyph color={tag.color} size={13} />
-                  <span style={{ fontSize: 13 }}>{tag.name}</span>
-                </div>
-                {isSelected(tag.id) && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
+                <span style={{ fontSize: 13, fontStyle: 'italic', color: 'var(--muted)' }}>Untagged</span>
+                <RowTrailing mode={selectionOf(UNTAGGED_TAG_ID)?.mode} excludable onExclude={() => pickExclude(untaggedSel)} />
               </div>
-            )
-          })
-        )}
+              {tags.length === 0 ? (
+                <div style={{ padding: '12px 16px', fontSize: 13, color: 'var(--muted)' }}>
+                  No tags yet — create them in Settings.
+                </div>
+              ) : tags.map(tag => {
+                const sel = { type: 'tag', id: tag.id, label: tag.name, color: tag.color }
+                return (
+                  <div key={tag.id} onClick={() => pickInclude(sel)} style={{
+                    ...rowStyle,
+                    background: rowBg(tag.id),
+                    justifyContent: 'space-between',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <TagGlyph color={tag.color} size={13} />
+                      <span style={{ fontSize: 13 }}>{tag.name}</span>
+                    </div>
+                    <RowTrailing mode={selectionOf(tag.id)?.mode} excludable onExclude={() => pickExclude(sel)} />
+                  </div>
+                )
+              })}
+            </>
+          )
+        })()}
 
         {tab === 'payee' && (
           <div style={{ padding: '8px 12px' }}>
@@ -435,13 +497,13 @@ function FilterPopover({ onClose }) {
               style={{ ...inputStyle, width: '100%', marginBottom: 8 }}
             />
             {payeeSuggestions.map(s => (
-              <div key={s.id} onClick={() => { toggle(s); setPayeeSearch('') }} style={{
+              <div key={s.id} onClick={() => { pickInclude(s); setPayeeSearch('') }} style={{
                 ...rowStyle, paddingLeft: 0,
-                background: isSelected(s.id) ? SELECTED_ROW_BG : 'transparent',
+                background: rowBg(s.id),
                 justifyContent: 'space-between',
               }}>
                 <span style={{ fontSize: 13 }}>{s.label}</span>
-                {isSelected(s.id) && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
+                <RowTrailing mode={selectionOf(s.id)?.mode} excludable onExclude={() => { pickExclude(s); setPayeeSearch('') }} />
               </div>
             ))}
             {payeeSearch && payeeSuggestions.length === 0 && (
@@ -463,19 +525,32 @@ function FilterPopover({ onClose }) {
   )
 }
 
-function FilterChip({ sel, onRemove }) {
+// The chip is the second way to flip a selection's mode (the row `≠` is the first): clicking the chip
+// body toggles include↔exclude for any facet. An excluded chip reads in the danger hue with a leading
+// `≠` so the two modes are legible in the bar at a glance.
+function FilterChip({ sel, onRemove, onFlipMode }) {
+  const excluded = sel.mode === 'exclude'
+  const accent = excluded ? 'var(--danger)' : 'var(--accent2)'
   return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 4,
-      padding: '3px 8px', borderRadius: 99, fontSize: 12,
-      background: 'color-mix(in srgb, var(--accent) 12%, var(--surface2))',
-      border: '1px solid var(--accent)', color: 'var(--accent2)',
-      whiteSpace: 'nowrap',
-    }}>
-      {sel.type === 'tag' ? <TagGlyph color={sel.color} size={12} /> : null}
+    <span
+      onClick={() => onFlipMode(sel.id)}
+      title={excluded ? 'Excluded (is not) — click to include' : 'Included — click to exclude'}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '3px 8px', borderRadius: 99, fontSize: 12,
+        background: excluded
+          ? 'color-mix(in srgb, var(--danger) 12%, var(--surface2))'
+          : 'color-mix(in srgb, var(--accent) 12%, var(--surface2))',
+        border: `1px solid ${excluded ? 'var(--danger)' : 'var(--accent)'}`,
+        color: accent,
+        whiteSpace: 'nowrap',
+        cursor: 'pointer',
+      }}>
+      {excluded ? <span style={{ fontWeight: 700 }}>≠</span> : null}
+      {sel.type === 'tag' && sel.color ? <TagGlyph color={sel.color} size={12} /> : null}
       {sel.label}
-      <button onClick={() => onRemove(sel.id)} style={{
-        background: 'none', border: 'none', color: 'var(--accent2)',
+      <button onClick={e => { e.stopPropagation(); onRemove(sel.id) }} style={{
+        background: 'none', border: 'none', color: accent,
         cursor: 'pointer', fontSize: 14, padding: 0, lineHeight: 1,
       }}>×</button>
     </span>
@@ -510,7 +585,7 @@ function FilterButton({ active, count, children, onClick, inert = false, title }
 }
 
 export default function FilterBar() {
-  const { filters, removeSelection, clearAll, dateApplies } = useFilters()
+  const { filters, removeSelection, clearAll, dateApplies, toggleSelectionMode } = useFilters()
   const [showDate,   setShowDate]   = useState(false)
   const [showFilter, setShowFilter] = useState(false)
 
@@ -548,7 +623,7 @@ export default function FilterBar() {
       </div>
 
       {filters.selections.map(s => (
-        <FilterChip key={s.id} sel={s} onRemove={removeSelection} />
+        <FilterChip key={s.id} sel={s} onRemove={removeSelection} onFlipMode={toggleSelectionMode} />
       ))}
 
       {hasAny && (

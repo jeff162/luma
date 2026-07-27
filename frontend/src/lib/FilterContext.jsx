@@ -44,18 +44,36 @@ export function FilterProvider({ children, initialDate = null, initialSelections
   function setDate(date) { setFilters(f => ({ ...f, date })) }
   function clearDate()   { setFilters(f => ({ ...f, date: null })) }
 
+  // Each selection carries a mode: 'include' (the default — narrow *to* it) or 'exclude' ('is not' —
+  // narrow *away* from it). Pages split selections by both type and mode into the include vs exclude
+  // API params; the backend ANDs excludes on as NULL-safe negations. Tags are include-only for now.
   function addSelection(sel) {
+    const withMode = { mode: 'include', ...sel }
     setFilters(f => ({
       ...f,
-      // Repeated picks can come from different entry points; dedupe them into one shared active filter chip.
-      selections: f.selections.find(s => s.id === sel.id)
-        ? f.selections
-        : [...f.selections, sel],
+      // Repeated picks can come from different entry points; dedupe by id. If the item is already a
+      // chip, adopt the incoming mode so clicking include on an excluded chip (or vice versa) flips it.
+      selections: f.selections.find(s => s.id === withMode.id)
+        ? f.selections.map(s => (s.id === withMode.id ? { ...s, mode: withMode.mode } : s))
+        : [...f.selections, withMode],
     }))
   }
 
   function removeSelection(id) {
     setFilters(f => ({ ...f, selections: f.selections.filter(s => s.id !== id) }))
+  }
+
+  function setSelectionMode(id, mode) {
+    setFilters(f => ({ ...f, selections: f.selections.map(s => (s.id === id ? { ...s, mode } : s)) }))
+  }
+
+  function toggleSelectionMode(id) {
+    setFilters(f => ({
+      ...f,
+      selections: f.selections.map(s => (
+        s.id === id ? { ...s, mode: s.mode === 'exclude' ? 'include' : 'exclude' } : s
+      )),
+    }))
   }
 
   // Batch helpers used by "select all" affordances (e.g. the [Income]/[Expense] super-group rows
@@ -64,7 +82,9 @@ export function FilterProvider({ children, initialDate = null, initialSelections
   function addSelections(items) {
     setFilters(f => {
       const existing = new Set(f.selections.map(s => s.id))
-      const additions = items.filter(item => !existing.has(item.id))
+      const additions = items
+        .filter(item => !existing.has(item.id))
+        .map(item => ({ mode: 'include', ...item }))
       if (!additions.length) return f
       return { ...f, selections: [...f.selections, ...additions] }
     })
@@ -82,6 +102,7 @@ export function FilterProvider({ children, initialDate = null, initialSelections
     <FilterContext.Provider value={{
       filters, setDate, clearDate,
       addSelection, addSelections, removeSelection, removeSelections, clearSelections, clearAll,
+      setSelectionMode, toggleSelectionMode,
       dateApplies, setDateApplies,
     }}>
       {children}

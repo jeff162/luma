@@ -1568,25 +1568,40 @@ export default function Dashboard() {
   const singlePeriodLabel = filters.date
     ? (filters.date.preset || `${filters.date.start} → ${filters.date.end}`)
     : 'All time'
-  const accountSelections = filters.selections.filter(s => s.type === 'account')
+  // Include-mode selections drive the historical include params; exclude-mode ('is not') chips feed the
+  // parallel exclude_* params carried in summaryFilters. Splitting by mode keeps an exclude chip from
+  // leaking into an include list (which would invert its meaning). Tags are include-only (see FilterBar).
+  const incSel = (type) => filters.selections.filter(s => s.type === type && s.mode !== 'exclude')
+  const excSel = (type) => filters.selections.filter(s => s.type === type && s.mode === 'exclude')
+  const joinIds = (arr, key = 'id', sep = ',') => (arr.length > 0 ? arr.map(s => s[key]).join(sep) : undefined)
+
+  const accountSelections = incSel('account')
   const accountId = accountSelections.length === 1 ? accountSelections[0].id : undefined
-  const tagSelections = filters.selections.filter(s => s.type === 'tag')
-  const tagIds = tagSelections.length > 0 ? tagSelections.map(s => s.id).join(',') : undefined
-  const ownerSelections = filters.selections.filter(s => s.type === 'owner')
-  const ownerIds = ownerSelections.length > 0 ? ownerSelections.map(s => s.id).join(',') : undefined
-  const accountIds = accountSelections.length > 0 ? accountSelections.map(s => s.id).join(',') : undefined
-  const groupSelections = filters.selections.filter(s => s.type === 'group')
-  const groupIds = groupSelections.length > 0 ? groupSelections.map(s => s.id).join(',') : undefined
-  const categorySelections = filters.selections.filter(s => s.type === 'category')
-  const categoryIds = categorySelections.length > 0 ? categorySelections.map(s => s.id).join(',') : undefined
-  const payeeSelections = filters.selections.filter(s => s.type === 'payee')
-  const payees = payeeSelections.length > 0 ? payeeSelections.map(s => s.label).join('|') : undefined
+  const tagIds = joinIds(incSel('tag'))
+  const ownerIds = joinIds(incSel('owner'))
+  const accountIds = joinIds(accountSelections)
+  const groupIds = joinIds(incSel('group'))
+  const categoryIds = joinIds(incSel('category'))
+  const payees = joinIds(incSel('payee'), 'label', '|')
+  const excludeAccountIds = joinIds(excSel('account'))
+  const excludeGroupIds = joinIds(excSel('group'))
+  const excludeCategoryIds = joinIds(excSel('category'))
+  const excludeOwnerIds = joinIds(excSel('owner'))
+  const excludeTagIds = joinIds(excSel('tag'))
+  const excludePayees = joinIds(excSel('payee'), 'label', '|')
   // The cross-cutting filters (beyond date/tag/owner) that the summary, trend, and list endpoints accept.
   // Passed as trailing opts to every totals/trend call and spread into drill lists so the filter chips
   // narrow the whole dashboard, not just bits of it. Keys match both the summary opts and the list params.
+  // The exclude_* keys ride along here too, so every endpoint the shared filter feeds honors "is not".
   const summaryFilters = useMemo(
-    () => ({ account_ids: accountIds, group_ids: groupIds, category_ids: categoryIds, payees }),
-    [accountIds, groupIds, categoryIds, payees],
+    () => ({
+      account_ids: accountIds, group_ids: groupIds, category_ids: categoryIds, payees,
+      exclude_account_ids: excludeAccountIds, exclude_group_ids: excludeGroupIds,
+      exclude_category_ids: excludeCategoryIds, exclude_owner_ids: excludeOwnerIds,
+      exclude_tag_ids: excludeTagIds, exclude_payees: excludePayees,
+    }),
+    [accountIds, groupIds, categoryIds, payees, excludeAccountIds, excludeGroupIds,
+     excludeCategoryIds, excludeOwnerIds, excludeTagIds, excludePayees],
   )
 
   // Picker resolution is hoisted ahead of the tag-mode fetch effect so the effect's
@@ -1611,8 +1626,15 @@ export default function Dashboard() {
   // Tag-report mode aggregates per signature on the frontend, so it needs the period's raw
   // transactions (already scoped to view + filters by the backend). Skipping the fetch when
   // the active mode is group/category keeps the network surface unchanged for those modes.
+  // Derive the refetch key from the exact params the fetch sends (including everything in
+  // summaryFilters — the include *and* exclude_* facets), so it can't drift out of sync when a filter
+  // dimension is added. Hand-listing only the include facets is what let a lone exclusion change (e.g.
+  // negating or clearing a tag chip) leave the tag-report data stale.
   const tagModeFetchKey = activeTagReport
-    ? `${activeTagReport.id}|${dashboardView}|${dateStart || ''}|${dateEnd || ''}|${accountId || ''}|${tagIds || ''}|${ownerIds || ''}|${accountIds || ''}|${groupIds || ''}|${categoryIds || ''}|${payees || ''}`
+    ? JSON.stringify({
+        id: activeTagReport.id, view: dashboardView, dateStart, dateEnd,
+        accountId, tagIds, ownerIds, ...summaryFilters,
+      })
     : null
   // The tag report's wedges are computed client-side from these rows, so an edit that changes a
   // transaction's effective tags (recategorizing it into/out of a tagged category) only shows up

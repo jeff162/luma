@@ -199,6 +199,45 @@ Reporting should not assume every transaction inside an expense or income branch
 
 - summaries and detail reports should include all matching transactions for the selected slice instead of filtering out the "unexpected" side
 
+### Filter exclusion ("is not")
+
+The shared transaction filter (`FilterBar` → the list feed, the bulk "select all matching" resolver,
+every `/transactions/summary/*` endpoint, and CSV export) accepts each facet — account, group,
+category, owner, payee, **and tags** — as both an **include** set and an **exclude** set (`exclude_*`
+params).
+
+- **Combination:** within one facet, include ids OR together (`IN (...)`); exclude ids AND on; across
+  facets everything ANDs. So `account:Checking` + `exclude category:Dining` reads as "in Checking AND
+  not Dining."
+- **Exclusion is the NULL-safe negation of the *same* membership expression the include path builds.**
+  One membership builder per facet feeds both modes, so they can never drift. The negation is
+  `COALESCE((membership), 0) = 0`, **not** a bare `NOT IN` — the COALESCE is load-bearing: `category_id
+  NOT IN (...)` is SQL-*unknown* (not true) for a NULL category, which would silently drop every
+  uncategorized row from a "not Groceries" result even though a NULL-category row plainly is not
+  Groceries. The invariant: **a row the include set does not match must survive that facet's
+  exclusion**, including rows with a NULL category/owner. Excluding the synthetic *Uncategorized*
+  buckets is the deliberate inverse (`category IS NOT NULL`, or the sign-scoped form for the
+  expense/income buckets); excluding the owner `unassigned` bucket is the one case that *removes*
+  NULL-owner rows, since that is the row set the user named.
+- **Tags are the one facet whose membership is an `EXISTS`, not an `IN`.** "Has tag X" is
+  `effective_tag_match_sql` (`services/transaction_tags.py`) — the *effective*-tag test: direct
+  (visible `txn_tag`) OR inherited from the leaf category, its parent group, or the effective account,
+  block-aware (a tag hidden on the row via `manual_state = -1` does not count). Exclusion negates it
+  with plain `NOT (...)`: `EXISTS` is never NULL, so no COALESCE guard is needed — a row with no
+  matching tag (including a fully untagged row) is exactly the `NOT EXISTS` set. Because inheritance is
+  honored, `≠ Business` drops a row tagged Business *only* through its account/category, not just rows
+  tagged directly. The filter also offers a synthetic **Untagged** bucket (`UNTAGGED_FILTER_ID`,
+  `'__untagged__'`) — rows with **no effective tag at all** (`NOT effective_tag_any_sql`), the complement
+  of "has any tag" and the tag-facet analog of the category *Uncategorized* / owner *unassigned* buckets;
+  so a row that inherits a tag from its account is *not* Untagged, and `≠ Untagged` means "only rows that
+  have some tag." Real ids and the Untagged bucket OR together within the facet (`tag_filter_membership_sql`).
+  **One definition** (that builder) feeds the list, the summaries, and CSV export — the export previously
+  matched direct tags only (a latent bug that silently omitted inherited rows for both include and
+  exclude), now corrected by routing it through the same builder.
+- The frontend carries the mode on each selection (`mode: 'include' | 'exclude'`, default include) and
+  **must split selections by both type and mode**; feeding an exclude selection into an include param
+  would invert its meaning. See `ui-patterns.md` → the include/exclude facet pattern.
+
 ## Rules
 
 Rules are keyword-based categorization rules (a single keyword, or a small AND of `contains` clauses).

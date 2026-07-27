@@ -53,7 +53,7 @@ from backend.db.demo_data import is_demo_data_loaded
 from backend.db.control_database import auth_required
 from backend.time_utils import utcnow_iso
 from backend.services import crypto_service
-from backend.services.transaction_tags import VISIBLE_TXN_TAG_SQL
+from backend.services.transaction_tags import tag_filter_membership_sql
 
 router = APIRouter()
 
@@ -443,6 +443,11 @@ def export_transactions_csv(
     group_ids:    Optional[str] = Query(None),
     category_ids: Optional[str] = Query(None),
     tag_ids:      Optional[str] = Query(None),
+    exclude_account_ids:  Optional[str] = Query(None, description="account IDs to exclude ('is not')"),
+    exclude_owner_ids:    Optional[str] = Query(None, description="owner IDs to exclude ('is not')"),
+    exclude_group_ids:    Optional[str] = Query(None, description="group IDs to exclude ('is not')"),
+    exclude_category_ids: Optional[str] = Query(None, description="category IDs to exclude ('is not')"),
+    exclude_tag_ids:      Optional[str] = Query(None, description="tag IDs to exclude ('is not')"),
     search:       Optional[str] = Query(None),
 ):
     col_keys = [c.strip() for c in columns.split(",") if c.strip() in EXPORT_COLUMNS]
@@ -475,20 +480,41 @@ def export_transactions_csv(
     if category_ids:
         ids = [i.strip() for i in category_ids.split(",") if i.strip()]
         clauses.append(f"t.category_id IN ({','.join('?'*len(ids))})"); params.extend(ids)
-    if tag_ids:
-        ids = [i.strip() for i in tag_ids.split(",") if i.strip()]
+    # Exclusion ("is not"): NULL-safe negation of the same membership test, so a row the include set
+    # doesn't match (including one with a NULL category/owner) survives the exclusion. Mirrors the
+    # transactions router's _negate_membership. Payee is intentionally not an export facet (never was).
+    if exclude_account_ids:
+        ids = [i.strip() for i in exclude_account_ids.split(",") if i.strip()]
         clauses.append(
-            f"""
-            EXISTS (
-                SELECT 1
-                FROM txn_tag tt
-                WHERE tt.txn_id = t.id
-                  AND tt.tag_id IN ({','.join('?' * len(ids))})
-                  AND {VISIBLE_TXN_TAG_SQL}
-            )
-            """
-        )
-        params.extend(ids)
+            f"COALESCE((COALESCE((SELECT parent_account_id FROM account WHERE id = t.account_id), t.account_id) "
+            f"IN ({','.join('?'*len(ids))})), 0) = 0"
+        ); params.extend(ids)
+    if exclude_owner_ids:
+        ids = [i.strip() for i in exclude_owner_ids.split(",") if i.strip()]
+        clauses.append(f"COALESCE((t.owner_id IN ({','.join('?'*len(ids))})), 0) = 0"); params.extend(ids)
+    if exclude_group_ids:
+        ids = [i.strip() for i in exclude_group_ids.split(",") if i.strip()]
+        clauses.append(
+            f"COALESCE((t.category_id IN (SELECT id FROM category WHERE parent_id IN ({','.join('?'*len(ids))}))), 0) = 0"
+        ); params.extend(ids)
+    if exclude_category_ids:
+        ids = [i.strip() for i in exclude_category_ids.split(",") if i.strip()]
+        clauses.append(f"COALESCE((t.category_id IN ({','.join('?'*len(ids))})), 0) = 0"); params.extend(ids)
+    # Tag include/exclude use the shared *effective*-tag membership (direct + inherited from
+    # category/group/account, block-aware) so a tag chip means the same thing here as on the ledger and
+    # dashboard. (This deliberately replaced an older direct-tags-only export filter, which silently
+    # omitted rows tagged only via their category or account.) Exclude negates it with NOT — EXISTS is
+    # null-free, so an untagged row is exactly the NOT set.
+    if tag_ids:
+        membership = tag_filter_membership_sql([i.strip() for i in tag_ids.split(",") if i.strip()])
+        if membership:
+            clauses.append(membership[0])
+            params.extend(membership[1])
+    if exclude_tag_ids:
+        membership = tag_filter_membership_sql([i.strip() for i in exclude_tag_ids.split(",") if i.strip()])
+        if membership:
+            clauses.append(f"NOT ({membership[0]})")
+            params.extend(membership[1])
     if search:
         clauses.append("(t.display_name LIKE ? OR t.merchant_name LIKE ? OR t.raw_name LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
