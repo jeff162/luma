@@ -99,7 +99,7 @@ const KIND_META = {
     help: 'No single charge matched this order, but a set of unaccounted charges sums to its total — likely a split shipment. Review and Accept to link them (each is excluded), or Dismiss to keep it as no-charge-found.' },
   unaccounted_duplicate: { rank: 4, label: 'Unaccounted · duplicate', stripe: '#f472b6', review: true,
     help: "Unaccounted charges that look like copies of each other — same account and amount, days apart — with no order accounting for either: the double import the general dedupe can't catch. Check each copy's origin (hover), then Discard a copy, Merge → keep one (the survivor keeps the richest detail and returns to the unaccounted list), or Not duplicates. Merge works per row or in bulk on selected rows; a merged-away copy is restorable from Settings → Trash." },
-  reverse: { rank: 5, label: 'Unaccounted charge', stripe: '#94a3b8',
+  reverse: { rank: 5, label: 'Unaccounted charge', stripe: '#94a3b8', warn: true,
     help: "Charges in your ledger that look like Amazon, on the cards Amazon uses, in this import's date range, that no imported order accounts for. Possibly purchases the export didn't cover. These count toward the needs-attention total so a stray one (e.g. an unpaired duplicate) gets a look; Trash sends one to Trash (for a duplicate the report failed to pair), or Mark reviewed acknowledges a legitimately-uncovered charge so it drops out of the count without trashing it (Undo puts it back)." },
   matched: { rank: 6, label: 'Matched', stripe: 'var(--success, #22c55e)',
     help: 'Each order was linked to the card charge(s) it paid, and those are excluded from totals.' },
@@ -514,13 +514,19 @@ export function AmazonReconciliationDialog({
     { key: 'kind', label: 'Kind', width: 150, render: (entry) => {
       const meta = KIND_META[entry.kind]
       // An acknowledged no-charge-found order or unaccounted charge no longer needs attention, so it drops
-      // the warn emphasis and reads muted (the green ✓ marker lives in the Actions column).
+      // the warn emphasis, reads muted, and carries its green ✓ Reviewed status here in the Kind cell — the
+      // status lives with the kind; the Undo action stays over in the Actions column.
       const handled = entry.reviewed && (entry.kind === 'unmatched' || entry.kind === 'reverse')
       const color = handled ? 'var(--muted)' : meta.warn ? 'var(--warning, #f59e0b)' : meta.review ? meta.stripe : 'var(--muted)'
       return (
-        <span style={{ whiteSpace: 'nowrap', color, fontWeight: !handled && (meta.warn || meta.review) ? 600 : 400 }} title={meta.help}>
-          {meta.label}
-        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+          <span style={{ whiteSpace: 'nowrap', color, fontWeight: !handled && (meta.warn || meta.review) ? 600 : 400 }} title={meta.help}>
+            {meta.label}
+          </span>
+          {handled ? (
+            <span style={{ fontSize: 11, color: 'var(--success)', fontWeight: 600, whiteSpace: 'nowrap' }} title="Acknowledged — not counted toward the attention total">✓ Reviewed</span>
+          ) : null}
+        </div>
       )
     } },
     { key: 'order', label: 'Amazon order', width: 330, render: (entry) => <OrderCell order={entry.order} url={entry.orderUrl} /> },
@@ -577,7 +583,7 @@ export function AmazonReconciliationDialog({
         // Informational, but surfaced for a look: Trash it (a duplicate the grouping failed to pair — labelled
         // "Trash" rather than "Discard" because it acts on the whole one-charge row, which is what makes it
         // bulk-able), or Mark reviewed to acknowledge a legitimately-uncovered charge so it leaves the
-        // attention count. A reviewed one shows a green ✓ with an Undo.
+        // attention count. A reviewed one carries its ✓ status in the Kind cell; here it offers Undo review.
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             <Button small variant="ghost" disabled={busy} onClick={() => discardCharge(entry.charge, entry)}
@@ -585,10 +591,7 @@ export function AmazonReconciliationDialog({
               Trash
             </Button>
             {entry.reviewed ? (
-              <>
-                <span style={{ fontSize: 11, color: 'var(--success)', fontWeight: 600, whiteSpace: 'nowrap' }} title="Acknowledged — not counted toward the attention total">✓ Reviewed</span>
-                <Button small variant="ghost" disabled={busy} onClick={() => setEntryReviewed(entry, false)} title="Un-acknowledge — return this charge to the attention count">Undo</Button>
-              </>
+              <Button small variant="ghost" disabled={busy} onClick={() => setEntryReviewed(entry, false)} title="Un-acknowledge — return this charge to the attention count">Undo review</Button>
             ) : (
               <Button small variant="ghost" disabled={busy} onClick={() => setEntryReviewed(entry, true)}
                 title="Acknowledge this charge — a purchase the export didn't cover, or otherwise fine — so it leaves the attention count without trashing it">
@@ -644,7 +647,7 @@ export function AmazonReconciliationDialog({
       }
       // No charge found: link a charge by hand, or acknowledge it (Mark reviewed) so it drops out of the
       // attention count — the escape valve for an untracked card with nothing to link. A reviewed order
-      // shows a green ✓ with an Undo to put it back.
+      // carries its ✓ status in the Kind cell; here it offers Undo review.
       if (entry.kind !== 'unmatched') return null
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -653,10 +656,7 @@ export function AmazonReconciliationDialog({
             Link charges…
           </Button>
           {entry.reviewed ? (
-            <>
-              <span style={{ fontSize: 11, color: 'var(--success)', fontWeight: 600, whiteSpace: 'nowrap' }} title="Acknowledged — not counted toward the attention total">✓ Reviewed</span>
-              <Button small variant="ghost" disabled={busy} onClick={() => setEntryReviewed(entry, false)} title="Un-acknowledge — return this order to the attention count">Undo</Button>
-            </>
+            <Button small variant="ghost" disabled={busy} onClick={() => setEntryReviewed(entry, false)} title="Un-acknowledge — return this order to the attention count">Undo review</Button>
           ) : (
             <Button small variant="ghost" disabled={busy} onClick={() => setEntryReviewed(entry, true)}
               title="Acknowledge this order — clears it from the attention count without linking a charge (for an untracked card with nothing to link)">
@@ -771,10 +771,6 @@ export function AmazonReconciliationDialog({
               onClick={() => runBulk('unlink')} title="Detach each selected matched order's charge(s) — their categories are restored and the orders return to needing a match">
               Unlink ({selectionSummary.unlink})
             </Button>
-            <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk || selectionSummary.trash === 0}
-              onClick={() => runBulk('trash')} title="Send each selected unaccounted charge to Trash (recoverable from Settings → Trash)">
-              Move to trash ({selectionSummary.trash})
-            </Button>
             <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk || selectionSummary.mark_reviewed === 0}
               onClick={() => runBulk('mark_reviewed')} title="Acknowledge each selected 'No charge found' order or unaccounted charge — clears them from the attention count without resolving them further">
               Mark reviewed ({selectionSummary.mark_reviewed})
@@ -782,6 +778,12 @@ export function AmazonReconciliationDialog({
             <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk || selectionSummary.unreview === 0}
               onClick={() => runBulk('unreview')} title="Un-acknowledge each selected reviewed row — returns it to the attention count">
               Undo review ({selectionSummary.unreview})
+            </Button>
+            {/* Trash is destructive, so it's the last of the action buttons — set apart from the constructive
+                Merge/Accept/… run, with the flex gap separating it from the Clear utility on the far right. */}
+            <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk || selectionSummary.trash === 0}
+              onClick={() => runBulk('trash')} title="Send each selected unaccounted charge to Trash (recoverable from Settings → Trash)">
+              Move to trash ({selectionSummary.trash})
             </Button>
             <span style={{ flex: 1 }} />
             <Button small variant="ghost" style={COMPACT_ACTION_BTN_STYLE} disabled={pendingBulk} onClick={() => setSelectedIds(new Set())}>
