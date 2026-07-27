@@ -16,6 +16,7 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { formatCurrency, monthLabel, lastNMonths } from '../lib/utils.js'
+import { shiftMonth, isYearToDateRange, computeTrendBuckets } from '../lib/trendBuckets.js'
 import {
   CHART_TOOLTIP_CONTENT_STYLE,
   CHART_TOOLTIP_ITEM_STYLE,
@@ -42,6 +43,11 @@ const DASHBOARD_VIEW_PREF_KEY = 'ui.dashboard.view'
 // divider to rebalance and it persists. Defaults to giving the monthly chart a little more room than
 // the annual one (its month labels are tighter than 4-digit years). Clamped to [MIN, MAX].
 const DASHBOARD_TRENDS_SPLIT_PREF_KEY = 'ui.dashboard.trendsSplit'
+// The single-period trend window is anchored to the period the user selected via the FilterBar, not to
+// wherever they've since clicked. Session-scoped so returning to the Dashboard from another page shows
+// the same window (matching how the FilterBar date itself survives navigation but resets on reload); a
+// reload that resets the date self-heals via the containment check in loadSingleTotals.
+const DASHBOARD_TREND_ANCHOR_PREF_KEY = 'ui.dashboard.trendAnchor'
 const TRENDS_SPLIT_DEFAULT = 0.56
 const TRENDS_SPLIT_MIN = 0.3
 const TRENDS_SPLIT_MAX = 0.75
@@ -183,14 +189,6 @@ function monthsBetween(startYM, endYM) {
   return (ey - sy) * 12 + (em - sm) + 1
 }
 
-function shiftMonth(ym, deltaMonths) {
-  const [y, m] = ym.split('-').map(Number)
-  const totalMonthIndex = (y * 12) + (m - 1) + deltaMonths
-  const newY = Math.floor(totalMonthIndex / 12)
-  const newM = (totalMonthIndex % 12) + 1
-  return `${newY}-${String(newM).padStart(2, '0')}`
-}
-
 // Resolve any period type to its concrete inclusive month range. The "year" case caps the end
 // at the current month when the year is the current year, so this-year-vs-last-year compares
 // elapsed-YTD vs same-window-prior-year rather than a partial year vs a full prior year.
@@ -258,42 +256,6 @@ function priorModeOptionsFor(periodA) {
   return []
 }
 
-// Single-page bottom-chart trend: instead of fetching a fixed rolling window, bucket the
-// historical timeline by the SELECTED period's length so the trend reads as "this kind of
-// slice, over time." The selected period sits as one bar; we show a generous run of earlier
-// buckets and a small lookahead so the user can see where they are. Returned bucket ranges
-// are inclusive month codes ('YYYY-MM').
-function computeTrendBuckets(periodDate, options = {}) {
-  const earlierCount = options.earlierCount ?? 11
-  const laterCount = options.laterCount ?? 3
-  let anchorStart, bucketMonths
-  if (periodDate?.start && periodDate?.end) {
-    anchorStart = periodDate.start.slice(0, 7)
-    // Bucket width tracks the selected period's *duration*, not how many calendar-month labels it
-    // touches. Otherwise a ~30-day range straddling a month boundary (e.g. "Last 30 days") counts as
-    // two months and inflates every bucket — and the displayed average — vs. an equivalent "Last month".
-    const daySpan = Math.round((new Date(periodDate.end) - new Date(periodDate.start)) / 86400000) + 1
-    bucketMonths = Math.max(1, Math.round(daySpan / 30.44))
-  } else {
-    anchorStart = thisM
-    bucketMonths = 1
-  }
-  const anchorEnd = shiftMonth(anchorStart, bucketMonths - 1)
-  const buckets = []
-  for (let i = earlierCount; i >= 1; i--) {
-    const start = shiftMonth(anchorStart, -i * bucketMonths)
-    const end = shiftMonth(start, bucketMonths - 1)
-    buckets.push({ start, end, isSelected: false })
-  }
-  buckets.push({ start: anchorStart, end: anchorEnd, isSelected: true })
-  for (let i = 1; i <= laterCount; i++) {
-    const start = shiftMonth(anchorStart, i * bucketMonths)
-    const end = shiftMonth(start, bucketMonths - 1)
-    buckets.push({ start, end, isSelected: false })
-  }
-  return { bucketMonths, buckets }
-}
-
 // Human label for one bucket. Single-month buckets just use the month name; full calendar
 // years collapse to the year; everything else shows the inclusive month range.
 function bucketLabel(b) {
@@ -309,6 +271,49 @@ function lastDayOfMonthISO(ym) {
   const [y, m] = ym.split('-').map(Number)
   const last = new Date(y, m, 0).getDate()
   return `${ym}-${String(last).padStart(2, '0')}`
+}
+
+// Persist/restore the trend-window anchor (a period {start,end,preset}) session-scoped, so the set of
+// trend bars is the same when the user returns to the Dashboard from another page. See
+// DASHBOARD_TREND_ANCHOR_PREF_KEY.
+function loadTrendAnchor() {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.sessionStorage.getItem(DASHBOARD_TREND_ANCHOR_PREF_KEY)
+    if (!raw) return null
+    const p = JSON.parse(raw)
+    return p && typeof p.start === 'string' && typeof p.end === 'string' ? p : null
+  } catch { return null }
+}
+
+function saveTrendAnchor(anchor) {
+  if (typeof window === 'undefined') return
+  try {
+    if (anchor) window.sessionStorage.setItem(DASHBOARD_TREND_ANCHOR_PREF_KEY, JSON.stringify(anchor))
+    else window.sessionStorage.removeItem(DASHBOARD_TREND_ANCHOR_PREF_KEY)
+  } catch { /* storage may be unavailable */ }
+}
+
+// KEEP test — does `date` fall exactly on one of `buckets` (same start AND end month)? Clicking a trend
+// bar sets the date to that bucket's exact range, so it matches and the window stays put; a FilterBar
+// change to a differently-sized or differently-aligned period doesn't, so the window re-anchors. The
+// match is intentionally exact (not just start month): a shorter period whose start happens to sit
+// inside a wider bucket is still a real re-selection that should re-size the buckets.
+function dateMatchesBucket(buckets, date) {
+  if (!buckets || !date) return false
+  const s = date.start.slice(0, 7)
+  const e = date.end.slice(0, 7)
+  return buckets.some(b => b.start === s && b.end === e)
+}
+
+// HIGHLIGHT test — which bar does `date` belong to? Its start month lands in exactly one (contiguous)
+// bucket, which handles both a clicked bar (start month = bucket start) and the anchor's own bar for a
+// rolling window like "Past 12 months", whose calendar-month bucket end (…-06) doesn't equal the
+// selection's actual end month (…-07) — so an exact match would leave nothing highlighted.
+function bucketHoldsDateStart(bucketStart, bucketEnd, date) {
+  if (!date) return false
+  const s = date.start.slice(0, 7)
+  return s >= bucketStart && s <= bucketEnd
 }
 
 // All-time lower bound for the trend fetch when no date chip is set: passing an explicit (ancient)
@@ -360,7 +365,8 @@ function aggregateMonthlyIntoBuckets(monthlyRows, buckets) {
     bucketStart: b.start,
     bucketEnd: b.end,
     isSelected: b.isSelected,
-    label: bucketLabel(b),
+    // Buckets may carry an explicit label (year-to-date bars label by year); otherwise derive it.
+    label: b.label ?? bucketLabel(b),
     // Carry the month key only when the bucket is a single month — the click-to-open behaviour
     // (which opens MonthDetail) is meaningless on multi-month buckets.
     singleMonth: b.start === b.end ? b.start : null,
@@ -1705,6 +1711,11 @@ export default function Dashboard() {
   // when a date chip is set; null means the no-chip "all time" case, where the grain selector applies.
   const [singleTrendRows, setSingleTrendRows]           = useState([])
   const [singleTrendWindowBuckets, setSingleTrendWindowBuckets] = useState(null)
+  // Frozen anchor for the trend window (see loadTrendAnchor). A ref, not state: the rendered window
+  // lives in singleTrendWindowBuckets, so the anchor only needs to survive across bar clicks (the
+  // containment check in loadSingleTotals) and across navigation (sessionStorage) — neither re-renders.
+  const trendAnchorRef = useRef(undefined)
+  if (trendAnchorRef.current === undefined) trendAnchorRef.current = loadTrendAnchor()
   const [trendGrain, setTrendGrain]         = useState('month')
   const [level, setLevel]         = useState('groups')
   const [selectedGroup, setSelectedGroup] = useState(null)
@@ -1882,7 +1893,21 @@ export default function Dashboard() {
     // (ancient start → backend skips its rolling window) and bucket it month-by-month across the data's
     // span — otherwise the trend sits on an empty current-month window while the totals show all time.
     const hasDate = !!filters.date
-    const windowBuckets = hasDate ? computeTrendBuckets(filters.date).buckets : null
+    // Freeze the trend window on the FilterBar-selected period: keep the current anchor while the
+    // selection stays on one of its bars (a bar click re-pins filters.date onto a bucket, which the top
+    // half honors), and only re-anchor when the selection moves off the window (a real FilterBar
+    // change). This is what stops the bars from sliding as the user clicks across them.
+    let anchor = null
+    if (hasDate) {
+      const prevAnchor = trendAnchorRef.current
+      const prevBuckets = prevAnchor ? computeTrendBuckets(prevAnchor).buckets : null
+      anchor = dateMatchesBucket(prevBuckets, filters.date) ? prevAnchor : filters.date
+    }
+    if (anchor !== trendAnchorRef.current) {
+      trendAnchorRef.current = anchor
+      saveTrendAnchor(anchor)
+    }
+    const windowBuckets = hasDate ? computeTrendBuckets(anchor).buckets : null
     const trendStart = hasDate ? `${windowBuckets[0].start}-01` : ALL_TIME_START
     const trendEnd = hasDate ? lastDayOfMonthISO(windowBuckets[windowBuckets.length - 1].end) : undefined
     const [g, tr, c] = await Promise.all([
@@ -1906,8 +1931,11 @@ export default function Dashboard() {
   const trend = useMemo(() => {
     const buckets = singleTrendWindowBuckets
       ?? calendarBucketsFromRows(singleTrendRows, showTrendGrainSelector ? trendGrain : 'month')
-    return trimEmptyTrendBuckets(aggregateMonthlyIntoBuckets(singleTrendRows, buckets))
-  }, [singleTrendRows, singleTrendWindowBuckets, trendGrain, showTrendGrainSelector])
+    // Mark the selected bar from the *current* selection, not from where the window was anchored — so
+    // the highlight follows the user's clicks across a frozen window.
+    const marked = buckets.map(b => ({ ...b, isSelected: bucketHoldsDateStart(b.start, b.end, filters.date) }))
+    return trimEmptyTrendBuckets(aggregateMonthlyIntoBuckets(singleTrendRows, marked))
+  }, [singleTrendRows, singleTrendWindowBuckets, trendGrain, showTrendGrainSelector, filters.date])
 
   // In-place loaders for the Compare and Trends aggregates, shared by their mode effects and the
   // transaction-change refresh so an edit updates them without resetting the user's drill.
@@ -2641,7 +2669,9 @@ export default function Dashboard() {
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
                       {filters.date
-                        ? 'Buckets sized to the selected period · scroll horizontally to pan'
+                        ? (isYearToDateRange(filters.date)
+                            ? `Same year-to-date range (through ${monthLabel(filters.date.end.slice(0, 7)).split(' ')[0]}) each year · scroll horizontally to pan`
+                            : 'Buckets sized to the selected period · scroll horizontally to pan')
                         : `${grainWord} totals across all data · scroll horizontally to pan`}
                     </div>
                     <div style={{ overflowX: 'auto', overflowY: 'hidden' }}>
