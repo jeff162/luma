@@ -9,7 +9,7 @@ import {
 import { api } from '../lib/api.js'
 import { txnMutations, reconcileRowsAfterRuleApply, categoryReconcilePatch } from '../lib/txnMutations.js'
 import TransactionDetail from '../components/TransactionDetail.jsx'
-import MonthDetail from '../components/MonthDetail.jsx'
+import PeriodDetail from '../components/PeriodDetail.jsx'
 import TagDetail from '../components/TagDetail.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
@@ -367,9 +367,6 @@ function aggregateMonthlyIntoBuckets(monthlyRows, buckets) {
     isSelected: b.isSelected,
     // Buckets may carry an explicit label (year-to-date bars label by year); otherwise derive it.
     label: b.label ?? bucketLabel(b),
-    // Carry the month key only when the bucket is a single month — the click-to-open behaviour
-    // (which opens MonthDetail) is meaningless on multi-month buckets.
-    singleMonth: b.start === b.end ? b.start : null,
     total: (monthlyRows || []).reduce(
       (sum, r) => (r.month >= b.start && r.month <= b.end ? sum + (Number(r.total) || 0) : sum),
       0,
@@ -1703,7 +1700,7 @@ export default function Dashboard() {
   const [groupTxnData, setGroupTxnData] = useState([])
   const [groupTxnDataTotal, setGroupTxnDataTotal] = useState(0)
   const [detailTxns, setDetailTxns]     = useState([])
-  const [detailMonths, setDetailMonths] = useState([])
+  const [detailPeriods, setDetailPeriods] = useState([])
   const [categories, setCategories]     = useState([])
   const [rulePrompt, setRulePrompt]     = useState(null)
   // The single-view trend is derived (memo below) from the raw monthly rows so the user can re-bucket
@@ -1716,6 +1713,9 @@ export default function Dashboard() {
   // containment check in loadSingleTotals) and across navigation (sessionStorage) — neither re-renders.
   const trendAnchorRef = useRef(undefined)
   if (trendAnchorRef.current === undefined) trendAnchorRef.current = loadTrendAnchor()
+  // Recharts gives Bar no dblclick event, so detect it manually: two clicks on the same bar within a
+  // short window open the transaction drawer, while a single click just re-pins the period.
+  const lastTrendBarClickRef = useRef({ key: null, time: 0 })
   const [trendGrain, setTrendGrain]         = useState('month')
   const [level, setLevel]         = useState('groups')
   const [selectedGroup, setSelectedGroup] = useState(null)
@@ -1844,17 +1844,25 @@ export default function Dashboard() {
 
   // Month detail panels stack like transaction detail panels: same key (month + view) opens
   // the existing one rather than spawning a duplicate, and each new panel goes on top.
-  function openMonthDetail(month, view) {
-    if (!month) return
-    const key = `${month}::${view || 'spending'}`
-    setDetailMonths(prev => [
+  // Range-scoped transaction drawer for a trend bar (or the selected period, via the header link).
+  // `start`/`end` are inclusive ISO dates, `label` the human range name shown in the panel header.
+  function openPeriodDetail({ start, end, label }, view) {
+    if (!start || !end) return
+    const key = `${start}::${end}::${view || 'spending'}`
+    setDetailPeriods(prev => [
       ...prev.filter(item => item.key !== key),
-      { key, month, view: view || 'spending' },
+      { key, start, end, label, view: view || 'spending' },
     ])
   }
 
-  function closeMonthDetail(key) {
-    setDetailMonths(prev => prev.filter(item => item.key !== key))
+  // A single month bar (the Trends tab's monthly drill) is just a one-month range.
+  function openMonthDetail(month, view) {
+    if (!month) return
+    openPeriodDetail({ start: `${month}-01`, end: lastDayOfMonthISO(month), label: monthLabel(month) }, view)
+  }
+
+  function closePeriodDetail(key) {
+    setDetailPeriods(prev => prev.filter(item => item.key !== key))
   }
 
   // Tag-signature detail panels stack like the other floating drawers. The key encodes
@@ -2636,43 +2644,72 @@ export default function Dashboard() {
                 const grainWord = effectiveGrain === 'year' ? 'Yearly' : effectiveGrain === 'quarter' ? 'Quarterly' : 'Monthly'
                 function handleTrendBarClick(d) {
                   if (!d) return
-                  if (d.singleMonth) {
-                    openMonthDetail(d.singleMonth, dashboardView)
-                    return
-                  }
-                  // Multi-month bucket: re-pin the date filter onto that bucket so the rest of
-                  // the page re-renders with it as the new "selected period."
                   const start = `${d.bucketStart}-01`
                   const end = lastDayOfMonthISO(d.bucketEnd)
+                  // Single click re-pins the date filter onto that bar so the rest of the page re-renders
+                  // with it as the new "selected period." This also fires as the first half of a
+                  // double-click, which is intended: double-clicking both focuses the period and opens it.
                   setDate({ start, end, preset: d.label })
+                  const now = Date.now()
+                  const prev = lastTrendBarClickRef.current
+                  if (prev.key === d.bucketStart && now - prev.time < 400) {
+                    lastTrendBarClickRef.current = { key: null, time: 0 }
+                    openPeriodDetail({ start, end, label: d.label }, dashboardView)
+                  } else {
+                    lastTrendBarClickRef.current = { key: d.bucketStart, time: now }
+                  }
+                }
+                // The header link opens the transaction drawer for the whole selected period (day-precise
+                // dates, not the bar's month range), so it's available even when no single bar is focused.
+                function openSelectedPeriodTransactions() {
+                  if (!filters.date) return
+                  const sM = filters.date.start.slice(0, 7)
+                  const eM = filters.date.end.slice(0, 7)
+                  const label = filters.date.preset
+                    || (sM === eM ? monthLabel(sM) : `${monthLabel(sM)} – ${monthLabel(eM)}`)
+                  openPeriodDetail({ start: filters.date.start, end: filters.date.end, label }, dashboardView)
                 }
                 return (
                   <Card>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
                       <div style={{ fontSize: 14, fontWeight: 600 }}>Trend</div>
-                      {showTrendGrainSelector && (
-                        <select
-                          value={trendGrain}
-                          onChange={e => setTrendGrain(e.target.value)}
-                          aria-label="Trend bucket size"
-                          style={{
-                            background: 'var(--surface2)', color: 'var(--text)',
-                            border: '1px solid var(--border)', borderRadius: 8,
-                            padding: '4px 8px', fontSize: 12, cursor: 'pointer',
-                          }}
-                        >
-                          <option value="month">Monthly</option>
-                          <option value="quarter">Quarterly</option>
-                          <option value="year">Yearly</option>
-                        </select>
-                      )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {filters.date && (
+                          <Button
+                            variant="ghost"
+                            small
+                            onClick={openSelectedPeriodTransactions}
+                            style={{ padding: '4px 10px', fontSize: 12 }}
+                            title="Open the transactions for the selected period"
+                          >
+                            View transactions ↗
+                          </Button>
+                        )}
+                        {showTrendGrainSelector && (
+                          <select
+                            value={trendGrain}
+                            onChange={e => setTrendGrain(e.target.value)}
+                            aria-label="Trend bucket size"
+                            style={{
+                              background: 'var(--surface2)', color: 'var(--text)',
+                              border: '1px solid var(--border)', borderRadius: 8,
+                              padding: '4px 8px', fontSize: 12, cursor: 'pointer',
+                            }}
+                          >
+                            <option value="month">Monthly</option>
+                            <option value="quarter">Quarterly</option>
+                            <option value="year">Yearly</option>
+                          </select>
+                        )}
+                      </div>
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
                       {filters.date
                         ? (isYearToDateRange(filters.date)
-                            ? `Same year-to-date range (through ${monthLabel(filters.date.end.slice(0, 7)).split(' ')[0]}) each year · scroll horizontally to pan`
-                            : 'Buckets sized to the selected period · scroll horizontally to pan')
-                        : `${grainWord} totals across all data · scroll horizontally to pan`}
+                            ? `Same year-to-date range (through ${monthLabel(filters.date.end.slice(0, 7)).split(' ')[0]}) each year`
+                            : 'Buckets sized to the selected period')
+                        : `${grainWord} totals across all data`}
+                      {' · click a bar to focus it, double-click for its transactions · scroll horizontally to pan'}
                     </div>
                     <div style={{ overflowX: 'auto', overflowY: 'hidden' }}>
                       <div style={{ minWidth: trendChartMinWidth, height: 224 }}>
@@ -2862,27 +2899,29 @@ export default function Dashboard() {
           categories={categories}
           forceFloating={multiDetailMode}
           stackIndex={index}
-          isTopmost={index === detailTxns.length - 1 && detailMonths.length === 0}
+          isTopmost={index === detailTxns.length - 1 && detailPeriods.length === 0}
           onClose={() => closeTransactionDetail(txn.id)}
           onReconcile={reconcileDetailEdit}
           dateStart={dateStart || undefined}
           dateEnd={dateEnd || undefined}
         />
       ))}
-      {detailMonths.map((entry, index) => (
-        <MonthDetail
+      {detailPeriods.map((entry, index) => (
+        <PeriodDetail
           key={entry.key}
-          month={entry.month}
+          start={entry.start}
+          end={entry.end}
+          label={entry.label}
           view={entry.view}
           accountId={accountId || undefined}
           tagIds={tagIds}
           ownerIds={ownerIds}
           filters={summaryFilters}
           categories={categories}
-          forceFloating={detailTxns.length + detailMonths.length + detailTagSignatures.length > 1}
+          forceFloating={detailTxns.length + detailPeriods.length + detailTagSignatures.length > 1}
           stackIndex={detailTxns.length + index}
-          isTopmost={index === detailMonths.length - 1 && detailTagSignatures.length === 0}
-          onClose={() => closeMonthDetail(entry.key)}
+          isTopmost={index === detailPeriods.length - 1 && detailTagSignatures.length === 0}
+          onClose={() => closePeriodDetail(entry.key)}
         />
       ))}
       {detailTagSignatures.map((entry, index) => (
@@ -2897,8 +2936,8 @@ export default function Dashboard() {
           dateEnd={entry.dateEnd || undefined}
           filterTagIds={entry.filterTagIds || undefined}
           categories={categories}
-          forceFloating={detailTxns.length + detailMonths.length + detailTagSignatures.length > 1}
-          stackIndex={detailTxns.length + detailMonths.length + index}
+          forceFloating={detailTxns.length + detailPeriods.length + detailTagSignatures.length > 1}
+          stackIndex={detailTxns.length + detailPeriods.length + index}
           isTopmost={index === detailTagSignatures.length - 1}
           onClose={() => closeTagDetail(entry.key)}
         />

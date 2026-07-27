@@ -68,7 +68,7 @@ and a mis-tap stays visible. Add when a real need shows up.
 The seam is an **opt-in `onRefresh`** callback on `lib/useBulkTransactionEditing.jsx`; `BulkEditChrome`
 renders a `↻ Refresh` next to the bar only when a host passes one (shared half ≈5 lines). Per-host wiring
 (Categories is the reference — it bumps `matchingReloadNonce` into the paging key):
-- MonthDetail / TagDetail: add a `refreshNonce` to the fetch `useEffect` deps.
+- PeriodDetail / TagDetail: add a `refreshNonce` to the fetch `useEffect` deps.
 - CategoryDetail / AccountDetail / ImportBatchDetail: thread a nonce into the `usePaged…Transactions`
   `activeKey` (ImportBatchDetail also re-fetches its count).
 - Dashboard: re-invoke its drill fn.

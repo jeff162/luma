@@ -95,7 +95,7 @@ export default function ImportBatchDetail({
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
     preferenceKey: IMPORT_BATCH_DETAIL_TABLE_PREF_KEY,
   })
-  const loadPage = useCallback((offset, limit) => (
+  const loadPage = useCallback((offset, limit, sort) => (
     api.getTransactions({
       import_batch_id: batch.id,
       ...(dateStart ? { date_start: dateStart } : {}),
@@ -103,6 +103,8 @@ export default function ImportBatchDetail({
       ...(debouncedFilter ? { quick_filter: debouncedFilter } : {}),
       limit,
       offset,
+      sort_by: sort.key,
+      sort_dir: sort.dir,
     }).then(result => ({
       ...result,
       transactions: (result?.transactions || []).map(withSourceAccountLabel),
@@ -113,6 +115,8 @@ export default function ImportBatchDetail({
     setRows,
     loading,
     listRef,
+    sortState,
+    onSort,
   } = usePagedTransactions({
     activeKey: `${batch.id}|${dateStart || ''}|${dateEnd || ''}|${debouncedFilter}`,
     loadPage,
@@ -302,6 +306,8 @@ export default function ImportBatchDetail({
             onColumnConfigChange={setColumnConfig}
             fillHeight
             scrollRef={listRef}
+            sortState={sortState}
+            onSort={onSort}
             emptyMessage="No imported transactions remain for this file."
           />
         )}

@@ -35,7 +35,7 @@ The high-value three shipped (see below). These were deliberately **deferred**, 
 - **Row-patch idiom** — `setX(prev => prev.map(t => t.id === id ? { ...t, … } : t))` appears ~10×
   across ~7 files. Could become a tiny `updateById(list, id, patch)` util, but each callsite is
   already one line and some are heterogeneous → **low priority; extract opportunistically.**
-- **The four drill detail panels** (`CategoryDetail` / `AccountDetail` / `MonthDetail` / `TagDetail`)
+- **The four drill detail panels** (`CategoryDetail` / `AccountDetail` / `PeriodDetail` / `TagDetail`)
   share a trend-chart + drill-list + child-`TransactionDetail` + bulk skeleton. `detailShared.jsx`
   already factors the chrome/paging/range. A full unify has **high divergence risk** (AccountDetail's
   source-account column/filter is genuinely different) → **leave; keep extracting into

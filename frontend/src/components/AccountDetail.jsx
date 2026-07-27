@@ -111,19 +111,23 @@ export default function AccountDetail({ account, categories = [], onClose, force
   )
   const anchorReady = rangeMode === 'all' ? trend.length > 0 : !!selectedMonth
   const activeKey = anchorReady ? `acct:${account.id}|${sourceCsv || 'all'}|${rangeMode}|${rangeKey}` : null
-  const loadPage = useCallback((offset, limit) => (
+  const loadPage = useCallback((offset, limit, sort) => (
     api.getTransactions({
       account_ids: String(account.id),
       ...(sourceCsv ? { source_account_ids: sourceCsv } : {}),
       ...range.params,
       limit,
       offset,
+      sort_by: sort.key,
+      sort_dir: sort.dir,
     })
   ), [account.id, sourceCsv, range])
   const {
     rows: monthTxns,
     loading: txnLoading,
     listRef,
+    sortState,
+    onSort,
   } = usePagedTransactions({ activeKey, loadPage })
   const [localMonthTxns, setLocalMonthTxns] = useState([])
   // The row's merchant ↗ opens the payee detail as a child panel (so it surfaces the per-transaction
@@ -328,6 +332,8 @@ export default function AccountDetail({ account, categories = [], onClose, force
                     onColumnConfigChange={setColumnConfig}
                     maxHeight={DETAIL_LIST_MAX_HEIGHT}
                     scrollRef={listRef}
+                    sortState={sortState}
+                    onSort={onSort}
                   />
                   <div style={{
                     padding: '8px 14px', fontSize: 13, fontWeight: 600,

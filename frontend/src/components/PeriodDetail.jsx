@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
-import { formatCurrency, monthLabel } from '../lib/utils.js'
+import { formatCurrency } from '../lib/utils.js'
 import { Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
@@ -16,19 +16,27 @@ import {
   DETAIL_LIST_MAX_HEIGHT,
   DetailPanelShell,
   useDetailPanelChrome,
+  usePagedTransactions,
   usePanelReveal,
 } from './detailShared.jsx'
 
-const MONTH_DETAIL_TABLE_PREF_KEY = 'ui.monthDetail.transactions.columns'
+const PERIOD_DETAIL_TABLE_PREF_KEY = 'ui.periodDetail.transactions.columns'
 
 /*
- * Floating detail panel scoped to a single month bar from the Dashboard's monthly-trend chart.
- * `view` ('spending' | 'income') mirrors the chart's filter so the listed transactions exactly
- * match the bar the user clicked, including refunds-in-expense-categories that pull a bar
- * negative. Multiple panels can stack via stackIndex/forceFloating, matching TransactionDetail.
+ * Floating detail panel scoped to a date range from the Dashboard's single-period trend chart — one
+ * trend bar (a month, a quarter, a full period, or a whole year, depending on the selected period's
+ * length), or the selected period itself via the "View transactions" header link. `start`/`end` are
+ * inclusive ISO dates; `label` is the human range name shown in the header (the bar's own label, or
+ * the FilterBar preset). `view` ('spending' | 'income') mirrors the chart's filter so the listed rows
+ * exactly match the bar the user clicked, including refunds-in-expense-categories that pull a bar
+ * negative. The list is infinite-scroll paginated with server-side sort (usePagedTransactions), so a
+ * whole-year range isn't truncated at a fetch cap and column sort reorders the entire result — not
+ * just the loaded page. Multiple panels stack via stackIndex/forceFloating, matching TransactionDetail.
  */
-export default function MonthDetail({
-  month,
+export default function PeriodDetail({
+  start,
+  end,
+  label,
   view,
   accountId,
   tagIds,
@@ -41,30 +49,44 @@ export default function MonthDetail({
   isTopmost = true,
 }) {
   const { pos, size, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
-  const [transactions, setTransactions] = useState([])
-  const [txnTotal, setTxnTotal] = useState(0)
-  // Signed net sum over the whole filtered month, from the server — the header total must not be summed
-  // from the (page-capped) `transactions`, which undercounts once a month exceeds the fetch limit.
-  const [txnSum, setTxnSum] = useState(0)
-  const [loading, setLoading] = useState(true)
-  // Hold the panel invisible until its geometry settles, so it fades in fully formed rather than
-  // visibly growing as its content lands (see usePanelReveal).
-  const revealed = usePanelReveal(panelRef, !loading)
   const [payeeDetail, setPayeeDetail] = useState(null)
   const [categoryDetail, setCategoryDetail] = useState(null)
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
-    preferenceKey: MONTH_DETAIL_TABLE_PREF_KEY,
+    preferenceKey: PERIOD_DETAIL_TABLE_PREF_KEY,
   })
 
-  // Filter that resolves the same rows the list shows, for "select all matching" bulk edits.
+  // Filter that resolves the same rows the list shows, for the fetch and for "select all matching" bulk
+  // edits. `date_start`/`date_end` scope the range; `view` mirrors the chart's spending/income filter.
   const bulkFilterParams = useMemo(() => ({
-    month,
+    date_start: start,
+    date_end: end,
     ...(accountId ? { account_id: accountId } : {}),
     ...(tagIds ? { tag_ids: tagIds } : {}),
     ...(ownerIds ? { owner_ids: ownerIds } : {}),
     ...filters,
     ...(view ? { view } : {}),
-  }), [month, view, accountId, tagIds, ownerIds, filters])
+  }), [start, end, view, accountId, tagIds, ownerIds, filters])
+
+  const activeKey = start && end ? JSON.stringify(bulkFilterParams) : null
+  const loadPage = useCallback((offset, limit, sort) => (
+    api.getTransactions({ ...bulkFilterParams, limit, offset, sort_by: sort.key, sort_dir: sort.dir })
+  ), [bulkFilterParams])
+  const {
+    rows: transactions,
+    setRows: setTransactions,
+    loading,
+    listRef,
+    total: txnTotal,
+    setTotal: setTxnTotal,
+    sumAmount: txnSum,
+    sortState,
+    onSort,
+  } = usePagedTransactions({ activeKey, loadPage })
+
+  // Hold the panel invisible until its geometry settles, so it fades in fully formed rather than
+  // visibly growing as its content lands (see usePanelReveal).
+  const revealed = usePanelReveal(panelRef, !loading)
+
   const bulk = useBulkTransactionEditing({
     rows: transactions,
     setRows: setTransactions,
@@ -73,23 +95,6 @@ export default function MonthDetail({
     categories,
     onRowsTrashed: count => setTxnTotal(prev => Math.max(0, prev - count)),
   })
-
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    api.getTransactions({ ...bulkFilterParams, limit: 1000 }).then(resp => {
-      if (cancelled) return
-      setTransactions(resp.transactions || [])
-      setTxnTotal(Number(resp.total || 0))
-      setTxnSum(Number(resp.sum_amount || 0))
-      setLoading(false)
-    }).catch(() => {
-      if (cancelled) return
-      setTransactions([])
-      setLoading(false)
-    })
-    return () => { cancelled = true }
-  }, [bulkFilterParams])
 
   function saveCategory(txnId, catId, catObj) {
     const cat = catObj || categories.find(c => c.id === catId)
@@ -100,15 +105,16 @@ export default function MonthDetail({
   }
 
   const viewLabel = view === 'income' ? 'Income' : 'Spending'
-  // Count and total come from the server aggregate over the whole month, not the page-capped rows, so
-  // they stay correct when the month has more transactions than the fetch limit. Income sums are stored
-  // negative, so flip the sign to show a positive magnitude.
+  const title = `${label} · ${viewLabel}`
+  // Count and total come from the server aggregate over the whole range, not the loaded page, so they
+  // stay correct as the user scrolls. Income sums are stored negative, so flip the sign to show a
+  // positive magnitude.
   const total = view === 'income' ? -txnSum : txnSum
 
   const header = (
     <>
       <div style={{ fontSize: 17, fontWeight: 600, lineHeight: 1.35 }}>
-        {monthLabel(month)} · {viewLabel}
+        {title}
       </div>
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
         {txnTotal} transaction{txnTotal !== 1 ? 's' : ''} · {formatCurrency(total)}
@@ -135,7 +141,7 @@ export default function MonthDetail({
         <div style={{ fontSize: 13, color: 'var(--muted)' }}>No transactions found.</div>
       ) : (
         <>
-          <TransactionListToolbar rows={transactions} title={`${monthLabel(month)} · ${viewLabel}`} bulk={bulk} />
+          <TransactionListToolbar rows={transactions} title={title} bulk={bulk} />
           <BulkEditChrome controller={bulk} />
           <TransactionListTable
             rows={transactions}
@@ -152,6 +158,9 @@ export default function MonthDetail({
             columnConfig={columnConfig}
             onColumnConfigChange={setColumnConfig}
             maxHeight={DETAIL_LIST_MAX_HEIGHT}
+            scrollRef={listRef}
+            sortState={sortState}
+            onSort={onSort}
           />
         </>
       )}

@@ -136,14 +136,16 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
   )
   const anchorReady = rangeMode === 'all' ? trend.length > 0 : !!selectedMonth
   const activeKey = anchorReady ? `${payee}|${rangeMode}|${rangeKey}` : null
-  const loadPage = useCallback((offset, limit) => (
-    api.getTransactions({ ...range.params, payees: payee, limit, offset })
+  const loadPage = useCallback((offset, limit, sort) => (
+    api.getTransactions({ ...range.params, payees: payee, limit, offset, sort_by: sort.key, sort_dir: sort.dir })
   ), [range, payee])
   const {
     rows: monthTxns,
     setRows: setMonthTxns,
     loading: txnLoading,
     listRef,
+    sortState,
+    onSort,
   } = usePagedTransactions({ activeKey, loadPage })
 
   useEffect(() => {
@@ -565,6 +567,8 @@ export default function TransactionDetail({ txn, categories, onClose, onReconcil
                     onColumnConfigChange={setColumnConfig}
                     maxHeight={DETAIL_LIST_MAX_HEIGHT}
                     scrollRef={listRef}
+                    sortState={sortState}
+                    onSort={onSort}
                     getRowStyle={row => (
                       row.id === txn.id
                         ? { background: 'color-mix(in srgb, var(--accent) 8%, transparent)' }

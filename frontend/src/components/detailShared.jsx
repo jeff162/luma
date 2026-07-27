@@ -4,7 +4,7 @@
 /* eslint-disable react-refresh/only-export-components -- DetailPanelShell + chart components + paging hooks + sizing helpers live together as the detail-panel kit */
 
 /*
- * Shared chrome for every floating detail panel (AccountDetail, CategoryDetail, MonthDetail,
+ * Shared chrome for every floating detail panel (AccountDetail, CategoryDetail, PeriodDetail,
  * TagDetail, TransactionDetail, ImportBatchDetail, the duplicate-detection dialog). Three
  * non-obvious design points:
  *
@@ -22,7 +22,7 @@
  *     key so changing a filter starts over at page 1.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, LabelList,
@@ -494,16 +494,46 @@ export function DetailRangeControl({ mode, onChange }) {
   )
 }
 
+// Detail lists open newest-first, matching the ledger's default.
+export const DETAIL_SORT_DEFAULT = { key: 'date', dir: 'desc' }
+// Date and amount read most-useful biggest-first; text columns start A→Z. Mirrors the ledger's
+// getInitialSortDirection so a column's first-click direction is the same everywhere.
+function detailInitialSortDir(key) {
+  return key === 'date' || key === 'amount' ? 'desc' : 'asc'
+}
+
+// Backs the detail panels' transaction lists: infinite-scroll pagination (DETAIL_PAGE_SIZE per page) with
+// **server-side sort**. `loadPage(offset, limit, sort)` does the fetch and must forward `sort` to the API
+// (`sort_by`/`sort_dir`) — sorting has to happen server-side because a client-side sort over an
+// infinite-scroll list is broken by construction: a reversed sort puts the un-loaded rows past the fetch
+// cursor at the *top* of the list, where scrolling to the bottom (what triggers the next page) can never
+// reach them. Changing the sort re-pages from offset 0 in the new order. `activeKey` resets pagination —
+// consumers include their filters (date range, search) in the key so changing a filter starts over.
+// `total`/`sumAmount` are the server aggregates over the whole filtered set (first-page response), for a
+// header count/total that stays correct past the loaded page; consumers that derive those from a trend
+// (category/account) ignore them. Feed `sortState`/`onSort` straight into TransactionListTable's
+// controlled-sort props so its header clicks drive this.
 export function usePagedTransactions({ activeKey, loadPage }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
   const [offset, setOffset] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [total, setTotal] = useState(0)
+  const [sumAmount, setSumAmount] = useState(0)
+  const [sortState, setSortState] = useState(DETAIL_SORT_DEFAULT)
   const listRef = useRef(null)
   // Synchronous re-entry guard (see comment above): blocks a same-offset double-fetch that would append
   // a page twice and produce duplicate React keys while scrolling.
   const loadingMoreRef = useRef(false)
+
+  // Header clicks pass a column key; re-clicking the same key flips direction. The first-page effect
+  // depends on sortState, so a sort change transparently re-pages from offset 0 in the new server order.
+  const onSort = useCallback(key => {
+    setSortState(prev => (prev && prev.key === key
+      ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: detailInitialSortDir(key) }))
+  }, [])
 
   useEffect(() => {
     if (!activeKey) {
@@ -511,28 +541,34 @@ export function usePagedTransactions({ activeKey, loadPage }) {
       setOffset(0)
       setHasMore(false)
       setLoading(false)
+      setTotal(0)
+      setSumAmount(0)
       return
     }
     let cancelled = false
     setLoading(true)
     setOffset(0)
-    loadPage(0, DETAIL_PAGE_SIZE).then(result => {
+    loadPage(0, DETAIL_PAGE_SIZE, sortState).then(result => {
       if (cancelled) return
       const nextRows = result?.transactions || []
-      const total = result?.total || 0
+      const resultTotal = Number(result?.total || 0)
       setRows(nextRows)
       setOffset(nextRows.length)
-      setHasMore(nextRows.length < total)
+      setHasMore(nextRows.length < resultTotal)
+      setTotal(resultTotal)
+      setSumAmount(Number(result?.sum_amount || 0))
       setLoading(false)
     }).catch(() => {
       if (cancelled) return
       setRows([])
       setOffset(0)
       setHasMore(false)
+      setTotal(0)
+      setSumAmount(0)
       setLoading(false)
     })
     return () => { cancelled = true }
-  }, [activeKey, loadPage])
+  }, [activeKey, loadPage, sortState])
 
   useEffect(() => {
     if (!activeKey || !listRef.current) return
@@ -542,19 +578,19 @@ export function usePagedTransactions({ activeKey, loadPage }) {
       if (el.scrollHeight - el.scrollTop - el.clientHeight > 240) return
       loadingMoreRef.current = true
       setLoadingMore(true)
-      loadPage(offset, DETAIL_PAGE_SIZE).then(result => {
+      loadPage(offset, DETAIL_PAGE_SIZE, sortState).then(result => {
         const nextRows = result?.transactions || []
-        const total = result?.total || 0
+        const resultTotal = Number(result?.total || 0)
         setRows(prev => mergeUniqueById(prev, nextRows))
         setOffset(prev => prev + nextRows.length)
-        setHasMore(offset + nextRows.length < total)
+        setHasMore(offset + nextRows.length < resultTotal)
       }).finally(() => { loadingMoreRef.current = false; setLoadingMore(false) })
     }
     const el = listRef.current
     el.addEventListener('scroll', onScroll)
     onScroll()
     return () => el.removeEventListener('scroll', onScroll)
-  }, [activeKey, offset, hasMore, loading, loadingMore, loadPage])
+  }, [activeKey, offset, hasMore, loading, loadingMore, loadPage, sortState])
 
   return {
     rows,
@@ -562,6 +598,11 @@ export function usePagedTransactions({ activeKey, loadPage }) {
     loading,
     loadingMore,
     listRef,
+    total,
+    setTotal,
+    sumAmount,
+    sortState,
+    onSort,
   }
 }
 

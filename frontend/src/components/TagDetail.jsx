@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
 import { formatCurrency } from '../lib/utils.js'
@@ -16,6 +16,7 @@ import {
   DETAIL_LIST_MAX_HEIGHT,
   DetailPanelShell,
   useDetailPanelChrome,
+  usePagedTransactions,
   usePanelReveal,
 } from './detailShared.jsx'
 
@@ -49,16 +50,51 @@ export default function TagDetail({
 }) {
   const { pos, size, panelRef, onDragStart, onResizeStart } =
     useDetailPanelChrome(onClose, { forceFloating, stackIndex })
-  const [transactions, setTransactions] = useState([])
-  const [loading, setLoading] = useState(true)
-  // Hold the panel invisible until its geometry settles, so it fades in fully formed rather than
-  // visibly growing as its content lands (see usePanelReveal).
-  const revealed = usePanelReveal(panelRef, !loading)
   const [payeeDetail, setPayeeDetail] = useState(null)
   const [categoryDetail, setCategoryDetail] = useState(null)
   const [columnConfig, setColumnConfig] = useTransactionTableLayout({
     preferenceKey: TAG_DETAIL_TABLE_PREF_KEY,
   })
+
+  const signatureTagIds = signature?.signature_tag_ids || []
+  const signatureKey = signatureTagIds.slice().sort().join('|')
+  const reportTagsKey = (reportTagIds || []).slice().sort().join('|')
+
+  // Scope the slice entirely server-side: a row must have *all* the signature's tags
+  // (require_all_tag_ids, AND) and *none* of the report's other tags (exclude_tag_ids). For the "Other"
+  // slice (no signature tags) that reduces to "none of the report's tags." Because require_all is
+  // independent of the OR `tag_ids`, the active filter's own tag_ids still applies on top. These params
+  // resolve exactly the slice's rows, so they drive both the paged fetch and "select all matching".
+  const fetchParams = useMemo(() => {
+    const otherReportTags = (reportTagIds || []).filter(id => !signatureTagIds.includes(id))
+    return {
+      ...(dateStart ? { date_start: dateStart } : {}),
+      ...(dateEnd ? { date_end: dateEnd } : {}),
+      ...(accountId ? { account_id: accountId } : {}),
+      ...(filterTagIds ? { tag_ids: filterTagIds } : {}),
+      ...(signatureTagIds.length ? { require_all_tag_ids: signatureTagIds.join(',') } : {}),
+      ...(otherReportTags.length ? { exclude_tag_ids: otherReportTags.join(',') } : {}),
+      ...(view ? { view } : {}),
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- signatureKey/reportTagsKey subsume the arrays
+  }, [signatureKey, reportTagsKey, view, accountId, dateStart, dateEnd, filterTagIds])
+
+  const activeKey = signature ? JSON.stringify(fetchParams) : null
+  const loadPage = useCallback((offset, limit, sort) => (
+    api.getTransactions({ ...fetchParams, limit, offset, sort_by: sort.key, sort_dir: sort.dir })
+  ), [fetchParams])
+  const {
+    rows: transactions,
+    setRows: setTransactions,
+    loading,
+    listRef,
+    sortState,
+    onSort,
+  } = usePagedTransactions({ activeKey, loadPage })
+
+  // Hold the panel invisible until its geometry settles, so it fades in fully formed rather than
+  // visibly growing as its content lands (see usePanelReveal).
+  const revealed = usePanelReveal(panelRef, !loading)
 
   function saveCategory(txnId, catId, catObj) {
     const cat = catObj || categories.find(c => c.id === catId)
@@ -68,58 +104,22 @@ export default function TagDetail({
     txnMutations.setCategory(txnId, catId)
   }
 
-  // The visible rows are a client-side exact-signature subset of an OR-match fetch, so no server filter
-  // can re-resolve them — "select all" selects every loaded row by id ('loaded' strategy) rather than
-  // flipping to server all-matching.
-  const bulk = useBulkTransactionEditing({
-    rows: transactions,
-    setRows: setTransactions,
-    selectAllStrategy: 'loaded',
-    categories,
-  })
-
-  const signatureTagIds = signature?.signature_tag_ids || []
-  const signatureKey = signatureTagIds.slice().sort().join('|')
-  const reportTagsKey = (reportTagIds || []).slice().sort().join('|')
-
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    // Scope the fetch to the exact signature entirely server-side: it must have *all* the signature's
-    // tags (require_all_tag_ids, AND) and *none* of the report's other tags (exclude_tag_ids). For the
-    // "Other" slice (no signature tags) that reduces to "none of the report's tags." Because require_all
-    // is independent of the OR `tag_ids`, the active filter's own tag_ids still applies on top. This
-    // returns exactly the slice's rows — no client-side match pass, and no truncation of a sparse slice.
-    const otherReportTags = (reportTagIds || []).filter(id => !signatureTagIds.includes(id))
-    const params = {
-      ...(dateStart ? { date_start: dateStart } : {}),
-      ...(dateEnd ? { date_end: dateEnd } : {}),
-      ...(accountId ? { account_id: accountId } : {}),
-      ...(filterTagIds ? { tag_ids: filterTagIds } : {}),
-      ...(signatureTagIds.length ? { require_all_tag_ids: signatureTagIds.join(',') } : {}),
-      ...(otherReportTags.length ? { exclude_tag_ids: otherReportTags.join(',') } : {}),
-      ...(view ? { view } : {}),
-      limit: 1000,
-    }
-    api.getTransactions(params).then(resp => {
-      if (cancelled) return
-      setTransactions(resp?.transactions || [])
-      setLoading(false)
-    }).catch(() => {
-      if (cancelled) return
-      setTransactions([])
-      setLoading(false)
-    })
-    return () => { cancelled = true }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signatureKey, reportTagsKey, view, accountId, dateStart, dateEnd, filterTagIds])
-
   // Count and total are the authoritative server bucket values for this slice (from the tag-report
-  // aggregation), not a sum of the displayed rows — so the header matches the pie exactly and can't be
-  // undercounted by the list's page cap.
+  // aggregation), not a sum of the displayed rows — so the header matches the pie exactly and is
+  // independent of how many rows have paged in.
   const headerCount = Number(signature?.count) || 0
   const total = Math.abs(Number(signature?.total) || 0)
   const headerLabel = signature?.signature_name || 'Tag signature'
+
+  // The slice is fully server-resolvable (fetchParams), so "select all matching" resolves the whole
+  // slice server-side rather than only the loaded rows.
+  const bulk = useBulkTransactionEditing({
+    rows: transactions,
+    setRows: setTransactions,
+    total: headerCount,
+    filterParams: fetchParams,
+    categories,
+  })
 
   const header = (
     <>
@@ -163,6 +163,9 @@ export default function TagDetail({
             columnConfig={columnConfig}
             onColumnConfigChange={setColumnConfig}
             maxHeight={DETAIL_LIST_MAX_HEIGHT}
+            scrollRef={listRef}
+            sortState={sortState}
+            onSort={onSort}
           />
         </>
       )}

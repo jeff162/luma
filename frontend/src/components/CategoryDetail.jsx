@@ -55,13 +55,15 @@ export default function CategoryDetail({ category, categories = [], onClose, for
   )
   const anchorReady = rangeMode === 'all' ? trend.length > 0 : !!selectedMonth
   const activeKey = anchorReady ? `cat:${category.id}|${rangeMode}|${rangeKey}` : null
-  const loadPage = useCallback((offset, limit) => (
-    api.getTransactions({ ...range.params, category_ids: String(category.id), limit, offset })
+  const loadPage = useCallback((offset, limit, sort) => (
+    api.getTransactions({ ...range.params, category_ids: String(category.id), limit, offset, sort_by: sort.key, sort_dir: sort.dir })
   ), [range, category.id])
   const {
     rows: monthTxns,
     loading: txnLoading,
     listRef,
+    sortState,
+    onSort,
   } = usePagedTransactions({ activeKey, loadPage })
 
   useEffect(() => {
@@ -184,6 +186,8 @@ export default function CategoryDetail({ category, categories = [], onClose, for
                     onColumnConfigChange={setColumnConfig}
                     maxHeight={DETAIL_LIST_MAX_HEIGHT}
                     scrollRef={listRef}
+                    sortState={sortState}
+                    onSort={onSort}
                   />
                   <div style={{
                     padding: '8px 14px', fontSize: 13, fontWeight: 600,

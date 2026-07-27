@@ -53,7 +53,7 @@ function getAvailableColumns({ showCategory, showAccount, showSourceAccount }) {
 }
 
 // Column-header click sorting is handled entirely by the table when no external sort props
-// are supplied — the surfaces that just render this table (MonthDetail, the dashboard
+// are supplied — the surfaces that just render this table (PeriodDetail, the dashboard
 // drill-down tables, AccountDetail, TagDetail) all get sort for free without each having to
 // reimplement the comparator. Numeric/date columns default to "biggest first"; text columns
 // to ascending, matching the pattern the Transactions page already uses.

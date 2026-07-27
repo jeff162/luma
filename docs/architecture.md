@@ -236,7 +236,7 @@ That core concentration is intentional. Import behavior is one of the places whe
 
 ### Detail panels
 
-- **Panels:** payee detail (`TransactionDetail`), category detail (`CategoryDetail`), account detail (`AccountDetail`), single-month transaction listing (`MonthDetail`, opened by clicking a bar on the dashboard's monthly-trend chart), and tag-signature listing (`TagDetail`, opened by clicking a wedge on a dashboard tag-report pie). All five share the same chrome.
+- **Panels:** payee detail (`TransactionDetail`), category detail (`CategoryDetail`), account detail (`AccountDetail`), range-scoped transaction listing (`PeriodDetail`, opened by double-clicking a bar on the dashboard's single-period trend chart or from the trend card's "View transactions" link, and by clicking a month bar on the Trends-tab monthly chart), and tag-signature listing (`TagDetail`, opened by clicking a wedge on a dashboard tag-report pie). All five share the same chrome.
 
 - **Shared behavior:** draggable + **resizable** shell, monthly bar charts, month selection, lazy-loaded transaction lists, and page-driven default placement when multiple panels are open. The resize handle in the bottom-right corner converts a docked panel to floating geometry on first drag so size and position stay coherent; the `useDetailPanelChrome` hook owns drag/resize state and `DetailPanelShell` renders the chrome.
 

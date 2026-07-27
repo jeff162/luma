@@ -6,7 +6,7 @@ import { Button } from './ui.jsx'
 
 /*
  * The "Copy the shown rows + toggle Bulk Edit" row that sits above a TransactionListTable on every
- * activity/drill surface — AccountDetail, CategoryDetail, MonthDetail, TagDetail, the payee
+ * activity/drill surface — AccountDetail, CategoryDetail, PeriodDetail, TagDetail, the payee
  * TransactionDetail, and the dashboard category drill. Pair it with a <BulkEditChrome controller={bulk}/>
  * rendered just below (kept separate so each host controls that chrome's own wrapper/padding).
  *
