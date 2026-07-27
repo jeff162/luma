@@ -94,46 +94,33 @@ const SMALLEST_NAMED_SLICE_MIN_SHARE = 0.03
 const OTHER_SLICE_KEY = '__other__'
 const OTHER_SLICE_COLOR = '#6b7280'
 
-// Build the per-signature buckets that drive the tag-report pie. Each transaction's
-// signature is the *sorted* set of selected tag ids it carries; transactions matching
-// no selected tags fall into an Other / Untagged bucket. The bucket key is stable
-// (sorted ids joined by `|`) so React keys don't churn.
-function computeTagSignatureRows(transactions, selectedTagIds, tagsById) {
-  const selectedSet = new Set(selectedTagIds)
-  const buckets = new Map()
-  for (const txn of transactions) {
-    const matched = (txn.tags || [])
-      .map(t => t.id)
-      .filter(id => selectedSet.has(id))
-      .sort()
-    const signatureKey = matched.length > 0 ? matched.join('|') : OTHER_SLICE_KEY
-    let bucket = buckets.get(signatureKey)
-    if (!bucket) {
-      const isOther = matched.length === 0
-      bucket = {
-        signature_id: signatureKey,
-        signature_tag_ids: matched,
-        signature_name: isOther
-          ? 'Other / Untagged'
-          : matched.map(id => tagsById.get(id)?.name || '?').join(' + '),
-        signature_color: isOther ? OTHER_SLICE_COLOR : null,
-        is_other: isOther,
-        total: 0,
-        count: 0,
-      }
-      buckets.set(signatureKey, bucket)
+// Turn the server's per-signature buckets (`[{ signature_tag_ids, total, count }]` from
+// /summary/by-tag-signature) into display rows: name each by its tags (Other / Untagged for the empty
+// signature), sink Other to the bottom and sort the rest by total desc, then assign palette colors. The
+// bucketing itself is done server-side so the report can't truncate on large periods — only naming,
+// coloring, and ordering stay on the client. The signature id (sorted ids joined by `|`) is a stable
+// React key.
+function buildTagSignatureRows(buckets, tagsById) {
+  const rows = (buckets || []).map(b => {
+    const ids = (b.signature_tag_ids || []).slice().sort()
+    const isOther = ids.length === 0
+    return {
+      signature_id: isOther ? OTHER_SLICE_KEY : ids.join('|'),
+      signature_tag_ids: ids,
+      signature_name: isOther
+        ? 'Other / Untagged'
+        : ids.map(id => tagsById.get(id)?.name || '?').join(' + '),
+      signature_color: isOther ? OTHER_SLICE_COLOR : null,
+      is_other: isOther,
+      total: Math.abs(Number(b.total) || 0),
+      count: Number(b.count) || 0,
     }
-    bucket.total += Math.abs(Number(txn.amount) || 0)
-    bucket.count += 1
-  }
-  // Real signatures sort by total desc; Other/Untagged always sinks to the bottom of
-  // the visible list so the pie reads as "named buckets first, leftover last".
-  const rows = Array.from(buckets.values()).sort((a, b) => {
+  })
+  rows.sort((a, b) => {
     if (a.is_other && !b.is_other) return 1
     if (b.is_other && !a.is_other) return -1
     return b.total - a.total
   })
-  // Assign palette colors to non-Other rows, preserving the OTHER_SLICE_COLOR for the Other row.
   let paletteIndex = 0
   for (const row of rows) {
     if (row.is_other) continue
@@ -1535,7 +1522,7 @@ export default function Dashboard() {
   const [dashboardView, setDashboardView] = useUserPreference(DASHBOARD_VIEW_PREF_KEY, 'spending')
   const { tags: availableTags } = useTags()
   const [tagBuilderOpen, setTagBuilderOpen] = useState(false)
-  const [tagModeTransactions, setTagModeTransactions] = useState([])
+  const [tagSignatureBuckets, setTagSignatureBuckets] = useState([])
   const [tagModeLoading, setTagModeLoading] = useState(false)
   const [detailTagSignatures, setDetailTagSignatures] = useState([])
   const [missingTagsToastReportId, setMissingTagsToastReportId] = useState(null)
@@ -1630,43 +1617,51 @@ export default function Dashboard() {
   // summaryFilters — the include *and* exclude_* facets), so it can't drift out of sync when a filter
   // dimension is added. Hand-listing only the include facets is what let a lone exclusion change (e.g.
   // negating or clearing a tag chip) leave the tag-report data stale.
+  // Derive the refetch key from the exact params the fetch sends — the report's own tags plus everything
+  // in summaryFilters (include *and* exclude_* facets) — so it can't drift out of sync when a filter
+  // dimension is added. Hand-listing only the include facets is what let a lone exclusion change (e.g.
+  // negating or clearing a tag chip) leave the tag-report data stale.
   const tagModeFetchKey = activeTagReport
     ? JSON.stringify({
-        id: activeTagReport.id, view: dashboardView, dateStart, dateEnd,
+        reportTags: (activeTagReport.tagIds || []).join(','),
+        view: dashboardView, dateStart, dateEnd,
         accountId, tagIds, ownerIds, ...summaryFilters,
       })
     : null
-  // The tag report's wedges are computed client-side from these rows, so an edit that changes a
-  // transaction's effective tags (recategorizing it into/out of a tagged category) only shows up
-  // once these are refetched. Extracted as a callback so both the scope-change effect below and the
-  // `luma:transactions-changed` handler can reload it — the same shape as loadSingleTotals.
-  const loadTagModeTransactions = useCallback(() => (
-    api.getTransactions({
-      ...(dateStart ? { date_start: dateStart } : {}),
-      ...(dateEnd ? { date_end: dateEnd } : {}),
-      ...(accountId ? { account_id: accountId } : {}),
-      ...(tagIds ? { tag_ids: tagIds } : {}),
-      ...(ownerIds ? { owner_ids: ownerIds } : {}),
-      ...summaryFilters,
-      view: dashboardView,
-      limit: 1000,
-    }).then(resp => resp?.transactions || [])
-  ), [dateStart, dateEnd, accountId, tagIds, ownerIds, summaryFilters, dashboardView])
+  // The tag report's pie is aggregated server-side (/summary/by-tag-signature) so it can't truncate on a
+  // large period the way the old client-side aggregation over a capped /transactions fetch did. The
+  // report's tags define the slices (selected_tag_ids); the shared filters narrow the rows. Extracted as
+  // a callback so both the scope-change effect and the `luma:transactions-changed` handler can reload it.
+  const loadTagSignatureBuckets = useCallback(() => (
+    api.getTagSignatureTotals(
+      (activeTagReport?.tagIds || []).join(','),
+      {
+        date_start: dateStart || undefined,
+        date_end: dateEnd || undefined,
+        account_id: accountId || undefined,
+        owner_ids: ownerIds,
+        tag_ids: tagIds,
+        exclude_income: !viewIsIncome,
+        exclude_expense: viewIsIncome,
+      },
+      summaryFilters,
+    ).then(resp => (Array.isArray(resp) ? resp : []))
+  ), [activeTagReport, dateStart, dateEnd, accountId, ownerIds, tagIds, viewIsIncome, summaryFilters])
   useEffect(() => {
     if (mode !== 'single' || !activeTagReport) {
-      setTagModeTransactions([])
+      setTagSignatureBuckets([])
       setTagModeLoading(false)
       return
     }
     let cancelled = false
     setTagModeLoading(true)
-    loadTagModeTransactions().then(txns => {
+    loadTagSignatureBuckets().then(buckets => {
       if (cancelled) return
-      setTagModeTransactions(txns)
+      setTagSignatureBuckets(buckets)
       setTagModeLoading(false)
     }).catch(() => {
       if (cancelled) return
-      setTagModeTransactions([])
+      setTagSignatureBuckets([])
       setTagModeLoading(false)
     })
     return () => { cancelled = true }
@@ -1674,8 +1669,8 @@ export default function Dashboard() {
   }, [mode, tagModeFetchKey])
 
   // Surface a one-shot toast when the active tag report references tag IDs that no longer
-  // exist (the user deleted a tag elsewhere). The renderer already silently ignores those
-  // IDs in computeTagSignatureRows, so the data displays correctly; the toast just
+  // exist (the user deleted a tag elsewhere). The server aggregation simply omits those
+  // IDs from the signatures, so the data displays correctly; the toast just
   // notifies the user that something changed so they can rebuild the report deliberately.
   // The user can dismiss for the session (auto-fade or X) or suppress permanently for this
   // preset via "Don't remind me again", which sets dismissedMissingWarning on the record.
@@ -1957,10 +1952,10 @@ export default function Dashboard() {
             .then(setCatRows)
         }
         // The tag report is a separate data path from the group/category totals above, so refresh its
-        // underlying rows too — otherwise recategorizing a transaction out of a tagged category (e.g.
-        // from the TagDetail panel) leaves the wedges stale.
+        // buckets too — otherwise recategorizing a transaction out of a tagged category (e.g. from the
+        // TagDetail panel) leaves the wedges stale.
         if (activeTagReport) {
-          loadTagModeTransactions().then(setTagModeTransactions).catch(() => {})
+          loadTagSignatureBuckets().then(setTagSignatureBuckets).catch(() => {})
         }
       } else if (mode === 'compare') {
         loadCompareTotals()
@@ -1977,7 +1972,7 @@ export default function Dashboard() {
     }
     window.addEventListener('luma:transactions-changed', onTxnChange)
     return () => window.removeEventListener('luma:transactions-changed', onTxnChange)
-  }, [mode, loadSingleTotals, loadCompareTotals, loadTrendSeries, loadTrendGroups, selectedGroup, cmpGroup, periodA, periodB, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeTagReport, loadTagModeTransactions])
+  }, [mode, loadSingleTotals, loadCompareTotals, loadTrendSeries, loadTrendGroups, selectedGroup, cmpGroup, periodA, periodB, accountId, dateStart, dateEnd, ownerIds, tagIds, summaryFilters, activeTagReport, loadTagSignatureBuckets])
 
   useEffect(() => {
     api.getCategories().then(setCategories)
@@ -2139,10 +2134,8 @@ export default function Dashboard() {
     return map
   }, [availableTags])
   const tagSignatureRows = useMemo(
-    () => activeTagReport
-      ? computeTagSignatureRows(tagModeTransactions, activeTagReport.tagIds || [], tagsById)
-      : [],
-    [activeTagReport, tagModeTransactions, tagsById],
+    () => activeTagReport ? buildTagSignatureRows(tagSignatureBuckets, tagsById) : [],
+    [activeTagReport, tagSignatureBuckets, tagsById],
   )
   const tagSignatureTotal = tagSignatureRows.reduce((s, r) => s + r.total, 0)
 

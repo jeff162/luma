@@ -182,6 +182,22 @@ export const api = {
     }
     return request(`/transactions/summary/by-category?${new URLSearchParams(p)}`)
   },
+  // Tag-report pie: server-side per-tag-signature buckets. `selected_tag_ids` are the report's tags
+  // (they define the slices); `filters`/opts narrow the rows exactly like the other summary calls.
+  getTagSignatureTotals: (selected_tag_ids, { date_start, date_end, account_id, owner_ids, tag_ids, exclude_income, exclude_expense } = {}, opts = {}) => {
+    const p = {
+      selected_tag_ids: selected_tag_ids || '',
+      ...(date_start ? { date_start } : {}),
+      ...(date_end   ? { date_end }   : {}),
+      ...(account_id ? { account_id } : {}),
+      ...csvParam('owner_ids', owner_ids),
+      ...csvParam('tag_ids', tag_ids),
+      ...(exclude_income ? { exclude_income: 'true' } : {}),
+      ...(exclude_expense ? { exclude_expense: 'true' } : {}),
+      ...summaryFilterParams(opts),
+    }
+    return request(`/transactions/summary/by-tag-signature?${new URLSearchParams(p)}`)
+  },
   getMonthlyByGroup: (months = 24, account_id, group_id, tag_ids, owner_ids, opts = {}) => {
     const q = new URLSearchParams({
       months,

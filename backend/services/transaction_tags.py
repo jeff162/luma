@@ -43,34 +43,54 @@ _EFFECTIVE_ACCOUNT_ID_SQL = "COALESCE((SELECT parent_account_id FROM account WHE
 # Uncategorized ids and the owner filter recognizes 'unassigned'.
 UNTAGGED_FILTER_ID = "__untagged__"
 
-# A transaction's *effective* tags: unioned across the four paths a tag reaches a row — direct (a
+# A transaction's *effective* tags, unioned across the four paths a tag reaches a row — direct (a
 # visible `txn_tag`), inherited from its leaf category, that category's parent group, or its effective
-# (top-level) account. `{extra}` is spliced into the eff WHERE so callers can add a tag-set restriction;
-# the block filter (a tag hidden on the row via `manual_state = -1` does not count) is always applied.
+# (top-level) account. Correlates on the outer `t`; every effective-tag helper builds on this one union.
+_EFFECTIVE_TAG_UNION_SQL = f"""
+    SELECT tt.tag_id AS tag_id
+    FROM txn_tag tt
+    WHERE tt.txn_id = t.id AND {VISIBLE_TXN_TAG_SQL}
+    UNION
+    SELECT ct.tag_id
+    FROM category_tag ct
+    JOIN category cc ON cc.id = t.category_id
+    WHERE ct.category_id = cc.id OR ct.category_id = cc.parent_id
+    UNION
+    SELECT atag.tag_id
+    FROM account_tag atag
+    WHERE atag.account_id = {_EFFECTIVE_ACCOUNT_ID_SQL}
+"""
+
+# A tag counts for a row only if not hidden on it (`manual_state = -1`). `eff.tag_id` refers to the
+# union alias above.
+_TAG_NOT_BLOCKED_SQL = (
+    "NOT EXISTS (SELECT 1 FROM txn_tag b "
+    "WHERE b.txn_id = t.id AND b.tag_id = eff.tag_id AND b.manual_state = -1)"
+)
+
+
+# `{extra}` is spliced into the eff WHERE so callers can add a tag-set restriction; the block filter is
+# always applied.
 def _effective_tag_exists_sql(extra: str = "") -> str:
-    return f"""
-        EXISTS (
-            SELECT 1
-            FROM (
-                SELECT tt.tag_id AS tag_id
-                FROM txn_tag tt
-                WHERE tt.txn_id = t.id AND {VISIBLE_TXN_TAG_SQL}
-                UNION
-                SELECT ct.tag_id
-                FROM category_tag ct
-                JOIN category cc ON cc.id = t.category_id
-                WHERE ct.category_id = cc.id OR ct.category_id = cc.parent_id
-                UNION
-                SELECT atag.tag_id
-                FROM account_tag atag
-                WHERE atag.account_id = {_EFFECTIVE_ACCOUNT_ID_SQL}
-            ) eff
-            WHERE {extra}NOT EXISTS (
-                  SELECT 1 FROM txn_tag b
-                  WHERE b.txn_id = t.id AND b.tag_id = eff.tag_id AND b.manual_state = -1
-              )
+    return f"EXISTS (SELECT 1 FROM ({_EFFECTIVE_TAG_UNION_SQL}) eff WHERE {extra}{_TAG_NOT_BLOCKED_SQL})"
+
+
+def effective_selected_tag_signature_sql(placeholder_count: int) -> str:
+    """A scalar subquery yielding a transaction's *tag signature*: the sorted, comma-joined ids of the
+    selected tags (supplied as `placeholder_count` `?` params) it *effectively* has (block-aware), or
+    NULL when it has none of them. Drives the server-side tag-report aggregation — grouping rows by this
+    value buckets them by which of the report's tags they carry, exactly as the client used to do over a
+    capped fetch. Callers must canonicalize (sort) the ids again when splitting, since SQLite does not
+    formally guarantee GROUP_CONCAT ordering."""
+    placeholders = ",".join("?" * placeholder_count)
+    return f"""(
+        SELECT GROUP_CONCAT(tag_id) FROM (
+            SELECT DISTINCT eff.tag_id AS tag_id
+            FROM ({_EFFECTIVE_TAG_UNION_SQL}) eff
+            WHERE eff.tag_id IN ({placeholders}) AND {_TAG_NOT_BLOCKED_SQL}
+            ORDER BY eff.tag_id
         )
-    """
+    )"""
 
 
 def effective_tag_match_sql(placeholder_count: int) -> str:
@@ -87,6 +107,20 @@ def effective_tag_any_sql() -> str:
     """True when the transaction has ANY effective tag (block-aware). Its negation `NOT (...)` is the
     'Untagged' bucket — a row with no direct or inherited tag at all."""
     return _effective_tag_exists_sql()
+
+
+def effective_tag_match_all_sql(placeholder_count: int) -> str:
+    """A SQL boolean true when the txn *effectively* has **all** of the tag ids (AND), unlike
+    `effective_tag_match_sql`'s any-of (OR). Counts its distinct matched effective tags and requires the
+    count to equal the number requested. Lets a caller compose two independent tag constraints in one
+    query (the OR `tag_ids` param and this one) — e.g. the tag-report drill scopes rows to an exact
+    signature (has-all these tags, none of the others) while the app-wide filter's own OR tag_ids still
+    applies. `placeholder_count` must be > 0."""
+    placeholders = ",".join("?" * placeholder_count)
+    return (
+        f"(SELECT COUNT(DISTINCT eff.tag_id) FROM ({_EFFECTIVE_TAG_UNION_SQL}) eff "
+        f"WHERE eff.tag_id IN ({placeholders}) AND {_TAG_NOT_BLOCKED_SQL}) = {placeholder_count}"
+    )
 
 
 def tag_filter_membership_sql(ids: list[str]) -> tuple[str, list] | None:

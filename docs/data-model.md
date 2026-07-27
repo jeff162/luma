@@ -199,6 +199,13 @@ Reporting should not assume every transaction inside an expense or income branch
 
 - summaries and detail reports should include all matching transactions for the selected slice instead of filtering out the "unexpected" side
 
+- **Totals and breakdowns must be aggregated server-side, never by summing a capped transaction fetch on the client.** The `/transactions` list is paginated (a `limit`), so any client that fetches it and then sums/counts to show a total will silently undercount once the result set exceeds the cap. The dashboard's group and category pies go through `/summary/by-*`; the **tag report** does too (`/summary/by-tag-signature`, which buckets by tag *signature* — the set of the report's selected tags a row effectively carries — with the same `ABS(SUM(amount))` and spending/income scope as `by-category`, so all three "Spending by" modes reconcile to one total). The ways a total legitimately reaches a client:
+  - the **`/summary/*`** endpoints (a pre-aggregated total/count per bucket) — the pies, and the tag-report slice rows (each carries its bucket `total`/`count`, which `TagDetail`'s header shows verbatim);
+  - **`range.total`/`range.count`** from the monthly-trend aggregation via `computeDetailRange` — `CategoryDetail` and `AccountDetail` window totals;
+  - the list response's **`total` (count) and `sum_amount` (signed net over the whole filtered set)** — for a panel that shows a header total beside a capped list, e.g. `MonthDetail`. `sum_amount` exists precisely so the header need not sum the page.
+
+  A new surface that needs a total uses one of these, never a client `reduce` over the fetched rows.
+
 ### Filter exclusion ("is not")
 
 The shared transaction filter (`FilterBar` → the list feed, the bulk "select all matching" resolver,
@@ -233,7 +240,13 @@ params).
   have some tag." Real ids and the Untagged bucket OR together within the facet (`tag_filter_membership_sql`).
   **One definition** (that builder) feeds the list, the summaries, and CSV export — the export previously
   matched direct tags only (a latent bug that silently omitted inherited rows for both include and
-  exclude), now corrected by routing it through the same builder.
+  exclude), now corrected by routing it through the same builder. Separately, the `/transactions` list
+  accepts **`require_all_tag_ids`** — an *AND* constraint ("has **all** of these", `effective_tag_match_all_sql`,
+  count-distinct = n), **independent** of the OR `tag_ids`, so both can apply in one query. It is an
+  internal primitive (not surfaced in the app-wide `FilterBar`, which stays OR): the tag-report drill
+  (`TagDetail`) uses it to scope rows to an *exact* signature — has-all the signature's tags,
+  `exclude_tag_ids` none of the report's others — server-side, while the active filter's own OR `tag_ids`
+  still applies on top. A general "tagged with both X and Y" filter could build on it later.
 - The frontend carries the mode on each selection (`mode: 'include' | 'exclude'`, default include) and
   **must split selections by both type and mode**; feeding an exclude selection into an include param
   would invert its meaning. See `ui-patterns.md` → the include/exclude facet pattern.

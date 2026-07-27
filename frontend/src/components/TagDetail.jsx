@@ -85,29 +85,25 @@ export default function TagDetail({
   useEffect(() => {
     let cancelled = false
     setLoading(true)
+    // Scope the fetch to the exact signature entirely server-side: it must have *all* the signature's
+    // tags (require_all_tag_ids, AND) and *none* of the report's other tags (exclude_tag_ids). For the
+    // "Other" slice (no signature tags) that reduces to "none of the report's tags." Because require_all
+    // is independent of the OR `tag_ids`, the active filter's own tag_ids still applies on top. This
+    // returns exactly the slice's rows — no client-side match pass, and no truncation of a sparse slice.
+    const otherReportTags = (reportTagIds || []).filter(id => !signatureTagIds.includes(id))
     const params = {
       ...(dateStart ? { date_start: dateStart } : {}),
       ...(dateEnd ? { date_end: dateEnd } : {}),
       ...(accountId ? { account_id: accountId } : {}),
       ...(filterTagIds ? { tag_ids: filterTagIds } : {}),
+      ...(signatureTagIds.length ? { require_all_tag_ids: signatureTagIds.join(',') } : {}),
+      ...(otherReportTags.length ? { exclude_tag_ids: otherReportTags.join(',') } : {}),
       ...(view ? { view } : {}),
       limit: 1000,
     }
     api.getTransactions(params).then(resp => {
       if (cancelled) return
-      const reportSet = new Set(reportTagIds || [])
-      const targetSet = new Set(signatureTagIds)
-      const matching = (resp?.transactions || []).filter(txn => {
-        const matched = (txn.tags || [])
-          .map(t => t.id)
-          .filter(id => reportSet.has(id))
-        if (matched.length !== targetSet.size) return false
-        for (const id of matched) {
-          if (!targetSet.has(id)) return false
-        }
-        return true
-      })
-      setTransactions(matching)
+      setTransactions(resp?.transactions || [])
       setLoading(false)
     }).catch(() => {
       if (cancelled) return
@@ -118,14 +114,18 @@ export default function TagDetail({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signatureKey, reportTagsKey, view, accountId, dateStart, dateEnd, filterTagIds])
 
-  const total = transactions.reduce((s, t) => s + Math.abs(Number(t.amount) || 0), 0)
+  // Count and total are the authoritative server bucket values for this slice (from the tag-report
+  // aggregation), not a sum of the displayed rows — so the header matches the pie exactly and can't be
+  // undercounted by the list's page cap.
+  const headerCount = Number(signature?.count) || 0
+  const total = Math.abs(Number(signature?.total) || 0)
   const headerLabel = signature?.signature_name || 'Tag signature'
 
   const header = (
     <>
       <div style={{ fontSize: 17, fontWeight: 600, lineHeight: 1.35 }}>{headerLabel}</div>
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
-        {reportName ? `${reportName} · ` : ''}{transactions.length} transaction{transactions.length !== 1 ? 's' : ''} · {formatCurrency(total)}
+        {reportName ? `${reportName} · ` : ''}{headerCount} transaction{headerCount !== 1 ? 's' : ''} · {formatCurrency(total)}
       </div>
     </>
   )

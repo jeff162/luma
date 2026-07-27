@@ -20,6 +20,8 @@ import re
 from backend.db.database import get_db
 from backend.services.transaction_tags import (
     tag_filter_membership_sql,
+    effective_selected_tag_signature_sql,
+    effective_tag_match_all_sql,
     get_blocked_transaction_tag_map,
     get_visible_transaction_tag_map,
     list_visible_transaction_tags,
@@ -280,10 +282,15 @@ def _append_source_account_filter(clauses, params, *, source_account_ids: Option
             params.extend(ids)
 
 
-def _append_tag_filter(clauses, params, *, tag_ids: Optional[str], exclude_tag_ids: Optional[str] = None):
+def _append_tag_filter(
+    clauses, params, *, tag_ids: Optional[str], exclude_tag_ids: Optional[str] = None,
+    require_all_tag_ids: Optional[str] = None,
+):
     # Membership ("has this tag", effective + block-aware, plus the synthetic Untagged bucket) is defined
     # once in tag_filter_membership_sql so list/summaries/export all agree. Exclusion negates the same
     # expression: EXISTS is null-free, so plain NOT(...) is the exact negation (no COALESCE guard).
+    # `require_all_tag_ids` is a *separate* AND constraint (has all of these), independent of the OR
+    # `tag_ids`, so a caller can apply both at once — see effective_tag_match_all_sql.
     if tag_ids and isinstance(tag_ids, str):
         membership = tag_filter_membership_sql([i.strip() for i in tag_ids.split(",") if i.strip()])
         if membership:
@@ -294,6 +301,11 @@ def _append_tag_filter(clauses, params, *, tag_ids: Optional[str], exclude_tag_i
         if membership:
             clauses.append(f"NOT ({membership[0]})")
             params.extend(membership[1])
+    if require_all_tag_ids and isinstance(require_all_tag_ids, str):
+        ids = [i.strip() for i in require_all_tag_ids.split(",") if i.strip()]
+        if ids:
+            clauses.append(effective_tag_match_all_sql(len(ids)))
+            params.extend(ids)
 
 
 def _owner_membership(ids: list[str]) -> tuple[str, list]:
@@ -602,7 +614,7 @@ def _build_transaction_filter(
     account_id=None, account_ids=None, source_account_ids=None, category_id=None, group_ids=None,
     category_ids=None, tag_ids=None, owner_ids=None, payees=None,
     exclude_account_ids=None, exclude_group_ids=None, exclude_category_ids=None,
-    exclude_owner_ids=None, exclude_payees=None, exclude_tag_ids=None,
+    exclude_owner_ids=None, exclude_payees=None, exclude_tag_ids=None, require_all_tag_ids=None,
     direction=None, view=None, search=None, quick_filter=None, ids=None,
     needs_review=None, include_trashed=False, recurring_series_id=None,
     recurring_excluded_series_id=None, account_type=None, import_evidence_type=None,
@@ -706,7 +718,8 @@ def _build_transaction_filter(
     _append_category_ids_filter(
         clauses, params, category_ids=category_ids, exclude_category_ids=exclude_category_ids,
     )
-    _append_tag_filter(clauses, params, tag_ids=tag_ids, exclude_tag_ids=exclude_tag_ids)
+    _append_tag_filter(clauses, params, tag_ids=tag_ids, exclude_tag_ids=exclude_tag_ids,
+                       require_all_tag_ids=require_all_tag_ids)
     _append_payee_filter(clauses, params, payees=payees, exclude_payees=exclude_payees)
     _append_owner_filter(clauses, params, owner_ids=owner_ids, exclude_owner_ids=exclude_owner_ids)
     if direction == "debit":
@@ -771,6 +784,7 @@ def list_transactions(
     exclude_owner_ids:    Optional[str] = Query(None, description="comma-separated owner IDs to exclude ('is not')"),
     exclude_payees:       Optional[str] = Query(None, description="pipe-separated payee names to exclude ('is not')"),
     exclude_tag_ids:      Optional[str] = Query(None, description="comma-separated tag IDs to exclude ('is not')"),
+    require_all_tag_ids:  Optional[str] = Query(None, description="comma-separated tag IDs the row must ALL have (AND), independent of tag_ids"),
     direction:    Optional[str] = Query(None, description="debit | credit"),
     view:         Optional[str] = Query(None, description="spending | income — mirrors monthly-trend's category-type scope filter"),
     search:       Optional[str] = Query(None),
@@ -798,6 +812,7 @@ def list_transactions(
         exclude_account_ids=exclude_account_ids, exclude_group_ids=exclude_group_ids,
         exclude_category_ids=exclude_category_ids, exclude_owner_ids=exclude_owner_ids,
         exclude_payees=exclude_payees, exclude_tag_ids=exclude_tag_ids,
+        require_all_tag_ids=require_all_tag_ids,
         direction=direction, view=view, search=search, quick_filter=quick_filter, ids=ids,
         needs_review=needs_review, include_trashed=include_trashed, recurring_series_id=recurring_series_id,
         recurring_excluded_series_id=recurring_excluded_series_id,
@@ -817,9 +832,12 @@ def list_transactions(
     order_by = ", ".join(order_by_parts)
 
     with get_db() as conn:
-        total = conn.execute(
+        # Count *and* signed net sum over the whole filtered set, not just the returned page — so a
+        # caller can show a correct total/count for a scope larger than the page limit instead of
+        # summing the capped `transactions` client-side (which silently undercounts past the limit).
+        agg = conn.execute(
             f"""
-            SELECT COUNT(*)
+            SELECT COUNT(*) AS count, COALESCE(SUM(t.amount), 0) AS sum_amount
             FROM txn t
             JOIN account a ON a.id = t.account_id
             LEFT JOIN account p ON p.id = a.parent_account_id
@@ -828,7 +846,9 @@ def list_transactions(
             {where}
             """,
             params
-        ).fetchone()[0]
+        ).fetchone()
+        total = agg["count"]
+        sum_amount = agg["sum_amount"]
 
         rows = conn.execute(
             f"""
@@ -893,6 +913,7 @@ def list_transactions(
 
     return {
         "total": total,
+        "sum_amount": sum_amount,
         "limit": limit,
         "offset": offset,
         "transactions": transactions,
@@ -1133,7 +1154,7 @@ _BULK_FILTER_KEYS = {
     "month", "date_start", "date_end", "import_batch_id", "account_id", "account_ids",
     "source_account_ids", "category_id", "group_ids", "category_ids", "tag_ids", "owner_ids",
     "payees", "exclude_account_ids", "exclude_group_ids", "exclude_category_ids",
-    "exclude_owner_ids", "exclude_payees", "exclude_tag_ids",
+    "exclude_owner_ids", "exclude_payees", "exclude_tag_ids", "require_all_tag_ids",
     "direction", "view", "search", "quick_filter",
 }
 
@@ -1481,6 +1502,101 @@ def spending_by_category(
 
     return [dict(r) for r in rows]
 
+
+@router.get("/summary/by-tag-signature")
+def spending_by_tag_signature(
+    selected_tag_ids:   str           = Query("", description="comma-separated tag IDs the report is built from"),
+    month:              Optional[str] = Query(None, description="YYYY-MM"),
+    date_start:         Optional[str] = Query(None),
+    date_end:           Optional[str] = Query(None),
+    account_id:         Optional[str] = Query(None),
+    account_ids:        Optional[str] = Query(None),
+    tag_ids:            Optional[str] = Query(None),
+    owner_ids:          Optional[str] = Query(None, description="comma-separated owner IDs"),
+    category_ids:       Optional[str] = Query(None, description="comma-separated leaf category IDs"),
+    group_ids:          Optional[str] = Query(None, description="comma-separated top-level group IDs"),
+    payees:             Optional[str] = Query(None, description="pipe-separated payee names"),
+    exclude_account_ids:  Optional[str] = Query(None, description="account IDs to exclude ('is not')"),
+    exclude_group_ids:    Optional[str] = Query(None, description="group IDs to exclude ('is not')"),
+    exclude_category_ids: Optional[str] = Query(None, description="category IDs to exclude ('is not')"),
+    exclude_owner_ids:    Optional[str] = Query(None, description="owner IDs to exclude ('is not')"),
+    exclude_payees:       Optional[str] = Query(None, description="payee names to exclude ('is not')"),
+    exclude_tag_ids:      Optional[str] = Query(None, description="tag IDs to exclude ('is not')"),
+    exclude_income:     bool          = Query(False, description="omit income categories from results"),
+    exclude_expense:    bool          = Query(False, description="omit expense categories from results"),
+):
+    # The tag report's pie: buckets the scoped spending by *tag signature* — which of the report's
+    # selected tags each transaction effectively carries — entirely in SQL. This replaces a client-side
+    # aggregation over a /transactions fetch capped at 1000 rows, which silently truncated (and thus
+    # undercounted every slice) on any period with more transactions than the cap. Scope mirrors
+    # spending_by_category exactly (is_pending / trashed / exclude_from_totals + exclude_income/expense +
+    # the shared facet filters incl. exclusions) so all three "Spending by" modes reconcile to one total.
+    sel_ids = [i.strip() for i in selected_tag_ids.split(",") if i.strip()]
+    clauses = ["t.is_pending = 0", "t.trashed_at IS NULL",
+               "COALESCE(p.exclude_from_totals, c.exclude_from_totals, 0) = 0"]
+    params: list = []
+    if date_start and date_end:
+        clauses.append("t.date BETWEEN ? AND ?"); params.extend([date_start, date_end])
+    elif date_start:
+        clauses.append("t.date >= ?"); params.append(date_start)
+    elif date_end:
+        clauses.append("t.date <= ?"); params.append(date_end)
+    elif month:
+        clauses.append("t.date LIKE ?"); params.append(f"{month}%")
+
+    _append_effective_account_filter(
+        clauses, params, account_id=account_id, account_ids=account_ids,
+        exclude_account_ids=exclude_account_ids,
+    )
+    _append_tag_filter(clauses, params, tag_ids=tag_ids, exclude_tag_ids=exclude_tag_ids)
+    _append_owner_filter(clauses, params, owner_ids=owner_ids, exclude_owner_ids=exclude_owner_ids)
+    _append_group_filter(clauses, params, group_ids=group_ids, exclude_group_ids=exclude_group_ids)
+    _append_category_ids_filter(clauses, params, category_ids=category_ids, exclude_category_ids=exclude_category_ids)
+    _append_payee_filter(clauses, params, payees=payees, exclude_payees=exclude_payees)
+    if exclude_income:
+        clauses.append("((t.category_id IS NULL AND t.amount > 0) OR "
+                       "COALESCE(c.category_type, p.category_type) != 'income')")
+    if exclude_expense:
+        clauses.append("((t.category_id IS NULL AND t.amount < 0) OR "
+                       "COALESCE(c.category_type, p.category_type) != 'expense')")
+
+    # The signature subquery sits in the inner SELECT, so its placeholders (the selected tag ids) precede
+    # the WHERE-clause params. When nothing is selected, every row's signature is the Other bucket.
+    sig_sql = effective_selected_tag_signature_sql(len(sel_ids)) if sel_ids else "NULL"
+    where = "WHERE " + " AND ".join(clauses)
+    query_params = sel_ids + params
+
+    with get_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT sig, SUM(net) AS net, COUNT(*) AS count FROM (
+                SELECT {sig_sql} AS sig, t.amount AS net
+                FROM   txn t
+                LEFT JOIN category c ON c.id = t.category_id
+                LEFT JOIN category p ON p.id = c.parent_id
+                {where}
+            ) q
+            GROUP BY sig
+            """,
+            query_params,
+        ).fetchall()
+
+    # Re-key by the canonical (sorted) signature — defensive against any GROUP_CONCAT ordering variance —
+    # and take ABS of each bucket's net sum, matching spending_by_category's ABS(SUM). An empty signature
+    # is the Other / Untagged bucket. Naming, coloring, and sort order stay on the client.
+    merged: dict[tuple, dict] = {}
+    for r in rows:
+        ids = tuple(sorted(r["sig"].split(","))) if r["sig"] else ()
+        bucket = merged.get(ids)
+        if bucket is None:
+            bucket = {"signature_tag_ids": list(ids), "net": 0.0, "count": 0}
+            merged[ids] = bucket
+        bucket["net"] += float(r["net"] or 0)
+        bucket["count"] += int(r["count"] or 0)
+    return [
+        {"signature_tag_ids": b["signature_tag_ids"], "total": abs(b["net"]), "count": b["count"]}
+        for b in merged.values()
+    ]
 
 
 @router.get("/summary/by-group")

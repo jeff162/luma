@@ -43,6 +43,9 @@ export default function MonthDetail({
   const { pos, size, panelRef, onDragStart, onResizeStart } = useDetailPanelChrome(onClose, { forceFloating, stackIndex })
   const [transactions, setTransactions] = useState([])
   const [txnTotal, setTxnTotal] = useState(0)
+  // Signed net sum over the whole filtered month, from the server — the header total must not be summed
+  // from the (page-capped) `transactions`, which undercounts once a month exceeds the fetch limit.
+  const [txnSum, setTxnSum] = useState(0)
   const [loading, setLoading] = useState(true)
   // Hold the panel invisible until its geometry settles, so it fades in fully formed rather than
   // visibly growing as its content lands (see usePanelReveal).
@@ -78,6 +81,7 @@ export default function MonthDetail({
       if (cancelled) return
       setTransactions(resp.transactions || [])
       setTxnTotal(Number(resp.total || 0))
+      setTxnSum(Number(resp.sum_amount || 0))
       setLoading(false)
     }).catch(() => {
       if (cancelled) return
@@ -96,10 +100,10 @@ export default function MonthDetail({
   }
 
   const viewLabel = view === 'income' ? 'Income' : 'Spending'
-  const total = transactions.reduce((s, t) => {
-    const amount = Number(t.amount) || 0
-    return s + (view === 'income' ? -amount : amount)
-  }, 0)
+  // Count and total come from the server aggregate over the whole month, not the page-capped rows, so
+  // they stay correct when the month has more transactions than the fetch limit. Income sums are stored
+  // negative, so flip the sign to show a positive magnitude.
+  const total = view === 'income' ? -txnSum : txnSum
 
   const header = (
     <>
@@ -107,7 +111,7 @@ export default function MonthDetail({
         {monthLabel(month)} · {viewLabel}
       </div>
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
-        {transactions.length} transaction{transactions.length !== 1 ? 's' : ''} · {formatCurrency(total)}
+        {txnTotal} transaction{txnTotal !== 1 ? 's' : ''} · {formatCurrency(total)}
       </div>
     </>
   )

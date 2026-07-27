@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
-from backend.routers.transactions import _build_transaction_filter
+from backend.routers.transactions import _build_transaction_filter, list_transactions
 
 
 class FilterExclusionTests(unittest.TestCase):
@@ -203,6 +203,31 @@ class FilterExclusionTests(unittest.TestCase):
         self.assertEqual(self._matching_keys(tag_ids=biz), set())
         self.assertEqual(self._matching_keys(exclude_tag_ids=biz), {"groc", "dining", "uncat"})
 
+    def test_require_all_tags_needs_every_tag(self):
+        biz = self._insert_tag("Business")
+        trav = self._insert_tag("Travel")
+        self._attach_txn_tag("groc", biz, manual_state=1)
+        self._attach_txn_tag("groc", trav, manual_state=1)   # groc has both
+        self._attach_txn_tag("dining", biz, manual_state=1)  # dining has only Business
+        self.assertEqual(self._matching_keys(require_all_tag_ids=f"{biz},{trav}"), {"groc"})
+        # A single required tag behaves like plain has-that-tag.
+        self.assertEqual(self._matching_keys(require_all_tag_ids=biz), {"groc", "dining"})
+
+    def test_require_all_is_independent_of_or_tag_ids(self):
+        # require_all (AND) and tag_ids (OR) compose: has BOTH biz+trav, AND has any of {other}.
+        biz = self._insert_tag("Business")
+        trav = self._insert_tag("Travel")
+        other = self._insert_tag("Other")
+        self._attach_txn_tag("groc", biz, manual_state=1)
+        self._attach_txn_tag("groc", trav, manual_state=1)
+        self._attach_txn_tag("groc", other, manual_state=1)   # groc: biz+trav+other
+        self._attach_txn_tag("dining", biz, manual_state=1)
+        self._attach_txn_tag("dining", trav, manual_state=1)  # dining: biz+trav (no other)
+        self.assertEqual(
+            self._matching_keys(require_all_tag_ids=f"{biz},{trav}", tag_ids=other),
+            {"groc"},
+        )
+
     def test_exclude_tag_emits_not_exists(self):
         biz = self._insert_tag("Business")
         clauses, _ = _build_transaction_filter(exclude_tag_ids=biz)
@@ -240,6 +265,26 @@ class FilterExclusionTests(unittest.TestCase):
         biz = self._insert_tag("Business")
         self._attach_txn_tag("dining", biz, manual_state=1)
         self.assertEqual(self._matching_keys(exclude_tag_ids=UNTAGGED_FILTER_ID), {"dining"})
+
+    def test_list_sum_amount_covers_full_set_not_just_page(self):
+        # The list response's sum_amount/total must aggregate the whole filtered set, not the returned
+        # page — this is what lets a capped detail panel show a correct header without summing rows.
+        with self._use_db_path():
+            resp = list_transactions(
+                month=None, date_start=None, date_end=None, import_batch_id=None,
+                sort_by="date", sort_dir="desc",
+                account_id=None, account_ids=None, source_account_ids=None, category_id=None,
+                group_ids=None, category_ids=None, tag_ids=None, owner_ids=None, payees=None,
+                exclude_account_ids=None, exclude_group_ids=None, exclude_category_ids=None,
+                exclude_owner_ids=None, exclude_payees=None, exclude_tag_ids=None,
+                direction=None, view=None, search=None, quick_filter=None, ids=None,
+                recurring_series_id=None, recurring_excluded_series_id=None,
+                account_type=None, import_evidence_type=None,
+                needs_review=False, include_trashed=False, limit=1, offset=0,
+            )
+        self.assertEqual(len(resp["transactions"]), 1)       # page is capped…
+        self.assertEqual(resp["total"], 3)                   # …but count is the full set
+        self.assertEqual(resp["sum_amount"], 100.0)          # …and so is the sum (50 + 30 + 20)
 
     def test_untagged_ors_with_real_tag(self):
         from backend.services.transaction_tags import UNTAGGED_FILTER_ID
