@@ -32,6 +32,7 @@ import CopyTransactionsButton from '../components/CopyTransactionsButton.jsx'
 import TransactionListToolbar from '../components/TransactionListToolbar.jsx'
 import { useBulkTransactionEditing, BulkEditChrome } from '../lib/useBulkTransactionEditing.jsx'
 import { useTransactionTableLayout } from '../lib/transactionTablePreferences.js'
+import { usePagedTransactions } from '../components/detailShared.jsx'
 import { useUserPreference, useDeferredPreference } from '../lib/UserPreferencesContext.jsx'
 import { useTags } from '../lib/useTags.js'
 
@@ -1695,10 +1696,6 @@ export default function Dashboard() {
     setMissingTagsToastReportId(hasMissing ? activeTagReport.id : null)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTagReport?.id, activeTagReport?.dismissedMissingWarning, availableTags])
-  const [txnData, setTxnData]     = useState([])
-  const [txnDataTotal, setTxnDataTotal] = useState(0)
-  const [groupTxnData, setGroupTxnData] = useState([])
-  const [groupTxnDataTotal, setGroupTxnDataTotal] = useState(0)
   const [detailTxns, setDetailTxns]     = useState([])
   const [detailPeriods, setDetailPeriods] = useState([])
   const [categories, setCategories]     = useState([])
@@ -1721,42 +1718,71 @@ export default function Dashboard() {
   const [selectedGroup, setSelectedGroup] = useState(null)
   const [selectedCat,   setSelectedCat]   = useState(null)
 
-  // Bulk edit for the two single-period drill tables. The filter params mirror the drill fetches exactly
-  // (category/group + the active date/account/owner/tag scope) so "select all matching" resolves the same
-  // rows server-side, including any past the loaded cap; rows reconcile in place.
+  // The two single-period drill transaction lists page through the shared usePagedTransactions with
+  // server-side sort — same as the floating detail panels — so drilling a busy group/category over a long
+  // range isn't truncated at a fetch cap and column sort reorders the whole result. Each is keyed on the
+  // drill selection: it fetches when a group/category is selected and clears when the user navigates back
+  // up. The bulk-edit filterParams (below) mirror these fetch params so "select all matching" resolves the
+  // same rows server-side. dateStart/dateEnd are the resolved global-filter range (matching the params).
+  const selectedGroupFilterParams = useMemo(() => ({
+    ...summaryFilters,
+    date_start: dateStart || undefined,
+    date_end: dateEnd || undefined,
+    group_ids: selectedGroup?.group_id,
+    account_id: accountId || undefined,
+    tag_ids: tagIds,
+    owner_ids: ownerIds,
+  }), [summaryFilters, dateStart, dateEnd, selectedGroup, accountId, tagIds, ownerIds])
+  const selectedGroupLoadPage = useCallback((offset, limit, sort) => (
+    api.getTransactions({ ...selectedGroupFilterParams, limit, offset, sort_by: sort.key, sort_dir: sort.dir })
+  ), [selectedGroupFilterParams])
+  const groupTxnPaged = usePagedTransactions({
+    activeKey: selectedGroup ? JSON.stringify(selectedGroupFilterParams) : null,
+    loadPage: selectedGroupLoadPage,
+  })
+  const groupTxnData = groupTxnPaged.rows
+  const setGroupTxnData = groupTxnPaged.setRows
+  const groupTxnDataTotal = groupTxnPaged.total
+
+  const selectedCatFilterParams = useMemo(() => ({
+    ...summaryFilters,
+    date_start: dateStart || undefined,
+    date_end: dateEnd || undefined,
+    category_id: selectedCat?.category_id,
+    account_id: accountId || undefined,
+    tag_ids: tagIds,
+    owner_ids: ownerIds,
+  }), [summaryFilters, dateStart, dateEnd, selectedCat, accountId, tagIds, ownerIds])
+  const selectedCatLoadPage = useCallback((offset, limit, sort) => (
+    api.getTransactions({ ...selectedCatFilterParams, limit, offset, sort_by: sort.key, sort_dir: sort.dir })
+  ), [selectedCatFilterParams])
+  const catTxnPaged = usePagedTransactions({
+    activeKey: selectedCat ? JSON.stringify(selectedCatFilterParams) : null,
+    loadPage: selectedCatLoadPage,
+  })
+  const txnData = catTxnPaged.rows
+  const setTxnData = catTxnPaged.setRows
+  const txnDataTotal = catTxnPaged.total
+
+  // Bulk edit for the two single-period drill tables. filterParams mirror the paged fetch above so
+  // "select all matching" resolves the same rows server-side; rows reconcile in place.
   const selectedCatBulk = useBulkTransactionEditing({
     rows: txnData,
     setRows: setTxnData,
     total: txnDataTotal,
-    filterParams: {
-      ...summaryFilters,
-      date_start: dateStart || undefined,
-      date_end: dateEnd || undefined,
-      category_id: selectedCat?.category_id,
-      account_id: accountId || undefined,
-      tag_ids: tagIds,
-      owner_ids: ownerIds,
-    },
+    filterParams: selectedCatFilterParams,
     categories,
     availableTags,
-    onRowsTrashed: count => setTxnDataTotal(prev => Math.max(0, prev - count)),
+    onRowsTrashed: count => catTxnPaged.setTotal(prev => Math.max(0, prev - count)),
   })
   const selectedGroupBulk = useBulkTransactionEditing({
     rows: groupTxnData,
     setRows: setGroupTxnData,
     total: groupTxnDataTotal,
-    filterParams: {
-      ...summaryFilters,
-      date_start: dateStart || undefined,
-      date_end: dateEnd || undefined,
-      group_ids: selectedGroup?.group_id,
-      account_id: accountId || undefined,
-      tag_ids: tagIds,
-      owner_ids: ownerIds,
-    },
+    filterParams: selectedGroupFilterParams,
     categories,
     availableTags,
-    onRowsTrashed: count => setGroupTxnDataTotal(prev => Math.max(0, prev - count)),
+    onRowsTrashed: count => groupTxnPaged.setTotal(prev => Math.max(0, prev - count)),
   })
 
   const [periodA, setPeriodA] = useState(presetToPeriod('this_month'))
@@ -2046,26 +2072,14 @@ export default function Dashboard() {
     const groupId  = group.group_id ?? group.payload?.group_id
     const groupRow = groupRows.find(r => r.group_id === groupId) || group
     setDrillLoading(true)
+    // Selecting the group keys the paged group-transaction list (usePagedTransactions), which fetches on
+    // its own; here we only need the category breakdown that the pie/list render from.
     setSelectedGroup(groupRow)
-    const [rows, txnResp] = await Promise.all([
-      api.getCategoryTotalsInGroup(null, groupId, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters),
-      api.getTransactions({
-        ...summaryFilters,
-        date_start:  filters.date?.start || undefined,
-        date_end:    filters.date?.end   || undefined,
-        group_ids:   groupId,
-        account_id:  accountId || undefined,
-        tag_ids:     tagIds,
-        owner_ids:   ownerIds,
-        limit: 500,
-      }),
-    ])
+    const rows = await api.getCategoryTotalsInGroup(null, groupId, accountId || undefined, dateStart, dateEnd, ownerIds, tagIds, summaryFilters)
     setCatRows(rows)
-    setGroupTxnData(txnResp.transactions)
-    setGroupTxnDataTotal(Number(txnResp.total || 0))
     setLevel('categories')
     setDrillLoading(false)
-  }, [groupRows, accountId, dateStart, dateEnd, tagIds, ownerIds, summaryFilters, filters.date?.start, filters.date?.end])
+  }, [groupRows, accountId, dateStart, dateEnd, tagIds, ownerIds, summaryFilters])
 
   // Consume a pending Single-mode drill once the date-scoped groupRows have loaded. If the
   // queued group isn't present in this slice (e.g. zero spend that month), drop the queue
@@ -2090,27 +2104,14 @@ export default function Dashboard() {
     setMode('single')
   }
 
-  async function drillToTransactions(cat) {
+  function drillToTransactions(cat) {
     const categoryId = cat.category_id ?? cat.payload?.category_id
     const catRow     = catRows.find(r => r.category_id === categoryId) || cat
-    setDrillLoading(true)
+    // Selecting the category keys the paged category-transaction list (usePagedTransactions), which
+    // fetches on its own — including the synthetic uncategorized-bucket ids the summary can surface, so
+    // the selected row's id is forwarded as-is rather than collapsed back to a single label.
     setSelectedCat(catRow)
-    const data = await api.getTransactions({
-      ...summaryFilters,
-      date_start:  filters.date?.start || undefined,
-      date_end:    filters.date?.end   || undefined,
-      // Summary rows can surface synthetic uncategorized buckets, so the drill path
-      // forwards the returned id directly instead of trying to collapse them back to one label.
-      category_id: categoryId,
-      account_id:  accountId || undefined,
-      tag_ids:     tagIds,
-      owner_ids:   ownerIds,
-      limit: 200,
-    })
-    setTxnData(data.transactions)
-    setTxnDataTotal(Number(data.total || 0))
     setLevel('transactions')
-    setDrillLoading(false)
   }
 
   // Crumb layout: Overview, then one "Other" crumb per Other-drill page peeled off the
@@ -2603,7 +2604,9 @@ export default function Dashboard() {
                   {level === 'transactions' && selectedCat && (
                     <div style={{ gridColumn: '1 / -1' }}>
                       <Card style={{ padding: 0, overflow: 'hidden' }}>
-                        {txnData.length === 0 ? <EmptyState message="No transactions" /> : (
+                        {/* A drilled category is in the breakdown because it has spend, so an empty list is
+                            the paged fetch still in flight, not a real empty state — show the spinner. */}
+                        {txnData.length === 0 ? <Spinner /> : (
                           <>
                             <TransactionListToolbar rows={txnData} title={selectedCat.category_name} bulk={selectedCatBulk} style={{ marginBottom: 0, padding: '8px 12px 0' }} />
                             <div style={{ padding: '0 12px' }}>
@@ -2621,10 +2624,13 @@ export default function Dashboard() {
                               onRulePrompt={setRulePrompt}
                               onRowsChange={setTxnData}
                               onTransactionOpenDetail={openTransactionDetail}
-                              onTrashed={txnId => { reconcileDetailEdit(txnId, null); setTxnDataTotal(prev => Math.max(0, prev - 1)) }}
+                              onTrashed={txnId => { reconcileDetailEdit(txnId, null); catTxnPaged.setTotal(prev => Math.max(0, prev - 1)) }}
                               showCategory={false}
                               columnConfig={categoryTxnColumns}
                               onColumnConfigChange={setCategoryTxnColumns}
+                              scrollRef={catTxnPaged.listRef}
+                              sortState={catTxnPaged.sortState}
+                              onSort={catTxnPaged.onSort}
                             />
                           </>
                         )}
@@ -2769,7 +2775,7 @@ export default function Dashboard() {
                     display: 'flex', alignItems: 'center', gap: 8,
                   }}>
                     <span>
-                      {selectedGroup.group_name} · {groupTxnData.length} transactions
+                      {selectedGroup.group_name} · {groupTxnDataTotal} transactions
                       <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--muted)', marginLeft: 8 }}>
                         Click a category above to filter
                       </span>
@@ -2796,10 +2802,13 @@ export default function Dashboard() {
                     onRulePrompt={setRulePrompt}
                     onRowsChange={setGroupTxnData}
                     onTransactionOpenDetail={openTransactionDetail}
-                    onTrashed={txnId => { reconcileDetailEdit(txnId, null); setGroupTxnDataTotal(prev => Math.max(0, prev - 1)) }}
+                    onTrashed={txnId => { reconcileDetailEdit(txnId, null); groupTxnPaged.setTotal(prev => Math.max(0, prev - 1)) }}
                     columnConfig={groupTxnColumns}
                     onColumnConfigChange={setGroupTxnColumns}
                     maxHeight={320}
+                    scrollRef={groupTxnPaged.listRef}
+                    sortState={groupTxnPaged.sortState}
+                    onSort={groupTxnPaged.onSort}
                   />
                 </Card>
               )}
