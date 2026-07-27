@@ -796,7 +796,7 @@ def list_transactions(
     import_evidence_type: Optional[str] = Query(None, description="Only rows whose captured import evidence carries this `Type` value (PayPal money-movement report)."),
     needs_review: bool          = Query(False, description="Only rows still flagged as needing review (freshly imported/synced, not yet looked over)."),
     include_trashed: bool       = Query(False, description="Include rows in the trash. Off by default — the trash view sets this explicitly."),
-    limit:        int           = Query(200, le=1000),
+    limit:        int           = Query(200, ge=0, le=1000, description="rows per page (max 1000); 0 = no limit — returns all matching rows, for known-bounded scopes only"),
     offset:       int           = Query(0),
 ):
     # This endpoint is the UI's lossless transaction feed, so filters narrow the raw rows but do not apply the
@@ -850,6 +850,8 @@ def list_transactions(
         total = agg["count"]
         sum_amount = agg["sum_amount"]
 
+        # limit=0 is the explicit "no limit / all matching rows" opt-in; SQLite treats LIMIT -1 as unbounded.
+        sql_limit = limit if limit > 0 else -1
         rows = conn.execute(
             f"""
             SELECT
@@ -900,7 +902,7 @@ def list_transactions(
             ORDER BY {order_by}
             LIMIT ? OFFSET ?
             """,
-            params + [limit, offset],
+            params + [sql_limit, offset],
         ).fetchall()
         transactions = [dict(r) for r in rows]
         txn_ids = [txn["id"] for txn in transactions]

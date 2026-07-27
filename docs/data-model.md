@@ -206,6 +206,8 @@ Reporting should not assume every transaction inside an expense or income branch
 
   A new surface that needs a total uses one of these, never a client `reduce` over the fetched rows.
 
+  **The list `limit` contract.** `/transactions` defaults to a **200-row page** (max `1000`); a scoped list that can exceed that must paginate (`usePagedTransactions`) rather than fetch once and render the page as complete. Two guards back this: passing **`limit=0`** is the explicit "no limit — return every matching row" opt-in, for *known-bounded* scopes only (e.g. a series' removed-from-recurring rows) — never for an open-ended ledger, since `txn` has no inherent size bound; and in **dev builds** `api.getTransactions` logs a warning when a caller that omitted `limit` gets a truncated page (`transactions.length < total`), turning a silent truncation into a visible signal. A caller that passes an explicit `limit` has made a conscious choice and is exempt from the warning.
+
 ### Filter exclusion ("is not")
 
 The shared transaction filter (`FilterBar` → the list feed, the bulk "select all matching" resolver,

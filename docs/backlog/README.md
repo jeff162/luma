@@ -66,6 +66,12 @@ delete the backlog file.
   A small inline note on the Dashboard tag-report view when a filter chip references a tag the active
   report is built from (the exclude is honored, not suppressed — the note just explains the subset).
   Parked for a larger tag-report pass rather than a one-off; the behavior is already correct without it.
+- [transaction-list-limits.md](transaction-list-limits.md) — **surveyed, mostly resolved (2026-07-27).**
+  Every scoped transaction list now paginates with server-side sort (the `limit: 1000`/`500`/`200` caps
+  that silently truncated rendered lists are gone), plus a `limit=0` no-limit opt-in and a dev-mode
+  truncation warning. This file records the caps that **remain on purpose** (the 36/60-month detail-drawer
+  trend windows; "All time" means recent history there) and the few **deferred fix candidates**
+  (money-movement Type preview `1000`, trash list `200`).
 
 ## Related (already tracked elsewhere)
 

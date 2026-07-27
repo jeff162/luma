@@ -139,7 +139,24 @@ export const api = {
 
   getTransactions: (params = {}) => {
     const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))
-    return request(`/transactions?${q}`)
+    const result = request(`/transactions?${q}`)
+    // Dev guard against the silent-truncation footgun: a caller that omits `limit` gets the backend's
+    // default page size, and if that page came back short of the true `total` the list is truncated —
+    // almost always a missing pagination (usePagedTransactions) or an intended `limit: 0` (all). A caller
+    // that passed an explicit limit made a conscious choice, so it's exempt. Dev-only; compiled out of
+    // production. Observing the promise here doesn't consume it — callers still get `result`.
+    if (import.meta.env?.DEV && params.limit == null) {
+      result.then(resp => {
+        if (resp && Array.isArray(resp.transactions) && typeof resp.total === 'number'
+            && resp.transactions.length < resp.total) {
+          console.warn(
+            `[api.getTransactions] returned ${resp.transactions.length} of ${resp.total} matching rows on the default page — this list is truncated. Paginate (usePagedTransactions), pass an explicit limit, or limit: 0 for all.`,
+            params,
+          )
+        }
+      }).catch(() => {})
+    }
+    return result
   },
   getGroupTotals: (month, account_id, date_start, date_end, owner_ids, category_owner_ids, tag_ids, opts = {}) => {
     const p = {

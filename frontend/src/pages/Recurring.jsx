@@ -20,6 +20,7 @@ import {
 } from '../components/ui.jsx'
 import TransactionListTable from '../components/TransactionListTable.jsx'
 import TransactionDetail from '../components/TransactionDetail.jsx'
+import { usePagedTransactions } from '../components/detailShared.jsx'
 import { getTxnMerchantLabel } from '../components/TransactionRow.jsx'
 import ContextualExplainer from '../help/ContextualExplainer.jsx'
 import TransientTextInput from '../components/TransientTextInput.jsx'
@@ -414,7 +415,7 @@ function RemovedSection({ excluded, onAddBack }) {
 
 // The drill-down uses the shared TransactionListTable (pill header, shared row cells + row menu), so it
 // looks and edits exactly like every other transaction list in the app rather than being a one-off.
-function ReportPanel({ series, rows, excluded, categories, loading, onClose, onCategorySave, onRowsChange, onOpenTxnDetail, onTrashed, onAddBack }) {
+function ReportPanel({ series, rows, excluded, total, categories, loading, onClose, onCategorySave, onRowsChange, onOpenTxnDetail, onTrashed, onAddBack, scrollRef, sortState, onSort }) {
   return (
     <div style={{
       flex: '0 0 46%', minHeight: 0, display: 'flex', flexDirection: 'column',
@@ -429,7 +430,7 @@ function ReportPanel({ series, rows, excluded, categories, loading, onClose, onC
             {series.display_name}
           </div>
           <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-            {loading ? 'Loading…' : `${rows.length} matching transaction${rows.length === 1 ? '' : 's'}`}
+            {loading ? 'Loading…' : `${total} matching transaction${total === 1 ? '' : 's'}`}
           </div>
         </div>
         <button
@@ -454,6 +455,9 @@ function ReportPanel({ series, rows, excluded, categories, loading, onClose, onC
             onTrashed={onTrashed}
             showMerchantReport={false}
             emptyMessage="No linked transactions. Run a scan to (re)link matches."
+            scrollRef={scrollRef}
+            sortState={sortState}
+            onSort={onSort}
           />
         )}
         <RemovedSection excluded={excluded} onAddBack={onAddBack} />
@@ -655,18 +659,41 @@ export default function Recurring() {
   const [scanSummary, setScanSummary] = useState(null)
   const [adding, setAdding] = useState(false)
   const [categories, setCategories] = useState([])
-  // The bottom drill-down: which series' transactions are shown, and their rows.
-  const [report, setReport] = useState(null)  // { series, rows, loading } | null
+  // The bottom drill-down. The member list pages through the shared usePagedTransactions (server-side
+  // sort, no fetch cap) so a high-frequency series with hundreds of occurrences isn't truncated at 500;
+  // the removed-from-series rows are a small user-curated set fetched alongside. `reportNonce` bumps to
+  // force a member re-fetch of the same open series (e.g. after a scan shifts membership).
+  const [openSeries, setOpenSeries] = useState(null)
+  const [reportNonce, setReportNonce] = useState(0)
+  const [excluded, setExcluded] = useState([])
   const [payeeDetail, setPayeeDetail] = useState(null)  // txn opened in the shared TransactionDetail panel
   const [ruleModal, setRuleModal] = useState(null)  // { mode:'edit', ruleId } for a rule-backed series
   const [searchParams, setSearchParams] = useSearchParams()
 
+  const membersLoadPage = useCallback((offset, limit, sort) => (
+    api.getTransactions({ recurring_series_id: openSeries?.id, limit, offset, sort_by: sort.key, sort_dir: sort.dir })
+  ), [openSeries])
+  const membersPaged = usePagedTransactions({
+    activeKey: openSeries ? `recurring:${openSeries.id}:${reportNonce}` : null,
+    loadPage: membersLoadPage,
+  })
+  // Reconcile after an inline edit / row-menu action operates on the paged member rows in place.
+  const setReportRows = membersPaged.setRows
+
   useEffect(() => { api.getCategories().then(setCategories).catch(() => {}) }, [])
 
-  // Update just the drill-down's rows in place (reconcile after an inline edit / row-menu action).
-  const setReportRows = useCallback((updater) => {
-    setReport(prev => (prev ? { ...prev, rows: typeof updater === 'function' ? updater(prev.rows) : updater } : prev))
-  }, [])
+  // The removed-from-series rows re-fetch alongside the members whenever the open series (or refresh
+  // nonce) changes. It stays a single fetch with an explicit `limit: 0` (all): removals are a bounded,
+  // user-curated set, so fetching the whole set is honest here rather than a magic cap that could hide
+  // some — the case the limit: 0 opt-in exists for.
+  useEffect(() => {
+    if (!openSeries) { setExcluded([]); return undefined }
+    let live = true
+    api.getTransactions({ recurring_excluded_series_id: openSeries.id, limit: 0 })
+      .then(resp => { if (live) setExcluded(resp.transactions || []) })
+      .catch(() => { if (live) setExcluded([]) })
+    return () => { live = false }
+  }, [openSeries, reportNonce])
 
   const applyCategoryToRow = useCallback((txnId, cat) => {
     setReportRows(prev => prev.map(t => (t.id === txnId
@@ -710,35 +737,26 @@ export default function Recurring() {
   }
 
   const openReport = useCallback((s) => {
-    // Clicking the transaction count of the already-open series closes the drill-down (toggle); clicking a
-    // different card switches to it. Members come from the shared transactions endpoint (full rows), so
-    // the drill-down renders and edits exactly like every other transaction list.
-    if (report && report.series.id === s.id) { setReport(null); return }
-    setReport({ series: s, rows: [], excluded: [], loading: true })
-    Promise.all([
-      api.getTransactions({ recurring_series_id: s.id, limit: 500 }),
-      api.getTransactions({ recurring_excluded_series_id: s.id, limit: 500 }),
-    ])
-      .then(([members, removed]) => setReport(prev => (prev && prev.series.id === s.id
-        ? { series: s, rows: members.transactions || [], excluded: removed.transactions || [], loading: false }
-        : prev)))
-      .catch(() => setReport(prev => (prev && prev.series.id === s.id ? { ...prev, loading: false } : prev)))
-  }, [report])
+    // Toggle: clicking the count of the already-open series closes the drill-down; a different card
+    // switches to it. Selecting a series keys the paged member fetch (usePagedTransactions) and the
+    // removed-rows effect, which load on their own — the list renders and edits like every other list.
+    setOpenSeries(prev => (prev && prev.id === s.id ? null : s))
+  }, [])
 
   // Undo a removal from inside the drill-down (the durable path for a mistake noticed after the toast is
   // gone): clear the exclude override, then move the row from the removed list back into members in place.
   const addBackToSeries = useCallback((txn) => {
-    setReport(prev => (prev
-      ? { ...prev, rows: [txn, ...prev.rows], excluded: (prev.excluded || []).filter(t => t.id !== txn.id) }
-      : prev))
-    api.setRecurringMembership(report?.series.id, txn.id, 'clear').catch(() => {})
-  }, [report])
+    membersPaged.setRows(prev => [txn, ...prev])
+    membersPaged.setTotal(prev => prev + 1)
+    setExcluded(prev => prev.filter(t => t.id !== txn.id))
+    api.setRecurringMembership(openSeries?.id, txn.id, 'clear').catch(() => {})
+  }, [membersPaged, openSeries])
 
   // When the drill-down opens (or switches series) the list area shrinks, which can hide the card that
   // was clicked. Scroll it back into view with block:'nearest' so the list shifts up by the minimum
   // needed — the clicked card stays visible just above the report, even for the last few rows.
   const listRef = useRef(null)
-  const openId = report?.series.id || null
+  const openId = openSeries?.id || null
   useEffect(() => {
     if (!openId) return
     const node = listRef.current?.querySelector(`[data-series-id="${openId}"]`)
@@ -766,7 +784,7 @@ export default function Recurring() {
       const summary = await api.scanRecurring()
       await load()  // a scan is a deliberate re-sort
       setScanSummary(summary)
-      if (report) openReport(report.series)  // membership may have shifted
+      if (openSeries) setReportNonce(n => n + 1)  // membership may have shifted → re-fetch members
     } finally {
       setScanning(false)
     }
@@ -795,7 +813,7 @@ export default function Recurring() {
     if (updated) setAllSeries(prev => (prev || []).map(x => (x.id === updated.id ? updated : x)))
     // A characterization change means the user is done inspecting → collapse the drill-down. A cadence
     // tweak is not a characterization change, so it leaves the report open.
-    if (CHARACTERIZATION_ACTIONS.has(kind)) setReport(null)
+    if (CHARACTERIZATION_ACTIONS.has(kind)) setOpenSeries(null)
   }
 
   const byId = new Map((allSeries || []).map(s => [s.id, s]))
@@ -856,7 +874,7 @@ export default function Recurring() {
 
       {/* Split: the series list stays visible above while the drill-down opens below. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <div ref={listRef} style={{ flex: report ? '1 1 54%' : '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '4px 32px 24px' }}>
+        <div ref={listRef} style={{ flex: openSeries ? '1 1 54%' : '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '4px 32px 24px' }}>
           <div style={{ maxWidth: 860, margin: '0 auto' }}>
             {allSeries === null ? (
               <Spinner />
@@ -884,7 +902,7 @@ export default function Recurring() {
                         onAction={handleAction}
                         onOpenReport={openReport}
                         onEditRule={(series) => setRuleModal({ mode: 'edit', ruleId: series.rule_id })}
-                        active={report?.series.id === id}
+                        active={openSeries?.id === id}
                       />
                     ) : null
                   })}
@@ -894,19 +912,23 @@ export default function Recurring() {
           </div>
         </div>
 
-        {report && (
+        {openSeries && (
           <ReportPanel
-            series={report.series}
-            rows={report.rows}
-            excluded={report.excluded}
+            series={openSeries}
+            rows={membersPaged.rows}
+            excluded={excluded}
+            total={membersPaged.total}
             categories={categories}
-            loading={report.loading}
-            onClose={() => setReport(null)}
+            loading={membersPaged.loading}
+            onClose={() => setOpenSeries(null)}
             onCategorySave={saveCategory}
-            onRowsChange={setReportRows}
+            onRowsChange={membersPaged.setRows}
             onOpenTxnDetail={setPayeeDetail}
-            onTrashed={txnId => setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev))}
+            onTrashed={txnId => { membersPaged.setTotal(prev => Math.max(0, prev - 1)); setPayeeDetail(prev => (prev && prev.id === txnId ? null : prev)) }}
             onAddBack={addBackToSeries}
+            scrollRef={membersPaged.listRef}
+            sortState={membersPaged.sortState}
+            onSort={membersPaged.onSort}
           />
         )}
       </div>
