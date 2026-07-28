@@ -9,7 +9,8 @@ import { formatDate } from '../lib/utils.js'
 import ImportBatchDetail from '../components/ImportBatchDetail.jsx'
 import PillGridTable from '../components/PillGridTable.jsx'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
-import { Button, Card, PageHeader, Spinner, EmptyState, Input, SelectAllCheckbox } from '../components/ui.jsx'
+import { Button, Card, PageHeader, Spinner, EmptyState, FilterConflictNote, Input, SelectAllCheckbox } from '../components/ui.jsx'
+import { planHidingProbes, hidingNoteText, hidingActionLabel } from '../lib/searchHidingProbe.js'
 import TransactionDetail from '../components/TransactionDetail.jsx'
 import CategoryDetail from '../components/CategoryDetail.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
@@ -163,7 +164,7 @@ function escapeCsvClipboardCell(value) {
 
 export default function Transactions() {
   const initialSessionStateRef = useRef(loadTransactionsSessionState())
-  const { filters } = useFilters()
+  const { filters, clearDate, removeSelections } = useFilters()
   const location = useLocation()
   const [categories, setCategories] = useState([])
   const [data, setData] = useState({ transactions: [], total: 0, offset: 0, limit: TRANSACTIONS_BASE_PAGE_SIZE })
@@ -452,6 +453,42 @@ export default function Transactions() {
   useEffect(() => {
     maybeLoadMore()
   }, [data.transactions.length, maybeLoadMore])
+
+  // When the ledger settles to *no* rows, quietly check whether a subtractive filter (the date window
+  // or an exclude chip) is what's hiding the user's matches — rather than there genuinely being none.
+  // The probes re-run the same query with one constraint dropped (see lib/searchHidingProbe); only the
+  // zero-results path pays the cost, and a stale filter change cancels an in-flight probe. If nothing
+  // would surface, we say nothing — the note never claims the filter is hiding what it isn't.
+  const [hidingCause, setHidingCause] = useState(null)
+  useEffect(() => {
+    if (initialLoading || loadingMore) return
+    if (data.transactions.length > 0) { setHidingCause(null); return }
+    const probes = planHidingProbes(currentFilterParams)
+    if (probes.length === 0) { setHidingCause(null); return }
+    let cancelled = false
+    setHidingCause(null)
+    ;(async () => {
+      for (const probe of probes) {
+        let resp
+        try {
+          resp = await api.getTransactions({ ...probe.params, limit: 1, offset: 0 })
+        } catch { return }
+        if (cancelled) return
+        if ((resp?.total || resp?.transactions?.length || 0) > 0) {
+          setHidingCause(probe.cause)
+          return
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [data.transactions.length, initialLoading, loadingMore, currentFilterParams])
+
+  function clearHidingCause(cause) {
+    if (cause === 'date' || cause === 'filters') clearDate()
+    if (cause === 'exclude' || cause === 'filters') {
+      removeSelections(filters.selections.filter(s => s.mode === 'exclude').map(s => s.id))
+    }
+  }
 
   // Reflect a resolved category onto the page list in place — including in "uncategorized only" mode,
   // where the freshly categorized row no longer matches the filter but is left visible (restyled with
@@ -944,7 +981,19 @@ export default function Transactions() {
               renderBody={({ columns: activeColumns, gridTemplateColumns }) => (
                 <div>
                   {initialLoading ? <Spinner /> : data.transactions.length === 0 ? (
-                    <EmptyState message={quickFilter.trim() ? 'No matching transactions' : 'No transactions found'} />
+                    <>
+                      <EmptyState message={quickFilter.trim() ? 'No matching transactions' : 'No transactions found'} />
+                      {hidingCause && (
+                        <div style={{ padding: '0 24px 32px', maxWidth: 620, margin: '0 auto' }}>
+                          <FilterConflictNote
+                            actionLabel={hidingActionLabel(hidingCause)}
+                            onAction={() => clearHidingCause(hidingCause)}
+                          >
+                            {hidingNoteText(hidingCause)}
+                          </FilterConflictNote>
+                        </div>
+                      )}
+                    </>
                   ) : (
                     // Windowed: only the rows near the viewport are in the DOM. No `content-visibility`
                     // here — windowing already keeps unmounted rows out of layout, and the

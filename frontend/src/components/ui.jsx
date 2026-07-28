@@ -803,6 +803,41 @@ export function EmptyState({ message }) {
   )
 }
 
+// A quiet, inline note for warning that the active filter conflicts with what a surface is showing —
+// e.g. an exclude chip removing a slice the Dashboard report breaks down, or a search whose matches
+// the date filter is hiding. Informational only (the filter still applies); muted and accent-tinted so
+// it reads as an aside, not an error. `children` is the message; an optional action renders as a link.
+export function FilterConflictNote({ children, actionLabel, onAction, style }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap',
+      fontSize: 12.5, lineHeight: 1.45,
+      color: 'var(--text)',
+      background: 'color-mix(in srgb, var(--accent2) 8%, var(--surface))',
+      border: '1px solid color-mix(in srgb, var(--accent2) 28%, var(--border))',
+      borderRadius: 8,
+      padding: '8px 12px',
+      ...style,
+    }}>
+      <span aria-hidden="true" style={{ color: 'var(--accent2)' }}>ⓘ</span>
+      <span style={{ flex: 1, minWidth: 0 }}>{children}</span>
+      {actionLabel && onAction && (
+        <button
+          type="button"
+          onClick={onAction}
+          style={{
+            background: 'none', border: 'none', padding: 0,
+            color: 'var(--accent2)', cursor: 'pointer', fontSize: 12.5,
+            whiteSpace: 'nowrap', fontWeight: 500,
+          }}
+        >
+          {actionLabel}
+        </button>
+      )}
+    </div>
+  )
+}
+
 export function GroupedSelect({ value, onChange, groups, extra = [], style, id, ...rest }) {
   const autoId = useId()  // self-assigned id (caller's wins) clears the "field needs an id/name" check
   return (
