@@ -118,6 +118,26 @@ class TagSignatureSummaryTests(unittest.TestCase):
         self._txn(account_id=self.acct_a, amount=-20.0, direct_tags=[self.t1])  # return on a T1 purchase
         self.assertEqual(self._signatures()[frozenset({self.t1})], (80.0, 2))
 
+    def test_net_refund_signature_reads_negative(self):
+        # When a signature's refunds outweigh its spend the bucket nets negative and stays that way — the
+        # server no longer ABSes it, so the refund isn't hidden as positive "spending".
+        self._txn(account_id=self.acct_a, amount=40.0, direct_tags=[self.t1])
+        self._txn(account_id=self.acct_a, amount=-100.0, direct_tags=[self.t1])
+        self.assertEqual(self._signatures()[frozenset({self.t1})], (-60.0, 2))
+
+    def test_income_signature_reads_positive(self):
+        # Income is stored negative; in an income-scoped report each row is negated so received income
+        # reads as a positive bucket total (mirroring the category/group summaries).
+        with self._use_db_path(), get_db() as conn:
+            income_cat = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO category (id, parent_id, name, category_type, sort_order) VALUES (?, NULL, 'Salary', 'income', 0)",
+                (income_cat,),
+            )
+        self._txn(account_id=self.acct_a, amount=-300.0, direct_tags=[self.t1], category_id=income_cat)
+        sigs = self._signatures(exclude_income=False, exclude_expense=True)
+        self.assertEqual(sigs[frozenset({self.t1})], (300.0, 1))
+
     def test_exclude_tag_filter_applies(self):
         self._txn(account_id=self.acct_a, amount=100.0, direct_tags=[self.t1])
         self._txn(account_id=self.acct_a, amount=50.0, direct_tags=[self.t2])

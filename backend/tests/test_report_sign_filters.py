@@ -164,6 +164,29 @@ class ReportSignFiltersTests(unittest.TestCase):
         self.assertEqual(category_rows[0]["count"], 2)
         self.assertEqual(category_rows[0]["total"], 70.0)
 
+    def test_net_refund_expense_bucket_reads_negative_not_absed(self):
+        # A period where an expense bucket's refunds outweigh its spend nets negative. The summaries must
+        # report that signed net (previously ABS(SUM) flipped it to a positive magnitude, inflating the
+        # total and hiding the refund). This is the whole point of dropping ABS.
+        account_id = self._insert_account("Checking")
+        expense_group_id = self._insert_category(name="Shopping Fixture", parent_id=None, category_type="expense")
+        returns_id = self._insert_category(name="Returns Fixture", parent_id=expense_group_id, category_type="expense")
+        self._insert_transaction(account_id=account_id, category_id=returns_id, amount=40.0, date="2026-04-05")
+        self._insert_transaction(account_id=account_id, category_id=returns_id, amount=-100.0, date="2026-04-12")
+
+        with self._use_db_path():
+            group_rows = spending_by_group(
+                month="2026-04", date_start=None, date_end=None, account_id=None,
+                account_ids=None, tag_ids=None, owner_ids=None, category_owner_ids=None,
+            )
+            category_rows = spending_by_category_in_group(
+                month="2026-04", date_start=None, date_end=None, group_id=expense_group_id,
+                account_id=None, account_ids=None, tag_ids=None, owner_ids=None,
+            )
+
+        self.assertEqual(group_rows[0]["total"], -60.0)
+        self.assertEqual(category_rows[0]["total"], -60.0)
+
     def test_uncategorized_summaries_split_income_from_expense(self):
         account_id = self._insert_account("Checking")
         self._insert_uncategorized_transaction(account_id=account_id, amount=90.0, date="2026-04-03")

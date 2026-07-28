@@ -230,6 +230,18 @@ def _summary_uncategorized_type_sql(level: str) -> str:
     )
 
 
+# Signed net for a summary bucket, following the sign convention documented at monthly_trend (see the
+# "Sign convention" note): income-type buckets negate so received income reads positive, while reverses
+# — refunds in an expense bucket, returns in an income bucket — stay negative. This deliberately replaces
+# ABS(SUM(amount)): ABS hid a refund by flipping its sign, so a bucket that net-refunded a period read as
+# positive "spending" and inflated the period total. `type_expr` must be constant within each GROUP BY
+# bucket (true for the by-category/by-group buckets, whose type is a function of the bucket). Charts that
+# can't render a negative magnitude (pie wedges, stacked bands) floor the geometry client-side while the
+# displayed numbers keep this true sign.
+def _summary_signed_total_sql(type_expr: str) -> str:
+    return f"CASE WHEN ({type_expr}) = 'income' THEN -SUM(t.amount) ELSE SUM(t.amount) END"
+
+
 # --- Exclusion ("is not") ---------------------------------------------------------------------
 # Every facet the shared FilterBar exposes can be selected as *include* (the historical default) or
 # *exclude*. Exclusion is expressed as the NULL-safe negation of the same membership expression the
@@ -1490,7 +1502,7 @@ def spending_by_category(
                 COALESCE(p.id, c.id)                          AS group_id,
                 COALESCE(p.name, c.name)                      AS group_name,
                 {_summary_uncategorized_type_sql('category')} AS category_type,
-                ABS(SUM(t.amount))                            AS total,
+                {_summary_signed_total_sql(_summary_uncategorized_type_sql('category'))} AS total,
                 COUNT(*)                                      AS count
             FROM   txn t
             LEFT JOIN category c ON c.id = t.category_id
@@ -1568,11 +1580,19 @@ def spending_by_tag_signature(
     where = "WHERE " + " AND ".join(clauses)
     query_params = sel_ids + params
 
+    # Sign each row by the convention in _summary_signed_total_sql before summing, so a signature that
+    # mixes expense and income rows nets them along their natural direction (income negated to positive,
+    # refunds/returns negative) rather than by raw stored sign. A whole signature can span both types, so
+    # the sign is applied per row here, not per bucket.
+    signed_amount = (
+        "CASE WHEN (COALESCE(c.category_type, p.category_type) = 'income' "
+        "OR (t.category_id IS NULL AND t.amount < 0)) THEN -t.amount ELSE t.amount END"
+    )
     with get_db() as conn:
         rows = conn.execute(
             f"""
             SELECT sig, SUM(net) AS net, COUNT(*) AS count FROM (
-                SELECT {sig_sql} AS sig, t.amount AS net
+                SELECT {sig_sql} AS sig, {signed_amount} AS net
                 FROM   txn t
                 LEFT JOIN category c ON c.id = t.category_id
                 LEFT JOIN category p ON p.id = c.parent_id
@@ -1583,9 +1603,10 @@ def spending_by_tag_signature(
             query_params,
         ).fetchall()
 
-    # Re-key by the canonical (sorted) signature — defensive against any GROUP_CONCAT ordering variance —
-    # and take ABS of each bucket's net sum, matching spending_by_category's ABS(SUM). An empty signature
-    # is the Other / Untagged bucket. Naming, coloring, and sort order stay on the client.
+    # Re-key by the canonical (sorted) signature — defensive against any GROUP_CONCAT ordering variance.
+    # The bucket total is the signed net (no ABS): a signature whose refunds outweigh its spend reads
+    # negative, exactly as it does in spending_by_category. An empty signature is the Other / Untagged
+    # bucket. Naming, coloring, and sort order stay on the client.
     merged: dict[tuple, dict] = {}
     for r in rows:
         ids = tuple(sorted(r["sig"].split(","))) if r["sig"] else ()
@@ -1596,7 +1617,7 @@ def spending_by_tag_signature(
         bucket["net"] += float(r["net"] or 0)
         bucket["count"] += int(r["count"] or 0)
     return [
-        {"signature_tag_ids": b["signature_tag_ids"], "total": abs(b["net"]), "count": b["count"]}
+        {"signature_tag_ids": b["signature_tag_ids"], "total": b["net"], "count": b["count"]}
         for b in merged.values()
     ]
 
@@ -1652,7 +1673,7 @@ def spending_by_group(
                 {_summary_uncategorized_name_sql('group')}    AS group_name,
                 NULL                                                        AS group_color,
                 {_summary_uncategorized_type_sql('group')}                       AS category_type,
-                ABS(SUM(t.amount))                                               AS total,
+                {_summary_signed_total_sql(_summary_uncategorized_type_sql('group'))} AS total,
                 COUNT(*)                                                         AS count
             FROM   txn t
             LEFT JOIN category c  ON c.id  = t.category_id
@@ -1732,7 +1753,7 @@ def spending_by_category_in_group(
                 {_summary_uncategorized_id_sql('category')}   AS category_id,
                 {_summary_uncategorized_name_sql('category')} AS category_name,
                 NULL                                AS category_color,
-                ABS(SUM(t.amount))                  AS total,
+                {_summary_signed_total_sql(_summary_uncategorized_type_sql('category'))} AS total,
                 COUNT(*)                            AS count
             FROM   txn t
             LEFT JOIN category c ON c.id = t.category_id
@@ -1977,13 +1998,13 @@ def monthly_by_group(
         select_id   = f"'{UNCATEGORIZED_EXPENSE_CATEGORY_ID}' AS series_id"
         select_name = f"'{UNCATEGORIZED_EXPENSE_CATEGORY_NAME}' AS series_name"
         select_col  = "NULL AS series_color"
-        select_type = "'expense' AS series_category_type"
+        type_expr   = "'expense'"
         join        = "LEFT JOIN category c ON c.id = t.category_id LEFT JOIN category p ON p.id = c.parent_id"
     elif group_id == UNCATEGORIZED_INCOME_CATEGORY_ID:
         select_id   = f"'{UNCATEGORIZED_INCOME_CATEGORY_ID}' AS series_id"
         select_name = f"'{UNCATEGORIZED_INCOME_CATEGORY_NAME}' AS series_name"
         select_col  = "NULL AS series_color"
-        select_type = "'income' AS series_category_type"
+        type_expr   = "'income'"
         join        = "LEFT JOIN category c ON c.id = t.category_id LEFT JOIN category p ON p.id = c.parent_id"
     elif group_id:
         # Drill-down switches the series identity from top-level groups to the group's leaf categories without
@@ -1991,7 +2012,7 @@ def monthly_by_group(
         select_id   = f"{_summary_uncategorized_id_sql('category')}   AS series_id"
         select_name = f"{_summary_uncategorized_name_sql('category')} AS series_name"
         select_col  = "NULL                                AS series_color"
-        select_type = f"{_summary_uncategorized_type_sql('category')} AS series_category_type"
+        type_expr   = _summary_uncategorized_type_sql('category')
         # Keep the parent join available because the shared reporting filters above still
         # read parent-group metadata such as exclude-from-totals and system category type.
         join        = "LEFT JOIN category c ON c.id = t.category_id LEFT JOIN category p ON p.id = c.parent_id"
@@ -1999,8 +2020,15 @@ def monthly_by_group(
         select_id   = f"{_summary_uncategorized_id_sql('group')}   AS series_id"
         select_name = f"{_summary_uncategorized_name_sql('group')} AS series_name"
         select_col  = "NULL                                          AS series_color"
-        select_type = f"{_summary_uncategorized_type_sql('group')} AS series_category_type"
+        type_expr   = _summary_uncategorized_type_sql('group')
         join        = "LEFT JOIN category c ON c.id = t.category_id LEFT JOIN category p ON p.id = c.parent_id"
+
+    select_type = f"{type_expr} AS series_category_type"
+    # Signed net per series (see _summary_signed_total_sql): a group that *net-refunded* a month reduces
+    # that month's total instead of inflating it, so the Trends "Total per month" bar agrees with the
+    # single-period spending total. The stacked by-group area chart floors each band at zero client-side
+    # for readable stacking; every numeric total keeps this true sign.
+    select_total = f"{_summary_signed_total_sql(type_expr)} AS total"
 
     with get_db() as conn:
         rows = conn.execute(
@@ -2011,7 +2039,7 @@ def monthly_by_group(
                 {select_name},
                 {select_col},
                 {select_type},
-                ABS(SUM(t.amount)) AS total
+                {select_total}
             FROM   txn t
             {join}
             {where}

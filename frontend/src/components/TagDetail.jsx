@@ -4,7 +4,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
-import { formatCurrency } from '../lib/utils.js'
+import { formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
@@ -108,7 +108,9 @@ export default function TagDetail({
   // aggregation), not a sum of the displayed rows — so the header matches the pie exactly and is
   // independent of how many rows have paged in.
   const headerCount = Number(signature?.count) || 0
-  const total = Math.abs(Number(signature?.total) || 0)
+  // Signed net from the server bucket (no ABS): a signature that net-refunded reads negative, matching
+  // the pie/list. The header shows the true amount.
+  const total = Number(signature?.total) || 0
   const headerLabel = signature?.signature_name || 'Tag signature'
 
   // The slice is fully server-resolvable (fetchParams), so "select all matching" resolves the whole
@@ -125,7 +127,7 @@ export default function TagDetail({
     <>
       <div style={{ fontSize: 17, fontWeight: 600, lineHeight: 1.35 }}>{headerLabel}</div>
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
-        {reportName ? `${reportName} · ` : ''}{headerCount} transaction{headerCount !== 1 ? 's' : ''} · {formatCurrency(total)}
+        {reportName ? `${reportName} · ` : ''}{headerCount} transaction{headerCount !== 1 ? 's' : ''} · {formatSignedMoneyAmount(total)}
       </div>
     </>
   )

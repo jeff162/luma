@@ -4,7 +4,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
-import { formatCurrency } from '../lib/utils.js'
+import { formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
@@ -117,7 +117,7 @@ export default function PeriodDetail({
         {title}
       </div>
       <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
-        {txnTotal} transaction{txnTotal !== 1 ? 's' : ''} · {formatCurrency(total)}
+        {txnTotal} transaction{txnTotal !== 1 ? 's' : ''} · {formatSignedMoneyAmount(total)}
       </div>
     </>
   )

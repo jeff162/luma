@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
-import { formatCurrency } from '../lib/utils.js'
+import { formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { Spinner, Badge, CategoryMarker } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
@@ -200,7 +200,15 @@ export default function CategoryDetail({ category, categories = [], onClose, for
                     borderBottomRightRadius: 8,
                   }}>
                     {range.count ? `${range.count} matching · ` : ''}
-                    Total: {formatCurrency(range.count ? range.total : localMonthTxns.reduce((s, t) => s + t.amount, 0))}
+                    {/* Scope-signed net: prefer the monthly-trend aggregate (already signed — income
+                        negated to positive, refunds negative). The local-sum fallback (used only when the
+                        window has no trend rows) is signed the same way monthly-trend signs a category
+                        scope — income negates, everything else keeps its stored sign — so it can't
+                        disagree with range.total. */}
+                    Total: {formatSignedMoneyAmount(range.count
+                      ? range.total
+                      : ((category.category_type ?? categories.find(c => c.id === category.id)?.category_type) === 'income' ? -1 : 1)
+                        * localMonthTxns.reduce((s, t) => s + t.amount, 0))}
                   </div>
                 </div>
               )}

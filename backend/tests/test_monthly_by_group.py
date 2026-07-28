@@ -172,6 +172,39 @@ class MonthlyByGroupTests(unittest.TestCase):
         self.assertEqual(sum(r["total"] for r in rows), 40.0)
         self.assertTrue(all(r["series_id"] == leaf_1 for r in rows))
 
+    def test_net_refund_expense_group_reads_negative_and_reconciles_with_trend(self):
+        # A month where an expense group's refunds outweigh its spend nets negative. by-group must report
+        # that signed net (not ABS), so it reduces the month's total exactly like the single-period trend.
+        account_id = self._insert_account("Checking")
+        group_id = self._insert_category(name="LivingRefund", parent_id=None, category_type="expense")
+        leaf_id = self._insert_category(name="GroceriesRefund", parent_id=group_id, category_type="expense")
+        self._insert_transaction(account_id=account_id, category_id=leaf_id, amount=100.0, date="2026-05-10")
+        self._insert_transaction(account_id=account_id, category_id=leaf_id, amount=-160.0, date="2026-05-20")
+
+        trend_kwargs = dict(category_id=None, payee=None, account_id=None, account_ids=None,
+                            tag_ids=None, owner_ids=None, months=24, date_start=None, date_end=None,
+                            view="spending")
+        with self._use_db_path():
+            group_rows = monthly_by_group(months=24, account_id=None, account_ids=None, tag_ids=None, group_id=group_id)
+            trend_rows = monthly_trend(**trend_kwargs)
+
+        self.assertEqual(sum(r["total"] for r in group_rows), -60.0)
+        # The net-refund month reconciles between the two endpoints, which was the whole point of the fix.
+        self.assertEqual(sum(r["total"] for r in trend_rows), -60.0)
+
+    def test_income_group_total_reads_positive(self):
+        # Income is stored as negative amounts; by-group negates income-type series so received income
+        # reads as a positive bar (mirroring monthly-trend's income sign convention).
+        account_id = self._insert_account("Checking")
+        group_id = self._insert_category(name="Paycheck", parent_id=None, category_type="income")
+        leaf_id = self._insert_category(name="Salary", parent_id=group_id, category_type="income")
+        self._insert_transaction(account_id=account_id, category_id=leaf_id, amount=-500.0, date="2026-05-15")
+
+        with self._use_db_path():
+            rows = monthly_by_group(months=24, account_id=None, account_ids=None, tag_ids=None, group_id=group_id)
+
+        self.assertEqual(sum(r["total"] for r in rows), 500.0)
+
     def test_payees_filter_restricts_to_selected_merchant(self):
         account_id = self._insert_account("Checking")
         group_id = self._insert_category(name="GroupD", parent_id=None, category_type="expense")

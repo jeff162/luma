@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api } from '../lib/api.js'
 import { txnMutations, makeRowReconciler, categoryReconcilePatch } from '../lib/txnMutations.js'
-import { formatCurrency } from '../lib/utils.js'
+import { formatSignedMoneyAmount } from '../lib/moneyDisplay.js'
 import { Spinner } from './ui.jsx'
 import TransactionListTable from './TransactionListTable.jsx'
 import TransactionDetail from './TransactionDetail.jsx'
@@ -346,7 +346,11 @@ export default function AccountDetail({ account, categories = [], onClose, force
                     borderBottomRightRadius: 8,
                   }}>
                     {range.count ? `${range.count} in totals · ` : ''}
-                    Total: {formatCurrency(range.count ? range.total : localMonthTxns.reduce((s, t) => s + t.amount, 0))}
+                    {/* Cash-flow-signed net (positive = money in), matching this drawer's monthly-trend
+                        view. range.total already carries that sign; the local-sum fallback negates the
+                        raw stored amounts (expense positive, income negative) to the same convention so
+                        the two branches agree. */}
+                    Total: {formatSignedMoneyAmount(range.count ? range.total : -localMonthTxns.reduce((s, t) => s + t.amount, 0))}
                     {/* The total (and the chart above) omit excluded-from-totals rows like transfers; the
                        rows stay listed and marked, so name the gap here rather than letting the count look wrong. */}
                     {localMonthTxns.some(t => t.excluded_from_totals)

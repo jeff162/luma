@@ -119,7 +119,9 @@ function buildTagSignatureRows(buckets, tagsById) {
         : ids.map(id => tagsById.get(id)?.name || '?').join(' + '),
       signature_color: isOther ? OTHER_SLICE_COLOR : null,
       is_other: isOther,
-      total: Math.abs(Number(b.total) || 0),
+      // Signed net (the server no longer ABSes it): a signature whose refunds outweigh its spend reads
+      // negative. The pie floors wedge geometry at zero; the list/tooltip show this true value.
+      total: Number(b.total) || 0,
       count: Number(b.count) || 0,
     }
   })
@@ -483,7 +485,9 @@ async function fetchPeriodCatTotals(period, groupId, accountId, tagIds, ownerIds
 }
 
 function SpendBar({ value, total, color }) {
-  const pct = total > 0 ? Math.min((value / total) * 100, 100) : 0
+  // Clamp to [0, 100]: a net-refund row has a negative signed value, which must read as an empty bar
+  // rather than a negative width. The row's numeric label still shows the true signed amount.
+  const pct = total > 0 ? Math.max(Math.min((value / total) * 100, 100), 0) : 0
   return (
     <div style={{ flex: 1, height: 6, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden' }}>
       <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 3, transition: 'width 0.3s' }} />
@@ -572,7 +576,7 @@ function AnnualTotalsChart({ data, avg, selectedYear, onSelectYear }) {
                 view; with a left axis it scrolls off-screen until the user drags back to the start. */}
             <YAxis orientation="right" tickFormatter={v => `$${(v/1000).toFixed(0)}k`} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
             <Tooltip
-              formatter={v => formatCurrency(v)}
+              formatter={v => formatSignedMoneyAmount(v)}
               contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
               labelStyle={CHART_TOOLTIP_LABEL_STYLE}
               itemStyle={CHART_TOOLTIP_ITEM_STYLE}
@@ -1002,7 +1006,16 @@ function assignColors(rows, colorKey) {
 
 function CompareRow({ label, color, kind = 'category', a, b, maxVal, onClick }) {
   const diff    = a - b
-  const diffPct = b > 0 ? ((a - b) / b) * 100 : null
+  // A percent change is only meaningful against a positive prior period. When B <= 0 (a net refund, or
+  // no activity) fall back to the absolute dollar change, which is always meaningful — e.g. a category
+  // that swung from a -$741 refund to +$2,960 of spend shows "▲ +$3,701", not a nonsensical percent.
+  const diffPct  = b > 0 ? ((a - b) / b) * 100 : null
+  const badgeText = diffPct !== null
+    ? `${Math.abs(diffPct).toFixed(0)}%`
+    : (diff !== 0 ? `${diff > 0 ? '+' : '-'}${formatCurrency(diff)}` : null)
+  // Bars floor at zero: a net-refund period (negative total) renders an empty bar rather than a broken
+  // negative width; the true signed amount is shown in the text below.
+  const barPct = v => `${maxVal > 0 ? Math.max((v / maxVal) * 100, 0) : 0}%`
   return (
     <div
       onClick={onClick}
@@ -1017,13 +1030,13 @@ function CompareRow({ label, color, kind = 'category', a, b, maxVal, onClick }) 
           <CategoryMarker kind={kind} />
           <span>{label}</span>
         </span>
-        {diffPct !== null && (
+        {badgeText !== null && (
           <span style={{
             fontSize: 11, fontWeight: 600, padding: '1px 6px', borderRadius: 99,
             background: diff > 0 ? 'color-mix(in srgb, var(--danger) 13%, transparent)' : 'color-mix(in srgb, var(--success) 13%, transparent)',
             color: diff > 0 ? 'var(--danger)' : 'var(--success)',
           }}>
-            {diff > 0 ? '▲' : '▼'} {Math.abs(diffPct).toFixed(0)}%
+            {diff > 0 ? '▲' : '▼'} {badgeText}
           </span>
         )}
         {onClick && <span style={{ color: 'var(--muted)', fontSize: 14 }}>›</span>}
@@ -1031,15 +1044,15 @@ function CompareRow({ label, color, kind = 'category', a, b, maxVal, onClick }) 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
           <div style={{ height: 5, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden' }}>
-            <div style={{ width: `${maxVal > 0 ? (a / maxVal) * 100 : 0}%`, height: '100%', background: color, opacity: 1, borderRadius: 3 }} />
+            <div style={{ width: barPct(a), height: '100%', background: color, opacity: 1, borderRadius: 3 }} />
           </div>
           <div style={{ height: 5, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden' }}>
-            <div style={{ width: `${maxVal > 0 ? (b / maxVal) * 100 : 0}%`, height: '100%', background: color, opacity: 0.35, borderRadius: 3 }} />
+            <div style={{ width: barPct(b), height: '100%', background: color, opacity: 0.35, borderRadius: 3 }} />
           </div>
         </div>
         <div style={{ textAlign: 'right', minWidth: 120 }}>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>{formatCurrency(a)}</span>
-          <span style={{ fontSize: 11, color: 'var(--muted)', marginLeft: 6 }}>vs {formatCurrency(b)}</span>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{formatSignedMoneyAmount(a)}</span>
+          <span style={{ fontSize: 11, color: 'var(--muted)', marginLeft: 6 }}>vs {formatSignedMoneyAmount(b)}</span>
         </div>
       </div>
       </div>
@@ -1167,11 +1180,18 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
   const viewSeriesIds = new Set(series.map(s => s.id))
   const viewRows = filteredRows.filter(r => viewSeriesIds.has(r.series_id))
 
+  // Stacked bands are floored at zero: a group that net-refunded a month (negative net) would otherwise
+  // stack below the axis and muddle the stack, so it renders as no-spend instead. The band's *true*
+  // signed net rides along under `${id}__net` so the tooltip can show the accurate figure even where the
+  // drawn band is clamped to zero. Every numeric total below (bar chart, annual, averages) uses the real
+  // signed net, not this floored value.
   const chartData = allMonths.map(m => {
     const entry = { month: monthLabel(m), monthKey: m }
     for (const s of series) {
       const row = filteredRows.find(r => r.month === m && r.series_id === s.id)
-      entry[s.id] = row ? row.total : 0
+      const net = row ? row.total : 0
+      entry[s.id] = Math.max(net, 0)
+      entry[`${s.id}__net`] = net
     }
     return entry
   })
@@ -1321,9 +1341,11 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
                 interval={Math.floor(allMonths.length / 8)} />
               <YAxis tickFormatter={v => `$${(v/1000).toFixed(0)}k`} tick={{ fill: 'var(--muted)', fontSize: 11 }} />
               <Tooltip
-                formatter={(v, name) => {
+                formatter={(v, name, item) => {
                   const s = series.find(x => x.id === name)
-                  return [formatCurrency(v), s ? s.name : name]
+                  // Show the true signed net (`__net`), not the zero-floored value the band is drawn at.
+                  const net = item?.payload?.[`${name}__net`]
+                  return [formatSignedMoneyAmount(net ?? v), s ? s.name : name]
                 }}
                 offset={20}
                 contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
@@ -1351,8 +1373,8 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Total per month</div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>
             {latestRunRate != null
-              ? <>12-mo run rate: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatCurrency(latestRunRate)}/mo</span></>
-              : <>Avg: {formatCurrency(overallAvg)}/mo</>}
+              ? <>12-mo run rate: <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{formatSignedMoneyAmount(latestRunRate)}/mo</span></>
+              : <>Avg: {formatSignedMoneyAmount(overallAvg)}/mo</>}
             {' · double-click a bar to open that month'}
           </div>
           {/* Fit the panel (no oversized horizontal scroll) so the tooltip's built-in edge-flip happens at
@@ -1370,7 +1392,7 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
                   />
                   <YAxis tickFormatter={v => `$${(v/1000).toFixed(0)}k`} tick={{ fill: 'var(--muted)', fontSize: 10 }} />
                   <Tooltip
-                    formatter={v => formatCurrency(v)}
+                    formatter={v => formatSignedMoneyAmount(v)}
                     allowEscapeViewBox={{ x: false, y: false }}
                     contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
                     labelStyle={CHART_TOOLTIP_LABEL_STYLE}
@@ -1467,8 +1489,8 @@ function TrendsPanel({ rows, groups, selectedYear, onYearChange, drillGroup, onD
                 <CategoryMarker kind={drillGroup ? 'category' : 'group'} />
                 <span>{s.name}</span>
               </div>
-              <span style={{ textAlign: 'right', fontWeight: 600 }}>{formatCurrency(s.avg)}</span>
-              <span style={{ textAlign: 'right', color: 'var(--muted)' }}>{formatCurrency(s.total)}</span>
+              <span style={{ textAlign: 'right', fontWeight: 600 }}>{formatSignedMoneyAmount(s.avg)}</span>
+              <span style={{ textAlign: 'right', color: 'var(--muted)' }}>{formatSignedMoneyAmount(s.total)}</span>
               <span style={{ textAlign: 'right', color: 'var(--muted)' }}>{pct}%</span>
             </div>
           )
@@ -1710,9 +1732,6 @@ export default function Dashboard() {
   // containment check in loadSingleTotals) and across navigation (sessionStorage) — neither re-renders.
   const trendAnchorRef = useRef(undefined)
   if (trendAnchorRef.current === undefined) trendAnchorRef.current = loadTrendAnchor()
-  // Recharts gives Bar no dblclick event, so detect it manually: two clicks on the same bar within a
-  // short window open the transaction drawer, while a single click just re-pins the period.
-  const lastTrendBarClickRef = useRef({ key: null, time: 0 })
   const [trendGrain, setTrendGrain]         = useState('month')
   const [level, setLevel]         = useState('groups')
   const [selectedGroup, setSelectedGroup] = useState(null)
@@ -2337,26 +2356,26 @@ export default function Dashboard() {
                   <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>
                     Total spending · {singlePeriodLabel}
                   </div>
-                  <div style={{ fontSize: 28, fontWeight: 700 }}>{formatCurrency(totalSpend)}</div>
+                  <div style={{ fontSize: 28, fontWeight: 700 }}>{formatSignedMoneyAmount(totalSpend)}</div>
                 </Card>
                 {totalIncome > 0 && (
                   <Card style={{ padding: '14px 24px' }}>
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>
                       Total income · {singlePeriodLabel}
                     </div>
-                    <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--success)' }}>{formatCurrency(totalIncome)}</div>
+                    <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--success)' }}>{formatSignedMoneyAmount(totalIncome)}</div>
                   </Card>
                 )}
                 {selectedGroup && level !== 'groups' && (
                   <Card style={{ padding: '14px 24px' }}>
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>{selectedGroup.group_name}</div>
-                    <div style={{ fontSize: 28, fontWeight: 700 }}>{formatCurrency(selectedGroup.total)}</div>
+                    <div style={{ fontSize: 28, fontWeight: 700 }}>{formatSignedMoneyAmount(selectedGroup.total)}</div>
                   </Card>
                 )}
                 {selectedCat && level === 'transactions' && (
                   <Card style={{ padding: '14px 24px' }}>
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>{selectedCat.category_name}</div>
-                    <div style={{ fontSize: 28, fontWeight: 700 }}>{formatCurrency(selectedCat.total)}</div>
+                    <div style={{ fontSize: 28, fontWeight: 700 }}>{formatSignedMoneyAmount(selectedCat.total)}</div>
                   </Card>
                 )}
               </div>
@@ -2415,7 +2434,12 @@ export default function Dashboard() {
                         _peeledOther: true,
                       }
                       : null
-                    const pieData = otherSlice ? [...pageRows, otherSlice] : pageRows
+                    // `pieValue` floors each wedge's geometry at zero so a net-refund bucket (negative
+                    // signed total) can't draw a broken/negative sector; the list and tooltip still show
+                    // the true signed `total`. Same floor-the-geometry-keep-the-number rule as the trend
+                    // charts.
+                    const pieData = (otherSlice ? [...pageRows, otherSlice] : pageRows)
+                      .map(r => ({ ...r, pieValue: Math.max(Number(r.total) || 0, 0) }))
                     const expansionAvailable = allRows.length > pageRows.length
                     const listRows = showAllSpendingRows ? allRows : pieData
 
@@ -2476,13 +2500,14 @@ export default function Dashboard() {
                           ) : (
                             <ResponsiveContainer width="100%" height={220}>
                               <PieChart>
-                                <Pie data={pieData} dataKey="total" nameKey={rowName}
+                                <Pie data={pieData} dataKey="pieValue" nameKey={rowName}
                                   cx="50%" cy="50%" innerRadius={55} outerRadius={95} paddingAngle={2}
                                   onClick={d => d && handleSliceClick(d)} style={{ cursor: 'pointer' }}>
                                   {pieData.map((r, i) => <Cell key={i} fill={r[rowColor]} />)}
                                 </Pie>
                                 <Tooltip
-                                  formatter={v => formatCurrency(v)}
+                                  // Show the true signed total, not the zero-floored wedge geometry.
+                                  formatter={(v, name, item) => formatSignedMoneyAmount(item?.payload?.total ?? v)}
                                   contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
                                   labelStyle={CHART_TOOLTIP_LABEL_STYLE}
                                   itemStyle={CHART_TOOLTIP_ITEM_STYLE}
@@ -2531,7 +2556,7 @@ export default function Dashboard() {
                                     <SpendBar value={r.total} total={listTotal} color={r[rowColor]} />
                                   </div>
                                   <span style={{ fontSize: 12, fontWeight: 600, minWidth: 68, textAlign: 'right', flexShrink: 0 }}>
-                                    {formatCurrency(r.total)}
+                                    {formatSignedMoneyAmount(r.total)}
                                   </span>
                                   <span style={{ color: 'var(--muted)', fontSize: 14, flexShrink: 0 }}>›</span>
                                 </div>
@@ -2567,13 +2592,16 @@ export default function Dashboard() {
                         </div>
                         <ResponsiveContainer width="100%" height={220}>
                           <PieChart>
-                            <Pie data={coloredCatRows} dataKey="total" nameKey="category_name"
+                            {/* `pieValue` floors wedge geometry at zero so a net-refund category can't
+                                draw a negative sector; tooltip/list show the true signed total. */}
+                            <Pie data={coloredCatRows.map(c => ({ ...c, pieValue: Math.max(Number(c.total) || 0, 0) }))}
+                              dataKey="pieValue" nameKey="category_name"
                               cx="50%" cy="50%" innerRadius={55} outerRadius={95} paddingAngle={2}
                               onClick={d => d && drillToTransactions(d)} style={{ cursor: 'pointer' }}>
                               {coloredCatRows.map((c, i) => <Cell key={i} fill={c._chartColor} />)}
                             </Pie>
                             <Tooltip
-                              formatter={v => formatCurrency(v)}
+                              formatter={(v, name, item) => formatSignedMoneyAmount(item?.payload?.total ?? v)}
                               contentStyle={CHART_TOOLTIP_CONTENT_STYLE}
                               labelStyle={CHART_TOOLTIP_LABEL_STYLE}
                               itemStyle={CHART_TOOLTIP_ITEM_STYLE}
@@ -2593,7 +2621,7 @@ export default function Dashboard() {
                             <span style={{ fontSize: 14, flex: 1 }}>{c.category_name}</span>
                             <SpendBar value={c.total} total={catRows.reduce((s,r)=>s+r.total,0)} color={c.category_color} />
                             <span style={{ fontSize: 12, color: 'var(--muted)', minWidth: 52, textAlign: 'right' }}>{c.count} txns</span>
-                            <span style={{ fontSize: 13, fontWeight: 600, minWidth: 70, textAlign: 'right' }}>{formatCurrency(c.total)}</span>
+                            <span style={{ fontSize: 13, fontWeight: 600, minWidth: 70, textAlign: 'right' }}>{formatSignedMoneyAmount(c.total)}</span>
                             <span style={{ color: 'var(--muted)', fontSize: 16 }}>›</span>
                           </div>
                         ))}
@@ -2652,18 +2680,11 @@ export default function Dashboard() {
                   if (!d) return
                   const start = `${d.bucketStart}-01`
                   const end = lastDayOfMonthISO(d.bucketEnd)
-                  // Single click re-pins the date filter onto that bar so the rest of the page re-renders
-                  // with it as the new "selected period." This also fires as the first half of a
-                  // double-click, which is intended: double-clicking both focuses the period and opens it.
+                  // Clicking a bar re-pins the date filter onto it so the rest of the page re-renders with
+                  // it as the new "selected period." The period's transactions open from the header's
+                  // "View transactions" button, not a bar double-click (Recharts bars can't be
+                  // double-clicked reliably).
                   setDate({ start, end, preset: d.label })
-                  const now = Date.now()
-                  const prev = lastTrendBarClickRef.current
-                  if (prev.key === d.bucketStart && now - prev.time < 400) {
-                    lastTrendBarClickRef.current = { key: null, time: 0 }
-                    openPeriodDetail({ start, end, label: d.label }, dashboardView)
-                  } else {
-                    lastTrendBarClickRef.current = { key: d.bucketStart, time: now }
-                  }
                 }
                 // The header link opens the transaction drawer for the whole selected period (day-precise
                 // dates, not the bar's month range), so it's available even when no single bar is focused.
@@ -2715,7 +2736,7 @@ export default function Dashboard() {
                             ? `Same year-to-date range (through ${monthLabel(filters.date.end.slice(0, 7)).split(' ')[0]}) each year`
                             : 'Buckets sized to the selected period')
                         : `${grainWord} totals across all data`}
-                      {' · click a bar to focus it, double-click for its transactions · scroll horizontally to pan'}
+                      {' · click a bar to focus it · scroll horizontally to pan'}
                     </div>
                     <div style={{ overflowX: 'auto', overflowY: 'hidden' }}>
                       <div style={{ minWidth: trendChartMinWidth, height: 224 }}>
@@ -2836,19 +2857,25 @@ export default function Dashboard() {
               <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
                 <Card style={{ padding: '14px 24px' }}>
                   <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>{periodLabel(periodA)}</div>
-                  <div style={{ fontSize: 28, fontWeight: 700 }}>{formatCurrency(cmpTotalA)}</div>
+                  <div style={{ fontSize: 28, fontWeight: 700 }}>{formatSignedMoneyAmount(cmpTotalA)}</div>
                 </Card>
                 <Card style={{ padding: '14px 24px' }}>
                   <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>{periodLabel(periodB)}</div>
-                  <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--muted)' }}>{formatCurrency(cmpTotalB)}</div>
-                  {cmpTotalB > 0 && (
-                    <div style={{
-                      fontSize: 12, marginTop: 2,
-                      color: cmpTotalA > cmpTotalB ? 'var(--danger)' : 'var(--success)',
-                    }}>
-                      {cmpTotalA > cmpTotalB ? '▲' : '▼'} {Math.abs(((cmpTotalA - cmpTotalB) / cmpTotalB) * 100).toFixed(0)}% vs {periodLabel(periodA)}
-                    </div>
-                  )}
+                  <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--muted)' }}>{formatSignedMoneyAmount(cmpTotalB)}</div>
+                  {(() => {
+                    // Mirror CompareRow: percent vs a positive prior total, else the absolute dollar
+                    // change (a whole-period total going <= 0 is vanishingly rare, but keep it accurate).
+                    const diff = cmpTotalA - cmpTotalB
+                    const text = cmpTotalB > 0
+                      ? `${Math.abs((diff / cmpTotalB) * 100).toFixed(0)}%`
+                      : (diff !== 0 ? `${diff > 0 ? '+' : '-'}${formatCurrency(diff)}` : null)
+                    if (text === null) return null
+                    return (
+                      <div style={{ fontSize: 12, marginTop: 2, color: diff > 0 ? 'var(--danger)' : 'var(--success)' }}>
+                        {diff > 0 ? '▲' : '▼'} {text} vs {periodLabel(periodA)}
+                      </div>
+                    )
+                  })()}
                 </Card>
               </div>
 
