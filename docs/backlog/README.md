@@ -72,6 +72,47 @@ delete the backlog file.
   truncation warning. This file records the caps that **remain on purpose** (the 36/60-month detail-drawer
   trend windows; "All time" means recent history there) and the few **deferred fix candidates**
   (money-movement Type preview `1000`, trash list `200`).
+- [import-history-windowing.md](import-history-windowing.md) — **lossy cap fixed; archive UX deferred
+  (2026-07-30).** The import history's silent global `LIMIT 50` (older cards — and whole crowded-out
+  sources — vanished with no indication) is gone: `list_batches` now returns the full completed history.
+  Deferred: the actual windowing — a per-source recent window with a reachable **"Older imports"** archive
+  grouped by year (marketplace cards too), a *reachable* re-bound on the fetch, and an explicit
+  batch-history deletion strategy (purge records, not the imported transactions).
+
+### Migrated from `TODO.md` / `TODO-TESTING.md` (2026-07-30)
+
+- [saved-tag-reports.md](saved-tag-reports.md) — **deferred.** Four dashboard tag-report
+  follow-ups: a Settings-page manager mirror, capturing filters in a preset, cross-user sharing
+  (a real `tag_report` table), and a richer (drag/NL) report builder.
+- [dashboard-reporting.md](dashboard-reporting.md) — **deferred.** A cash-flow **Sankey**
+  visualization (its own dashboard mode), and a **Trends-tab double-count audit** to do before the
+  tag-report selector reaches Trends mode.
+- [import-input-formats.md](import-input-formats.md) — **deferred, ranked.** New ingestion formats
+  behind a shared **parse-seam extraction**: XLSX (Tier 1, reuses everything), OFX/QFX/QBO (Tier 2,
+  mapping-free + FITID dedupe), and SimpleFIN (a Plaid-parallel connection/sync track).
+- [import-dedupe-followups.md](import-dedupe-followups.md) — **deferred (not safety).** Auto-restore
+  deduped rows when a contributing import is undone, and a duplicate-resolution history view + batch
+  undo. Both convenience only — per-row restore already prevents loss.
+- [merchant-rename-fate.md](merchant-rename-fate.md) — **dormant code, decision pending.** Keep-or-drop
+  the unwired `merchants.py` / `merchant_rename` CRUD (its role was absorbed by
+  `category_rule.clean_name`); revisit when Plaid sync is exercised.
+- [pre-auth-security-ui.md](pre-auth-security-ui.md) — **blocked on a security-model decision.** Rebuild
+  the three removed Settings forms (security profile / sign-in protection / password policy); backend
+  endpoints + lib helpers were kept, so it's mostly stitching.
+- [i18n-display-formatting.md](i18n-display-formatting.md) — **deferred.** Tier-1 currency-symbol +
+  number/date **formatting** (not translation): a display bucket (cosmetic) and a free-text-parse bucket
+  (the quick-filter date/amount ambiguity — the only correctness risk).
+- [query-cache-invalidation.md](query-cache-invalidation.md) — **parked, maybe never.** Swap the
+  hand-wired `notifyTransactionsChanged` refresh map for dependency-based (query-key) invalidation —
+  only if transaction-derived views proliferate enough to hurt.
+- [lint-and-tooling.md](lint-and-tooling.md) — **deferred.** Two "enable → measure → triage → gate"
+  linter passes: raise eslint strictness beyond the narrow baseline, and make the aspirational **ruff**
+  config real (wire it in; adopt `flake8-datetimez` over the bespoke timestamp guard).
+- [test-coverage-gaps.md](test-coverage-gaps.md) — **running checklist.** Owed tests: rule-collision
+  HTTP + E2E + component coverage, the migration/fresh-schema parity guard (build with the first
+  post-rebrand migration), and rule-suggestion owner-scope stability.
+- [misc-followups.md](misc-followups.md) — **catch-all.** One-offs too small for their own file;
+  currently the unwritten CHANGELOG entry for the category-owner → tag migration.
 
 ## Related (already tracked elsewhere)
 

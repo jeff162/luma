@@ -4535,18 +4535,13 @@ def import_batch_duplicates(batch_id: str, body: BatchDuplicateImportRequest):
 @router.get("/batches")
 def list_batches():
     with get_db() as conn:
+        # Recent window feeding the best-effort reconcile below ONLY — deliberately capped. The reconcile
+        # writes per batch on every load, so running it over all history would rewrite every batch on each
+        # call and worsen lock contention; the newest imports are where stale batch-account rows actually
+        # arise. This cap does NOT bound the returned history (that query is unbounded, see below).
         batch_rows = conn.execute("""
-            SELECT b.id, b.profile_id, b.filename, b.file_content_hash, b.imported_at, b.row_count, b.skipped_count,
-                   b.deduped_count, b.status, b.use_imported_categories, b.config_snapshot, p.name AS profile_name,
-                   EXISTS(
-                       SELECT 1
-                       FROM   txn t
-                       WHERE  t.import_batch_id = b.id
-                         AND  t.imported_category IS NOT NULL
-                         AND  TRIM(t.imported_category) <> ''
-                   ) AS has_imported_categories
+            SELECT b.id
             FROM   import_batch b
-            LEFT JOIN csv_import_profile p ON p.id = b.profile_id
             WHERE  b.status = 'completed'
             ORDER  BY b.imported_at DESC
             LIMIT  50
@@ -4558,6 +4553,12 @@ def list_batches():
             _reconcile_batch_history(conn, [row["id"] for row in batch_rows])
         except sqlite3.OperationalError as exc:
             log_warning(f"[import] batch-history reconcile skipped (transient): {exc}")
+        # Full completed history, unbounded. A prior global `LIMIT 50` here silently dropped older imports
+        # — and because the cap was global-most-recent, an actively-fed source could push another source's
+        # cards (and their Undo/rename/review affordances) entirely out of the window with no indication.
+        # Cardinality is one row per imported *file* (not per transaction), so returning all of them is
+        # tolerable in the interim. The real bound belongs per-source with a reachable "Older imports"
+        # archive — see docs/backlog/import-history-windowing.md — which will reintroduce paging here.
         batches = conn.execute("""
             SELECT b.id, b.profile_id, b.filename, b.file_content_hash, b.imported_at, b.row_count, b.skipped_count,
                    b.deduped_count, b.status, b.use_imported_categories, b.config_snapshot, b.source_kind, p.name AS profile_name,
@@ -4572,7 +4573,6 @@ def list_batches():
             LEFT JOIN csv_import_profile p ON p.id = b.profile_id
             WHERE  b.status = 'completed'
             ORDER  BY b.imported_at DESC
-            LIMIT  50
         """).fetchall()
 
         # Lazy import: amazon.py imports from this module, so a top-level import would be circular.

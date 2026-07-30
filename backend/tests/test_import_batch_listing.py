@@ -96,6 +96,28 @@ class ImportBatchListingTests(unittest.IsolatedAsyncioTestCase):
         # data source's fingerprint before adopting the batch.
         self.assertEqual(batches[0]["header_fingerprint"], "Date|Description|Account|Amount")
 
+    def _insert_completed_batch(self, filename: str, imported_at: str) -> str:
+        batch_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO import_batch (id, filename, imported_at, status) VALUES (?, ?, ?, 'completed')",
+                    (batch_id, filename, imported_at),
+                )
+        return batch_id
+
+    async def test_batch_listing_is_not_capped_at_fifty(self):
+        # Regression: the listing used to `LIMIT 50` globally, so a heavy importer silently lost older
+        # cards (and an actively-fed source could crowd another source's history out of the window
+        # entirely). The full completed history must come back. See the per-source archive backlog item.
+        count = 60
+        for i in range(count):
+            # Zero-padded month/day so lexical imported_at order matches chronological order.
+            self._insert_completed_batch(f"file-{i:03d}.csv", f"2026-01-01T00:{i // 60:02d}:{i % 60:02d}")
+        with self._use_db_path():
+            batches = list_batches()
+        self.assertEqual(len(batches), count)
+
 
 if __name__ == "__main__":
     unittest.main()
