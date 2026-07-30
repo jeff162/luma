@@ -1976,6 +1976,55 @@ const isReconRemoval = (item) =>
   item.dedupe_resolved_by === 'amazon_merge' || item.dedupe_resolved_by === 'amazon_discard'
 const isDirectDelete = (item) => !isReconRemoval(item)
 
+// Timeframe options for the Empty-trash chooser. Values match backend/routers/transactions.py
+// `_TRASH_OLDER_THAN`; the cutoff is measured on `trashed_at` (age in the trash). `all` empties the
+// whole section — the button's long-standing meaning — and `ago` is the human phrase for the confirm copy.
+const TRASH_TIMEFRAMES = [
+  { value: 'all', label: 'Everything', ago: null },
+  { value: '1m', label: 'Older than 1 month', ago: '1 month' },
+  { value: '3m', label: 'Older than 3 months', ago: '3 months' },
+  { value: '6m', label: 'Older than 6 months', ago: '6 months' },
+  { value: '1y', label: 'Older than 1 year', ago: '1 year' },
+]
+
+// The "how much to erase" radio group shown inside the Empty-trash confirm dialog. Defaults to
+// Everything; narrower picks purge only rows trashed at least that long ago.
+function TrashTimeframeChooser({ value, onChange, disabled, name }) {
+  return (
+    <div role="radiogroup" aria-label="How much to erase" style={{ display: 'grid', gap: 6, marginTop: 6 }}>
+      {TRASH_TIMEFRAMES.map(tf => {
+        const selected = value === tf.value
+        return (
+          <label
+            key={tf.value}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
+              border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`, borderRadius: 10,
+              cursor: disabled ? 'default' : 'pointer', fontSize: 14,
+              background: selected ? 'color-mix(in srgb, var(--accent) 10%, transparent)' : 'var(--surface2)',
+            }}
+          >
+            <input type="radio" name={name} value={tf.value} checked={selected} disabled={disabled}
+              onChange={() => onChange(tf.value)} />
+            {tf.label}
+          </label>
+        )
+      })}
+    </div>
+  )
+}
+
+// Confirm-dialog body for emptying a transaction-trash section: an extent line reflecting the chosen
+// timeframe, then the section-specific `note` (its sibling-protection + irreversibility caveats).
+// `noun` names the section's rows ("deleted transaction", "removed duplicate copy").
+function trashEmptyDescription(timeframe, noun, note) {
+  const tf = TRASH_TIMEFRAMES.find(t => t.value === timeframe) || TRASH_TIMEFRAMES[0]
+  const extent = tf.ago
+    ? `This permanently removes every ${noun} trashed more than ${tf.ago} ago.`
+    : `This permanently removes every ${noun} listed here.`
+  return `${extent} ${note}`
+}
+
 // Load / restore / empty plumbing shared by the two transaction-trash sections. `filter` selects the
 // section's slice of the trash; `scope` keeps its Empty button from deleting the other section's rows.
 function useTrashedTransactions(filter, scope) {
@@ -1985,6 +2034,7 @@ function useTrashedTransactions(filter, scope) {
   const [emptying, setEmptying] = useState(false)
   const [error, setError] = useState('')
   const [confirmEmpty, setConfirmEmpty] = useState(false)
+  const [timeframe, setTimeframe] = useState('all')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -2014,12 +2064,19 @@ function useTrashedTransactions(filter, scope) {
     }
   }
 
+  // Open the confirm dialog, always starting the chooser back at Everything so a narrow pick from a
+  // previous empty doesn't silently carry over into the next one.
+  function openConfirm() {
+    setTimeframe('all')
+    setConfirmEmpty(true)
+  }
+
   async function emptyTrash() {
     setConfirmEmpty(false)
     setEmptying(true)
     setError('')
     try {
-      await api.emptyTransactionTrash(scope)
+      await api.emptyTransactionTrash(scope, timeframe)
       await load()
     } catch (err) {
       setError(err.message || 'Failed to empty trash')
@@ -2028,7 +2085,7 @@ function useTrashedTransactions(filter, scope) {
     }
   }
 
-  return { items, loading, workingId, emptying, error, confirmEmpty, setConfirmEmpty, restoreItem, emptyTrash }
+  return { items, loading, workingId, emptying, error, confirmEmpty, setConfirmEmpty, openConfirm, timeframe, setTimeframe, restoreItem, emptyTrash }
 }
 
 // One trashed transaction, shared by both sections (they differ only in list structure around it).
@@ -2078,14 +2135,16 @@ function TransactionsTrashSection() {
       {t.confirmEmpty ? (
         <AppConfirmDialog
           title="Empty transaction trash?"
-          description="This permanently removes every deleted transaction listed here (removed duplicates have their own section and are not touched). Restored history will not be recoverable afterward."
+          description={trashEmptyDescription(t.timeframe, 'deleted transaction', 'Removed duplicates have their own section and are not touched. Restored history will not be recoverable afterward.')}
           confirmLabel="Empty trash"
           confirmVariant="danger"
           borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
           onConfirm={t.emptyTrash}
           onCancel={() => t.setConfirmEmpty(false)}
           width="min(620px, 100%)"
-        />
+        >
+          <TrashTimeframeChooser name="empty-deleted-trash" value={t.timeframe} onChange={t.setTimeframe} />
+        </AppConfirmDialog>
       ) : null}
 
       <Card style={{ display: 'grid', gap: 14 }}>
@@ -2096,7 +2155,7 @@ function TransactionsTrashSection() {
           <Button
             small
             variant="ghost"
-            onClick={() => t.setConfirmEmpty(true)}
+            onClick={t.openConfirm}
             disabled={t.emptying || t.loading || t.items.length === 0}
           >
             {t.emptying ? 'Emptying…' : 'Empty trash'}
@@ -2150,14 +2209,16 @@ function DuplicateTransactionsTrashSection() {
       {t.confirmEmpty ? (
         <AppConfirmDialog
           title="Empty removed-duplicates trash?"
-          description="This permanently removes every duplicate copy listed here (deleted transactions have their own section and are not touched). The record of what was merged or discarded goes with them."
+          description={trashEmptyDescription(t.timeframe, 'removed duplicate copy', 'Deleted transactions have their own section and are not touched. The record of what was merged or discarded goes with them.')}
           confirmLabel="Empty trash"
           confirmVariant="danger"
           borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
           onConfirm={t.emptyTrash}
           onCancel={() => t.setConfirmEmpty(false)}
           width="min(620px, 100%)"
-        />
+        >
+          <TrashTimeframeChooser name="empty-duplicates-trash" value={t.timeframe} onChange={t.setTimeframe} />
+        </AppConfirmDialog>
       ) : null}
 
       <Card style={{ display: 'grid', gap: 14 }}>
@@ -2169,7 +2230,7 @@ function DuplicateTransactionsTrashSection() {
           <Button
             small
             variant="ghost"
-            onClick={() => t.setConfirmEmpty(true)}
+            onClick={t.openConfirm}
             disabled={t.emptying || t.loading || t.items.length === 0}
           >
             {t.emptying ? 'Emptying…' : 'Empty trash'}
@@ -2248,7 +2309,7 @@ function AboutSection({ dbInstanceId }) {
           <AboutRow
             label="Instance ID"
             value={dbInstanceId || 'Unavailable'}
-            help="Useful when you want to confirm which installation a screenshot or issue report came from."
+            help="Unique identifier for this database. Backups are stamped with it, so restoring a backup from a different database warns before overwriting."
           />
         </div>
       </div>

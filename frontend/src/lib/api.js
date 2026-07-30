@@ -344,7 +344,7 @@ export const api = {
   bulkUpdateTransactions: (selection, actions) =>
     request('/transactions/bulk', { method: 'POST', body: JSON.stringify({ selection, actions }) }),
   getTrashedTransactions: ()        => request('/transactions/trash'),
-  emptyTransactionTrash: (scope = 'all') => request(`/transactions/trash/empty?scope=${encodeURIComponent(scope)}`, { method: 'POST' }),
+  emptyTransactionTrash: (scope = 'all', olderThan = 'all') => request(`/transactions/trash/empty?scope=${encodeURIComponent(scope)}&older_than=${encodeURIComponent(olderThan)}`, { method: 'POST' }),
   // Soft-flag duplicate review. Flagging happens in the backend during import (new account,
   // soft match) and account merge; the per-batch unified report (UnifiedDuplicatesDialog)
   // calls these to let the user keep, reject, or undo a previous rejection on a flagged row.

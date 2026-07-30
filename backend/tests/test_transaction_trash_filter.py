@@ -15,6 +15,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from fastapi import HTTPException
+
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.transactions import (
     empty_transaction_trash,
@@ -285,6 +287,36 @@ class TrashFilterCoverageTests(unittest.TestCase):
         with self._use_db_path():
             self.assertEqual(empty_transaction_trash(scope="duplicates")["removed"], 1)
         self.assertFalse(self._txn_exists(merged))
+
+    def _backdate_trashed_at(self, txn_id: str, modifier: str) -> None:
+        """Push a trashed row's trashed_at into the past by a SQLite datetime modifier (e.g. '-7 months'),
+        preserving the ISO format the app writes, so age-in-trash cutoffs have something old to match."""
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?) WHERE id = ?",
+                    (modifier, txn_id),
+                )
+
+    def test_empty_trash_older_than_purges_only_aged_rows(self):
+        # The timeframe chooser maps to older_than: a cutoff on trashed_at (age in the trash). One row
+        # was trashed 7 months ago, the other just now; 'older than 6 months' takes only the aged one.
+        account, group, _, old_trash = self._seed_two()
+        recent_trash = self._insert_txn(account_id=account, category_id=group, amount=55.00, date="2026-04-27")
+        with self._use_db_path():
+            trash_transaction(old_trash)
+            trash_transaction(recent_trash)
+            self._backdate_trashed_at(old_trash, "-7 months")
+            result = empty_transaction_trash(scope="deleted", older_than="6m")
+        self.assertEqual(result["removed"], 1)
+        self.assertFalse(self._txn_exists(old_trash))    # trashed 7 months ago → purged
+        self.assertTrue(self._txn_exists(recent_trash))  # trashed just now → kept
+
+    def test_empty_trash_rejects_unknown_timeframe(self):
+        with self._use_db_path():
+            with self.assertRaises(HTTPException) as ctx:
+                empty_transaction_trash(scope="deleted", older_than="bogus")
+        self.assertEqual(ctx.exception.status_code, 400)
 
 
 if __name__ == "__main__":  # pragma: no cover

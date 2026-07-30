@@ -1390,14 +1390,23 @@ def list_trashed_transactions(limit: int = Query(200, le=1000)):
     return [dict(row) for row in rows]
 
 
+# Timeframe cutoffs for the Empty-trash chooser, keyed by the frontend's option value. Each maps to a
+# SQLite datetime modifier applied to `trashed_at` (age in the trash, not the transaction's own date):
+# a row is purged only if it was trashed at or before now minus this interval. "all" has no cutoff and
+# empties the whole section — the original behavior.
+_TRASH_OLDER_THAN = {"1m": "-1 month", "3m": "-3 months", "6m": "-6 months", "1y": "-1 year"}
+
+
 @router.post("/trash/empty")
-def empty_transaction_trash(scope: str = "all"):
+def empty_transaction_trash(scope: str = "all", older_than: str = "all"):
     """Empty the visible transaction trash. ``scope`` narrows to one Trash section — ``deleted``
     (rows the user trashed directly) or ``duplicates`` (Amazon reconciliation removals) — so each
-    section's Empty button touches only its own rows; ``all`` empties both. The unified dedupe flow's
-    confirmed-duplicate rows are protected regardless: they aren't shown in the Trash view, so
-    emptying it must not permanently delete them either — doing so would silently destroy the rows
-    that account-detach (auto_merge) and "undo reject" (user) rely on to restore them."""
+    section's Empty button touches only its own rows; ``all`` empties both. ``older_than`` narrows by
+    age in the trash (``trashed_at``): ``all`` purges the whole section, or ``1m``/``3m``/``6m``/``1y``
+    purge only rows trashed at least that long ago. The unified dedupe flow's confirmed-duplicate rows
+    are protected regardless: they aren't shown in the Trash view, so emptying it must not permanently
+    delete them either — doing so would silently destroy the rows that account-detach (auto_merge) and
+    "undo reject" (user) rely on to restore them."""
     # The two visible slices. Amazon removals are exactly the duplicate_confirmed rows tagged
     # amazon_*; direct deletes are the untagged remainder (the dedupe flow's rows match neither).
     amazon = "COALESCE(dedupe_resolved_by, '') IN ('amazon_merge', 'amazon_discard')"
@@ -1410,8 +1419,20 @@ def empty_transaction_trash(scope: str = "all"):
         visible = f"({direct} OR {amazon})"
     else:
         raise HTTPException(status_code=400, detail="Unknown trash scope")
+    if older_than != "all" and older_than not in _TRASH_OLDER_THAN:
+        raise HTTPException(status_code=400, detail="Unknown trash timeframe")
+    params: tuple = ()
+    cutoff = ""
+    if older_than != "all":
+        # Compare through julianday() so the stored ISO trashed_at (…T…Z) and the computed cutoff land on
+        # the same numeric scale regardless of separator/zone formatting (both are UTC) — a raw string
+        # compare would misjudge same-date boundaries where the 'T'/space separators diverge.
+        cutoff = " AND julianday(trashed_at) <= julianday('now', ?)"
+        params = (_TRASH_OLDER_THAN[older_than],)
     with get_db() as conn:
-        cursor = conn.execute(f"DELETE FROM txn WHERE trashed_at IS NOT NULL AND {visible}")
+        cursor = conn.execute(
+            f"DELETE FROM txn WHERE trashed_at IS NOT NULL AND {visible}{cutoff}", params
+        )
         removed = cursor.rowcount or 0
     return {"removed": removed}
 
