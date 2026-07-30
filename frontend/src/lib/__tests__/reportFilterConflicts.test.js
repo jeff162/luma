@@ -146,17 +146,17 @@ describe('describeReportConflicts', () => {
   })
   it('names a single slice', () => {
     expect(describeReportConflicts([{ facet: 'category', id: 'c', label: 'Groceries' }]))
-      .toBe('This report’s filter excludes Groceries — it is left out of the breakdown.')
+      .toBe('The current filter excludes Groceries which is part of this report')
   })
   it('joins two, then summarizes the rest', () => {
     const three = [
       { label: 'Groceries' }, { label: 'Dining' }, { label: 'Rent' },
     ]
     expect(describeReportConflicts(three))
-      .toBe('This report’s filter excludes Groceries, Dining and 1 more — they are left out of the breakdown.')
+      .toBe('The current filter excludes Groceries, Dining and 1 more which is part of this report')
   })
-  it('uses the "built on … leaves out" framing when a tag is missing (not excluded)', () => {
+  it('uses the "omits … part of this report" framing when a tag is missing (not excluded)', () => {
     expect(describeReportConflicts([{ facet: 'tag', label: 'Reimbursable', reason: 'missing' }]))
-      .toBe('This report is built on Reimbursable, which the current filter leaves out — it is left out of the breakdown.')
+      .toBe('The current filter omits Reimbursable which is part of this report')
   })
 })

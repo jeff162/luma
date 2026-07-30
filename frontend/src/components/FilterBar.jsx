@@ -28,6 +28,9 @@ const DATE_PRESETS = [
   { label: 'Last 30 days',    fn: () => ({ start: fmt(subDays(today, 29)),  end: fmt(today) }) },
   { label: 'Last 60 days',    fn: () => ({ start: fmt(subDays(today, 59)),  end: fmt(today) }) },
   { label: 'Last 90 days',    fn: () => ({ start: fmt(subDays(today, 89)),  end: fmt(today) }) },
+  // Explicit all-time: a truthy value with no range, so it *overrides* a page's default period (unlike
+  // "unset", which falls back to the default). This is the discoverable form of the old Clear button.
+  { label: 'All time',        fn: () => ({ start: null, end: null }) },
 ]
 
 function dateLabel(date) {
@@ -112,7 +115,10 @@ function Popover({ children, onClose, style }) {
 }
 
 function DatePickerPopover({ onClose }) {
-  const { filters, setDate, clearDate } = useFilters()
+  const { filters, setDate, clearDate, getDate } = useFilters()
+  // Highlight the preset matching the *effective* period, so a page's active default reads as selected
+  // even before the user has picked anything explicitly.
+  const effectivePreset = getDate()?.preset
   const [customStart, setCustomStart] = useState(filters.date?.start || fmt(startOfMonth(today)))
   const [customEnd,   setCustomEnd]   = useState(filters.date?.end   || fmt(today))
 
@@ -132,7 +138,7 @@ function DatePickerPopover({ onClose }) {
     <Popover onClose={onClose}>
       <div style={{ padding: '4px 0' }}>
         {DATE_PRESETS.map(p => {
-          const selected = filters.date?.preset === p.label
+          const selected = effectivePreset === p.label
           return (
             <div key={p.label} onClick={() => applyPreset(p)} style={{
               ...rowStyle,
@@ -585,10 +591,11 @@ function FilterButton({ active, count, children, onClick, inert = false, title }
 }
 
 export default function FilterBar() {
-  const { filters, removeSelection, clearAll, dateApplies, toggleSelectionMode } = useFilters()
+  const { filters, removeSelection, clearAll, dateApplies, toggleSelectionMode, getDate, dateIsDefault } = useFilters()
   const [showDate,   setShowDate]   = useState(false)
   const [showFilter, setShowFilter] = useState(false)
 
+  const effectiveDate = getDate()
   const hasDate       = !!filters.date
   const hasSelections = filters.selections.length > 0
   const hasAny        = hasDate || hasSelections
@@ -606,7 +613,9 @@ export default function FilterBar() {
           title={dateApplies ? undefined : 'The date filter does not apply to this view.'}
           onClick={() => { setShowDate(v => !v); setShowFilter(false) }}
         >
-          📅 {dateLabel(filters.date)}
+          📅 {dateIsDefault
+            ? <span style={{ color: 'var(--muted)' }}>{effectiveDate.preset || 'Default'} <span style={{ opacity: 0.7 }}>· default</span></span>
+            : dateLabel(filters.date)}
         </FilterButton>
         {showDate && <DatePickerPopover onClose={() => setShowDate(false)} />}
       </div>

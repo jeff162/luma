@@ -38,6 +38,16 @@ const preferencePersistenceRestrictions = [
   { object: 'api', property: 'clearUserPreferences', message: 'Clear preferences through UserPreferencesContext, not api.clearUserPreferences directly.' },
 ]
 
+// The shared date filter must be read through the getters, not the raw field: getDate() (default-aware
+// — what almost everything wants) or getRawDate() (explicit-only — the rare bypass, e.g. the
+// Transactions ledger). Reading `filters.date` directly silently skips the page-default logic. The
+// files that legitimately read the explicit value — the FilterContext that defines it, the FilterBar
+// date-picker UI, the Dashboard trend (deliberately keyed on the explicit pick, not the default), and
+// ExportTab (its own nested provider with no default) — are allowlisted in the overrides below.
+const filterDateRestrictions = [
+  { object: 'filters', property: 'date', message: 'Read the period via getDate() (default-aware) or getRawDate() (explicit-only) from useFilters — reading filters.date directly bypasses the page-default logic.' },
+]
+
 export default [
   {
     ignores: ['dist/**', 'node_modules/**', 'playwright-report/**', 'test-results/**'],
@@ -100,20 +110,32 @@ export default [
       // deep (e.g. the delete-category radio rows) are correctly seen as labelled, not false-flagged.
       'jsx-a11y/label-has-associated-control': ['error', { depth: 4 }],
 
-      // See the txnMutation / preference restriction lists defined above this config.
-      'no-restricted-properties': ['error', ...txnMutationRestrictions, ...preferencePersistenceRestrictions],
+      // See the txnMutation / preference / filter-date restriction lists defined above this config.
+      'no-restricted-properties': ['error', ...txnMutationRestrictions, ...preferencePersistenceRestrictions, ...filterDateRestrictions],
     },
   },
   {
     // The mutation layer is the one sanctioned place that calls the wrapped txn api.* writes directly.
     files: ['src/lib/txnMutations.js'],
-    rules: { 'no-restricted-properties': ['error', ...preferencePersistenceRestrictions] },
+    rules: { 'no-restricted-properties': ['error', ...preferencePersistenceRestrictions, ...filterDateRestrictions] },
   },
   {
     // The preferences context owns persistence; the app shell (App.jsx) bootstraps the startup route
-    // above the provider and Settings runs the destructive reset. These keep the txn guardrail.
+    // above the provider and Settings runs the destructive reset. These keep the txn + filter-date guards.
     files: ['src/lib/UserPreferencesContext.jsx', 'src/App.jsx', 'src/pages/Settings.jsx'],
-    rules: { 'no-restricted-properties': ['error', ...txnMutationRestrictions] },
+    rules: { 'no-restricted-properties': ['error', ...txnMutationRestrictions, ...filterDateRestrictions] },
+  },
+  {
+    // Files that legitimately read the *explicit* date field: the context that defines it, the date-picker
+    // UI, the Dashboard trend (keyed on the explicit pick, not the default), and ExportTab's nested
+    // provider. They keep the txn + preference guards; only the filters.date guard is lifted here.
+    files: [
+      'src/lib/FilterContext.jsx',
+      'src/components/FilterBar.jsx',
+      'src/pages/Dashboard.jsx',
+      'src/components/importExport/ExportTab.jsx',
+    ],
+    rules: { 'no-restricted-properties': ['error', ...txnMutationRestrictions, ...preferencePersistenceRestrictions] },
   },
   {
     // Build/tool scripts run in Node, not the browser.

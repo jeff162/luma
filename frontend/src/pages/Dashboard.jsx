@@ -26,6 +26,7 @@ import {
 } from '../lib/moneyDisplay.js'
 import { AppDialog, Button, Card, Input, PageHeader, Select, Spinner, EmptyState, FilterConflictNote, CategoryMarker, getFormControlStyle } from '../components/ui.jsx'
 import { computeReportSpendingConflicts, describeReportConflicts, resolveConflictSelectionIds } from '../lib/reportFilterConflicts.js'
+import { useDashboardDefaultPeriod, DASHBOARD_DEFAULT_PERIOD_OPTIONS } from '../lib/dashboardDefaultPeriod.js'
 import { TagGlyph } from '../components/TagUi.jsx'
 import { format, subMonths } from 'date-fns'
 import TransactionListTable from '../components/TransactionListTable.jsx'
@@ -304,7 +305,8 @@ function saveTrendAnchor(anchor) {
 // match is intentionally exact (not just start month): a shorter period whose start happens to sit
 // inside a wider bucket is still a real re-selection that should re-size the buckets.
 function dateMatchesBucket(buckets, date) {
-  if (!buckets || !date) return false
+  // A rangeless date (explicit "All time") is truthy but has no start/end — treat it as no match.
+  if (!buckets || !date || !date.start || !date.end) return false
   const s = date.start.slice(0, 7)
   const e = date.end.slice(0, 7)
   return buckets.some(b => b.start === s && b.end === e)
@@ -315,7 +317,7 @@ function dateMatchesBucket(buckets, date) {
 // rolling window like "Past 12 months", whose calendar-month bucket end (…-06) doesn't equal the
 // selection's actual end month (…-07) — so an exact match would leave nothing highlighted.
 function bucketHoldsDateStart(bucketStart, bucketEnd, date) {
-  if (!date) return false
+  if (!date || !date.start) return false
   const s = date.start.slice(0, 7)
   return s >= bucketStart && s <= bucketEnd
 }
@@ -754,6 +756,71 @@ function TagReportBuilder({ availableTags, onClose, onDisplay, onSave }) {
         </AppDialog>
       )}
     </>
+  )
+}
+
+/*
+ * Gear beside the "Dashboard" title: sets the per-user *default period* — what the shared date filter
+ * means on the Dashboard when the user hasn't picked a range. A setting (persisted), not a filter, and
+ * it never applies to other pages. "Automatic" resolves to Last 12 months when the current year has
+ * data, else All time; the popover shows which, so the choice isn't opaque.
+ */
+function DashboardDefaultPeriodGear({ pref, setPref, resolvedLabel }) {
+  const [open, setOpen] = useState(false)
+  const btnRef = useRef(null)
+  const popRef = useRef(null)
+  useDismissibleLayer({ open, onClose: () => setOpen(false), refs: [btnRef, popRef], closeOnScrollResize: true })
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        aria-label="Dashboard default period"
+        title="Set the Dashboard's default time period"
+        style={{
+          background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)',
+          fontSize: 16, lineHeight: 1, padding: 4, borderRadius: 6,
+        }}
+      >⚙</button>
+      {open && (
+        <div
+          ref={popRef}
+          style={{
+            position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 1400,
+            minWidth: 220, background: 'var(--surface)', border: '1px solid var(--border)',
+            borderRadius: 10, boxShadow: '0 18px 44px rgba(15, 23, 42, 0.28)', padding: '8px 0',
+          }}
+        >
+          <div style={{ padding: '4px 14px 8px', fontSize: 11, fontWeight: 600, color: 'var(--muted)',
+            textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Default period
+          </div>
+          {DASHBOARD_DEFAULT_PERIOD_OPTIONS.map(opt => {
+            const selected = pref === opt.value
+            return (
+              <div
+                key={opt.value}
+                onClick={() => { setPref(opt.value); setOpen(false) }}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                  padding: '7px 14px', cursor: 'pointer', fontSize: 13,
+                  background: selected ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
+                }}
+              >
+                <span style={{ fontWeight: selected ? 600 : 400 }}>
+                  {opt.label}
+                  {opt.value === 'auto' && resolvedLabel && (
+                    <span style={{ color: 'var(--muted)', fontWeight: 400 }}> — {resolvedLabel}</span>
+                  )}
+                </span>
+                {selected && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -1507,7 +1574,21 @@ export default function Dashboard() {
    * Dashboard runs three analysis modes over the same global filters, but each mode keeps its own drill state.
    * Resetting that state on mode changes avoids carrying breadcrumbs into views that summarize the same data differently.
    */
-  const { filters, setDateApplies, setDate, removeSelections } = useFilters()
+  const { filters, setDateApplies, setDate, removeSelections, setDefaultDate } = useFilters()
+  // The Dashboard's configurable default period: what "unset" means here (Transactions treats unset as
+  // all-time). Registered into the shared filter so the date chip can show it; the Dashboard itself uses
+  // the local `defaultDate` for scope to avoid a first-render all-time→default refetch.
+  const { pref: defaultPeriodPref, setPref: setDefaultPeriodPref, defaultDate: dashboardDefaultDate, pending: defaultPeriodPending } = useDashboardDefaultPeriod()
+  useEffect(() => {
+    setDefaultDate(dashboardDefaultDate)
+    return () => setDefaultDate(null)
+  }, [dashboardDefaultDate, setDefaultDate])
+  // Effective period: explicit pick wins; otherwise the Dashboard's default (null => all-time).
+  const effectiveDate = filters.date || dashboardDefaultDate
+  // Hold the first paint until the 'auto' probe answers, rather than flashing all-time then the default.
+  // Only bites on the first Dashboard visit of a session (the probe is cached after) and never when the
+  // user has an explicit date or a non-auto default.
+  const dateResolving = defaultPeriodPending && !filters.date
   const [mode, setMode] = useState('single')
   // When the user double-clicks a month in the Trends top chart with a group drill active,
   // we stash the group id here and consume it after Single mode re-runs its groupRows fetch.
@@ -1575,12 +1656,12 @@ export default function Dashboard() {
 
   // Filter derivation is hoisted ahead of the tag-mode fetch effect so the effect's
   // dependency expression can read these without a temporal dead zone.
-  const dateStart = filters.date?.start || null
-  const dateEnd = filters.date?.end || null
-  // The period shown on the single-view totals cards. With no date chip the dashboard aggregates over
-  // all data, so it reads "All time" rather than implying the current month.
-  const singlePeriodLabel = filters.date
-    ? (filters.date.preset || `${filters.date.start} → ${filters.date.end}`)
+  const dateStart = effectiveDate?.start || null
+  const dateEnd = effectiveDate?.end || null
+  // The period shown on the single-view totals cards. The effective period (explicit pick or the
+  // Dashboard default) drives it; a rangeless value (all-time, explicit or default) reads "All time".
+  const singlePeriodLabel = (effectiveDate && effectiveDate.start && effectiveDate.end)
+    ? (effectiveDate.preset || `${effectiveDate.start} → ${effectiveDate.end}`)
     : 'All time'
   // Include-mode selections drive the historical include params; exclude-mode ('is not') chips feed the
   // parallel exclude_* params carried in summaryFilters. Splitting by mode keeps an exclude chip from
@@ -1970,7 +2051,10 @@ export default function Dashboard() {
     // selection. With no chip the dashboard totals cover all data, so fetch the full monthly history
     // (ancient start → backend skips its rolling window) and bucket it month-by-month across the data's
     // span — otherwise the trend sits on an empty current-month window while the totals show all time.
-    const hasDate = !!filters.date
+    // The trend keys on the *explicit* pick (not the Dashboard default — the trend has its own default
+    // window), and only when it's a concrete range: an explicit "All time" is rangeless, so it falls to
+    // the same all-time monthly trend as no chip.
+    const hasDate = !!(filters.date && filters.date.start && filters.date.end)
     // Freeze the trend window on the FilterBar-selected period: keep the current anchor while the
     // selection stays on one of its bars (a bar click re-pins filters.date onto a bucket, which the top
     // half honors), and only re-anchor when the selection moves off the window (a real FilterBar
@@ -2042,10 +2126,13 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (mode !== 'single') return
+    // Hold the fetch until the default period resolves, so we don't load all-time and then reload the
+    // default. Re-runs when dateResolving flips (the dep) even if the resolved period is also all-time.
+    if (dateResolving) return
     setLoading(true)
     setLevel('groups'); setSelectedGroup(null); setSelectedCat(null); setOtherDrillDepth(0)
     loadSingleTotals().then(() => setLoading(false))
-  }, [mode, loadSingleTotals])
+  }, [mode, loadSingleTotals, dateResolving])
 
   // Recategorizing (here or from a detail panel) changes the aggregates, so refresh the breakdown/trend
   // and the open group's category totals in place — otherwise a moved transaction lingers in the list.
@@ -2306,12 +2393,26 @@ export default function Dashboard() {
   const cmpCrumbs = [periodLabel(periodA) + ' vs ' + periodLabel(periodB)]
   if (cmpGroup) cmpCrumbs.push(cmpGroup.group_name)
 
+  // Hold the paint until the 'auto' default resolves on first visit, so the Dashboard doesn't flash an
+  // all-time view before snapping to the default. Only the single-period view is scoped by the effective
+  // date; Compare/Trends have their own windows. Brief, and cached after the first visit of a session.
+  if (dateResolving && mode === 'single') {
+    return <div data-browser-context-passthrough="true" style={{ height: '100%' }} />
+  }
+
   return (
     <div data-browser-context-passthrough="true" style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', flexShrink: 0 }}>
         <PageHeader
           title="Dashboard"
           help={<FeatureExplainer topic="how-luma-works" placement="bottom-left" />}
+          titleAdornment={(
+            <DashboardDefaultPeriodGear
+              pref={defaultPeriodPref}
+              setPref={setDefaultPeriodPref}
+              resolvedLabel={dashboardDefaultDate?.preset || 'All time'}
+            />
+          )}
           leftAdornment={(mode === 'single' || mode === 'trends') && (
             <div style={{
               display: 'flex', background: 'var(--surface2)',
@@ -2724,19 +2825,21 @@ export default function Dashboard() {
                   // The header link opens the transaction drawer for the whole selected period (day-precise
                   // dates, not the bar's month range), so it's available even when no single bar is focused.
                   function openSelectedPeriodTransactions() {
-                    if (!filters.date) return
-                    const sM = filters.date.start.slice(0, 7)
-                    const eM = filters.date.end.slice(0, 7)
-                    const label = filters.date.preset
+                    // Opens the effective period (explicit pick or the Dashboard default). A rangeless
+                    // all-time value has no bounded period to open, so the link is inert there.
+                    if (!effectiveDate || !effectiveDate.start || !effectiveDate.end) return
+                    const sM = effectiveDate.start.slice(0, 7)
+                    const eM = effectiveDate.end.slice(0, 7)
+                    const label = effectiveDate.preset
                       || (sM === eM ? monthLabel(sM) : `${monthLabel(sM)} – ${monthLabel(eM)}`)
-                    openPeriodDetail({ start: filters.date.start, end: filters.date.end, label }, dashboardView)
+                    openPeriodDetail({ start: effectiveDate.start, end: effectiveDate.end, label }, dashboardView)
                   }
                   return (
                     <Card>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
                         <div style={{ fontSize: 14, fontWeight: 600 }}>Trend</div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          {filters.date && (
+                          {effectiveDate && effectiveDate.start && effectiveDate.end && (
                             <Button
                               variant="ghost"
                               small
@@ -2766,7 +2869,7 @@ export default function Dashboard() {
                         </div>
                       </div>
                       <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
-                        {filters.date
+                        {(filters.date && filters.date.start && filters.date.end)
                           ? (isYearToDateRange(filters.date)
                             ? `Same year-to-date range (through ${monthLabel(filters.date.end.slice(0, 7)).split(' ')[0]}) each year`
                             : 'Buckets sized to the selected period')

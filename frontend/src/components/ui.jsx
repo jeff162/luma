@@ -670,7 +670,7 @@ export function DialogActions({ children, align = 'end', style, background = 'va
 // app's consistent launcher spot for "what is this page" help (pass a node, e.g. <FeatureExplainer …/>,
 // so this primitive stays free of help-module imports). `leftAdornment` renders to the right of the
 // title for page-scoped controls; `children` are the right-aligned actions.
-export function PageHeader({ title, children, leftAdornment, help }) {
+export function PageHeader({ title, children, leftAdornment, help, titleAdornment }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -680,6 +680,7 @@ export function PageHeader({ title, children, leftAdornment, help }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {help}
           <h1 style={{ fontSize: 22, fontWeight: 600 }}>{title}</h1>
+          {titleAdornment}
         </div>
         {leftAdornment}
       </div>

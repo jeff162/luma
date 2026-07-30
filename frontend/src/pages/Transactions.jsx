@@ -164,7 +164,9 @@ function escapeCsvClipboardCell(value) {
 
 export default function Transactions() {
   const initialSessionStateRef = useRef(loadTransactionsSessionState())
-  const { filters, clearDate, removeSelections } = useFilters()
+  // The ledger reads the *explicit* date via getRawDate() — never getDate() — so a page default (the
+  // Dashboard's) can never leak in: an unset filter here always means all-time. See getRawDate's contract.
+  const { filters, clearDate, removeSelections, getRawDate } = useFilters()
   const location = useLocation()
   const [categories, setCategories] = useState([])
   const [data, setData] = useState({ transactions: [], total: 0, offset: 0, limit: TRANSACTIONS_BASE_PAGE_SIZE })
@@ -276,8 +278,8 @@ export default function Transactions() {
     const exPayeeSel = ofType('payee', true, 'label')
     const exOwnerSel = ofType('owner', true)
     return {
-      date_start: filters.date?.start || undefined,
-      date_end: filters.date?.end || undefined,
+      date_start: getRawDate()?.start || undefined,
+      date_end: getRawDate()?.end || undefined,
       account_ids: accountSel.length ? accountSel.join(',') : undefined,
       group_ids: groupSel.length ? groupSel.join(',') : undefined,
       category_id: uncategorizedOnly ? '__uncategorized__' : undefined,
@@ -294,7 +296,7 @@ export default function Transactions() {
       quick_filter: debouncedQuickFilter || undefined,
       needs_review: needsReviewOnly ? true : undefined,
     }
-  }, [filters, uncategorizedOnly, needsReviewOnly, debouncedQuickFilter])
+  }, [filters, getRawDate, uncategorizedOnly, needsReviewOnly, debouncedQuickFilter])
 
 
   useEffect(() => {
@@ -357,8 +359,8 @@ export default function Transactions() {
       exOwnerSel,
       uncategorizedOnly,
       needsReviewOnly,
-      dateStart: filters.date?.start || '',
-      dateEnd: filters.date?.end || '',
+      dateStart: getRawDate()?.start || '',
+      dateEnd: getRawDate()?.end || '',
       quickFilter: debouncedQuickFilter,
       sortBy: sortState.key,
       sortDir: sortState.dir,
@@ -373,8 +375,8 @@ export default function Transactions() {
     else if (isFirstLoad.current) setInitialLoading(true)
 
     const response = await api.getTransactions({
-      date_start: filters.date?.start || undefined,
-      date_end: filters.date?.end || undefined,
+      date_start: getRawDate()?.start || undefined,
+      date_end: getRawDate()?.end || undefined,
       account_ids: accountSel.length ? accountSel.join(',') : undefined,
       group_ids: groupSel.length ? groupSel.join(',') : undefined,
       category_id: uncategorizedOnly ? '__uncategorized__' : undefined,
@@ -415,7 +417,7 @@ export default function Transactions() {
     setInitialLoading(false)
     setLoadingMore(false)
     isFirstLoad.current = false
-  }, [filters, uncategorizedOnly, needsReviewOnly, debouncedQuickFilter, sortState])
+  }, [filters, getRawDate, uncategorizedOnly, needsReviewOnly, debouncedQuickFilter, sortState])
 
   useEffect(() => {
     isFirstLoad.current = true
@@ -1105,8 +1107,8 @@ export default function Transactions() {
                 stackIndex={index}
                 isTopmost={index === totalDetailPanelCount - 1}
                 onClose={() => closeDetailPanel('txn', panel.item.id)}
-                dateStart={filters.date?.start || undefined}
-                dateEnd={filters.date?.end || undefined}
+                dateStart={getRawDate()?.start || undefined}
+                dateEnd={getRawDate()?.end || undefined}
                 onReconcile={reconcilePanelEdit}
               />
             )
@@ -1121,8 +1123,8 @@ export default function Transactions() {
                 stackIndex={index}
                 isTopmost={index === totalDetailPanelCount - 1}
                 onClose={() => closeDetailPanel('category', panel.item.id)}
-                dateStart={filters.date?.start || undefined}
-                dateEnd={filters.date?.end || undefined}
+                dateStart={getRawDate()?.start || undefined}
+                dateEnd={getRawDate()?.end || undefined}
               />
             )
           }
@@ -1136,8 +1138,8 @@ export default function Transactions() {
                 stackIndex={index}
                 isTopmost={index === totalDetailPanelCount - 1}
                 onClose={() => closeDetailPanel('account', panel.item.id)}
-                dateStart={filters.date?.start || undefined}
-                dateEnd={filters.date?.end || undefined}
+                dateStart={getRawDate()?.start || undefined}
+                dateEnd={getRawDate()?.end || undefined}
               />
             )
           }

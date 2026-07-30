@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useRef, Component, lazy, Suspense, useMemo } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { FilterProvider, pastTwelveMonthsRange } from './lib/FilterContext.jsx'
+import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
 import RuntimeConfigScreen from './components/RuntimeConfigScreen.jsx'
@@ -1529,7 +1529,9 @@ export default function App() {
           key={authEnabled ? `user:${currentUser?.id || currentUser?.username || ''}` : `local:${activeLocalProfile?.id || ''}`}
           initialPreferences={bootPreferenceSubjectId && bootPreferenceSubjectId === preferenceSubjectId ? bootPreferences : null}
         >
-          <FilterProvider initialDate={pastTwelveMonthsRange()}>
+          {/* No seeded date: the filter starts unset (all-time). The Dashboard reinterprets "unset" as
+              its own configurable default period; other pages treat unset as all-time. */}
+          <FilterProvider>
             <PanelStackProvider>
               <TransactionShareProvider>
                 <UnifiedDuplicatesViewerProvider>
