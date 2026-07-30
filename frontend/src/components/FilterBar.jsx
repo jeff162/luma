@@ -93,6 +93,10 @@ const SYNTHETIC_UNASSIGNED_INCOME_GROUP_ID = '__uncategorized_income_group__'
 // tag_filter_membership_sql recognizes this id as the untagged bucket. Mirrors the category filter's
 // synthetic Uncategorized ids and the owner filter's 'unassigned'.
 const UNTAGGED_TAG_ID = '__untagged__'
+// Synthetic tag selection for "belongs to any recurring series". Recurring isn't a tag, but it shares
+// the row's tag marker strip and rides the tag facet, so a single backend definition
+// (tag_filter_membership_sql) carries it to the ledger, the Dashboard, and the CSV export at once.
+const RECURRING_TAG_ID = '__recurring__'
 
 function Popover({ children, onClose, style }) {
   const ref = useRef(null)
@@ -456,16 +460,29 @@ function FilterPopover({ onClose }) {
           // The synthetic "Untagged" bucket (rows with no effective tag) leads the list and is always
           // available even before any tags exist — it's a filter over the absence of tags, not a tag.
           const untaggedSel = { type: 'tag', id: UNTAGGED_TAG_ID, label: 'Untagged' }
+          // "Recurring" is not a tag but shares the tag marker strip and rides the tag facet — so it can
+          // scope the Dashboard and the ledger the same way. Excludable too: `≠ Recurring` = one-off rows.
+          const recurringSel = { type: 'tag', id: RECURRING_TAG_ID, label: 'Recurring' }
           return (
             <>
               <div onClick={() => pickInclude(untaggedSel)} style={{
                 ...rowStyle,
                 background: rowBg(UNTAGGED_TAG_ID),
                 justifyContent: 'space-between',
-                borderBottom: '1px solid var(--border)',
               }}>
                 <span style={{ fontSize: 13, fontStyle: 'italic', color: 'var(--muted)' }}>Untagged</span>
                 <RowTrailing mode={selectionOf(UNTAGGED_TAG_ID)?.mode} excludable onExclude={() => pickExclude(untaggedSel)} />
+              </div>
+              <div onClick={() => pickInclude(recurringSel)} style={{
+                ...rowStyle,
+                background: rowBg(RECURRING_TAG_ID),
+                justifyContent: 'space-between',
+                borderBottom: '1px solid var(--border)',
+              }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--muted)' }}>
+                  <span aria-hidden="true">↻</span> Recurring
+                </span>
+                <RowTrailing mode={selectionOf(RECURRING_TAG_ID)?.mode} excludable onExclude={() => pickExclude(recurringSel)} />
               </div>
               {tags.length === 0 ? (
                 <div style={{ padding: '12px 16px', fontSize: 13, color: 'var(--muted)' }}>

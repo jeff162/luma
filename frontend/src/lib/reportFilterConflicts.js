@@ -39,8 +39,13 @@ export function computeReportSpendingConflicts({
   const selList = selections || []
 
   if (reportKind === 'tag') {
-    const excludedTagIds = new Set(selList.filter(s => s?.type === 'tag' && s.mode === 'exclude').map(s => s.id))
-    const includedTagIds = new Set(selList.filter(s => s?.type === 'tag' && s.mode !== 'exclude').map(s => s.id))
+    // Only *real* tag selections participate in the tag co-occurrence check. The tags tab also carries
+    // synthetic buckets (`__untagged__`, `__recurring__`, `__*__`) that are orthogonal axes, not report
+    // tags — a `Recurring` include chip must not read as "filtering on tags" and flag every report tag as
+    // missing (recurring rows can well carry the report's tags), and it has no report wedge of its own.
+    const isRealTagId = id => typeof id === 'string' && !id.startsWith('__')
+    const excludedTagIds = new Set(selList.filter(s => s?.type === 'tag' && s.mode === 'exclude' && isRealTagId(s.id)).map(s => s.id))
+    const includedTagIds = new Set(selList.filter(s => s?.type === 'tag' && s.mode !== 'exclude' && isRealTagId(s.id)).map(s => s.id))
     // Only when a tag *include* filter is active are the report's other tags being narrowed away; with
     // no tag include chip, every report tag is present unless explicitly excluded.
     const filteringOnTags = includedTagIds.size > 0

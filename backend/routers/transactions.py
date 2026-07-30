@@ -630,6 +630,8 @@ def _build_transaction_filter(
     direction=None, view=None, search=None, quick_filter=None, ids=None,
     needs_review=None, include_trashed=False, recurring_series_id=None,
     recurring_excluded_series_id=None, account_type=None, import_evidence_type=None,
+    amount_min=None, amount_max=None, amount_min_op=None, amount_max_op=None,
+    recurring_only=None,
 ):
     # Single source of truth for the transaction-list WHERE clause, shared by the list feed and the
     # bulk endpoint so "select all matching the current filter" resolves the exact set the user sees.
@@ -660,6 +662,10 @@ def _build_transaction_filter(
     if recurring_series_id and isinstance(recurring_series_id, str):
         clauses.append("t.recurring_series_id = ?")
         params.append(recurring_series_id)
+    # "Any recurring series" — backs the Recurring page's all-series report. `is True` mirrors the
+    # needs_review guard so a direct (non-HTTP) call with an unset Query default doesn't trip it.
+    if recurring_only is True:
+        clauses.append("t.recurring_series_id IS NOT NULL")
     # Rows the user explicitly removed from a series (an 'excluded' override) — for the "N removed" list
     # in that series' drill-down, so a mistaken removal is recoverable there and not just via the toast.
     if recurring_excluded_series_id and isinstance(recurring_excluded_series_id, str):
@@ -738,6 +744,20 @@ def _build_transaction_filter(
         clauses.append("t.amount > 0")
     elif direction == "credit":
         clauses.append("t.amount < 0")
+    # Amount-magnitude filter (the Transactions ledger's amount popover). Mirrors the category-rule
+    # amount condition: bounds compare against ABS(amount) while the debit/credit *side* is applied
+    # separately through `direction` above — so "credit, >= $50" resolves to amount <= -50. Comparators
+    # are whitelisted to the two the UI offers per bound (>=/> and <=/<) so they can be interpolated safely.
+    # isinstance numeric guard mirrors the other filters: a direct (non-HTTP) call leaves an unset Query
+    # default as a truthy FieldInfo, which `is not None` wouldn't catch (bool excluded — it's not a bound).
+    if isinstance(amount_min, (int, float)) and not isinstance(amount_min, bool):
+        op = ">" if str(amount_min_op) == ">" else ">="
+        clauses.append(f"ABS(t.amount) {op} ?")
+        params.append(float(amount_min))
+    if isinstance(amount_max, (int, float)) and not isinstance(amount_max, bool):
+        op = "<" if str(amount_max_op) == "<" else "<="
+        clauses.append(f"ABS(t.amount) {op} ?")
+        params.append(float(amount_max))
     if view == "spending":
         clauses.append(
             "(COALESCE(c.category_type, pc.category_type) = 'expense' "
@@ -803,7 +823,12 @@ def list_transactions(
     quick_filter: Optional[str] = Query(None),
     ids:          Optional[str] = Query(None, description="comma-separated transaction IDs — re-fetch a specific set of rows"),
     recurring_series_id: Optional[str] = Query(None, description="Only rows linked to this recurring series (its members)."),
+    recurring_only: bool          = Query(False, description="Only rows linked to any recurring series (recurring_series_id IS NOT NULL)."),
     recurring_excluded_series_id: Optional[str] = Query(None, description="Only rows the user removed from this series (an 'excluded' override)."),
+    amount_min:   Optional[float] = Query(None, description="Lower amount-magnitude bound; compares against ABS(amount). Pair with amount_min_op."),
+    amount_max:   Optional[float] = Query(None, description="Upper amount-magnitude bound; compares against ABS(amount). Pair with amount_max_op."),
+    amount_min_op: Optional[str]  = Query(">=", description="Lower-bound comparator: '>=' (default) or '>'."),
+    amount_max_op: Optional[str]  = Query("<=", description="Upper-bound comparator: '<=' (default) or '<'."),
     account_type: Optional[str] = Query(None, description="Only rows whose effective account is of this type (e.g. 'paypal')."),
     import_evidence_type: Optional[str] = Query(None, description="Only rows whose captured import evidence carries this `Type` value (PayPal money-movement report)."),
     needs_review: bool          = Query(False, description="Only rows still flagged as needing review (freshly imported/synced, not yet looked over)."),
@@ -827,8 +852,11 @@ def list_transactions(
         require_all_tag_ids=require_all_tag_ids,
         direction=direction, view=view, search=search, quick_filter=quick_filter, ids=ids,
         needs_review=needs_review, include_trashed=include_trashed, recurring_series_id=recurring_series_id,
+        recurring_only=recurring_only,
         recurring_excluded_series_id=recurring_excluded_series_id,
         account_type=account_type, import_evidence_type=import_evidence_type,
+        amount_min=amount_min, amount_max=amount_max,
+        amount_min_op=amount_min_op, amount_max_op=amount_max_op,
     )
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
@@ -1170,6 +1198,7 @@ _BULK_FILTER_KEYS = {
     "payees", "exclude_account_ids", "exclude_group_ids", "exclude_category_ids",
     "exclude_owner_ids", "exclude_payees", "exclude_tag_ids", "require_all_tag_ids",
     "direction", "view", "search", "quick_filter",
+    "amount_min", "amount_max", "amount_min_op", "amount_max_op", "recurring_only",
 }
 
 

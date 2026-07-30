@@ -124,6 +124,16 @@ describe('computeReportSpendingConflicts — tag report', () => {
       { facet: 'tag', id: 't2', label: 'Reimbursable', reason: 'missing' },
     ])
   })
+
+  it('ignores synthetic tag buckets (Recurring/Untagged) — they are orthogonal axes, not report tags', () => {
+    // A `Recurring` include chip is not "filtering on tags": recurring rows can carry the report's tags,
+    // so it must not flag every report tag as missing.
+    expect(computeReportSpendingConflicts({ ...base, selections: [include('tag', '__recurring__', 'Recurring')] })).toEqual([])
+    expect(computeReportSpendingConflicts({ ...base, selections: [include('tag', '__untagged__', 'Untagged')] })).toEqual([])
+    // A real excluded report tag is still flagged even alongside a synthetic include chip.
+    const out = computeReportSpendingConflicts({ ...base, selections: [include('tag', '__recurring__', 'Recurring'), exclude('tag', 't1', 'Business')] })
+    expect(out).toEqual([{ facet: 'tag', id: 't1', label: 'Business', reason: 'excluded' }])
+  })
 })
 
 describe('resolveConflictSelectionIds', () => {

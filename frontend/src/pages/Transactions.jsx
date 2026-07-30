@@ -24,6 +24,7 @@ import { useDismissibleLayer } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import CopyTransactionsButton from '../components/CopyTransactionsButton.jsx'
+import AmountFilterControl, { normalizeAmountFilter } from '../components/AmountFilterControl.jsx'
 import WindowedRows from '../components/WindowedRows.jsx'
 
 const COLUMN_DEFS = [
@@ -87,6 +88,9 @@ function loadTransactionsSessionState() {
     const parsed = JSON.parse(raw)
     return {
       quickFilter: typeof parsed?.quickFilter === 'string' ? parsed.quickFilter : '',
+      // The amount filter is a page-local slice (like quickFilter) — session-scoped so it survives
+      // navigation but resets on next launch. normalizeAmountFilter drops an inactive/no-op draft.
+      amountFilter: normalizeAmountFilter(parsed?.amountFilter),
       sortState: normalizeTransactionSortState(parsed?.sortState),
     }
   } catch {
@@ -94,11 +98,12 @@ function loadTransactionsSessionState() {
   }
 }
 
-function saveTransactionsSessionState({ quickFilter, sortState }) {
+function saveTransactionsSessionState({ quickFilter, amountFilter, sortState }) {
   if (typeof window === 'undefined') return
   try {
     window.sessionStorage.setItem(TXN_SESSION_STATE_STORAGE_KEY, JSON.stringify({
       quickFilter: quickFilter || '',
+      amountFilter: normalizeAmountFilter(amountFilter),
       sortState: normalizeTransactionSortState(sortState),
     }))
   } catch { }
@@ -133,6 +138,19 @@ function normalizeColumnConfig(cfg) {
 
 function getInitialSortDirection(columnKey) {
   return columnKey === 'date' || columnKey === 'amount' ? 'desc' : 'asc'
+}
+
+// Translate the page-local amount filter into transaction-endpoint params. The debit/credit side maps
+// to the existing `direction` sign predicate; the magnitude bounds + per-bound comparators pass through.
+function amountFilterParams(f) {
+  if (!f) return {}
+  return {
+    amount_min: f.low != null ? f.low : undefined,
+    amount_max: f.high != null ? f.high : undefined,
+    amount_min_op: f.low != null ? f.lowOp : undefined,
+    amount_max_op: f.high != null ? f.highOp : undefined,
+    direction: f.side && f.side !== 'both' ? f.side : undefined,
+  }
 }
 
 function formatTransactionClipboardCell(key, txn, { showSourceInCategorySlot = false } = {}) {
@@ -179,6 +197,9 @@ export default function Transactions() {
   const [rulePrompt, setRulePrompt] = useState(null)
   const [quickFilter, setQuickFilter] = useState(() => initialSessionStateRef.current?.quickFilter || '')
   const [debouncedQuickFilter, setDebouncedQuickFilter] = useState(() => initialSessionStateRef.current?.quickFilter?.trim() || '')
+  // Page-local amount filter (ledger only — never the shared FilterBar/Dashboard). Bounds compare
+  // against |amount|; side rides the `direction` param so the sign applies separately. See amountParams.
+  const [amountFilter, setAmountFilter] = useState(() => initialSessionStateRef.current?.amountFilter || null)
   // Right-click row menu + its note/tag/trash/rule editors — the same shared controller the report
   // lists use via TransactionListTable, so the ledger and the reports never fork this interaction.
   // The ledger owns its paginated list, so reconcile flows back here: note/tag patch the row in
@@ -295,8 +316,9 @@ export default function Transactions() {
       exclude_owner_ids: exOwnerSel.length ? exOwnerSel.join(',') : undefined,
       quick_filter: debouncedQuickFilter || undefined,
       needs_review: needsReviewOnly ? true : undefined,
+      ...amountFilterParams(amountFilter),
     }
-  }, [filters, getRawDate, uncategorizedOnly, needsReviewOnly, debouncedQuickFilter])
+  }, [filters, getRawDate, uncategorizedOnly, needsReviewOnly, debouncedQuickFilter, amountFilter])
 
 
   useEffect(() => {
@@ -321,8 +343,8 @@ export default function Transactions() {
   }, [quickFilter])
 
   useEffect(() => {
-    saveTransactionsSessionState({ quickFilter, sortState })
-  }, [quickFilter, sortState])
+    saveTransactionsSessionState({ quickFilter, amountFilter, sortState })
+  }, [quickFilter, amountFilter, sortState])
 
   const load = useCallback(async ({ append = false, offsetOverride = 0 } = {}) => {
     // Selections split by facet *and* mode: include-mode drives the historical params, exclude-mode
@@ -359,6 +381,7 @@ export default function Transactions() {
       exOwnerSel,
       uncategorizedOnly,
       needsReviewOnly,
+      amountFilter,
       dateStart: getRawDate()?.start || '',
       dateEnd: getRawDate()?.end || '',
       quickFilter: debouncedQuickFilter,
@@ -392,6 +415,7 @@ export default function Transactions() {
       exclude_owner_ids: exOwnerSel.length ? exOwnerSel.join(',') : undefined,
       quick_filter: debouncedQuickFilter || undefined,
       needs_review: needsReviewOnly || undefined,
+      ...amountFilterParams(amountFilter),
       sort_by: sortState.key,
       sort_dir: sortState.dir,
       limit: pageSize,
@@ -417,7 +441,7 @@ export default function Transactions() {
     setInitialLoading(false)
     setLoadingMore(false)
     isFirstLoad.current = false
-  }, [filters, getRawDate, uncategorizedOnly, needsReviewOnly, debouncedQuickFilter, sortState])
+  }, [filters, getRawDate, uncategorizedOnly, needsReviewOnly, amountFilter, debouncedQuickFilter, sortState])
 
   useEffect(() => {
     isFirstLoad.current = true
@@ -469,19 +493,19 @@ export default function Transactions() {
     if (probes.length === 0) { setHidingCause(null); return }
     let cancelled = false
     setHidingCause(null)
-    ;(async () => {
-      for (const probe of probes) {
-        let resp
-        try {
-          resp = await api.getTransactions({ ...probe.params, limit: 1, offset: 0 })
-        } catch { return }
-        if (cancelled) return
-        if ((resp?.total || resp?.transactions?.length || 0) > 0) {
-          setHidingCause(probe.cause)
-          return
+      ; (async () => {
+        for (const probe of probes) {
+          let resp
+          try {
+            resp = await api.getTransactions({ ...probe.params, limit: 1, offset: 0 })
+          } catch { return }
+          if (cancelled) return
+          if ((resp?.total || resp?.transactions?.length || 0) > 0) {
+            setHidingCause(probe.cause)
+            return
+          }
         }
-      }
-    })()
+      })()
     return () => { cancelled = true }
   }, [data.transactions.length, initialLoading, loadingMore, currentFilterParams])
 
@@ -877,6 +901,10 @@ export default function Transactions() {
                 Clear
               </button>
             )}
+            <AmountFilterControl
+              value={amountFilter}
+              onChange={f => { setAmountFilter(f); isFirstLoad.current = true }}
+            />
             <FeatureExplainer topic="searching-transactions" placement="bottom-left" />
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>

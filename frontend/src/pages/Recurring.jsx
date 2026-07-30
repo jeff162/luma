@@ -75,6 +75,10 @@ function seriesCategory(series) {
 const SORT_OPTIONS = [{ value: 'name', label: 'A–Z' }, { value: 'next_due', label: 'Next due' }]
 const DEFAULT_FILTERS = ['suggested', 'confirmed', 'ended']
 
+// Synthetic openSeries id for the all-series report (every row linked to any series). Not a real
+// series id, so no SeriesCard ever matches it and the removed-rows section stays series-specific.
+const ALL_RECURRING_ID = '__all_recurring__'
+
 // Status is the primary sort key (the sections); this is the secondary key within each section.
 function seriesComparator(sortOrder) {
   const byName = (a, b) => String(a.display_name || '').localeCompare(String(b.display_name || ''))
@@ -418,7 +422,7 @@ function RemovedSection({ excluded, onAddBack }) {
 function ReportPanel({ series, rows, excluded, total, categories, loading, onClose, onCategorySave, onRowsChange, onOpenTxnDetail, onTrashed, onAddBack, scrollRef, sortState, onSort }) {
   return (
     <div style={{
-      flex: '0 0 46%', minHeight: 0, display: 'flex', flexDirection: 'column',
+      flex: '1 1 0%', minHeight: 0, display: 'flex', flexDirection: 'column',
       borderTop: '1px solid var(--border)', background: 'var(--surface2)',
     }}>
       <div style={{
@@ -670,9 +674,25 @@ export default function Recurring() {
   const [ruleModal, setRuleModal] = useState(null)  // { mode:'edit', ruleId } for a rule-backed series
   const [searchParams, setSearchParams] = useSearchParams()
 
-  const membersLoadPage = useCallback((offset, limit, sort) => (
-    api.getTransactions({ recurring_series_id: openSeries?.id, limit, offset, sort_by: sort.key, sort_dir: sort.dir })
-  ), [openSeries])
+  // The drill-down serves two shapes through one paged list: a single series (recurring_series_id) or
+  // the all-series report (recurring_only — every row linked to any series). `openSeries._all` flags the
+  // synthetic marker the "View all recurring" button sets.
+  const membersLoadPage = useCallback((offset, limit, sort) => {
+    const base = { limit, offset, sort_by: sort.key, sort_dir: sort.dir }
+    if (openSeries?._all) return api.getTransactions({ recurring_only: true, ...base })
+    // A suppressed series owns no rows (suppress nulls their recurring_series_id), so the membership
+    // fetch would come back empty and the "N transactions" link would look broken. Fall back to the
+    // series' payee (+ account when it's account-scoped) so the link still surfaces the matching
+    // transactions — the set this series would cover — without re-linking them.
+    if (openSeries?.status === 'suppressed') {
+      return api.getTransactions({
+        payees: openSeries.display_name,
+        account_ids: openSeries.account_id || undefined,
+        ...base,
+      })
+    }
+    return api.getTransactions({ recurring_series_id: openSeries?.id, ...base })
+  }, [openSeries])
   const membersPaged = usePagedTransactions({
     activeKey: openSeries ? `recurring:${openSeries.id}:${reportNonce}` : null,
     loadPage: membersLoadPage,
@@ -687,7 +707,9 @@ export default function Recurring() {
   // user-curated set, so fetching the whole set is honest here rather than a magic cap that could hide
   // some — the case the limit: 0 opt-in exists for.
   useEffect(() => {
-    if (!openSeries) { setExcluded([]); return undefined }
+    // The all-series report has no single series to fetch removals for — an 'excluded' override is
+    // per-series, so the removed-rows section only applies to a single-series drill-down.
+    if (!openSeries || openSeries._all) { setExcluded([]); return undefined }
     let live = true
     api.getTransactions({ recurring_excluded_series_id: openSeries.id, limit: 0 })
       .then(resp => { if (live) setExcluded(resp.transactions || []) })
@@ -741,6 +763,14 @@ export default function Recurring() {
     // switches to it. Selecting a series keys the paged member fetch (usePagedTransactions) and the
     // removed-rows effect, which load on their own — the list renders and edits like every other list.
     setOpenSeries(prev => (prev && prev.id === s.id ? null : s))
+  }, [])
+
+  // The all-series report: a synthetic marker driving the same drill-down over every series-linked row
+  // (recurring_only). Toggles closed when it's already the open view.
+  const openAllReport = useCallback(() => {
+    setOpenSeries(prev => (prev && prev._all
+      ? null
+      : { id: ALL_RECURRING_ID, display_name: 'All recurring transactions', _all: true }))
   }, [])
 
   // Undo a removal from inside the drill-down (the durable path for a mistake noticed after the toast is
@@ -830,7 +860,24 @@ export default function Recurring() {
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ padding: '32px 32px 0', maxWidth: 860, width: '100%', margin: '0 auto', flexShrink: 0 }}>
-        <PageHeader title="Recurring Transactions">
+        <PageHeader
+          title="Recurring Transactions"
+          titleAdornment={allSeries && allSeries.length > 0 && (
+            // The standard report ↗ next to the title opens a transaction report of every recurring row
+            // (all series). Toggles closed when it's already the open view.
+            <button
+              onClick={openAllReport}
+              aria-label="Open a report of all recurring transactions"
+              title={openSeries?._all ? 'Close the recurring transactions report' : 'Open a report of all recurring transactions'}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent2)',
+                fontSize: 17, lineHeight: 1, padding: '2px 6px', borderRadius: 6,
+                opacity: openSeries?._all ? 1 : 0.75,
+                textDecoration: openSeries?._all ? 'underline' : 'none',
+              }}
+            >↗</button>
+          )}
+        >
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Button variant="ghost" onClick={() => load()} title="Reload the list">Refresh</Button>
             <Button variant="ghost" onClick={() => setAdding(true)}>Add manually</Button>
@@ -874,7 +921,10 @@ export default function Recurring() {
 
       {/* Split: the series list stays visible above while the drill-down opens below. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <div ref={listRef} style={{ flex: openSeries ? '1 1 54%' : '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '4px 32px 24px' }}>
+        {/* When a report is open the list shrinks to its content but is capped so a long series list can't
+            crowd out the report; the report (flex:1 below) then fills all remaining space — so a short
+            list (even one series) yields a large report instead of a fixed small strip. */}
+        <div ref={listRef} style={{ flex: openSeries ? '0 1 auto' : '1 1 auto', maxHeight: openSeries ? '50%' : undefined, minHeight: 0, overflowY: 'auto', padding: '4px 32px 24px' }}>
           <div style={{ maxWidth: 860, margin: '0 auto' }}>
             {allSeries === null ? (
               <Spinner />

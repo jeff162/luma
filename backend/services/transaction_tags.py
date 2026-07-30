@@ -43,6 +43,12 @@ _EFFECTIVE_ACCOUNT_ID_SQL = "COALESCE((SELECT parent_account_id FROM account WHE
 # Uncategorized ids and the owner filter recognizes 'unassigned'.
 UNTAGGED_FILTER_ID = "__untagged__"
 
+# Synthetic tag-filter selection: "rows that belong to any recurring series" (recurring_series_id set).
+# Recurring isn't a tag, but it shares the tag marker strip on the row and the user filters on it the
+# same way, so it rides the tag facet — which means it reaches every surface the tag filter already does
+# (the ledger, the Dashboard summaries/trends/drills, and the CSV export) with no per-endpoint plumbing.
+RECURRING_FILTER_ID = "__recurring__"
+
 # A transaction's *effective* tags, unioned across the four paths a tag reaches a row — direct (a
 # visible `txn_tag`), inherited from its leaf category, that category's parent group, or its effective
 # (top-level) account. Correlates on the outer `t`; every effective-tag helper builds on this one union.
@@ -125,14 +131,16 @@ def effective_tag_match_all_sql(placeholder_count: int) -> str:
 
 def tag_filter_membership_sql(ids: list[str]) -> tuple[str, list] | None:
     """Build one membership expression for a tag-filter selection that may mix real tag ids with the
-    synthetic UNTAGGED_FILTER_ID. Real ids match via `effective_tag_match_sql`; UNTAGGED matches rows
-    with no effective tag (`NOT effective_tag_any_sql`). The parts OR together (within-facet OR), exactly
+    synthetic UNTAGGED_FILTER_ID / RECURRING_FILTER_ID. Real ids match via `effective_tag_match_sql`;
+    UNTAGGED matches rows with no effective tag (`NOT effective_tag_any_sql`); RECURRING matches rows in
+    any recurring series (`recurring_series_id IS NOT NULL`). The parts OR together (within-facet OR), exactly
     as the category filter ORs real categories with its synthetic Uncategorized buckets. Returns
     `(expr, params)` or None when nothing is selected. Callers append `expr` for include and
     `NOT (expr)` for exclude, so include/exclude share one definition. One builder feeds the list feed,
     the summaries, and the CSV export so a tag chip means the same thing on every surface."""
-    real = [i for i in ids if i and i != UNTAGGED_FILTER_ID]
+    real = [i for i in ids if i and i not in (UNTAGGED_FILTER_ID, RECURRING_FILTER_ID)]
     want_untagged = UNTAGGED_FILTER_ID in ids
+    want_recurring = RECURRING_FILTER_ID in ids
     parts: list[str] = []
     params: list = []
     if real:
@@ -140,6 +148,11 @@ def tag_filter_membership_sql(ids: list[str]) -> tuple[str, list] | None:
         params.extend(real)
     if want_untagged:
         parts.append(f"NOT ({effective_tag_any_sql()})")
+    # Recurring membership is a plain column test on the correlated `t`. As one of the OR parts it means
+    # "has any of these tags OR is recurring"; wrapped in NOT (...) by the exclude path it becomes
+    # `recurring_series_id IS NULL` (non-recurring) — NULL-safe, since IS NOT NULL never yields NULL.
+    if want_recurring:
+        parts.append("t.recurring_series_id IS NOT NULL")
     if not parts:
         return None
     return f"({' OR '.join(parts)})", params

@@ -29,6 +29,12 @@ export const INCLUDE_KEYS = [
   'account_ids', 'group_ids', 'category_id', 'category_ids', 'tag_ids', 'payees', 'owner_ids',
 ]
 
+// The ledger's amount popover (magnitude bounds + debit/credit side via `direction`) and the recurring
+// filter are narrowing intents too — like an include facet, an amount/recurring filter that yields
+// nothing is genuine emptiness, so they count toward "intent to preserve" but are never *dropped* by a
+// probe (only the subtractive date/exclude constraints are).
+export const INTENT_FLAG_KEYS = ['amount_min', 'amount_max', 'direction', 'recurring_only']
+
 const has = (params, keys) => keys.some(k => params[k] != null && params[k] !== '')
 
 function without(params, keys) {
@@ -45,7 +51,8 @@ export function planHidingProbes(params = {}) {
   const hasExclude = has(params, EXCLUDE_KEYS)
   if (!hasDate && !hasExclude) return []
 
-  const hasIntent = !!params.quick_filter || !!params.needs_review || has(params, INCLUDE_KEYS)
+  const hasIntent = !!params.quick_filter || !!params.needs_review
+    || has(params, INCLUDE_KEYS) || has(params, INTENT_FLAG_KEYS)
   if (!hasIntent) return []
 
   const probes = []

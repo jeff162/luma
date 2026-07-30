@@ -150,7 +150,10 @@ function SegButton({ active, onClick, children }) {
   )
 }
 
-function AmountCondition({ low, lowOp, high, highOp, side, onChange }) {
+// Exported so the Transactions ledger's amount *filter* popover reuses the exact same control (Both/
+// Debits/Credits, Range/Equals, per-bound comparator) users already know from the rule editor —
+// magnitude compares against |amount|, the debit/credit side applies the sign separately.
+export function AmountCondition({ low, lowOp, high, highOp, side, onChange }) {
   const isEquals = low != null && high != null && low === high
   function setLow(v) { onChange({ low: v, lowOp, high, highOp, side }) }
   function setLowOp(op) { onChange({ low, lowOp: op, high, highOp, side }) }
