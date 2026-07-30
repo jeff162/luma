@@ -762,10 +762,10 @@ function TagReportBuilder({ availableTags, onClose, onDisplay, onSave }) {
 /*
  * Gear beside the "Dashboard" title: sets the per-user *default period* — what the shared date filter
  * means on the Dashboard when the user hasn't picked a range. A setting (persisted), not a filter, and
- * it never applies to other pages. "Automatic" resolves to Last 12 months when the current year has
- * data, else All time; the popover shows which, so the choice isn't opaque.
+ * it never applies to other pages. The menu is the concrete periods (Year to date / Last 12 months /
+ * All time); the first-visit seed picks the initial one automatically (see useDashboardDefaultPeriod).
  */
-function DashboardDefaultPeriodGear({ pref, setPref, resolvedLabel }) {
+function DashboardDefaultPeriodGear({ pref, setPref }) {
   const [open, setOpen] = useState(false)
   const btnRef = useRef(null)
   const popRef = useRef(null)
@@ -808,12 +808,7 @@ function DashboardDefaultPeriodGear({ pref, setPref, resolvedLabel }) {
                   background: selected ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
                 }}
               >
-                <span style={{ fontWeight: selected ? 600 : 400 }}>
-                  {opt.label}
-                  {opt.value === 'auto' && resolvedLabel && (
-                    <span style={{ color: 'var(--muted)', fontWeight: 400 }}> — {resolvedLabel}</span>
-                  )}
-                </span>
+                <span style={{ fontWeight: selected ? 600 : 400 }}>{opt.label}</span>
                 {selected && <span style={{ color: 'var(--accent2)', fontSize: 11 }}>✓</span>}
               </div>
             )
@@ -2410,7 +2405,6 @@ export default function Dashboard() {
             <DashboardDefaultPeriodGear
               pref={defaultPeriodPref}
               setPref={setDefaultPeriodPref}
-              resolvedLabel={dashboardDefaultDate?.preset || 'All time'}
             />
           )}
           leftAdornment={(mode === 'single' || mode === 'trends') && (

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { resolveDashboardDefaultDate } from '../dashboardDefaultPeriod.js'
+import { resolveDashboardDefaultDate, initialDefaultPref } from '../dashboardDefaultPeriod.js'
 
 describe('resolveDashboardDefaultDate', () => {
   beforeEach(() => {
@@ -23,21 +23,22 @@ describe('resolveDashboardDefaultDate', () => {
     expect(resolveDashboardDefaultDate('all')).toBeNull()
   })
 
-  it('auto with current-year data → Last 12 months', () => {
-    expect(resolveDashboardDefaultDate('auto', true)).toEqual({ start: '2025-07-30', end: '2026-07-30', preset: 'Last 12 months' })
+  it('an unknown/missing pref falls back to all-time (null)', () => {
+    expect(resolveDashboardDefaultDate(undefined)).toBeNull()
   })
 
-  it('auto without current-year data → all-time (null)', () => {
-    expect(resolveDashboardDefaultDate('auto', false)).toBeNull()
-  })
-
-  it('auto with unknown probe result falls back to all-time (null)', () => {
-    expect(resolveDashboardDefaultDate('auto', undefined)).toBeNull()
-  })
-
-  it('every option ends at today', () => {
+  it('concrete presets end at today', () => {
     for (const pref of ['ytd', 'last12m']) {
       expect(resolveDashboardDefaultDate(pref).end).toBe('2026-07-30')
     }
+  })
+})
+
+describe('initialDefaultPref (first-visit seed)', () => {
+  it('seeds Last 12 months when the last 12 months has data', () => {
+    expect(initialDefaultPref(true)).toBe('last12m')
+  })
+  it('seeds All time when there is no recent data', () => {
+    expect(initialDefaultPref(false)).toBe('all')
   })
 })

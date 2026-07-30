@@ -9,10 +9,12 @@
  * the filter starts unset everywhere, and only the Dashboard reinterprets "unset" as this default —
  * the Transactions page always treats unset as all-time, so the default never leaks across pages.
  *
- * `auto` is the shipped default: Last 12 months when there's data in the current year, else All time —
- * so loading a pile of old historical data and then cleaning it up doesn't open the Dashboard on an
- * empty 12-month window. That check needs the server (there's no date-bounds endpoint), so it's a
- * one-shot probe, module-cached for the session and invalidated when transactions change.
+ * The user picks the default period from the gear menu: Year to date, Last 12 months, or All time. On
+ * the very first visit (no stored choice yet) the *initial* value is computed for them — Last 12 months
+ * when there's data in the last 12 months, else All time — so loading a pile of old historical data
+ * doesn't open the Dashboard on an empty window. That's only a one-time seed: it's persisted as a
+ * normal concrete choice, so "automatic" is never an ongoing mode the user has to reason about. The
+ * check needs the server (there's no date-bounds endpoint), so it's a one-shot probe, module-cached.
  */
 
 import { useEffect, useMemo, useState } from 'react'
@@ -22,9 +24,9 @@ import { useUserPreference } from './UserPreferencesContext.jsx'
 
 export const DASHBOARD_DEFAULT_PERIOD_PREF_KEY = 'ui.dashboard.defaultPeriod'
 
-// Order here is the order shown in the gear menu.
+// The selectable defaults, in gear-menu order. "Automatic" is not here — it's only the first-visit seed
+// (see initialDefaultPref), not a choice the user keeps.
 export const DASHBOARD_DEFAULT_PERIOD_OPTIONS = [
-  { value: 'auto', label: 'Automatic' },
   { value: 'ytd', label: 'Year to date' },
   { value: 'last12m', label: 'Last 12 months' },
   { value: 'all', label: 'All time' },
@@ -32,11 +34,11 @@ export const DASHBOARD_DEFAULT_PERIOD_OPTIONS = [
 
 const fmt = d => format(d, 'yyyy-MM-dd')
 
-// Resolve a preference (+ the current-year-data probe result, for 'auto') into an effective date object
-// the filter machinery understands, or `null` for all-time. Every option ends at *today* — the choice
-// is only how far back it starts. `null` (all-time) is deliberately indistinguishable from "no default"
-// downstream: `getDate()` returns it, and the chip shows no default badge, which is correct.
-export function resolveDashboardDefaultDate(pref, hasCurrentYearData) {
+// Resolve a concrete preference into an effective date object the filter machinery understands, or
+// `null` for all-time. Every option ends at *today* — the choice is only how far back it starts. `null`
+// (all-time) is deliberately indistinguishable from "no default" downstream: `getDate()` returns it and
+// the chip shows no default badge, which is correct.
+export function resolveDashboardDefaultDate(pref) {
   const today = new Date()
   switch (pref) {
     case 'ytd':
@@ -44,13 +46,15 @@ export function resolveDashboardDefaultDate(pref, hasCurrentYearData) {
     case 'last12m':
       return { start: fmt(subYears(today, 1)), end: fmt(today), preset: 'Last 12 months' }
     case 'all':
-      return null
-    case 'auto':
     default:
-      // Unknown current-year data (probe pending) resolves to all-time; the caller holds the paint
-      // until it settles, so this fallback only shows if the probe genuinely can't answer.
-      return hasCurrentYearData ? resolveDashboardDefaultDate('last12m') : null
+      return null
   }
+}
+
+// The concrete default to seed on first visit, from the current-year-data probe: Last 12 months when
+// there's recent data, otherwise All time.
+export function initialDefaultPref(hasCurrentYearData) {
+  return hasCurrentYearData ? 'last12m' : 'all'
 }
 
 // Session cache for the "is there data in the current year?" probe. `undefined` = not yet known.
@@ -70,34 +74,34 @@ function probeCurrentYearData() {
   return inflightProbe
 }
 
-function invalidateCurrentYearProbe() {
-  cachedHasCurrentYearData = undefined
-  inflightProbe = null
-}
-
-// Reads the default-period preference and resolves it to an effective date. `pending` is true only
-// while the 'auto' probe hasn't answered yet (the Dashboard uses it to hold the first paint); it's
-// always false for the explicit presets, which resolve synchronously.
+// Reads the default-period preference and resolves it to an effective date. Until the user (or the
+// first-visit seed) has established a concrete choice, `pending` is true and the Dashboard holds its
+// first paint; once a concrete value exists the resolve is synchronous.
 export function useDashboardDefaultPeriod() {
-  const [pref, setPref] = useUserPreference(DASHBOARD_DEFAULT_PERIOD_PREF_KEY, 'auto')
+  // `null` = no choice stored yet → seed it from the probe on first visit.
+  const [storedPref, setStoredPref] = useUserPreference(DASHBOARD_DEFAULT_PERIOD_PREF_KEY, null)
   const [hasCurrentYearData, setHasCurrentYearData] = useState(cachedHasCurrentYearData)
 
+  // Probe only while there's no stored choice yet (that's the only thing the probe feeds).
   useEffect(() => {
-    if (pref !== 'auto') return
+    if (storedPref != null) return
     let cancelled = false
     probeCurrentYearData().then(result => { if (!cancelled) setHasCurrentYearData(result) })
-    // A transaction import/cleanup can change whether the current year has data; re-probe so the
-    // default follows suit on the next Dashboard visit.
-    const onChange = () => { invalidateCurrentYearProbe(); probeCurrentYearData().then(r => { if (!cancelled) setHasCurrentYearData(r) }) }
-    window.addEventListener('luma:transactions-changed', onChange)
-    return () => { cancelled = true; window.removeEventListener('luma:transactions-changed', onChange) }
-  }, [pref])
+    return () => { cancelled = true }
+  }, [storedPref])
 
-  const defaultDate = useMemo(
-    () => resolveDashboardDefaultDate(pref, hasCurrentYearData),
-    [pref, hasCurrentYearData],
-  )
-  const pending = pref === 'auto' && hasCurrentYearData === undefined
+  // First visit: once the probe answers, persist the computed default as a normal concrete choice, so
+  // it survives reloads and never re-evaluates behind the user's back.
+  useEffect(() => {
+    if (storedPref == null && hasCurrentYearData !== undefined) {
+      setStoredPref(initialDefaultPref(hasCurrentYearData))
+    }
+  }, [storedPref, hasCurrentYearData, setStoredPref])
 
-  return { pref, setPref, defaultDate, pending }
+  // Effective choice: the stored one, or the computed seed while it's still being established.
+  const pref = storedPref ?? (hasCurrentYearData === undefined ? undefined : initialDefaultPref(hasCurrentYearData))
+  const defaultDate = useMemo(() => (pref ? resolveDashboardDefaultDate(pref) : null), [pref])
+  const pending = storedPref == null && hasCurrentYearData === undefined
+
+  return { pref, setPref: setStoredPref, defaultDate, pending }
 }
