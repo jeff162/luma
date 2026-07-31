@@ -60,9 +60,31 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
   const [twoFactorCode, setTwoFactorCode] = useState('')
   const [awaiting2fa, setAwaiting2fa] = useState(false)
   const [recoveryCodeCount, setRecoveryCodeCount] = useState(null)
+  // A migrated/claimable account (or an admin-forced reset) must set a new password before the session
+  // completes; login/change-password can return `requires_password_change`, pivoting the form in place.
+  const [awaitingPasswordChange, setAwaitingPasswordChange] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const profile = getSecurityProfile(securityProfile)
+
+  // Route a login/change-password response to the right in-place step (password change, then 2FA, then done).
+  function applyAuthResponse(resp) {
+    if (resp.requires_password_change) {
+      setAwaitingPasswordChange(true)
+      setNewPassword('')
+      setNewPasswordConfirm('')
+      return
+    }
+    if (resp.requires_2fa) {
+      setAwaiting2fa(true)
+      setRecoveryCodeCount(resp.recovery_code_count ?? null)
+      setTwoFactorCode('')
+      return
+    }
+    onAuthenticated(resp.user)
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -72,14 +94,30 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
       const resp = needsBootstrap
         ? await api.bootstrap(username, password, displayName || username)
         : await api.login(username, password)
-      if (resp.requires_2fa) {
-        // Username/password can be accepted before the session is complete, so the form pivots into code entry in place.
-        setAwaiting2fa(true)
-        setRecoveryCodeCount(resp.recovery_code_count ?? null)
-        setTwoFactorCode('')
-        return
-      }
-      onAuthenticated(resp.user)
+      applyAuthResponse(resp)
+    } catch (err) {
+      setError(err.message || 'Request failed')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handlePasswordChangeSubmit(e) {
+    e.preventDefault()
+    if (!validatePasswordForPolicy(newPassword, passwordPolicy)) {
+      setError(`Password does not meet the policy: ${passwordPolicyHelpText(passwordPolicy)}`)
+      return
+    }
+    if (newPassword !== newPasswordConfirm) {
+      setError('Passwords do not match.')
+      return
+    }
+    setSubmitting(true)
+    setError('')
+    try {
+      const resp = await api.changePassword(newPassword)
+      setAwaitingPasswordChange(false)
+      applyAuthResponse(resp)
     } catch (err) {
       setError(err.message || 'Request failed')
     } finally {
@@ -102,29 +140,34 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
   }
 
   const buttonLabel = submitting
-    ? (awaiting2fa ? 'Verifying code...' : (needsBootstrap ? 'Creating account...' : 'Signing in...'))
-    : (awaiting2fa ? 'Verify code' : (needsBootstrap ? 'Create first account' : 'Sign in'))
+    ? (awaitingPasswordChange ? 'Saving password...' : (awaiting2fa ? 'Verifying code...' : (needsBootstrap ? 'Creating account...' : 'Signing in...')))
+    : (awaitingPasswordChange ? 'Set password' : (awaiting2fa ? 'Verify code' : (needsBootstrap ? 'Create first account' : 'Sign in')))
   const bootstrapPasswordOk = validatePasswordForPolicy(password, passwordPolicy)
+  const formSubmit = awaitingPasswordChange
+    ? handlePasswordChangeSubmit
+    : (awaiting2fa ? handleTwoFactorSubmit : handleSubmit)
 
   return (
     <div style={s.page}>
-      <form onSubmit={awaiting2fa ? handleTwoFactorSubmit : handleSubmit} style={s.card}>
+      <form onSubmit={formSubmit} style={s.card}>
         <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 6 }}>{APP_NAME}</div>
         <div style={{ fontSize: 14, color: 'var(--muted)', marginBottom: 20, lineHeight: 1.5 }}>
-          {awaiting2fa
-            ? `Enter the 6-digit code from your authenticator app to complete sign-in.${recoveryCodeCount ? ` You can also use one of your ${recoveryCodeCount} recovery codes.` : ''}`
-            : needsBootstrap
-              ? `Create the first account. That account becomes the initial tenant owner. Security mode: ${profile.label}.`
-              : `Sign in to load your workspace. Security mode: ${profile.label}.`}
+          {awaitingPasswordChange
+            ? 'Set a new password to finish signing in.'
+            : awaiting2fa
+              ? `Enter the 6-digit code from your authenticator app to complete sign-in.${recoveryCodeCount ? ` You can also use one of your ${recoveryCodeCount} recovery codes.` : ''}`
+              : needsBootstrap
+                ? `Create the first account. That account becomes the workspace admin. Security mode: ${profile.label}.`
+                : `Sign in to load your workspace. Security mode: ${profile.label}.`}
         </div>
-        {!awaiting2fa && (
+        {!awaiting2fa && !awaitingPasswordChange && (
           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16, lineHeight: 1.5 }}>
             {profile.summary}
           </div>
         )}
 
         <div style={{ display: 'grid', gap: 12 }}>
-          {!awaiting2fa && (
+          {!awaiting2fa && !awaitingPasswordChange && (
             <TransientTextInput
               value={username}
               onChange={setUsername}
@@ -135,7 +178,7 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
               style={s.input}
             />
           )}
-          {!awaiting2fa && needsBootstrap && (
+          {!awaiting2fa && !awaitingPasswordChange && needsBootstrap && (
             <TransientTextInput
               value={displayName}
               onChange={setDisplayName}
@@ -146,7 +189,33 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
               style={s.input}
             />
           )}
-          {!awaiting2fa ? (
+          {awaitingPasswordChange ? (
+            <>
+              <TransientTextInput
+                type="password"
+                value={newPassword}
+                onChange={setNewPassword}
+                restoreOnEscape
+                onBlurCommit={false}
+                placeholder="New password"
+                autoComplete="new-password"
+                style={s.input}
+              />
+              <TransientTextInput
+                type="password"
+                value={newPasswordConfirm}
+                onChange={setNewPasswordConfirm}
+                restoreOnEscape
+                onBlurCommit={false}
+                placeholder="Confirm new password"
+                autoComplete="new-password"
+                style={s.input}
+              />
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: -4 }}>
+                {passwordPolicyHelpText(passwordPolicy)}
+              </div>
+            </>
+          ) : !awaiting2fa ? (
             <>
               <TransientTextInput
                 type="password"

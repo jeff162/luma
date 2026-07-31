@@ -914,6 +914,7 @@ export default function App() {
   const [runtimeConfig, setRuntimeConfig] = useState({ ok: true })
   const [passwordPolicy, setPasswordPolicy] = useState('min_8')
   const [securityProfile, setSecurityProfile] = useState('local_private')
+  const [dataProviderIntended, setDataProviderIntended] = useState(false)
   const [experimentalSecuritySettings, setExperimentalSecuritySettings] = useState(false)
   const [developerOptionsEnabled, setDeveloperOptionsEnabled] = useState(false)
   const [dbInstanceId, setDbInstanceId] = useState('')
@@ -943,21 +944,31 @@ export default function App() {
   const preferenceSubjectId = authEnabled
     ? (currentUser?.id || currentUser?.user_id || '')
     : (activeLocalProfile?.id || '')
+  // Setters are exposed alongside getters so the Settings security forms can persist a change to
+  // the backend and immediately reflect it in shell-level session state without a reload. (useState
+  // setters are stable, so they never re-trigger this memo.)
   const appSessionValue = useMemo(() => ({
     authEnabled,
     currentUser,
     passwordPolicy,
     securityProfile,
+    dataProviderIntended,
     experimentalSecuritySettings,
     developerOptionsEnabled,
     dbInstanceId,
     activeLocalProfile,
     preferenceSubjectId,
+    setAuthEnabled,
+    setSecurityProfile,
+    setPasswordPolicy,
+    setDataProviderIntended,
+    setCurrentUser,
   }), [
     authEnabled,
     currentUser,
     passwordPolicy,
     securityProfile,
+    dataProviderIntended,
     experimentalSecuritySettings,
     developerOptionsEnabled,
     dbInstanceId,
@@ -1007,6 +1018,7 @@ export default function App() {
         setNeedsBootstrap(!!status.needs_bootstrap)
         setPasswordPolicy(status.password_policy || 'min_8')
         setSecurityProfile(status.security_profile || 'local_private')
+        setDataProviderIntended(!!status.data_provider_intended)
         setExperimentalSecuritySettings(!!status.experimental_security_settings)
         setDeveloperOptionsEnabled(!!status.developer_options_enabled)
         setDbInstanceId(status.db_instance_id || '')

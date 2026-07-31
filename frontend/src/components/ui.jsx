@@ -765,6 +765,51 @@ export function Input({ value, onChange, placeholder, style, id, ...rest }) {
   )
 }
 
+// Password field with an inline show/hide reveal. Controlled like `Input` (value/onChange as a string).
+// `wrapperStyle` sizes the field (e.g. a maxWidth so it doesn't stretch to the full card); the reveal
+// button is non-tabbable so it never sits between the field and the submit button in tab order.
+export function PasswordInput({
+  value,
+  onChange,
+  placeholder,
+  disabled = false,
+  autoComplete = 'new-password',
+  id,
+  wrapperStyle,
+  ...rest
+}) {
+  const autoId = useId()
+  const [revealed, setRevealed] = useState(false)
+  return (
+    <div style={{ position: 'relative', ...wrapperStyle }}>
+      <input
+        {...rest}
+        id={id || autoId}
+        type={revealed ? 'text' : 'password'}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        disabled={disabled}
+        autoComplete={autoComplete}
+        style={{ ...getFormControlStyle({ size: 'md', surface: 'base' }), width: '100%', paddingRight: 58 }}
+      />
+      <button
+        type="button"
+        tabIndex={-1}
+        onClick={() => setRevealed(v => !v)}
+        aria-label={revealed ? 'Hide password' : 'Show password'}
+        style={{
+          position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+          background: 'transparent', border: 'none', color: 'var(--muted)',
+          fontSize: 12, fontWeight: 600, cursor: disabled ? 'default' : 'pointer', padding: '4px 6px',
+        }}
+      >
+        {revealed ? 'Hide' : 'Show'}
+      </button>
+    </div>
+  )
+}
+
 export function Badge({ label, toneKey, markerKind = 'category' }) {
   const theme = getCategoryBadgeTheme(toneKey || label || 'badge')
   return (

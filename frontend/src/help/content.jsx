@@ -64,6 +64,11 @@ export const HELP_SECTIONS = [
     label: 'Reports & search',
     blurb: 'Getting answers back out: dashboard breakdowns and searching the history.',
   },
+  {
+    key: 'access-safety',
+    label: 'Access & data safety',
+    blurb: 'What sign-in protection and two-factor guard, and what stays in your hands -- the ledger on disk, and backups.',
+  },
 ]
 
 export const HELP_TOPICS = [
@@ -1330,6 +1335,76 @@ export const HELP_TOPICS = [
           See also:{' '}
           <HelpLink to="/help/parts-of-luma">how rules come into being</HelpLink> and{' '}
           <HelpLink to="/help/re-categorizing">what changes a transaction’s category</HelpLink>.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'data-and-backups',
+    section: 'access-safety',
+    title: 'Your data on disk, and backups',
+    surfaces: ['Intended usage (Settings)'],
+    summary: `Your transactions live in a plain-text database on this machine -- protected by your computer, not by ${APP_NAME}. Treat that file as sensitive: don’t copy it around, and move data with an encrypted backup instead.`,
+    body: () => (
+      <>
+        <p>
+          {APP_NAME} keeps everything in a local SQLite database on the machine it runs on. The
+          transaction ledger &mdash; accounts, transactions, categories, tags &mdash; is stored in{' '}
+          <strong>plain text</strong>. It is protected by your computer’s own security (disk encryption,
+          your OS login, who can physically reach the machine), not by anything {APP_NAME} does to the
+          file. The sign-in password guards <em>network</em> access to the app; it does not encrypt the
+          file on disk.
+        </p>
+        <p>
+          The practical consequence: <strong>treat the database file as sensitive.</strong> Copying it to
+          a shared drive, emailing it, or syncing it to the cloud exposes the whole ledger in the clear
+          to anyone who can read it there. To move or archive your data, use {APP_NAME}’s{' '}
+          <strong>backup</strong> (on the Import / Export page) rather than the raw file &mdash; a backup
+          can be <strong>encrypted</strong> with a key you supply, so it is safe to store or carry.
+        </p>
+        <p>
+          Connecting a bank or data provider is the most sensitive thing you can store, because it holds
+          live, ongoing access to that account. Unlike the transaction ledger, those credentials are{' '}
+          <strong>encrypted on disk</strong> &mdash; sealed with a strong password of their own, separate
+          from and unaffected by the account sign-in password policy &mdash; so they stay protected even
+          where the rest of the database does not. The sign-in side of access is covered in{' '}
+          <HelpLink to="/help/account-security">account security</HelpLink>.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: 'account-security',
+    section: 'access-safety',
+    title: 'Account security: password and two-factor',
+    surfaces: ['Account security (Settings)'],
+    summary: `Sign-in protection is a network perimeter -- it keeps people who aren’t users out. It is not disk encryption, and everyone signed in shares the same data. Two-factor adds a code at sign-in and is optional.`,
+    body: () => (
+      <>
+        <p>
+          Sign-in protection exists to keep <strong>non-users out</strong> &mdash; it is a perimeter
+          around the app, not a wall between the people who use it. Everyone who signs in sees and edits
+          the <strong>same shared data</strong>; the password does not scope one person’s transactions
+          away from another’s. And it guards <em>network</em> access only: it is not disk encryption, so
+          it is not a substitute for keeping the machine itself secure (see{' '}
+          <HelpLink to="/help/data-and-backups">your data on disk</HelpLink>).
+        </p>
+        <p>
+          <strong>Password policy</strong> sets how strong account passwords must be. It applies to
+          everyone, and you can tighten or relax it at any time.
+        </p>
+        <p>
+          <strong>Two-factor (an authenticator app)</strong> adds a one-time code after the password.
+          When it is on, you enter that code on <strong>every fresh sign-in</strong> &mdash; a browser
+          with an active session is not asked again until that session ends, but there is no &ldquo;trust
+          this device&rdquo; that skips the code on a new sign-in. If you lose the authenticator, the{' '}
+          <strong>recovery codes</strong> shown when you turn it on are the way back in, so save them
+          somewhere safe.
+        </p>
+        <p>
+          Two-factor is optional and mainly matters if this instance is reachable beyond your trusted
+          network. On a single machine or a trusted home network it adds little &mdash; leaving it off is
+          reasonable, and it does nothing unless enabled.
         </p>
       </>
     ),

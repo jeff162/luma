@@ -6,9 +6,9 @@ import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { APP_NAME, APP_VERSION } from '../lib/appConfig.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
-import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, AppConfirmDialog } from '../components/ui.jsx'
+import { Card, PageHeader, Button, Spinner, EmptyState, FormLabel, InsetPanel, SectionEyebrow, getFormControlStyle, PasswordInput, AppConfirmDialog } from '../components/ui.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
-import { passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
+import { PASSWORD_POLICIES, passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
 import { useTransientTextEdit } from '../lib/uiInteractions.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { THEME_PREF_KEY, THEME_SYSTEM, THEME_CHOICES, THEME_LABELS } from '../lib/theme.js'
@@ -20,6 +20,9 @@ const SETTINGS_SECTIONS_PREF_KEY = 'ui.settings.stickySections'
 // Stable default so the preference value keeps a constant identity when nothing is saved yet.
 const EMPTY_SECTION_STATE = {}
 const SETTINGS_CONTENT_WIDTH = 'min(1040px, 100%)'
+// Password fields don't need the full card width — cap them so a ~40-50 character entry is visible
+// without the field spanning the whole (wide) settings card.
+const PASSWORD_FIELD_WIDTH = { maxWidth: 360 }
 function clearBrowserStoredState() {
   if (typeof window === 'undefined') return
   try {
@@ -117,6 +120,7 @@ function UserAdminSection({ passwordPolicy }) {
       password: '',
       role: user.role || 'member',
       status: user.status || 'active',
+      must_change_password: !!user.must_change_password,
     })
     setError('')
   }
@@ -129,6 +133,7 @@ function UserAdminSection({ passwordPolicy }) {
       password: '',
       role: 'member',
       status: 'active',
+      must_change_password: false,
     })
   }
 
@@ -141,6 +146,7 @@ function UserAdminSection({ passwordPolicy }) {
         display_name: editForm.display_name,
         role: editForm.role,
         status: editForm.status,
+        must_change_password: editForm.must_change_password,
         ...(editForm.password ? { password: editForm.password } : {}),
       }
       await api.updateUser(userId, payload)
@@ -281,6 +287,14 @@ function UserAdminSection({ passwordPolicy }) {
               <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                 {editForm.password ? passwordPolicyHelpText(passwordPolicy) : 'Leave the password field empty to keep the existing password.'}
               </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={editForm.must_change_password}
+                  onChange={e => setEditForm(prev => ({ ...prev, must_change_password: e.target.checked }))}
+                />
+                Require a password change at next sign-in
+              </label>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 <Button
                   small
@@ -329,7 +343,372 @@ function UserAdminSection({ passwordPolicy }) {
   )
 }
 
-function AccountSecuritySection() {
+// The "Intended usage" selector. Three mutually-exclusive setup states, projected onto two orthogonal
+// backend settings: the deployment `security_profile` (local_private / network_private) and the
+// `data_provider_intended` flag. Standalone absorbs the "provider optional" case (a provider works over
+// loopback with just a vault passphrase, so it needs no declaration); client-server splits into
+// with/without a provider because that is exactly what flips HTTPS from recommended to required (and,
+// in later phases, drives the HTTPS-readiness task + Connect-bank gate). It steers recommendations only
+// — it does not force sign-in on or off.
+const INTENDED_USAGE_OPTIONS = [
+  {
+    key: 'standalone',
+    profile: 'local_private',
+    dataProvider: false,
+    label: 'Standalone',
+    summary: 'Luma runs on this one computer and you use it right here. Nothing else connects to it. A bank or data provider can be configured if desired — it stays on this machine, so no HTTPS is needed.',
+  },
+  {
+    key: 'client_server',
+    profile: 'network_private',
+    dataProvider: false,
+    label: 'Client-server',
+    summary: 'The backend runs on a computer on your network, and you (and anyone you allow) reach it from a browser on another device.',
+  },
+  {
+    key: 'client_server_provider',
+    profile: 'network_private',
+    dataProvider: true,
+    label: 'Client-server with an online data provider (e.g. Plaid)',
+    summary: 'A networked setup where you also connect a bank or data provider. This requires HTTPS, because the secrets that unlock the provider travel across the network.',
+  },
+]
+
+function IntendedUsageSection({ authEnabled, securityProfile, dataProviderIntended, passwordPolicy, onProfileChange, onDataProviderChange }) {
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  // local_private always maps to standalone (the provider flag is inert there); network_private splits
+  // on the flag.
+  const selectedKey = securityProfile !== 'network_private'
+    ? 'standalone'
+    : (dataProviderIntended ? 'client_server_provider' : 'client_server')
+  // HTTPS is *recommended* for plain client-server (protects the login password/cookie — the operator's
+  // call, not enforced), but *required* once a data provider is in play (enforced at connect time, since
+  // the provider-unlock secrets cross the network).
+  const recommendation = selectedKey === 'standalone'
+    ? 'Sign-in protection is optional here — nothing outside this computer can reach Luma.'
+    : selectedKey === 'client_server_provider'
+      ? 'Turn on sign-in protection to control who can connect. HTTPS becomes required at the point you connect a data provider, because the secrets that unlock it cross the network — set it up before then.'
+      : 'Turn on sign-in protection to control who can connect. HTTPS is recommended (not required) so sign-in passwords aren\'t sent across your network in the clear — strongly advised once sign-in is on.'
+
+  async function selectOption(option) {
+    setSaving(true)
+    setError('')
+    try {
+      if (option.profile !== securityProfile) {
+        const resp = await api.saveSecurityProfile(option.profile)
+        onProfileChange?.(resp.security_profile || option.profile)
+      }
+      if (option.dataProvider !== !!dataProviderIntended) {
+        const resp = await api.saveDataProviderIntent(option.dataProvider)
+        onDataProviderChange?.(!!resp.data_provider_intended)
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card style={{ padding: 20 }}>
+      <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, marginBottom: 14 }}>
+        How will you run {APP_NAME}? This tells {APP_NAME} whether it runs on just this computer or is reached over your network — and whether you&apos;ll connect a bank — so it can recommend the right protections. It doesn&apos;t turn sign-in protection on or off by itself.
+      </div>
+      <div style={{ display: 'grid', gap: 8 }}>
+        {INTENDED_USAGE_OPTIONS.map(option => (
+          <label
+            key={option.key}
+            style={{
+              display: 'grid',
+              gap: 4,
+              padding: '12px 14px',
+              border: `1px solid ${selectedKey === option.key ? 'var(--accent)' : 'var(--border)'}`,
+              borderRadius: 12,
+              background: selectedKey === option.key
+                ? 'color-mix(in srgb, var(--accent) 7%, var(--surface2))'
+                : 'var(--surface2)',
+              cursor: saving ? 'default' : 'pointer',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <input
+                type="radio"
+                name="intended-usage"
+                checked={selectedKey === option.key}
+                onChange={() => selectOption(option)}
+                disabled={saving}
+              />
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{option.label}</span>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, paddingLeft: 24 }}>
+              {option.summary}
+            </div>
+          </label>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 14, padding: 12, borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Current recommendation</div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
+          {recommendation}
+        </div>
+        {authEnabled && (
+          <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6, marginTop: 6 }}>
+            Active password policy: {passwordPolicyHelpText(passwordPolicy)}
+          </div>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ marginTop: 12, color: '#ef4444', fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// Password-strength policy for new sign-ins and account passwords. Shares the PASSWORD_POLICIES
+// vocabulary with AuthScreen and new-user validation, so all three agree on the same choices.
+function PasswordPolicyPanel({ passwordPolicy, onChange }) {
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  async function handleChange(nextPolicy) {
+    setSaving(true)
+    setError('')
+    try {
+      const resp = await api.savePasswordPolicy(nextPolicy)
+      onChange?.(resp.password_policy || nextPolicy)
+    } catch (err) {
+      setError(err.message || 'Failed to save password policy')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: 8, marginBottom: 18 }}>
+      <div style={{ fontSize: 14, fontWeight: 600 }}>Password policy</div>
+      <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+        Choose how strictly passwords are validated for new sign-ins and user accounts.
+      </div>
+      <div style={{ display: 'grid', gap: 6, paddingLeft: 14 }}>
+        {PASSWORD_POLICIES.map(option => (
+          <label
+            key={option.value}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '8px 12px',
+              border: `1px solid ${passwordPolicy === option.value ? 'var(--accent)' : 'var(--border)'}`,
+              borderRadius: 999,
+              background: passwordPolicy === option.value
+                ? 'color-mix(in srgb, var(--accent) 8%, var(--surface2))'
+                : 'var(--surface2)',
+              cursor: saving ? 'default' : 'pointer',
+            }}
+          >
+            <input
+              type="radio"
+              name="password-policy"
+              checked={passwordPolicy === option.value}
+              onChange={() => handleChange(option.value)}
+              disabled={saving}
+            />
+            <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>{option.label}</span>
+            <span style={{ fontSize: 12, color: 'var(--muted)' }}>{option.hint}</span>
+          </label>
+        ))}
+      </div>
+      {error && (
+        <div style={{ color: '#ef4444', fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Sign-in protection is turned on here. Instead of orphaning the existing local profiles and
+// bootstrapping a fresh admin, this migrates every profile into a real account: the operator claims
+// one profile as the admin (setting a password), and may set an optional starting password for each
+// other profile. Every non-claimed account is forced to set its own password at next login, so a
+// blank starting password just means "the person claims it themselves." On success the page reloads
+// into authenticated mode signed in as the new admin.
+function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
+  const [profiles, setProfiles] = useState(null)
+  const [loadError, setLoadError] = useState('')
+  const [claimId, setClaimId] = useState('')
+  const [adminPassword, setAdminPassword] = useState('')
+  const [adminConfirm, setAdminConfirm] = useState('')
+  const [otherPasswords, setOtherPasswords] = useState({})
+  // The operator picks the password policy for the install here (seeded from the stored default) rather
+  // than being locked to it; it is persisted server-side as part of enabling sign-in.
+  const [policy, setPolicy] = useState(passwordPolicy)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    api.getLocalPreferenceProfiles()
+      .then(resp => {
+        if (cancelled) return
+        const list = resp.profiles || []
+        setProfiles(list)
+        // Pre-select the operator's active profile as the claim; fall back to the first.
+        const preferred = list.find(p => p.id === activeLocalProfile?.id) || list[0]
+        setClaimId(preferred?.id || '')
+      })
+      .catch(err => { if (!cancelled) setLoadError(err.message || 'Failed to load profiles') })
+    return () => { cancelled = true }
+  }, [activeLocalProfile?.id])
+
+  async function enableWithMigration(e) {
+    e.preventDefault()
+    setError('')
+    if (!claimId) { setError('Choose which profile is yours.'); return }
+    if (!validatePasswordForPolicy(adminPassword, policy)) {
+      setError(`Your password does not meet the policy: ${passwordPolicyHelpText(policy)}`)
+      return
+    }
+    if (adminPassword !== adminConfirm) { setError('Passwords do not match.'); return }
+    const others = (profiles || []).filter(p => p.id !== claimId)
+    const initial_passwords = {}
+    for (const p of others) {
+      const pw = otherPasswords[p.id] || ''
+      if (pw && !validatePasswordForPolicy(pw, policy)) {
+        setError(`The starting password for "${p.name}" does not meet the policy.`)
+        return
+      }
+      if (pw) initial_passwords[p.id] = pw
+    }
+    setSaving(true)
+    try {
+      await api.enableAuth({ claim_profile_id: claimId, admin_password: adminPassword, initial_passwords, password_policy: policy })
+      window.location.reload()
+    } catch (err) {
+      setError(err.message || 'Failed to enable sign-in protection')
+      setSaving(false)
+    }
+  }
+
+  // With no local profiles there is nothing to migrate — enable auth and let the sign-in screen
+  // bootstrap the first admin (the pre-migration behavior).
+  async function enablePlain() {
+    setSaving(true)
+    setError('')
+    try {
+      await api.enableAuth()
+      window.location.reload()
+    } catch (err) {
+      setError(err.message || 'Failed to enable sign-in protection')
+      setSaving(false)
+    }
+  }
+
+  if (profiles === null && !loadError) return <Spinner />
+
+  if (loadError) {
+    return <Card style={{ padding: 20 }}><div style={{ color: '#ef4444', fontSize: 13 }}>{loadError}</div></Card>
+  }
+
+  if (profiles.length === 0) {
+    return (
+      <Card style={{ padding: 20 }}>
+        <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+          Turning this on enables authenticated mode. You&apos;ll then create the first user account and use that account to manage any additional users.
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <Button small onClick={enablePlain} disabled={saving}>
+            {saving ? 'Enabling...' : 'Enable sign-in protection'}
+          </Button>
+        </div>
+        {error && <div style={{ marginTop: 12, color: '#ef4444', fontSize: 13 }}>{error}</div>}
+      </Card>
+    )
+  }
+
+  const others = profiles.filter(p => p.id !== claimId)
+  const single = profiles.length === 1
+
+  return (
+    <Card style={{ padding: 20 }}>
+      <form onSubmit={enableWithMigration} style={{ display: 'grid', gap: 16 }}>
+        <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+          {single
+            ? 'Turning this on converts your local profile into a password-protected account. Set a password to continue — you become the admin.'
+            : 'Turning this on converts each local profile into its own password-protected account. Choose which profile is yours (you become the admin), then optionally set a starting password for the others. Everyone else is required to set their own password the next time they sign in.'}
+        </div>
+
+        {!single && (
+          <div style={{ display: 'grid', gap: 8 }}>
+            <FormLabel>Which profile is yours?</FormLabel>
+            {profiles.map(p => (
+              <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+                <input type="radio" name="claim-profile" checked={claimId === p.id} onChange={() => setClaimId(p.id)} disabled={saving} />
+                <span style={{ fontWeight: 600 }}>{p.name}</span>
+              </label>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gap: 8 }}>
+          <FormLabel>Password requirements</FormLabel>
+          <div style={{ display: 'grid', gap: 6 }}>
+            {PASSWORD_POLICIES.map(option => (
+              <label key={option.value} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: saving ? 'default' : 'pointer' }}>
+                <input type="radio" name="enable-password-policy" checked={policy === option.value} onChange={() => setPolicy(option.value)} disabled={saving} />
+                <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{option.label}</span>
+                <span style={{ fontSize: 12, color: 'var(--muted)' }}>{option.hint}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gap: 8 }}>
+          <FormLabel>Your password (admin)</FormLabel>
+          <PasswordInput value={adminPassword} onChange={setAdminPassword} disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} />
+          <PasswordInput value={adminConfirm} onChange={setAdminConfirm} placeholder="Confirm password" disabled={saving} wrapperStyle={PASSWORD_FIELD_WIDTH} />
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{passwordPolicyHelpText(policy)}</div>
+        </div>
+
+        {!single && others.length > 0 && (
+          <div style={{ display: 'grid', gap: 10 }}>
+            <FormLabel>Starting passwords for the other profiles (optional)</FormLabel>
+            <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
+              Leave blank to let each person set their own on first sign-in. Whatever you enter, they will be asked to choose a new password the next time they sign in.
+            </div>
+            {others.map(p => (
+              <div key={p.id} style={{ display: 'grid', gap: 4 }}>
+                <span style={{ fontSize: 12, fontWeight: 600 }}>{p.name}</span>
+                <PasswordInput
+                  placeholder="Leave blank to let them set it"
+                  wrapperStyle={PASSWORD_FIELD_WIDTH}
+                  value={otherPasswords[p.id] || ''}
+                  onChange={value => setOtherPasswords(prev => ({ ...prev, [p.id]: value }))}
+                  disabled={saving}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {error && <div style={{ color: '#ef4444', fontSize: 13 }}>{error}</div>}
+
+        <div>
+          <Button small type="submit" disabled={saving}>
+            {saving ? 'Enabling...' : 'Enable sign-in protection'}
+          </Button>
+        </div>
+      </form>
+    </Card>
+  )
+}
+
+function AccountSecuritySection({ passwordPolicy, onPasswordPolicyChange }) {
   const fieldIdBase = useId()
   const [currentUser, setCurrentUser] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -338,8 +717,19 @@ function AccountSecuritySection() {
   const [disableCode, setDisableCode] = useState('')
   const [regenCode, setRegenCode] = useState('')
   const [recoveryCodes, setRecoveryCodes] = useState([])
+  const [copiedCodes, setCopiedCodes] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+
+  async function copyRecoveryCodes() {
+    try {
+      await navigator.clipboard.writeText(recoveryCodes.join('\n'))
+      setCopiedCodes(true)
+      setTimeout(() => setCopiedCodes(false), 2000)
+    } catch {
+      setError('Could not reach the clipboard — select the codes above and copy them manually.')
+    }
+  }
 
   async function load() {
     setLoading(true)
@@ -428,6 +818,9 @@ function AccountSecuritySection() {
 
   return (
     <Card style={{ padding: 20 }}>
+      {onPasswordPolicyChange && (
+        <PasswordPolicyPanel passwordPolicy={passwordPolicy} onChange={onPasswordPolicyChange} />
+      )}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>Authenticator app</div>
@@ -448,8 +841,19 @@ function AccountSecuritySection() {
       {setup && !currentUser.two_factor_enabled && (
         <InsetPanel as="form" onSubmit={confirmSetup} style={{ marginBottom: 14 }}>
           <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
-            Add this secret to your authenticator app, then enter the current 6-digit code to confirm.
+            Scan this QR code with your authenticator app (or enter the key manually), then enter the current 6-digit code to confirm.
           </div>
+          {setup.qr_svg && (
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <img
+                src={setup.qr_svg}
+                alt="Authenticator setup QR code"
+                width={168}
+                height={168}
+                style={{ background: '#fff', padding: 8, borderRadius: 8, border: '1px solid var(--border)' }}
+              />
+            </div>
+          )}
           <div>
             <div style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Manual setup key</div>
             <div style={{ fontFamily: 'monospace', fontSize: 14, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, wordBreak: 'break-all' }}>
@@ -541,85 +945,17 @@ function AccountSecuritySection() {
               </div>
             ))}
           </div>
-          <div style={{ marginTop: 12 }}>
-            <Button small variant="ghost" type="button" onClick={() => setRecoveryCodes([])}>
+          <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+            <Button small type="button" onClick={copyRecoveryCodes}>
+              {copiedCodes ? 'Copied' : 'Copy codes'}
+            </Button>
+            <Button small variant="ghost" type="button" onClick={() => { setRecoveryCodes([]); setCopiedCodes(false) }}>
               Dismiss codes
             </Button>
           </div>
         </div>
       )}
 
-      {error && (
-        <div style={{ marginTop: 14, color: 'var(--danger)', fontSize: 13 }}>
-          {error}
-        </div>
-      )}
-    </Card>
-  )
-}
-
-function PlaidTokenProtectionSection() {
-  const [currentUser, setCurrentUser] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-
-  async function load() {
-    setLoading(true)
-    try {
-      const resp = await api.getCurrentUser()
-      setCurrentUser(resp.user)
-      setError('')
-    } catch (err) {
-      setError(err.message || 'Failed to load Plaid token protection')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => { load() }, [])
-
-  async function setPrivacyMode(nextMode) {
-    setSaving(true)
-    setError('')
-    try {
-      const resp = await api.setPrivacyMode(nextMode)
-      setCurrentUser(resp.user)
-    } catch (err) {
-      setError(err.message || 'Failed to update token protection')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  if (loading) return <Spinner />
-  if (!currentUser) return null
-
-  return (
-    <Card style={{ padding: 20 }}>
-      <InsetPanel>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>Sensitive token protection</div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
-              Optional protection for Plaid access tokens at rest. Local single-user installs usually do not need this if the machine is already encrypted.
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 6 }}>
-              Status: {currentUser.privacy_mode === 'server_managed' ? 'Server-managed protection enabled' : 'Off'}
-            </div>
-          </div>
-          <Button
-            small
-            onClick={() => setPrivacyMode(currentUser.privacy_mode === 'server_managed' ? 'off' : 'server_managed')}
-            disabled={saving}
-          >
-            {currentUser.privacy_mode === 'server_managed' ? 'Turn off' : 'Enable'}
-          </Button>
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
-          This only protects Plaid tokens on disk. It does not change what can be displayed after you sign in.
-        </div>
-      </InsetPanel>
       {error && (
         <div style={{ marginTop: 14, color: 'var(--danger)', fontSize: 13 }}>
           {error}
@@ -2360,8 +2696,14 @@ export default function Settings() {
     authEnabled,
     currentUser,
     passwordPolicy,
+    securityProfile,
+    dataProviderIntended,
     developerOptionsEnabled,
     dbInstanceId,
+    activeLocalProfile,
+    setSecurityProfile,
+    setPasswordPolicy,
+    setDataProviderIntended,
   } = useAppSession()
   // Section open/closed state is a single user preference, read and written straight through the
   // context — no local mirror, no load/save effects, no localStorage, so there is nothing to drift.
@@ -2416,25 +2758,43 @@ export default function Settings() {
             </StickySection>
           )}
 
-          {authEnabled && (
+          <StickySection
+            title="Intended usage"
+            description={`How you'll run ${APP_NAME}, and whether you'll connect a bank or data provider.`}
+            actions={<FeatureExplainer topic="data-and-backups" placement="bottom-left" />}
+            scrollContainerRef={settingsScrollRef}
+            {...bindSection('intendedUsage')}
+          >
+            <IntendedUsageSection
+              authEnabled={authEnabled}
+              securityProfile={securityProfile}
+              dataProviderIntended={dataProviderIntended}
+              passwordPolicy={passwordPolicy}
+              onProfileChange={value => setSecurityProfile?.(value)}
+              onDataProviderChange={value => setDataProviderIntended?.(value)}
+            />
+          </StickySection>
+
+          {!authEnabled && (
             <StickySection
-              title="Account security"
-              description="Manage authenticator-based sign-in protection for this user."
+              title="Sign-in protection"
+              description="Enable login when you want passwords, 2FA, or multiple sign-in accounts for the same installation."
               scrollContainerRef={settingsScrollRef}
-              {...bindSection('accountSecurity')}
+              {...bindSection('signInProtection')}
             >
-              <AccountSecuritySection />
+              <AuthModeSection passwordPolicy={passwordPolicy} activeLocalProfile={activeLocalProfile} />
             </StickySection>
           )}
 
           {authEnabled && (
             <StickySection
-              title="Plaid token protection"
-              description="Control how Plaid access tokens are protected on disk for this account."
+              title="Account security"
+              description="Manage password requirements and authenticator-based sign-in protection."
+              actions={<FeatureExplainer topic="account-security" placement="bottom-left" />}
               scrollContainerRef={settingsScrollRef}
-              {...bindSection('plaidTokenProtection')}
+              {...bindSection('accountSecurity')}
             >
-              <PlaidTokenProtectionSection />
+              <AccountSecuritySection passwordPolicy={passwordPolicy} onPasswordPolicyChange={setPasswordPolicy} />
             </StickySection>
           )}
 

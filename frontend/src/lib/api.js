@@ -113,11 +113,18 @@ export const api = {
     request('/auth/password-policy', { method: 'POST', body: JSON.stringify({ policy }) }),
   saveSecurityProfile: (profile) =>
     request('/auth/security-profile', { method: 'POST', body: JSON.stringify({ profile }) }),
+  saveDataProviderIntent: (intended) =>
+    request('/auth/data-provider-intent', { method: 'POST', body: JSON.stringify({ intended }) }),
   getBootstrapStatus: () => request('/auth/bootstrap-status'),
   getCurrentUser: () => request('/auth/me'),
-  enableAuth: () => request('/auth/enable', { method: 'POST', body: JSON.stringify({ enabled: true }) }),
+  // `migration` (optional) turns on sign-in protection by converting local profiles into accounts:
+  // { claim_profile_id, admin_password, initial_passwords: { profileId: password } }.
+  enableAuth: (migration = null) =>
+    request('/auth/enable', { method: 'POST', body: JSON.stringify({ enabled: true, ...(migration || {}) }) }),
   login: (username, password) =>
     request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  changePassword: (new_password) =>
+    request('/auth/change-password', { method: 'POST', body: JSON.stringify({ new_password }) }),
   verifyTwoFactor: (code) =>
     request('/auth/2fa/verify', { method: 'POST', body: JSON.stringify({ code }) }),
   bootstrap: (username, password, display_name) =>
