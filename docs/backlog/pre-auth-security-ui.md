@@ -1,9 +1,12 @@
 # Pre-auth security UI (Settings page)
 
-**Status: deferred — blocked on a security-model decision (migrated from `TODO.md` 2026-07-30).**
-Three small Settings forms were removed during a lint cleanup and are to be rebuilt once the
-project commits to a security model. The backend endpoints and lib helpers were kept, so the
-rebuild is mostly stitching.
+**Status: unblocked (2026-07-30); not started.** The security-model decision this waited on is now
+settled in [`security-and-deployment-model.md`](security-and-deployment-model.md) (multi-tenant
+dropped; one shared workspace with multiple login identities; login as an authentication perimeter,
+admin gating settings not data). Three small Settings forms were removed during a lint cleanup and are
+to be rebuilt now that the model is committed. The backend endpoints and lib helpers were kept, so the
+rebuild is mostly stitching. NOTE: with `multi_tenant` retired, the security-profile picker drops to
+three options (`local_private` / `network_private` / `household_shared`).
 
 **Context.** Three Settings sections were removed during a lint cleanup
 because their `onChange`/`onEnabled` callbacks called setters
