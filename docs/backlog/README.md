@@ -96,18 +96,23 @@ delete the backlog file.
 - [merchant-rename-fate.md](merchant-rename-fate.md) — **dormant code, decision pending.** Keep-or-drop
   the unwired `merchants.py` / `merchant_rename` CRUD (its role was absorbed by
   `category_rule.clean_name`); revisit when Plaid sync is exercised.
-- [security-and-deployment-model.md](security-and-deployment-model.md) — **decided (2026-07-30), not
-  started.** The settled security/deployment design: drop multi-tenant hosted; one shared workspace with
-  multiple login identities (login = perimeter, admin gates settings not data); Plaid tokens protected by
-  **multi-wrap envelope encryption** (one workspace DEK, wrapped per user under a passphrase or WebAuthn-
-  PRF **passkey** slot — separate from login), with co-present/invite enrollment. Also generalizes to
-  **provider-agnostic connections** (a `connection`/adapter seam, Plaid first then Teller/SimpleFIN; app
-  credentials moved from `.env` into the vault; connections stay on the Accounts → Connections tab).
-  Unblocks the Settings-UI rebuild below.
-- [pre-auth-security-ui.md](pre-auth-security-ui.md) — **unblocked (2026-07-30); not started.** Rebuild
-  the three removed Settings forms (security profile / sign-in protection / password policy); backend
-  endpoints + lib helpers were kept, so it's mostly stitching. The model it waited on is now settled in
-  [security-and-deployment-model.md](security-and-deployment-model.md).
+- [security-and-deployment-model.md](security-and-deployment-model.md) — **decided (2026-07-30);
+  phases 1–2b done, 3–6 not started.** The settled security/deployment design: drop multi-tenant hosted;
+  one shared workspace with multiple login identities (login = perimeter, admin gates settings not data);
+  Plaid tokens protected by **multi-wrap envelope encryption** (one workspace DEK, wrapped per user under a
+  passphrase or WebAuthn-PRF **passkey** slot — separate from login), with co-present/invite enrollment.
+  Also generalizes to **provider-agnostic connections** (a `connection`/adapter seam, Plaid first then
+  Teller/SimpleFIN; app credentials moved from `.env` into the vault; connections stay on the Accounts →
+  Connections tab). Now also carries the **transport-security policy** (HTTP-vs-HTTPS per topology; the
+  vault phase adds it). Phases 1–2b (drop multi-tenant, rebuild Settings forms, migrate profiles→accounts
+  on flip) are implemented.
+- [pre-auth-security-ui.md](pre-auth-security-ui.md) — **DONE (2026-07-30).** The three Settings forms
+  (security profile / sign-in protection / password policy) were rebuilt and session-wired alongside
+  phases 1–2b of [security-and-deployment-model.md](security-and-deployment-model.md).
+- [deployment-topologies.md](deployment-topologies.md) — **notes / not started (2026-07-30).** How Luma is
+  *packaged and run* (vs. who may reach it): a **LAN server + Caddy** shape and a **single-user desktop**
+  shape (pywebview / Tauri / Electron / browser-launcher), the shared `StaticFiles` SPA-serving addition,
+  and the pywebview Python/OS-webview install requirements (WebKitGTK on Linux is the wrinkle).
 - [i18n-display-formatting.md](i18n-display-formatting.md) — **deferred.** Tier-1 currency-symbol +
   number/date **formatting** (not translation): a display bucket (cosmetic) and a free-text-parse bucket
   (the quick-filter date/amount ambiguity — the only correctness risk).

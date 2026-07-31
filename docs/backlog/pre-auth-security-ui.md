@@ -1,12 +1,13 @@
 # Pre-auth security UI (Settings page)
 
-**Status: unblocked (2026-07-30); not started.** The security-model decision this waited on is now
-settled in [`security-and-deployment-model.md`](security-and-deployment-model.md) (multi-tenant
-dropped; one shared workspace with multiple login identities; login as an authentication perimeter,
-admin gating settings not data). Three small Settings forms were removed during a lint cleanup and are
-to be rebuilt now that the model is committed. The backend endpoints and lib helpers were kept, so the
-rebuild is mostly stitching. NOTE: with `multi_tenant` retired, the security-profile picker drops to
-three options (`local_private` / `network_private` / `household_shared`).
+**Status: DONE (built alongside phases 1–2b of
+[`security-and-deployment-model.md`](security-and-deployment-model.md)).** The three Settings forms
+have been rebuilt in `Settings.jsx` — `SecurityProfileSection` (now two options — **Standalone** /
+**Client-server**; `multi_tenant` and `household_shared` retired), `AuthModeSection` (the
+sign-in-protection toggle, now a profile→account migration wizard),
+and `PasswordPolicyPanel` (rendered inside `AccountSecuritySection` when auth is on). The missing
+wiring — setters exposed from `useAppSession()` (`setSecurityProfile` / `setPasswordPolicy` /
+`setAuthEnabled` / `setCurrentUser`) — is in place. Historical context below is retained for the record.
 
 **Context.** Three Settings sections were removed during a lint cleanup
 because their `onChange`/`onEnabled` callbacks called setters
@@ -56,11 +57,17 @@ their internal components:
   `passwordPolicy`) in `App.jsx` and exposed read-only through
   `useAppSession()`. The `experimentalSecuritySettings` flag is still
   threaded through to `AuthScreen` via `showModePill`.
-- `AccountSecuritySection` (now just the 2FA management surface —
-  authenticator app setup, disable, recovery code regen) and
-  `PlaidTokenProtectionSection`. Both remain gated on `authEnabled`, so
-  they are dormant in the current household mode but available when
-  auth is turned on.
+- `AccountSecuritySection` (now the 2FA management surface —
+  authenticator app setup, disable, recovery-code regen with a
+  copy-to-clipboard action — plus the password-policy picker), gated on
+  `authEnabled`.
+- `PlaidTokenProtectionSection` **has been removed** (2026-07-31): it
+  exposed the retired `privacy_mode` `off`/`server_managed` toggle,
+  which contradicts the settled "vault is the only custody, tokens are
+  always encrypted" model. The underlying `crypto_service` /
+  `/auth/privacy-mode` machinery is retired in phase 3 (multi-wrap vault
+  core); the real token-protection surface is the per-provider vault UI
+  on the Accounts → Connections tab (phases 3/6).
 
 **To rebuild when the model is decided.** Three small Cards in
 Settings, each with a radio list driven by the corresponding constant

@@ -256,6 +256,47 @@ That core concentration is intentional. Import behavior is one of the places whe
 
 - **Back navigation:** the popover stamps `state={{ from: <pathname> }}` onto the Read-more `<Link>`; the Help page reads it back to render a labeled "Back to `<page>`" button. `<HelpLink>` is used for cross-topic links inside content bodies so the original source survives multiple hops within the Help section
 
+### Identity, access & deployment model
+
+The settled shape (see `docs/backlog/security-and-deployment-model.md` for the full decision record) is
+**one shared workspace with multiple login identities** — not multi-tenant hosting. Every member is
+provisioned into the single admin tenant and shares one data DB; there is no per-tenant data isolation
+and no hosted multi-tenant target. Per-tenant DB routing (`set_current_db_path`, `TENANT_DATA_ROOT/<id>/`)
+is retained as **dormant plumbing** — the code no longer offers to spin up new tenants, but excising the
+routing would be risky and low-value, so it stays wired and unused.
+
+- **Login is an authentication *perimeter*, not an authorization system.** Its only job is to keep
+  *non-users* out. Once inside, every user sees and edits the **same** data with no row- or scope-level
+  restriction. No data route checks role.
+- **Admin gates *settings*, not *data*.** The `_require_admin` split (`backend/routers/auth.py`) governs
+  user management and environment/provider settings only; nothing at the data layer is admin-gated.
+- **Two access modes, an all-or-nothing workspace toggle.** *Perimeter off* is local mode: named
+  `local_preference_profile`s with no passwords, picked from a chooser, scoping only per-person UI
+  preferences. *Perimeter on* is auth mode: every identity is a real `user_account` with a password,
+  reusing the accounts / 2FA / roles / password-policy machinery. "Password optional" is a **workspace**
+  property (the "Enable sign-in protection" switch → `enable_auth_mode()`), never per-user — because the
+  data is shared, a per-user opt-out would let a LAN peer just pick the passwordless identity and read the
+  same ledger. Today this is **two tables** (`local_preference_profile`, `user_account`); the
+  `auth_required()` gate, the middleware's session-vs-local branch, and preference-scope keying are all
+  wired to the split. **Settled direction (not yet built):** collapse to a single `user_account` table
+  where the sign-in flag toggles only *whether the password is checked* — see
+  `docs/backlog/security-and-deployment-model.md` → "Unified identity model" (it makes disabling sign-in
+  a flag flip and drops the `user_count()>1` auth latch).
+- **Turning the perimeter on migrates, it does not orphan.** Flipping sign-in protection converts the
+  existing local profiles into `user_account`s (the operator claims one as admin and sets passwords;
+  others may be left password-unset and forced to set one at next login via `must_change_password`) and
+  re-keys their `ui_preference` rows to the new user ids, rather than bootstrapping a fresh admin and
+  stranding the profiles.
+- **Security profile is a setup *preset*, not an enforcement mechanism.** Two deployment shapes:
+  **Standalone** (`local_private` — this one machine, loopback) and **Client-server** (`network_private`
+  — backend on a networked box, reached from other devices). They steer recommendations (whether sign-in
+  is recommended, and the HTTP/HTTPS transport guidance); they do not by themselves force auth on or off.
+  (The retired `multi_tenant` and `household_shared` profiles are gone.)
+
+Aggregator token protection (the Plaid/provider vault) is **orthogonal** to this perimeter and is a
+separate, later subsystem — a passwordless install can still hold vault-encrypted tokens because the vault
+secret is per-user and independent of the app perimeter.
+
 ### Storage layers
 
 Luma uses several distinct storage layers for working state.

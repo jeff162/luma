@@ -1,6 +1,7 @@
 # Security & deployment model
 
-**Status: decided (2026-07-30), not started.** This is the design decision that
+**Status: decided (2026-07-30). Phases 1–2b implemented; phases 3–6 (the vault/crypto rework and
+provider-agnostic connections) not started.** This is the design decision that
 [`pre-auth-security-ui.md`](pre-auth-security-ui.md) was blocked on. It settles which deployments
 Luma supports, what the login perimeter is (and isn't) for, and how Plaid credentials are protected
 at rest. Supersedes the exploratory `server_managed`-only privacy mode as the *meaningful* protection
@@ -9,8 +10,10 @@ path. Pick-up-cold summary below; build phases at the end.
 ## Deployment model
 
 - **No multi-tenant hosted.** Dropped as a target. The `multi_tenant` "preview" security profile and
-  the pretense of per-tenant provisioning go away. Down to three onboarding profiles
-  (`local_private` / `network_private` / `household_shared`).
+  the pretense of per-tenant provisioning go away. Down to **two** deployment profiles:
+  **Standalone** (`local_private` — this one machine, loopback) and **Client-server** (`network_private`
+  — backend on a networked box, reached from other devices). `household_shared` is retired too (it
+  collapses into Client-server; there were no stored `household_shared` installs, so no migration).
 - **One shared workspace, multiple login identities.** This is already the shape of the code — members
   are provisioned into the one admin tenant and share one data DB. Per-tenant DB routing
   (`set_current_db_path`, `TENANT_DATA_ROOT/<tenant_id>/`) stays as **dormant plumbing**; we stop
@@ -36,7 +39,7 @@ path. Pick-up-cold summary below; build phases at the end.
 ## Threat model / assumptions
 
 - **The backend is not exposed beyond the local network.** Deployments are local (`local_private`) or
-  LAN-reachable (`network_private` / `household_shared`); the web port is assumed *not* public-internet
+  LAN-reachable (`network_private`, i.e. client-server); the web port is assumed *not* public-internet
   facing. If someone did expose it, the app password becomes far more load-bearing than this model
   assumes — that's on the operator, and the onboarding profile copy should say so.
 - **The ledger (transactions, categories) is plaintext at rest, and that's accepted.** Anyone with the
@@ -73,12 +76,56 @@ not a new mode**:
 2. **Migrate on flip.** Turning sign-in protection *on* converts existing local profiles into
    `user_account`s (each sets a password then), rather than today's behavior of bootstrapping a fresh
    admin and orphaning the profiles.
-3. **Keep the two tables under the hood.** The global `auth_required()` gate, the middleware's
-   session-vs-local-user branch, preference-scope keying, and tenant routing are all wired to the split;
-   collapsing them into one nullable-password table is a deep refactor for no user-visible gain.
+3. ~~**Keep the two tables under the hood.**~~ **SUPERSEDED — see "Unified identity model" below.** The
+   original call kept `local_preference_profile` and `user_account` as separate tables (collapsing them
+   "a deep refactor for no user-visible gain"). That rationale turned out to be wrong: the gain is a
+   *coherent single "user" concept* and a **trivial disable** (the two-table split is the only reason
+   turning sign-in protection back off looked like a lossy reverse-migration). The settled direction is
+   now to **unify to one `user_account` table** where the workspace flag toggles only *whether the
+   password is checked*.
 
 The Plaid vault stays **orthogonal**: a fully passwordless (perimeter-off) install can still have
 vault-encrypted tokens, because the vault secret is per-user and independent of the app perimeter.
+
+## Unified identity model (settled — supersedes "keep the two tables")
+
+**Decision (2026-07-31):** there is **one identity concept — a user** — in a single `user_account`
+table. The "Enable sign-in protection" flag decides *only whether the login password is verified*; it no
+longer switches which table identities come from. This reverses point 3 above. The earlier "no
+user-visible gain" reasoning missed two gains that matter: identities stop changing shape when auth is
+toggled, and **disabling** sign-in protection becomes a flag flip instead of a lossy reverse-migration.
+
+**How each operation behaves under one table:**
+
+- **Perimeter off:** the login screen shows a **username chooser** (or the browser remembers who you
+  are), *no password field* — pick your identity and you're in. This is exactly what local mode does
+  today, just pointed at `user_account` rows instead of `local_preference_profile`. 2FA is skipped while
+  off.
+- **Perimeter on:** username + password (+ 2FA), as now.
+- **Enable** = set the flag on; any user with no password is marked **`must_change_password`** (the claim
+  flow already built in phase 2b) so they set one at next login. There is **no profile→account
+  conversion** — users are already users.
+- **Disable** = set the flag off. Users stay users; password hashes simply stop being consulted (they can
+  sit unused so re-enabling is seamless), 2FA is skipped. **No migration, no credential loss, no
+  re-keying.** Admin-gated, with a clear confirmation (it reopens network access and drops the perimeter).
+- **Preferences** are always keyed by `user_id` — the profile-id vs user-id re-keying disappears
+  entirely.
+- The **`auth_required()` latch** (`user_count() > 1` forcing auth on) is **dropped**: multiple
+  *passwordless* users become ordinary (many rows, flag off), which the current latch wrongly forbids.
+  The flag alone governs the perimeter.
+
+**What it touches / supersedes.** This reworks the middleware's local-vs-session branch (`main.py`),
+`auth_required()` + the latch, the local-profile endpoints and the `App.jsx` chooser (retargeted to
+users), and preference-scope keying. It **supersedes part of phase 2b**: `migrate_profiles_to_accounts`
+(a profile→account converter) is replaced by a **one-time** "existing `local_preference_profile` rows
+become `user_account` rows" unification, after which *enable* is trivial. The account model, the
+`must_change_password`/unset-password **sentinel/claim** primitive, and the forced-change login flow all
+carry over unchanged. Can be **staged**: first let auth-off mode authenticate against `user_account`
+(no password) so disable works and nothing is lost, then retire `local_preference_profile` once nothing
+reads it.
+
+**Not yet built** — recorded now, to implement after the current phase-1/2b refinement settles. Until
+then the two tables still exist and phase 2b's migrate-on-flip is the live behavior.
 
 ## The Plaid credential model (so the two secrets don't get conflated)
 
@@ -165,6 +212,104 @@ owns the box you run the app on," at which point the ledger is readable off disk
 model). Browser-side (zero-knowledge) crypto would only add defense against an untrusted host, which this
 model deliberately doesn't include. The ceremony below keeps the same *shape* if we ever wanted an
 untrusted-host mode — every wrap/unwrap would just move into the browser — so this choice isn't a corner.
+
+### Transport security: HTTP vs HTTPS is a per-topology decision (settled)
+
+Server-side crypto has a direct transport consequence: **sensitive material crosses the wire.** The
+unlock secret (vault passphrase, or the passkey PRF output posted from the browser), the app-login
+password, and the invite secret on redemption all travel frontend→backend in the clear *at the
+application layer* — so on any non-loopback link they must be protected by **TLS**. This is not
+optional theater: a leaked vault-unlock secret is the key that unwraps the DEK and decrypts live bank
+tokens (the doc's "leaked token ≫ leaked ledger").
+
+**TLS is a property of the deployment topology, not a mode the app toggles.** The app always speaks
+plain HTTP; whether that HTTP is *wrapped* is decided at the edge:
+
+- **Desktop / loopback (`local_private`):** no wire leaves the machine → plain HTTP on `127.0.0.1`;
+  TLS is pure friction (self-signed warnings, cert management) for zero gain.
+- **Client-server / LAN server (`network_private`):** a reverse proxy (Caddy) terminates TLS and
+  proxies to uvicorn over loopback. "The deployment is HTTPS" and "the app is HTTP" are both true.
+
+**Why browser-side crypto is *not* an escape hatch from TLS here (settled).** It is tempting to think
+"do the crypto in the browser and HTTP is fine." It is not, for two independent reasons:
+
+1. **The backend is Plaid's API client.** Syncing requires an authenticated call to Plaid using the app
+   `secret` + the plaintext `access_token`, and it must be the backend (Plaid isn't browser-callable —
+   no CORS, and the app secret can't ship to browsers; there is no "blind relay" because the backend
+   must hold the plaintext to make the TLS call *to Plaid*). So wherever the DEK is unwrapped, the
+   backend must obtain the plaintext token/DEK at sync — cleartext key material on the wire regardless.
+   Any scheme that protects it while still letting the backend call Plaid ends up **reinventing a secure
+   channel = TLS.**
+2. **The ledger itself crosses the wire in every API response.** Browser-side *token* crypto doesn't
+   touch that; only pervasive end-to-end (browser-side field) ledger encryption would, which is an
+   enormous lift and explicitly out of scope.
+
+**The permissible-HTTP rule (settled).** Plain HTTP on a non-loopback bind is an acceptable *operator*
+choice **only when both** hold: (1) **no aggregator/vault is configured** (no live bank secret ever on
+the wire), **and** (2) the instance is **passwordless / perimeter-off** (no login credential or session
+cookie to steal). The coupling is the point: the reason to run a password perimeter is distrust of who
+can reach the box — and that same distrust makes a sniffable, replayable **session cookie** unacceptable
+(the cookie is a bearer token on *every* authenticated request, so protecting only the login exchange
+protects nothing). **Client-side password hashing does not rescue this** — a client-computed hash *is* a
+replayable password-equivalent (pass-the-hash), and even a real PAKE (SRP/OPAQUE — decidedly not "easy")
+still leaves the session cookie exposed. So HTTP is coherent only where there is *no perimeter to
+defeat*; enabling sign-in protection or connecting an aggregator implies HTTPS.
+
+Both gating conditions — `auth_required()` and "is a connection configured" — are known at runtime, so
+this is **enforceable/warnable**, consistent with the profile's recommend-don't-force philosophy: default
+the cookie's `Secure`/`SameSite` off (safe for the loopback default), and hard-warn when someone turns on
+sign-in protection or connects an aggregator on a non-loopback bind ("credentials/bank secrets will cross
+the network in cleartext — configure HTTPS"). A single explicit `SESSION_COOKIE_SECURE` env (set by the
+Caddy/systemd install, left false by the desktop launcher) drives the cookie flag — **not** derived from
+the security profile (a recommendation, not a transport guarantee: deriving `Secure` from it would lock
+users out when a network-profile install runs plain HTTP) and **not** hardcoded (breaks one topology).
+Behind Caddy, run uvicorn with `--proxy-headers` so `request.url.scheme` reflects the external scheme.
+
+**Detecting "HTTPS is running" and the non-blocking setup flow (settled).** Because the backend always
+speaks HTTP (Caddy terminates TLS), "is HTTPS running" is really *"did this request arrive over
+HTTPS?"* — read from `request.url.scheme`, which reflects `X-Forwarded-Proto` once uvicorn runs with
+`--proxy-headers` behind Caddy (it trusts your own proxy — acceptable in the trusted-server/LAN model).
+Setting up HTTPS is not instantaneous (install Caddy, configure, restart the backend), so the first
+connection attempt must **not** block on it out of nowhere. Instead:
+
+- **A "data provider intended" declaration lives on the "Intended usage" section**, *not* on the
+  Connections tab (that's too late). It is persisted as a `data_provider_intended` app-setting
+  (`POST /auth/data-provider-intent`, surfaced in `/auth/status`), kept **orthogonal** to the deployment
+  `security_profile` under the hood. In the UI the two are **projected onto three radios** — Standalone /
+  Client-server / **Client-server with a data provider** — because the flag only *matters* for
+  client-server (it flips HTTPS from recommended to required and drives the task/gate below), while
+  standalone absorbs the "provider optional" case (a provider works over loopback with just a vault
+  passphrase, so no declaration is needed there). Picking the third radio sets the flag and surfaces the
+  HTTPS setup guidance early so the user can prepare ahead of time. **Built (guidance only) with the
+  phase-2 card cleanup;** the *task* and *connect gate* that also read this flag come later (below).
+- **The "Set up HTTPS" reminder rides the existing computed-task model** (`tasks.py` — tasks are live
+  conditions, not stored/dismissible rows). Condition: *client-server mode ∧ `data_provider_intended` ∧
+  request scheme ≠ https* → emit a task whose `link` points at the setup instructions. It **self-clears**
+  the moment a request arrives over HTTPS — no dismiss state. The task is also where the user re-reads
+  the instructions later.
+- **Recommended-vs-required split — the plain client-server warning is *dismissible* (phase 3 detail).**
+  For **client-server *with* a data provider**, HTTPS is *required* and enforced at connect (the gate
+  below) — not dismissible. But for **plain client-server** (no provider), HTTPS is only *recommended*
+  (it protects the login password/cookie — the operator's call on their own network), so its
+  "HTTPS not configured" nag must be **suppressible without configuring HTTPS**: a "Don't warn about
+  configuring HTTPS" checkbox, either on the client-server option in "Intended usage" **or** on the task
+  message itself (a persisted suppression flag, unlike the provider task's self-clearing condition).
+  Only the *recommended* case is dismissible; the *required* (provider) case never is. The Intended-usage
+  recommendation copy already states this recommended-vs-required difference.
+- **The Connect-bank button (Connections tab, phase 6) gates on HTTPS *availability*, not on the
+  declaration.** In client-server mode it is disabled until `request.url.scheme == https` (with a tooltip
+  explaining why); in standalone mode it's gated only on the vault passphrase (loopback needs no TLS).
+  So the declaration drives *preparation* (instructions + task), while real HTTPS availability drives
+  *enforcement* (the gate). The two are deliberately decoupled.
+
+This spans phases: the `data_provider_intended` radio + inline HTTPS guidance shipped with the phase-2
+card cleanup; `--proxy-headers` + scheme detection + `SESSION_COOKIE_SECURE` + the computed HTTPS task
+land with **phase 3** (transport); the Connect-button gate (on HTTPS *availability*, not the declaration)
+lands with **phase 6** (connections).
+
+Deployment packaging (LAN-server vs single-user desktop shell) is tracked separately in
+[`deployment-topologies.md`](deployment-topologies.md); this section is only the transport-security
+policy that the vault phase must honor.
 
 ### Unlock methods (key slots)
 
@@ -318,8 +463,9 @@ ever want an untrusted host); retire `server_managed`, the master-key fallback, 
 token path** — the vault is the *only* custody, with passphrase strength keyed to provider mode (sandbox
 lax, Production enforced); no required fallback slot / no recovery escrow (loss = re-link); passkeys are
 Plaid-vault-only; **identity & perimeter** — password optionality is an all-or-nothing *workspace* toggle
-(the existing two modes), per-user auth when on, unify presentation + migrate profiles→accounts on flip,
-keep the two tables; **invite ceremony** — 128-bit HKDF bearer secret, app mints a copy-able code/link and
+(the existing two modes), per-user auth when on; **unify to one `user_account` table** (the flag toggles
+only password verification — reverses the earlier "keep two tables" call; makes disable a flag flip);
+**invite ceremony** — 128-bit HKDF bearer secret, app mints a copy-able code/link and
 the human carries it (no email sending), 48–72h + single-use, AEAD-tag-as-verifier, account-creation
 separable from vault-grant, rotate-on-untrusted-departure; **provider-agnostic connections** — a
 `connection` table with a `provider` discriminator + opaque encrypted credential blob and an adapter
@@ -331,19 +477,30 @@ premise was wrong.
 
 ## Build phases (rough, when unblocked)
 
-1. **Drop the multi-tenant pretense** — remove `multi_tenant` profile, doc the single-workspace model.
-   Small; mostly copy/UI.
-2. **Rebuild the three Settings forms** (per [`pre-auth-security-ui.md`](pre-auth-security-ui.md)) —
-   security profile / sign-in protection / password policy. Backend + lib helpers already exist; only
-   missing wiring is exposing setters from `useAppSession()`.
-2b. **Unify the identity presentation** — show local profiles as "users," require a named identity (no
-   anonymous default), and make "enable sign-in protection" **migrate** existing local profiles into
-   `user_account`s (each sets a password) instead of bootstrapping a fresh admin. Keep the two tables.
+1. **[DONE] Drop the multi-tenant pretense** — removed the `multi_tenant` profile; the single-workspace
+   / perimeter model is documented in `architecture.md` → "Identity, access & deployment model".
+2. **[DONE] Rebuild the three Settings forms** (per [`pre-auth-security-ui.md`](pre-auth-security-ui.md)) —
+   security profile / sign-in protection / password policy, now session-wired via setters exposed from
+   `useAppSession()`.
+2b. **[DONE] Unify the identity presentation** — "enable sign-in protection" **migrates** existing local
+   profiles into `user_account`s via `migrate_profiles_to_accounts`: the operator claims one profile as
+   admin, others may be left password-unset and are forced to set one at next login
+   (`must_change_password` + the unset-password sentinel; also the admin password-reset primitive).
+   Preferences are re-keyed profile→user. The local-profile chooser already required a named identity
+   (no anonymous default). *(The two tables are still live as of this build; see phase 2c.)*
+2c. **Unify to one `user_account` table** (see "Unified identity model") — retire `local_preference_profile`;
+   the sign-in flag toggles only password verification, not which table identities come from. Disable
+   becomes a flag flip (no reverse-migration); the `auth_required()` `user_count()>1` latch is dropped;
+   `migrate_profiles_to_accounts` collapses to a one-time profile→user unification. Supersedes the
+   two-table parts of 2b. **Not started** — scheduled after the current phase-1/2b refinement settles.
 3. **Multi-wrap vault core** — workspace DEK, per-slot wrapped-DEK storage, passphrase-slot KDF path
    (columns already present), session-scoped unlock caching, rework `crypto_service` from per-user DEK to
    one shared DEK + slots. **Retire `server_managed`, the `APP_MASTER_KEY`→`SESSION_SECRET` fallback, and
    the `off`/plaintext path** — the vault is the only custody; enforce a vault-passphrase minimum when a
-   provider is set to Production (sandbox stays lax).
+   provider is set to Production (sandbox stays lax). **Transport-security policy** (see "Transport
+   security" above): because vault-unlock secrets now cross the wire, add the `SESSION_COOKIE_SECURE` env
+   with `--proxy-headers` handling and the runtime warn-when-cleartext gate (enabling sign-in protection or
+   connecting an aggregator on a non-loopback bind ⇒ HTTPS expected).
 4. **Passkey (PRF) slot** — registration with the `prf` extension, unlock ceremony, biometric daily
    unlock, graceful "your authenticator lacks PRF → use a passphrase slot" fallback.
 5. **Enrollment/invite** — co-present path first (simpler), then the invite ceremony (mint copy-able
@@ -353,6 +510,17 @@ premise was wrong.
    credential blob) replacing `plaid_item`; a provider-adapter interface refactored out of
    `plaid_service`/sync; move app-level credentials from `.env` into the DB under vault custody; extend
    the Accounts → Connections tab. Ship **Plaid** as the first adapter; Teller, then SimpleFIN, follow.
+
+## Docs to write (deferred to after phase 3/6)
+
+- **README "Security" section.** The README needs a dedicated Security section outlining the whole
+  picture: the ledger is **plaintext at rest** (host-protected, not encrypted by the app) so the raw DB
+  shouldn't be copied around — use the **encrypted backup**; the app password is a **network perimeter**,
+  not disk encryption; **2FA** is optional/household-marginal; provider tokens get the **vault**; and the
+  **HTTPS setup** (Caddy reverse proxy, `SESSION_COOKIE_SECURE`, `--proxy-headers`) for client-server.
+  Deferred until **after phase 3/6**, since that work introduces the HTTPS configuration the section must
+  document. The in-app Help topics **`data-and-backups`** and **`account-security`** (already written) are
+  the seed copy for it.
 
 ## Cross-refs
 

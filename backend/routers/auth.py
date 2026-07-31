@@ -36,11 +36,15 @@ from backend.db.control_database import (
     disable_totp,
     delete_user,
     enable_totp,
+    get_data_provider_intended,
     get_local_preference_profile,
+    get_login_account,
     get_password_policy,
     get_local_mode_user,
     get_security_profile,
     get_user_by_id,
+    migrate_profiles_to_accounts,
+    set_data_provider_intended,
     list_local_preference_profiles,
     list_users,
     password_policy_label,
@@ -99,6 +103,7 @@ class UserUpdateRequest(BaseModel):
     password: str | None = None
     role: str | None = None
     status: str | None = None
+    must_change_password: bool | None = None
 
 
 class TotpVerifyRequest(BaseModel):
@@ -115,6 +120,21 @@ class PrivacyModeRequest(BaseModel):
 
 class EnableAuthRequest(BaseModel):
     enabled: bool = True
+    # When present, turning on sign-in protection migrates the existing local profiles into accounts:
+    # `claim_profile_id` is the profile the operator claims as admin, `admin_password` is the admin's
+    # password, and `initial_passwords` maps each other profile id to an optional starting password
+    # (missing/blank => the account is left claimable, forced to set one at next login). Absent =>
+    # legacy behavior (enable auth, then bootstrap the first admin via the sign-in screen).
+    claim_profile_id: str | None = None
+    admin_password: str | None = None
+    initial_passwords: dict[str, str] | None = None
+    # The operator may pick the password policy while enabling sign-in, rather than being locked to the
+    # stored default; it is applied before migration so the admin/starting passwords validate against it.
+    password_policy: str | None = None
+
+
+class PasswordChangeRequest(BaseModel):
+    new_password: str
 
 
 class RuntimeConfigRequest(BaseModel):
@@ -136,6 +156,10 @@ class PasswordPolicyRequest(BaseModel):
 
 class SecurityProfileRequest(BaseModel):
     profile: str
+
+
+class DataProviderIntentRequest(BaseModel):
+    intended: bool
 
 
 class UserPreferenceRequest(BaseModel):
@@ -204,6 +228,7 @@ def _session_payload(user: dict) -> dict:
         "display_name": user.get("display_name") or user["username"],
         "role": user.get("role", "member"),
         "privacy_mode": user.get("privacy_mode", "off"),
+        "must_change_password": bool(user.get("must_change_password")),
         "two_factor_enabled": bool(user.get("totp_enabled")),
         "recovery_code_count": recovery_code_count(user["id"]),
         "tenant_id": user["tenant_id"],
@@ -236,6 +261,7 @@ def _auth_status_payload(request: Request | None = None) -> dict:
         "password_policy": password_policy,
         "password_policy_label": password_policy_label(password_policy),
         "security_profile": security_profile,
+        "data_provider_intended": get_data_provider_intended(),
         "security_profile_label": security_profile_label(security_profile),
         "security_profile_summary": security_guidance["summary"],
         "security_profile_recommended_auth": security_guidance["recommended_auth"],
@@ -488,15 +514,42 @@ def save_security_profile(body: SecurityProfileRequest, request: Request):
     }
 
 
+@router.post("/data-provider-intent")
+def save_data_provider_intent(body: DataProviderIntentRequest, request: Request):
+    _require_admin_or_local(request)
+    set_data_provider_intended(bool(body.intended))
+    return {"data_provider_intended": get_data_provider_intended()}
+
+
 @router.post("/enable")
-def enable_auth(body: EnableAuthRequest):
+def enable_auth(body: EnableAuthRequest, request: Request):
     _ensure_runtime_config_ok()
     if not body.enabled:
         raise HTTPException(status_code=400, detail="Disabling auth is not supported here")
     if auth_required():
-        return _auth_status_payload()
+        return _auth_status_payload(request)
+    if body.password_policy is not None:
+        # Set the chosen policy first so the migration/bootstrap passwords below validate against it.
+        try:
+            set_password_policy(body.password_policy)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    if body.claim_profile_id:
+        # Migrate the existing local profiles into accounts and sign the operator in as the new admin,
+        # rather than orphaning the profiles and bootstrapping a fresh admin.
+        try:
+            admin = migrate_profiles_to_accounts(
+                body.claim_profile_id,
+                body.admin_password or "",
+                body.initial_passwords,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        request.session.clear()
+        request.session["user_id"] = admin["id"]
+        return _auth_status_payload(request)
     enable_auth_mode()
-    return _auth_status_payload()
+    return _auth_status_payload(request)
 
 
 @router.post("/bootstrap")
@@ -524,16 +577,59 @@ def login(body: LoginRequest, request: Request):
             raise HTTPException(status_code=401, detail="Invalid username or password")
         request.session.clear()
         return {"user": _session_payload(user)}
-    user = authenticate_user(body.username, body.password)
-    if not user:
+
+    # Auth mode. A password-set account verifies normally; an unset (sentinel) account is claimable —
+    # login accepts it without a password *only* when it is flagged must_change_password, then routes
+    # straight into the forced password-set. Either way a must_change_password account cannot complete
+    # login until it sets a new password.
+    account = get_login_account(body.username)
+    if not account or account["status"] != "active":
         raise HTTPException(status_code=401, detail="Invalid username or password")
+    if account["password_set"]:
+        user = authenticate_user(body.username, body.password)
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+    else:
+        if not account["must_change_password"]:
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        user = get_user_by_id(account["id"])
 
     request.session.clear()
+    if user.get("must_change_password"):
+        request.session["pending_password_change_user_id"] = user["id"]
+        return {"requires_password_change": True}
     if user.get("totp_enabled"):
         request.session["pending_user_id"] = user["id"]
         return {"requires_2fa": True, "recovery_code_count": recovery_code_count(user["id"])}
     request.session["user_id"] = user["id"]
     return {"user": _session_payload(user)}
+
+
+@router.post("/change-password")
+def change_password(body: PasswordChangeRequest, request: Request):
+    # Completes a forced password change begun at login (must_change_password / claim). The pending user
+    # is held in the session between the two calls; setting a valid password clears the flag and either
+    # continues to 2FA or completes sign-in.
+    _ensure_runtime_config_ok()
+    pending_user_id = request.session.get("pending_password_change_user_id")
+    if not pending_user_id:
+        raise HTTPException(status_code=400, detail="No pending password change")
+    user = get_user_by_id(pending_user_id)
+    if not user:
+        request.session.clear()
+        raise HTTPException(status_code=400, detail="No pending password change")
+    try:
+        update_user(user["id"], password=body.new_password, must_change_password=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    request.session.clear()
+    updated = get_user_by_id(user["id"])
+    if updated.get("totp_enabled"):
+        request.session["pending_user_id"] = updated["id"]
+        return {"requires_2fa": True, "recovery_code_count": recovery_code_count(updated["id"])}
+    request.session["user_id"] = updated["id"]
+    return {"user": _session_payload(updated)}
 
 
 @router.post("/logout")
@@ -708,6 +804,7 @@ def edit_user(user_id: str, body: UserUpdateRequest, request: Request):
             password=body.password,
             role=body.role,
             status=body.status,
+            must_change_password=body.must_change_password,
         )
     except ValueError as exc:
         detail = str(exc)

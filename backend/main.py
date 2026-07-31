@@ -74,6 +74,7 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
             "/api/auth/login",
             "/api/auth/logout",
             "/api/auth/2fa/verify",
+            "/api/auth/change-password",
         }
         if request.url.path in public_paths or not request.url.path.startswith("/api/"):
             return await call_next(request)

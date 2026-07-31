@@ -19,10 +19,12 @@ import struct
 import time
 import urllib.parse
 import uuid
+
+import segno
 from contextlib import contextmanager
 from pathlib import Path
 
-from backend.db.database import DB_PATH, init_db
+from backend.db.database import DB_PATH, get_db, init_db
 from backend.runtime_config import APP_NAME
 
 
@@ -39,15 +41,15 @@ PASSWORD_POLICY_VALUES = {
     PASSWORD_POLICY_MIN_8,
     PASSWORD_POLICY_STRONG,
 }
+# Two deployment shapes: standalone (this one machine, loopback) vs client-server (backend on a
+# networked box, reached from other devices' browsers). The profile is a setup preset that steers
+# recommendations (whether sign-in is recommended, and — later — the HTTP/HTTPS transport policy); it
+# does not by itself enforce auth. The old `household_shared` and `multi_tenant` profiles are retired.
 SECURITY_PROFILE_LOCAL_PRIVATE = "local_private"
 SECURITY_PROFILE_NETWORK_PRIVATE = "network_private"
-SECURITY_PROFILE_HOUSEHOLD_SHARED = "household_shared"
-SECURITY_PROFILE_MULTI_TENANT = "multi_tenant"
 SECURITY_PROFILE_VALUES = {
     SECURITY_PROFILE_LOCAL_PRIVATE,
     SECURITY_PROFILE_NETWORK_PRIVATE,
-    SECURITY_PROFILE_HOUSEHOLD_SHARED,
-    SECURITY_PROFILE_MULTI_TENANT,
 }
 
 
@@ -87,6 +89,18 @@ def verify_password(password: str, password_hash: str) -> bool:
         return hmac.compare_digest(actual, expected)
     except Exception:
         return False
+
+
+# An account with no usable password (e.g. a profile migrated into an account that the operator left
+# blank) stores this sentinel instead of a hash. It is deliberately *not* a valid `pbkdf2_sha256$...`
+# string, so `verify_password` can never match it — nothing anyone types authenticates against an
+# unset account. Such an account is only reachable through the "claim" path (login recognizes the
+# unset state and routes to a forced password-set), which is gated on `must_change_password`.
+UNSET_PASSWORD_SENTINEL = "unset"
+
+
+def password_is_set(password_hash: str | None) -> bool:
+    return bool(password_hash) and password_hash != UNSET_PASSWORD_SENTINEL
 
 
 def _hash_recovery_code(code: str) -> str:
@@ -182,6 +196,7 @@ def init_control_db():
                 password_hash  TEXT NOT NULL,
                 tenant_id      TEXT NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
                 status         TEXT NOT NULL DEFAULT 'active',
+                must_change_password INTEGER NOT NULL DEFAULT 0,
                 created_at     TEXT NOT NULL DEFAULT (datetime('now')),
                 last_login_at  TEXT
             );
@@ -234,6 +249,12 @@ def init_control_db():
         try:
             conn.execute(
                 "ALTER TABLE user_account ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+        except Exception:
+            pass
+        try:
+            conn.execute(
+                "ALTER TABLE user_account ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"
             )
         except Exception:
             pass
@@ -390,39 +411,36 @@ def set_security_profile(profile: str):
     set_app_setting("security_profile", normalized)
 
 
+# Declared intent to connect an aggregator/data provider, orthogonal to the deployment profile. It
+# only *steers* setup guidance (and, later, the HTTPS-readiness task) — it does not enforce anything;
+# the Connect-bank gate keys off actual HTTPS availability, not this flag.
+def get_data_provider_intended() -> bool:
+    return get_app_setting("data_provider_intended", "0") == "1"
+
+
+def set_data_provider_intended(value: bool):
+    set_app_setting("data_provider_intended", "1" if value else "0")
+
+
 def security_profile_label(profile: str | None = None) -> str:
     normalized = profile or get_security_profile()
     if normalized == SECURITY_PROFILE_NETWORK_PRIVATE:
-        return "Private network or remote access"
-    if normalized == SECURITY_PROFILE_HOUSEHOLD_SHARED:
-        return "Shared household access"
-    if normalized == SECURITY_PROFILE_MULTI_TENANT:
-        return "Multi-tenant preview"
-    return "Private localhost only"
+        return "Client-server"
+    return "Standalone"
 
 
+# `suggested_password_policy` is retained in the payload for the API contract but is no longer
+# surfaced as a recommendation in the UI (we don't presume why a user wants a password).
 def security_profile_guidance(profile: str | None = None) -> dict:
     normalized = profile or get_security_profile()
     if normalized == SECURITY_PROFILE_NETWORK_PRIVATE:
         return {
-            "summary": "Use this when the browser and backend are not on the same machine, or when the app is reachable over your network.",
+            "summary": f"The {APP_NAME} backend runs on a computer on your network, and you and anyone you allow reach it from a browser on another device.",
             "recommended_auth": True,
             "suggested_password_policy": PASSWORD_POLICY_MIN_8,
         }
-    if normalized == SECURITY_PROFILE_HOUSEHOLD_SHARED:
-        return {
-            "summary": "Use this when more than one person in a household may sign in. Separate accounts and stronger sign-in protections usually make sense here.",
-            "recommended_auth": True,
-            "suggested_password_policy": PASSWORD_POLICY_STRONG,
-        }
-    if normalized == SECURITY_PROFILE_MULTI_TENANT:
-        return {
-            "summary": "This is the work-in-progress path for real multi-tenant hosting. Treat strong passwords and explicit sign-in as required.",
-            "recommended_auth": True,
-            "suggested_password_policy": PASSWORD_POLICY_STRONG,
-        }
     return {
-        "summary": f"Use this when {APP_NAME} runs only on the same machine as the browser and never needs access outside localhost.",
+        "summary": f"{APP_NAME} runs on this one computer and you use it right here. Nothing else connects to it.",
         "recommended_auth": False,
         "suggested_password_policy": PASSWORD_POLICY_NONE,
     }
@@ -523,10 +541,18 @@ def _create_user_with_tenant(
     role: str = "member",
     use_legacy_db_if_present: bool = False,
     tenant_id: str | None = None,
+    must_change_password: bool = False,
 ) -> dict:
     if not username.strip():
         raise ValueError("username is required")
-    validate_password_for_policy(password)
+    # A blank password is only allowed when the account is created in a "must set a password on next
+    # login" state (the profile-migration path). It stores the unset sentinel rather than a hash.
+    password_provided = bool(password)
+    if password_provided:
+        validate_password_for_policy(password)
+    elif not must_change_password:
+        raise ValueError("password is required")
+    password_hash = _hash_password(password) if password_provided else UNSET_PASSWORD_SENTINEL
 
     if role not in {"member", "admin"}:
         raise ValueError("role must be 'member' or 'admin'")
@@ -571,16 +597,17 @@ def _create_user_with_tenant(
         user_id = str(uuid.uuid4())
         conn.execute(
             """
-            INSERT INTO user_account (id, username, display_name, password_hash, tenant_id, role)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO user_account (id, username, display_name, password_hash, tenant_id, role, must_change_password)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
                 clean_username,
                 user_display_name,
-                _hash_password(password),
+                password_hash,
                 resolved_tenant_id,
                 role,
+                1 if must_change_password else 0,
             ),
         )
         conn.execute(
@@ -614,6 +641,7 @@ def get_user_by_id(user_id: str) -> dict | None:
                 u.role,
                 u.totp_secret,
                 COALESCE(u.totp_enabled, 0) AS totp_enabled,
+                COALESCE(u.must_change_password, 0) AS must_change_password,
                 u.status,
                 u.tenant_id,
                 t.name AS tenant_name,
@@ -642,6 +670,7 @@ def authenticate_user(username: str, password: str) -> dict | None:
                 u.password_hash,
                 u.role,
                 COALESCE(u.totp_enabled, 0) AS totp_enabled,
+                COALESCE(u.must_change_password, 0) AS must_change_password,
                 u.totp_secret,
                 u.status,
                 u.tenant_id,
@@ -668,6 +697,28 @@ def authenticate_user(username: str, password: str) -> dict | None:
     user = dict(row)
     user.pop("password_hash", None)
     return user
+
+
+def get_login_account(username: str) -> dict | None:
+    # Lightweight lookup for the login flow: enough to branch verify-vs-claim and pick the next step,
+    # without exposing the stored hash to callers. `password_set` is False for an unset (sentinel)
+    # account, which — combined with `must_change_password` — is the only case login accepts without a
+    # password (the claim path).
+    with get_control_db() as conn:
+        row = conn.execute(
+            """
+            SELECT id, status, password_hash,
+                   COALESCE(totp_enabled, 0) AS totp_enabled,
+                   COALESCE(must_change_password, 0) AS must_change_password
+            FROM user_account WHERE lower(username) = lower(?)
+            """,
+            (username.strip(),),
+        ).fetchone()
+    if not row:
+        return None
+    account = dict(row)
+    account["password_set"] = password_is_set(account.pop("password_hash"))
+    return account
 
 
 def list_users() -> list[dict]:
@@ -764,6 +815,77 @@ def create_user(
     )
 
 
+def migrate_profiles_to_accounts(
+    claim_profile_id: str,
+    admin_password: str,
+    initial_passwords: dict | None = None,
+) -> dict:
+    """Turn on sign-in protection by converting every local preference profile into a `user_account`,
+    preserving each profile's UI preferences — instead of the old behavior of bootstrapping a fresh
+    admin and orphaning the profiles.
+
+    The operator claims one profile as the **admin** and sets a real password for it. Every other
+    profile becomes an account the operator may leave password-unset; an unset account is claimable and
+    forced to set a password on next login (`must_change_password`). Preference rows in the data DB are
+    re-keyed from profile id to the new user id, the migrated profiles are deleted, and auth mode is
+    enabled **last** (a single-profile migration yields one account, so `auth_required()` would stay off
+    without the explicit flag). Everything is validated up front so a bad password never leaves a
+    partially migrated workspace. Returns the new admin user.
+    """
+    if auth_required():
+        raise ValueError("sign-in protection is already enabled")
+    initial_passwords = initial_passwords or {}
+    profiles = list_local_preference_profiles()
+    if not profiles:
+        raise ValueError("no local profiles to migrate")
+    claim = next((p for p in profiles if p["id"] == claim_profile_id), None)
+    if not claim:
+        raise ValueError("claim profile not found")
+
+    validate_password_for_policy(admin_password)
+    others = [p for p in profiles if p["id"] != claim_profile_id]
+    for profile in others:
+        candidate = initial_passwords.get(profile["id"]) or ""
+        if candidate:
+            validate_password_for_policy(candidate)
+
+    admin = _create_user_with_tenant(
+        username=claim["name"],
+        password=admin_password,
+        display_name=claim["name"],
+        role="admin",
+        use_legacy_db_if_present=True,
+    )
+    mapping = {claim["id"]: admin["id"]}
+    for profile in others:
+        candidate = initial_passwords.get(profile["id"]) or ""
+        member = _create_user_with_tenant(
+            username=profile["name"],
+            password=candidate,
+            display_name=profile["name"],
+            role="member",
+            tenant_id=admin["tenant_id"],
+            must_change_password=True,
+        )
+        mapping[profile["id"]] = member["id"]
+
+    # Preferences live in the data DB keyed by scope_id (the profile id in local mode); re-key them to
+    # the new user ids so each migrated user keeps their layout/view state. Open the tenant's data DB by
+    # explicit path because auth_required() has already flipped true (2+ accounts) and there is no
+    # request-scoped tenant routing inside this call.
+    with get_db(db_path=admin["db_path"]) as data_conn:
+        for old_id, new_id in mapping.items():
+            data_conn.execute(
+                "UPDATE ui_preference SET scope_id = ? WHERE scope_id = ?",
+                (new_id, old_id),
+            )
+    for old_id in mapping:
+        delete_local_preference_profile(old_id)
+
+    enable_auth_mode()
+    return admin
+
+
 def update_user(
     user_id: str,
     *,
@@ -772,6 +894,7 @@ def update_user(
     password: str | None = None,
     role: str | None = None,
     status: str | None = None,
+    must_change_password: bool | None = None,
 ) -> dict:
     current = get_user_by_id(user_id)
     if not current:
@@ -801,10 +924,25 @@ def update_user(
             fields.append("display_name = ?")
             params.append(clean_display_name)
 
+        # Password reset doubles as the migration/force-change primitive. A blank password stores the
+        # unset sentinel (account becomes claimable) and implies must_change_password; a real password
+        # is validated, hashed, and clears the flag unless the caller forces it (temp-password reset).
         if password is not None:
-            validate_password_for_policy(password)
-            fields.append("password_hash = ?")
-            params.append(_hash_password(password))
+            if password == "":
+                fields.append("password_hash = ?")
+                params.append(UNSET_PASSWORD_SENTINEL)
+                if must_change_password is None:
+                    must_change_password = True
+            else:
+                validate_password_for_policy(password)
+                fields.append("password_hash = ?")
+                params.append(_hash_password(password))
+                if must_change_password is None:
+                    must_change_password = False
+
+        if must_change_password is not None:
+            fields.append("must_change_password = ?")
+            params.append(1 if must_change_password else 0)
 
         if role is not None:
             normalized_role = role.strip()
@@ -857,9 +995,14 @@ def begin_totp_setup(user_id: str) -> dict:
     if not user:
         raise ValueError("user not found")
     secret = generate_totp_secret()
+    otpauth_uri = build_totp_uri(user["username"], secret)
+    # A scannable QR of the same provisioning URI, rendered server-side as an inline SVG data URI so
+    # the frontend just drops it into an <img> (no client QR dependency; the secret is already in this
+    # response either way). The manual key/URI remain for authenticators that can't scan.
     return {
         "secret": secret,
-        "otpauth_uri": build_totp_uri(user["username"], secret),
+        "otpauth_uri": otpauth_uri,
+        "qr_svg": segno.make(otpauth_uri).svg_data_uri(),
     }
 
 
