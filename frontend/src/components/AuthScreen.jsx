@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { APP_NAME } from '../lib/appConfig.js'
 import { passwordPolicyHelpText, validatePasswordForPolicy } from '../lib/passwordPolicy.js'
-import { getSecurityProfile } from '../lib/securityProfiles.js'
 import TransientTextInput from './TransientTextInput.jsx'
 
 const s = {
@@ -49,7 +48,7 @@ const s = {
   },
 }
 
-export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', securityProfile = 'local_private', onAuthenticated }) {
+export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', onAuthenticated }) {
   /*
    * Bootstrap, password login, and 2FA confirmation share one shell here so the active security profile,
    * password rules, and recovery-code guidance stay in the same flow instead of bouncing the user between screens.
@@ -67,7 +66,17 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
   const [newPasswordConfirm, setNewPasswordConfirm] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
-  const profile = getSecurityProfile(securityProfile)
+
+  // TransientTextInput intercepts Enter (preventDefault + commit), so the native "Enter submits the
+  // form" never fires. Wire it explicitly: Enter advances to the next field, and Enter on the final
+  // field submits (requestSubmit routes through the form's onSubmit and respects a disabled button,
+  // e.g. an invalid bootstrap password).
+  const formRef = useRef(null)
+  const displayNameRef = useRef(null)
+  const passwordRef = useRef(null)
+  const newPasswordConfirmRef = useRef(null)
+  const advanceOnEnter = ref => e => { if (e.key === 'Enter') ref.current?.focus() }
+  const submitOnEnter = e => { if (e.key === 'Enter') formRef.current?.requestSubmit() }
 
   // Route a login/change-password response to the right in-place step (password change, then 2FA, then done).
   function applyAuthResponse(resp) {
@@ -149,7 +158,7 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
 
   return (
     <div style={s.page}>
-      <form onSubmit={formSubmit} style={s.card}>
+      <form ref={formRef} onSubmit={formSubmit} style={s.card}>
         <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 6 }}>{APP_NAME}</div>
         <div style={{ fontSize: 14, color: 'var(--muted)', marginBottom: 20, lineHeight: 1.5 }}>
           {awaitingPasswordChange
@@ -157,20 +166,16 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
             : awaiting2fa
               ? `Enter the 6-digit code from your authenticator app to complete sign-in.${recoveryCodeCount ? ` You can also use one of your ${recoveryCodeCount} recovery codes.` : ''}`
               : needsBootstrap
-                ? `Create the first account. That account becomes the workspace admin. Security mode: ${profile.label}.`
-                : `Sign in to load your workspace. Security mode: ${profile.label}.`}
+                ? 'Create the first account. That account becomes the workspace admin.'
+                : 'Sign in to load your workspace.'}
         </div>
-        {!awaiting2fa && !awaitingPasswordChange && (
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16, lineHeight: 1.5 }}>
-            {profile.summary}
-          </div>
-        )}
 
         <div style={{ display: 'grid', gap: 12 }}>
           {!awaiting2fa && !awaitingPasswordChange && (
             <TransientTextInput
               value={username}
               onChange={setUsername}
+              onKeyDown={advanceOnEnter(needsBootstrap ? displayNameRef : passwordRef)}
               restoreOnEscape
               onBlurCommit={false}
               placeholder="Username"
@@ -180,8 +185,10 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
           )}
           {!awaiting2fa && !awaitingPasswordChange && needsBootstrap && (
             <TransientTextInput
+              ref={displayNameRef}
               value={displayName}
               onChange={setDisplayName}
+              onKeyDown={advanceOnEnter(passwordRef)}
               restoreOnEscape
               onBlurCommit={false}
               placeholder="Display name"
@@ -195,6 +202,7 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
                 type="password"
                 value={newPassword}
                 onChange={setNewPassword}
+                onKeyDown={advanceOnEnter(newPasswordConfirmRef)}
                 restoreOnEscape
                 onBlurCommit={false}
                 placeholder="New password"
@@ -202,9 +210,11 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
                 style={s.input}
               />
               <TransientTextInput
+                ref={newPasswordConfirmRef}
                 type="password"
                 value={newPasswordConfirm}
                 onChange={setNewPasswordConfirm}
+                onKeyDown={submitOnEnter}
                 restoreOnEscape
                 onBlurCommit={false}
                 placeholder="Confirm new password"
@@ -218,9 +228,11 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
           ) : !awaiting2fa ? (
             <>
               <TransientTextInput
+                ref={passwordRef}
                 type="password"
                 value={password}
                 onChange={setPassword}
+                onKeyDown={submitOnEnter}
                 restoreOnEscape
                 onBlurCommit={false}
                 placeholder="Password"
@@ -237,6 +249,7 @@ export default function AuthScreen({ needsBootstrap, passwordPolicy = 'min_8', s
             <TransientTextInput
               value={twoFactorCode}
               onChange={setTwoFactorCode}
+              onKeyDown={submitOnEnter}
               restoreOnEscape
               onBlurCommit={false}
               placeholder="123456"

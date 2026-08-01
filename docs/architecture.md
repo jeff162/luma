@@ -76,9 +76,9 @@ There are shared primitives designed to create a uniform user experience. Unles
 
 The concern behind this is interaction drift. Repeated popovers, inline editors, and dismissal rules are easy to make "almost the same" on each page, which creates both subtle bugs and a less coherent product feel over time.
 
-- **Local-mode onboarding:** when auth is off and no local preference profiles exist yet, `App.jsx` opens a first-run welcome flow that creates the initial local profile and then routes the user once to a chosen data-entry surface — import a CSV, connect a data source, load the demo dataset, or skip into an empty app. Getting data in is the point of the flow; account owners, additional profiles, and categorization setup are deferred to the normal app surfaces rather than collected up front. The chosen destination is a **one-time** navigation, deliberately distinct from the persisted startup-route preference (which stays at its default so later launches land on the dashboard, not back on import/accounts).
+- **Local-mode onboarding:** when auth is off and no identities exist yet, `App.jsx` opens a first-run welcome flow that creates the initial identity and then routes the user once to a chosen data-entry surface — import a CSV, connect a data source, load the demo dataset, or skip into an empty app. Getting data in is the point of the flow; account owners, additional identities, and categorization setup are deferred to the normal app surfaces rather than collected up front. The chosen destination is a **one-time** navigation, deliberately distinct from the persisted startup-route preference (which stays at its default so later launches land on the dashboard, not back on import/accounts).
 
-Keeping this in `App.jsx` makes it part of bootstrap rather than a repeatable workflow. The main need is to block the ordinary shell until there is enough local-profile state to scope preferences cleanly, not to create a long-lived page in the app’s information architecture. The welcome flow guides the user toward their first import because that data is what activates the rest of the app; the supporting concepts are introduced where they become relevant (e.g. a post-import nudge about categories) instead of as onboarding prerequisites.
+Keeping this in `App.jsx` makes it part of bootstrap rather than a repeatable workflow. The main need is to block the ordinary shell until an identity is selected to scope preferences cleanly, not to create a long-lived page in the app’s information architecture. The welcome flow guides the user toward their first import because that data is what activates the rest of the app; the supporting concepts are introduced where they become relevant (e.g. a post-import nudge about categories) instead of as onboarding prerequisites.
 
 - **Demo data — built through the real pipeline:** the demo is constructed by generating CSV files and importing them via `run_import_core` (the import endpoint's reusable, in-process core), not by hand-inserting rows. So it has genuine batches, per-account coverage, dedupe results, and saved data sources — the file cards look exactly like real imports. It generates two sources with different header formats: one *with* a category column imported "using imported categories" (creates `Pet Care` under Unassigned, maps the rest onto starter leaves), and one *without* (rows categorized only by the rules it then seeds, or left uncategorized). One transaction is duplicated across the two files/accounts so the real post-import sweep flags it. `load_demo_data` passes its own `conn` to `run_import_core` so the whole build is one transaction.
 
@@ -270,23 +270,27 @@ routing would be risky and low-value, so it stays wired and unused.
   restriction. No data route checks role.
 - **Admin gates *settings*, not *data*.** The `_require_admin` split (`backend/routers/auth.py`) governs
   user management and environment/provider settings only; nothing at the data layer is admin-gated.
-- **Two access modes, an all-or-nothing workspace toggle.** *Perimeter off* is local mode: named
-  `local_preference_profile`s with no passwords, picked from a chooser, scoping only per-person UI
-  preferences. *Perimeter on* is auth mode: every identity is a real `user_account` with a password,
-  reusing the accounts / 2FA / roles / password-policy machinery. "Password optional" is a **workspace**
-  property (the "Enable sign-in protection" switch → `enable_auth_mode()`), never per-user — because the
-  data is shared, a per-user opt-out would let a LAN peer just pick the passwordless identity and read the
-  same ledger. Today this is **two tables** (`local_preference_profile`, `user_account`); the
-  `auth_required()` gate, the middleware's session-vs-local branch, and preference-scope keying are all
-  wired to the split. **Settled direction (not yet built):** collapse to a single `user_account` table
-  where the sign-in flag toggles only *whether the password is checked* — see
-  `docs/backlog/security-and-deployment-model.md` → "Unified identity model" (it makes disabling sign-in
-  a flag flip and drops the `user_count()>1` auth latch).
-- **Turning the perimeter on migrates, it does not orphan.** Flipping sign-in protection converts the
-  existing local profiles into `user_account`s (the operator claims one as admin and sets passwords;
-  others may be left password-unset and forced to set one at next login via `must_change_password`) and
-  re-keys their `ui_preference` rows to the new user ids, rather than bootstrapping a fresh admin and
-  stranding the profiles.
+- **One identity concept — a `user_account` — in a single table.** There is no separate local-profile
+  table: a perimeter-off identity and an authenticated user are the *same* row, and the "Enable sign-in
+  protection" flag decides **only whether the login password is verified**. *Perimeter off* is local mode:
+  passwordless `user_account`s picked from a chooser, scoping per-person UI preferences. *Perimeter on* is
+  auth mode: the same identities, now password-checked, reusing the accounts / 2FA / roles / password-policy
+  machinery. "Password optional" is a **workspace** property (`enable_auth_mode()` / `disable_auth_mode()`),
+  never per-user — because the data is shared, a per-user opt-out would let a LAN peer just pick the
+  passwordless identity and read the same ledger. `auth_required()` is now **only** the sign-in flag (the
+  old `user_count() > 1` latch is gone, so multiple passwordless users are ordinary).
+- **Identity is carried by the session in both modes.** The tenant middleware (`backend/main.py`) reads a
+  single `session['user_id']` regardless of mode; a perimeter-off session is stamped `pwless` (identity
+  chosen via `POST /auth/select-identity`, no password), and enabling sign-in invalidates any `pwless`
+  session on its next request (Starlette sessions are stateless signed cookies, so this per-request check
+  *is* the invalidation). There is no per-request identity header.
+- **Enable and disable are flag flips.** *Enable* claims one existing identity as admin (sets its password),
+  marks every other passwordless identity `must_change_password` (claimable at next login), and flips the
+  flag (`enable_auth_with_admin`). *Disable* (admin-gated) just flips the flag back — identities and their
+  password hashes are preserved (dormant), so re-enabling is seamless; no migration, no re-keying, no
+  credential loss. A one-time `_unify_local_profiles_into_users()` at startup folds any legacy
+  `local_preference_profile` rows from an older install into `user_account`s (preferences re-keyed) and
+  drops the table.
 - **Security profile is a setup *preset*, not an enforcement mechanism.** Two deployment shapes:
   **Standalone** (`local_private` — this one machine, loopback) and **Client-server** (`network_private`
   — backend on a networked box, reached from other devices). They steer recommendations (whether sign-in
@@ -307,7 +311,7 @@ Luma uses several distinct storage layers for working state.
 
 - **Lifespan:** `localStorage` survives reloads on the same browser profile until cleared; `sessionStorage` lasts only for the current browser tab/session
 
-- **Contains:** browser-specific remembered local-profile selection, import draft/fallback state, migration fallback values from older UI preference storage, and other machine-local or browser-local UI state that should not be treated as durable shared preference data
+- **Contains:** browser-specific remembered identity selection (a convenience auto-select; the session cookie is the source of truth), import draft/fallback state, migration fallback values from older UI preference storage, and other machine-local or browser-local UI state that should not be treated as durable shared preference data
 
 #### Frontend session state
 
@@ -325,23 +329,21 @@ Luma uses several distinct storage layers for working state.
 
 - **Lifespan:** durable until explicitly changed or cleared
 
-- **Contains:** per-user preferences in authenticated mode, per-local-profile preferences in local access mode, and other small JSON-friendly UI preference values that should follow the active user or local profile
+- **Contains:** UI preferences keyed to the current identity's `user_id`, and other small JSON-friendly UI preference values that follow the active identity
 
-- **Authenticated mode:** keyed to the signed-in user
-
-- **Local access mode:** keyed to a lightweight **local profile** instead of a security identity
+- **Scope:** always keyed to `user_id` — the same key whether the perimeter is on or off (the middleware resolves the identity from the session in both modes), so there is no profile-id ⇄ user-id re-keying
 
 - **Key files:** `backend/db/control\_database.py`, `backend/routers/auth.py`, `frontend/src/lib/UserPreferencesContext.jsx`
 
-#### Local-profile records in the control database
+#### Identity records in the control database
 
 - **Lives in:** `backend/luma-control.db`
 
 - **Lifespan:** durable until explicitly deleted
 
-- **Contains:** local access mode profile identities used to separate layout/view preferences for different people sharing one database
+- **Contains:** the single `user_account` table — one identity concept for both modes. Perimeter-off identities are passwordless rows (unset-password sentinel); enabling sign-in assigns passwords/roles to the same rows. There is no separate local-profile table.
 
-- **Properties:** selected from the browser-facing profile picker in `frontend/src/App.jsx`; not authentication or authorization identities; used to scope preference data and startup behavior in local mode
+- **Properties:** perimeter-off identities are picked from the chooser in `frontend/src/App.jsx`, which establishes a `pwless` session via `POST /auth/select-identity`; the same rows become authenticated users when the perimeter is on
 
 #### Application data database
 
@@ -367,11 +369,11 @@ When `LUMA\_DEVELOPER\_OPTIONS=true`, the Settings page exposes developer reset
 
 - **`Clear import memory`:** clears backend import-memory data stored in the main application database
 
-- **`Clear local user profiles`:** clears local-profile records stored in the control database
+- **`Clear local users`:** deletes the perimeter-off `user_account` identities stored in the control database
 
 These resets remain separate because they target different storage layers with different lifespans and different effects on startup behavior.
 
-The separation is important because "resetting the app" can mean very different things in practice. Browser-local troubleshooting, preference cleanup, import-workflow cleanup, and removing local profiles are all recoveries with different blast radii, so the tooling keeps them explicit instead of hiding them behind one broad reset.
+The separation is important because "resetting the app" can mean very different things in practice. Browser-local troubleshooting, preference cleanup, import-workflow cleanup, and removing local identities are all recoveries with different blast radii, so the tooling keeps them explicit instead of hiding them behind one broad reset.
 
 ## Cross-platform approach
 

@@ -47,7 +47,7 @@ from pydantic import BaseModel, Field
 from backend.app_logging import log_warning
 from backend.db.database import SHARED_OWNER_ID, get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.db.demo_data import is_demo_data_loaded
-from backend.db.control_database import auth_required, get_local_preference_profile
+from backend.db.control_database import auth_required
 from backend.json_utils import safe_json_dict
 from backend.time_utils import utcnow_iso
 from backend.routers.accounts import resolve_default_owner_id
@@ -147,18 +147,12 @@ def _developer_options_enabled() -> bool:
 def _require_developer_access(request: Request):
     if not _developer_options_enabled():
         raise HTTPException(status_code=404, detail="Developer options are not enabled")
-    if auth_required():
-        user = getattr(request.state, "user", None)
-        if not user:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        return user
-    profile_id = (request.headers.get("X-Fintrack-Preference-Profile") or "").strip()
-    if not profile_id:
-        raise HTTPException(status_code=400, detail="Preference profile is required")
-    profile = get_local_preference_profile(profile_id)
-    if not profile:
-        raise HTTPException(status_code=404, detail="Preference profile not found")
-    return profile
+    # Identity is uniform in both modes now: the middleware resolves the session identity onto
+    # request.state.user (perimeter on or off), so there is no separate local-profile header path.
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
 
 
 class ColumnMap(BaseModel):

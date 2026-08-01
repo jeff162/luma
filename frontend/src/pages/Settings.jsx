@@ -532,12 +532,11 @@ function PasswordPolicyPanel({ passwordPolicy, onChange }) {
   )
 }
 
-// Sign-in protection is turned on here. Instead of orphaning the existing local profiles and
-// bootstrapping a fresh admin, this migrates every profile into a real account: the operator claims
-// one profile as the admin (setting a password), and may set an optional starting password for each
-// other profile. Every non-claimed account is forced to set its own password at next login, so a
-// blank starting password just means "the person claims it themselves." On success the page reloads
-// into authenticated mode signed in as the new admin.
+// Sign-in protection is turned on here. Identities are already unified `user_account` rows, so this
+// only assigns passwords/roles: the operator claims one identity as the admin (setting a password),
+// and may set an optional starting password for each other identity. Every non-claimed account is
+// forced to set its own password at next login, so a blank starting password just means "the person
+// claims it themselves." On success the page reloads into authenticated mode signed in as the admin.
 function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
   const [profiles, setProfiles] = useState(null)
   const [loadError, setLoadError] = useState('')
@@ -553,23 +552,23 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
 
   useEffect(() => {
     let cancelled = false
-    api.getLocalPreferenceProfiles()
+    api.getIdentities()
       .then(resp => {
         if (cancelled) return
-        const list = resp.profiles || []
+        const list = (resp.identities || []).map(i => ({ id: i.id, name: i.display_name }))
         setProfiles(list)
-        // Pre-select the operator's active profile as the claim; fall back to the first.
+        // Pre-select the operator's active identity as the claim; fall back to the first.
         const preferred = list.find(p => p.id === activeLocalProfile?.id) || list[0]
         setClaimId(preferred?.id || '')
       })
-      .catch(err => { if (!cancelled) setLoadError(err.message || 'Failed to load profiles') })
+      .catch(err => { if (!cancelled) setLoadError(err.message || 'Failed to load users') })
     return () => { cancelled = true }
   }, [activeLocalProfile?.id])
 
   async function enableWithMigration(e) {
     e.preventDefault()
     setError('')
-    if (!claimId) { setError('Choose which profile is yours.'); return }
+    if (!claimId) { setError('Choose which user is yours.'); return }
     if (!validatePasswordForPolicy(adminPassword, policy)) {
       setError(`Your password does not meet the policy: ${passwordPolicyHelpText(policy)}`)
       return
@@ -587,7 +586,7 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
     }
     setSaving(true)
     try {
-      await api.enableAuth({ claim_profile_id: claimId, admin_password: adminPassword, initial_passwords, password_policy: policy })
+      await api.enableAuth({ claim_user_id: claimId, admin_password: adminPassword, initial_passwords, password_policy: policy })
       window.location.reload()
     } catch (err) {
       setError(err.message || 'Failed to enable sign-in protection')
@@ -595,8 +594,8 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
     }
   }
 
-  // With no local profiles there is nothing to migrate — enable auth and let the sign-in screen
-  // bootstrap the first admin (the pre-migration behavior).
+  // With no existing identities there is nothing to claim — enable auth and let the sign-in screen
+  // bootstrap the first admin.
   async function enablePlain() {
     setSaving(true)
     setError('')
@@ -639,13 +638,13 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
       <form onSubmit={enableWithMigration} style={{ display: 'grid', gap: 16 }}>
         <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
           {single
-            ? 'Turning this on converts your local profile into a password-protected account. Set a password to continue — you become the admin.'
-            : 'Turning this on converts each local profile into its own password-protected account. Choose which profile is yours (you become the admin), then optionally set a starting password for the others. Everyone else is required to set their own password the next time they sign in.'}
+            ? 'Turning this on password-protects your user. Set a password to continue — you become the admin.'
+            : 'Turning this on password-protects each user. Choose which user is yours (you become the admin), then optionally set a starting password for the others. Everyone else is required to set their own password the next time they sign in.'}
         </div>
 
         {!single && (
           <div style={{ display: 'grid', gap: 8 }}>
-            <FormLabel>Which profile is yours?</FormLabel>
+            <FormLabel>Which user is yours?</FormLabel>
             {profiles.map(p => (
               <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
                 <input type="radio" name="claim-profile" checked={claimId === p.id} onChange={() => setClaimId(p.id)} disabled={saving} />
@@ -677,7 +676,7 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
 
         {!single && others.length > 0 && (
           <div style={{ display: 'grid', gap: 10 }}>
-            <FormLabel>Starting passwords for the other profiles (optional)</FormLabel>
+            <FormLabel>Starting passwords for the other users (optional)</FormLabel>
             <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>
               Leave blank to let each person set their own on first sign-in. Whatever you enter, they will be asked to choose a new password the next time they sign in.
             </div>
@@ -704,6 +703,55 @@ function AuthModeSection({ passwordPolicy, activeLocalProfile }) {
           </Button>
         </div>
       </form>
+    </Card>
+  )
+}
+
+// Turning sign-in protection back off (admin-gated). It is a flag flip — identities and their password
+// hashes are preserved so re-enabling is seamless — but it reopens network access, so it confirms first.
+function DisableAuthSection() {
+  const [confirming, setConfirming] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  async function disable() {
+    setSaving(true)
+    setError('')
+    try {
+      await api.disableAuth()
+      window.location.reload()
+    } catch (err) {
+      setError(err.message || 'Failed to turn off sign-in protection')
+      setSaving(false)
+      setConfirming(false)
+    }
+  }
+
+  return (
+    <Card style={{ padding: 20 }}>
+      {confirming ? (
+        <AppConfirmDialog
+          title="Turn off sign-in protection?"
+          description="Anyone who can reach this installation on the network will be able to open it and pick any identity — no password, no 2FA. Accounts and their passwords are kept, so you can turn protection back on at any time."
+          confirmLabel="Turn off sign-in protection"
+          confirmVariant="danger"
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={disable}
+          onCancel={() => setConfirming(false)}
+          confirmDisabled={saving}
+          width="min(520px, 100%)"
+        />
+      ) : null}
+      <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+        Sign-in protection is on. Turning it off drops the login perimeter but keeps every account and
+        password, so re-enabling later is seamless.
+      </div>
+      {error && <div style={{ marginTop: 12, color: '#ef4444', fontSize: 13 }}>{error}</div>}
+      <div style={{ marginTop: 14 }}>
+        <Button small variant="danger" onClick={() => setConfirming(true)} disabled={saving}>
+          {saving ? 'Turning off...' : 'Turn off sign-in protection'}
+        </Button>
+      </div>
     </Card>
   )
 }
@@ -1854,6 +1902,7 @@ function EnvironmentSection({ authEnabled, currentUser }) {
 }
 
 function DeveloperOptionsSection({ authEnabled }) {
+  const { currentUser } = useAppSession()
   const [workingAction, setWorkingAction] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -1875,10 +1924,10 @@ function DeveloperOptionsSection({ authEnabled }) {
   function requestActionConfirm(actionKey) {
     const confirmConfig = {
       all: {
-        title: 'Clear all stored state?',
+        title: 'Reset all stored state?',
         description: authEnabled
-          ? 'Clear browser-local state, saved preferences, and import memory, then reload?'
-          : 'Clear browser-local state, saved preferences, import memory, and local user profiles, then reload?',
+          ? 'Turn sign-in protection OFF and delete ALL users (passwords, 2FA, and recovery codes included), then clear browser-local state, saved preferences, and import memory and reload to the welcome screen?'
+          : 'Delete all users, then clear browser-local state, saved preferences, and import memory and reload to the welcome screen?',
       },
       browser: {
         title: 'Clear browser-local state?',
@@ -1893,8 +1942,10 @@ function DeveloperOptionsSection({ authEnabled }) {
         description: 'Clear saved data sources and import snapshots, then reload?',
       },
       profiles: {
-        title: 'Clear local user profiles?',
-        description: 'Clear all local user profiles and reload?',
+        title: 'Reset to first-run?',
+        description: authEnabled
+          ? 'Turn sign-in protection OFF and delete ALL users — passwords, 2FA, and recovery codes included — returning to the welcome screen?'
+          : 'Delete all users and return to the welcome screen?',
       },
     }[actionKey]
     if (!confirmConfig) return
@@ -1906,7 +1957,7 @@ function DeveloperOptionsSection({ authEnabled }) {
       return runAction('all', async () => {
         await api.clearUserPreferences()
         await api.clearImportMemory()
-        if (!authEnabled) await api.clearLocalPreferenceProfiles()
+        await resetToFirstRun()
         clearBrowserStoredState()
         window.location.reload()
       })
@@ -1931,12 +1982,30 @@ function DeveloperOptionsSection({ authEnabled }) {
     }
     if (actionKey === 'profiles') {
       return runAction('profiles', async () => {
-        await api.clearLocalPreferenceProfiles()
+        await resetToFirstRun()
         clearBrowserStoredState()
         window.location.reload()
       })
     }
     return Promise.resolve()
+  }
+
+  // Full reset to the first-run welcome screen. In auth mode this first turns sign-in protection off
+  // (admin-gated) — which drops to local mode, so the identity endpoints become reachable and
+  // delete_user's keep-one-admin guard no longer applies — then removes every user, the admin included.
+  async function resetToFirstRun() {
+    if (authEnabled) await api.disableAuth()
+    // No bulk endpoint — identities are ordinary users — so remove them one by one; individual failures
+    // are ignored so a partial reset still reloads to a clean welcome screen. Delete the current
+    // session's own identity LAST: deleting it first invalidates the session and would 401 (and thus
+    // strand) the remaining users.
+    const resp = await api.getIdentities().catch(() => ({ identities: [] }))
+    const ids = (resp?.identities || []).map(i => i.id)
+    const currentId = currentUser?.id
+    const ordered = [...ids.filter(id => id !== currentId), ...ids.filter(id => id === currentId)]
+    for (const id of ordered) {
+      await api.deleteIdentity(id).catch(() => { })
+    }
   }
 
   return (
@@ -1971,12 +2040,12 @@ function DeveloperOptionsSection({ authEnabled }) {
           padding: '10px 18px',
         }}
         title={authEnabled
-          ? "Clears browser state, saved preferences, and import memory, then reloads the app."
-          : "Clears browser state, saved preferences, import memory, and local user profiles, then reloads the app."}
+          ? "Turns sign-in protection off and deletes all users, then clears browser state, saved preferences, and import memory and reloads to the welcome screen."
+          : "Deletes all users, then clears browser state, saved preferences, and import memory and reloads to the welcome screen."}
         onClick={() => requestActionConfirm('all')}
         disabled={!!workingAction}
       >
-        {workingAction === 'all' ? 'Clearing…' : 'Clear all'}
+        {workingAction === 'all' ? 'Resetting…' : 'Clear all'}
       </Button>
       <div style={{ paddingRight: 146 }}>
         <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, maxWidth: 560 }}>
@@ -2037,28 +2106,26 @@ function DeveloperOptionsSection({ authEnabled }) {
             {workingAction === 'importMemory' ? 'Clearing…' : 'Clear import memory'}
           </Button>
         </div>
-        {!authEnabled ? (
-          <>
-            <div style={{ height: 1, background: 'var(--border)' }} />
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>Clear local user profiles</div>
-                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
-                  Deletes the local-mode profile records from the control database, then reloads to the profile chooser.
-                </div>
-              </div>
-              <Button
-                small
-                variant="ghost"
-                title="Deletes local-mode user profile records from the control database, then reloads the app."
-                onClick={() => requestActionConfirm('profiles')}
-                disabled={!!workingAction}
-              >
-                {workingAction === 'profiles' ? 'Clearing…' : 'Clear local profiles'}
-              </Button>
+        <div style={{ height: 1, background: 'var(--border)' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Reset to first-run</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
+              {authEnabled
+                ? 'Turns sign-in protection off and deletes every user (passwords, 2FA, and recovery codes included), then reloads to the welcome screen.'
+                : 'Deletes every user, then reloads to the welcome screen.'}
             </div>
-          </>
-        ) : null}
+          </div>
+          <Button
+            small
+            variant="ghost"
+            title="Turns sign-in protection off (if on), deletes every user, then reloads the app to the first-run welcome screen."
+            onClick={() => requestActionConfirm('profiles')}
+            disabled={!!workingAction}
+          >
+            {workingAction === 'profiles' ? 'Resetting…' : 'Reset to first-run'}
+          </Button>
+        </div>
       </div>
       {message ? (
         <div style={{ fontSize: 12, color: 'var(--muted)' }}>{message}</div>
@@ -2806,6 +2873,17 @@ export default function Settings() {
               {...bindSection('userManagement')}
             >
               <UserAdminSection passwordPolicy={passwordPolicy} />
+            </StickySection>
+          )}
+
+          {authEnabled && currentUser?.role === 'admin' && (
+            <StickySection
+              title="Sign-in protection"
+              description="Turn off login for this installation (accounts and passwords are kept)."
+              scrollContainerRef={settingsScrollRef}
+              {...bindSection('disableSignInProtection')}
+            >
+              <DisableAuthSection />
             </StickySection>
           )}
 

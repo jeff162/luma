@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from backend.db.control_database import auth_required, get_local_mode_user, get_user_by_id, init_control_db
+from backend.db.control_database import auth_required, get_user_by_id, init_control_db
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
 from backend.routers import accounts, auth, categories, import_export, owners, plaid, recurring, rules, sync, tags, tasks, transactions
 from backend.runtime_config import APP_NAME, runtime_config_status
@@ -75,28 +75,26 @@ class TenantSessionMiddleware(BaseHTTPMiddleware):
             "/api/auth/logout",
             "/api/auth/2fa/verify",
             "/api/auth/change-password",
+            "/api/auth/identities",
+            "/api/auth/select-identity",
         }
         if request.url.path in public_paths or not request.url.path.startswith("/api/"):
             return await call_next(request)
 
-        if not auth_required():
-            local_user = get_local_mode_user()
-            if not local_user:
-                request.state.user = None
-                return await call_next(request)
-            token = set_current_db_path(local_user["db_path"])
-            request.state.user = local_user
-            try:
-                return await call_next(request)
-            finally:
-                reset_current_db_path(token)
-
+        # One identity path for both modes: the session carries `user_id`. `auth_enabled` governs only
+        # whether a *password* was required to establish that session — a perimeter-off session is
+        # marked `pwless` (identity chosen from the chooser, no password). When the perimeter is on, a
+        # `pwless` session is stale (auth was enabled after it was created) and must re-authenticate;
+        # Starlette sessions are stateless signed cookies, so this per-request check is the invalidation.
         session = request.scope.get("session")
         if session is None:
             return JSONResponse({"detail": "Session middleware is not available"}, status_code=500)
 
         user_id = session.get("user_id")
         if not user_id:
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        if auth_required() and session.get("pwless"):
+            session.clear()
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 
         user = get_user_by_id(user_id)

@@ -3,16 +3,14 @@
 
 /*
  * This module is the contract boundary between page-level UI state and backend routes. Most callers hand it
- * app concepts like filters, profile context, or batch actions and let this layer normalize headers, query strings,
- * and the handful of upload/download cases that cannot use the default JSON request helper.
+ * app concepts like filters, batch actions, or the current identity and let this layer normalize headers, query
+ * strings, and the handful of upload/download cases that cannot use the default JSON request helper.
+ *
+ * Identity is carried by the session cookie in both modes (perimeter on or off), so there is no per-request
+ * identity header: selecting an identity (or signing in) establishes the session server-side.
  */
 
 const BASE = '/api'
-let localPreferenceProfileId = ''
-
-export function setLocalPreferenceProfileId(profileId) {
-  localPreferenceProfileId = profileId || ''
-}
 
 // Single app-wide "something was persisted" signal. Every successful mutation pings it: all non-GET
 // requests through `request()` below, plus the multipart upload helpers (import/run, restore) that
@@ -52,8 +50,6 @@ async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
     headers: {
       'Content-Type': 'application/json',
-      // Preference profile selection is app-wide context, so the header is injected here instead of threaded through every call site.
-      ...(localPreferenceProfileId ? { 'X-Fintrack-Preference-Profile': localPreferenceProfileId } : {}),
       ...fetchOptions.headers,
     },
     ...fetchOptions,
@@ -92,14 +88,17 @@ export const api = {
   saveUserPreference: (key, value) =>
     request('/auth/preferences', { method: 'POST', body: JSON.stringify({ key, value }) }),
   clearUserPreferences: () => request('/auth/preferences', { method: 'DELETE' }),
-  getLocalPreferenceProfiles: () => request('/auth/local-preference-profiles'),
-  createLocalPreferenceProfile: (name) =>
-    request('/auth/local-preference-profiles', { method: 'POST', body: JSON.stringify({ name }) }),
-  clearLocalPreferenceProfiles: () => request('/auth/local-preference-profiles', { method: 'DELETE' }),
-  updateLocalPreferenceProfile: (id, name) =>
-    request(`/auth/local-preference-profiles/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
-  deleteLocalPreferenceProfile: (id) =>
-    request(`/auth/local-preference-profiles/${id}`, { method: 'DELETE' }),
+  // Perimeter-off identities: the unified `user_account` rows presented as the local chooser. Selecting
+  // one establishes a passwordless session server-side (see /auth/select-identity).
+  getIdentities: () => request('/auth/identities'),
+  createIdentity: (name) =>
+    request('/auth/identities', { method: 'POST', body: JSON.stringify({ name }) }),
+  renameIdentity: (id, name) =>
+    request(`/auth/identities/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+  deleteIdentity: (id) =>
+    request(`/auth/identities/${id}`, { method: 'DELETE' }),
+  selectIdentity: (userId) =>
+    request('/auth/select-identity', { method: 'POST', body: JSON.stringify({ user_id: userId }) }),
   loadDemoData: () => request('/auth/demo-data', { method: 'POST' }),
   getDemoDataStatus: () => request('/auth/demo-data'),
   clearDemoData: () => request('/auth/demo-data/clear', { method: 'POST' }),
@@ -117,10 +116,11 @@ export const api = {
     request('/auth/data-provider-intent', { method: 'POST', body: JSON.stringify({ intended }) }),
   getBootstrapStatus: () => request('/auth/bootstrap-status'),
   getCurrentUser: () => request('/auth/me'),
-  // `migration` (optional) turns on sign-in protection by converting local profiles into accounts:
-  // { claim_profile_id, admin_password, initial_passwords: { profileId: password } }.
-  enableAuth: (migration = null) =>
-    request('/auth/enable', { method: 'POST', body: JSON.stringify({ enabled: true, ...(migration || {}) }) }),
+  // `options` (optional) turns on sign-in protection by claiming an existing identity as admin:
+  // { claim_user_id, admin_password, initial_passwords: { userId: password }, password_policy }.
+  enableAuth: (options = null) =>
+    request('/auth/enable', { method: 'POST', body: JSON.stringify({ enabled: true, ...(options || {}) }) }),
+  disableAuth: () => request('/auth/disable', { method: 'POST' }),
   login: (username, password) =>
     request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   changePassword: (new_password) =>

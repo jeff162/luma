@@ -220,16 +220,12 @@ def init_control_db():
                 updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
-            CREATE TABLE IF NOT EXISTS local_preference_profile (
-                id         TEXT PRIMARY KEY,
-                name       TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
             -- Preferences moved to the data DB's `ui_preference` table (so backups carry them);
-            -- the control DB now keeps only identity/secrets + local-profile definitions. Drop the
-            -- now-unused control-DB preference copies. (The lazy-relocation bridge that emptied them
-            -- into the data DB has been removed.)
+            -- the control DB now keeps only identity/secrets. Drop the now-unused control-DB preference
+            -- copies. (The lazy-relocation bridge that emptied them into the data DB has been removed.)
+            -- The legacy `local_preference_profile` table (retired in favor of the unified `user_account`
+            -- identity) is deliberately *not* declared here: `_unify_local_profiles_into_users()` reads
+            -- any physical rows left by an older version, folds them into accounts, then drops the table.
             DROP TABLE IF EXISTS user_preference;
             DROP TABLE IF EXISTS local_preference_value;
             """
@@ -278,6 +274,10 @@ def init_control_db():
                 (user_id,),
             )
 
+    # After the schema transaction commits (so `_create_user_with_tenant`'s own connection can write),
+    # fold any legacy local preference profiles into unified `user_account` identities.
+    _unify_local_profiles_into_users()
+
 
 def get_app_setting(key: str, default: str | None = None) -> str | None:
     with get_control_db() as conn:
@@ -300,91 +300,108 @@ def set_app_setting(key: str, value: str):
         )
 
 
-def list_local_preference_profiles() -> list[dict]:
-    with get_control_db() as conn:
-        rows = conn.execute(
-            "SELECT id, name, created_at FROM local_preference_profile ORDER BY name, created_at"
-        ).fetchall()
-    return [dict(row) for row in rows]
-
-
-def get_local_preference_profile(profile_id: str) -> dict | None:
+def _existing_shared_tenant_id() -> str | None:
+    """The one shared workspace tenant, if any exists. There is a single workspace, so a new identity
+    must adopt it rather than mint a second tenant (which would collide on the unique `tenant.db_path`).
+    Prefer a current user's tenant; fall back to any existing `tenant` row — the orphan case after every
+    identity was deleted (e.g. the developer "reset to first-run") but the tenant/data DB remained."""
     with get_control_db() as conn:
         row = conn.execute(
-            "SELECT id, name, created_at FROM local_preference_profile WHERE id = ?",
-            (profile_id,),
+            "SELECT tenant_id FROM user_account ORDER BY created_at, id LIMIT 1"
         ).fetchone()
-    return dict(row) if row else None
+        if row:
+            return row["tenant_id"]
+        tenant = conn.execute(
+            "SELECT id FROM tenant ORDER BY created_at, id LIMIT 1"
+        ).fetchone()
+        return tenant["id"] if tenant else None
 
 
-def create_local_preference_profile(name: str) -> dict:
+def _unify_local_profiles_into_users():
+    """One-time: collapse legacy `local_preference_profile` rows into unified passwordless
+    `user_account` identities, then drop the table. Preferences (data DB `ui_preference`, keyed by
+    scope_id = the profile id in the old local mode) are re-keyed to each new user id so layouts/views
+    survive. Idempotent: a no-op once the table is gone (fresh installs never had it).
+
+    All identities share one workspace/tenant (the deployment model's "one shared workspace, multiple
+    login identities"), so the first migrated user adopts the legacy data DB and the rest join its
+    tenant. A profile whose name already matches an account (a re-run, or a name collision) is folded
+    into that account rather than duplicated.
+    """
+    with get_control_db() as conn:
+        has_table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='local_preference_profile'"
+        ).fetchone()
+        if not has_table:
+            return
+        profiles = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT id, name FROM local_preference_profile ORDER BY created_at, id"
+            ).fetchall()
+        ]
+        existing = {
+            row["username"].lower(): row["id"]
+            for row in conn.execute("SELECT id, username FROM user_account").fetchall()
+        }
+    shared_tenant_id = _existing_shared_tenant_id()
+
+    mapping: dict[str, str] = {}
+    for profile in profiles:
+        name = profile["name"]
+        match_id = existing.get(name.lower())
+        if match_id:
+            mapping[profile["id"]] = match_id
+            continue
+        user = _create_user_with_tenant(
+            username=name,
+            password="",
+            display_name=name,
+            role="member",
+            allow_unset_password=True,
+            use_legacy_db_if_present=(shared_tenant_id is None),
+            tenant_id=shared_tenant_id,
+        )
+        if shared_tenant_id is None:
+            shared_tenant_id = user["tenant_id"]
+        existing[name.lower()] = user["id"]
+        mapping[profile["id"]] = user["id"]
+
+    if mapping and shared_tenant_id:
+        with get_control_db() as conn:
+            tenant = conn.execute(
+                "SELECT db_path FROM tenant WHERE id = ?", (shared_tenant_id,)
+            ).fetchone()
+        if tenant:
+            with get_db(db_path=tenant["db_path"]) as data_conn:
+                for old_id, new_id in mapping.items():
+                    if old_id != new_id:
+                        data_conn.execute(
+                            "UPDATE ui_preference SET scope_id = ? WHERE scope_id = ?",
+                            (new_id, old_id),
+                        )
+
+    with get_control_db() as conn:
+        conn.execute("DROP TABLE IF EXISTS local_preference_profile")
+
+
+def create_local_identity(name: str) -> dict:
+    """Create a passwordless `user_account` for perimeter-off mode (the first-run identity, or an
+    added identity from the chooser). Replaces the retired local-preference-profile creation; the
+    account is selectable without a password while sign-in protection is off."""
     normalized = (name or "").strip()
     if not normalized:
-        raise ValueError("Profile name is required")
-    with get_control_db() as conn:
-        existing = conn.execute(
-            "SELECT id, name, created_at FROM local_preference_profile WHERE LOWER(name) = LOWER(?)",
-            (normalized,),
-        ).fetchone()
-        if existing:
-            return dict(existing)
-        profile_id = str(uuid.uuid4())
-        conn.execute(
-            "INSERT INTO local_preference_profile (id, name) VALUES (?, ?)",
-            (profile_id, normalized),
-        )
-        row = conn.execute(
-            "SELECT id, name, created_at FROM local_preference_profile WHERE id = ?",
-            (profile_id,),
-        ).fetchone()
-    return dict(row)
-
-
-def update_local_preference_profile(profile_id: str, name: str) -> dict:
-    normalized = (name or "").strip()
-    if not normalized:
-        raise ValueError("Profile name is required")
-    with get_control_db() as conn:
-        existing = conn.execute(
-            "SELECT id FROM local_preference_profile WHERE id = ?",
-            (profile_id,),
-        ).fetchone()
-        if not existing:
-            raise ValueError("Preference profile not found")
-        duplicate = conn.execute(
-            "SELECT id FROM local_preference_profile WHERE LOWER(name) = LOWER(?) AND id != ?",
-            (normalized, profile_id),
-        ).fetchone()
-        if duplicate:
-            raise ValueError("A profile with that name already exists")
-        conn.execute(
-            "UPDATE local_preference_profile SET name = ? WHERE id = ?",
-            (normalized, profile_id),
-        )
-        row = conn.execute(
-            "SELECT id, name, created_at FROM local_preference_profile WHERE id = ?",
-            (profile_id,),
-        ).fetchone()
-    return dict(row)
-
-
-def delete_local_preference_profile(profile_id: str):
-    with get_control_db() as conn:
-        existing = conn.execute(
-            "SELECT id FROM local_preference_profile WHERE id = ?",
-            (profile_id,),
-        ).fetchone()
-        if not existing:
-            raise ValueError("Preference profile not found")
-        conn.execute(
-            "DELETE FROM local_preference_profile WHERE id = ?",
-            (profile_id,),
-        )
-
-
-def clear_all_local_preference_profiles():
-    with get_control_db() as conn:
-        conn.execute("DELETE FROM local_preference_profile")
+        raise ValueError("Name is required")
+    shared_tenant_id = _existing_shared_tenant_id()
+    return _create_user_with_tenant(
+        username=normalized,
+        password="",
+        display_name=normalized,
+        role="member",
+        allow_unset_password=True,
+        use_legacy_db_if_present=(shared_tenant_id is None),
+        tenant_id=shared_tenant_id,
+    )
 
 
 def get_password_policy() -> str:
@@ -494,25 +511,21 @@ def bootstrap_required() -> bool:
 
 
 def auth_required() -> bool:
-    # More than one user implies shared access semantics even if an older install never
-    # explicitly flipped the auth flag, so multi-user setups cannot silently run open.
-    return get_app_setting("auth_enabled", "0") == "1" or user_count() > 1
+    # The workspace-level sign-in flag is the *only* thing that governs the perimeter. Multiple
+    # passwordless identities are ordinary in perimeter-off mode, so an account count never forces
+    # auth on (the old `user_count() > 1` latch wrongly forbade a passwordless multi-user household).
+    return get_app_setting("auth_enabled", "0") == "1"
 
 
 def enable_auth_mode():
     set_app_setting("auth_enabled", "1")
 
 
-def get_local_mode_user() -> dict | None:
-    if auth_required():
-        return None
-    with get_control_db() as conn:
-        row = conn.execute(
-            "SELECT id FROM user_account ORDER BY created_at, id LIMIT 1"
-        ).fetchone()
-    if not row:
-        return None
-    return get_user_by_id(row["id"])
+def disable_auth_mode():
+    # Turning the perimeter off is a flag flip: identities stay `user_account` rows and password hashes
+    # simply stop being consulted (they sit unused so re-enabling is seamless). No migration, no
+    # credential loss, no re-keying — the whole point of the unified single-table model.
+    set_app_setting("auth_enabled", "0")
 
 
 def _legacy_db_path() -> str:
@@ -542,15 +555,17 @@ def _create_user_with_tenant(
     use_legacy_db_if_present: bool = False,
     tenant_id: str | None = None,
     must_change_password: bool = False,
+    allow_unset_password: bool = False,
 ) -> dict:
     if not username.strip():
         raise ValueError("username is required")
-    # A blank password is only allowed when the account is created in a "must set a password on next
-    # login" state (the profile-migration path). It stores the unset sentinel rather than a hash.
+    # A blank password is only allowed for a deliberately passwordless account: a perimeter-off local
+    # identity (`allow_unset_password`) or one created in a "must set a password on next login" state
+    # (`must_change_password`). Either way it stores the unset sentinel rather than a hash.
     password_provided = bool(password)
     if password_provided:
         validate_password_for_policy(password)
-    elif not must_change_password:
+    elif not (must_change_password or allow_unset_password):
         raise ValueError("password is required")
     password_hash = _hash_password(password) if password_provided else UNSET_PASSWORD_SENTINEL
 
@@ -815,75 +830,69 @@ def create_user(
     )
 
 
-def migrate_profiles_to_accounts(
-    claim_profile_id: str,
+def enable_auth_with_admin(
+    claim_user_id: str,
     admin_password: str,
     initial_passwords: dict | None = None,
+    password_policy: str | None = None,
 ) -> dict:
-    """Turn on sign-in protection by converting every local preference profile into a `user_account`,
-    preserving each profile's UI preferences — instead of the old behavior of bootstrapping a fresh
-    admin and orphaning the profiles.
+    """Turn on sign-in protection over the already-unified `user_account` identities. The operator
+    claims one existing identity as the **admin** and sets a real password for it (so the perimeter has
+    a protected owner the instant it comes up). Every other password-unset identity is marked
+    `must_change_password`, so it stays claimable and is forced to set a password at next login. An
+    identity that already has a password keeps it.
 
-    The operator claims one profile as the **admin** and sets a real password for it. Every other
-    profile becomes an account the operator may leave password-unset; an unset account is claimable and
-    forced to set a password on next login (`must_change_password`). Preference rows in the data DB are
-    re-keyed from profile id to the new user id, the migrated profiles are deleted, and auth mode is
-    enabled **last** (a single-profile migration yields one account, so `auth_required()` would stay off
-    without the explicit flag). Everything is validated up front so a bad password never leaves a
-    partially migrated workspace. Returns the new admin user.
+    No accounts are created and no preferences are re-keyed — identities are already users; this only
+    assigns passwords/roles and flips the flag. `initial_passwords` optionally seeds specific members'
+    passwords up front (keyed by user id). Everything is validated before any write, so a bad password
+    never leaves the workspace half-configured. Returns the admin user.
     """
     if auth_required():
         raise ValueError("sign-in protection is already enabled")
     initial_passwords = initial_passwords or {}
-    profiles = list_local_preference_profiles()
-    if not profiles:
-        raise ValueError("no local profiles to migrate")
-    claim = next((p for p in profiles if p["id"] == claim_profile_id), None)
+
+    # Apply the chosen policy first so the admin/seeded passwords validate against it.
+    if password_policy is not None:
+        set_password_policy(password_policy)
+
+    claim = get_user_by_id(claim_user_id)
     if not claim:
-        raise ValueError("claim profile not found")
+        raise ValueError("claimed identity not found")
 
     validate_password_for_policy(admin_password)
-    others = [p for p in profiles if p["id"] != claim_profile_id]
-    for profile in others:
-        candidate = initial_passwords.get(profile["id"]) or ""
+    for user_id, candidate in initial_passwords.items():
         if candidate:
             validate_password_for_policy(candidate)
 
-    admin = _create_user_with_tenant(
-        username=claim["name"],
+    # Admin gets a real password + the admin role and is no longer claimable.
+    update_user(
+        claim_user_id,
         password=admin_password,
-        display_name=claim["name"],
         role="admin",
-        use_legacy_db_if_present=True,
+        must_change_password=False,
     )
-    mapping = {claim["id"]: admin["id"]}
-    for profile in others:
-        candidate = initial_passwords.get(profile["id"]) or ""
-        member = _create_user_with_tenant(
-            username=profile["name"],
-            password=candidate,
-            display_name=profile["name"],
-            role="member",
-            tenant_id=admin["tenant_id"],
-            must_change_password=True,
-        )
-        mapping[profile["id"]] = member["id"]
 
-    # Preferences live in the data DB keyed by scope_id (the profile id in local mode); re-key them to
-    # the new user ids so each migrated user keeps their layout/view state. Open the tenant's data DB by
-    # explicit path because auth_required() has already flipped true (2+ accounts) and there is no
-    # request-scoped tenant routing inside this call.
-    with get_db(db_path=admin["db_path"]) as data_conn:
-        for old_id, new_id in mapping.items():
-            data_conn.execute(
-                "UPDATE ui_preference SET scope_id = ? WHERE scope_id = ?",
-                (new_id, old_id),
-            )
-    for old_id in mapping:
-        delete_local_preference_profile(old_id)
+    for user in list_users():
+        if user["id"] == claim_user_id:
+            continue
+        candidate = initial_passwords.get(user["id"]) or ""
+        if candidate:
+            # A seeded starting password is still a temp credential — force a change at next login.
+            update_user(user["id"], password=candidate, must_change_password=True)
+        elif not password_is_set(_user_password_hash(user["id"])):
+            # Leave the account password-unset but claimable: forced to set one at next login.
+            update_user(user["id"], must_change_password=True)
 
     enable_auth_mode()
-    return admin
+    return get_user_by_id(claim_user_id)
+
+
+def _user_password_hash(user_id: str) -> str | None:
+    with get_control_db() as conn:
+        row = conn.execute(
+            "SELECT password_hash FROM user_account WHERE id = ?", (user_id,)
+        ).fetchone()
+    return row["password_hash"] if row else None
 
 
 def update_user(
@@ -983,7 +992,16 @@ def delete_user(user_id: str):
     current = get_user_by_id(user_id)
     if not current:
         raise ValueError("user not found")
-    if current["role"] == "admin" and current["status"] == "active" and admin_count() <= 1:
+    # The "keep at least one admin" invariant only matters when the perimeter is on (admin gates
+    # settings). Perimeter-off, admin is meaningless — everyone is effectively admin — so the guard
+    # would only get in the way (e.g. it would block clearing the local identities down to none, which
+    # should land back on the first-run chooser).
+    if (
+        auth_required()
+        and current["role"] == "admin"
+        and current["status"] == "active"
+        and admin_count() <= 1
+    ):
         raise ValueError("at least one active admin is required")
 
     with get_control_db() as conn:

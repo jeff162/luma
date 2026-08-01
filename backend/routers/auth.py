@@ -26,10 +26,9 @@ from backend.db.control_database import (
     begin_totp_setup,
     bootstrap_required,
     enable_auth_mode,
+    disable_auth_mode,
     auth_required,
-    create_local_preference_profile,
-    clear_all_local_preference_profiles,
-    delete_local_preference_profile,
+    create_local_identity,
     consume_recovery_code,
     create_user,
     create_initial_user,
@@ -37,15 +36,12 @@ from backend.db.control_database import (
     delete_user,
     enable_totp,
     get_data_provider_intended,
-    get_local_preference_profile,
     get_login_account,
     get_password_policy,
-    get_local_mode_user,
     get_security_profile,
     get_user_by_id,
-    migrate_profiles_to_accounts,
+    enable_auth_with_admin,
     set_data_provider_intended,
-    list_local_preference_profiles,
     list_users,
     password_policy_label,
     recovery_code_count,
@@ -54,7 +50,6 @@ from backend.db.control_database import (
     replace_recovery_codes,
     set_security_profile,
     set_password_policy,
-    update_local_preference_profile,
     update_user,
     update_user_secret_material,
     verify_totp_code,
@@ -120,16 +115,16 @@ class PrivacyModeRequest(BaseModel):
 
 class EnableAuthRequest(BaseModel):
     enabled: bool = True
-    # When present, turning on sign-in protection migrates the existing local profiles into accounts:
-    # `claim_profile_id` is the profile the operator claims as admin, `admin_password` is the admin's
-    # password, and `initial_passwords` maps each other profile id to an optional starting password
-    # (missing/blank => the account is left claimable, forced to set one at next login). Absent =>
-    # legacy behavior (enable auth, then bootstrap the first admin via the sign-in screen).
-    claim_profile_id: str | None = None
+    # When present, turning on sign-in protection claims an existing identity as admin: `claim_user_id`
+    # is the identity the operator claims, `admin_password` is the password set for it, and
+    # `initial_passwords` maps other user ids to an optional starting password (missing/blank => that
+    # account is left claimable, forced to set one at next login). Absent => enable auth on an empty
+    # workspace and bootstrap the first admin via the sign-in screen.
+    claim_user_id: str | None = None
     admin_password: str | None = None
     initial_passwords: dict[str, str] | None = None
     # The operator may pick the password policy while enabling sign-in, rather than being locked to the
-    # stored default; it is applied before migration so the admin/starting passwords validate against it.
+    # stored default; it is applied before claiming so the admin/starting passwords validate against it.
     password_policy: str | None = None
 
 
@@ -167,12 +162,12 @@ class UserPreferenceRequest(BaseModel):
     value: object
 
 
-class LocalPreferenceProfileCreateRequest(BaseModel):
+class IdentityCreateRequest(BaseModel):
     name: str
 
 
-class LocalPreferenceProfileUpdateRequest(BaseModel):
-    name: str
+class SelectIdentityRequest(BaseModel):
+    user_id: str
 
 
 def _require_admin(request: Request):
@@ -207,18 +202,7 @@ def _require_current_user(request: Request):
 
 def _require_local_mode():
     if auth_required():
-        raise HTTPException(status_code=400, detail="Local preference profiles are only available in local access mode")
-
-
-def _require_local_preference_profile(request: Request):
-    _require_local_mode()
-    profile_id = (request.headers.get("X-Fintrack-Preference-Profile") or "").strip()
-    if not profile_id:
-        raise HTTPException(status_code=400, detail="Preference profile is required")
-    profile = get_local_preference_profile(profile_id)
-    if not profile:
-        raise HTTPException(status_code=404, detail="Preference profile not found")
-    return profile
+        raise HTTPException(status_code=400, detail="This action is only available while sign-in protection is off")
 
 
 def _session_payload(user: dict) -> dict:
@@ -237,9 +221,9 @@ def _session_payload(user: dict) -> dict:
 
 
 def _auth_status_payload(request: Request | None = None) -> dict:
-    # App startup consumes one payload to choose bootstrap/auth gates and the active
-    # preference identity, so status has to fold together runtime config, auth mode,
-    # and the current session/profile in a single round trip.
+    # App startup consumes one payload to choose the bootstrap/sign-in gates and the active identity,
+    # so status folds runtime config, auth mode, and the current session identity into one round trip.
+    # Identity is now uniform: whichever mode, the current user (if any) comes from the session.
     enabled = auth_required()
     password_policy = get_password_policy()
     security_profile = get_security_profile()
@@ -270,25 +254,16 @@ def _auth_status_payload(request: Request | None = None) -> dict:
         "developer_options_enabled": developer_options_enabled,
         "db_instance_id": db_instance_id,
     }
-    if request and enabled:
-        user_id = request.session.get("user_id")
-        if user_id:
+    # The current identity always comes from the session (both modes). A perimeter-off session is
+    # `pwless`; enabling auth invalidates it (the middleware clears it), so a stale pwless session is
+    # not surfaced as the signed-in user here either.
+    if request:
+        session = request.scope.get("session") or {}
+        user_id = session.get("user_id")
+        if user_id and not (enabled and session.get("pwless")):
             user = get_user_by_id(user_id)
             if user:
                 payload["user"] = _session_payload(user)
-    elif not enabled:
-        user = get_local_mode_user()
-        if user:
-            payload["user"] = _session_payload(user)
-        if request:
-            profile_id = (request.headers.get("X-Fintrack-Preference-Profile") or "").strip()
-            if profile_id:
-                profile = get_local_preference_profile(profile_id)
-                if profile:
-                    payload["preference_profile"] = {
-                        "id": profile["id"],
-                        "name": profile["name"],
-                    }
     return payload
 
 
@@ -302,17 +277,15 @@ def auth_status(request: Request):
     return _auth_status_payload(request)
 
 
-# Preferences are scoped to the authenticated user (auth mode) or the local-preference-profile
-# (local mode). The id of that scope is the `scope_id` used in the data DB's ui_preference table.
-def _resolve_preference_scope(request: Request) -> tuple[str, bool]:
-    if auth_required():
-        return _require_current_user(request)["id"], True
-    return _require_local_preference_profile(request)["id"], False
+# Preferences are scoped to the current identity in both modes: the `user_id` the middleware resolved
+# onto `request.state.user`. That id is the `scope_id` used in the data DB's ui_preference table.
+def _resolve_preference_scope(request: Request) -> str:
+    return _require_current_user(request)["id"]
 
 
 @router.get("/preferences")
 def auth_preferences(request: Request):
-    scope_id, _ = _resolve_preference_scope(request)
+    scope_id = _resolve_preference_scope(request)
     prefs = get_preferences(scope_id)
     parsed = {}
     for key, value in prefs.items():
@@ -328,45 +301,86 @@ def save_auth_preference(body: UserPreferenceRequest, request: Request):
     key = (body.key or "").strip()
     if not key:
         raise HTTPException(status_code=400, detail="Preference key is required")
-    scope_id, _ = _resolve_preference_scope(request)
+    scope_id = _resolve_preference_scope(request)
     set_preference(scope_id, key, json.dumps(body.value))
     return {"ok": True}
 
 
 @router.delete("/preferences")
 def clear_auth_preferences(request: Request):
-    scope_id, _ = _resolve_preference_scope(request)
+    scope_id = _resolve_preference_scope(request)
     clear_preferences(scope_id)
     return {"ok": True}
 
 
-@router.get("/local-preference-profiles")
-def local_preference_profiles():
+def _identity_view(user: dict) -> dict:
+    return {"id": user["id"], "display_name": user.get("display_name") or user["username"]}
+
+
+@router.get("/identities")
+def list_identities():
+    # Perimeter-off identity chooser: names only, reachable before a session exists (there are no
+    # secrets to protect while sign-in is off). In auth mode identities are managed through the admin
+    # user endpoints instead, so this is local-mode only.
     _require_local_mode()
-    return {"profiles": list_local_preference_profiles()}
+    return {"identities": [_identity_view(u) for u in list_users()]}
 
 
-@router.post("/local-preference-profiles")
-def create_local_profile(body: LocalPreferenceProfileCreateRequest):
+@router.post("/identities")
+def create_identity(body: IdentityCreateRequest):
     _require_local_mode()
     try:
-        profile = create_local_preference_profile(body.name)
+        user = create_local_identity(body.name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"profile": profile}
+    return {"identity": _identity_view(user)}
+
+
+@router.post("/select-identity")
+def select_identity(body: SelectIdentityRequest, request: Request):
+    # Establish a perimeter-off session: pick an identity, no password checked. Marked `pwless` so
+    # that enabling sign-in protection later invalidates it (see the middleware and _auth_status_payload).
+    _require_local_mode()
+    user = get_user_by_id(body.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Identity not found")
+    request.session.clear()
+    request.session["user_id"] = user["id"]
+    request.session["pwless"] = True
+    return {"user": _session_payload(user)}
+
+
+@router.patch("/identities/{user_id}")
+def rename_identity(user_id: str, body: IdentityCreateRequest):
+    _require_local_mode()
+    try:
+        user = update_user(user_id, username=body.name, display_name=body.name)
+    except ValueError as exc:
+        detail = str(exc)
+        raise HTTPException(status_code=404 if detail == "user not found" else 400, detail=detail)
+    return {"identity": _identity_view(user)}
+
+
+@router.delete("/identities/{user_id}")
+def delete_identity(user_id: str):
+    _require_local_mode()
+    try:
+        delete_user(user_id)
+    except ValueError as exc:
+        detail = str(exc)
+        raise HTTPException(status_code=404 if detail == "user not found" else 400, detail=detail)
+    return {"ok": True}
 
 
 @router.post("/demo-data")
-def load_demo_data_endpoint():
-    """Populate an empty local tenant with the explorable demo dataset, ensuring a preference profile
-    exists so the app leaves onboarding. No-op if the tenant already has data; local-mode only (so it
-    can never run against a real authenticated account)."""
+def load_demo_data_endpoint(request: Request):
+    """Populate an empty local tenant with the explorable demo dataset, scoped to the current identity.
+    No-op if the tenant already has data; local-mode only (so it can never run against a real
+    authenticated account)."""
     _require_local_mode()
-    profiles = list_local_preference_profiles()
-    if not profiles:
-        profiles = [create_local_preference_profile("Demo")]
+    scope_id = _require_current_user(request)["id"]
     with get_db() as conn:
-        return load_demo_data(conn, scope_id=profiles[0]["id"])
+        return load_demo_data(conn, scope_id=scope_id)
 
 
 @router.get("/demo-data")
@@ -399,44 +413,6 @@ def clear_demo_data_endpoint():
         _wipe_user_data_tables(conn)
         _seed_default_categories(conn)
         ensure_shared_owner(conn)
-    return {"ok": True}
-
-
-@router.patch("/local-preference-profiles/{profile_id}")
-def update_local_profile(profile_id: str, body: LocalPreferenceProfileUpdateRequest):
-    _require_local_mode()
-    try:
-        profile = update_local_preference_profile(profile_id, body.name)
-    except ValueError as exc:
-        detail = str(exc)
-        if detail == "Preference profile not found":
-            raise HTTPException(status_code=404, detail=detail)
-        raise HTTPException(status_code=400, detail=detail)
-    return {"profile": profile}
-
-
-@router.delete("/local-preference-profiles/{profile_id}")
-def delete_local_profile(profile_id: str):
-    _require_local_mode()
-    try:
-        delete_local_preference_profile(profile_id)
-    except ValueError as exc:
-        detail = str(exc)
-        if detail == "Preference profile not found":
-            raise HTTPException(status_code=404, detail=detail)
-        raise HTTPException(status_code=400, detail=detail)
-    return {"ok": True}
-
-
-@router.delete("/local-preference-profiles")
-def clear_local_profiles(request: Request):
-    if not _truthy_env(
-        os.getenv("LUMA_DEVELOPER_OPTIONS"),
-        default=False,
-    ):
-        raise HTTPException(status_code=404, detail="Developer options are not enabled")
-    _require_local_mode()
-    clear_all_local_preference_profiles()
     return {"ok": True}
 
 
@@ -525,30 +501,52 @@ def save_data_provider_intent(body: DataProviderIntentRequest, request: Request)
 def enable_auth(body: EnableAuthRequest, request: Request):
     _ensure_runtime_config_ok()
     if not body.enabled:
-        raise HTTPException(status_code=400, detail="Disabling auth is not supported here")
+        raise HTTPException(status_code=400, detail="Use /auth/disable to turn sign-in protection off")
     if auth_required():
         return _auth_status_payload(request)
-    if body.password_policy is not None:
-        # Set the chosen policy first so the migration/bootstrap passwords below validate against it.
+    if body.claim_user_id:
+        # Claim an existing identity as admin (sets its password), mark every other passwordless
+        # identity must_change_password (claimable at next login), and flip the perimeter on — signing
+        # the operator straight in as the protected admin.
         try:
-            set_password_policy(body.password_policy)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-    if body.claim_profile_id:
-        # Migrate the existing local profiles into accounts and sign the operator in as the new admin,
-        # rather than orphaning the profiles and bootstrapping a fresh admin.
-        try:
-            admin = migrate_profiles_to_accounts(
-                body.claim_profile_id,
+            admin = enable_auth_with_admin(
+                body.claim_user_id,
                 body.admin_password or "",
                 body.initial_passwords,
+                body.password_policy,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         request.session.clear()
         request.session["user_id"] = admin["id"]
         return _auth_status_payload(request)
+    # No claim: enable on an empty workspace (bootstrap the first admin at the sign-in screen). If any
+    # passwordless identities happen to exist, mark them claimable so enabling can never lock anyone out.
+    if body.password_policy is not None:
+        try:
+            set_password_policy(body.password_policy)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    for user in list_users():
+        if not get_login_account(user["username"])["password_set"]:
+            update_user(user["id"], must_change_password=True)
     enable_auth_mode()
+    return _auth_status_payload(request)
+
+
+@router.post("/disable")
+def disable_auth(request: Request):
+    # Turning the perimeter off reopens network access and drops sign-in, so it is admin-gated. Identities
+    # and their password hashes are preserved (dormant), so re-enabling is seamless. The acting admin
+    # stays signed in as a now-perimeter-off (pwless) identity.
+    _ensure_runtime_config_ok()
+    if not auth_required():
+        return _auth_status_payload(request)
+    _require_admin(request)
+    disable_auth_mode()
+    session = request.scope.get("session")
+    if session is not None and session.get("user_id"):
+        session["pwless"] = True
     return _auth_status_payload(request)
 
 
@@ -571,12 +569,8 @@ def bootstrap(body: BootstrapRequest, request: Request):
 def login(body: LoginRequest, request: Request):
     _ensure_runtime_config_ok()
     if not auth_required():
-        local_user = get_local_mode_user()
-        user = authenticate_user(body.username, body.password)
-        if not local_user or not user or user["id"] != local_user["id"]:
-            raise HTTPException(status_code=401, detail="Invalid username or password")
-        request.session.clear()
-        return {"user": _session_payload(user)}
+        # Perimeter off: there is no password login — identities are chosen via /auth/select-identity.
+        raise HTTPException(status_code=400, detail="Sign-in protection is off; choose an identity instead")
 
     # Auth mode. A password-set account verifies normally; an unset (sentinel) account is claimable —
     # login accepts it without a password *only* when it is flagged must_change_password, then routes
@@ -665,19 +659,9 @@ def verify_2fa(body: TotpVerifyRequest, request: Request):
 
 @router.get("/me")
 def me(request: Request):
-    if not auth_required():
-        user = get_local_mode_user()
-        if not user:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        return {"user": _session_payload(user)}
-    user_id = request.session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    user = get_user_by_id(user_id)
-    if not user:
-        request.session.clear()
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    return {"user": _session_payload(user)}
+    # Identity is uniform now: the middleware resolved the session identity onto request.state in both
+    # modes, so /me just reflects it.
+    return {"user": _session_payload(_require_current_user(request))}
 
 
 @router.post("/2fa/setup")

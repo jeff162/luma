@@ -9,7 +9,7 @@ import { FilterProvider } from './lib/FilterContext.jsx'
 import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
 import RuntimeConfigScreen from './components/RuntimeConfigScreen.jsx'
-import { api, setLocalPreferenceProfileId } from './lib/api.js'
+import { api } from './lib/api.js'
 import { HELP_HINTS_ENABLED_PREF_KEY } from './help/preferences.js'
 import { UserPreferencesProvider, useUserPreference } from './lib/UserPreferencesContext.jsx'
 import { THEME_PREF_KEY, THEME_SYSTEM, applyTheme, normalizeThemeChoice, reconcileThemeCacheForDb } from './lib/theme.js'
@@ -390,6 +390,9 @@ function LocalPreferenceProfileScreen({
   const [editingId, setEditingId] = useState(null)
   const [editingName, setEditingName] = useState('')
   const [menu, setMenu] = useState(null)
+  // The chooser owns its own delete confirmation so the dialog is mounted while the chooser is up
+  // (it renders as a full-screen route, so a dialog rendered by the parent app tree would be hidden).
+  const [pendingDelete, setPendingDelete] = useState(null)
   const menuRef = useRef(null)
 
   const hasProfiles = profiles.length > 0
@@ -845,7 +848,7 @@ function LocalPreferenceProfileScreen({
           </button>
           <button
             onClick={() => {
-              onDelete(menu.profile)
+              setPendingDelete(menu.profile)
               setMenu(null)
             }}
             style={{
@@ -864,6 +867,18 @@ function LocalPreferenceProfileScreen({
             Delete
           </button>
         </div>
+      ) : null}
+      {pendingDelete ? (
+        <AppConfirmDialog
+          title="Delete user?"
+          description={`Delete user "${pendingDelete.name}"? This removes their saved preferences.`}
+          confirmLabel="Delete"
+          confirmVariant="danger"
+          borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
+          onConfirm={() => { onDelete(pendingDelete); setPendingDelete(null) }}
+          onCancel={() => setPendingDelete(null)}
+          width="min(480px, 100%)"
+        />
       ) : null}
     </div>
   )
@@ -923,7 +938,6 @@ export default function App() {
   const [previousLocalProfile, setPreviousLocalProfile] = useState(null)
   const [localProfilePickerDismissible, setLocalProfilePickerDismissible] = useState(false)
   const [creatingLocalProfile, setCreatingLocalProfile] = useState(false)
-  const [pendingLocalProfileDelete, setPendingLocalProfileDelete] = useState(null)
   const [localProfileError, setLocalProfileError] = useState('')
   // Demo-data mode: a global app strip + the guard that blocks new imports/connections while the
   // explorable demo set is loaded (see the demo-data marker in the backend).
@@ -979,7 +993,8 @@ export default function App() {
   async function hydrateStartupRoute(profileId = '', options = {}) {
     const { forceFromRoot = false, preferenceSubjectIdOverride = '' } = options
     try {
-      if (profileId) setLocalPreferenceProfileId(profileId)
+      // Identity is carried by the session cookie now; the caller establishes it (select-identity /
+      // login) before hydrating, so there is nothing to set here.
       // The startup route is stored per active preference identity, so hydrate it before we start saving the
       // current location; otherwise first load would immediately overwrite the remembered landing page with "/".
       const prefResp = await api.getUserPreferences().catch(() => ({ preferences: {} }))
@@ -1030,26 +1045,27 @@ export default function App() {
         setBootPreferenceSubjectId('')
 
         if (!status.auth_enabled) {
-          const profilesResp = await api.getLocalPreferenceProfiles().catch(() => ({ profiles: [] }))
+          const identsResp = await api.getIdentities().catch(() => ({ identities: [] }))
           if (cancelled) return
-          const profiles = profilesResp?.profiles || []
+          // Present the unified user_account rows as the local chooser; keep the internal `{id, name}`
+          // shape the picker/nav already use by folding display_name -> name.
+          const profiles = (identsResp?.identities || []).map(i => ({ id: i.id, name: i.display_name }))
           setLocalProfiles(profiles)
-          setCurrentUser(status.user || null)
           const storageKey = getLocalProfileStorageKey(status.db_instance_id || '')
           const rememberedId = storageKey ? window.localStorage.getItem(storageKey) : ''
+          // An already-established (pwless) session — status.user — means an identity is picked; adopt it
+          // without re-selecting. Otherwise auto-select a remembered/only identity (which establishes the
+          // session), else stop on the chooser. "No anonymous default": nothing is active without a pick.
+          const sessionProfile = status.user
+            ? (profiles.find(p => p.id === status.user.id) || { id: status.user.id, name: status.user.display_name })
+            : null
           const remembered = profiles.find(profile => profile.id === rememberedId) || null
-          // Skip the picker when there is an unambiguous local profile so desktop startup lands directly in the
-          // last-used workspace instead of stopping on a purely preference-level choice.
-          const autoSelected = remembered || (profiles.length === 1 ? profiles[0] : null)
-          if (autoSelected) {
-            setLocalPreferenceProfileId(autoSelected.id)
-            setActiveLocalProfile(autoSelected)
-            if (storageKey) {
-              try { window.localStorage.setItem(storageKey, autoSelected.id) } catch { }
-            }
-            await hydrateStartupRoute(autoSelected.id, { preferenceSubjectIdOverride: autoSelected.id })
+          const target = sessionProfile || remembered || (profiles.length === 1 ? profiles[0] : null)
+          if (target) {
+            setCurrentUser(status.user || null)
+            await activateLocalProfile(target, { alreadySelected: !!sessionProfile })
           } else {
-            setLocalPreferenceProfileId('')
+            setCurrentUser(null)
             setActiveLocalProfile(null)
             setStartupRouteApplied(true)
           }
@@ -1263,22 +1279,34 @@ export default function App() {
   }
 
   function handleSwitchLocalProfile() {
+    // Switching shows the chooser again; the session cookie keeps pointing at the current identity until
+    // a new one is picked (select-identity), so there is nothing to clear here.
     setPreviousLocalProfile(activeLocalProfile)
     setLocalProfilePickerDismissible(true)
     setActiveLocalProfile(null)
-    setLocalPreferenceProfileId('')
   }
 
-  function activateLocalProfile(profile, options = {}) {
-    const { forceStartupRoute = false } = options
+  // Make `profile` the active identity. Unless it is `alreadySelected`, establish its perimeter-off
+  // session first (select-identity) — that is what carries identity now, in place of the old header.
+  async function activateLocalProfile(profile, options = {}) {
+    const { forceStartupRoute = false, alreadySelected = false } = options
     setLocalProfileError('')
+    if (!alreadySelected) {
+      try {
+        const resp = await api.selectIdentity(profile.id)
+        setCurrentUser(resp?.user || null)
+      } catch (err) {
+        setLocalProfileError(err?.message || 'Could not switch to this user.')
+        setStartupRouteApplied(true)
+        return
+      }
+    }
     setStartupRouteApplied(false)
     setActiveLocalProfile(profile)
     setPreviousLocalProfile(null)
     setLocalProfilePickerDismissible(false)
     setNavProfileEditing(false)
     setNavProfileMenu(null)
-    setLocalPreferenceProfileId(profile?.id || '')
     setBootPreferences(null)
     setBootPreferenceSubjectId('')
     const storageKey = getLocalProfileStorageKey(dbInstanceId)
@@ -1297,14 +1325,15 @@ export default function App() {
     setLocalProfileError('')
     setCreatingLocalProfile(true)
     try {
-      const resp = await api.createLocalPreferenceProfile(name)
-      const profile = resp?.profile
-      if (!profile) return
+      const resp = await api.createIdentity(name)
+      const identity = resp?.identity
+      if (!identity) return
+      const profile = { id: identity.id, name: identity.display_name }
       setLocalProfiles(prev => {
         const exists = prev.find(item => item.id === profile.id)
         return exists ? prev : [...prev, profile].sort((a, b) => a.name.localeCompare(b.name))
       })
-      activateLocalProfile(profile, { forceStartupRoute: !localProfilePickerDismissible })
+      await activateLocalProfile(profile, { forceStartupRoute: !localProfilePickerDismissible })
       clearForm?.()
     } catch (err) {
       setLocalProfileError(
@@ -1331,14 +1360,14 @@ export default function App() {
 
     setLocalProfileError('')
     setCreatingLocalProfile(true)
-    const originalProfileId = activeLocalProfile?.id || ''
 
     try {
-      const resp = await api.createLocalPreferenceProfile(name)
-      const profile = resp?.profile
-      if (!profile) {
-        throw new Error('Could not create the first user profile.')
+      const resp = await api.createIdentity(name)
+      const identity = resp?.identity
+      if (!identity) {
+        throw new Error('Could not create the first user.')
       }
+      const profile = { id: identity.id, name: identity.display_name }
 
       setLocalProfiles(prev => (
         prev.some(item => item.id === profile.id)
@@ -1346,10 +1375,10 @@ export default function App() {
           : [...prev, profile].sort((a, b) => a.name.localeCompare(b.name))
       ))
 
-      // Demo data is scoped to the active preference profile, so make the new profile active first.
-      setLocalPreferenceProfileId(profile.id)
-      // Persist the welcome screen's "skip first-use hints" choice against the brand-new profile (the
-      // profile header is now set), before the app mounts the preferences provider and navigates.
+      // Preferences and demo data are scoped to the current identity's session, so establish it first.
+      await api.selectIdentity(profile.id)
+      // Persist the welcome screen's "skip first-use hints" choice against the brand-new identity (the
+      // session is now set), before the app mounts the preferences provider and navigates.
       if (setup?.disableHints) {
         await api.saveUserPreference(HELP_HINTS_ENABLED_PREF_KEY, false).catch(() => { })
       }
@@ -1358,10 +1387,9 @@ export default function App() {
         setDemoLoaded(true)
       }
 
-      activateLocalProfile(profile)
+      await activateLocalProfile(profile, { alreadySelected: true })
       navigate(destination, { replace: true, state: setup?.navState || undefined })
     } catch (err) {
-      setLocalPreferenceProfileId(originalProfileId)
       setLocalProfileError(
         err?.message === 'Failed to fetch'
           ? `Server unreachable. Start or restart ${APP_NAME} and try again.`
@@ -1373,8 +1401,8 @@ export default function App() {
   }
 
   async function handleRenameLocalProfile(profileId, name) {
-    const resp = await api.updateLocalPreferenceProfile(profileId, name)
-    const updated = resp?.profile
+    const resp = await api.renameIdentity(profileId, name)
+    const updated = resp?.identity ? { id: resp.identity.id, name: resp.identity.display_name } : null
     if (!updated) return
     setLocalProfiles(prev => prev.map(profile => profile.id === profileId ? updated : profile).sort((a, b) => a.name.localeCompare(b.name)))
     setActiveLocalProfile(prev => prev?.id === profileId ? updated : prev)
@@ -1383,8 +1411,24 @@ export default function App() {
     }
   }
 
+  // The chooser confirms the deletion itself and calls this on confirm, so this performs the delete.
   async function handleDeleteLocalProfile(profile) {
-    setPendingLocalProfileDelete(profile)
+    if (!profile) return
+    await api.deleteIdentity(profile.id)
+    setLocalProfiles(prev => prev.filter(item => item.id !== profile.id))
+    const deletedCurrentProfile =
+      activeLocalProfile?.id === profile.id || previousLocalProfile?.id === profile.id
+    if (deletedCurrentProfile) {
+      const storageKey = getLocalProfileStorageKey(dbInstanceId)
+      if (storageKey) {
+        try { window.localStorage.removeItem(storageKey) } catch { }
+      }
+      setActiveLocalProfile(null)
+      setPreviousLocalProfile(null)
+      setLocalProfilePickerDismissible(false)
+      setNavProfileEditing(false)
+      setNavProfileMenu(null)
+    }
   }
 
   // Demo-data status follows the active tenant/profile; it drives the global demo strip and is the
@@ -1408,29 +1452,6 @@ export default function App() {
     } catch (err) {
       setClearingDemo(false)
       setDemoClearError(err?.message || 'Could not clear the demo data. Please try again.')
-    }
-  }
-
-  async function confirmDeleteLocalProfile() {
-    if (!pendingLocalProfileDelete) return
-    const profile = pendingLocalProfileDelete
-    setPendingLocalProfileDelete(null)
-    await api.deleteLocalPreferenceProfile(profile.id)
-    setLocalProfiles(prev => prev.filter(item => item.id !== profile.id))
-    const deletedCurrentProfile =
-      activeLocalProfile?.id === profile.id || previousLocalProfile?.id === profile.id
-
-    if (deletedCurrentProfile) {
-      const storageKey = getLocalProfileStorageKey(dbInstanceId)
-      if (storageKey) {
-        try { window.localStorage.removeItem(storageKey) } catch { }
-      }
-      setLocalPreferenceProfileId('')
-      setActiveLocalProfile(null)
-      setPreviousLocalProfile(null)
-      setLocalProfilePickerDismissible(false)
-      setNavProfileEditing(false)
-      setNavProfileMenu(null)
     }
   }
 
@@ -1473,7 +1494,6 @@ export default function App() {
         <AuthScreen
           needsBootstrap={needsBootstrap}
           passwordPolicy={passwordPolicy}
-          securityProfile={securityProfile}
           onAuthenticated={user => {
             setStartupRouteApplied(false)
             setCurrentUser(user)
@@ -1556,18 +1576,6 @@ export default function App() {
                     <AmazonImportDetailViewerRenderer />
                     <ImportedCategoryWorkspaceRenderer />
                     <style>{GLOBAL_SCROLLBAR_STYLES}</style>
-                    {pendingLocalProfileDelete ? (
-                      <AppConfirmDialog
-                        title="Delete user profile?"
-                        description={`Delete user profile "${pendingLocalProfileDelete.name}"?`}
-                        confirmLabel="Delete"
-                        confirmVariant="danger"
-                        borderColor="color-mix(in srgb, var(--danger) 35%, var(--border))"
-                        onConfirm={confirmDeleteLocalProfile}
-                        onCancel={() => setPendingLocalProfileDelete(null)}
-                        width="min(480px, 100%)"
-                      />
-                    ) : null}
                     {pendingDemoClear ? (
                       <AppConfirmDialog
                         title="Clear demo data?"

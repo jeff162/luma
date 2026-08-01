@@ -1,7 +1,8 @@
 # Security & deployment model
 
-**Status: decided (2026-07-30). Phases 1–2b implemented; phases 3–6 (the vault/crypto rework and
-provider-agnostic connections) not started.** This is the design decision that
+**Status: decided (2026-07-30). Phases 1–2c implemented (identity unified to one `user_account` table,
+session-based identity in both modes, enable/disable as flag flips); phases 3–6 (the vault/crypto rework
+and provider-agnostic connections) not started.** This is the design decision that
 [`pre-auth-security-ui.md`](pre-auth-security-ui.md) was blocked on. It settles which deployments
 Luma supports, what the login perimeter is (and isn't) for, and how Plaid credentials are protected
 at rest. Supersedes the exploratory `server_managed`-only privacy mode as the *meaningful* protection
@@ -10,10 +11,13 @@ path. Pick-up-cold summary below; build phases at the end.
 ## Deployment model
 
 - **No multi-tenant hosted.** Dropped as a target. The `multi_tenant` "preview" security profile and
-  the pretense of per-tenant provisioning go away. Down to **two** deployment profiles:
-  **Standalone** (`local_private` — this one machine, loopback) and **Client-server** (`network_private`
-  — backend on a networked box, reached from other devices). `household_shared` is retired too (it
-  collapses into Client-server; there were no stored `household_shared` installs, so no migration).
+  the pretense of per-tenant provisioning go away. Down to **two** deployment shapes:
+  **Standalone** (this one machine, loopback) and **Client-server** (backend on a networked box,
+  reached from other devices). `household_shared` is retired too (it collapses into Client-server; there
+  were no stored `household_shared` installs, so no migration). **Refinement (2026-07-31): these two are
+  a *detected topology*, not a user-chosen stored preset** — see "Topology is detected, not a chosen
+  profile" below. The `security_profile` app-setting (`local_private`/`network_private`) is demoted to a
+  stopgap until per-request detection (phase 3) lands.
 - **One shared workspace, multiple login identities.** This is already the shape of the code — members
   are provisioned into the one admin tenant and share one data DB. Per-tenant DB routing
   (`set_current_db_path`, `TENANT_DATA_ROOT/<tenant_id>/`) stays as **dormant plumbing**; we stop
@@ -124,8 +128,13 @@ carry over unchanged. Can be **staged**: first let auth-off mode authenticate ag
 (no password) so disable works and nothing is lost, then retire `local_preference_profile` once nothing
 reads it.
 
-**Not yet built** — recorded now, to implement after the current phase-1/2b refinement settles. Until
-then the two tables still exist and phase 2b's migrate-on-flip is the live behavior.
+**Built (phase 2c, 2026-07-31).** One `user_account` table; `local_preference_profile` retired via a
+one-time `_unify_local_profiles_into_users()` at startup (folds legacy rows into users, re-keys
+`ui_preference`, drops the table). Identity is carried by the session in **both** modes — the middleware
+reads a single `session['user_id']`; a perimeter-off session is stamped `pwless` and invalidated the
+moment sign-in is enabled. Enable is `enable_auth_with_admin` (claim an admin, force the rest to
+`must_change_password`); disable is `disable_auth_mode()` (a flag flip that preserves accounts/hashes).
+The `auth_required()` `user_count() > 1` latch is gone. `migrate_profiles_to_accounts` is replaced.
 
 ## The Plaid credential model (so the two secrets don't get conflated)
 
@@ -265,6 +274,40 @@ the security profile (a recommendation, not a transport guarantee: deriving `Sec
 users out when a network-profile install runs plain HTTP) and **not** hardcoded (breaks one topology).
 Behind Caddy, run uvicorn with `--proxy-headers` so `request.url.scheme` reflects the external scheme.
 
+### Topology is detected, not a chosen profile (refinement, 2026-07-31)
+
+Separate **detected facts** from **declared intent**; only the latter is a real question to put to the
+user. Standalone-vs-client-server is a *detected fact*, so it shouldn't be a stored preset the user
+picks at all:
+
+- **Standalone vs client-server is detected — per request.** It is just *"did this request arrive over
+  loopback or over the network?"* — the same `request.url` (scheme/host, via `--proxy-headers`) the HTTPS
+  gate already reads in phase 3. The **packaged single-user build** (frontend+backend shell we ship) is
+  simply the case where *every* request is loopback; it can self-declare via an env flag the launcher
+  sets (see [`deployment-topologies.md`](deployment-topologies.md)), but that flag mainly drives defaults
+  like `SESSION_COOKIE_SECURE=false` and suppressing network nags — the security-relevant signal is the
+  per-request loopback/network fact, which is *more* correct than a static stored profile (the same
+  install is loopback from its own box and networked from another).
+- **The one genuine user choice is forward-looking: "will you connect a data source?"** That is what turns
+  HTTPS from unnecessary (loopback / no live secret) into *required* (a bank/vault secret crossing a
+  network link). It must be **asked and persisted ahead of time** (`data_provider_intended`) because
+  standing up HTTPS isn't instantaneous — you can't first discover the requirement at connect-time. It
+  only *matters* when networked (loopback + no provider needs nothing), so it's the only setting worth
+  surfacing, and only in the client-server case.
+- **It is not the only HTTPS trigger.** Enabling **sign-in protection** also puts a credential/session
+  cookie on the wire, which the permissible-HTTP rule also requires HTTPS to protect on a network bind.
+  So the runtime expectation stays *network link ∧ (perimeter on ∨ data source configured) ⇒ HTTPS* — the
+  data-source declaration is the forward-looking half; enabling sign-in is the other trigger, surfaced
+  when the user does it.
+- **Consequence — `security_profile` is demoted.** The stored Standalone/Client-server preset stops being
+  a user choice; what survives is (a) detected topology and (b) the one persisted `data_provider_intended`
+  bit. The "Intended usage" UI collapses from three radios to a single "connecting a data source?"
+  question, shown when networked — which is also the *only* topology-related thing worth putting on the
+  first-run welcome screen (standalone has nothing to choose; sign-in stays a later conditional nudge).
+- **Sequencing.** This depends on phase-3 per-request detection (`--proxy-headers` + scheme/host reading)
+  and the packaging flag from `deployment-topologies.md`; until those land, the stored `security_profile`
+  is the stopgap and the three-radio UI stays. So this is a decided *direction*, implemented with phase 3.
+
 **Detecting "HTTPS is running" and the non-blocking setup flow (settled).** Because the backend always
 speaks HTTP (Caddy terminates TLS), "is HTTPS running" is really *"did this request arrive over
 HTTPS?"* — read from `request.url.scheme`, which reflects `X-Forwarded-Proto` once uvicorn runs with
@@ -282,6 +325,10 @@ connection attempt must **not** block on it out of nowhere. Instead:
   passphrase, so no declaration is needed there). Picking the third radio sets the flag and surfaces the
   HTTPS setup guidance early so the user can prepare ahead of time. **Built (guidance only) with the
   phase-2 card cleanup;** the *task* and *connect gate* that also read this flag come later (below).
+  **Refined (see "Topology is detected, not a chosen profile"): with phase-3 detection this three-radio
+  projection collapses to a single "connecting a data source?" question shown only when networked** —
+  the Standalone/Client-server halves become detected, not chosen. The `data_provider_intended` mechanism
+  itself (persisted, forward-looking, drives the early task/gate) is unchanged; only its UI shrinks.
 - **The "Set up HTTPS" reminder rides the existing computed-task model** (`tasks.py` — tasks are live
   conditions, not stored/dismissible rows). Condition: *client-server mode ∧ `data_provider_intended` ∧
   request scheme ≠ https* → emit a task whose `link` points at the setup instructions. It **self-clears**
@@ -458,7 +505,10 @@ None substantive remain — the model is fully decided. Remaining unknowns are i
 (exact table columns, endpoint shapes, UI copy) and belong to the build, not the design.
 
 **Resolved:** deployment model (no multi-tenant hosted; one shared workspace, multiple identities; login
-= perimeter, admin gates settings not data); trusted-server / server-side crypto (browser-side only if we
+= perimeter, admin gates settings not data; **topology is *detected* not a chosen profile** — Standalone
+vs client-server falls out of per-request loopback/network, the only real user choice is the
+forward-looking "connecting a data source?" declaration, and `security_profile` is demoted to a
+pre-detection stopgap — see "Topology is detected, not a chosen profile"); trusted-server / server-side crypto (browser-side only if we
 ever want an untrusted host); retire `server_managed`, the master-key fallback, **and any `off`/plaintext
 token path** — the vault is the *only* custody, with passphrase strength keyed to provider mode (sandbox
 lax, Production enforced); no required fallback slot / no recovery escrow (loss = re-link); passkeys are
@@ -488,11 +538,12 @@ premise was wrong.
    (`must_change_password` + the unset-password sentinel; also the admin password-reset primitive).
    Preferences are re-keyed profile→user. The local-profile chooser already required a named identity
    (no anonymous default). *(The two tables are still live as of this build; see phase 2c.)*
-2c. **Unify to one `user_account` table** (see "Unified identity model") — retire `local_preference_profile`;
-   the sign-in flag toggles only password verification, not which table identities come from. Disable
-   becomes a flag flip (no reverse-migration); the `auth_required()` `user_count()>1` latch is dropped;
-   `migrate_profiles_to_accounts` collapses to a one-time profile→user unification. Supersedes the
-   two-table parts of 2b. **Not started** — scheduled after the current phase-1/2b refinement settles.
+2c. **[DONE]** **Unify to one `user_account` table** (see "Unified identity model") — retired
+   `local_preference_profile` (one-time `_unify_local_profiles_into_users()` at startup); the sign-in flag
+   toggles only password verification. Identity is session-carried in both modes (single `session['user_id']`
+   + a `pwless` marker the middleware invalidates on enable). Disable is a flag flip (no reverse-migration);
+   the `auth_required()` `user_count()>1` latch is dropped; `migrate_profiles_to_accounts` was replaced by
+   `enable_auth_with_admin`. Supersedes the two-table parts of 2b.
 3. **Multi-wrap vault core** — workspace DEK, per-slot wrapped-DEK storage, passphrase-slot KDF path
    (columns already present), session-scoped unlock caching, rework `crypto_service` from per-user DEK to
    one shared DEK + slots. **Retire `server_managed`, the `APP_MASTER_KEY`→`SESSION_SECRET` fallback, and
