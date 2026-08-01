@@ -297,9 +297,44 @@ routing would be risky and low-value, so it stays wired and unused.
   is recommended, and the HTTP/HTTPS transport guidance); they do not by themselves force auth on or off.
   (The retired `multi_tenant` and `household_shared` profiles are gone.)
 
-Aggregator token protection (the Plaid/provider vault) is **orthogonal** to this perimeter and is a
-separate, later subsystem — a passwordless install can still hold vault-encrypted tokens because the vault
-secret is per-user and independent of the app perimeter.
+Aggregator token protection (the Plaid/provider vault) is **orthogonal** to this perimeter — a
+passwordless install can still hold vault-encrypted tokens because the vault secret is per-user and
+independent of the app perimeter. See "Token vault & transport security" below for the vault itself.
+
+### Token vault & transport security
+
+Provider (Plaid/aggregator) access tokens are the crown jewels — a leaked token is live, ongoing bank
+access, materially worse than the plaintext ledger — so they get real at-rest protection via a
+**multi-wrap envelope vault** (`backend/services/crypto_service.py`). The full decision record is
+`docs/backlog/security-and-deployment-model.md`; the shape:
+
+- **One workspace Data Encryption Key (DEK)** encrypts every per-connection secret (today
+  `plaid_item.access_token_enc`). The DEK is wrapped once **per user "slot"** under a KEK derived from
+  that user's unlock secret — a passphrase via `scrypt` now, a passkey PRF later. Slots live in the
+  control DB's `vault_slot` table (wrapped DEK + public KDF params only); the ciphertext travels with
+  data backups, the wrapping material with the control DB. **The property is leaked-DB ≠ leaked-tokens**:
+  no live unlock secret ⇒ no KEK ⇒ every wrapped DEK stays opaque. It deliberately does *not* defend a
+  compromised *running* host (the server is trusted and holds the DEK while unlocked) — matching the
+  self-hosted/LAN model. The **ledger stays plaintext at rest** (host-protected, not vault-encrypted).
+- **Unlocking** re-derives the KEK, unwraps the DEK, and holds it in a **server-side, in-process cache
+  keyed by `user_id` with an idle TTL** — *never* the signed session cookie (which serializes to the
+  browser). Dropped on logout and on restart (re-unlock ⇒ "first sync of the day"). Endpoints:
+  `POST /auth/vault/{set-passphrase,change-passphrase,unlock,lock}`; status via `vault_configured`/
+  `vault_has_passphrase`/`vault_unlocked`. Plaid connect/sync and credential export/restore require an
+  unlocked vault (`423`; connect on an unconfigured vault `409`). The first user's passphrase mints the
+  DEK; enrolling *other* users (co-present/invite) is a later phase. There is **no `off`/plaintext path
+  and no app-held master key** — the vault is the only custody. Switching a provider to **Production**
+  requires every slot to meet a real passphrase minimum (an *all-slots* property — the DEK is only as
+  strong as its weakest wrap); **Sandbox** stays lax.
+- **Transport** is a per-topology property, not an app mode: the backend always speaks HTTP; a
+  client-server deployment terminates TLS at a reverse proxy (Caddy) with uvicorn on `--proxy-headers`,
+  so `request.url.scheme` reflects the external scheme. `backend/transport.py` detects loopback-vs-network
+  and HTTPS **per request**. The permissible-HTTP rule: plain HTTP on a networked bind is fine only with
+  no perimeter to defeat (no sign-in, no provider); either trigger ⇒ HTTPS. Enforced/nudged by
+  `SESSION_COOKIE_SECURE` (→ cookie `Secure`, set by the install, not derived from the profile), a
+  `transport_warning` when connecting a provider on a cleartext link, and a **computed "Set up HTTPS"
+  task** (`tasks.py`) — required/non-dismissible for a provider, recommended/suppressible for plain
+  client-server, self-clearing over HTTPS.
 
 ### Storage layers
 
@@ -369,11 +404,11 @@ When `LUMA\_DEVELOPER\_OPTIONS=true`, the Settings page exposes developer reset
 
 - **`Clear import memory`:** clears backend import-memory data stored in the main application database
 
-- **`Clear local users`:** deletes the perimeter-off `user_account` identities stored in the control database
+- **`Reset to first-run`:** deletes every `user_account` identity and reloads to the welcome screen. In auth mode it first turns sign-in protection off (admin-gated) — which drops to local mode so the identity endpoints are reachable and the keep-one-admin guard no longer applies — then removes all users (the current session's own identity last, so deleting it doesn't 401 the rest). Passwords/2FA/recovery codes go with the accounts. `Clear all` performs this same reset plus the preference/import-memory/browser clears.
 
 These resets remain separate because they target different storage layers with different lifespans and different effects on startup behavior.
 
-The separation is important because "resetting the app" can mean very different things in practice. Browser-local troubleshooting, preference cleanup, import-workflow cleanup, and removing local identities are all recoveries with different blast radii, so the tooling keeps them explicit instead of hiding them behind one broad reset.
+The separation is important because "resetting the app" can mean very different things in practice. Browser-local troubleshooting, preference cleanup, import-workflow cleanup, and resetting to first-run are all recoveries with different blast radii, so the tooling keeps them explicit instead of hiding them behind one broad reset.
 
 ## Cross-platform approach
 

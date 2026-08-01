@@ -11,7 +11,7 @@ engine so imported history and future syncs stay consistent with one another.
 
 import uuid
 from datetime import date, timedelta
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from backend.app_logging import log_warning
 from backend.db.database import get_db
@@ -47,6 +47,14 @@ def run_sync(days: int = 30, request: Request = None):
             """
         )
         items = conn.execute("SELECT item_id, access_token, access_token_enc FROM plaid_item").fetchall()
+
+        # Syncing decrypts each item's access token under the workspace DEK, so the vault must be
+        # unlocked. Fail the whole sync up front rather than silently skipping every item in the loop.
+        if items and not crypto_service.is_unlocked(request.state.user["id"]):
+            raise HTTPException(status_code=423, detail={
+                "code": "vault_locked",
+                "message": "Unlock the vault to sync.",
+            })
 
         # Rules are stable across a sync; load once for the per-transaction matcher in the loops below.
         rules = load_categorization_rules(conn)

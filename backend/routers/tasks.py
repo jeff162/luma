@@ -11,8 +11,14 @@ tasks stay hidden until the household actually uses owner tracking) so a fresh i
 greet the user with a wall of warnings about features they haven't opted into yet.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from backend.db.database import get_db
+from backend.db.control_database import (
+    auth_required,
+    get_data_provider_intended,
+    get_https_warning_suppressed,
+)
+from backend import transport
 
 router = APIRouter()
 
@@ -20,9 +26,48 @@ SEVERITY_WARNING = "warning"
 SEVERITY_INFO    = "info"
 
 
+def _https_setup_task(request: Request | None) -> dict | None:
+    # Transport nag: on a networked (non-loopback) bind still served over plain HTTP, credentials and
+    # bank secrets would cross the wire in cleartext. Emit when either trigger is live — sign-in
+    # protection on (a login cookie to sniff) or a data provider intended (a live bank secret). The
+    # provider case is *required* (not dismissible); plain client-server is only *recommended* and is
+    # suppressible. Self-clears the moment a request arrives over HTTPS — no stored dismissal for it.
+    if request is None or transport.request_is_loopback(request) or transport.request_is_https(request):
+        return None
+    perimeter_on = auth_required()
+    provider_intended = get_data_provider_intended()
+    if not (perimeter_on or provider_intended):
+        return None
+    required = provider_intended
+    if not required and get_https_warning_suppressed():
+        return None
+    return {
+        "id":          "configure_https",
+        "title":       "Set up HTTPS",
+        "description": (
+            "This server is reached over the network without HTTPS. "
+            + ("A data source is configured, so bank credentials would cross the network in cleartext — "
+               "HTTPS is required before connecting."
+               if required else
+               "Sign-in credentials cross the network in cleartext — configuring HTTPS is recommended.")
+            + " Put a TLS-terminating reverse proxy (Caddy) in front of the backend."
+        ),
+        "count":       1,
+        "link":        "/settings",
+        "link_label":  "How to set up HTTPS",
+        "severity":    SEVERITY_WARNING,
+        "required":    required,
+        "dismissible": not required,
+    }
+
+
 @router.get("")
-def get_tasks():
+def get_tasks(request: Request = None):
     tasks = []
+
+    https_task = _https_setup_task(request)
+    if https_task:
+        tasks.append(https_task)
 
     with get_db() as conn:
         owner_count = conn.execute("""

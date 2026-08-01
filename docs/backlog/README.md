@@ -97,15 +97,25 @@ delete the backlog file.
   the unwired `merchants.py` / `merchant_rename` CRUD (its role was absorbed by
   `category_rule.clean_name`); revisit when Plaid sync is exercised.
 - [security-and-deployment-model.md](security-and-deployment-model.md) — **decided (2026-07-30);
-  phases 1–2b done, 3–6 not started.** The settled security/deployment design: drop multi-tenant hosted;
+  phases 1–3 done, 4–6 not started.** The settled security/deployment design: drop multi-tenant hosted;
   one shared workspace with multiple login identities (login = perimeter, admin gates settings not data);
   Plaid tokens protected by **multi-wrap envelope encryption** (one workspace DEK, wrapped per user under a
   passphrase or WebAuthn-PRF **passkey** slot — separate from login), with co-present/invite enrollment.
   Also generalizes to **provider-agnostic connections** (a `connection`/adapter seam, Plaid first then
   Teller/SimpleFIN; app credentials moved from `.env` into the vault; connections stay on the Accounts →
-  Connections tab). Now also carries the **transport-security policy** (HTTP-vs-HTTPS per topology; the
-  vault phase adds it). Phases 1–2b (drop multi-tenant, rebuild Settings forms, migrate profiles→accounts
-  on flip) are implemented.
+  Connections tab). Now also carries the **transport-security policy** (HTTP-vs-HTTPS per topology). Phases
+  1–2c (drop multi-tenant, rebuild Settings forms, unify to one `user_account` table) and **phase 3** (the
+  multi-wrap vault core — workspace DEK + passphrase slots + server-side unlock cache, `server_managed`/
+  master-key retired, Production passphrase gate; plus `SESSION_COOKIE_SECURE`/`--proxy-headers`/the
+  computed HTTPS task) are implemented. Remaining: passkey slots (4), enrollment/invite (5), connections (6).
+- [backup-restore-scope-and-secrets.md](backup-restore-scope-and-secrets.md) — **parked, do after phase 6
+  (2026-08-01).** Make each backup's *scope* explicit on the Backup page and add a coherent **accounts &
+  secrets** backup — the control DB (identities, perimeter, `vault_slot`) **plus** the data DB's vaulted
+  tokens, which phase 3 made cryptographically coupled (ciphertext in data DB, keys in control DB). Adds a
+  sectioned **back up all**, moves recipient management onto the Backup page, and a **restore flow that asks
+  how to reconcile identities** (always preserves the current admin → no self-lockout, no silent perimeter
+  overwrite). Motivated by restore-over-existing ≠ restore-onto-fresh. Waits on phase 6 (app creds into the
+  vault).
 - [pre-auth-security-ui.md](pre-auth-security-ui.md) — **DONE (2026-07-30).** The three Settings forms
   (security profile / sign-in protection / password policy) were rebuilt and session-wired alongside
   phases 1–2b of [security-and-deployment-model.md](security-and-deployment-model.md).

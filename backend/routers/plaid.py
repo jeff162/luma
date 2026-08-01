@@ -6,7 +6,7 @@ Plaid onboarding bridges Link into Luma's local account model.
 
 The router treats a Plaid item as the durable credential boundary: one token
 exchange can create many accounts, while the access token is stored separately
-so later sync and privacy-mode changes are keyed to item lifecycle rather than account rows.
+(vault-encrypted at rest) so later sync is keyed to item lifecycle rather than account rows.
 """
 
 import uuid
@@ -42,6 +42,19 @@ def exchange_token(body: PublicTokenExchange, request: Request):
                 "code": "demo_data_loaded",
                 "message": "Clear the demo data before connecting a data source.",
             })
+    # A connected bank stores a live access token, which must never sit unencrypted — so connecting
+    # always requires a vault, unlocked, regardless of the app-login perimeter (they are orthogonal).
+    user = request.state.user
+    if not crypto_service.vault_configured():
+        raise HTTPException(status_code=409, detail={
+            "code": "vault_not_configured",
+            "message": "Set a vault passphrase before connecting a data source.",
+        })
+    if not crypto_service.is_unlocked(user["id"]):
+        raise HTTPException(status_code=423, detail={
+            "code": "vault_locked",
+            "message": "Unlock the vault to connect a data source.",
+        })
     try:
         result       = plaid_service.exchange_public_token(body.public_token)
         access_token = result["access_token"]

@@ -141,8 +141,6 @@ export const api = {
     request('/auth/2fa/disable', { method: 'POST', body: JSON.stringify({ code }) }),
   regenerateRecoveryCodes: (code) =>
     request('/auth/2fa/recovery-codes', { method: 'POST', body: JSON.stringify({ code }) }),
-  setPrivacyMode: (privacy_mode) =>
-    request('/auth/privacy-mode', { method: 'POST', body: JSON.stringify({ privacy_mode }) }),
 
   getTransactions: (params = {}) => {
     const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null))

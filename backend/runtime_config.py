@@ -13,7 +13,6 @@ environment settings like Plaid credentials.
 import os
 import secrets
 import shutil
-from base64 import b64encode
 from pathlib import Path
 
 from dotenv import dotenv_values, set_key
@@ -54,14 +53,9 @@ def generate_session_secret() -> str:
     return secrets.token_urlsafe(48)
 
 
-def generate_app_master_key() -> str:
-    return b64encode(secrets.token_bytes(32)).decode("ascii")
-
-
 def runtime_config_defaults() -> dict:
     return {
         "session_secret": generate_session_secret(),
-        "app_master_key": generate_app_master_key(),
         "session_cookie_name": default_session_cookie_name(),
     }
 
@@ -105,7 +99,6 @@ def runtime_config_status() -> dict:
 def write_runtime_env(
     *,
     session_secret: str | None,
-    app_master_key: str | None = None,
     session_cookie_name: str | None = None,
 ) -> dict:
     env_path = env_file_path()
@@ -125,9 +118,6 @@ def write_runtime_env(
     if _invalid_session_secret(final_session_secret):
         raise ValueError("SESSION_SECRET must not be blank or use the example placeholder")
 
-    existing_app_master_key = (existing.get("APP_MASTER_KEY") or "").strip()
-    final_app_master_key = (app_master_key or "").strip() or existing_app_master_key or generate_app_master_key()
-
     existing_session_cookie_name = (existing.get("SESSION_COOKIE_NAME") or "").strip()
     final_session_cookie_name = (
         (session_cookie_name or "").strip()
@@ -136,7 +126,6 @@ def write_runtime_env(
     )
 
     set_key(str(env_path), "SESSION_SECRET", final_session_secret)
-    set_key(str(env_path), "APP_MASTER_KEY", final_app_master_key)
     set_key(str(env_path), "SESSION_COOKIE_NAME", final_session_cookie_name)
 
     return {

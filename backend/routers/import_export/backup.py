@@ -708,6 +708,12 @@ def export_credentials(request: Request, encrypted: bool = Query(False)):
                 ORDER  BY created_at DESC, label
             """).fetchall()]
     user = getattr(request.state, "user", None)
+    # Tokens are vault ciphertext at rest; producing a plaintext credentials export needs the DEK.
+    if items and not (user and crypto_service.is_unlocked(user["id"])):
+        raise HTTPException(status_code=423, detail={
+            "code": "vault_locked",
+            "message": "Unlock the vault to export credentials.",
+        })
     exported_items = []
     for row in items:
         item = dict(row)
@@ -1134,6 +1140,12 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
     _verify_payload_content_hash(d)
     items = d.get("plaid_items", [])
     user = getattr(request.state, "user", None)
+    # Re-encrypting restored tokens under the workspace DEK needs the vault unlocked.
+    if items and not (user and crypto_service.is_unlocked(user["id"])):
+        raise HTTPException(status_code=423, detail={
+            "code": "vault_locked",
+            "message": "Unlock the vault to restore credentials.",
+        })
     with get_db() as conn:
         conn.execute("DELETE FROM plaid_item")
         for item in items:

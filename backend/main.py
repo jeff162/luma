@@ -46,6 +46,17 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _truthy_env(value: str | None, default: bool = False) -> bool:
+    normalized = (value or "").strip().lower()
+    if not normalized:
+        return default
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def _cors_origins() -> list[str]:
     configured = os.getenv("CORS_ORIGINS", "").strip()
     if configured:
@@ -128,6 +139,12 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=os.getenv("SESSION_SECRET", "dev-session-secret-change-me"),
     session_cookie=os.getenv("SESSION_COOKIE_NAME", "session"),
+    # Mark the cookie Secure on a TLS-terminated (client-server) deployment so it never crosses the
+    # network in cleartext. Driven by an explicit env the install sets — NOT derived from the security
+    # profile (that is a recommendation, not a transport guarantee; deriving Secure from it would lock
+    # out a network-profile install running plain HTTP) and NOT hardcoded (that breaks the loopback
+    # desktop default). Left false for the loopback default where the cookie never leaves the machine.
+    https_only=_truthy_env(os.getenv("SESSION_COOKIE_SECURE"), default=False),
 )
 
 app.add_middleware(

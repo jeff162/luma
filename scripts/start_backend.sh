@@ -95,14 +95,6 @@ print(base64.urlsafe_b64encode(secrets.token_bytes(36)).decode().rstrip('='))
 PY
 }
 
-generate_app_master_key() {
-  "$SYSTEM_PYTHON" - <<'PY'
-import base64
-import secrets
-print(base64.b64encode(secrets.token_bytes(32)).decode())
-PY
-}
-
 default_session_cookie_name() {
   "$SYSTEM_PYTHON" - "$ROOT_DIR" <<'PY'
 from pathlib import Path
@@ -130,16 +122,11 @@ if [[ -f "$ENV_PATH" ]]; then
     exit 1
   fi
   SESSION_SECRET_VALUE="$(get_env_value "$ENV_PATH" SESSION_SECRET)"
-  APP_MASTER_KEY_VALUE="$(get_env_value "$ENV_PATH" APP_MASTER_KEY)"
   SESSION_COOKIE_NAME_VALUE="$(get_env_value "$ENV_PATH" SESSION_COOKIE_NAME)"
   UPDATED_ENV=0
 
   if invalid_session_secret "$SESSION_SECRET_VALUE"; then
     set_env_value "$ENV_PATH" SESSION_SECRET "$(generate_session_secret)"
-    UPDATED_ENV=1
-  fi
-  if [[ -z "${APP_MASTER_KEY_VALUE// }" ]]; then
-    set_env_value "$ENV_PATH" APP_MASTER_KEY "$(generate_app_master_key)"
     UPDATED_ENV=1
   fi
   if [[ -z "${SESSION_COOKIE_NAME_VALUE// }" || "$SESSION_COOKIE_NAME_VALUE" == "session" ]]; then
@@ -211,5 +198,8 @@ cd "$ROOT_DIR"
 echo "Checking/installing backend dependencies. This can take a minute on first run..."
 "$VENV_PYTHON" -m pip install -r backend/requirements.txt
 echo "Starting backend on port $BACKEND_PORT"
-#exec "$VENV_PYTHON" -m uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port "$BACKEND_PORT"
-"$VENV_PYTHON" -m uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port "$BACKEND_PORT"
+# --proxy-headers lets request.url.scheme reflect X-Forwarded-Proto from a trusted reverse proxy
+# (Caddy terminating TLS in the client-server topology). It defaults to trusting only a loopback
+# proxy, so it is safe/inert for the direct-access dev case here.
+#exec "$VENV_PYTHON" -m uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port "$BACKEND_PORT" --proxy-headers
+"$VENV_PYTHON" -m uvicorn backend.main:app --reload --reload-dir backend --host 0.0.0.0 --port "$BACKEND_PORT" --proxy-headers

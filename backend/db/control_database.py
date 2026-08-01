@@ -209,16 +209,33 @@ def init_control_db():
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
-            CREATE TABLE IF NOT EXISTS user_secret_material (
-                user_id             TEXT PRIMARY KEY REFERENCES user_account(id) ON DELETE CASCADE,
-                privacy_mode        TEXT NOT NULL DEFAULT 'off',
-                key_mode            TEXT NOT NULL DEFAULT 'server_managed',
-                wrapped_user_key    TEXT,
-                wrapping_kdf_salt   TEXT,
-                wrapping_kdf_iters  INTEGER,
-                created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            -- Vault key slots (multi-wrap envelope encryption). One workspace DEK protects every
+            -- per-connection provider secret; it is wrapped once per user "slot" under a KEK derived
+            -- from that user's unlock secret. A slot stores only the *wrapped* DEK and the public KDF
+            -- parameters — never the unlock secret and never the DEK in the clear. `method` is
+            -- 'passphrase' today; a 'passkey' (WebAuthn PRF) method joins in a later phase, which is
+            -- why this is a per-(user, method) table rather than one column on user_account.
+            CREATE TABLE IF NOT EXISTS vault_slot (
+                id                   TEXT PRIMARY KEY,
+                user_id              TEXT NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,
+                method               TEXT NOT NULL DEFAULT 'passphrase',
+                wrapped_dek          TEXT NOT NULL,
+                kdf_algo             TEXT NOT NULL DEFAULT 'scrypt',
+                kdf_salt             TEXT NOT NULL,
+                kdf_n                INTEGER NOT NULL,
+                kdf_r                INTEGER NOT NULL,
+                kdf_p                INTEGER NOT NULL,
+                meets_production_min INTEGER NOT NULL DEFAULT 0,
+                created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at           TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(user_id, method)
             );
+
+            -- Retired with the vault rework: the old `user_secret_material` held a per-user DEK wrapped
+            -- under an app master key (the `server_managed` model), which never delivered
+            -- leaked-DB != leaked-tokens. Its ciphertext is unrecoverable under the new model by design
+            -- (clean break; any live connection re-links). Superseded by `vault_slot` above.
+            DROP TABLE IF EXISTS user_secret_material;
 
             -- Preferences moved to the data DB's `ui_preference` table (so backups carry them);
             -- the control DB now keeps only identity/secrets. Drop the now-unused control-DB preference
@@ -267,12 +284,6 @@ def init_control_db():
                     "UPDATE user_account SET role = 'admin' WHERE id = ?",
                     (first_user["id"],),
                 )
-        user_ids = [row["id"] for row in conn.execute("SELECT id FROM user_account").fetchall()]
-        for user_id in user_ids:
-            conn.execute(
-                "INSERT OR IGNORE INTO user_secret_material (user_id) VALUES (?)",
-                (user_id,),
-            )
 
     # After the schema transaction commits (so `_create_user_with_tenant`'s own connection can write),
     # fold any legacy local preference profiles into unified `user_account` identities.
@@ -437,6 +448,18 @@ def get_data_provider_intended() -> bool:
 
 def set_data_provider_intended(value: bool):
     set_app_setting("data_provider_intended", "1" if value else "0")
+
+
+# Persisted suppression of the "Set up HTTPS" nag for the *recommended* (plain client-server, no
+# provider) case only — HTTPS there protects the login cookie, which is the operator's call on their
+# own network. The *required* (provider configured) case is never suppressible; it self-clears only
+# when a request actually arrives over HTTPS.
+def get_https_warning_suppressed() -> bool:
+    return get_app_setting("https_warning_suppressed", "0") == "1"
+
+
+def set_https_warning_suppressed(value: bool):
+    set_app_setting("https_warning_suppressed", "1" if value else "0")
 
 
 def security_profile_label(profile: str | None = None) -> str:
@@ -625,10 +648,6 @@ def _create_user_with_tenant(
                 1 if must_change_password else 0,
             ),
         )
-        conn.execute(
-            "INSERT INTO user_secret_material (user_id) VALUES (?)",
-            (user_id,),
-        )
 
     return get_user_by_id(user_id)
 
@@ -660,13 +679,9 @@ def get_user_by_id(user_id: str) -> dict | None:
                 u.status,
                 u.tenant_id,
                 t.name AS tenant_name,
-                t.db_path,
-                usm.privacy_mode,
-                usm.key_mode,
-                usm.wrapped_user_key
+                t.db_path
             FROM user_account u
             JOIN tenant t ON t.id = u.tenant_id
-            LEFT JOIN user_secret_material usm ON usm.user_id = u.id
             WHERE u.id = ?
             """,
             (user_id,),
@@ -690,13 +705,9 @@ def authenticate_user(username: str, password: str) -> dict | None:
                 u.status,
                 u.tenant_id,
                 t.name AS tenant_name,
-                t.db_path,
-                usm.privacy_mode,
-                usm.key_mode,
-                usm.wrapped_user_key
+                t.db_path
             FROM user_account u
             JOIN tenant t ON t.id = u.tenant_id
-            LEFT JOIN user_secret_material usm ON usm.user_id = u.id
             WHERE lower(u.username) = lower(?)
             """,
             (username.strip(),),
@@ -750,11 +761,9 @@ def list_users() -> list[dict]:
                 u.created_at,
                 u.last_login_at,
                 u.tenant_id,
-                t.name AS tenant_name,
-                usm.privacy_mode
+                t.name AS tenant_name
             FROM user_account u
             JOIN tenant t ON t.id = u.tenant_id
-            LEFT JOIN user_secret_material usm ON usm.user_id = u.id
             ORDER BY u.created_at, u.username
             """
         ).fetchall()
@@ -769,48 +778,84 @@ def recovery_code_count(user_id: str) -> int:
         ).fetchone()[0]
 
 
-def get_user_secret_material(user_id: str) -> dict:
+# --- Vault key slots (see the `vault_slot` table and `crypto_service`) ---------------------------
+#
+# A slot is one wrapping of the single workspace DEK under one user's unlock method. The control DB
+# only ever holds the *wrapped* DEK plus public KDF parameters; the unlock secret and the DEK in the
+# clear live only in the process at unlock time. These helpers are thin storage — all crypto (KDF,
+# wrap/unwrap, the unlock cache) lives in `crypto_service`.
+
+def get_vault_slot(user_id: str, method: str = "passphrase") -> dict | None:
     with get_control_db() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO user_secret_material (user_id) VALUES (?)",
-            (user_id,),
-        )
         row = conn.execute(
-            "SELECT * FROM user_secret_material WHERE user_id = ?",
-            (user_id,),
+            "SELECT * FROM vault_slot WHERE user_id = ? AND method = ?",
+            (user_id, method),
         ).fetchone()
-    return dict(row)
+    return dict(row) if row else None
 
 
-def update_user_secret_material(
+def upsert_vault_slot(
     user_id: str,
     *,
-    privacy_mode: str | None = None,
-    key_mode: str | None = None,
-    wrapped_user_key: str | None = None,
+    method: str,
+    wrapped_dek: str,
+    kdf_algo: str,
+    kdf_salt: str,
+    kdf_n: int,
+    kdf_r: int,
+    kdf_p: int,
+    meets_production_min: bool,
 ):
-    fields = []
-    params = []
-    if privacy_mode is not None:
-        fields.append("privacy_mode = ?")
-        params.append(privacy_mode)
-    if key_mode is not None:
-        fields.append("key_mode = ?")
-        params.append(key_mode)
-    if wrapped_user_key is not None:
-        fields.append("wrapped_user_key = ?")
-        params.append(wrapped_user_key)
-    fields.append("updated_at = datetime('now')")
     with get_control_db() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO user_secret_material (user_id) VALUES (?)",
-            (user_id,),
+            """
+            INSERT INTO vault_slot
+                (id, user_id, method, wrapped_dek, kdf_algo, kdf_salt, kdf_n, kdf_r, kdf_p, meets_production_min)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(user_id, method) DO UPDATE SET
+                wrapped_dek          = excluded.wrapped_dek,
+                kdf_algo             = excluded.kdf_algo,
+                kdf_salt             = excluded.kdf_salt,
+                kdf_n                = excluded.kdf_n,
+                kdf_r                = excluded.kdf_r,
+                kdf_p                = excluded.kdf_p,
+                meets_production_min = excluded.meets_production_min,
+                updated_at           = datetime('now')
+            """,
+            (
+                str(uuid.uuid4()), user_id, method, wrapped_dek, kdf_algo, kdf_salt,
+                kdf_n, kdf_r, kdf_p, 1 if meets_production_min else 0,
+            ),
         )
-        params.append(user_id)
-        conn.execute(
-            f"UPDATE user_secret_material SET {', '.join(fields)} WHERE user_id = ?",
-            params,
-        )
+
+
+def delete_vault_slots(user_id: str, method: str | None = None):
+    with get_control_db() as conn:
+        if method is None:
+            conn.execute("DELETE FROM vault_slot WHERE user_id = ?", (user_id,))
+        else:
+            conn.execute(
+                "DELETE FROM vault_slot WHERE user_id = ? AND method = ?",
+                (user_id, method),
+            )
+
+
+def vault_slot_count() -> int:
+    with get_control_db() as conn:
+        return conn.execute("SELECT COUNT(*) FROM vault_slot").fetchone()[0]
+
+
+def all_slots_meet_production_min() -> bool:
+    # Production readiness is an *all-slots* property: the DEK is only as strong as its weakest wrap,
+    # so a single weak passphrase slot would let an offline attacker recover the DEK (and every token).
+    with get_control_db() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM vault_slot").fetchone()[0]
+        if total == 0:
+            return False
+        weak = conn.execute(
+            "SELECT COUNT(*) FROM vault_slot WHERE meets_production_min = 0"
+        ).fetchone()[0]
+    return weak == 0
 
 
 def create_user(

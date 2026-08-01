@@ -36,9 +36,11 @@ from backend.db.control_database import (
     delete_user,
     enable_totp,
     get_data_provider_intended,
+    get_https_warning_suppressed,
     get_login_account,
     get_password_policy,
     get_security_profile,
+    set_https_warning_suppressed,
     get_user_by_id,
     enable_auth_with_admin,
     set_data_provider_intended,
@@ -51,7 +53,6 @@ from backend.db.control_database import (
     set_security_profile,
     set_password_policy,
     update_user,
-    update_user_secret_material,
     verify_totp_code,
 )
 from backend.services.preferences import (
@@ -62,7 +63,8 @@ from backend.services.preferences import (
 from backend.db.database import get_db, get_db_instance_id, ensure_shared_owner, _seed_default_categories
 from backend.db.demo_data import load_demo_data, is_demo_data_loaded, is_demo_loadable
 from backend.routers.import_export.backup import _wipe_user_data_tables
-from backend.services.crypto_service import reencrypt_plaid_items
+from backend.services import crypto_service
+from backend import transport
 
 
 router = APIRouter()
@@ -109,8 +111,13 @@ class TotpConfirmRequest(TotpVerifyRequest):
     secret: str
 
 
-class PrivacyModeRequest(BaseModel):
-    privacy_mode: str
+class VaultPassphraseRequest(BaseModel):
+    passphrase: str
+
+
+class VaultChangePassphraseRequest(BaseModel):
+    old_passphrase: str
+    new_passphrase: str
 
 
 class EnableAuthRequest(BaseModel):
@@ -134,7 +141,6 @@ class PasswordChangeRequest(BaseModel):
 
 class RuntimeConfigRequest(BaseModel):
     session_secret: str | None = None
-    app_master_key: str | None = None
     session_cookie_name: str | None = None
 
 
@@ -155,6 +161,10 @@ class SecurityProfileRequest(BaseModel):
 
 class DataProviderIntentRequest(BaseModel):
     intended: bool
+
+
+class HttpsWarningSuppressRequest(BaseModel):
+    suppressed: bool
 
 
 class UserPreferenceRequest(BaseModel):
@@ -211,7 +221,11 @@ def _session_payload(user: dict) -> dict:
         "username": user["username"],
         "display_name": user.get("display_name") or user["username"],
         "role": user.get("role", "member"),
-        "privacy_mode": user.get("privacy_mode", "off"),
+        # Vault status: whether the workspace DEK exists at all, whether *this* user can unlock it
+        # (has a slot), and whether it is unlocked in the current process for this user.
+        "vault_configured": crypto_service.vault_configured(),
+        "vault_has_passphrase": crypto_service.user_has_slot(user["id"]),
+        "vault_unlocked": crypto_service.is_unlocked(user["id"]),
         "must_change_password": bool(user.get("must_change_password")),
         "two_factor_enabled": bool(user.get("totp_enabled")),
         "recovery_code_count": recovery_code_count(user["id"]),
@@ -264,6 +278,18 @@ def _auth_status_payload(request: Request | None = None) -> dict:
             user = get_user_by_id(user_id)
             if user:
                 payload["user"] = _session_payload(user)
+        # Detected transport facts (topology + HTTPS) are per-request, not stored presets. The frontend
+        # uses these to steer HTTPS guidance and gate connect-time actions on real HTTPS availability.
+        provider_intended = payload["data_provider_intended"]
+        payload["transport"] = {
+            "is_loopback": transport.request_is_loopback(request),
+            "scheme": transport.request_scheme(request),
+            "is_https": transport.request_is_https(request),
+            "https_expected": transport.https_expected(
+                request, perimeter_on=enabled, provider_intended=provider_intended
+            ),
+            "https_warning_suppressed": get_https_warning_suppressed(),
+        }
     return payload
 
 
@@ -423,7 +449,6 @@ def configure_runtime_config(body: RuntimeConfigRequest):
     try:
         result = write_runtime_env(
             session_secret=body.session_secret,
-            app_master_key=body.app_master_key,
             session_cookie_name=body.session_cookie_name,
         )
     except ValueError as exc:
@@ -447,8 +472,21 @@ def get_environment_settings(request: Request):
 @router.post("/environment")
 def save_environment_settings(body: EnvironmentSettingsRequest, request: Request):
     _require_admin_or_local(request)
+    # Production holds real, live bank tokens, so the vault must exist and every slot must meet the
+    # vault's Production passphrase minimum first — the DEK can never sit behind a weak wrap. Sandbox
+    # stays lax (a throwaway passphrase is fine). This is the enforced half of "definitely not weak in
+    # Production"; sandbox tokens are harmless.
+    if (body.plaid_env or "").strip() == "production" and not crypto_service.ready_for_production():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Set a strong vault passphrase before switching to Production. Every vault passphrase "
+                f"must be at least {crypto_service.VAULT_PRODUCTION_MIN_LEN} characters so live bank "
+                "tokens are never protected by a weak secret."
+            ),
+        )
     try:
-        return write_environment_settings(
+        result = write_environment_settings(
             plaid_client_id=body.plaid_client_id,
             plaid_secret=body.plaid_secret,
             plaid_env=body.plaid_env,
@@ -456,6 +494,14 @@ def save_environment_settings(body: EnvironmentSettingsRequest, request: Request
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    # Configuring a provider puts a live bank secret in play; warn if this instance is reachable over a
+    # cleartext network link (recommend-don't-force — the connect gate itself enforces HTTPS later).
+    warning = transport.cleartext_warning(
+        request, perimeter_on=auth_required(), provider_intended=True
+    )
+    if warning:
+        result["transport_warning"] = warning
+    return result
 
 
 @router.post("/password-policy")
@@ -495,6 +541,15 @@ def save_data_provider_intent(body: DataProviderIntentRequest, request: Request)
     _require_admin_or_local(request)
     set_data_provider_intended(bool(body.intended))
     return {"data_provider_intended": get_data_provider_intended()}
+
+
+@router.post("/https-warning-suppress")
+def suppress_https_warning(body: HttpsWarningSuppressRequest, request: Request):
+    # Only the *recommended* (plain client-server, no provider) HTTPS nag is suppressible — the
+    # required (provider configured) case ignores this and self-clears only over real HTTPS.
+    _require_admin_or_local(request)
+    set_https_warning_suppressed(bool(body.suppressed))
+    return {"https_warning_suppressed": get_https_warning_suppressed()}
 
 
 @router.post("/enable")
@@ -630,6 +685,10 @@ def change_password(body: PasswordChangeRequest, request: Request):
 def logout(request: Request):
     session = request.scope.get("session")
     if session is not None:
+        # Drop any unlocked vault DEK for this identity so logging out re-locks the vault.
+        user_id = session.get("user_id")
+        if user_id:
+            crypto_service.lock(user_id)
         session.clear()
     return {"ok": True}
 
@@ -722,27 +781,52 @@ def regenerate_recovery_codes(body: TotpVerifyRequest, request: Request):
     return {"user": _session_payload(updated), "recovery_codes": recovery_codes}
 
 
-@router.post("/privacy-mode")
-def set_privacy_mode(body: PrivacyModeRequest, request: Request):
-    user = getattr(request.state, "user", None)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+@router.post("/vault/set-passphrase")
+def vault_set_passphrase(body: VaultPassphraseRequest, request: Request):
+    # Set (or replace) this user's vault passphrase. The first passphrase in the workspace mints the
+    # DEK; re-setting your own re-wraps it (requires being unlocked). Enrolling a *new* user into an
+    # existing vault (co-present / invite) is a later phase — until then only the first user, or a
+    # user re-setting their own, can set a passphrase.
+    user = _require_current_user(request)
+    try:
+        crypto_service.set_passphrase(user["id"], body.passphrase)
+    except crypto_service.VaultLocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc) or "Vault enrollment is not available yet")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"user": _session_payload(user)}
 
-    privacy_mode = (body.privacy_mode or "").strip()
-    if privacy_mode not in ("off", "server_managed"):
-        raise HTTPException(status_code=400, detail="Unsupported privacy mode")
 
-    with get_db() as conn:
-        reencrypt_plaid_items(conn, user, enable_privacy=(privacy_mode == "server_managed"))
+@router.post("/vault/change-passphrase")
+def vault_change_passphrase(body: VaultChangePassphraseRequest, request: Request):
+    user = _require_current_user(request)
+    try:
+        crypto_service.change_passphrase(user["id"], body.old_passphrase, body.new_passphrase)
+    except crypto_service.VaultLocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc) or "No vault passphrase is set")
+    except ValueError as exc:
+        # Wrong old passphrase, or an empty new one.
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"user": _session_payload(user)}
 
-    update_user_secret_material(
-        user["id"],
-        privacy_mode=privacy_mode,
-        key_mode="server_managed",
-    )
-    updated = get_user_by_id(user["id"])
-    request.state.user = updated
-    return {"user": _session_payload(updated)}
+
+@router.post("/vault/unlock")
+def vault_unlock(body: VaultPassphraseRequest, request: Request):
+    user = _require_current_user(request)
+    try:
+        crypto_service.unlock(user["id"], body.passphrase)
+    except crypto_service.VaultLocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc) or "No vault passphrase is set")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"user": _session_payload(user)}
+
+
+@router.post("/vault/lock")
+def vault_lock(request: Request):
+    user = _require_current_user(request)
+    crypto_service.lock(user["id"])
+    return {"user": _session_payload(user)}
 
 
 @router.get("/users")
