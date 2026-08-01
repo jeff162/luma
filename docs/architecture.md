@@ -308,8 +308,9 @@ access, materially worse than the plaintext ledger — so they get real at-rest 
 **multi-wrap envelope vault** (`backend/services/crypto_service.py`). The full decision record is
 `docs/backlog/security-and-deployment-model.md`; the shape:
 
-- **One workspace Data Encryption Key (DEK)** encrypts every per-connection secret (today
-  `plaid_item.access_token_enc`). The DEK is wrapped once **per user "slot"** under a KEK derived from
+- **One workspace Data Encryption Key (DEK)** encrypts every per-connection secret
+  (`connection.credential_enc`; the retired `plaid_item.access_token_enc` was folded into `connection`
+  by migration v18 — see "Provider connections" below). The DEK is wrapped once **per user "slot"** under a KEK derived from
   that user's unlock secret — a passphrase via `scrypt` now, a passkey PRF later. Slots live in the
   control DB's `vault_slot` table (wrapped DEK + public KDF params only); the ciphertext travels with
   data backups, the wrapping material with the control DB. **The property is leaked-DB ≠ leaked-tokens**:
@@ -335,6 +336,30 @@ access, materially worse than the plaintext ledger — so they get real at-rest 
   `transport_warning` when connecting a provider on a cleartext link, and a **computed "Set up HTTPS"
   task** (`tasks.py`) — required/non-dismissible for a provider, recommended/suppressible for plain
   client-server, self-clearing over HTTPS.
+
+### Provider connections (the aggregator seam)
+
+Data-source aggregators reach the app through **one provider-neutral seam** (security-and-deployment-model
+phase 6a), so adding Teller or SimpleFIN is an adapter, not a change to the connect/sync callers.
+
+- **Storage.** A `connection` row (`backend/db/database.py`) is the durable credential boundary: a
+  `provider` discriminator, the provider's stable `external_id` (Plaid's item_id), and the opaque
+  per-connection credential vault-encrypted under the DEK (`credential_enc`; plaintext column always ''
+  — see the vault above). It **supersedes `plaid_item`**, which now lingers only as a migration/restore
+  source. Accounts still link to a connection implicitly via `account.plaid_item_id == connection.external_id`;
+  the explicit `provider`/`connection_id` account columns (and retiring the `plaid_*` column *names*) are
+  deferred to phase 6b, where the per-provider UI consumes them.
+- **Adapter interface.** `backend/services/providers/` exposes `get_adapter(provider)` over a
+  `ProviderAdapter` (`create_link_token` / `exchange` → `{external_id, credential}` / `fetch_accounts` /
+  `fetch_transactions`), normalized to provider-neutral dict keys (`external_account_id`,
+  `external_transaction_id`, …). `PlaidAdapter` is the first adapter; it delegates SDK details to the thin
+  `plaid_service` boundary and translates its Plaid-shaped dicts. The connect (`routers/plaid.py`) and
+  sync (`routers/sync.py`) paths speak only the adapter + `connection` table — never a Plaid field name.
+- **Credential continuity.** `crypto_service.encrypt/decrypt_connection_credential` binds the ciphertext
+  to `(provider, external_id)`; for `provider='plaid'` it reuses the exact pre-6a AAD
+  (`plaid_item|<item_id>|access_token`), so tokens written before the cutover decrypt unchanged — the
+  migration re-keys nothing. App-level provider credentials (Plaid `client_id`/`secret`/`env`) still come
+  from the environment via `plaid_service` in this phase; moving them into the vaulted DB is phase 6b.
 
 ### Storage layers
 

@@ -4,7 +4,8 @@
 session-based identity in both modes, enable/disable as flag flips; and the multi-wrap vault core +
 transport-security policy — workspace DEK, passphrase slots, server-side unlock cache, `server_managed`/
 master-key retired, Production passphrase gate, `SESSION_COOKIE_SECURE`/`--proxy-headers`/computed HTTPS
-task); phases 4–6 (passkey slots, enrollment/invite, provider-agnostic connections) not started.** This
+task) and phase 6a (the provider-agnostic `connection`/adapter seam, Plaid retargeted onto it); phases 4–5
+(passkey slots, enrollment/invite) and phase 6b (app-cred vaulting + per-provider connection UI) not started.** This
 is the design decision that
 [`pre-auth-security-ui.md`](pre-auth-security-ui.md) was blocked on. It settles which deployments
 Luma supports, what the login perimeter is (and isn't) for, and how Plaid credentials are protected
@@ -586,6 +587,30 @@ premise was wrong.
    credential blob) replacing `plaid_item`; a provider-adapter interface refactored out of
    `plaid_service`/sync; move app-level credentials from `.env` into the DB under vault custody; extend
    the Accounts → Connections tab. Ship **Plaid** as the first adapter; Teller, then SimpleFIN, follow.
+
+6a. **[DONE]** **The backend connection/adapter seam (Plaid only, no behavior change).** New `connection`
+   data-DB table (`id`, `provider`, `external_id`, `credential`/`credential_enc`, `institution`), the
+   vault-encrypted credential store that **supersedes `plaid_item`**; a startup
+   migration (v18) folds legacy `plaid_item` rows into `provider='plaid'` connections **carrying the
+   ciphertext verbatim** (the Plaid AAD is keyed on `external_id == item_id`, so nothing re-keys — no
+   unlock needed to migrate). A `backend/services/providers/` package (`get_adapter` over a
+   `ProviderAdapter` ABC; `PlaidAdapter` delegates to the thin `plaid_service`) normalizes to
+   provider-neutral dict keys; `routers/plaid.py` (link-token/exchange), `routers/sync.py`, and the
+   **credentials** backup (`export/restore_credentials`, status count, payload v2 `connections` — legacy
+   v1 `plaid_items` still restored) all route through the seam + `connection`. `crypto_service` generalized
+   to `encrypt/decrypt_connection_credential` (Plaid AAD continuity). **Built (2026-08-01):** all backend +
+   unit-tested (`test_connection_seam.py`; `test_vault.py`/`test_vault_endpoints.py`/`test_backup_restore.py`/
+   `test_demo_data.py` updated). **No frontend; Plaid behaves identically; app creds still read from `.env`.**
+   **Deliberately deferred to 6b** (nothing in 6a reads them): explicit `provider`/`connection_id` account
+   columns and renaming the `plaid_account_id`/`plaid_item_id` column *names* (accounts link implicitly by
+   `plaid_item_id == connection.external_id`); dropping the now-vestigial `plaid_item` table.
+6b. **App creds into the vault + the Connections-tab UI.** Move Plaid `client_id`/`secret`/`env` out of
+   `.env`/Settings into the vaulted DB (**no migration** — the Configure card just writes them going
+   forward; re-entering once is acceptable — decided 2026-08-01, see
+   [`optional-env-and-layered-config.md`](optional-env-and-layered-config.md)); per-provider data-source
+   cards on the Accounts → Connections tab (Configure/Connect/Sync per card, config moves out of Settings);
+   the Connect-bank HTTPS-availability gate; fix the deprecated "development mode" copy; and the explicit
+   account connection columns/renames deferred from 6a. Teller, then SimpleFIN, follow on the seam.
 
 ## Docs to write (deferred to after phase 3/6)
 

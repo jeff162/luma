@@ -113,7 +113,7 @@ def get_db(db_path: str | None = None):
 # v14 adds `category_rule.match_expr` (multi-clause AND/contains merchant matcher). v15 adds
 # `category_rule.last_effect_date` (stale-rule signal) + `category_rule.deleted_at` (rules trash).
 
-CURRENT_VERSION = 17
+CURRENT_VERSION = 18
 
 MIGRATIONS = {}
 
@@ -529,6 +529,65 @@ def _add_amazon_charge_reviewed(conn):
     """)
 
 
+@migration(18)
+def _add_connection_table(conn):
+    # Provider-agnostic connections supersede plaid_item as the credential store (see
+    # security-and-deployment-model.md phase 6a). Fresh installs get the table from init_db's baseline
+    # CREATE; existing databases get it here, then legacy plaid_item rows are folded into connection rows
+    # (the data half, below). Account columns and the plaid_item drop are deliberately deferred to phase 6b.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS connection (
+            id             TEXT PRIMARY KEY,
+            provider       TEXT NOT NULL,
+            external_id    TEXT,
+            credential     TEXT NOT NULL DEFAULT '',
+            credential_enc TEXT,
+            institution    TEXT,
+            created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_provider_external ON connection(provider, external_id)"
+    )
+    _backfill_connections_from_plaid_items(conn)
+
+
+def _backfill_connections_from_plaid_items(conn):
+    # Fold each legacy plaid_item row into a provider='plaid' connection, carrying the encrypted credential
+    # verbatim. The vault AAD for provider='plaid' is keyed on external_id == item_id (see
+    # crypto_service._connection_aad), so the ciphertext still decrypts unchanged — no re-keying, no unlock
+    # needed here. Idempotent: an item already represented by a connection is skipped, so this is safe to
+    # re-run. Guarded on both tables existing (the isolated per-migration unit tests hand-build minimal
+    # schemas). institution is best-effort from an account already linked to the item.
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "plaid_item" not in tables or "connection" not in tables:
+        return
+    for item in conn.execute("SELECT item_id, access_token, access_token_enc FROM plaid_item").fetchall():
+        already = conn.execute(
+            "SELECT 1 FROM connection WHERE provider = 'plaid' AND external_id = ?",
+            (item["item_id"],),
+        ).fetchone()
+        if already:
+            continue
+        inst = conn.execute(
+            "SELECT institution FROM account WHERE plaid_item_id = ? AND institution IS NOT NULL LIMIT 1",
+            (item["item_id"],),
+        ).fetchone()
+        conn.execute(
+            """
+            INSERT INTO connection (id, provider, external_id, credential, credential_enc, institution)
+            VALUES (?, 'plaid', ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                item["item_id"],
+                item["access_token"],
+                item["access_token_enc"],
+                inst["institution"] if inst else None,
+            ),
+        )
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -686,6 +745,24 @@ def init_db(db_path: str | None = None):
                 access_token     TEXT NOT NULL DEFAULT '',
                 access_token_enc TEXT
             );
+
+            -- Provider-agnostic data-source connections (Plaid first; Teller/SimpleFIN later). One row per
+            -- linked connection, carrying a `provider` discriminator and the opaque per-connection
+            -- credential vault-encrypted under the workspace DEK (`credential_enc`; the plaintext column is
+            -- always ''). `external_id` is the provider's stable handle (Plaid's item_id) and joins accounts
+            -- via account.plaid_item_id. Supersedes plaid_item as the credential store — plaid_item lingers
+            -- only as a migration/restore source (see migration v18 / security-and-deployment-model.md 6a).
+            CREATE TABLE IF NOT EXISTS connection (
+                id             TEXT PRIMARY KEY,
+                provider       TEXT NOT NULL,
+                external_id    TEXT,
+                credential     TEXT NOT NULL DEFAULT '',
+                credential_enc TEXT,
+                institution    TEXT,
+                created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_provider_external
+                ON connection(provider, external_id);
 
             -- Two-level category hierarchy: groups (parent_id NULL) and leaves.
             -- Transactions are assigned to leaves only.

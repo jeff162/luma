@@ -252,21 +252,32 @@ def decrypt_secret(dek: bytes, payload: str, *, aad: bytes) -> str:
         raise VaultDecryptError() from exc
 
 
-# --- Plaid access-token storage (the sole consumer until provider-agnostic connections land) ------
+# --- Per-connection credential storage (provider-agnostic) ----------------------------------------
 #
-# Storage contract is unchanged for callers: (access_token, access_token_enc). Tokens are now *always*
-# ciphertext-only — the plaintext column is left empty. Both paths require the caller's vault unlocked.
+# A connection holds one opaque provider secret (Plaid: the access_token; Teller/SimpleFIN: their own
+# shapes). The vault doesn't care which — it wraps a string under the DEK. Storage contract for callers
+# is (credential, credential_enc): the credential is *always* ciphertext-only, the plaintext column left
+# empty. Both paths require the caller's vault unlocked.
 
-def encrypt_plaid_access_token(user: dict, item_id: str, access_token: str) -> tuple[str, str | None]:
+def _connection_aad(provider: str, external_id: str) -> bytes:
+    # Plaid continuity: access tokens written before provider-agnostic connections used exactly this AAD
+    # (`plaid_item|<item_id>|access_token`), so the Plaid path must keep it or existing ciphertext won't
+    # decrypt after the plaid_item → connection cutover. Other providers get their own clean namespace.
+    if provider == "plaid":
+        return _aad("plaid_item", external_id, "access_token")
+    return _aad("connection", provider, external_id, "credential")
+
+
+def encrypt_connection_credential(user: dict, provider: str, external_id: str, secret: str) -> tuple[str, str | None]:
     dek = require_dek(user["id"])
-    payload = encrypt_secret(dek, access_token, aad=_aad("plaid_item", item_id, "access_token"))
+    payload = encrypt_secret(dek, secret, aad=_connection_aad(provider, external_id))
     return "", payload
 
 
-def decrypt_plaid_access_token(user: dict, item_id: str, access_token: str | None, access_token_enc: str | None) -> str:
-    if access_token_enc:
+def decrypt_connection_credential(user: dict, provider: str, external_id: str, credential: str | None, credential_enc: str | None) -> str:
+    if credential_enc:
         dek = require_dek(user["id"])
-        return decrypt_secret(dek, access_token_enc, aad=_aad("plaid_item", item_id, "access_token"))
+        return decrypt_secret(dek, credential_enc, aad=_connection_aad(provider, external_id))
     # A legacy plaintext row (never encrypted) reads straight through — no DEK needed. New writes never
     # take this path.
-    return access_token or ""
+    return credential or ""

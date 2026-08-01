@@ -15,7 +15,8 @@ from fastapi import APIRouter, HTTPException, Request
 
 from backend.app_logging import log_warning
 from backend.db.database import get_db
-from backend.services import crypto_service, plaid_service
+from backend.services import crypto_service
+from backend.services.providers import UnknownProviderError, get_adapter
 from backend.services.categorizer import (
     categorize_transaction,
     load_categorization_rules,
@@ -37,20 +38,13 @@ def run_sync(days: int = 30, request: Request = None):
     touched_ids: list[str] = []  # rows this sync added or advanced — the scope for the recurring rescan
 
     with get_db() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS plaid_item (
-                item_id           TEXT PRIMARY KEY,
-                access_token      TEXT NOT NULL DEFAULT '',
-                access_token_enc  TEXT
-            )
-            """
-        )
-        items = conn.execute("SELECT item_id, access_token, access_token_enc FROM plaid_item").fetchall()
+        connections = conn.execute(
+            "SELECT id, provider, external_id, credential, credential_enc FROM connection"
+        ).fetchall()
 
-        # Syncing decrypts each item's access token under the workspace DEK, so the vault must be
-        # unlocked. Fail the whole sync up front rather than silently skipping every item in the loop.
-        if items and not crypto_service.is_unlocked(request.state.user["id"]):
+        # Syncing decrypts each connection's credential under the workspace DEK, so the vault must be
+        # unlocked. Fail the whole sync up front rather than silently skipping every connection in the loop.
+        if connections and not crypto_service.is_unlocked(request.state.user["id"]):
             raise HTTPException(status_code=423, detail={
                 "code": "vault_locked",
                 "message": "Unlock the vault to sync.",
@@ -59,24 +53,29 @@ def run_sync(days: int = 30, request: Request = None):
         # Rules are stable across a sync; load once for the per-transaction matcher in the loops below.
         rules = load_categorization_rules(conn)
         rule_tags_by_id = load_rule_tags_by_id(conn)
-        for item in items:
+        for connection in connections:
             try:
-                access_token = crypto_service.decrypt_plaid_access_token(
-                    request.state.user, item["item_id"], item["access_token"], item["access_token_enc"]
+                adapter = get_adapter(connection["provider"])
+                credential = crypto_service.decrypt_connection_credential(
+                    request.state.user, connection["provider"], connection["external_id"],
+                    connection["credential"], connection["credential_enc"],
                 )
-                txns = plaid_service.fetch_transactions(
-                    access_token,
+                txns = adapter.fetch_transactions(
+                    credential,
                     start_date=start_date,
                     end_date=date.today(),
                 )
+            except UnknownProviderError as e:
+                log_warning(f"[sync] skipping connection {connection['id']}: {e}")
+                continue
             except Exception as e:
-                log_warning(f"[sync] error fetching item {item['item_id']}: {e}")
+                log_warning(f"[sync] error fetching connection {connection['id']}: {e}")
                 continue
 
             for t in txns:
                 acc = conn.execute(
                     "SELECT id, owner_id FROM account WHERE plaid_account_id = ?",
-                    (t["plaid_account_id"],),
+                    (t["external_account_id"],),
                 ).fetchone()
                 if not acc:
                     skipped += 1
@@ -84,7 +83,7 @@ def run_sync(days: int = 30, request: Request = None):
 
                 existing = conn.execute(
                     "SELECT id, is_pending FROM txn WHERE plaid_transaction_id = ?",
-                    (t["plaid_transaction_id"],),
+                    (t["external_transaction_id"],),
                 ).fetchone()
 
                 if existing:
@@ -127,7 +126,7 @@ def run_sync(days: int = 30, request: Request = None):
                     """,
                     (
                         txn_id,
-                        t["plaid_transaction_id"],
+                        t["external_transaction_id"],
                         acc["id"],
                         acc["owner_id"],
                         cat_id,

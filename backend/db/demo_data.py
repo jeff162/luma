@@ -80,13 +80,13 @@ def is_demo_loadable(conn) -> bool:
     """True only when the tenant is a true blank slate (the seeded category tree doesn't count). Guards
     the loader so it can't touch a real database, and gates the "Load demo data" offer. Beyond actual
     data rows, a **configured source counts as engagement**: a saved data source (`csv_import_profile`)
-    or a linked connection (`plaid_item`) means the user has set up their own pipeline, so the demo
+    or a linked connection (`connection`) means the user has set up their own pipeline, so the demo
     offer disappears even before any rows have imported or synced."""
     row = conn.execute(
         """
         SELECT (SELECT COUNT(*) FROM account)            AS accounts,
                (SELECT COUNT(*) FROM txn)                AS txns,
-               (SELECT COUNT(*) FROM plaid_item)         AS connections,
+               (SELECT COUNT(*) FROM connection)         AS connections,
                (SELECT COUNT(*) FROM csv_import_profile) AS sources
         """
     ).fetchone()

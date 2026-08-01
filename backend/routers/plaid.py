@@ -4,9 +4,11 @@
 """
 Plaid onboarding bridges Link into Luma's local account model.
 
-The router treats a Plaid item as the durable credential boundary: one token
-exchange can create many accounts, while the access token is stored separately
-(vault-encrypted at rest) so later sync is keyed to item lifecycle rather than account rows.
+The router treats a connection as the durable credential boundary: one token exchange can create many
+accounts, while the per-connection credential is stored separately (vault-encrypted at rest) so later
+sync is keyed to connection lifecycle rather than account rows. It reaches Plaid only through the
+provider-adapter seam (`get_adapter`), so the same flow generalizes to Teller/SimpleFIN later; the
+`/plaid/*` route prefix is retained for the frontend Link integration in this phase.
 """
 
 import uuid
@@ -15,9 +17,12 @@ from pydantic import BaseModel
 from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
 from backend.routers.accounts import resolve_default_owner_id
-from backend.services import crypto_service, plaid_service
+from backend.services import crypto_service
+from backend.services.providers import get_adapter
 
 router = APIRouter()
+
+PROVIDER = "plaid"
 
 
 class PublicTokenExchange(BaseModel):
@@ -28,7 +33,7 @@ class PublicTokenExchange(BaseModel):
 @router.get("/link-token")
 def get_link_token():
     try:
-        token = plaid_service.create_link_token()
+        token = get_adapter(PROVIDER).create_link_token()
         return {"link_token": token}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -55,22 +60,23 @@ def exchange_token(body: PublicTokenExchange, request: Request):
             "code": "vault_locked",
             "message": "Unlock the vault to connect a data source.",
         })
+    adapter = get_adapter(PROVIDER)
     try:
-        result       = plaid_service.exchange_public_token(body.public_token)
-        access_token = result["access_token"]
-        item_id      = result["item_id"]
-        accounts     = plaid_service.fetch_accounts(access_token)
+        result      = adapter.exchange(body.public_token)
+        credential  = result["credential"]
+        external_id = result["external_id"]
+        accounts    = adapter.fetch_accounts(credential)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     with get_db() as conn:
         default_owner_id = resolve_default_owner_id(conn, None)
-        # Plaid onboarding is item-centric: one exchanged token can fan out to many
-        # accounts, and later sync discovers credentials by item id rather than account id.
+        # A connection is item/connection-centric: one exchange can fan out to many accounts, and later
+        # sync discovers the credential by connection, matching transactions to accounts by external id.
         for acc in accounts:
             existing = conn.execute(
                 "SELECT id FROM account WHERE plaid_account_id = ?",
-                (acc["plaid_account_id"],),
+                (acc["external_account_id"],),
             ).fetchone()
             if not existing:
                 conn.execute(
@@ -81,8 +87,8 @@ def exchange_token(body: PublicTokenExchange, request: Request):
                     """,
                     (
                         str(uuid.uuid4()),
-                        acc["plaid_account_id"],
-                        item_id,
+                        acc["external_account_id"],
+                        external_id,
                         acc["name"],
                         acc["name"],
                         body.institution_name,
@@ -93,26 +99,27 @@ def exchange_token(body: PublicTokenExchange, request: Request):
                     ),
                 )
 
-        # Keep the token in plaid_item even if account rows are edited later; sync needs a
-        # stable credential lookup keyed by Plaid's item lifecycle, not the local account rows.
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS plaid_item (
-                item_id           TEXT PRIMARY KEY,
-                access_token      TEXT NOT NULL DEFAULT '',
-                access_token_enc  TEXT
+        # Store the credential on the connection even if account rows are edited later; sync needs a
+        # stable credential lookup keyed by the connection's provider handle, not the local account rows.
+        stored_credential, stored_credential_enc = crypto_service.encrypt_connection_credential(
+            request.state.user, PROVIDER, external_id, credential
+        )
+        existing_conn = conn.execute(
+            "SELECT id FROM connection WHERE provider = ? AND external_id = ?",
+            (PROVIDER, external_id),
+        ).fetchone()
+        if existing_conn:
+            conn.execute(
+                "UPDATE connection SET credential = ?, credential_enc = ?, institution = COALESCE(?, institution) WHERE id = ?",
+                (stored_credential, stored_credential_enc, body.institution_name, existing_conn["id"]),
             )
-            """
-        )
-        stored_access_token, stored_access_token_enc = crypto_service.encrypt_plaid_access_token(
-            request.state.user, item_id, access_token
-        )
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO plaid_item (item_id, access_token, access_token_enc)
-            VALUES (?,?,?)
-            """,
-            (item_id, stored_access_token, stored_access_token_enc),
-        )
+        else:
+            conn.execute(
+                """
+                INSERT INTO connection (id, provider, external_id, credential, credential_enc, institution)
+                VALUES (?,?,?,?,?,?)
+                """,
+                (str(uuid.uuid4()), PROVIDER, external_id, stored_credential, stored_credential_enc, body.institution_name),
+            )
 
     return {"ok": True, "accounts_added": len(accounts)}

@@ -68,11 +68,13 @@ Transactions also carry `owner\_id`, denormalized from the account, so owner-bas
 
 ## Accounts
 
-Accounts represent bank or credit accounts, typically imported from Plaid or created during CSV import.
+Accounts represent bank or credit accounts, typically created by a data-source connection (Plaid today) or created during CSV import.
 
 Important behavior:
 
 - each account belongs to an owner or is temporarily unassigned
+
+- **Data-source linkage.** An account created by a provider connection carries `plaid_account_id` (the provider's external account id, matched by sync) and `plaid_item_id` (the provider's connection handle). The credential lives on a **`connection`** row, joined implicitly by `plaid_item_id == connection.external_id` — see `architecture.md` → "Provider connections" for the provider-agnostic seam that supersedes `plaid_item`. CSV/manual accounts use sentinel `plaid_item_id` values (`csv_import`, `manual`) and have no connection. Renaming these two column *names* to be provider-neutral, and adding explicit `provider`/`connection_id` account columns, are deferred to security phase 6b
 
 - transactions reference `account\_id`
 

@@ -365,7 +365,7 @@ def list_backup_recipients():
 @router.get("/backup/credentials/status")
 def get_credentials_backup_status():
     with get_db() as conn:
-        row = conn.execute("SELECT COUNT(*) AS credential_count FROM plaid_item").fetchone()
+        row = conn.execute("SELECT COUNT(*) AS credential_count FROM connection").fetchone()
     credential_count = int(row["credential_count"] or 0) if row else 0
     return {
         "has_credentials": credential_count > 0,
@@ -696,9 +696,11 @@ def export_backup(encrypted: bool = Query(False)):
 
 @router.get("/backup/credentials")
 def export_credentials(request: Request, encrypted: bool = Query(False)):
-    """Export Plaid credentials — treat this file like a password."""
+    """Export data-source connection credentials — treat this file like a password."""
     with get_db() as conn:
-        items = conn.execute("SELECT * FROM plaid_item").fetchall()
+        connections = conn.execute(
+            "SELECT id, provider, external_id, credential, credential_enc, institution FROM connection"
+        ).fetchall()
         recipients = []
         if encrypted:
             recipients = [dict(r) for r in conn.execute("""
@@ -708,28 +710,29 @@ def export_credentials(request: Request, encrypted: bool = Query(False)):
                 ORDER  BY created_at DESC, label
             """).fetchall()]
     user = getattr(request.state, "user", None)
-    # Tokens are vault ciphertext at rest; producing a plaintext credentials export needs the DEK.
-    if items and not (user and crypto_service.is_unlocked(user["id"])):
+    # Credentials are vault ciphertext at rest; producing a plaintext export needs the DEK.
+    if connections and not (user and crypto_service.is_unlocked(user["id"])):
         raise HTTPException(status_code=423, detail={
             "code": "vault_locked",
             "message": "Unlock the vault to export credentials.",
         })
-    exported_items = []
-    for row in items:
-        item = dict(row)
-        item["access_token"] = crypto_service.decrypt_plaid_access_token(
+    exported_connections = []
+    for row in connections:
+        conn_row = dict(row)
+        conn_row["credential"] = crypto_service.decrypt_connection_credential(
             user,
-            item["item_id"],
-            item.get("access_token"),
-            item.get("access_token_enc"),
+            conn_row["provider"],
+            conn_row["external_id"],
+            conn_row.get("credential"),
+            conn_row.get("credential_enc"),
         )
-        item.pop("access_token_enc", None)
-        exported_items.append(item)
+        conn_row.pop("credential_enc", None)
+        exported_connections.append(conn_row)
     payload = _stamp_content_hash({
-        "version":     1,
+        "version":     2,
         "exported_at": utcnow_iso(),
-        "warning":     "This file contains sensitive Plaid access tokens. Store securely.",
-        "plaid_items": exported_items,
+        "warning":     "This file contains sensitive data-source access tokens. Store securely.",
+        "connections": exported_connections,
     })
     if encrypted:
         if not recipients:
@@ -1135,30 +1138,55 @@ async def inspect_backup_file(file: UploadFile = File(...)):
 @router.post("/restore/credentials")
 def restore_credentials(body: CredentialsRestoreRequest, request: Request):
     d = body.data
-    if d.get("version") != 1:
+    version = d.get("version")
+    if version not in (1, 2):
         raise HTTPException(status_code=400, detail="Unrecognized credentials backup version")
     _verify_payload_content_hash(d)
-    items = d.get("plaid_items", [])
+    # v2 carries provider-agnostic connections; v1 (legacy) carried Plaid items — fold those into
+    # provider='plaid' connections so an older credentials export still restores after the cutover.
+    if version == 2:
+        connections = [dict(c) for c in d.get("connections", [])]
+    else:
+        connections = [
+            {
+                "provider":    "plaid",
+                "external_id": item["item_id"],
+                "credential":  item["access_token"],
+                "institution": item.get("institution"),
+            }
+            for item in d.get("plaid_items", [])
+        ]
     user = getattr(request.state, "user", None)
-    # Re-encrypting restored tokens under the workspace DEK needs the vault unlocked.
-    if items and not (user and crypto_service.is_unlocked(user["id"])):
+    # Re-encrypting restored credentials under the workspace DEK needs the vault unlocked.
+    if connections and not (user and crypto_service.is_unlocked(user["id"])):
         raise HTTPException(status_code=423, detail={
             "code": "vault_locked",
             "message": "Unlock the vault to restore credentials.",
         })
     with get_db() as conn:
-        conn.execute("DELETE FROM plaid_item")
-        for item in items:
-            access_token, access_token_enc = crypto_service.encrypt_plaid_access_token(
+        conn.execute("DELETE FROM connection")
+        for c in connections:
+            credential, credential_enc = crypto_service.encrypt_connection_credential(
                 user,
-                item["item_id"],
-                item["access_token"],
+                c["provider"],
+                c["external_id"],
+                c["credential"],
             )
             conn.execute(
-                "INSERT OR IGNORE INTO plaid_item (item_id, access_token, access_token_enc) VALUES (?, ?, ?)",
-                (item["item_id"], access_token, access_token_enc)
+                """
+                INSERT OR IGNORE INTO connection (id, provider, external_id, credential, credential_enc, institution)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    c.get("id") or str(uuid.uuid4()),
+                    c["provider"],
+                    c["external_id"],
+                    credential,
+                    credential_enc,
+                    c.get("institution"),
+                ),
             )
-    return {"ok": True, "restored": len(items)}
+    return {"ok": True, "restored": len(connections)}
 
 
 @router.post("/restore-file")

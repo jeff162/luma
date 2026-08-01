@@ -169,7 +169,7 @@ class DemoDataTests(unittest.TestCase):
         with self._conn() as conn:
             self.assertTrue(is_demo_loadable(conn))
             # A linked connection counts even before any transactions have synced.
-            conn.execute("INSERT INTO plaid_item (item_id) VALUES ('item-1')")
+            conn.execute("INSERT INTO connection (id, provider, external_id) VALUES ('c1', 'plaid', 'item-1')")
         with self._conn() as conn:
             self.assertFalse(is_demo_loadable(conn))
 

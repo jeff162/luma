@@ -122,48 +122,60 @@ class VaultTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             cs.unlock(self.alice, "correct horse battery")  # old no longer works
 
-    # --- per-connection secret / Plaid token paths -----------------------------------------------
+    # --- per-connection credential paths ---------------------------------------------------------
 
-    def test_plaid_token_roundtrip_when_unlocked(self):
+    def test_connection_credential_roundtrip_when_unlocked(self):
         cs.set_passphrase(self.alice, "correct horse battery")
         user = {"id": self.alice}
-        stored, enc = cs.encrypt_plaid_access_token(user, "item-1", "access-sandbox-abc")
+        stored, enc = cs.encrypt_connection_credential(user, "plaid", "item-1", "access-sandbox-abc")
         self.assertEqual(stored, "")  # ciphertext-only; no plaintext path
         self.assertTrue(enc)
         self.assertEqual(
-            cs.decrypt_plaid_access_token(user, "item-1", stored, enc), "access-sandbox-abc"
+            cs.decrypt_connection_credential(user, "plaid", "item-1", stored, enc), "access-sandbox-abc"
         )
 
-    def test_plaid_encrypt_requires_unlock(self):
+    def test_connection_encrypt_requires_unlock(self):
         cs.set_passphrase(self.alice, "correct horse battery")
         cs.lock(self.alice)
         with self.assertRaises(cs.VaultLocked):
-            cs.encrypt_plaid_access_token({"id": self.alice}, "item-1", "tok")
+            cs.encrypt_connection_credential({"id": self.alice}, "plaid", "item-1", "tok")
 
     def test_decrypt_wrong_context_fails_closed(self):
-        # A ciphertext bound to (item-1) must not decrypt under a different item id — the AAD binding.
+        # A ciphertext bound to (item-1) must not decrypt under a different external id — the AAD binding.
         cs.set_passphrase(self.alice, "correct horse battery")
         user = {"id": self.alice}
-        _, enc = cs.encrypt_plaid_access_token(user, "item-1", "tok")
+        _, enc = cs.encrypt_connection_credential(user, "plaid", "item-1", "tok")
         with self.assertRaises(cs.VaultDecryptError):
-            cs.decrypt_plaid_access_token(user, "item-2", "", enc)
+            cs.decrypt_connection_credential(user, "plaid", "item-2", "", enc)
+
+    def test_plaid_aad_continuity_across_the_plaid_item_cutover(self):
+        # A Plaid access token encrypted under the *pre-6a* AAD (`plaid_item|<item>|access_token`) must
+        # still decrypt through the generalized connection API — that continuity is what makes the
+        # plaid_item -> connection migration a no-rekey cutover, not a forced re-link.
+        cs.set_passphrase(self.alice, "correct horse battery")
+        user = {"id": self.alice}
+        dek = cs.require_dek(self.alice)
+        legacy_enc = cs.encrypt_secret(dek, "access-sandbox-abc", aad=cs._aad("plaid_item", "item-1", "access_token"))
+        self.assertEqual(
+            cs.decrypt_connection_credential(user, "plaid", "item-1", "", legacy_enc), "access-sandbox-abc"
+        )
 
     def test_decrypt_under_a_different_dek_is_the_clean_break(self):
         # Simulate a blob written under an old/rotated DEK (the retired server_managed ciphertext): a
         # fresh vault cannot read it, and the failure surfaces as VaultDecryptError -> re-link.
         cs.set_passphrase(self.alice, "correct horse battery")
         user = {"id": self.alice}
-        _, enc = cs.encrypt_plaid_access_token(user, "item-1", "tok")
+        _, enc = cs.encrypt_connection_credential(user, "plaid", "item-1", "tok")
         cdb.delete_vault_slots(self.alice)
         cs.lock_all()
         cs.set_passphrase(self.alice, "correct horse battery")  # a brand-new DEK
         with self.assertRaises(cs.VaultDecryptError):
-            cs.decrypt_plaid_access_token({"id": self.alice}, "item-1", "", enc)
+            cs.decrypt_connection_credential({"id": self.alice}, "plaid", "item-1", "", enc)
 
     def test_legacy_plaintext_passthrough_needs_no_dek(self):
         # A row that was never encrypted (enc is None) reads straight through, even locked.
         self.assertEqual(
-            cs.decrypt_plaid_access_token({"id": self.alice}, "item-1", "plain-token", None),
+            cs.decrypt_connection_credential({"id": self.alice}, "plaid", "item-1", "plain-token", None),
             "plain-token",
         )
 
