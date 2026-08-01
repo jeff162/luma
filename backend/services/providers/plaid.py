@@ -21,14 +21,14 @@ from backend.services.providers.base import ProviderAdapter
 class PlaidAdapter(ProviderAdapter):
     provider = "plaid"
 
-    def create_link_token(self, user_id: str = "local-user") -> str:
-        return plaid_service.create_link_token(user_id)
+    def create_link_token(self, app_config: dict, user_id: str = "local-user") -> str:
+        return plaid_service.create_link_token(app_config, user_id)
 
-    def exchange(self, public_token: str) -> dict:
-        result = plaid_service.exchange_public_token(public_token)
+    def exchange(self, app_config: dict, public_token: str) -> dict:
+        result = plaid_service.exchange_public_token(app_config, public_token)
         return {"external_id": result["item_id"], "credential": result["access_token"]}
 
-    def fetch_accounts(self, credential: str) -> list[dict]:
+    def fetch_accounts(self, app_config: dict, credential: str) -> list[dict]:
         return [
             {
                 "external_account_id": a["plaid_account_id"],
@@ -37,11 +37,11 @@ class PlaidAdapter(ProviderAdapter):
                 "subtype":             a["subtype"],
                 "mask":                a["mask"],
             }
-            for a in plaid_service.fetch_accounts(credential)
+            for a in plaid_service.fetch_accounts(app_config, credential)
         ]
 
     def fetch_transactions(
-        self, credential: str, start_date: date | None = None, end_date: date | None = None
+        self, app_config: dict, credential: str, start_date: date | None = None, end_date: date | None = None
     ) -> list[dict]:
         return [
             {
@@ -53,5 +53,8 @@ class PlaidAdapter(ProviderAdapter):
                 "date":                    t["date"],
                 "is_pending":              t["is_pending"],
             }
-            for t in plaid_service.fetch_transactions(credential, start_date=start_date, end_date=end_date)
+            for t in plaid_service.fetch_transactions(app_config, credential, start_date=start_date, end_date=end_date)
         ]
+
+    def remove(self, app_config: dict, credential: str) -> None:
+        plaid_service.remove_item(app_config, credential)

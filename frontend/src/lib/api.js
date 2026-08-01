@@ -114,6 +114,23 @@ export const api = {
     request('/auth/security-profile', { method: 'POST', body: JSON.stringify({ profile }) }),
   saveDataProviderIntent: (intended) =>
     request('/auth/data-provider-intent', { method: 'POST', body: JSON.stringify({ intended }) }),
+  // Vault (data-source credential custody). Set/change require the current user; set mints the workspace
+  // DEK for the first user. All return { user: <session payload with vault_* flags> }.
+  setVaultPassphrase: (passphrase) =>
+    request('/auth/vault/set-passphrase', { method: 'POST', body: JSON.stringify({ passphrase }) }),
+  changeVaultPassphrase: (old_passphrase, new_passphrase) =>
+    request('/auth/vault/change-passphrase', { method: 'POST', body: JSON.stringify({ old_passphrase, new_passphrase }) }),
+  unlockVault: (passphrase) =>
+    request('/auth/vault/unlock', { method: 'POST', body: JSON.stringify({ passphrase }) }),
+  lockVault: () => request('/auth/vault/lock', { method: 'POST' }),
+  // Per-provider app-level credentials (the Configure card). Status never returns the secret.
+  getProviders: () => request('/providers'),
+  getProviderConfig: (provider) => request(`/providers/${provider}/config`),
+  saveProviderConfig: (provider, data) =>
+    request(`/providers/${provider}/config`, { method: 'POST', body: JSON.stringify(data) }),
+  // Revoke a linked connection at the provider (invalidates the token everywhere) and drop it locally.
+  disconnectProvider: (provider, external_id) =>
+    request(`/providers/${provider}/disconnect`, { method: 'POST', body: JSON.stringify({ external_id }) }),
   getBootstrapStatus: () => request('/auth/bootstrap-status'),
   getCurrentUser: () => request('/auth/me'),
   // `options` (optional) turns on sign-in protection by claiming an existing identity as admin:

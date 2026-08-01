@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from backend.app_logging import log_warning
 from backend.db.database import get_db
 from backend.services import crypto_service
-from backend.services.providers import UnknownProviderError, get_adapter
+from backend.services.providers import UnknownProviderError, get_adapter, resolve_app_config
 from backend.services.categorizer import (
     categorize_transaction,
     load_categorization_rules,
@@ -56,11 +56,19 @@ def run_sync(days: int = 30, request: Request = None):
         for connection in connections:
             try:
                 adapter = get_adapter(connection["provider"])
+                app_config = resolve_app_config(request.state.user, connection["provider"])
+                if not app_config:
+                    log_warning(
+                        f"[sync] skipping connection {connection['id']}: provider "
+                        f"{connection['provider']!r} has no configured app credentials"
+                    )
+                    continue
                 credential = crypto_service.decrypt_connection_credential(
                     request.state.user, connection["provider"], connection["external_id"],
                     connection["credential"], connection["credential_enc"],
                 )
                 txns = adapter.fetch_transactions(
+                    app_config,
                     credential,
                     start_date=start_date,
                     end_date=date.today(),

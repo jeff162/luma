@@ -9,6 +9,11 @@ an aggregator, so adding Teller or SimpleFIN is registering an adapter here, not
 from __future__ import annotations
 
 from backend.services.providers.base import ProviderAdapter
+from backend.services.providers.config import (
+    get_provider_config_status,
+    resolve_app_config,
+    set_provider_config,
+)
 from backend.services.providers.plaid import PlaidAdapter
 
 
@@ -32,4 +37,7 @@ def supported_providers() -> list[str]:
     return sorted(_ADAPTERS)
 
 
-__all__ = ["ProviderAdapter", "get_adapter", "supported_providers", "UnknownProviderError"]
+__all__ = [
+    "ProviderAdapter", "get_adapter", "supported_providers", "UnknownProviderError",
+    "resolve_app_config", "set_provider_config", "get_provider_config_status",
+]

@@ -365,8 +365,13 @@ def list_backup_recipients():
 @router.get("/backup/credentials/status")
 def get_credentials_backup_status():
     with get_db() as conn:
-        row = conn.execute("SELECT COUNT(*) AS credential_count FROM connection").fetchone()
-    credential_count = int(row["credential_count"] or 0) if row else 0
+        connection_count = int(conn.execute("SELECT COUNT(*) AS n FROM connection").fetchone()["n"] or 0)
+        # App-level provider credentials (the vaulted app secret) are backed up alongside per-connection
+        # credentials, so a configured-but-not-yet-connected provider still has something worth exporting.
+        provider_config_count = int(
+            conn.execute("SELECT COUNT(*) AS n FROM provider_config WHERE secret_enc IS NOT NULL OR client_id != ''").fetchone()["n"] or 0
+        )
+    credential_count = connection_count + provider_config_count
     return {
         "has_credentials": credential_count > 0,
         "credential_count": credential_count,
@@ -701,6 +706,9 @@ def export_credentials(request: Request, encrypted: bool = Query(False)):
         connections = conn.execute(
             "SELECT id, provider, external_id, credential, credential_enc, institution FROM connection"
         ).fetchall()
+        provider_configs = conn.execute(
+            "SELECT provider, client_id, secret, secret_enc, env FROM provider_config"
+        ).fetchall()
         recipients = []
         if encrypted:
             recipients = [dict(r) for r in conn.execute("""
@@ -711,7 +719,7 @@ def export_credentials(request: Request, encrypted: bool = Query(False)):
             """).fetchall()]
     user = getattr(request.state, "user", None)
     # Credentials are vault ciphertext at rest; producing a plaintext export needs the DEK.
-    if connections and not (user and crypto_service.is_unlocked(user["id"])):
+    if (connections or provider_configs) and not (user and crypto_service.is_unlocked(user["id"])):
         raise HTTPException(status_code=423, detail={
             "code": "vault_locked",
             "message": "Unlock the vault to export credentials.",
@@ -728,11 +736,20 @@ def export_credentials(request: Request, encrypted: bool = Query(False)):
         )
         conn_row.pop("credential_enc", None)
         exported_connections.append(conn_row)
+    exported_provider_configs = []
+    for row in provider_configs:
+        pc_row = dict(row)
+        pc_row["secret"] = crypto_service.decrypt_app_credential(
+            user, pc_row["provider"], pc_row.get("secret"), pc_row.get("secret_enc")
+        )
+        pc_row.pop("secret_enc", None)
+        exported_provider_configs.append(pc_row)
     payload = _stamp_content_hash({
-        "version":     2,
-        "exported_at": utcnow_iso(),
-        "warning":     "This file contains sensitive data-source access tokens. Store securely.",
-        "connections": exported_connections,
+        "version":          2,
+        "exported_at":      utcnow_iso(),
+        "warning":          "This file contains sensitive data-source access tokens. Store securely.",
+        "connections":      exported_connections,
+        "provider_configs": exported_provider_configs,
     })
     if encrypted:
         if not recipients:
@@ -1156,9 +1173,11 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
             }
             for item in d.get("plaid_items", [])
         ]
+    # App-level provider credentials ride the same credentials backup (v2 only; legacy v1 had none).
+    provider_configs = [dict(pc) for pc in d.get("provider_configs", [])] if version == 2 else []
     user = getattr(request.state, "user", None)
     # Re-encrypting restored credentials under the workspace DEK needs the vault unlocked.
-    if connections and not (user and crypto_service.is_unlocked(user["id"])):
+    if (connections or provider_configs) and not (user and crypto_service.is_unlocked(user["id"])):
         raise HTTPException(status_code=423, detail={
             "code": "vault_locked",
             "message": "Unlock the vault to restore credentials.",
@@ -1186,7 +1205,19 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
                     c.get("institution"),
                 ),
             )
-    return {"ok": True, "restored": len(connections)}
+        conn.execute("DELETE FROM provider_config")
+        for pc in provider_configs:
+            plain = pc.get("secret") or ""
+            # Only a non-empty app secret is vaulted; a config with just client_id/env stores no ciphertext.
+            secret, secret_enc = crypto_service.encrypt_app_credential(user, pc["provider"], plain) if plain else ("", None)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO provider_config (provider, client_id, secret, secret_enc, env)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (pc["provider"], pc.get("client_id") or "", secret, secret_enc, pc.get("env") or "sandbox"),
+            )
+    return {"ok": True, "restored": len(connections) + len(provider_configs)}
 
 
 @router.post("/restore-file")

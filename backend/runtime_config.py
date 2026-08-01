@@ -158,20 +158,17 @@ def _truthy_env(value: str | None, default: bool = False) -> bool:
 
 
 def read_environment_settings() -> dict:
+    # Provider (Plaid) credentials moved to the vaulted per-provider config (services/providers/config.py,
+    # security phase 6b); the `.env` PLAID_* values survive only as a resolver bootstrap fallback and are
+    # no longer surfaced here. This endpoint now carries only the remaining `.env`-backed toggles.
     env_path = env_file_path()
     values = dotenv_values(str(env_path)) if env_path.exists() else {}
 
-    plaid_client_id = (values.get("PLAID_CLIENT_ID") or os.getenv("PLAID_CLIENT_ID") or "").strip()
-    plaid_secret = (values.get("PLAID_SECRET") or os.getenv("PLAID_SECRET") or "").strip()
-    plaid_env = (values.get("PLAID_ENV") or os.getenv("PLAID_ENV") or "sandbox").strip() or "sandbox"
     log_value = values.get("LUMA_USE_LOG_FILES")
     if log_value is None:
         log_value = os.getenv("LUMA_USE_LOG_FILES")
 
     return {
-        "plaid_client_id": plaid_client_id,
-        "plaid_secret": plaid_secret,
-        "plaid_env": plaid_env,
         "luma_use_log_files": _truthy_env(log_value, default=False),
         "env_file_present": env_path.exists(),
         "env_file_path": str(env_path),
@@ -180,26 +177,10 @@ def read_environment_settings() -> dict:
 
 def write_environment_settings(
     *,
-    plaid_client_id: str | None,
-    plaid_secret: str | None,
-    plaid_env: str | None,
     luma_use_log_files: bool | None,
 ) -> dict:
     env_path = _ensure_env_file_exists()
 
-    if plaid_env is not None:
-        normalized_plaid_env = plaid_env.strip() or "sandbox"
-        if normalized_plaid_env not in {"sandbox", "development", "production"}:
-            raise ValueError("PLAID_ENV must be sandbox, development, or production")
-    else:
-        normalized_plaid_env = None
-
-    if plaid_client_id is not None:
-        set_key(str(env_path), "PLAID_CLIENT_ID", plaid_client_id.strip())
-    if plaid_secret is not None:
-        set_key(str(env_path), "PLAID_SECRET", plaid_secret.strip())
-    if normalized_plaid_env is not None:
-        set_key(str(env_path), "PLAID_ENV", normalized_plaid_env)
     if luma_use_log_files is not None:
         set_key(str(env_path), "LUMA_USE_LOG_FILES", "true" if luma_use_log_files else "false")
 

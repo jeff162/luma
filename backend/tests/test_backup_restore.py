@@ -33,9 +33,10 @@ from backend.routers.import_export.backup import _zip_json_bytes, _load_json_or_
 from backend.services.categorizer import seed_default_rules
 
 # Data-DB tables deliberately NOT in the regular backup (credentials/encryption config/schema meta).
-# `connection` and its legacy predecessor `plaid_item` hold vault-encrypted provider credentials, which
-# ride the separate credentials backup (export/restore_credentials), not the regular data backup.
-EXCLUDED_TABLES = {"plaid_item", "connection", "backup_recipient", "db_meta"}
+# `connection` (per-bank credentials), its legacy predecessor `plaid_item`, and `provider_config`
+# (app-level provider credentials) hold vault-encrypted secrets, which ride the separate credentials
+# backup (export/restore_credentials), not the regular data backup.
+EXCLUDED_TABLES = {"plaid_item", "connection", "provider_config", "backup_recipient", "db_meta"}
 
 # Every other data-DB table maps to a backup payload section. A new table with no entry here fails
 # the coverage guard, which is the point: it can't be silently left out of backups.

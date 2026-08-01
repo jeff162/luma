@@ -112,6 +112,18 @@ Luma is local-first by design, a the data stays locally:
 
 You decide what comes in, what stays, and what leaves. Luma is built to organize your financial data, not to collect it.
 
+## Security
+
+Local-first also means the security model is easy to reason about — but it's worth being clear about what protects what, and what a compromise would actually mean.
+
+- **Transaction data is stored unencrypted on disk.** The ledger lives in a local SQLite database in plain form, so the database files — and any **unencrypted** backup — are the sensitive artifacts to protect. They should be kept off shared or cloud-synced locations; anything that leaves the machine should use the **encrypted backup** (protected with a user-supplied key).
+
+- **The optional sign-in password is network-access control, not disk encryption.** It governs who on the local network can reach a running instance. It does not encrypt the database and does not protect the files if someone copies them off the disk.
+
+- **Data-source tokens are the one secret Luma encrypts at rest.** A connected provider (such as Plaid) issues a token that grants **ongoing, read-only** access to an account's transactions and balances — it cannot move money. Because that access is live until revoked, the token is kept in a passphrase-protected vault rather than in plain text. The vault passphrase is separate from the sign-in password and is never stored; losing it simply means re-linking the data sources.
+
+- **If a database or backup is lost or copied by someone else:** the historical transactions it holds should be treated as exposed, since they were never encrypted. Any connected data source should be **disconnected** — which revokes its token at the provider, so a stolen copy can no longer pull new data — and, for a deliberate compromise, the vault passphrase rotated. Cancelling a token limits the damage to what was already in the copied files.
+
 ## Features
 
 Luma focuses on making common tasks easy and reducing the effort required to maintain accurate data over time.

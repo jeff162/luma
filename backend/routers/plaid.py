@@ -18,7 +18,7 @@ from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
 from backend.routers.accounts import resolve_default_owner_id
 from backend.services import crypto_service
-from backend.services.providers import get_adapter
+from backend.services.providers import get_adapter, resolve_app_config
 
 router = APIRouter()
 
@@ -30,11 +30,32 @@ class PublicTokenExchange(BaseModel):
     institution_name: str | None = None
 
 
-@router.get("/link-token")
-def get_link_token():
+def _require_app_config(request: Request):
+    """Resolve the provider's app credential (vaulted DB or `.env` bootstrap). 409 when the provider is
+    unconfigured; 423 when its secret is vaulted but the vault is locked (resolve raises VaultLocked)."""
     try:
-        token = get_adapter(PROVIDER).create_link_token()
+        app_config = resolve_app_config(request.state.user, PROVIDER)
+    except crypto_service.VaultLocked:
+        raise HTTPException(status_code=423, detail={
+            "code": "vault_locked",
+            "message": "Unlock the vault to use this data source.",
+        })
+    if not app_config:
+        raise HTTPException(status_code=409, detail={
+            "code": "provider_not_configured",
+            "message": "Configure this data source's credentials before connecting.",
+        })
+    return app_config
+
+
+@router.get("/link-token")
+def get_link_token(request: Request):
+    app_config = _require_app_config(request)
+    try:
+        token = get_adapter(PROVIDER).create_link_token(app_config)
         return {"link_token": token}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -60,12 +81,15 @@ def exchange_token(body: PublicTokenExchange, request: Request):
             "code": "vault_locked",
             "message": "Unlock the vault to connect a data source.",
         })
+    app_config = _require_app_config(request)
     adapter = get_adapter(PROVIDER)
     try:
-        result      = adapter.exchange(body.public_token)
+        result      = adapter.exchange(app_config, body.public_token)
         credential  = result["credential"]
         external_id = result["external_id"]
-        accounts    = adapter.fetch_accounts(credential)
+        accounts    = adapter.fetch_accounts(app_config, credential)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

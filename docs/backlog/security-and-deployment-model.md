@@ -4,8 +4,11 @@
 session-based identity in both modes, enable/disable as flag flips; and the multi-wrap vault core +
 transport-security policy — workspace DEK, passphrase slots, server-side unlock cache, `server_managed`/
 master-key retired, Production passphrase gate, `SESSION_COOKIE_SECURE`/`--proxy-headers`/computed HTTPS
-task) and phase 6a (the provider-agnostic `connection`/adapter seam, Plaid retargeted onto it); phases 4–5
-(passkey slots, enrollment/invite) and phase 6b (app-cred vaulting + per-provider connection UI) not started.** This
+task), phase 6a (the provider-agnostic `connection`/adapter seam, Plaid retargeted onto it), phase 6b-1
+(app-level provider creds into the vaulted `provider_config` table, `.env` demoted to a bootstrap fallback),
+and phase 6b-2 (the per-provider Connections-tab UI + the vault set/unlock UI; provider config removed from
+Settings); phases 4–5 (passkey slots, enrollment/invite) and phase 6b-3 (the deferred account columns) not
+started.** This
 is the design decision that
 [`pre-auth-security-ui.md`](pre-auth-security-ui.md) was blocked on. It settles which deployments
 Luma supports, what the login perimeter is (and isn't) for, and how Plaid credentials are protected
@@ -54,8 +57,27 @@ path. Pick-up-cold summary below; build phases at the end.
   DB file or disk access reads it. Protecting the ledger at rest is explicitly *not* a goal here (it
   would need pervasive field or whole-DB encryption). The app password guards *network* access, not
   disk access.
-- **Only the Plaid access_tokens get real at-rest protection**, via the vault below — because a leaked
-  token is materially worse than a leaked ledger (it's live, ongoing access to the actual bank).
+- **Only the provider access_tokens get real at-rest protection**, via the vault below — because a leaked
+  token is *live and ongoing*, worse than the ledger in the **future/duration** dimension: the ledger is a
+  static snapshot the thief already has, while a token keeps pulling **new** data until revoked.
+  **Right-sizing this (refined 2026-08-01):** Luma requests Plaid's `transactions` product only, so the
+  token is **read-only** (transaction history + balances; not payment-capable, and it doesn't even expose
+  account/routing numbers — that's the `auth` product). So the realistic worst case is *ongoing read
+  access to financial data*, **revocable** by disconnecting the connection (which calls the provider's
+  item-remove; see the disconnect flow) — **not** "access to the actual bank." Framing the token as
+  uniquely precious "crown jewels" overstated it; the honest framing is below. **This conditioning is on
+  read-only** — adding a payment-capable token (Teller payments) or `auth`/`identity` would enlarge the
+  blast radius past the ledger and this section must be revisited.
+- **Consequences & responsibilities (what a user must actually protect, and what a compromise means).**
+  Because the ledger is plaintext at rest, an attacker who copies the **database files or an unencrypted
+  backup** already has the full transaction history *without breaking anything* — so the user's real
+  responsibility is guarding those files: don't scatter copies, and use the **encrypted backup** for
+  anything that leaves the machine. The **app password** protects *network* access to the running app, not
+  the files on disk. The **vault passphrase** protects only the provider token, and only against **future**
+  pulls after a file theft — so if the DB leaks, the historical exposure is already done and the right
+  action is to **disconnect/revoke the connection** (kills any stolen token) and, for a hostile exposure,
+  rotate the vault. Losing the vault passphrase itself costs nothing but the connections (re-link). This is
+  the plain-language content the README "Security" section (below) must convey.
 
 ## Identity & the network perimeter (settled)
 
@@ -151,8 +173,10 @@ Every aggregator has **two levels** of secret; only the *shapes* differ per prov
    can link a small number of live accounts (≈10) for free; production is a paid scale-up, not a
    permission wall. So Plaid is a fine *first* provider to actually test (see sequencing below).
 2. **Per-connection credential** — one **per linked bank connection**, stored in the data DB. For Plaid
-   it's the `access_token`; `access_token + client_id + secret` = pull that bank's full history. **These
-   are the crown jewels.**
+   it's the `access_token`; `access_token + client_id + secret` = pull that bank's transaction history +
+   balances (read-only). **The most sensitive stored secret** — worth real at-rest protection because it's
+   *live and revocable* — though see the tempered "Threat model" framing above: it's ongoing read access to
+   financial data, not payment access.
 
 **Where app-level credentials live (reversed from an earlier draft):** they move **out of `.env` and
 into the DB**, DEK-encrypted under the vault, exactly like the per-connection secrets (there is no
@@ -612,16 +636,68 @@ premise was wrong.
    the Connect-bank HTTPS-availability gate; fix the deprecated "development mode" copy; and the explicit
    account connection columns/renames deferred from 6a. Teller, then SimpleFIN, follow on the seam.
 
+6b-1. **[DONE]** **App-level provider credentials into the vault (backend).** New data-DB `provider_config`
+   table (`provider` PK, `client_id`/`env` plaintext, `secret_enc` vault-encrypted under an
+   `app_credential|<provider>|secret` AAD). `crypto_service.encrypt/decrypt_app_credential`; a
+   `providers.config` service with `resolve_app_config` (a saved row wins, else the `.env` `PLAID_*`
+   **bootstrap fallback**, so pre-6b installs keep working untouched) + `set_provider_config`/
+   `get_provider_config_status` (secret is **write-only** — status never returns it). Every adapter method
+   now takes the resolved `app_config` (no adapter reads `os.environ`); `plaid_service` builds its client
+   from it. Admin-gated CRUD `GET/POST /api/providers` + `/api/providers/{provider}/config`
+   (`routers/providers.py`); saving a secret needs the vault unlocked (`423`), and the **Production
+   all-slots vault gate** rides the env change here too. `routers/plaid.py` (link-token/exchange) and
+   `routers/sync.py` resolve `app_config` (→ `409 provider_not_configured` / `423`). App creds ride the
+   **credentials backup** (`provider_configs`). **No `.env` → DB migration** (re-enter once). **Built
+   (2026-08-01):** backend + unit-tested (`test_provider_config.py`; `test_connection_seam.py` updated).
+   **Left for 6b-2:** the Configure/Connections-tab UI still lives on the Settings environment form; the
+   legacy `/auth/environment` Plaid write (to `.env`) is untouched and remains a coherent fallback until
+   the UI moves.
+6b-2. **[DONE]** **The Connections-tab UI.** `DataSourceConnections` (in `pages/Accounts.jsx`) replaces the
+   single "Data Source Connections" card with a **card per provider** (from `GET /api/providers`): mode
+   badge, admin-only **Configure** (app-credential entry — `ProviderConfigDialog`, secret write-only),
+   **Connect bank**, **Sync now**, linked accounts, and the "+ Add data source" affordance for
+   unconfigured providers. It also introduces the **vault set-passphrase / unlock UI** (`VaultStrip` +
+   `VaultPassphraseDialog`; phase 3 had deferred the vault UI to the connection cards) posting to
+   `/auth/vault/*` and refreshing the session vault flags. **Connect** gates on vault configured+unlocked
+   and — on a networked bind — real HTTPS (`transport.is_https`). Plaid credential entry is **removed from
+   the Settings `EnvironmentSection`** (which keeps only its log-files toggle and now points to
+   Connections); the `/auth/environment` endpoint + `runtime_config` drop their Plaid fields, and the
+   Production gate now lives on `POST /api/providers/{provider}/config`. Deprecated "development mode in
+   `.env`" copy fixed. **Built (2026-08-01):** frontend + backend-endpoint cleanup; lint + production build
+   clean; backend suite green (`test_vault_endpoints` Production-gate test repointed to the providers
+   endpoint). **Not browser-verified by the agent** (per repo rule — handed to the user).
+6b-3. **Deferred account columns.** Explicit `provider`/`connection_id` account columns, rename the
+   `plaid_account_id`/`plaid_item_id` column *names* to be provider-neutral, and drop the vestigial
+   `plaid_item` table (accounts link implicitly by `plaid_item_id == connection.external_id` until then).
+   Teller, then SimpleFIN, follow on the seam.
+
+**6b refinements — [DONE 2026-08-01].** Two follow-ons landed with the 6b UI, after the threat-model
+discussion above:
+
+- **Vault-strength tuning.** `VAULT_PRODUCTION_MIN_LEN` 12 → **20** plus a **distinct-character guard**
+  (`VAULT_PRODUCTION_MIN_DISTINCT = 6`) in `passphrase_meets_production_min`, so a long-but-degenerate
+  passphrase (one char repeated) can't clear the Production gate. Length is the main lever precisely
+  because the passphrase is meant to live in a password manager (the passkey/biometric daily unlock is
+  phase 4), so a long floor costs no typing. The frontend adds an **advisory strength meter** on the vault
+  set dialog that *blocks nothing* — the only hard gate stays the backend Production check. **Decided
+  against a "choose your security level" question:** with a sensible fixed floor there's nothing meaningful
+  to dial, and it cuts against the "detect facts, one forward-looking question" direction.
+- **Disconnect / revoke flow.** The adapter gained a `remove(app_config, credential)` op (Plaid
+  `/item/remove`); `POST /api/providers/{provider}/disconnect` revokes **provider-side** (so a leaked
+  token dies too) then drops the local `connection` row, keeping accounts/transactions. `GET /api/providers`
+  now returns each provider's `connections`; the card renders per-connection groups with a **Disconnect**
+  action (confirm dialog). This is the in-app version of "revoke on the provider's website" the threat
+  model relies on. Not admin-gated (symmetric with connect/sync); needs the vault unlocked.
+
 ## Docs to write (deferred to after phase 3/6)
 
-- **README "Security" section.** The README needs a dedicated Security section outlining the whole
-  picture: the ledger is **plaintext at rest** (host-protected, not encrypted by the app) so the raw DB
-  shouldn't be copied around — use the **encrypted backup**; the app password is a **network perimeter**,
-  not disk encryption; **2FA** is optional/household-marginal; provider tokens get the **vault**; and the
-  **HTTPS setup** (Caddy reverse proxy, `SESSION_COOKIE_SECURE`, `--proxy-headers`) for client-server.
-  Deferred until **after phase 3/6**, since that work introduces the HTTPS configuration the section must
-  document. The in-app Help topics **`data-and-backups`** and **`account-security`** (already written) are
-  the seed copy for it.
+- **README "Security" section — [DONE 2026-08-01].** Written: covers the ledger being **plaintext at
+  rest** (protect the DB files / use the **encrypted backup**); the sign-in password as a **network
+  perimeter**, not disk encryption; provider tokens being **read-only + revocable** and the only thing
+  vault-encrypted; and the compromise playbook (**disconnect to revoke**, rotate the vault). Still
+  **to add when the HTTPS install lands**: the Caddy/`SESSION_COOKIE_SECURE`/`--proxy-headers` setup steps
+  for client-server. The in-app Help topics **`data-and-backups`** and **`account-security`** should be
+  reconciled against the tempered read-only framing next time they're touched.
 
 ## Cross-refs
 

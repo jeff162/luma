@@ -1734,15 +1734,11 @@ function TransactionTagsSection() {
 }
 
 function EnvironmentSection({ authEnabled, currentUser }) {
-  const fieldIdBase = useId()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
   const [settings, setSettings] = useState({
-    plaid_client_id: '',
-    plaid_secret: '',
-    plaid_env: 'sandbox',
     luma_use_log_files: false,
     env_file_path: '',
     env_file_present: false,
@@ -1763,9 +1759,6 @@ function EnvironmentSection({ authEnabled, currentUser }) {
         const resp = await api.getEnvironmentSettings()
         if (!cancelled) {
           setSettings({
-            plaid_client_id: resp.plaid_client_id || '',
-            plaid_secret: resp.plaid_secret || '',
-            plaid_env: resp.plaid_env || 'sandbox',
             luma_use_log_files: !!resp.luma_use_log_files,
             env_file_path: resp.env_file_path || '',
             env_file_present: !!resp.env_file_present,
@@ -1785,12 +1778,6 @@ function EnvironmentSection({ authEnabled, currentUser }) {
 
   if (!canManage) return null
 
-  const inputStyle = {
-    background: 'var(--surface)', color: 'var(--text)',
-    border: '1px solid var(--border)', borderRadius: 6,
-    padding: '7px 10px', fontSize: 13, width: '100%', outline: 'none',
-  }
-
   async function handleSave(e) {
     e.preventDefault()
     setSaving(true)
@@ -1798,9 +1785,6 @@ function EnvironmentSection({ authEnabled, currentUser }) {
     setError('')
     try {
       const resp = await api.saveEnvironmentSettings({
-        plaid_client_id: settings.plaid_client_id,
-        plaid_secret: settings.plaid_secret,
-        plaid_env: settings.plaid_env,
         luma_use_log_files: settings.luma_use_log_files,
       })
       setSettings(prev => ({
@@ -1819,47 +1803,12 @@ function EnvironmentSection({ authEnabled, currentUser }) {
     <Card style={{ padding: 0, overflow: 'hidden' }}>
       {loading ? <Spinner /> : (
         <form onSubmit={handleSave} style={{ display: 'grid', gap: 14, padding: 16 }}>
-          <InsetPanel style={{ gap: 10 }}>
-            <SectionEyebrow style={{ fontSize: 13, fontWeight: 600, textTransform: 'none', letterSpacing: '0.03em' }}>Plaid credentials</SectionEyebrow>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 160px', gap: 10 }}>
-              <div>
-                <FormLabel htmlFor={`${fieldIdBase}-plaid-client-id`} style={{ marginBottom: 4 }}>Plaid client ID</FormLabel>
-                <input
-                  id={`${fieldIdBase}-plaid-client-id`}
-                  name="settings-plaid-client-id"
-                  value={settings.plaid_client_id}
-                  onChange={e => setSettings(prev => ({ ...prev, plaid_client_id: e.target.value }))}
-                  placeholder="Optional"
-                  style={inputStyle}
-                />
-              </div>
-              <div>
-                <FormLabel htmlFor={`${fieldIdBase}-plaid-secret`} style={{ marginBottom: 4 }}>Plaid secret</FormLabel>
-                <input
-                  id={`${fieldIdBase}-plaid-secret`}
-                  name="settings-plaid-secret"
-                  type="password"
-                  value={settings.plaid_secret}
-                  onChange={e => setSettings(prev => ({ ...prev, plaid_secret: e.target.value }))}
-                  placeholder="Optional"
-                  style={inputStyle}
-                />
-              </div>
-              <div>
-                <FormLabel htmlFor={`${fieldIdBase}-plaid-environment`} style={{ marginBottom: 4 }}>Plaid environment</FormLabel>
-                <select
-                  id={`${fieldIdBase}-plaid-environment`}
-                  name="settings-plaid-environment"
-                  value={settings.plaid_env}
-                  onChange={e => setSettings(prev => ({ ...prev, plaid_env: e.target.value }))}
-                  style={{ ...inputStyle, cursor: 'pointer' }}
-                >
-                  <option value="sandbox">sandbox</option>
-                  <option value="development">development</option>
-                  <option value="production">production</option>
-                </select>
-              </div>
-            </div>
+          <InsetPanel style={{ gap: 8 }}>
+            <SectionEyebrow style={{ fontSize: 13, fontWeight: 600, textTransform: 'none', letterSpacing: '0.03em' }}>Data-source credentials</SectionEyebrow>
+            <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, margin: 0 }}>
+              Provider credentials (Plaid client ID, secret, and environment) are configured per data source on the
+              <strong> Accounts → Connections</strong> tab, where the secret is stored in the encrypted vault rather than in <code>.env</code>.
+            </p>
           </InsetPanel>
 
           <InsetPanel style={{ gap: 10 }}>

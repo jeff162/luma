@@ -64,9 +64,11 @@ class VaultEndpointTests(unittest.TestCase):
             self.assertEqual(r.json()["detail"]["code"], "vault_locked")
 
     def test_production_gate_blocks_without_a_strong_vault(self):
-        # The gate runs before any .env write, so this never touches the real environment file.
+        # The Production gate moved onto the per-provider Configure endpoint (phase 6b); a weak vault must
+        # still block switching a provider to Production. The gate runs before any write.
         with api_client() as (client, _):
-            r = client.post("/api/auth/environment", json={"plaid_env": "production"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "shortpass"})  # under the Production min
+            r = client.post("/api/providers/plaid/config", json={"env": "production"})
             self.assertEqual(r.status_code, 400)
             self.assertIn("vault passphrase", r.json()["detail"])
 

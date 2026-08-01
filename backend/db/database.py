@@ -113,7 +113,7 @@ def get_db(db_path: str | None = None):
 # v14 adds `category_rule.match_expr` (multi-clause AND/contains merchant matcher). v15 adds
 # `category_rule.last_effect_date` (stale-rule signal) + `category_rule.deleted_at` (rules trash).
 
-CURRENT_VERSION = 18
+CURRENT_VERSION = 19
 
 MIGRATIONS = {}
 
@@ -588,6 +588,24 @@ def _backfill_connections_from_plaid_items(conn):
         )
 
 
+@migration(19)
+def _add_provider_config_table(conn):
+    # App-level provider credentials move out of `.env` into the vaulted DB (security-and-deployment-model
+    # 6b). Fresh installs get the table from init_db's baseline CREATE; existing databases get it here.
+    # There is **no data migration** (decided 2026-08-01): the app credential is re-entered once via the
+    # provider Configure card, and `.env` remains a bootstrap/override the resolver still falls back to.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS provider_config (
+            provider   TEXT PRIMARY KEY,
+            client_id  TEXT NOT NULL DEFAULT '',
+            secret     TEXT NOT NULL DEFAULT '',
+            secret_enc TEXT,
+            env        TEXT NOT NULL DEFAULT 'sandbox',
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -763,6 +781,20 @@ def init_db(db_path: str | None = None):
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_provider_external
                 ON connection(provider, external_id);
+
+            -- App-level provider credentials (one row per provider): the app secret that identifies the
+            -- Luma app to the aggregator (Plaid's client_id + secret), moved out of `.env` into the DB
+            -- (security-and-deployment-model.md 6b). Only `secret` is sensitive — it is vault-encrypted
+            -- under the workspace DEK (`secret_enc`; the plaintext column is always ''); `client_id`/`env`
+            -- are semi-public and stored plaintext. Distinct from `connection` (the per-bank credential).
+            CREATE TABLE IF NOT EXISTS provider_config (
+                provider   TEXT PRIMARY KEY,
+                client_id  TEXT NOT NULL DEFAULT '',
+                secret     TEXT NOT NULL DEFAULT '',
+                secret_enc TEXT,
+                env        TEXT NOT NULL DEFAULT 'sandbox',
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
 
             -- Two-level category hierarchy: groups (parent_id NULL) and leaves.
             -- Transactions are assigned to leaves only.

@@ -183,10 +183,16 @@ class VaultTests(unittest.TestCase):
 
     def test_production_requires_a_strong_passphrase(self):
         self.assertFalse(cs.ready_for_production())  # no vault yet
-        cs.set_passphrase(self.alice, "short")  # under the 12-char minimum
+        cs.set_passphrase(self.alice, "short")  # under the Production length minimum
         self.assertFalse(cs.ready_for_production())
         cs.change_passphrase(self.alice, "short", "a-sufficiently-long-passphrase")
         self.assertTrue(cs.ready_for_production())
+
+    def test_production_rejects_a_long_but_degenerate_passphrase(self):
+        # Length alone isn't enough: a passphrase that is one character repeated clears the length floor
+        # but has almost no entropy, so the distinct-character guard keeps it out of Production.
+        cs.set_passphrase(self.alice, "a" * 30)
+        self.assertFalse(cs.ready_for_production())
 
     def test_production_is_blocked_by_any_weak_slot(self):
         # Two slots, one weak: the DEK is only as strong as its weakest wrap, so Production stays off.

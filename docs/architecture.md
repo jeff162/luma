@@ -325,8 +325,11 @@ access, materially worse than the plaintext ledger — so they get real at-rest 
   unlocked vault (`423`; connect on an unconfigured vault `409`). The first user's passphrase mints the
   DEK; enrolling *other* users (co-present/invite) is a later phase. There is **no `off`/plaintext path
   and no app-held master key** — the vault is the only custody. Switching a provider to **Production**
-  requires every slot to meet a real passphrase minimum (an *all-slots* property — the DEK is only as
-  strong as its weakest wrap); **Sandbox** stays lax.
+  requires every slot to meet a real passphrase minimum — **≥ 20 chars and ≥ 6 distinct characters**
+  (`passphrase_meets_production_min`; the distinct-char guard rejects a long-but-degenerate repeat), an
+  *all-slots* property since the DEK is only as strong as its weakest wrap; **Sandbox** stays lax. The
+  passphrase is meant to live in a password manager (a passkey/biometric daily unlock is a later phase),
+  so length is cheap; the vault set dialog shows an **advisory strength meter** that blocks nothing.
 - **Transport** is a per-topology property, not an app mode: the backend always speaks HTTP; a
   client-server deployment terminates TLS at a reverse proxy (Caddy) with uvicorn on `--proxy-headers`,
   so `request.url.scheme` reflects the external scheme. `backend/transport.py` detects loopback-vs-network
@@ -358,8 +361,31 @@ phase 6a), so adding Teller or SimpleFIN is an adapter, not a change to the conn
 - **Credential continuity.** `crypto_service.encrypt/decrypt_connection_credential` binds the ciphertext
   to `(provider, external_id)`; for `provider='plaid'` it reuses the exact pre-6a AAD
   (`plaid_item|<item_id>|access_token`), so tokens written before the cutover decrypt unchanged — the
-  migration re-keys nothing. App-level provider credentials (Plaid `client_id`/`secret`/`env`) still come
-  from the environment via `plaid_service` in this phase; moving them into the vaulted DB is phase 6b.
+  migration re-keys nothing.
+- **App-level credentials (phase 6b-1).** The aggregator's *own* app secret (Plaid `client_id`/`secret`/
+  `env` — one per provider, distinct from the per-bank connection credential) lives in the vaulted DB
+  `provider_config` table: only `secret` is vault-encrypted (`secret_enc`, AAD `app_credential|<provider>|
+  secret`); `client_id`/`env` are semi-public plaintext. `providers.config.resolve_app_config(user, provider)`
+  returns the decrypted `{client_id, secret, env}` the adapter needs — a saved row is authoritative,
+  else it falls back to the **`.env` bootstrap** (`PLAID_*`), so pre-6b installs keep working with no
+  action. Every adapter method takes this resolved `app_config` (never reads the environment itself).
+  Admin-gated CRUD is `GET/POST /api/providers/{provider}/config` (`routers/providers.py`); saving the
+  secret needs the vault unlocked (`423`), and switching a provider to Production still runs the all-slots
+  vault gate. App credentials ride the **credentials backup** (`provider_configs`) alongside connections.
+  There is **no `.env` → DB migration** — the credential is re-entered once via the Configure card
+  (decided 2026-08-01).
+- **Connections-tab UI (phase 6b-2).** `DataSourceConnections` (in `pages/Accounts.jsx`) renders the
+  Connections tab as one card **per provider** (driven by `GET /api/providers`): a mode badge, admin-only
+  **Configure** (the app credential — moved off the Settings form entirely; that section now only points
+  here), **Connect bank**, **Sync now**, and the linked accounts. It also hosts the **vault set-passphrase
+  / unlock** affordance (phase 3 deferred the vault UI to "ride the connection cards") — set/unlock post to
+  `/auth/vault/*` and refresh the session's vault flags. **Connect** is gated: vault configured + unlocked,
+  and — on a networked (non-loopback) bind — real HTTPS (`transport.is_https` from `/auth/status`), so a
+  bank secret never crosses the wire in cleartext. Each card lists its **connections** (from
+  `GET /api/providers`, which returns them per provider) with a **Disconnect** action → `POST
+  /api/providers/{provider}/disconnect`, which **revokes the token provider-side** (the adapter's `remove`
+  op → Plaid `/item/remove`, so a leaked copy dies too) then drops the local `connection` row, keeping the
+  accounts/transactions. Only the deferred account columns (6b-3) remain.
 
 ### Storage layers
 

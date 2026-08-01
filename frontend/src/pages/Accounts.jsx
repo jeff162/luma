@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { notifyAccountsChanged } from '../App.jsx'
-import { Card, Button, Spinner, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog } from '../components/ui.jsx'
+import { Card, Button, Spinner, Select, Input, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, DialogActions } from '../components/ui.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import PillTableHeader from '../components/PillTableHeader.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
@@ -350,6 +350,511 @@ function controlStyle(extra = {}) {
     fontSize: 13,
     ...extra,
   }
+}
+
+// --- Data-source connections (security phase 6b) --------------------------------------------------
+//
+// The Connections tab: one card per supported aggregator, plus the vault affordance the cards depend on.
+// Provider *configuration* (the app credential) lives here, not in Settings; the app secret is vaulted,
+// so connecting/syncing needs the vault unlocked, and — on a networked bind — HTTPS. Only Plaid ships an
+// adapter today; the layout is provider-generic for Teller/SimpleFIN later.
+
+const CONNECTION_SENTINELS = new Set(['csv_import', 'manual'])
+const PROVIDER_LABELS = { plaid: 'Plaid', teller: 'Teller', simplefin: 'SimpleFIN' }
+
+function providerLabel(provider) {
+  return PROVIDER_LABELS[provider] || (provider ? provider[0].toUpperCase() + provider.slice(1) : 'Provider')
+}
+
+function EnvBadge({ env }) {
+  // Sandbox = muted; Production = a live-money warning tone; anything else = neutral.
+  const tone = env === 'production'
+    ? { bg: 'rgba(220, 38, 38, 0.14)', text: '#dc2626', border: 'rgba(220, 38, 38, 0.4)' }
+    : env === 'sandbox'
+      ? { bg: 'var(--surface2)', text: 'var(--muted)', border: 'var(--border)' }
+      : { bg: 'rgba(37, 99, 235, 0.14)', text: '#2563eb', border: 'rgba(37, 99, 235, 0.4)' }
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center',
+      background: tone.bg, color: tone.text, border: `1px solid ${tone.border}`,
+      borderRadius: 99, padding: '2px 9px', fontSize: 11, fontWeight: 600, textTransform: 'capitalize',
+      whiteSpace: 'nowrap',
+    }}>
+      {env || 'sandbox'}
+    </span>
+  )
+}
+
+function ProviderConfigDialog({ provider, initial, onSave, onClose }) {
+  const [clientId, setClientId] = useState(initial?.client_id || '')
+  const [secret, setSecret] = useState('')
+  const [env, setEnv] = useState(initial?.env || 'sandbox')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const hasSecret = !!initial?.has_secret
+
+  async function submit() {
+    setSaving(true)
+    setError('')
+    try {
+      // A blank secret field leaves the stored secret unchanged (write-only), so an edit that only
+      // changes client_id/env never forces re-entering the secret.
+      const payload = { client_id: clientId, env }
+      if (secret) payload.secret = secret
+      await onSave(payload)
+    } catch (e) {
+      setError(e.message || 'Could not save credentials')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <AppDialog
+      title={`Configure ${providerLabel(provider)}`}
+      description="These app credentials identify this app to the provider. The secret is stored in the encrypted vault; only the secret needs the vault unlocked to save."
+      onClose={onClose}
+      width="min(520px, 100%)"
+      actions={
+        <DialogActions>
+          <Button variant="ghost" small onClick={onClose}>Cancel</Button>
+          <Button small onClick={submit} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
+        </DialogActions>
+      }
+    >
+      <div style={{ display: 'grid', gap: 12 }}>
+        <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+          <span style={{ color: 'var(--muted)' }}>Client ID</span>
+          <Input value={clientId} onChange={e => setClientId(e.target.value)} placeholder="Provider client ID" />
+        </div>
+        <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+          <span style={{ color: 'var(--muted)' }}>Secret</span>
+          <Input type="password" value={secret} onChange={e => setSecret(e.target.value)}
+            placeholder={hasSecret ? '•••••••• (leave blank to keep)' : 'Provider secret'} />
+        </div>
+        <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+          <span style={{ color: 'var(--muted)' }}>Environment</span>
+          <Select value={env} onChange={e => setEnv(e.target.value)} options={[
+            { value: 'sandbox', label: 'Sandbox' },
+            { value: 'development', label: 'Development' },
+            { value: 'production', label: 'Production' },
+          ]} />
+        </div>
+        <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
+          Switching to Production requires a strong vault passphrase first, so live bank tokens are never protected by a weak secret.
+        </p>
+        {error ? <div style={{ fontSize: 13, color: '#dc2626' }}>{error}</div> : null}
+      </div>
+    </AppDialog>
+  )
+}
+
+// Advisory only — a rough entropy estimate to nudge toward a stronger passphrase; it never blocks
+// (the hard Production floor lives in the backend). Bits ≈ length × log2(effective alphabet), heavily
+// penalized when very few distinct characters are used (a repeated char clears length but not entropy).
+const STRENGTH_LABELS = ['Very weak', 'Weak', 'Fair', 'Good', 'Strong']
+const STRENGTH_COLORS = ['#dc2626', '#dc2626', '#eab308', '#16a34a', '#16a34a']
+
+function estimatePassphraseStrength(p) {
+  if (!p) return { score: 0, label: '', bits: 0 }
+  const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/]
+  const sizes = [26, 26, 10, 32]
+  const alphabet = classes.reduce((sum, re, i) => sum + (re.test(p) ? sizes[i] : 0), 0) || 1
+  let bits = p.length * Math.log2(alphabet)
+  const distinct = new Set(p).size
+  if (distinct <= 4) bits = Math.min(bits, 24)  // near-repetition has almost no real entropy
+  let score = 0
+  if (bits >= 45) score = 1
+  if (bits >= 65) score = 2
+  if (bits >= 85) score = 3
+  if (bits >= 110) score = 4
+  return { score, label: STRENGTH_LABELS[score], bits }
+}
+
+function PassphraseStrengthMeter({ passphrase }) {
+  if (!passphrase) return null
+  const { score, label } = estimatePassphraseStrength(passphrase)
+  const color = STRENGTH_COLORS[score]
+  return (
+    <div style={{ display: 'grid', gap: 5 }}>
+      <div style={{ display: 'flex', gap: 4 }}>
+        {[0, 1, 2, 3].map(i => (
+          <div key={i} style={{ height: 4, flex: 1, borderRadius: 2, background: i < score ? color : 'var(--border)' }} />
+        ))}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--muted)' }}>
+        <span style={{ color }}>{label}</span>
+        {score < 2 ? <span>Consider a longer, more varied passphrase.</span> : null}
+      </div>
+    </div>
+  )
+}
+
+function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
+  // mode: 'set' (mint/replace the workspace vault) | 'unlock' (open it for this session)
+  const [passphrase, setPassphrase] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const setting = mode === 'set'
+
+  async function submit() {
+    if (setting && passphrase !== confirm) { setError('The passphrases do not match.'); return }
+    if (!passphrase) { setError('Enter a passphrase.'); return }
+    setBusy(true)
+    setError('')
+    try {
+      await onSubmit(passphrase)
+    } catch (e) {
+      setError(e.message || 'Could not update the vault')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <AppDialog
+      title={setting ? 'Set a vault passphrase' : 'Unlock the vault'}
+      description={setting
+        ? 'The vault encrypts your data-source credentials at rest. You will enter this passphrase once per session to connect or sync.'
+        : 'Enter your vault passphrase to connect and sync data sources this session.'}
+      onClose={onClose}
+      width="min(460px, 100%)"
+      actions={
+        <DialogActions>
+          <Button variant="ghost" small onClick={onClose}>Cancel</Button>
+          <Button small onClick={submit} disabled={busy}>{busy ? 'Working…' : (setting ? 'Set passphrase' : 'Unlock')}</Button>
+        </DialogActions>
+      }
+    >
+      <div style={{ display: 'grid', gap: 12 }}>
+        <Input type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)}
+          placeholder="Vault passphrase" autoFocus />
+        {setting ? <PassphraseStrengthMeter passphrase={passphrase} /> : null}
+        {setting ? (
+          <Input type="password" value={confirm} onChange={e => setConfirm(e.target.value)}
+            placeholder="Confirm passphrase" />
+        ) : null}
+        {setting ? (
+          <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
+            There is no recovery if this is lost — you would simply re-link your data sources. Store it in a password manager; for Production it must be at least 20 characters.
+          </p>
+        ) : null}
+        {error ? <div style={{ fontSize: 13, color: '#dc2626' }}>{error}</div> : null}
+      </div>
+    </AppDialog>
+  )
+}
+
+function VaultStrip({ vault, onSet, onUnlock, onLock }) {
+  const box = (bg, border) => ({
+    display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+    background: bg, border: `1px solid ${border}`, borderRadius: 8, padding: '10px 14px', marginBottom: 12,
+    fontSize: 13,
+  })
+  if (!vault.configured) {
+    return (
+      <div style={box('var(--surface2)', 'var(--border)')}>
+        <span style={{ color: 'var(--muted)' }}>Data-source credentials are kept in an encrypted vault. Set a passphrase to begin.</span>
+        <Button small onClick={onSet} style={{ marginLeft: 'auto' }}>Set vault passphrase</Button>
+      </div>
+    )
+  }
+  if (!vault.hasPassphrase) {
+    return (
+      <div style={box('var(--surface2)', 'var(--border)')}>
+        <span style={{ color: 'var(--muted)' }}>The vault was set up by another user; per-user enrollment isn’t available yet.</span>
+      </div>
+    )
+  }
+  if (!vault.unlocked) {
+    return (
+      <div style={box('rgba(234, 179, 8, 0.12)', 'rgba(234, 179, 8, 0.4)')}>
+        <span>The vault is locked. Unlock it to connect or sync.</span>
+        <Button small onClick={onUnlock} style={{ marginLeft: 'auto' }}>Unlock vault</Button>
+      </div>
+    )
+  }
+  return (
+    <div style={box('var(--surface2)', 'var(--border)')}>
+      <span style={{ color: 'var(--muted)' }}>Vault unlocked for this session.</span>
+      <Button variant="ghost" small onClick={onLock} style={{ marginLeft: 'auto' }}>Lock</Button>
+    </div>
+  )
+}
+
+function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCurrentUser, authEnabled, width, disabled }) {
+  const [providers, setProviders] = useState(null)
+  const [transport, setTransport] = useState(null)
+  const [vault, setVault] = useState({ configured: false, hasPassphrase: false, unlocked: false })
+  const [loading, setLoading] = useState(true)
+  const [syncState, setSyncState] = useState({})       // provider -> { syncing, result }
+  const [configTarget, setConfigTarget] = useState(null)
+  const [vaultDialog, setVaultDialog] = useState(null) // 'set' | 'unlock'
+  const [notice, setNotice] = useState(null)
+  const [disconnectTarget, setDisconnectTarget] = useState(null) // { provider, external_id, institution }
+  const [disconnecting, setDisconnecting] = useState(false)
+
+  const isAdmin = !authEnabled || currentUser?.role === 'admin'
+  // On a networked (non-loopback) bind, the app secret / bank tokens cross the wire, so connecting needs
+  // real HTTPS — decoupled from the forward-looking "intend to connect" declaration (see transport docs).
+  const httpsBlocked = !!(transport && !transport.is_loopback && !transport.is_https)
+
+  const refresh = useCallback(async () => {
+    const [status, provResp] = await Promise.all([
+      api.getAuthStatus().catch(() => ({})),
+      api.getProviders().catch(() => ({ providers: [] })),
+    ])
+    setTransport(status.transport || null)
+    const u = status.user || currentUser || {}
+    setVault({
+      configured: !!u.vault_configured,
+      hasPassphrase: !!u.vault_has_passphrase,
+      unlocked: !!u.vault_unlocked,
+    })
+    setProviders(provResp.providers || [])
+    setLoading(false)
+  }, [currentUser])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  // Accounts join a connection by external_id == plaid_item_id (until account.connection_id lands in
+  // phase 6b-3). The authoritative connection list comes from the backend (p.connections); accounts are
+  // matched into their group here.
+  const accountsForExternalId = useCallback((externalId) => {
+    return (accounts || []).filter(a => a.plaid_item_id === externalId && !CONNECTION_SENTINELS.has(externalId))
+  }, [accounts])
+
+  async function saveConfig(provider, payload) {
+    const result = await api.saveProviderConfig(provider, payload)
+    await refresh()
+    if (result?.transport_warning) {
+      setNotice({ title: 'Saved — check your connection security', description: result.transport_warning })
+    }
+    setConfigTarget(null)
+  }
+
+  async function submitVault(passphrase) {
+    const resp = vaultDialog === 'set'
+      ? await api.setVaultPassphrase(passphrase)
+      : await api.unlockVault(passphrase)
+    if (resp?.user) setCurrentUser?.(resp.user)
+    setVaultDialog(null)
+    await refresh()
+  }
+
+  async function lockVault() {
+    await api.lockVault().catch(() => {})
+    const status = await api.getAuthStatus().catch(() => ({}))
+    if (status?.user) setCurrentUser?.(status.user)
+    await refresh()
+  }
+
+  function connect(provider) {
+    if (!vault.configured) { setVaultDialog('set'); return }
+    if (!vault.unlocked) { setVaultDialog('unlock'); return }
+    if (httpsBlocked) {
+      setNotice({
+        title: 'HTTPS required to connect',
+        description: 'This server is reachable over the network without HTTPS. Configure HTTPS (a reverse proxy) before connecting a data source, so bank credentials never cross the network in cleartext.',
+      })
+      return
+    }
+    if (provider !== 'plaid') {
+      setNotice({ title: 'Not yet available', description: `${providerLabel(provider)} connections are coming soon.` })
+      return
+    }
+    startPlaidLink()
+  }
+
+  async function startPlaidLink() {
+    try {
+      const { link_token } = await api.getLinkToken()
+      // Load Plaid Link on demand so normal visits don't pull in the third-party script.
+      const script = document.createElement('script')
+      script.src = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js'
+      document.head.appendChild(script)
+      script.onload = () => {
+        const handler = window.Plaid.create({
+          token: link_token,
+          onSuccess: async (public_token, metadata) => {
+            try {
+              await api.exchangeToken(public_token, metadata.institution?.name)
+              await onAccountsChanged?.()
+              await refresh()
+            } catch (e) {
+              setNotice({ title: 'Could not finish connecting', description: e.message })
+            }
+          },
+          onExit: (err) => { if (err) console.error('Plaid Link error', err) },
+        })
+        handler.open()
+      }
+    } catch (e) {
+      setNotice({ title: 'Could not start the connection', description: e.message })
+    }
+  }
+
+  async function sync(provider) {
+    if (syncState[provider]?.syncing) return
+    if (!vault.unlocked) { setVaultDialog('unlock'); return }
+    setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
+    try {
+      const result = await api.runSync(30)
+      setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result } }))
+      await onAccountsChanged?.()
+    } catch (e) {
+      setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
+      setNotice({ title: 'Sync failed', description: e.message })
+    }
+  }
+
+  async function confirmDisconnect() {
+    if (!disconnectTarget) return
+    setDisconnecting(true)
+    try {
+      await api.disconnectProvider(disconnectTarget.provider, disconnectTarget.external_id)
+      setDisconnectTarget(null)
+      await onAccountsChanged?.()
+      await refresh()
+    } catch (e) {
+      setDisconnectTarget(null)
+      setNotice({ title: 'Could not disconnect', description: e.message })
+    } finally {
+      setDisconnecting(false)
+    }
+  }
+
+  if (loading) return <Card style={{ width: typeof width === 'number' ? `${width}px` : (width || 'fit-content'), maxWidth: '100%', padding: 0 }}><Spinner /></Card>
+
+  const list = providers || []
+  const configured = list.filter(p => p.configured)
+  const unconfigured = list.filter(p => !p.configured)
+
+  return (
+    <div style={{ display: 'grid', gap: 12, width: typeof width === 'number' ? `${width}px` : (width || '100%'), maxWidth: '100%', opacity: disabled ? 0.55 : 1, pointerEvents: disabled ? 'none' : 'auto' }}>
+      <VaultStrip
+        vault={vault}
+        onSet={() => setVaultDialog('set')}
+        onUnlock={() => setVaultDialog('unlock')}
+        onLock={lockVault}
+      />
+
+      {configured.length === 0 && unconfigured.length === 0 ? (
+        <Card style={{ padding: 16 }}>
+          <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>No data-source providers are available.</p>
+        </Card>
+      ) : null}
+
+      {configured.map(p => {
+        const connections = p.connections || []
+        const ss = syncState[p.provider] || {}
+        const connectDisabled = disabled || (vault.configured && !vault.unlocked) || httpsBlocked
+        const connectTitle = !vault.configured ? 'Set a vault passphrase first'
+          : !vault.unlocked ? 'Unlock the vault first'
+          : httpsBlocked ? 'Configure HTTPS before connecting on a networked server'
+          : ''
+        return (
+          <SectionCard
+            key={p.provider}
+            title={providerLabel(p.provider)}
+            summary={connections.length ? `${connections.length} connection${connections.length === 1 ? '' : 's'}` : 'Not connected'}
+            collapsible={false}
+            width={width}
+            headerCenter={<EnvBadge env={p.env} />}
+          >
+            <div style={{ padding: '12px 16px 14px', display: 'grid', gap: 12 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                {isAdmin ? <Button variant="ghost" small onClick={() => setConfigTarget(p)}>Configure</Button> : null}
+                <Button small onClick={() => connect(p.provider)} disabled={connectDisabled} title={connectTitle}>+ Connect bank</Button>
+                <Button variant="ghost" small onClick={() => sync(p.provider)}
+                  disabled={ss.syncing || !connections.length}
+                  title={connections.length ? '' : 'Connect a bank before syncing'}>
+                  {ss.syncing ? 'Syncing…' : '↻ Sync now (30 days)'}
+                </Button>
+                {p.source === 'env' ? (
+                  <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 'auto' }}>credentials from <code>.env</code></span>
+                ) : null}
+              </div>
+
+              {ss.result ? (
+                <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: 'var(--muted)' }}>
+                  Sync complete — {ss.result.added} added, {ss.result.updated} updated, {ss.result.skipped} skipped
+                </div>
+              ) : null}
+
+              {connections.length ? (
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {connections.map(c => {
+                    const accts = accountsForExternalId(c.external_id)
+                    return (
+                      <div key={c.external_id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', display: 'grid', gap: 6 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <span style={{ fontWeight: 600, fontSize: 13 }}>{c.institution || 'Linked bank'}</span>
+                          <Button variant="ghost" small style={{ marginLeft: 'auto' }}
+                            onClick={() => setDisconnectTarget({ provider: p.provider, external_id: c.external_id, institution: c.institution })}>
+                            Disconnect
+                          </Button>
+                        </div>
+                        {accts.length ? accts.map(a => (
+                          <div key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: 'var(--muted)' }}>
+                            <span style={{ color: 'var(--text)' }}>{a.display_name || a.name}</span>
+                            {a.mask ? <span>····{a.mask}</span> : null}
+                          </div>
+                        )) : <span style={{ fontSize: 12, color: 'var(--muted)' }}>No accounts imported yet — Sync to pull them in.</span>}
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0, lineHeight: 1.6 }}>
+                  {p.env === 'sandbox'
+                    ? 'Running in Sandbox — use the provider’s test credentials when the connect dialog opens. Switch to Production on Configure once you’re ready for real accounts.'
+                    : 'Connect a bank to keep balances and transactions in sync.'}
+                </p>
+              )}
+            </div>
+          </SectionCard>
+        )
+      })}
+
+      {unconfigured.length && isAdmin ? (
+        <Card style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, color: 'var(--muted)' }}>Add a data source:</span>
+          {unconfigured.map(p => (
+            <Button key={p.provider} variant="ghost" small onClick={() => setConfigTarget(p)}>+ {providerLabel(p.provider)}</Button>
+          ))}
+        </Card>
+      ) : null}
+
+      {configTarget ? (
+        <ProviderConfigDialog
+          provider={configTarget.provider}
+          initial={configTarget}
+          onSave={(payload) => saveConfig(configTarget.provider, payload)}
+          onClose={() => setConfigTarget(null)}
+        />
+      ) : null}
+
+      {vaultDialog ? (
+        <VaultPassphraseDialog mode={vaultDialog} onSubmit={submitVault} onClose={() => setVaultDialog(null)} />
+      ) : null}
+
+      {disconnectTarget ? (
+        <AppConfirmDialog
+          title={`Disconnect ${disconnectTarget.institution || 'this bank'}?`}
+          description="This revokes the connection at the provider, so it can no longer pull transactions (and any leaked copy of the token also stops working). Existing accounts and their transactions are kept. Reconnecting later means linking the bank again."
+          confirmLabel={disconnecting ? 'Disconnecting…' : 'Disconnect'}
+          confirmDisabled={disconnecting}
+          cancelDisabled={disconnecting}
+          onConfirm={confirmDisconnect}
+          onCancel={() => setDisconnectTarget(null)}
+        />
+      ) : null}
+
+      {notice ? (
+        <AppNoticeDialog title={notice.title} description={notice.description} onClose={() => setNotice(null)} />
+      ) : null}
+    </div>
+  )
 }
 
 function PillSelect({ value, options, onChange, placeholder = '—', minOpenWidth = 132, createLabel = null, onCreate = null, onContextMenu = null, disabled = false }) {
@@ -1748,8 +2253,6 @@ export default function Accounts() {
   const [tagPickerAccountId, setTagPickerAccountId] = useState(null)
   const [categories, setCategories] = useState([])
   const [loading, setLoading] = useState(true)
-  const [syncing, setSyncing] = useState(false)
-  const [syncResult, setSyncResult] = useState(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState(null)
   const [pendingTrashAccount, setPendingTrashAccount] = useState(null)
   const [noticeDialog, setNoticeDialog] = useState(null)
@@ -1760,7 +2263,7 @@ export default function Accounts() {
   const [contextOpen, setContextOpen] = useState(false)
   const [listContextMenu, setListContextMenu] = useState(null) // { x, y }
   const [detailAccounts, setDetailAccounts] = useState([])
-  const { dbInstanceId, preferenceSubjectId: userId } = useAppSession()
+  const { dbInstanceId, preferenceSubjectId: userId, currentUser, setCurrentUser, authEnabled } = useAppSession()
   const { preferences, setPreference } = useUserPreferences()
   const [sectionExpandedState, setSectionExpandedState] = useState({})
   const [sectionStateLoaded, setSectionStateLoaded] = useState(false)
@@ -2114,33 +2617,6 @@ export default function Accounts() {
     return () => observer.disconnect()
   }, [accounts.length, accountsPanelWidth, loading, sectionExpandedState, showCreateAccount])
 
-  const connectBank = async () => {
-    try {
-      const { link_token } = await api.getLinkToken()
-      // Load Plaid only on demand so normal account-page visits do not pull in a
-      // third-party banking script unless the user actually starts a connection flow.
-      const script = document.createElement('script')
-      script.src = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js'
-      document.head.appendChild(script)
-      script.onload = () => {
-        const handler = window.Plaid.create({
-          token: link_token,
-          onSuccess: async (public_token, metadata) => {
-            await api.exchangeToken(public_token, metadata.institution?.name)
-            loadData()
-          },
-          onExit: (err) => { if (err) console.error('Plaid Link error', err) },
-        })
-        handler.open()
-      }
-    } catch (e) {
-      setNoticeDialog({
-        title: 'Could not start Plaid Link',
-        description: e.message,
-      })
-    }
-  }
-
   function openCreateAccount() {
     setContextOpen(false)
     setShowCreateAccount(true)
@@ -2154,24 +2630,6 @@ export default function Accounts() {
       await reloadAccounts()
     } finally {
       setCreatingAccount(false)
-    }
-  }
-
-  const sync = async () => {
-    if (!hasPlaidConnected || syncing) return
-    setSyncing(true)
-    setSyncResult(null)
-    try {
-      const result = await api.runSync(30)
-      setSyncResult(result)
-      loadData()
-    } catch (e) {
-      setNoticeDialog({
-        title: 'Sync failed',
-        description: e.message,
-      })
-    } finally {
-      setSyncing(false)
     }
   }
 
@@ -2535,12 +2993,10 @@ export default function Accounts() {
 
   const ownerCount = owners.length
   const unownedCount = rootAccounts.filter(a => !a.owner_id).length
-  const hasPlaidConnected = rootAccounts.some(a => a.plaid_item_id && a.plaid_item_id !== 'csv_import' && a.plaid_item_id !== 'manual')
   const mergedChildCount = activeAccounts.length - rootAccounts.length
   const accountListSummary = rootAccounts.length
     ? `${formatCountSummary(rootAccounts.length, 'account')}${mergedChildCount ? `, ${formatCountSummary(mergedChildCount, 'merged account')}` : ''}`
     : 'No accounts'
-  const dataSourcesSummary = hasPlaidConnected ? formatCountSummary(1, 'data provider') : 'No data providers'
   const ownerWarning = ownerCount > 0 && unownedCount > 0 ? `${unownedCount} account${unownedCount > 1 ? 's' : ''} need${unownedCount === 1 ? 's' : ''} an owner assigned` : ''
   const renameOwnerName = ownerRenameDialog?.name || ''
 
@@ -3093,47 +3549,15 @@ export default function Accounts() {
           )}
 
           {tab === 'connections' && (
-          <SectionCard
-            title="Data Source Connections"
-            summary={dataSourcesSummary}
-            collapsible={false}
-            disabled={showCreateAccount}
+          <DataSourceConnections
+            accounts={rootAccounts}
+            onAccountsChanged={loadData}
+            currentUser={currentUser}
+            setCurrentUser={setCurrentUser}
+            authEnabled={authEnabled}
             width={sectionPanelWidth}
-          >
-            <div style={{ padding: '12px 16px 14px' }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
-                <Button small onClick={connectBank}>+ Connect bank</Button>
-                <Button
-                  variant="ghost"
-                  small
-                  onClick={sync}
-                  disabled={syncing || !hasPlaidConnected}
-                  title={hasPlaidConnected ? '' : 'Connect a data provider before refreshing'}
-                >
-                  {syncing ? 'Syncing…' : '↻ Sync now (30 days)'}
-                </Button>
-              </div>
-              {syncResult && (
-                <div style={{
-                  background: 'var(--surface2)', border: '1px solid var(--border)',
-                  borderRadius: 8, padding: '10px 16px', marginBottom: 12,
-                  fontSize: 13, color: 'var(--muted)',
-                }}>
-                  Sync complete — {syncResult.added} added, {syncResult.updated} updated, {syncResult.skipped} skipped
-                </div>
-              )}
-              {hasPlaidConnected ? (
-                <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-                  This data provider is currently running in sandbox mode. Use the provider’s test credentials when the connect dialog opens.
-                  Switch the provider to development mode in your <code>.env</code> when you’re ready to connect real accounts.
-                </p>
-              ) : (
-                <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-                  Connect an account data provider to keep account balances and transactions in sync.
-                </p>
-              )}
-            </div>
-          </SectionCard>
+            disabled={showCreateAccount}
+          />
           )}
 
           {detailAccounts.map((account, index) => (

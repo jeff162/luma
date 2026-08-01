@@ -145,9 +145,8 @@ class RuntimeConfigRequest(BaseModel):
 
 
 class EnvironmentSettingsRequest(BaseModel):
-    plaid_client_id: str | None = None
-    plaid_secret: str | None = None
-    plaid_env: str | None = None
+    # Provider (Plaid) credentials moved to the vaulted per-provider config (see routers/providers.py,
+    # security phase 6b); this endpoint now carries only the remaining `.env`-backed toggles.
     luma_use_log_files: bool | None = None
 
 
@@ -472,35 +471,14 @@ def get_environment_settings(request: Request):
 @router.post("/environment")
 def save_environment_settings(body: EnvironmentSettingsRequest, request: Request):
     _require_admin_or_local(request)
-    # Production holds real, live bank tokens, so the vault must exist and every slot must meet the
-    # vault's Production passphrase minimum first — the DEK can never sit behind a weak wrap. Sandbox
-    # stays lax (a throwaway passphrase is fine). This is the enforced half of "definitely not weak in
-    # Production"; sandbox tokens are harmless.
-    if (body.plaid_env or "").strip() == "production" and not crypto_service.ready_for_production():
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Set a strong vault passphrase before switching to Production. Every vault passphrase "
-                f"must be at least {crypto_service.VAULT_PRODUCTION_MIN_LEN} characters so live bank "
-                "tokens are never protected by a weak secret."
-            ),
-        )
+    # Provider credentials + the Production vault gate moved to the per-provider Configure card
+    # (POST /api/providers/{provider}/config); this endpoint now carries only the `.env`-backed toggles.
     try:
         result = write_environment_settings(
-            plaid_client_id=body.plaid_client_id,
-            plaid_secret=body.plaid_secret,
-            plaid_env=body.plaid_env,
             luma_use_log_files=body.luma_use_log_files,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    # Configuring a provider puts a live bank secret in play; warn if this instance is reachable over a
-    # cleartext network link (recommend-don't-force — the connect gate itself enforces HTTPS later).
-    warning = transport.cleartext_warning(
-        request, perimeter_on=auth_required(), provider_intended=True
-    )
-    if warning:
-        result["transport_warning"] = warning
     return result
 
 

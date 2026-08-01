@@ -93,20 +93,21 @@ class ProviderAdapterTests(unittest.TestCase):
 
     def test_adapter_normalizes_to_provider_neutral_keys(self):
         adapter = get_adapter("plaid")
+        cfg = {"client_id": "cid", "secret": "sek", "env": "sandbox"}  # app_config threaded through in 6b
         with mock.patch("backend.services.plaid_service.exchange_public_token",
                         return_value={"access_token": "tok-1", "item_id": "item-1"}):
-            self.assertEqual(adapter.exchange("public-1"), {"external_id": "item-1", "credential": "tok-1"})
+            self.assertEqual(adapter.exchange(cfg, "public-1"), {"external_id": "item-1", "credential": "tok-1"})
         with mock.patch("backend.services.plaid_service.fetch_accounts", return_value=[
             {"plaid_account_id": "acct-1", "name": "Checking", "type": "depository", "subtype": "checking", "mask": "0000"}
         ]):
-            self.assertEqual(adapter.fetch_accounts("tok-1"), [
+            self.assertEqual(adapter.fetch_accounts(cfg, "tok-1"), [
                 {"external_account_id": "acct-1", "name": "Checking", "type": "depository", "subtype": "checking", "mask": "0000"}
             ])
         with mock.patch("backend.services.plaid_service.fetch_transactions", return_value=[
             {"plaid_transaction_id": "t-1", "plaid_account_id": "acct-1", "amount": 12.5,
              "merchant_name": "Store", "raw_name": "STORE #1", "date": "2026-01-01", "is_pending": False}
         ]):
-            self.assertEqual(adapter.fetch_transactions("tok-1"), [
+            self.assertEqual(adapter.fetch_transactions(cfg, "tok-1"), [
                 {"external_transaction_id": "t-1", "external_account_id": "acct-1", "amount": 12.5,
                  "merchant_name": "Store", "raw_name": "STORE #1", "date": "2026-01-01", "is_pending": False}
             ])
@@ -120,6 +121,9 @@ class CredentialBackupTests(unittest.TestCase):
         cs.lock_all()
 
     def _connect_one(self, client):
+        # Exchange now resolves the provider's app credential (phase 6b), so Plaid must be configured
+        # first (the vault is unlocked by set-passphrase, so the secret can be vaulted).
+        client.post("/api/providers/plaid/config", json={"client_id": "cid-1", "secret": "app-secret-1"})
         with mock.patch("backend.services.plaid_service.exchange_public_token",
                         return_value={"access_token": "access-sandbox-xyz", "item_id": "item-1"}), \
              mock.patch("backend.services.plaid_service.fetch_accounts", return_value=[
@@ -129,13 +133,30 @@ class CredentialBackupTests(unittest.TestCase):
             r = client.post("/api/plaid/exchange", json={"public_token": "public-1", "institution_name": "Test Bank"})
         self.assertEqual(r.status_code, 200, r.text)
 
+    def test_disconnect_revokes_at_provider_and_removes_the_connection(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            self._connect_one(client)
+            plaid = next(p for p in client.get("/api/providers").json()["providers"] if p["provider"] == "plaid")
+            self.assertEqual(len(plaid["connections"]), 1)
+
+            with mock.patch("backend.services.plaid_service.remove_item") as remove_item:
+                r = client.post("/api/providers/plaid/disconnect", json={"external_id": "item-1"})
+            self.assertEqual(r.status_code, 200, r.text)
+            remove_item.assert_called_once()  # revoked provider-side, not just deleted locally
+
+            plaid = next(p for p in client.get("/api/providers").json()["providers"] if p["provider"] == "plaid")
+            self.assertEqual(len(plaid["connections"]), 0)
+
     def test_exchange_writes_a_connection_and_status_counts_it(self):
         with api_client() as (client, _):
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
             self._connect_one(client)
             status = client.get("/api/import-export/backup/credentials/status").json()
             self.assertTrue(status["has_credentials"])
-            self.assertEqual(status["credential_count"], 1)
+            # 1 connection + 1 provider_config (the app credential _connect_one saves): both are vaulted
+            # secrets the credentials backup carries.
+            self.assertEqual(status["credential_count"], 2)
 
     def test_credentials_export_restore_roundtrip(self):
         with api_client() as (client, _):
@@ -151,7 +172,7 @@ class CredentialBackupTests(unittest.TestCase):
 
             restored = client.post("/api/import-export/restore/credentials", json={"data": payload})
             self.assertEqual(restored.status_code, 200, restored.text)
-            self.assertEqual(restored.json()["restored"], 1)
+            self.assertEqual(restored.json()["restored"], 2)  # 1 connection + 1 provider_config
             # Re-export proves the restored credential re-encrypted and still decrypts to the same secret.
             again = _load_json_or_zip_payload(client.get("/api/import-export/backup/credentials").content, "luma_credentials.zip", "luma_credentials")
             self.assertEqual(again["connections"][0]["credential"], "access-sandbox-xyz")

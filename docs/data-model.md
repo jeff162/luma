@@ -74,7 +74,7 @@ Important behavior:
 
 - each account belongs to an owner or is temporarily unassigned
 
-- **Data-source linkage.** An account created by a provider connection carries `plaid_account_id` (the provider's external account id, matched by sync) and `plaid_item_id` (the provider's connection handle). The credential lives on a **`connection`** row, joined implicitly by `plaid_item_id == connection.external_id` — see `architecture.md` → "Provider connections" for the provider-agnostic seam that supersedes `plaid_item`. CSV/manual accounts use sentinel `plaid_item_id` values (`csv_import`, `manual`) and have no connection. Renaming these two column *names* to be provider-neutral, and adding explicit `provider`/`connection_id` account columns, are deferred to security phase 6b
+- **Data-source linkage.** An account created by a provider connection carries `plaid_account_id` (the provider's external account id, matched by sync) and `plaid_item_id` (the provider's connection handle). The per-bank credential lives on a **`connection`** row, joined implicitly by `plaid_item_id == connection.external_id`; the aggregator's **app-level** credential (Plaid `client_id`/`secret`/`env`, one per provider — its `secret` vault-encrypted) lives in **`provider_config`**. See `architecture.md` → "Provider connections" for the provider-agnostic seam (which supersedes `plaid_item`) and the app-credential resolver + `.env` bootstrap fallback. CSV/manual accounts use sentinel `plaid_item_id` values (`csv_import`, `manual`) and have no connection. Renaming these two column *names* to be provider-neutral, and adding explicit `provider`/`connection_id` account columns, are deferred to security phase 6b-3
 
 - transactions reference `account\_id`
 

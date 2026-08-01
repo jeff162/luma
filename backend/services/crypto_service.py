@@ -47,9 +47,14 @@ DEK_BYTES = 32  # AES-256
 # also drops it (re-unlock required). Sliding — each use pushes the deadline out.
 UNLOCK_TTL_SECONDS = 8 * 60 * 60
 
-# Minimum passphrase length for a slot to be usable in Production (real, live bank tokens). Sandbox
-# accepts any passphrase. This is the *vault* minimum, separate from the app-login password policy.
-VAULT_PRODUCTION_MIN_LEN = 12
+# Production vault-passphrase floor (real, live bank tokens). Sandbox accepts any passphrase; this is the
+# *vault* minimum, separate from the app-login password policy. Length is the main lever — the passphrase
+# is meant to live in a password manager (a passkey/biometric is the everyday unlock, phase 4), so a long
+# floor costs no typing. A small distinct-character requirement rejects degenerate inputs (a single char
+# repeated, trivial alternations) that pass a length check but have almost no entropy. Both are enforced
+# only at the Production gate; the frontend also shows an advisory strength meter that blocks nothing.
+VAULT_PRODUCTION_MIN_LEN = 20
+VAULT_PRODUCTION_MIN_DISTINCT = 6
 
 
 class VaultLocked(Exception):
@@ -159,7 +164,8 @@ def ready_for_production() -> bool:
 
 
 def passphrase_meets_production_min(passphrase: str) -> bool:
-    return len(passphrase or "") >= VAULT_PRODUCTION_MIN_LEN
+    p = passphrase or ""
+    return len(p) >= VAULT_PRODUCTION_MIN_LEN and len(set(p)) >= VAULT_PRODUCTION_MIN_DISTINCT
 
 
 def require_dek(user_id: str) -> bytes:
@@ -281,3 +287,27 @@ def decrypt_connection_credential(user: dict, provider: str, external_id: str, c
     # A legacy plaintext row (never encrypted) reads straight through — no DEK needed. New writes never
     # take this path.
     return credential or ""
+
+
+# --- App-level provider credential storage (the aggregator's own app secret) ----------------------
+#
+# Distinct from a per-connection credential: this is the *app*-level secret that identifies the Luma
+# app to the provider (Plaid's `secret`), one per provider, not per linked bank. It moves out of `.env`
+# into the vaulted DB (phase 6b) so it isn't a plaintext secret on disk. Only the secret is vaulted —
+# the paired `client_id`/`env` are semi-public and stored plaintext by the caller.
+
+def _app_credential_aad(provider: str) -> bytes:
+    return _aad("app_credential", provider, "secret")
+
+
+def encrypt_app_credential(user: dict, provider: str, secret: str) -> tuple[str, str | None]:
+    dek = require_dek(user["id"])
+    payload = encrypt_secret(dek, secret, aad=_app_credential_aad(provider))
+    return "", payload
+
+
+def decrypt_app_credential(user: dict, provider: str, secret: str | None, secret_enc: str | None) -> str:
+    if secret_enc:
+        dek = require_dek(user["id"])
+        return decrypt_secret(dek, secret_enc, aad=_app_credential_aad(provider))
+    return secret or ""
