@@ -4555,7 +4555,8 @@ def list_batches():
         # archive — see docs/backlog/import-history-windowing.md — which will reintroduce paging here.
         batches = conn.execute("""
             SELECT b.id, b.profile_id, b.filename, b.file_content_hash, b.imported_at, b.row_count, b.skipped_count,
-                   b.deduped_count, b.status, b.use_imported_categories, b.config_snapshot, b.source_kind, p.name AS profile_name,
+                   b.deduped_count, b.status, b.use_imported_categories, b.config_snapshot, b.source_kind,
+                   b.connection_id, p.name AS profile_name,
                    EXISTS(
                        SELECT 1
                        FROM   txn t

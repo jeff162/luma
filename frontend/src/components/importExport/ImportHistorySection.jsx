@@ -165,6 +165,10 @@ export function ImportHistorySection({
                   }
                   const isManual = row.kind === 'manual'
                   const isUnknown = row.kind === 'unknown'
+                  // A data-source sync group: one row per connection, its monthly period cards as batches.
+                  // Rendered through this generic row (shared duplicate/review pills) with a fixed label and
+                  // none of the profile affordances (rename/description/assign/undo don't apply to a sync).
+                  const isConnection = row.kind === 'connection'
                   const isMarketplace = false
                   const isUnsaved = isManual || isUnknown
                   const rowExpanded = !!expandedSourceRows[row.key]
@@ -198,7 +202,7 @@ export function ImportHistorySection({
                           ) : <span style={{ width: 20, height: 20 }} />}
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontStyle: isUnsaved ? 'italic' : 'normal', color: isUnsaved ? 'var(--muted)' : 'var(--text)' }}>
-                              {isManual ? 'temporary draft' : isUnknown ? 'unknown data source' : isMarketplace ? row.label : editingSourceNameKey === getSourceNameEditKey('list', row.profile.id) ? (
+                              {isManual ? 'temporary draft' : isUnknown ? 'unknown data source' : isConnection ? row.label : isMarketplace ? row.label : editingSourceNameKey === getSourceNameEditKey('list', row.profile.id) ? (
                                 <TransientTextInput
                                   value={sourceNameDraft}
                                   onChange={setSourceNameDraft}
@@ -251,7 +255,7 @@ export function ImportHistorySection({
                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 3, fontSize: 11, color: 'var(--muted)' }}>
                               {isManual ? (
                                 row.manualDraftRecord?.filenamePattern ? <span>{row.manualDraftRecord.filenamePattern}</span> : null
-                              ) : isUnknown || isMarketplace ? null : editingSourceDescriptionId === row.profile.id ? (
+                              ) : isUnknown || isMarketplace || isConnection ? null : editingSourceDescriptionId === row.profile.id ? (
                                 <TransientTextInput
                                   value={sourceDescriptionDraft}
                                   onChange={setSourceDescriptionDraft}
@@ -520,7 +524,12 @@ export function ImportHistorySection({
                                               <option value="__new__">+ New data source from this file…</option>
                                             </select>
                                         ) : null}
-                                        <button onClick={() => handleUndoClick(b)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}>Undo</button>
+                                        {/* Undo removes an imported *file*. A sync period card isn't an
+                                            undoable file event (it accretes across daily fetches), so it
+                                            carries no Undo — synced rows are managed on the ledger instead. */}
+                                        {isConnection ? null : (
+                                          <button onClick={() => handleUndoClick(b)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--danger)', cursor: 'pointer', fontSize: 12, padding: '3px 8px' }}>Undo</button>
+                                        )}
                                       </div>
                                     </div>
                                     {!isMarketplace && b.use_imported_categories && batchImportedCategorySummary ? (

@@ -748,11 +748,42 @@ function ImportTab({ onAmazonDetected }) {
       })
     }
 
+    // Data-source sync cards (source_kind 'connection_sync', no CSV profile): one history row per
+    // connection, its per-(connection, month) period cards as the expandable batches — grouped like a
+    // marketplace vendor so synced rows get the same per-card duplicate/review affordances as an imported
+    // file. The card filename is "<institution> · <Month Year>"; the institution prefix labels the row.
+    const isConnectionSyncBatch = batch => batch.source_kind === 'connection_sync'
+    const connectionLabelFromFilename = filename => {
+      const [prefix] = String(filename || '').split(' · ')
+      return (prefix || '').trim() || 'Connection'
+    }
+    const connectionGroups = new Map()
+    for (const batch of batches) {
+      if (!isConnectionSyncBatch(batch)) continue
+      const key = batch.connection_id || 'connection:unknown'
+      if (!connectionGroups.has(key)) connectionGroups.set(key, [])
+      connectionGroups.get(key).push(batch)
+    }
+    for (const [connectionId, connBatches] of connectionGroups) {
+      const byImport = connBatches.sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
+      savedSourceRows.push({
+        key: `connection:${connectionId}`,
+        kind: 'connection',
+        connectionId,
+        label: connectionLabelFromFilename(byImport[0]?.filename),
+        profile: null,
+        hasImportedCategories: false,
+        batches: byImport,
+        latestBatch: byImport[0],
+        manualDraftRecord: null,
+      })
+    }
+
     const manualBatches = batches
-      .filter(batch => !batch.profile_id && !batch.unknown_source_fallback && !isMarketplaceBatch(batch))
+      .filter(batch => !batch.profile_id && !batch.unknown_source_fallback && !isMarketplaceBatch(batch) && !isConnectionSyncBatch(batch))
       .sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
     const fallbackUnknownBatches = batches
-      .filter(batch => !batch.profile_id && batch.unknown_source_fallback && !isMarketplaceBatch(batch))
+      .filter(batch => !batch.profile_id && batch.unknown_source_fallback && !isMarketplaceBatch(batch) && !isConnectionSyncBatch(batch))
       .sort((a, b) => String(b.imported_at || '').localeCompare(String(a.imported_at || '')))
     const latestManualBatch = manualBatches[0] || null
     const olderManualBatches = manualBatches.slice(1)

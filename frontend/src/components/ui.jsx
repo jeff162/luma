@@ -744,16 +744,23 @@ export function Select({ value, onChange, options, style, id, ...rest }) {
   )
 }
 
-export function Input({ value, onChange, placeholder, style, id, ...rest }) {
+export function Input({ value, onChange, placeholder, style, id, suppressAutofillId = false, ...rest }) {
   // `...rest` forwards a11y/form props (aria-label, name, type, …) the wrapper used to swallow —
   // a placeholder alone isn't an accessible name, so callers can give the field a real label.
   // A stable auto-`id` (caller-supplied wins) satisfies the browser's "field needs an id/name"
   // check for every Input without each call site having to invent one.
+  //
+  // `suppressAutofillId` renders the field with NO id/name at all — deliberately leaving it one of
+  // the "form field element has neither an id nor a name attribute" fields the console warns about.
+  // Sensitive fields (vault passphrase, provider secret) want this: `useId` values are reused across
+  // views, and the browser keys its form-field history on that id, so a text search box that rendered
+  // as the same `:rN:` leaks its saved suggestions onto the password field. No handle → no key → no
+  // suggestions. The console warning is the intended trade and must not be "fixed" by giving it an id.
   const autoId = useId()
   return (
     <input
       {...rest}
-      id={id || autoId}
+      id={suppressAutofillId ? undefined : (id || autoId)}
       value={value}
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
@@ -775,16 +782,19 @@ export function PasswordInput({
   disabled = false,
   autoComplete = 'new-password',
   id,
+  suppressAutofillId = false,
   wrapperStyle,
   ...rest
 }) {
+  // `suppressAutofillId`: render with no id/name so the browser has no handle to key form-field
+  // history on — see the Input component for the full rationale (reused `useId` leaks suggestions).
   const autoId = useId()
   const [revealed, setRevealed] = useState(false)
   return (
     <div style={{ position: 'relative', ...wrapperStyle }}>
       <input
         {...rest}
-        id={id || autoId}
+        id={suppressAutofillId ? undefined : (id || autoId)}
         type={revealed ? 'text' : 'password'}
         value={value}
         onChange={e => onChange(e.target.value)}

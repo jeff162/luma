@@ -116,7 +116,7 @@ def get_db(db_path: str | None = None):
 # v20 makes the account→connection link provider-neutral (external_account_id / connection_id / provider,
 # drop plaid_item_id) and drops the vestigial `plaid_item` table.
 
-CURRENT_VERSION = 20
+CURRENT_VERSION = 21
 
 MIGRATIONS = {}
 
@@ -643,6 +643,22 @@ def _account_connection_columns(conn):
     conn.execute("DROP TABLE IF EXISTS plaid_item")
 
 
+@migration(21)
+def _add_import_batch_connection_id(conn):
+    # A data-source sync now records its rows on a per-(connection, calendar-month) import_batch card
+    # (source_kind='connection_sync'), so synced rows carry an import_batch_id and gain a duplicate-review
+    # home like any imported file (see docs/backlog/sync-import-records-and-dedupe.md). connection_id links
+    # the period card back to the connection that produced it; it is the indexed key sync uses to resolve
+    # "the current period's card for this connection". NULL for ordinary CSV/marketplace batches. Fresh
+    # installs get the column + index from the import_batch baseline CREATE TABLE; existing databases here.
+    conn.execute(
+        "ALTER TABLE import_batch ADD COLUMN connection_id TEXT REFERENCES connection(id) ON DELETE SET NULL"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_import_batch_connection ON import_batch(connection_id)"
+    )
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -1117,8 +1133,12 @@ def init_db(db_path: str | None = None):
                 config_snapshot  TEXT,
                 -- Provenance class of the import, for history grouping. NULL = an ordinary CSV import;
                 -- 'marketplace:<vendor>' (e.g. 'marketplace:amazon') marks a dedicated marketplace
-                -- importer's batch so the history groups it under that vendor instead of "unknown source".
+                -- importer's batch so the history groups it under that vendor instead of "unknown source";
+                -- 'connection_sync' marks a data-source sync's per-(connection, month) period card.
                 source_kind      TEXT,
+                -- The connection whose sync produced this card (source_kind='connection_sync'); the indexed
+                -- key sync uses to resolve the current period's card. NULL for CSV/marketplace batches.
+                connection_id    TEXT REFERENCES connection(id) ON DELETE SET NULL,
                 -- Cached Amazon reconciliation "attention" count (a duplicate/split to resolve), with the
                 -- global recon epoch (db_meta 'recon_epoch') it was computed at. Recomputed lazily only when
                 -- the batch's epoch trails the current one; see amazon.reconciliation_attention_count and the
@@ -1296,6 +1316,12 @@ def init_db(db_path: str | None = None):
         # column is present on both fresh and migrated paths.
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_txn_recurring ON txn(recurring_series_id) WHERE recurring_series_id IS NOT NULL"
+        )
+        # Same deferral again: import_batch.connection_id only exists after migration v21 on a pre-v21
+        # database, so its index is created here (after run_migrations) rather than in the baseline schema
+        # script, where it would reference a not-yet-existing column on an in-place upgrade.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_import_batch_connection ON import_batch(connection_id)"
         )
         # A transaction can be pinned to at most one series (membership is exclusive). Excludes are not
         # constrained — a row can be excluded from more than one candidate series.

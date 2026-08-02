@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from backend import transport
 from backend.db.control_database import auth_required
 from backend.db.database import get_db
+from backend.routers.accounts import resolve_default_owner_id, upsert_connection_accounts
 from backend.routers.auth import _require_admin_or_local
 from backend.services import crypto_service
 from backend.services.providers import (
@@ -37,6 +38,10 @@ class ProviderConfigRequest(BaseModel):
 
 
 class DisconnectRequest(BaseModel):
+    external_id: str
+
+
+class RefreshAccountsRequest(BaseModel):
     external_id: str
 
 
@@ -138,3 +143,49 @@ def disconnect(provider: str, body: DisconnectRequest, request: Request):
     with get_db() as conn:
         conn.execute("DELETE FROM connection WHERE provider = ? AND external_id = ?", (provider, body.external_id))
     return {"ok": True}
+
+
+@router.post("/{provider}/refresh-accounts")
+def refresh_accounts(provider: str, body: RefreshAccountsRequest, request: Request):
+    # Rebuild the local account rows for an existing connection from its still-valid credential — no
+    # re-linking, no token churn. The recovery path when a backup restore rolls back the ledger (account
+    # rows included) but leaves the live connection intact (connections are credential data the restore
+    # never carries — see import_export/backup.py), leaving a connection whose accounts are gone and whose
+    # sync therefore skips every fetched transaction for lack of a matching account. Needs the vault
+    # unlocked to decrypt the credential; not admin-gated (symmetric with connect/sync/disconnect). Never
+    # revokes anything. The caller then backfills history via POST /sync?connection_id=…&days=0.
+    _validate_provider(provider)
+    user = request.state.user
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, external_id, credential, credential_enc, institution FROM connection WHERE provider = ? AND external_id = ?",
+            (provider, body.external_id),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    try:
+        app_config = resolve_app_config(user, provider)
+        credential = crypto_service.decrypt_connection_credential(
+            user, provider, row["external_id"], row["credential"], row["credential_enc"]
+        )
+    except crypto_service.VaultLocked:
+        raise HTTPException(status_code=423, detail={
+            "code": "vault_locked",
+            "message": "Unlock the vault to refresh this data source.",
+        })
+    if not app_config:
+        raise HTTPException(status_code=409, detail={
+            "code": "provider_not_configured",
+            "message": "This data source has no configured credentials.",
+        })
+    try:
+        accounts = get_adapter(provider).fetch_accounts(app_config, credential)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not fetch accounts from the provider: {exc}")
+    with get_db() as conn:
+        default_owner_id = resolve_default_owner_id(conn, None)
+        upsert_connection_accounts(
+            conn, connection_id=row["id"], provider=provider,
+            institution=row["institution"], accounts=accounts, default_owner_id=default_owner_id,
+        )
+    return {"ok": True, "accounts_added": len(accounts), "connection_id": row["id"]}

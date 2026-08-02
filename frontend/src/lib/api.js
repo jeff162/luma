@@ -131,6 +131,10 @@ export const api = {
   // Revoke a linked connection at the provider (invalidates the token everywhere) and drop it locally.
   disconnectProvider: (provider, external_id) =>
     request(`/providers/${provider}/disconnect`, { method: 'POST', body: JSON.stringify({ external_id }) }),
+  // Rebuild a connection's local account rows from its still-valid credential (no re-link) — the recovery
+  // when a restore rolled back the accounts but kept the connection. Caller then backfills history via sync.
+  refreshConnectionAccounts: (provider, external_id) =>
+    request(`/providers/${provider}/refresh-accounts`, { method: 'POST', body: JSON.stringify({ external_id }) }),
   getBootstrapStatus: () => request('/auth/bootstrap-status'),
   getCurrentUser: () => request('/auth/me'),
   // `options` (optional) turns on sign-in protection by claiming an existing identity as admin:
@@ -430,7 +434,10 @@ export const api = {
       suppressMutationSignal: true,
     }),
 
-  runSync: (days = 30) => request(`/sync?days=${days}`, { method: 'POST' }),
+  // days <= 0 means "all available history" (the connect/refresh backfill). connectionId scopes the sync
+  // to one connection so a backfill doesn't re-pull every other bank; omit it to sync all connections.
+  runSync: (days = 30, connectionId = null) =>
+    request(`/sync?days=${days}${connectionId ? `&connection_id=${encodeURIComponent(connectionId)}` : ''}`, { method: 'POST' }),
   recategorize: () => request('/sync/recategorize', { method: 'POST' }),
   getRecategorizePreview: () => request('/sync/recategorize-preview'),
 

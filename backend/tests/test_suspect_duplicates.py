@@ -28,6 +28,7 @@ from backend.services.duplicate_detection import (
     mark_import_suspects,
     promote_in_group_suspects_to_confirmed,
     resolve_suspect,
+    scan_scope_for_cross_account_duplicates,
     restore_auto_merged_after_detach,
     restore_rejected_duplicate,
 )
@@ -1474,6 +1475,71 @@ class SuspectDuplicateTests(unittest.TestCase):
         self.assertIsNotNone(link["trashed_at"])
         self.assertEqual(link["rejection_reason"], "duplicate_confirmed")
         self.assertEqual(link["dedupe_resolved_by"], "user")
+
+    # ---- merge-time fresh cross-scope scan -------------------------------
+
+    def _set_needs_review(self, txn_id: str, value: int) -> None:
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE txn SET needs_review = ? WHERE id = ?", (value, txn_id))
+
+    def test_merge_fresh_scan_catches_uncompared_cross_account_pair(self):
+        # The gap the scan closes: two rows that were NEVER compared at import time (e.g. a synced row
+        # that ran no detection) carry no suspect pointer, so promote-on-merge alone finds nothing. The
+        # fresh scan flags the pair, and promote then confirms it. Attach runs both, end-to-end.
+        plaid_acct = self._insert_account("Plaid Checking")
+        csv_acct = self._insert_account("CSV Checking")
+        kept = self._insert_txn(account_id=csv_acct, date="2026-08-10", amount=-10.0, merchant_name="Coffee")
+        synced = self._insert_txn(account_id=plaid_acct, date="2026-08-10", amount=-10.0, merchant_name="Coffee")
+        self._set_needs_review(kept, 0)      # reviewed CSV row → the canonical to keep
+        self._set_needs_review(synced, 1)    # un-reviewed synced copy → the suspect to trash
+        # Neither carries a suspect pointer going in.
+        self.assertIsNone(self._suspect_link(synced)["suspect_duplicate_of"])
+
+        with self._use_db_path():
+            attach_account(plaid_acct, AccountAttachRequest(parent_account_id=csv_acct))
+
+        # The synced copy is confirmed-trashed against the CSV row; the CSV row is untouched.
+        suspect = self._suspect_link(synced)
+        self.assertEqual(suspect["suspect_duplicate_of"], kept)
+        self.assertEqual(suspect["rejection_reason"], "duplicate_confirmed")
+        self.assertEqual(suspect["dedupe_resolved_by"], "auto_merge")
+        self.assertIsNotNone(suspect["trashed_at"])
+        canonical = self._suspect_link(kept)
+        self.assertIsNone(canonical["trashed_at"])
+        self.assertIsNone(canonical["suspect_duplicate_of"])
+
+    def test_merge_fresh_scan_is_reversible_on_detach(self):
+        # A scan-found, promote-confirmed duplicate is an auto_merge resolution, so detaching the account
+        # restores it exactly like any other auto_merge promotion — the scan doesn't create a stuck row.
+        plaid_acct = self._insert_account("Plaid Checking")
+        csv_acct = self._insert_account("CSV Checking")
+        kept = self._insert_txn(account_id=csv_acct, date="2026-08-10", amount=-10.0, merchant_name="Coffee")
+        synced = self._insert_txn(account_id=plaid_acct, date="2026-08-10", amount=-10.0, merchant_name="Coffee")
+        self._set_needs_review(kept, 0)
+        self._set_needs_review(synced, 1)
+        with self._use_db_path():
+            attach_account(plaid_acct, AccountAttachRequest(parent_account_id=csv_acct))
+            response = detach_account(plaid_acct)
+        self.assertEqual(response.get("restored_count"), 1)
+        link = self._suspect_link(synced)
+        self.assertIsNone(link["trashed_at"])
+        self.assertIsNone(link["dedupe_resolved_by"])
+        self.assertEqual(link["suspect_duplicate_of"], kept)  # back to an active suspect
+
+    def test_merge_fresh_scan_ignores_same_account_repeat(self):
+        # Two identical-looking rows on the SAME account are a legitimate repeat (two coffees), not a
+        # cross-account duplicate. The scan only pairs rows that straddle two different accounts.
+        acct = self._insert_account("Checking")
+        other = self._insert_account("Savings")
+        r1 = self._insert_txn(account_id=acct, date="2026-08-10", amount=-4.0, merchant_name="Coffee")
+        r2 = self._insert_txn(account_id=acct, date="2026-08-10", amount=-4.0, merchant_name="Coffee")
+        with self._use_db_path():
+            with get_db() as conn:
+                flagged = scan_scope_for_cross_account_duplicates(conn, [acct, other])
+        self.assertEqual(flagged, 0)
+        self.assertIsNone(self._suspect_link(r1)["suspect_duplicate_of"])
+        self.assertIsNone(self._suspect_link(r2)["suspect_duplicate_of"])
 
     def test_detach_restore_skips_rows_pointing_outside_remaining_group(self):
         # The restore SQL filters suspect_duplicate_of to "still in the group" canonicals only,

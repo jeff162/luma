@@ -1380,6 +1380,94 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
     return {"resolved": False, "reason": "invalid_action"}
 
 
+def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
+                                            account_ids: Iterable[str]) -> int:
+    """Fresh existing-vs-existing cross-account scan within a set of accounts (a just-merged group).
+
+    The import-time evaluator and `mark_import_suspects` only ever compare an *incoming* batch's rows
+    against what already exists; a pair of rows that both predate the comparison — e.g. a synced row that
+    ran no detection before this feature, and a CSV row imported earlier — is never looked at. A merge is
+    the strongest "these are the same account" signal, so it is the right moment to close that gap: scan
+    every row now in the unified group and soft-flag each un-compared same-(date, amount, normalized payee)
+    match that straddles two DIFFERENT accounts in the group. The following `promote_in_group_suspects_to_
+    confirmed` then graduates these (and any pre-existing) in-group soft-flags to confirmed, reversibly.
+
+    Canonical choice (which row is KEPT vs. which becomes the trashed suspect): keep the more-curated row.
+    A row still awaiting review (needs_review = 1 — every synced row starts here) yields to a reviewed one;
+    ties break to the earlier import, then the lower id. So a re-fetched Plaid copy is trashed in favor of
+    the categorized CSV row it duplicates, not the reverse. Only rows not already carrying a suspect pointer
+    are flagged. Returns the number of rows newly flagged.
+    """
+    ids = [aid for aid in (account_ids or []) if aid]
+    if len(ids) < 2:
+        return 0
+    ph = _placeholders(ids)
+    payee_sql = NORMALIZED_PAYEE_SQL.format(alias="t")
+    rows = conn.execute(
+        f"""
+        SELECT t.id, t.account_id, t.date, ROUND(t.amount, 2) AS amt,
+               {payee_sql} AS payee, t.merchant_name,
+               COALESCE(t.needs_review, 0) AS needs_review,
+               t.suspect_duplicate_of,
+               COALESCE(b.imported_at, '') AS imported_at
+        FROM   txn t
+        LEFT JOIN import_batch b ON b.id = t.import_batch_id
+        WHERE  t.account_id IN ({ph})
+          AND  t.trashed_at IS NULL
+          AND  {payee_sql} != ''
+        """,
+        ids,
+    ).fetchall()
+
+    groups: dict[tuple, list] = {}
+    for r in rows:
+        groups.setdefault((r["date"], r["amt"], r["payee"]), []).append(r)
+
+    def _priority(row) -> tuple:
+        # Lower sorts first = the KEPT canonical. A row that ALREADY carries a suspect pointer is a known
+        # duplicate of something and must never be chosen as the canonical (else the scan would flag the
+        # real canonical as a reciprocal suspect of it — double-counting the pair). After that: keep the
+        # more-curated row — reviewed before un-reviewed — then earliest import, then id.
+        return (
+            1 if row["suspect_duplicate_of"] is not None else 0,
+            int(row["needs_review"] or 0),
+            row["imported_at"] or "",
+            str(row["id"]),
+        )
+
+    flagged: list[tuple[str, str]] = []
+    for members in groups.values():
+        if len(members) < 2 or len({m["account_id"] for m in members}) < 2:
+            continue
+        ordered = sorted(members, key=_priority)
+        canonical = ordered[0]
+        for m in ordered[1:]:
+            if m["account_id"] == canonical["account_id"]:
+                continue  # a legit repeat on the canonical's own account, not a cross-account duplicate
+            if m["suspect_duplicate_of"] is not None:
+                continue  # already flagged/compared — leave the existing pointer intact
+            if canonical["suspect_duplicate_of"] == m["id"]:
+                continue  # the pair is already linked the other way — don't add a reciprocal flag
+            # Two genuinely different checks can share date+amount+"Check"; don't flag those as a pair.
+            if are_distinct_checks(m["merchant_name"], canonical["merchant_name"]):
+                continue
+            flagged.append((canonical["id"], m["id"]))
+
+    if not flagged:
+        return 0
+    conn.executemany(
+        """
+        UPDATE txn
+        SET    suspect_duplicate_of = ?,
+               suspect_duplicate_reason = 'cross_account',
+               suspect_resolved_at = NULL
+        WHERE  id = ?
+        """,
+        flagged,
+    )
+    return len(flagged)
+
+
 def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
                                             account_ids: Iterable[str]) -> int:
     """After accounts are attached into a linked group, any pre-existing soft-flag whose suspect

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { notifyAccountsChanged } from '../App.jsx'
 import { Card, Button, Spinner, Select, Input, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, DialogActions } from '../components/ui.jsx'
@@ -513,6 +514,12 @@ const SENSITIVE_FIELD_PROPS = {
   'data-lpignore': 'true',
   'data-bwignore': 'true',
   'data-form-type': 'other',
+  // Render with NO id/name so the browser has no handle to key its form-field history on. The shared
+  // Input auto-assigns a `useId` id, but those ids are reused across views, so a text search box that
+  // rendered as the same `:rN:` leaks its saved suggestions onto this password field even with
+  // autoComplete="new-password" set. Being an "unnamed field" (the console warns about it — intended
+  // here) is what actually stops the suggestion dropdown. See Input's `suppressAutofillId`.
+  suppressAutofillId: true,
 }
 
 function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
@@ -635,7 +642,16 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   const [notice, setNotice] = useState(null)
   const [disconnectTarget, setDisconnectTarget] = useState(null) // { provider, external_id, institution }
   const [disconnecting, setDisconnecting] = useState(false)
+  // Per-connection sync-record summary (connection_id -> { suspects, cards }), the Connections-tab home for
+  // a sync's duplicate review: a synced row lands on a per-(connection, month) import card, and unresolved
+  // cross-source duplicates surface here as a badge that jumps to the Import/Export report to resolve them.
+  const [syncSummaryByConnection, setSyncSummaryByConnection] = useState({})
+  // Window for a routine "Sync now" (days back). Defaults to a recent window for speed; the initial
+  // connect/refresh backfills ALL history regardless (days=0), per the module's max-history principle.
+  const [syncWindow, setSyncWindow] = useState(30)
+  const [refreshingConnId, setRefreshingConnId] = useState(null)  // connection currently being refreshed
   const exchangingRef = useRef(false)  // guards against a double Plaid onSuccess exchanging the same token twice
+  const navigate = useNavigate()
 
   const isAdmin = !authEnabled || currentUser?.role === 'admin'
   // On a networked (non-loopback) bind, the app secret / bank tokens cross the wire, so connecting needs
@@ -643,9 +659,10 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   const httpsBlocked = !!(transport && !transport.is_loopback && !transport.is_https)
 
   const refresh = useCallback(async () => {
-    const [status, provResp] = await Promise.all([
+    const [status, provResp, batches] = await Promise.all([
       api.getAuthStatus().catch(() => ({})),
       api.getProviders().catch(() => ({ providers: [] })),
+      api.listBatches().catch(() => []),
     ])
     setTransport(status.transport || null)
     const u = status.user || currentUser || {}
@@ -655,6 +672,15 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       unlocked: !!u.vault_unlocked,
     })
     setProviders(provResp.providers || [])
+    // Roll each connection's sync period cards up to a suspect/card count for the review badge below.
+    const summary = {}
+    for (const b of (batches || [])) {
+      if (b.source_kind !== 'connection_sync' || !b.connection_id) continue
+      const entry = summary[b.connection_id] || (summary[b.connection_id] = { suspects: 0, cards: 0 })
+      entry.suspects += Math.max(0, Number(b.suspect_duplicate_count || 0))
+      entry.cards += 1
+    }
+    setSyncSummaryByConnection(summary)
     setLoading(false)
   }, [currentUser])
 
@@ -721,7 +747,19 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
           if (exchangingRef.current) return
           exchangingRef.current = true
           try {
-            await api.exchangeToken(public_token, metadata.institution?.name)
+            const result = await api.exchangeToken(public_token, metadata.institution?.name)
+            // Immediately backfill ALL available history for just this new connection (days=0), scoped by
+            // connection_id so it doesn't re-pull other banks. Max history on add is the module default.
+            if (result?.connection_id) {
+              setSyncState(prev => ({ ...prev, plaid: { syncing: true, result: null } }))
+              try {
+                const synced = await api.runSync(0, result.connection_id)
+                setSyncState(prev => ({ ...prev, plaid: { syncing: false, result: synced } }))
+              } catch (syncErr) {
+                setSyncState(prev => ({ ...prev, plaid: { syncing: false, result: null } }))
+                setNotice({ title: 'Connected, but could not pull history', description: syncErr.message })
+              }
+            }
             await onAccountsChanged?.()
             await refresh()
           } catch (e) {
@@ -743,12 +781,31 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     if (!vault.unlocked) { setVaultDialog('unlock'); return }
     setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
     try {
-      const result = await api.runSync(30)
+      const result = await api.runSync(syncWindow)
       setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result } }))
       await onAccountsChanged?.()
     } catch (e) {
       setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
       setNotice({ title: 'Sync failed', description: e.message })
+    }
+  }
+
+  // Rebuild a connection's account rows from its still-valid credential (no re-link), then backfill ALL
+  // history for it. The one-click recovery after a restore rolled back the accounts but kept the connection.
+  async function refreshConnectionAccounts(provider, connection) {
+    if (refreshingConnId) return
+    if (!vault.unlocked) { setVaultDialog('unlock'); return }
+    setRefreshingConnId(connection.id)
+    try {
+      const res = await api.refreshConnectionAccounts(provider, connection.external_id)
+      const synced = await api.runSync(0, res.connection_id)  // days=0 → all available history, scoped
+      await onAccountsChanged?.()
+      await refresh()
+      setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: synced } }))
+    } catch (e) {
+      setNotice({ title: 'Could not refresh accounts', description: e.message })
+    } finally {
+      setRefreshingConnId(null)
     }
   }
 
@@ -813,8 +870,20 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                 <Button variant="ghost" small onClick={() => sync(p.provider)}
                   disabled={ss.syncing || !connections.length}
                   title={connections.length ? '' : 'Connect a bank before syncing'}>
-                  {ss.syncing ? 'Syncing…' : '↻ Sync now (30 days)'}
+                  {ss.syncing ? 'Syncing…' : '↻ Sync now'}
                 </Button>
+                <Select
+                  value={String(syncWindow)}
+                  onChange={v => setSyncWindow(Number(v))}
+                  options={[
+                    { value: '0', label: 'All available history' },
+                    { value: '365', label: 'Last year' },
+                    { value: '90', label: 'Last 90 days' },
+                    { value: '30', label: 'Last 30 days' },
+                  ]}
+                  title="How far back a routine sync pulls. Connecting a new bank always backfills all available history."
+                  style={{ fontSize: 12, padding: '4px 8px', minWidth: 0, width: 'auto' }}
+                />
                 {p.source === 'env' ? (
                   <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 'auto' }}>credentials from <code>.env</code></span>
                 ) : null}
@@ -830,21 +899,46 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                 <div style={{ display: 'grid', gap: 10 }}>
                   {connections.map(c => {
                     const accts = accountsForConnectionId(c.id)
+                    const syncSummary = syncSummaryByConnection[c.id]
                     return (
                       <div key={c.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', display: 'grid', gap: 6 }}>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                           <span style={{ fontWeight: 600, fontSize: 13 }}>{c.institution || 'Linked bank'}</span>
-                          <Button variant="ghost" small style={{ marginLeft: 'auto' }}
-                            onClick={() => setDisconnectTarget({ provider: p.provider, external_id: c.external_id, institution: c.institution })}>
-                            Disconnect
-                          </Button>
+                          {syncSummary?.suspects > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => navigate('/import-export')}
+                              title={`${syncSummary.suspects} synced transaction${syncSummary.suspects === 1 ? '' : 's'} may duplicate an existing row — open the Import / Export history to review this connection's sync cards`}
+                              style={{
+                                display: 'inline-flex', alignItems: 'center', gap: 4,
+                                padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                                background: 'color-mix(in srgb, var(--warning) 12%, var(--surface2))',
+                                color: 'var(--warning)',
+                                border: '1px solid color-mix(in srgb, var(--warning) 50%, var(--border))',
+                              }}
+                            >
+                              ⚠ {syncSummary.suspects} to review
+                            </button>
+                          ) : null}
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginLeft: 'auto' }}>
+                            <Button variant="ghost" small
+                              onClick={() => refreshConnectionAccounts(p.provider, c)}
+                              disabled={!!refreshingConnId || ss.syncing}
+                              title="Rebuild this connection's accounts from its saved credential (no re-linking) and pull all available history. Use this if the accounts are missing — e.g. after restoring a backup.">
+                              {refreshingConnId === c.id ? 'Refreshing…' : '↻ Refresh accounts'}
+                            </Button>
+                            <Button variant="ghost" small
+                              onClick={() => setDisconnectTarget({ provider: p.provider, external_id: c.external_id, institution: c.institution })}>
+                              Disconnect
+                            </Button>
+                          </div>
                         </div>
                         {accts.length ? accts.map(a => (
                           <div key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: 'var(--muted)' }}>
                             <span style={{ color: 'var(--text)' }}>{a.display_name || a.name}</span>
                             {a.mask ? <span>····{a.mask}</span> : null}
                           </div>
-                        )) : <span style={{ fontSize: 12, color: 'var(--muted)' }}>No accounts imported yet — Sync to pull them in.</span>}
+                        )) : <span style={{ fontSize: 12, color: 'var(--muted)' }}>No accounts imported yet — use “Refresh accounts” to pull them in.</span>}
                       </div>
                     )
                   })}

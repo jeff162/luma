@@ -36,6 +36,7 @@ from backend.services.duplicate_detection import (
     list_distinct_account_pairs,
     promote_in_group_suspects_to_confirmed,
     restore_auto_merged_after_detach,
+    scan_scope_for_cross_account_duplicates,
 )
 
 router = APIRouter()
@@ -385,6 +386,46 @@ def resolve_default_owner_id(conn, owner_id: Optional[str]) -> Optional[str]:
     return None
 
 
+def upsert_connection_accounts(conn, *, connection_id: str, provider: str,
+                               institution: Optional[str], accounts: list[dict],
+                               default_owner_id: Optional[str]) -> int:
+    """Create/re-link the local account rows for a provider connection from a `fetch_accounts` result.
+
+    Shared by the initial connect (token exchange) and the standalone "Refresh accounts" recovery: a
+    restore rolls back the ledger — including account rows — but never the live connection (see
+    import_export/backup.py), leaving a connection whose accounts are gone; refresh rebuilds them from
+    the still-valid credential without re-linking. Upsert is keyed on `external_account_id` (the stable
+    provider handle) and re-stamps ONLY the connection linkage (connection_id/provider) — never the
+    user-editable name/display_name/owner/type — so a refresh or a re-link of a previously-disconnected
+    bank re-attaches cleanly without clobbering local edits. Returns the number of accounts processed.
+    """
+    for acc in accounts:
+        conn.execute(
+            """
+            INSERT INTO account
+                (id, external_account_id, connection_id, provider, name, display_name, institution, type, subtype, mask, owner_id, parent_account_id, trashed_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)
+            ON CONFLICT(external_account_id) DO UPDATE SET
+                connection_id = excluded.connection_id,
+                provider = excluded.provider
+            """,
+            (
+                str(uuid.uuid4()),
+                acc["external_account_id"],
+                connection_id,
+                provider,
+                acc["name"],
+                acc["name"],
+                institution,
+                acc["type"],
+                acc["subtype"],
+                acc["mask"],
+                default_owner_id,
+            ),
+        )
+    return len(accounts)
+
+
 @router.get("")
 def list_accounts(include_children: bool = False, include_trashed: bool = False):
     with get_db() as conn:
@@ -596,17 +637,18 @@ def attach_account(account_id: str, body: AccountAttachRequest):
             "UPDATE account SET parent_account_id = ?, display_name = ? WHERE id = ?",
             [(parent["id"], target_display_name, member_id) for member_id in group_member_ids],
         )
-        # In the new per-pair-distinct dedupe model, detection happens at import time only.
-        # On merge we have two responsibilities:
-        #   1. Promote any PRE-EXISTING soft-flags whose two sides are now in this linked
-        #      group to confirmed duplicates. The merge is the user's assertion that the two
-        #      accounts are the same physical account; a same (date, amount, payee) match
-        #      across them is the same case that exact_hash_linked_group would have hard-
-        #      rejected at import time.
-        #   2. Delete any `account_pair_distinct` rows between the merging accounts. The user
-        #      may have previously asserted these accounts were distinct; the merge contradicts
-        #      that, so the new declaration wins.
+        # On merge we have three responsibilities:
+        #   1. Fresh-scan the newly-unified group for cross-account duplicates that were never compared at
+        #      import time (existing-vs-existing) — e.g. a pre-existing synced row that ran no detection.
+        #      This soft-flags them so step 2 can graduate them alongside any pre-existing soft-flags.
+        #   2. Promote any in-group soft-flag (fresh or pre-existing) whose two sides now share an effective
+        #      root to a confirmed duplicate. The merge is the user's assertion that the two accounts are the
+        #      same physical account; a same (date, amount, payee) match across them is the same case that
+        #      exact_hash_linked_group would have hard-rejected at import time.
+        #   3. Delete any `account_pair_distinct` rows between the merging accounts. The user may have
+        #      previously asserted these accounts were distinct; the merge contradicts that, so it wins.
         affected_ids = group_member_ids + [parent["id"]]
+        scan_scope_for_cross_account_duplicates(conn, affected_ids)
         promote_in_group_suspects_to_confirmed(conn, affected_ids)
         clear_account_pair_distinct_for_merge(conn, affected_ids)
     return {"ok": True}
