@@ -6,9 +6,10 @@ transport-security policy — workspace DEK, passphrase slots, server-side unloc
 master-key retired, Production passphrase gate, `SESSION_COOKIE_SECURE`/`--proxy-headers`/computed HTTPS
 task), phase 6a (the provider-agnostic `connection`/adapter seam, Plaid retargeted onto it), phase 6b-1
 (app-level provider creds into the vaulted `provider_config` table, `.env` demoted to a bootstrap fallback),
-and phase 6b-2 (the per-provider Connections-tab UI + the vault set/unlock UI; provider config removed from
-Settings); phases 4–5 (passkey slots, enrollment/invite) and phase 6b-3 (the deferred account columns) not
-started.** This
+phase 6b-2 (the per-provider Connections-tab UI + the vault set/unlock UI; provider config removed from
+Settings), and phase 6b-3 (the deferred account columns — migration v20: `external_account_id`/
+`connection_id`/`provider`, `plaid_item` table dropped, backup payload v8 with v7 restore-translation);
+phases 4–5 (passkey slots, enrollment/invite) not started — they are all that remains of this initiative.** This
 is the design decision that
 [`pre-auth-security-ui.md`](pre-auth-security-ui.md) was blocked on. It settles which deployments
 Luma supports, what the login perimeter is (and isn't) for, and how Plaid credentials are protected
@@ -666,10 +667,19 @@ premise was wrong.
    `.env`" copy fixed. **Built (2026-08-01):** frontend + backend-endpoint cleanup; lint + production build
    clean; backend suite green (`test_vault_endpoints` Production-gate test repointed to the providers
    endpoint). **Not browser-verified by the agent** (per repo rule — handed to the user).
-6b-3. **Deferred account columns.** Explicit `provider`/`connection_id` account columns, rename the
-   `plaid_account_id`/`plaid_item_id` column *names* to be provider-neutral, and drop the vestigial
-   `plaid_item` table (accounts link implicitly by `plaid_item_id == connection.external_id` until then).
-   Teller, then SimpleFIN, follow on the seam.
+6b-3. **[DONE]** **Deferred account columns.** Migration **v20** (in-place ALTERs, not a table rebuild, so
+   the `account.id` every FK references is never dropped): rename `plaid_account_id → external_account_id`;
+   replace the `plaid_item_id` string (item_id / `csv_import` / `manual`) with an explicit
+   `connection_id` FK (→ `connection.id`, `ON DELETE SET NULL` — matches the disconnect flow, which drops
+   the connection row but keeps accounts) plus a `provider` discriminator; drop the vestigial `plaid_item`
+   table. Backfill relinks real item_ids to their connection and maps the sentinels to `csv`/`manual`
+   providers with a NULL connection. Frontend groups accounts by `connection_id == connection.id` (the
+   `csv_import`/`manual` sentinel special-casing is gone; `list_connections` now returns each connection's
+   `id`). Backup payload bumped **7 → 8** (accounts dump the new columns); **v7 restore translates** the
+   legacy columns before insert (`_reconcile_restored_account_links`, also nulls any locally-absent
+   `connection_id`). **Built (2026-08-01):** backend + frontend; full backend suite green (added a v20
+   migration test + a v7-restore-translation test); lint + production build clean. **Not browser-verified
+   by the agent** (per repo rule — handed to the user). Teller, then SimpleFIN, follow on the seam.
 
 **6b refinements — [DONE 2026-08-01].** Two follow-ons landed with the 6b UI, after the threat-model
 discussion above:

@@ -55,7 +55,7 @@ class DeleteOwnerTests(unittest.TestCase):
             conn.execute(
                 """
                 INSERT INTO account
-                  (id, plaid_account_id, plaid_item_id, name, display_name, type, subtype,
+                  (id, external_account_id, provider, name, display_name, type, subtype,
                    mask, owner_id, parent_account_id, trashed_at)
                 VALUES (?, ?, 'fixture', 'Acct', 'Acct', 'credit', 'credit_card', NULL, ?, NULL, NULL)
                 """,

@@ -90,7 +90,7 @@ class InactiveCategoryTests(unittest.IsolatedAsyncioTestCase):
                 conn.execute(
                     """
                     INSERT INTO account
-                      (id, plaid_account_id, plaid_item_id, name, display_name, type, subtype, mask, owner_id, parent_account_id, trashed_at)
+                      (id, external_account_id, provider, name, display_name, type, subtype, mask, owner_id, parent_account_id, trashed_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
                     """,
                     (account_id, f"test_{account_id}", "fixture_import", name, name, "checking", "checking", "1234", SHARED_OWNER_ID),

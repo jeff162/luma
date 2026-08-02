@@ -17,7 +17,9 @@ otherwise independent of the import-run workflow:
   and rebuilds in FK-safe order. The payload is stamped with the source `instance_id` +
   `access_mode`; restore's compatibility guard uses these to refuse a silent cross-system/cross-mode
   wipe (409 unless `force`) while still allowing an empty target or a same-instance self-restore.
-  (Payload is version 7; older versions are no longer accepted.)
+  (Payload is version 8; version 7 is still accepted and its legacy account columns
+  — `plaid_account_id`/`plaid_item_id` — are translated to the 6b-3 shape on restore. Older
+  versions are no longer accepted.)
 - **Credentials backup/restore** (`/backup/credentials`, `/restore/credentials`) — the Plaid
   access tokens, kept deliberately separate from the regular backup so an ordinary backup never
   carries secrets (see `docs/data-model.md` → Backups).
@@ -598,7 +600,7 @@ def build_backup_data(conn) -> dict:
         return [dict(r) for r in conn.execute(q).fetchall()]
 
     return _stamp_content_hash({
-            "version":        7,
+            "version":        8,
             # Two independent version axes. `version` is the *payload format* (this JSON's shape),
             # bumped by hand when the envelope changes; restore hard-rejects anything but the format
             # it understands. `schema_version` is the *DB migration level* the data conforms to
@@ -615,7 +617,7 @@ def build_backup_data(conn) -> dict:
             "access_mode":    "auth" if auth_required() else "local",
             "owners":         dump("owner"),
             "accounts":       dump("account",
-                                   "SELECT id, plaid_account_id, plaid_item_id, name, display_name, "
+                                   "SELECT id, external_account_id, connection_id, provider, name, display_name, "
                                    "institution, type, subtype, mask, owner_id, parent_account_id, trashed_at FROM account"),
             "categories":     dump("category"),
             "category_rules": dump("category_rule"),
@@ -833,13 +835,55 @@ def _wipe_user_data_tables(conn):
     conn.execute("DELETE FROM owner")
 
 
+def _reconcile_restored_account_links(conn, accounts, backup_version):
+    """Reconcile each restored account's connection link against the live `connection` table (which is
+    credential data — never wiped or carried in the payload). Two jobs:
+
+    - **v7 → 6b-3 translation.** A v7 backup carries the pre-6b-3 columns `plaid_account_id` and
+      `plaid_item_id`; the current schema has `external_account_id` / `connection_id` / `provider`.
+      `insert_rows` would silently drop the unknown v7 keys, so map them here: the per-account handle
+      becomes `external_account_id`; a real `plaid_item_id` (an item_id) resolves to its live connection's
+      id + provider, while the `'csv_import'`/`'manual'` sentinels become an origin-only provider with no
+      connection.
+    - **Dangling-FK normalization (any version).** `connection_id` references the live connection table,
+      which a cross-system restore won't share — a stale id would fail the deferred FK check. Null out any
+      `connection_id` not present locally. v7-derived ids come straight from the live table so always pass;
+      this guards v8 backups carried in from another system.
+    """
+    conn_by_external = {}
+    valid_conn_ids = set()
+    for r in conn.execute("SELECT id, external_id, provider FROM connection"):
+        valid_conn_ids.add(r["id"])
+        if r["external_id"] is not None:
+            conn_by_external[r["external_id"]] = (r["id"], r["provider"])
+    for row in accounts:
+        if backup_version == 7:
+            if row.get("external_account_id") is None and "plaid_account_id" in row:
+                row["external_account_id"] = row.get("plaid_account_id")
+            legacy_item = row.get("plaid_item_id")
+            if row.get("connection_id") is None and legacy_item not in (None, "", "csv_import", "manual"):
+                match = conn_by_external.get(legacy_item)
+                row["connection_id"] = match[0] if match else None
+            if row.get("provider") is None:
+                if legacy_item == "csv_import":
+                    row["provider"] = "csv"
+                elif legacy_item == "manual":
+                    row["provider"] = "manual"
+                elif legacy_item not in (None, ""):
+                    match = conn_by_external.get(legacy_item)
+                    row["provider"] = match[1] if match else "plaid"
+        if row.get("connection_id") and row["connection_id"] not in valid_conn_ids:
+            row["connection_id"] = None
+
+
 def restore_backup(body: RestoreRequest):
     """
     Destructive restore. Wipes all non-credential data and replaces with backup.
     Plaid items / access tokens are NOT touched.
     """
     d = body.data
-    if d.get("version") != 7:
+    backup_version = d.get("version")
+    if backup_version not in (7, 8):
         raise HTTPException(status_code=400, detail="Unrecognized or unsupported backup version")
     # Integrity check before anything destructive: a corrupted/truncated file must not get as far as
     # wiping the target. No-op for older backups that predate the hash field.
@@ -1054,6 +1098,9 @@ def restore_backup(body: RestoreRequest):
                 )
 
         insert_rows("owner",            owners)
+        # Resolve account→connection links against the live connection table (needs `conn`): translate a
+        # v7 payload's legacy plaid_* columns and null out any connection_id absent locally.
+        _reconcile_restored_account_links(conn, accounts, backup_version)
         insert_rows("account",          accounts)
         insert_rows("category",         categories)
         insert_rows("category_rule",    category_rules)

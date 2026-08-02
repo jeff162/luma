@@ -16,7 +16,7 @@ from backend.routers.import_export.core import run_import_core
 
 def _account_sql(account_id, name, acct_type):
     return (
-        """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type)
+        """INSERT INTO account (id, external_account_id, provider, name, display_name, type)
            VALUES (?, NULL, 'manual', ?, ?, ?)""",
         (account_id, name, name, acct_type),
     )

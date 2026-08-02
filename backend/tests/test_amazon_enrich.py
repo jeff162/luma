@@ -79,12 +79,12 @@ class AmazonOrdersTests(unittest.TestCase):
         self.batch_id = str(uuid.uuid4())
         with self._use_db_path(), get_db() as conn:
             conn.execute(
-                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, owner_id)
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type, owner_id)
                    VALUES ('amazon', 'p_amazon', 'fixture', 'Amazon', 'Amazon', 'other', ?)""",
                 (SHARED_OWNER_ID,),
             )
             conn.execute(
-                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, mask, owner_id)
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type, mask, owner_id)
                    VALUES ('card', 'p_card', 'fixture', 'Rewards Card', 'Rewards Card', 'credit', '4321', ?)""",
                 (SHARED_OWNER_ID,),
             )
@@ -470,7 +470,7 @@ class AmazonOrdersTests(unittest.TestCase):
         # map names which account this instrument charges, constraining the search to it so it resolves.
         with self._use_db_path(), get_db() as conn:
             conn.execute(
-                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, owner_id)
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type, owner_id)
                    VALUES ('card2', 'p_card2', 'fixture', 'Other Card', 'Other Card', 'credit', ?)""",
                 (SHARED_OWNER_ID,),
             )
@@ -502,7 +502,7 @@ class AmazonOrdersTests(unittest.TestCase):
         # but a maskless account can't contradict it, so amount + date + uniqueness carries the match.
         with self._use_db_path(), get_db() as conn:
             conn.execute(
-                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, owner_id)
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type, owner_id)
                    VALUES ('nomask', 'p_nomask', 'fixture', 'Imported Card', 'Imported Card', 'credit', ?)""",
                 (SHARED_OWNER_ID,),
             )
@@ -1287,7 +1287,7 @@ class AmazonOrdersTests(unittest.TestCase):
     def _add_second_funding_account(self):
         with self._use_db_path(), get_db() as conn:
             conn.execute(
-                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, owner_id)
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type, owner_id)
                    VALUES ('card2', 'p_card2', 'fixture', 'Other Card', 'Other Card', 'credit', ?)""",
                 (SHARED_OWNER_ID,),
             )
@@ -1749,7 +1749,7 @@ class AmazonOrdersTests(unittest.TestCase):
         child_id = str(uuid.uuid4())
         with self._use_db_path(), get_db() as conn:
             conn.execute(
-                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, mask, owner_id, parent_account_id)
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type, mask, owner_id, parent_account_id)
                    VALUES (?, ?, 'fixture', ?, ?, 'credit', ?, ?, ?)""",
                 (child_id, f"p_{child_id}", name, name, mask, SHARED_OWNER_ID, parent_id),
             )
@@ -1818,7 +1818,7 @@ class AmazonOrdersTests(unittest.TestCase):
         acct_id = str(uuid.uuid4())
         with self._use_db_path(), get_db() as conn:
             conn.execute(
-                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, mask, owner_id)
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type, mask, owner_id)
                    VALUES (?, ?, 'fixture', ?, ?, 'credit', ?, ?)""",
                 (acct_id, f"p_{acct_id}", name, name, mask, SHARED_OWNER_ID),
             )

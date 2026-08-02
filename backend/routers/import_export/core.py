@@ -3194,8 +3194,8 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                     new_acc_id = str(uuid.uuid4())
                     conn.execute("""
                         INSERT INTO account
-                          (id, plaid_account_id, plaid_item_id, name, display_name, type, subtype, owner_id, parent_account_id, trashed_at)
-                        VALUES (?, ?, 'csv_import', ?, ?, ?, ?, ?, NULL, NULL)
+                          (id, external_account_id, connection_id, provider, name, display_name, type, subtype, owner_id, parent_account_id, trashed_at)
+                        VALUES (?, ?, NULL, 'csv', ?, ?, ?, ?, ?, NULL, NULL)
             """, (new_acc_id, f"csv_{new_acc_id}", single_name, single_name, single_type, "checking",
                   default_owner_id))
             created_account_ids["__single_account__"] = new_acc_id
@@ -3231,8 +3231,8 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             new_acc_id = str(uuid.uuid4())
             conn.execute("""
                 INSERT INTO account
-                  (id, plaid_account_id, plaid_item_id, name, display_name, type, subtype, owner_id, parent_account_id, trashed_at)
-                VALUES (?, ?, 'csv_import', ?, ?, ?, ?, ?, NULL, NULL)
+                  (id, external_account_id, connection_id, provider, name, display_name, type, subtype, owner_id, parent_account_id, trashed_at)
+                VALUES (?, ?, NULL, 'csv', ?, ?, ?, ?, ?, NULL, NULL)
             """, (new_acc_id, f"csv_{new_acc_id}", acc_name, acc_name, acc_type, "checking",
                   default_owner_id))
             created_account_ids[csv_val] = new_acc_id

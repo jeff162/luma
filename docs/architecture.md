@@ -348,10 +348,12 @@ phase 6a), so adding Teller or SimpleFIN is an adapter, not a change to the conn
 - **Storage.** A `connection` row (`backend/db/database.py`) is the durable credential boundary: a
   `provider` discriminator, the provider's stable `external_id` (Plaid's item_id), and the opaque
   per-connection credential vault-encrypted under the DEK (`credential_enc`; plaintext column always ''
-  — see the vault above). It **supersedes `plaid_item`**, which now lingers only as a migration/restore
-  source. Accounts still link to a connection implicitly via `account.plaid_item_id == connection.external_id`;
-  the explicit `provider`/`connection_id` account columns (and retiring the `plaid_*` column *names*) are
-  deferred to phase 6b, where the per-provider UI consumes them.
+  — see the vault above). It **superseded `plaid_item`**, which was dropped in migration v20 (phase 6b-3).
+  Accounts link to their connection via an explicit `account.connection_id` FK (→ `connection.id`,
+  `ON DELETE SET NULL` — a disconnected account keeps its rows but drops to `NULL`); `account.provider`
+  records origin (`plaid`/`csv`/`manual`) and `account.external_account_id` (renamed from the old
+  `plaid_account_id`) is the provider's per-account handle / sync upsert key. CSV and manual accounts have
+  `connection_id IS NULL`.
 - **Adapter interface.** `backend/services/providers/` exposes `get_adapter(provider)` over a
   `ProviderAdapter` (`create_link_token` / `exchange` → `{external_id, credential}` / `fetch_accounts` /
   `fetch_transactions`), normalized to provider-neutral dict keys (`external_account_id`,

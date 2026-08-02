@@ -102,7 +102,8 @@ def _get_account_row(conn, account_id: str):
             a.owner_id,
             a.parent_account_id,
             a.trashed_at,
-            a.plaid_item_id,
+            a.connection_id,
+            a.provider,
             (
                 SELECT COUNT(*)
                 FROM txn t
@@ -139,7 +140,8 @@ def _list_account_rows(conn, *, include_children: bool, include_trashed: bool):
             a.owner_id,
             a.parent_account_id,
             a.trashed_at,
-            a.plaid_item_id,
+            a.connection_id,
+            a.provider,
             (
                 SELECT COUNT(*)
                 FROM txn t
@@ -431,8 +433,8 @@ def create_account(body: AccountCreate):
         conn.execute(
             """
             INSERT INTO account
-                (id, plaid_account_id, plaid_item_id, name, display_name, institution, type, subtype, mask, owner_id, parent_account_id, trashed_at)
-            VALUES (?, NULL, 'manual', ?, ?, NULL, ?, NULL, NULL, ?, NULL, NULL)
+                (id, external_account_id, connection_id, provider, name, display_name, institution, type, subtype, mask, owner_id, parent_account_id, trashed_at)
+            VALUES (?, NULL, NULL, 'manual', ?, ?, NULL, ?, NULL, NULL, ?, NULL, NULL)
             """,
             (account_id, name, name, account_type, owner_id),
         )

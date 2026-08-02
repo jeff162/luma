@@ -27,7 +27,7 @@ Normalized contracts (plain dicts, provider-neutral keys):
         -> [ {"external_transaction_id", "external_account_id", "amount", "merchant_name",
               "raw_name", "date", "is_pending"} ]`
       `date` is an ISO string; `amount` keeps the provider's sign convention (downstream categorization
-      is written against it); `external_account_id` joins to `account.plaid_account_id`.
+      is written against it); `external_account_id` joins to `account.external_account_id`.
 """
 
 from __future__ import annotations

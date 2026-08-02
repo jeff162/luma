@@ -112,8 +112,11 @@ def get_db(db_path: str | None = None):
 # `recurring_membership_override` table is created by the same CREATE TABLE IF NOT EXISTS script).
 # v14 adds `category_rule.match_expr` (multi-clause AND/contains merchant matcher). v15 adds
 # `category_rule.last_effect_date` (stale-rule signal) + `category_rule.deleted_at` (rules trash).
+# v18 adds the provider-agnostic `connection` credential store; v19 adds `provider_config` (app creds).
+# v20 makes the account→connection link provider-neutral (external_account_id / connection_id / provider,
+# drop plaid_item_id) and drops the vestigial `plaid_item` table.
 
-CURRENT_VERSION = 19
+CURRENT_VERSION = 20
 
 MIGRATIONS = {}
 
@@ -534,7 +537,8 @@ def _add_connection_table(conn):
     # Provider-agnostic connections supersede plaid_item as the credential store (see
     # security-and-deployment-model.md phase 6a). Fresh installs get the table from init_db's baseline
     # CREATE; existing databases get it here, then legacy plaid_item rows are folded into connection rows
-    # (the data half, below). Account columns and the plaid_item drop are deliberately deferred to phase 6b.
+    # (the data half, below). This runs before v20, which renames the account columns and finally drops the
+    # plaid_item table — so the plaid_item_id references here operate on the still-legacy pre-v20 schema.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS connection (
             id             TEXT PRIMARY KEY,
@@ -604,6 +608,39 @@ def _add_provider_config_table(conn):
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
+
+
+@migration(20)
+def _account_connection_columns(conn):
+    # 6b-3 (security-and-deployment-model.md): make the account→connection link provider-neutral. Rename
+    # plaid_account_id → external_account_id (the per-account provider handle); replace the plaid_item_id
+    # string — a Plaid item_id, or the 'csv_import'/'manual' sentinels — with an explicit connection_id FK
+    # (→ connection.id, NULL when an account isn't backed by a live connection) plus a provider
+    # discriminator; then drop the now-vestigial plaid_item table (connection has been the credential store
+    # since 6a). Uses in-place ALTERs (SQLite ≥ 3.35 for DROP COLUMN) rather than a table rebuild, so the
+    # account.id that every other table's FK references is never dropped. Fresh installs get the final shape
+    # from init_db's baseline CREATE and never reach here.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(account)")}
+    if "external_account_id" in cols or "plaid_account_id" not in cols:
+        return  # already migrated, or a minimal hand-built fixture without the legacy column
+    conn.execute("ALTER TABLE account RENAME COLUMN plaid_account_id TO external_account_id")
+    conn.execute(
+        "ALTER TABLE account ADD COLUMN connection_id TEXT REFERENCES connection(id) ON DELETE SET NULL"
+    )
+    conn.execute("ALTER TABLE account ADD COLUMN provider TEXT")
+    # Backfill from the legacy plaid_item_id: a real item_id joins to its connection (id + provider), while
+    # the sentinels map to an origin-only provider with no connection (connection_id stays NULL).
+    conn.execute("""
+        UPDATE account
+           SET connection_id = (SELECT c.id FROM connection c WHERE c.external_id = plaid_item_id),
+               provider = COALESCE(
+                   (SELECT c.provider FROM connection c WHERE c.external_id = plaid_item_id),
+                   CASE plaid_item_id WHEN 'csv_import' THEN 'csv'
+                                      WHEN 'manual'     THEN 'manual'
+                                      ELSE 'plaid' END)
+    """)
+    conn.execute("ALTER TABLE account DROP COLUMN plaid_item_id")
+    conn.execute("DROP TABLE IF EXISTS plaid_item")
 
 
 def get_db_version(conn) -> int:
@@ -758,18 +795,12 @@ def init_db(db_path: str | None = None):
         is_fresh_db = len(existing_tables) == 0
 
         conn.executescript("""
-            CREATE TABLE IF NOT EXISTS plaid_item (
-                item_id          TEXT PRIMARY KEY,
-                access_token     TEXT NOT NULL DEFAULT '',
-                access_token_enc TEXT
-            );
-
             -- Provider-agnostic data-source connections (Plaid first; Teller/SimpleFIN later). One row per
             -- linked connection, carrying a `provider` discriminator and the opaque per-connection
             -- credential vault-encrypted under the workspace DEK (`credential_enc`; the plaintext column is
-            -- always ''). `external_id` is the provider's stable handle (Plaid's item_id) and joins accounts
-            -- via account.plaid_item_id. Supersedes plaid_item as the credential store — plaid_item lingers
-            -- only as a migration/restore source (see migration v18 / security-and-deployment-model.md 6a).
+            -- always ''). `external_id` is the provider's stable handle (Plaid's item_id); accounts link
+            -- back via account.connection_id (see the account table). The credential store — superseded the
+            -- old `plaid_item` table, dropped in migration v20 (security-and-deployment-model.md 6a/6b-3).
             CREATE TABLE IF NOT EXISTS connection (
                 id             TEXT PRIMARY KEY,
                 provider       TEXT NOT NULL,
@@ -862,19 +893,25 @@ def init_db(db_path: str | None = None):
                 color TEXT NOT NULL DEFAULT '#6366f1'
             );
 
+            -- `external_account_id` is the provider's stable per-account handle (Plaid's account_id, a
+            -- synthetic `csv_{uuid}` for CSV imports, NULL for manual accounts); it's the upsert key on
+            -- connect/sync. `connection_id` links to the backing connection (NULL = not backed by a live
+            -- connection: CSV/manual accounts, or an account whose connection was disconnected). `provider`
+            -- records origin ('plaid'/'csv'/'manual', matching connection.provider when linked).
             CREATE TABLE IF NOT EXISTS account (
-                id               TEXT PRIMARY KEY,
-                plaid_account_id TEXT UNIQUE,
-                plaid_item_id    TEXT NOT NULL,
-                name             TEXT NOT NULL,
-                display_name     TEXT NOT NULL,
-                institution      TEXT,
-                type             TEXT,
-                subtype          TEXT,
-                mask             TEXT,
-                owner_id         TEXT REFERENCES owner(id) ON DELETE SET NULL,
-                parent_account_id TEXT REFERENCES account(id) ON DELETE SET NULL,
-                trashed_at       TEXT
+                id                  TEXT PRIMARY KEY,
+                external_account_id TEXT UNIQUE,
+                connection_id       TEXT REFERENCES connection(id) ON DELETE SET NULL,
+                provider            TEXT,
+                name                TEXT NOT NULL,
+                display_name        TEXT NOT NULL,
+                institution         TEXT,
+                type                TEXT,
+                subtype             TEXT,
+                mask                TEXT,
+                owner_id            TEXT REFERENCES owner(id) ON DELETE SET NULL,
+                parent_account_id   TEXT REFERENCES account(id) ON DELETE SET NULL,
+                trashed_at          TEXT
             );
 
             -- Core transaction table. `txn` not `transaction` (SQLite reserved word).

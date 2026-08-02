@@ -36,7 +36,7 @@ class RecurringDetectionTests(unittest.TestCase):
         with self._use_db_path():
             with get_db() as conn:
                 conn.execute(
-                    "INSERT INTO account (id, plaid_item_id, name, display_name) VALUES (?, 'fixture', 'Checking', 'Checking')",
+                    "INSERT INTO account (id, provider, name, display_name) VALUES (?, 'fixture', 'Checking', 'Checking')",
                     (self.account_id,),
                 )
                 unassigned = conn.execute("SELECT id FROM category WHERE system_key = 'unassigned'").fetchone()["id"]

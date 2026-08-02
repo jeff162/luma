@@ -359,7 +359,6 @@ function controlStyle(extra = {}) {
 // so connecting/syncing needs the vault unlocked, and — on a networked bind — HTTPS. Only Plaid ships an
 // adapter today; the layout is provider-generic for Teller/SimpleFIN later.
 
-const CONNECTION_SENTINELS = new Set(['csv_import', 'manual'])
 const PROVIDER_LABELS = { plaid: 'Plaid', teller: 'Teller', simplefin: 'SimpleFIN' }
 
 function providerLabel(provider) {
@@ -424,16 +423,17 @@ function ProviderConfigDialog({ provider, initial, onSave, onClose }) {
       <div style={{ display: 'grid', gap: 12 }}>
         <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
           <span style={{ color: 'var(--muted)' }}>Client ID</span>
-          <Input value={clientId} onChange={e => setClientId(e.target.value)} placeholder="Provider client ID" />
+          <Input value={clientId} onChange={setClientId} placeholder="Provider client ID" />
         </div>
         <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
           <span style={{ color: 'var(--muted)' }}>Secret</span>
-          <Input type="password" value={secret} onChange={e => setSecret(e.target.value)}
-            placeholder={hasSecret ? '•••••••• (leave blank to keep)' : 'Provider secret'} />
+          <Input type="password" value={secret} onChange={setSecret}
+            placeholder={hasSecret ? '•••••••• (leave blank to keep)' : 'Provider secret'}
+            {...SENSITIVE_FIELD_PROPS} />
         </div>
         <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
           <span style={{ color: 'var(--muted)' }}>Environment</span>
-          <Select value={env} onChange={e => setEnv(e.target.value)} options={[
+          <Select value={env} onChange={setEnv} options={[
             { value: 'sandbox', label: 'Sandbox' },
             { value: 'development', label: 'Development' },
             { value: 'production', label: 'Production' },
@@ -471,22 +471,48 @@ function estimatePassphraseStrength(p) {
 }
 
 function PassphraseStrengthMeter({ passphrase }) {
-  if (!passphrase) return null
-  const { score, label } = estimatePassphraseStrength(passphrase)
+  // Always rendered — even with no passphrase yet — so this row reserves its space up front and the
+  // confirm field below doesn't jump the moment the user starts typing. The empty state shows neutral grey
+  // bars and a muted "Passphrase strength" caption rather than an alarming "Very weak".
+  const has = !!passphrase
+  const { score, label } = has ? estimatePassphraseStrength(passphrase) : { score: 0, label: '' }
   const color = STRENGTH_COLORS[score]
   return (
     <div style={{ display: 'grid', gap: 5 }}>
       <div style={{ display: 'flex', gap: 4 }}>
         {[0, 1, 2, 3].map(i => (
-          <div key={i} style={{ height: 4, flex: 1, borderRadius: 2, background: i < score ? color : 'var(--border)' }} />
+          <div key={i} style={{ height: 4, flex: 1, borderRadius: 2, background: has && i < score ? color : 'var(--border)' }} />
         ))}
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--muted)' }}>
-        <span style={{ color }}>{label}</span>
-        {score < 2 ? <span>Consider a longer, more varied passphrase.</span> : null}
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--muted)', minHeight: 16 }}>
+        <span style={{ color: has ? color : 'var(--muted)' }}>{has ? label : 'Passphrase strength'}</span>
+        {has && score < 2 ? <span>Consider a longer, more varied passphrase.</span> : null}
       </div>
     </div>
   )
+}
+
+// Secret fields (vault passphrase/confirm, provider secret): the value is meant to live in a password
+// manager — we tell the user so, and the Production vault floor is ≥20 chars — so suppress the browser's
+// own autofill/suggestion dropdown and any autocorrect/capitalize/spellcheck that would mangle a pasted
+// secret. `autoComplete="new-password"` is the reliable cross-browser suppressor even on the unlock field
+// (`"off"` is widely ignored for password inputs). Copy/paste stays fully enabled — Input adds no onPaste
+// blocker — since typing a 20+ char manager-generated secret isn't realistic.
+const SENSITIVE_FIELD_PROPS = {
+  autoComplete: 'new-password',
+  autoCorrect: 'off',
+  autoCapitalize: 'off',
+  spellCheck: false,
+  // Password-manager extensions (1Password/LastPass/Bitwarden/Dashlane) inject a "choose a saved login"
+  // overlay on any type=password field and ignore autoComplete — these per-vendor opt-out attributes tell
+  // them to leave this one alone. The vault passphrase is a one-off secret to paste, not a site login to
+  // fill or capture. (`autoComplete="new-password"` already suppresses the *browser's own* saved-password
+  // dropdown; the dialog is not a <form> and never submits one, so the native save-password prompt — which
+  // fires on form submission — doesn't trigger either.)
+  'data-1p-ignore': 'true',
+  'data-lpignore': 'true',
+  'data-bwignore': 'true',
+  'data-form-type': 'other',
 }
 
 function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
@@ -526,12 +552,12 @@ function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
       }
     >
       <div style={{ display: 'grid', gap: 12 }}>
-        <Input type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)}
-          placeholder="Vault passphrase" autoFocus />
+        <Input type="password" value={passphrase} onChange={setPassphrase}
+          placeholder="Vault passphrase" autoFocus {...SENSITIVE_FIELD_PROPS} />
         {setting ? <PassphraseStrengthMeter passphrase={passphrase} /> : null}
         {setting ? (
-          <Input type="password" value={confirm} onChange={e => setConfirm(e.target.value)}
-            placeholder="Confirm passphrase" />
+          <Input type="password" value={confirm} onChange={setConfirm}
+            placeholder="Confirm passphrase" {...SENSITIVE_FIELD_PROPS} />
         ) : null}
         {setting ? (
           <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
@@ -581,6 +607,23 @@ function VaultStrip({ vault, onSet, onUnlock, onLock }) {
   )
 }
 
+// Load Plaid Link on demand (so normal visits don't pull the third-party script) exactly once. A cached
+// promise means repeated "Connect bank" attempts reuse the same <script> and global instead of appending a
+// fresh tag each time — which previously stacked multiple Link handlers, each firing its own onSuccess.
+let plaidScriptPromise = null
+function loadPlaidScript() {
+  if (window.Plaid) return Promise.resolve()
+  if (plaidScriptPromise) return plaidScriptPromise
+  plaidScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js'
+    script.onload = () => resolve()
+    script.onerror = () => { plaidScriptPromise = null; reject(new Error('Could not load Plaid Link.')) }
+    document.head.appendChild(script)
+  })
+  return plaidScriptPromise
+}
+
 function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCurrentUser, authEnabled, width, disabled }) {
   const [providers, setProviders] = useState(null)
   const [transport, setTransport] = useState(null)
@@ -592,6 +635,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   const [notice, setNotice] = useState(null)
   const [disconnectTarget, setDisconnectTarget] = useState(null) // { provider, external_id, institution }
   const [disconnecting, setDisconnecting] = useState(false)
+  const exchangingRef = useRef(false)  // guards against a double Plaid onSuccess exchanging the same token twice
 
   const isAdmin = !authEnabled || currentUser?.role === 'admin'
   // On a networked (non-loopback) bind, the app secret / bank tokens cross the wire, so connecting needs
@@ -616,11 +660,11 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
 
   useEffect(() => { refresh() }, [refresh])
 
-  // Accounts join a connection by external_id == plaid_item_id (until account.connection_id lands in
-  // phase 6b-3). The authoritative connection list comes from the backend (p.connections); accounts are
-  // matched into their group here.
-  const accountsForExternalId = useCallback((externalId) => {
-    return (accounts || []).filter(a => a.plaid_item_id === externalId && !CONNECTION_SENTINELS.has(externalId))
+  // Accounts link a connection by account.connection_id == connection.id (6b-3). CSV/manual accounts and
+  // disconnected ones have a NULL connection_id, so they naturally fall out of every connection group. The
+  // authoritative connection list comes from the backend (p.connections).
+  const accountsForConnectionId = useCallback((connectionId) => {
+    return (accounts || []).filter(a => a.connection_id === connectionId)
   }, [accounts])
 
   async function saveConfig(provider, payload) {
@@ -668,26 +712,27 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   async function startPlaidLink() {
     try {
       const { link_token } = await api.getLinkToken()
-      // Load Plaid Link on demand so normal visits don't pull in the third-party script.
-      const script = document.createElement('script')
-      script.src = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js'
-      document.head.appendChild(script)
-      script.onload = () => {
-        const handler = window.Plaid.create({
-          token: link_token,
-          onSuccess: async (public_token, metadata) => {
-            try {
-              await api.exchangeToken(public_token, metadata.institution?.name)
-              await onAccountsChanged?.()
-              await refresh()
-            } catch (e) {
-              setNotice({ title: 'Could not finish connecting', description: e.message })
-            }
-          },
-          onExit: (err) => { if (err) console.error('Plaid Link error', err) },
-        })
-        handler.open()
-      }
+      await loadPlaidScript()  // loaded once and reused — not re-appended per attempt (would stack handlers)
+      const handler = window.Plaid.create({
+        token: link_token,
+        onSuccess: async (public_token, metadata) => {
+          // Plaid's onSuccess can fire more than once; exchange is single-use per token, so guard against a
+          // second concurrent call racing into /exchange (the backend is idempotent too, belt-and-braces).
+          if (exchangingRef.current) return
+          exchangingRef.current = true
+          try {
+            await api.exchangeToken(public_token, metadata.institution?.name)
+            await onAccountsChanged?.()
+            await refresh()
+          } catch (e) {
+            setNotice({ title: 'Could not finish connecting', description: e.message })
+          } finally {
+            exchangingRef.current = false
+          }
+        },
+        onExit: (err) => { if (err) console.error('Plaid Link error', err) },
+      })
+      handler.open()
     } catch (e) {
       setNotice({ title: 'Could not start the connection', description: e.message })
     }
@@ -784,9 +829,9 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
               {connections.length ? (
                 <div style={{ display: 'grid', gap: 10 }}>
                   {connections.map(c => {
-                    const accts = accountsForExternalId(c.external_id)
+                    const accts = accountsForConnectionId(c.id)
                     return (
-                      <div key={c.external_id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', display: 'grid', gap: 6 }}>
+                      <div key={c.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', display: 'grid', gap: 6 }}>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                           <span style={{ fontWeight: 600, fontSize: 13 }}>{c.institution || 'Linked bank'}</span>
                           <Button variant="ghost" small style={{ marginLeft: 'auto' }}
@@ -2256,6 +2301,7 @@ export default function Accounts() {
   const [confirmDeleteId, setConfirmDeleteId] = useState(null)
   const [pendingTrashAccount, setPendingTrashAccount] = useState(null)
   const [noticeDialog, setNoticeDialog] = useState(null)
+  const [promoteTagsDialog, setPromoteTagsDialog] = useState(null)
   const [pendingOwnerDelete, setPendingOwnerDelete] = useState(null)
   const [ownerRenameDialog, setOwnerRenameDialog] = useState(null)
   const [showCreateAccount, setShowCreateAccount] = useState(false)
@@ -2410,6 +2456,14 @@ export default function Accounts() {
       setNoticeDialog({ title: 'Could not update account tags', description: error?.message || 'Please try again.' })
       reloadAccounts().catch(() => { })
     }
+  }
+
+  async function confirmPromoteTags() {
+    const dialog = promoteTagsDialog
+    setPromoteTagsDialog(null)
+    if (!dialog) return
+    await handleSetAccountTags(dialog.targetId, dialog.nextTagIds)
+    notifyAccountsChanged()
   }
 
   function handleAccountTagCreated(created) {
@@ -2742,12 +2796,22 @@ export default function Accounts() {
       await api.attachAccount(source.id, target.id)
       await reloadAccounts()
       notifyAccountsChanged()
-      if (Array.isArray(source.tag_ids) && source.tag_ids.length > 0) {
-        const sourceName = source.display_name || source.name
-        const targetName = target.display_name || target.name
-        setNoticeDialog({
-          title: 'Tags set aside on merge',
-          description: `"${sourceName}" is now merged under "${targetName}", so its own tags no longer apply — "${targetName}"'s tags govern these transactions. Ungroup "${sourceName}" to bring its tags back.`,
+      // Merging sets the child's own account tags aside — the parent's tags govern its transactions now
+      // (see data-model.md). Offer to *promote* only the child's tags the parent lacks, so they keep
+      // applying; overlapping tags are already governed by the parent, and identical/no extra tags merge
+      // silently. Promotion is one-way (a later detach won't strip the promoted tags).
+      const childTagIds = Array.isArray(source.tag_ids) ? source.tag_ids : []
+      const parentTagIds = Array.isArray(target.tag_ids) ? target.tag_ids : []
+      const missingTagIds = childTagIds.filter(id => !parentTagIds.includes(id))
+      if (missingTagIds.length > 0) {
+        setPromoteTagsDialog({
+          sourceName: source.display_name || source.name,
+          targetName: target.display_name || target.name,
+          targetId: target.id,
+          nextTagIds: [...parentTagIds, ...missingTagIds],
+          tagNames: missingTagIds
+            .map(id => availableTags.find(t => t.id === id)?.name)
+            .filter(Boolean),
         })
       }
     } catch (error) {
@@ -3050,6 +3114,18 @@ export default function Accounts() {
           title={noticeDialog.title}
           description={noticeDialog.description}
           onClose={() => setNoticeDialog(null)}
+        />
+      ) : null}
+
+      {promoteTagsDialog ? (
+        <AppConfirmDialog
+          title="Bring tags along?"
+          description={`Merging "${promoteTagsDialog.sourceName}" under "${promoteTagsDialog.targetName}" sets its own tags aside — while merged, the tags on "${promoteTagsDialog.targetName}" govern these transactions. "${promoteTagsDialog.sourceName}" has tags that "${promoteTagsDialog.targetName}" doesn't: ${promoteTagsDialog.tagNames.join(', ')}. Promote them so they keep applying? Promotion stays even if you ungroup later.`}
+          confirmLabel="Promote tags"
+          cancelLabel="Keep separate"
+          onConfirm={confirmPromoteTags}
+          onCancel={() => setPromoteTagsDialog(null)}
+          width="min(480px, 100%)"
         />
       ) : null}
 

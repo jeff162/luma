@@ -56,7 +56,7 @@ class ExcludedFromTotalsFlagTests(unittest.TestCase):
             with get_db() as conn:
                 conn.execute(
                     """
-                    INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name,
+                    INSERT INTO account (id, external_account_id, provider, name, display_name,
                                          type, subtype, mask, owner_id, parent_account_id, trashed_at)
                     VALUES (?, ?, 'fixture', 'Card', 'Card', 'credit', 'credit_card', '1', ?, NULL, NULL)
                     """,

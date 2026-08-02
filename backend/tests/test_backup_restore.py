@@ -104,7 +104,7 @@ class BackupRestoreTests(unittest.TestCase):
                 for acc in (a1, a2):
                     conn.execute(
                         """
-                        INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, subtype, mask, owner_id, parent_account_id, trashed_at)
+                        INSERT INTO account (id, external_account_id, provider, name, display_name, type, subtype, mask, owner_id, parent_account_id, trashed_at)
                         VALUES (?, ?, 'fixture', ?, ?, 'checking', 'checking', '1', ?, NULL, NULL)
                         """,
                         (acc, f"plaid_{acc}", f"Acct {acc[:4]}", f"Acct {acc[:4]}", SHARED_OWNER_ID),
@@ -261,6 +261,42 @@ class BackupRestoreTests(unittest.TestCase):
             restore_backup(RestoreRequest(data=payload))  # must not raise OperationalError
 
         self.assertEqual(self._counts(tables), before)
+
+    def test_restore_v7_translates_legacy_account_columns(self):
+        # A pre-6b-3 (version 7) backup carries the old plaid_account_id / plaid_item_id columns. Restore
+        # must translate them: the handle → external_account_id; a real item_id relinks to its live
+        # connection (id + provider); the csv/manual sentinels become an origin-only provider with no
+        # connection. `insert_rows` would otherwise silently drop the unknown v7 keys.
+        with self._use_db_path():
+            with get_db() as conn:
+                # connection is credential data — not wiped by restore, not carried in the data payload.
+                conn.execute(
+                    "INSERT INTO connection (id, provider, external_id, credential) VALUES ('c1', 'plaid', 'item-9', '')"
+                )
+            payload = {
+                "version": 7,
+                "schema_version": 7,
+                "owners": [{"id": "o1", "name": "Me", "color": "#111111"}],
+                "accounts": [
+                    {"id": "a1", "plaid_account_id": "acct-9", "plaid_item_id": "item-9",
+                     "name": "Bank", "display_name": "Bank", "type": "depository", "owner_id": "o1", "parent_account_id": None},
+                    {"id": "a2", "plaid_account_id": "csv_x", "plaid_item_id": "csv_import",
+                     "name": "CSV", "display_name": "CSV", "type": "depository", "owner_id": "o1", "parent_account_id": None},
+                    {"id": "a3", "plaid_account_id": None, "plaid_item_id": "manual",
+                     "name": "Manual", "display_name": "Manual", "type": "other", "owner_id": "o1", "parent_account_id": None},
+                ],
+            }
+            restore_backup(RestoreRequest(data=payload, force=True))
+            with get_db() as conn:
+                rows = {
+                    r["id"]: r
+                    for r in conn.execute("SELECT id, external_account_id, connection_id, provider FROM account")
+                }
+        self.assertEqual((rows["a1"]["external_account_id"], rows["a1"]["connection_id"], rows["a1"]["provider"]),
+                         ("acct-9", "c1", "plaid"))
+        self.assertEqual((rows["a2"]["external_account_id"], rows["a2"]["connection_id"], rows["a2"]["provider"]),
+                         ("csv_x", None, "csv"))
+        self.assertEqual((rows["a3"]["connection_id"], rows["a3"]["provider"]), (None, "manual"))
 
     def test_restore_rejects_unsupported_version(self):
         with self._use_db_path():

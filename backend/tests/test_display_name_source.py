@@ -50,7 +50,7 @@ class DisplayNameSourceTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 """INSERT INTO account
-                     (id, plaid_account_id, plaid_item_id, name, display_name, type, subtype, mask, owner_id)
+                     (id, external_account_id, provider, name, display_name, type, subtype, mask, owner_id)
                    VALUES (?, ?, 'fixture', 'Checking', 'Checking', 'checking', 'checking', '1234', ?)""",
                 (account_id, f"plaid_{account_id}", SHARED_OWNER_ID),
             )

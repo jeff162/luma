@@ -29,7 +29,7 @@ class CrossAccountTransferMatchTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             for acc_id, name in (("paypal", "PayPal"), ("checking", "Northgate Checking"), ("card", "Northgate Rewards")):
                 conn.execute(
-                    """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, owner_id)
+                    """INSERT INTO account (id, external_account_id, provider, name, display_name, type, owner_id)
                        VALUES (?, ?, 'fixture', ?, ?, 'checking', ?)""",
                     (acc_id, f"p_{acc_id}", name, name, SHARED_OWNER_ID),
                 )

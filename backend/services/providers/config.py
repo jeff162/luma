@@ -78,10 +78,10 @@ def list_connections(provider: str) -> list[dict]:
     the stable external handle and institution only — never the credential."""
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT external_id, institution FROM connection WHERE provider = ? ORDER BY rowid",
+            "SELECT id, external_id, institution FROM connection WHERE provider = ? ORDER BY rowid",
             (provider,),
         ).fetchall()
-    return [{"external_id": r["external_id"], "institution": r["institution"]} for r in rows]
+    return [{"id": r["id"], "external_id": r["external_id"], "institution": r["institution"]} for r in rows]
 
 
 def resolve_app_config(user: dict, provider: str) -> dict | None:

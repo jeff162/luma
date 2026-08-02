@@ -29,7 +29,7 @@ class RuleCleanupTrashTests(unittest.TestCase):
         init_db(str(self.db_path))
         with self._use_db(), get_db() as conn:
             conn.execute(
-                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, owner_id)
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type, owner_id)
                    VALUES ('acc', 'p_acc', 'fix', 'acc', 'acc', 'depository', ?)""",
                 (SHARED_OWNER_ID,),
             )

@@ -95,55 +95,60 @@ def exchange_token(body: PublicTokenExchange, request: Request):
 
     with get_db() as conn:
         default_owner_id = resolve_default_owner_id(conn, None)
-        # A connection is item/connection-centric: one exchange can fan out to many accounts, and later
-        # sync discovers the credential by connection, matching transactions to accounts by external id.
-        for acc in accounts:
-            existing = conn.execute(
-                "SELECT id FROM account WHERE plaid_account_id = ?",
-                (acc["external_account_id"],),
-            ).fetchone()
-            if not existing:
-                conn.execute(
-                    """
-                    INSERT INTO account
-                        (id, plaid_account_id, plaid_item_id, name, display_name, institution, type, subtype, mask, owner_id, parent_account_id, trashed_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,NULL,NULL)
-                    """,
-                    (
-                        str(uuid.uuid4()),
-                        acc["external_account_id"],
-                        external_id,
-                        acc["name"],
-                        acc["name"],
-                        body.institution_name,
-                        acc["type"],
-                        acc["subtype"],
-                        acc["mask"],
-                        default_owner_id,
-                    ),
-                )
-
         # Store the credential on the connection even if account rows are edited later; sync needs a
         # stable credential lookup keyed by the connection's provider handle, not the local account rows.
+        # The connection is upserted first so its id is available to stamp on the account rows below.
         stored_credential, stored_credential_enc = crypto_service.encrypt_connection_credential(
             request.state.user, PROVIDER, external_id, credential
         )
-        existing_conn = conn.execute(
+        # Upsert the connection atomically on its (provider, external_id) unique key. A user can complete
+        # Link more than once for the same bank (Plaid's onSuccess may fire twice; a re-link re-exchanges),
+        # and those calls can race — a check-then-insert would let the loser hit the UNIQUE constraint and
+        # 500. ON CONFLICT makes a duplicate exchange a clean credential-refresh instead.
+        conn.execute(
+            """
+            INSERT INTO connection (id, provider, external_id, credential, credential_enc, institution)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(provider, external_id) DO UPDATE SET
+                credential = excluded.credential,
+                credential_enc = excluded.credential_enc,
+                institution = COALESCE(excluded.institution, connection.institution)
+            """,
+            (str(uuid.uuid4()), PROVIDER, external_id, stored_credential, stored_credential_enc, body.institution_name),
+        )
+        connection_id = conn.execute(
             "SELECT id FROM connection WHERE provider = ? AND external_id = ?",
             (PROVIDER, external_id),
-        ).fetchone()
-        if existing_conn:
-            conn.execute(
-                "UPDATE connection SET credential = ?, credential_enc = ?, institution = COALESCE(?, institution) WHERE id = ?",
-                (stored_credential, stored_credential_enc, body.institution_name, existing_conn["id"]),
-            )
-        else:
+        ).fetchone()["id"]
+
+        # A connection is item/connection-centric: one exchange can fan out to many accounts, and later
+        # sync discovers the credential by connection, matching transactions to accounts by external id.
+        # Upsert on external_account_id (also idempotent under the duplicate/racing exchange above): re-stamp
+        # only the connection linkage — never the user-editable name/display_name/owner/type — so a re-link
+        # of a previously-disconnected bank (its accounts' connection_id went NULL) re-attaches cleanly.
+        for acc in accounts:
             conn.execute(
                 """
-                INSERT INTO connection (id, provider, external_id, credential, credential_enc, institution)
-                VALUES (?,?,?,?,?,?)
+                INSERT INTO account
+                    (id, external_account_id, connection_id, provider, name, display_name, institution, type, subtype, mask, owner_id, parent_account_id, trashed_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)
+                ON CONFLICT(external_account_id) DO UPDATE SET
+                    connection_id = excluded.connection_id,
+                    provider = excluded.provider
                 """,
-                (str(uuid.uuid4()), PROVIDER, external_id, stored_credential, stored_credential_enc, body.institution_name),
+                (
+                    str(uuid.uuid4()),
+                    acc["external_account_id"],
+                    connection_id,
+                    PROVIDER,
+                    acc["name"],
+                    acc["name"],
+                    body.institution_name,
+                    acc["type"],
+                    acc["subtype"],
+                    acc["mask"],
+                    default_owner_id,
+                ),
             )
 
     return {"ok": True, "accounts_added": len(accounts)}

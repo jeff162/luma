@@ -52,13 +52,23 @@ class ConnectionMigrationTests(unittest.TestCase):
     def tearDown(self):
         self._stack.__exit__(None, None, None)
 
+    def _add_legacy_plaid_schema(self, conn):
+        # The v18 backfill runs against the pre-v18/v20 shape: a `plaid_item` table (dropped in v20) and an
+        # `account.plaid_item_id` column (renamed in v20). init_db builds the *current* schema, so hand-build
+        # the legacy bits the migration reads — the "isolated per-migration" pattern this helper documents.
+        conn.execute(
+            "CREATE TABLE plaid_item (item_id TEXT PRIMARY KEY, access_token TEXT NOT NULL DEFAULT '', access_token_enc TEXT)"
+        )
+        conn.execute("ALTER TABLE account ADD COLUMN plaid_item_id TEXT")
+
     def test_backfill_folds_plaid_items_into_connections(self):
         with database.get_db(db_path=self.data_path) as conn:
+            self._add_legacy_plaid_schema(conn)
             conn.execute(
                 "INSERT INTO plaid_item (item_id, access_token, access_token_enc) VALUES ('item-1', '', 'enc-blob')"
             )
             conn.execute(
-                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, institution)
+                """INSERT INTO account (id, external_account_id, plaid_item_id, name, display_name, institution)
                    VALUES ('a1', 'acct-1', 'item-1', 'Checking', 'Checking', 'Test Bank')"""
             )
             # Fresh init_db already created the (empty) connection table; simulate the upgrade data half.
@@ -72,8 +82,51 @@ class ConnectionMigrationTests(unittest.TestCase):
         self.assertEqual(rows[0]["credential_enc"], "enc-blob")  # ciphertext carried verbatim (no re-key)
         self.assertEqual(rows[0]["institution"], "Test Bank")
 
+    def test_v20_relinks_accounts_and_drops_plaid_item(self):
+        # v20 makes the account→connection link provider-neutral. Rebuild the pre-v20 account shape (the
+        # renamed columns + the plaid_item_id string link) and a plaid_item table, then run the migration and
+        # assert: plaid columns are gone, a real item_id relinks to its connection (id + provider), and the
+        # csv/manual sentinels become an origin-only provider with a NULL connection.
+        with database.get_db(db_path=self.data_path) as conn:
+            conn.execute("DROP TABLE account")
+            conn.execute("""
+                CREATE TABLE account (
+                    id TEXT PRIMARY KEY, plaid_account_id TEXT UNIQUE, plaid_item_id TEXT NOT NULL,
+                    name TEXT NOT NULL, display_name TEXT NOT NULL, institution TEXT, type TEXT,
+                    subtype TEXT, mask TEXT, owner_id TEXT, parent_account_id TEXT, trashed_at TEXT)
+            """)
+            conn.execute("CREATE TABLE plaid_item (item_id TEXT PRIMARY KEY)")
+            conn.execute(
+                "INSERT INTO connection (id, provider, external_id, credential) VALUES ('c1', 'plaid', 'item-1', '')"
+            )
+            for row in (
+                ("a1", "acct-1", "item-1", "Bank"),      # linked → connection c1
+                ("a2", "csv_abc", "csv_import", "CSV"),  # CSV import → provider 'csv', no connection
+                ("a3", None, "manual", "Manual"),        # manual → provider 'manual', no connection
+            ):
+                conn.execute(
+                    "INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name) VALUES (?,?,?,?,?)",
+                    (*row, row[3]),
+                )
+            database._account_connection_columns(conn)
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(account)")}
+            tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            rows = {
+                r["id"]: r
+                for r in conn.execute("SELECT id, external_account_id, connection_id, provider FROM account")
+            }
+        self.assertIn("external_account_id", cols)
+        self.assertNotIn("plaid_account_id", cols)
+        self.assertNotIn("plaid_item_id", cols)
+        self.assertNotIn("plaid_item", tables)  # the vestigial table is dropped
+        self.assertEqual((rows["a1"]["external_account_id"], rows["a1"]["connection_id"], rows["a1"]["provider"]),
+                         ("acct-1", "c1", "plaid"))
+        self.assertEqual((rows["a2"]["connection_id"], rows["a2"]["provider"]), (None, "csv"))
+        self.assertEqual((rows["a3"]["connection_id"], rows["a3"]["provider"]), (None, "manual"))
+
     def test_backfill_is_idempotent(self):
         with database.get_db(db_path=self.data_path) as conn:
+            self._add_legacy_plaid_schema(conn)
             conn.execute(
                 "INSERT INTO plaid_item (item_id, access_token, access_token_enc) VALUES ('item-1', '', 'enc-blob')"
             )
@@ -148,6 +201,12 @@ class CredentialBackupTests(unittest.TestCase):
             plaid = next(p for p in client.get("/api/providers").json()["providers"] if p["provider"] == "plaid")
             self.assertEqual(len(plaid["connections"]), 0)
 
+            # The account survives the disconnect (its rows are kept); its connection_id drops to NULL via
+            # the account.connection_id → connection(id) ON DELETE SET NULL FK — it's just no longer linked.
+            accounts = client.get("/api/accounts").json()
+            acct = next(a for a in accounts if a["name"] == "Checking")
+            self.assertIsNone(acct["connection_id"])
+
     def test_exchange_writes_a_connection_and_status_counts_it(self):
         with api_client() as (client, _):
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
@@ -157,6 +216,32 @@ class CredentialBackupTests(unittest.TestCase):
             # 1 connection + 1 provider_config (the app credential _connect_one saves): both are vaulted
             # secrets the credentials backup carries.
             self.assertEqual(status["credential_count"], 2)
+
+    def test_repeated_exchange_is_idempotent(self):
+        # A user can complete Plaid Link more than once for the same bank (onSuccess double-fire, re-link),
+        # which re-exchanges to the same item_id. That must upsert cleanly (200), not 500 on the connection's
+        # UNIQUE(provider, external_id) or the account's UNIQUE(external_account_id).
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            self._connect_one(client)
+            self._connect_one(client)  # second exchange for the same item — must not raise
+            plaid = next(p for p in client.get("/api/providers").json()["providers"] if p["provider"] == "plaid")
+            self.assertEqual(len(plaid["connections"]), 1)  # de-duplicated, not a second connection
+            checking = [a for a in client.get("/api/accounts").json() if a["name"] == "Checking"]
+            self.assertEqual(len(checking), 1)  # account not duplicated either
+            self.assertIsNotNone(checking[0]["connection_id"])  # re-stamped to the (single) connection
+
+    def test_reexchange_reattaches_a_disconnected_account(self):
+        # Reconnecting a bank whose accounts were left dangling by a prior disconnect (connection_id NULL)
+        # re-attaches them: the account upsert re-stamps connection_id on conflict.
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            self._connect_one(client)
+            with mock.patch("backend.services.plaid_service.remove_item"):
+                client.post("/api/providers/plaid/disconnect", json={"external_id": "item-1"})
+            self.assertIsNone(next(a for a in client.get("/api/accounts").json() if a["name"] == "Checking")["connection_id"])
+            self._connect_one(client)  # reconnect the same bank
+            self.assertIsNotNone(next(a for a in client.get("/api/accounts").json() if a["name"] == "Checking")["connection_id"])
 
     def test_credentials_export_restore_roundtrip(self):
         with api_client() as (client, _):

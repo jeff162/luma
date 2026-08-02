@@ -166,8 +166,8 @@ def load_demo_data(conn, scope_id: str | None = None) -> dict:
     }
     for aid, name, acct_type, owner_id in accounts.values():
         conn.execute(
-            """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, owner_id)
-               VALUES (?, NULL, 'manual', ?, ?, ?, ?)""",
+            """INSERT INTO account (id, external_account_id, connection_id, provider, name, display_name, type, owner_id)
+               VALUES (?, NULL, NULL, 'manual', ?, ?, ?, ?)""",
             (aid, name, name, acct_type, owner_id),
         )
     name_of = {key: accounts[key][1] for key in accounts}

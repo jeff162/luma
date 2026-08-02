@@ -82,7 +82,7 @@ def run_sync(days: int = 30, request: Request = None):
 
             for t in txns:
                 acc = conn.execute(
-                    "SELECT id, owner_id FROM account WHERE plaid_account_id = ?",
+                    "SELECT id, owner_id FROM account WHERE external_account_id = ?",
                     (t["external_account_id"],),
                 ).fetchone()
                 if not acc:

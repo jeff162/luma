@@ -20,7 +20,7 @@ from backend.services.duplicate_detection import account_skipped_duplicate_summa
 def _account(conn, account_id, name, display_name):
     conn.execute(
         """
-        INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type,
+        INSERT INTO account (id, external_account_id, provider, name, display_name, type,
                              subtype, mask, owner_id, parent_account_id, trashed_at)
         VALUES (?, ?, 'manual', ?, ?, 'credit', NULL, NULL, NULL, NULL, NULL)
         """,

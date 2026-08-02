@@ -31,7 +31,7 @@ class AccountTypeCriterionTests(unittest.TestCase):
         with self._use_db(), get_db() as conn:
             for acct_id, acct_type in (("pp", "paypal"), ("chk", "depository")):
                 conn.execute(
-                    """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, owner_id)
+                    """INSERT INTO account (id, external_account_id, provider, name, display_name, type, owner_id)
                        VALUES (?, ?, 'fix', ?, ?, ?, ?)""",
                     (acct_id, f"p_{acct_id}", acct_id, acct_id, acct_type, SHARED_OWNER_ID),
                 )
@@ -95,7 +95,7 @@ class AccountTypeCriterionTests(unittest.TestCase):
         # A child account merged under a PayPal parent inherits the parent's type for matching.
         with self._use_db(), get_db() as conn:
             conn.execute(
-                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, owner_id, parent_account_id)
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type, owner_id, parent_account_id)
                    VALUES ('ppchild', 'p_ppchild', 'fix', 'child', 'child', 'depository', ?, 'pp')""",
                 (SHARED_OWNER_ID,),
             )

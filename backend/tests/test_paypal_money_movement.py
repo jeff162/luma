@@ -79,7 +79,7 @@ class PaypalMoneyMovementTests(unittest.IsolatedAsyncioTestCase):
         account_id = str(uuid.uuid4())
         with self._use_db_path(), get_db() as conn:
             conn.execute(
-                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, subtype, mask, owner_id, parent_account_id, trashed_at)
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type, subtype, mask, owner_id, parent_account_id, trashed_at)
                    VALUES (?, ?, 'fixture', ?, ?, 'depository', 'checking', NULL, ?, NULL, NULL)""",
                 (account_id, f"p_{account_id}", name, name, SHARED_OWNER_ID),
             )

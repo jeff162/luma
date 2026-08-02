@@ -46,7 +46,7 @@ class AccountTagTests(unittest.TestCase):
                 conn.execute(
                     """
                     INSERT INTO account
-                      (id, plaid_account_id, plaid_item_id, name, display_name, type, subtype, mask, owner_id, parent_account_id, trashed_at)
+                      (id, external_account_id, provider, name, display_name, type, subtype, mask, owner_id, parent_account_id, trashed_at)
                     VALUES (?, ?, ?, ?, ?, 'checking', 'checking', '1234', ?, ?, NULL)
                     """,
                     (account_id, f"plaid_{account_id}", "fixture_account_tags", name, name, SHARED_OWNER_ID, parent_account_id),

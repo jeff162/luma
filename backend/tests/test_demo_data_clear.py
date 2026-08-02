@@ -72,7 +72,7 @@ class DemoDataClearTests(unittest.TestCase):
         # Simulate live data: an account, no demo marker. The wipe must refuse and leave it intact.
         with get_db(str(self.db_path)) as conn:
             conn.execute(
-                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type)
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type)
                    VALUES ('a1', NULL, 'manual', 'Real Acct', 'Real Acct', 'depository')"""
             )
         before = self._counts()

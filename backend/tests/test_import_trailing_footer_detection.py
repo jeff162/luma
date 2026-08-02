@@ -30,7 +30,7 @@ class TrailingFooterDetectionTests(unittest.TestCase):
         init_db(str(self.db_path))
         with get_db(str(self.db_path)) as conn:
             conn.execute(
-                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type)
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type)
                    VALUES ('acc-chk', NULL, 'manual', 'Checking', 'Checking', 'depository')"""
             )
 

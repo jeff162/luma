@@ -85,7 +85,7 @@ class CategorizerPerfContractTests(unittest.TestCase):
         account_id = str(uuid.uuid4())
         with self._use_db_path(), get_db() as conn:
             conn.execute(
-                """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type,
+                """INSERT INTO account (id, external_account_id, provider, name, display_name, type,
                    subtype, mask, owner_id, parent_account_id, trashed_at)
                    VALUES (?, ?, 'fixture', 'Acct', 'Acct', 'credit', 'credit_card', NULL, ?, NULL, NULL)""",
                 (account_id, f"plaid_{account_id}", SHARED_OWNER_ID),

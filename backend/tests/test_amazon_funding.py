@@ -30,7 +30,7 @@ class AmazonFundingMapTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             for acc in ("amazon", "amazon2", "card", "card2"):
                 conn.execute(
-                    """INSERT INTO account (id, plaid_account_id, plaid_item_id, name, display_name, type, owner_id)
+                    """INSERT INTO account (id, external_account_id, provider, name, display_name, type, owner_id)
                        VALUES (?, ?, 'fixture', ?, ?, 'credit', ?)""",
                     (acc, f"p_{acc}", acc, acc, SHARED_OWNER_ID),
                 )
