@@ -92,7 +92,7 @@ def get_tasks(request: Request = None):
                     "description": f"{unowned} account{'s have' if unowned != 1 else ' has'} no owner assigned. "
                                    "Assign each account to a specific owner.",
                     "count":       unowned,
-                    "link":        "/accounts",
+                    "link":        "/accounts?tab=accounts",
                     "link_label":  "Review accounts",
                     "severity":    SEVERITY_WARNING,
                 })

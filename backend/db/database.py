@@ -114,9 +114,10 @@ def get_db(db_path: str | None = None):
 # `category_rule.last_effect_date` (stale-rule signal) + `category_rule.deleted_at` (rules trash).
 # v18 adds the provider-agnostic `connection` credential store; v19 adds `provider_config` (app creds).
 # v20 makes the account→connection link provider-neutral (external_account_id / connection_id / provider,
-# drop plaid_item_id) and drops the vestigial `plaid_item` table.
+# drop plaid_item_id) and drops the vestigial `plaid_item` table. v23 adds the `connection_sync_log`
+# diagnostics table (dev-options provider-sync log; see routers/sync.py).
 
-CURRENT_VERSION = 22
+CURRENT_VERSION = 23
 
 MIGRATIONS = {}
 
@@ -670,6 +671,39 @@ def _add_connection_sync_cursor(conn):
     conn.execute("ALTER TABLE connection ADD COLUMN initial_sync_complete INTEGER NOT NULL DEFAULT 0")
 
 
+@migration(23)
+def _add_connection_sync_log(conn):
+    # Developer-options diagnostic log of provider sync calls, so a sync that under-fetches (e.g. only the
+    # ~30-day Initial Update lands, never the historical backfill) can be explained from the recorded
+    # transactions_update_status sequence rather than guessed at. Purely additive; captured only when
+    # developer options are enabled (see routers/sync.py). Fresh installs get the table from the connection
+    # baseline CREATE in init_db; existing databases gain it here. The started_at index is created in
+    # init_db just after migrations, where the table is guaranteed to exist on both paths.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS connection_sync_log (
+            id              TEXT PRIMARY KEY,
+            connection_id   TEXT REFERENCES connection(id) ON DELETE SET NULL,
+            provider        TEXT,
+            institution     TEXT,
+            started_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            finished_at     TEXT,
+            mode            TEXT,
+            days_requested  INTEGER,
+            cursor_before   TEXT,
+            cursor_after    TEXT,
+            pages           INTEGER NOT NULL DEFAULT 0,
+            added           INTEGER NOT NULL DEFAULT 0,
+            updated         INTEGER NOT NULL DEFAULT 0,
+            removed         INTEGER NOT NULL DEFAULT 0,
+            skipped         INTEGER NOT NULL DEFAULT 0,
+            status_sequence TEXT,
+            final_status    TEXT,
+            became_complete INTEGER NOT NULL DEFAULT 0,
+            error           TEXT
+        )
+    """)
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -846,6 +880,40 @@ def init_db(db_path: str | None = None):
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_provider_external
                 ON connection(provider, external_id);
+
+            -- Diagnostic log of provider sync calls (one row per connection per /sync call), captured only
+            -- when developer options are enabled. Provider-agnostic by construction: it records the neutral
+            -- fields every adapter speaks (see services/providers/base.py), so it serves Plaid today and any
+            -- future aggregator unchanged. Its purpose is to explain *why* a sync fetched what it did —
+            -- chiefly the historical-backfill readiness: `status_sequence` is the JSON list of the adapter's
+            -- update_status signal (Plaid's transactions_update_status today) seen across the drained pages,
+            -- and `became_complete` records the call that flipped the connection out of its initial pull.
+            -- Cursors are stored only as a short fingerprint (length + prefix), never the full opaque token.
+            -- connection_id is ON DELETE SET NULL so a disconnect (which deletes the connection) leaves its
+            -- diagnostics readable via the denormalized provider/institution snapshot. See routers/sync.py.
+            CREATE TABLE IF NOT EXISTS connection_sync_log (
+                id              TEXT PRIMARY KEY,
+                connection_id   TEXT REFERENCES connection(id) ON DELETE SET NULL,
+                provider        TEXT,
+                institution     TEXT,
+                started_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                finished_at     TEXT,
+                mode            TEXT,     -- 'initial' (historical backfill) | 'routine' (cursor deltas)
+                days_requested  INTEGER,
+                cursor_before   TEXT,
+                cursor_after    TEXT,
+                pages           INTEGER NOT NULL DEFAULT 0,
+                added           INTEGER NOT NULL DEFAULT 0,
+                updated         INTEGER NOT NULL DEFAULT 0,
+                removed         INTEGER NOT NULL DEFAULT 0,
+                skipped         INTEGER NOT NULL DEFAULT 0,
+                status_sequence TEXT,     -- JSON array of transactions_update_status, one per drained page
+                final_status    TEXT,
+                became_complete INTEGER NOT NULL DEFAULT 0,
+                error           TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_connection_sync_log_started
+                ON connection_sync_log(started_at);
 
             -- App-level provider credentials (one row per provider): the app secret that identifies the
             -- Luma app to the aggregator (Plaid's client_id + secret), moved out of `.env` into the DB

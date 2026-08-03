@@ -560,9 +560,14 @@ export function ImportHistorySection({
                                       // resolves to, the user mapped it after the import completed. Surface both
                                       // so the file card matches what the user saw at import time, with the mapped
                                       // destination as a faded suffix.
-                                      const showMapping = !a.was_skipped && mappedLabel && csvLabel && mappedLabel !== csvLabel
+                                      // For a data-source connection the csv_value is the provider's opaque
+                                      // external account id — of no use to the user — so show only the account
+                                      // name it maps to (no id, no mapping arrow). CSV cards keep the raw file
+                                      // label → mapped-account form, which is meaningful (it's what the file
+                                      // called the account, and how the user mapped it).
+                                      const showMapping = !isConnection && !a.was_skipped && mappedLabel && csvLabel && mappedLabel !== csvLabel
                                       const truncate = s => (s && s.length > 22 ? s.slice(0, 20) + '…' : s)
-                                      const primary = csvLabel
+                                      const primary = isConnection ? (mappedLabel || csvLabel) : csvLabel
                                       const baseTooltip = showMapping
                                         ? `${csvLabel} → ${mappedLabel}`
                                         : (a.was_skipped ? csvLabel : (mappedLabel || csvLabel))

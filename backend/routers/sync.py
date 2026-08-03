@@ -14,11 +14,12 @@ reuse of the shared categorization engine, and — for a connection's first (his
 
 import json
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 
 from backend.app_logging import log_warning
 from backend.db.database import get_db
+from backend.runtime_config import developer_options_enabled
 from backend.services import crypto_service
 from backend.services.providers import UnknownProviderError, get_adapter, resolve_app_config
 from backend.services.categorizer import (
@@ -127,6 +128,56 @@ def resolve_sync_period_batch(conn, connection, on_date: date) -> str:
 
 _MAX_PAGES_PER_CALL = 50  # safety cap (≤ 25k txns/request) so a misbehaving has_more can't loop forever
 
+# Cap on retained connection_sync_log rows: a diagnostic aid, not an audit trail — keep the most recent
+# window and prune the rest so repeated dev syncs can't grow the table unbounded.
+_SYNC_LOG_RETENTION = 500
+
+
+def _utcnow_iso() -> str:
+    # Note %S before the fractional %f: Python's %f is *microseconds*, not SQLite's seconds.fraction, so
+    # omitting %S yields an unparseable "HH:MM:<micros>Z" string (renders as "Invalid Date" in the viewer).
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _cursor_fingerprint(cursor: str | None) -> str | None:
+    """A short, non-reversible marker for a provider cursor — its length plus a leading slice — so the
+    diagnostics log can show whether the cursor was present and whether it advanced, without persisting the
+    full opaque paging token."""
+    if not cursor:
+        return None
+    return f"len={len(cursor)}·{cursor[:8]}"
+
+
+def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
+    """Persist this sync's per-connection diagnostic rows and prune to the retention window. Called only
+    when developer options are enabled; never lets a logging failure affect the sync itself."""
+    for r in rows:
+        conn.execute(
+            """
+            INSERT INTO connection_sync_log
+                (id, connection_id, provider, institution, started_at, finished_at, mode, days_requested,
+                 cursor_before, cursor_after, pages, added, updated, removed, skipped, status_sequence,
+                 final_status, became_complete, error)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                str(uuid.uuid4()), r["connection_id"], r["provider"], r["institution"], r["started_at"],
+                r["finished_at"], r["mode"], r["days_requested"], r["cursor_before"], r["cursor_after"],
+                r["pages"], r["added"], r["updated"], r["removed"], r["skipped"],
+                json.dumps(r["status_sequence"]), r["final_status"], 1 if r["became_complete"] else 0,
+                r["error"],
+            ),
+        )
+    conn.execute(
+        """
+        DELETE FROM connection_sync_log
+        WHERE id NOT IN (
+            SELECT id FROM connection_sync_log ORDER BY started_at DESC, id DESC LIMIT ?
+        )
+        """,
+        (_SYNC_LOG_RETENTION,),
+    )
+
 
 @router.post("")
 def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
@@ -142,6 +193,7 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
     card_added: dict[str, int] = {}          # card_id -> rows added this call
     card_accounts: dict[tuple[str, str], dict] = {}  # (card_id, csv_value) -> {account_id, count}
     synced_statuses: list = []               # each synced connection's final update_status
+    sync_diagnostics: list[dict] = []        # per-connection diagnostic rows (persisted only in dev mode)
 
     with get_db() as conn:
         if connection_id:
@@ -297,6 +349,37 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
             initial = not connection["initial_sync_complete"]
             cursor = connection["transactions_cursor"]
             final_status = None
+            # Per-connection diagnostics (persisted only in dev mode): the status sequence across drained
+            # pages is what tells whether the historical backfill actually completed or the call stopped at
+            # the Initial Update. Count deltas are snapshotted here and differenced after the connection runs.
+            started_at = _utcnow_iso()
+            cursor_before = connection["transactions_cursor"]
+            status_sequence: list = []
+            pages = 0
+            added0, updated0, removed0, skipped0 = added, updated, removed, skipped
+
+            def _record(*, error=None, became_complete=False):
+                sync_diagnostics.append({
+                    "connection_id":  connection["id"],
+                    "provider":       connection["provider"],
+                    "institution":    connection["institution"],
+                    "started_at":     started_at,
+                    "finished_at":    _utcnow_iso(),
+                    "mode":           "initial" if initial else "routine",
+                    "days_requested": days_requested,
+                    "cursor_before":  _cursor_fingerprint(cursor_before),
+                    "cursor_after":   _cursor_fingerprint(cursor),
+                    "pages":          pages,
+                    "added":          added - added0,
+                    "updated":        updated - updated0,
+                    "removed":        removed - removed0,
+                    "skipped":        skipped - skipped0,
+                    "status_sequence": list(status_sequence),
+                    "final_status":   final_status,
+                    "became_complete": became_complete,
+                    "error":          error,
+                })
+
             # The card is created lazily on the first actually-inserted row (a no-op sync leaves no empty
             # card): the initial historical pull → one "initial import" card; a routine sync (backfill
             # already complete) → the current monthly period card. Defaults bind the per-connection values.
@@ -315,6 +398,7 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
                         f"[sync] skipping connection {connection['id']}: provider "
                         f"{connection['provider']!r} has no configured app credentials"
                     )
+                    _record(error="no configured app credentials")
                     continue
                 credential = crypto_service.decrypt_connection_credential(
                     request.state.user, connection["provider"], connection["external_id"],
@@ -336,6 +420,8 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
                     page_removed.extend(page["removed"])
                     cursor = page["next_cursor"]
                     final_status = page["update_status"]
+                    pages += 1
+                    status_sequence.append(page["update_status"])
                     if not page["has_more"]:
                         break
                 for t in page_added:
@@ -346,12 +432,15 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
                     _apply_removed(ext_id)
             except UnknownProviderError as e:
                 log_warning(f"[sync] skipping connection {connection['id']}: {e}")
+                _record(error=f"unknown provider: {e}")
                 continue
             except NotImplementedError as e:
                 log_warning(f"[sync] skipping connection {connection['id']}: {e}")
+                _record(error=str(e))
                 continue
             except Exception as e:
                 log_warning(f"[sync] error fetching connection {connection['id']}: {e}")
+                _record(error=str(e))
                 continue
 
             # Persist the advanced cursor, and flip the connection out of "initial" once the historical
@@ -362,6 +451,7 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
                 (cursor, 1 if (connection["initial_sync_complete"] or became_complete) else 0, connection["id"]),
             )
             synced_statuses.append(final_status)
+            _record(became_complete=became_complete)
 
         # Flush the card tallies (a card is reused across calls, so counts accumulate).
         for card_id, n in card_added.items():
@@ -394,6 +484,14 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
             if card_account_ids:
                 promote_in_group_suspects_to_confirmed(conn, card_account_ids)
 
+        # Persist the sync diagnostics (dev-mode only). Best-effort: a logging failure must never fail the
+        # sync that already did its work, so it is guarded and swallowed.
+        if sync_diagnostics and developer_options_enabled():
+            try:
+                _write_sync_diagnostics(conn, sync_diagnostics)
+            except Exception as e:
+                log_warning(f"[sync] could not write sync diagnostics: {e}")
+
     # New/advanced rows change the recurring picture, so refresh detection now rather than waiting for a
     # manual scan. Cheap scoped path: reprocess only the payees this sync touched, not the whole ledger
     # (the daily app-load catch-up is the global safety net). Runs after the sync transaction commits, in
@@ -413,6 +511,48 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
         "added": added, "updated": updated, "removed": removed, "skipped": skipped,
         "update_status": overall_status, "historical_complete": historical_complete,
     }
+
+
+def _require_developer_options():
+    # The sync diagnostics log is a developer/testing aid; its endpoints 404 (rather than 403) when the
+    # feature is off, so the surface is invisible unless LUMA_DEVELOPER_OPTIONS is set — matching how the
+    # rest of the developer-options surface behaves (import_export/core._require_developer_access).
+    if not developer_options_enabled():
+        raise HTTPException(status_code=404, detail="Developer options are not enabled")
+
+
+@router.get("/diagnostics")
+def sync_diagnostics(limit: int = 100):
+    """Recent connection-sync diagnostic rows, newest first (developer options only). One row per connection
+    per /sync call: the status sequence, cursor fingerprints, count deltas, and whether the call completed
+    the initial backfill — enough to see whether a sync stopped at the Initial Update or ran to HISTORICAL_
+    UPDATE_COMPLETE, and why an under-fetch happened."""
+    _require_developer_options()
+    limit = max(1, min(limit, _SYNC_LOG_RETENTION))
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM connection_sync_log ORDER BY started_at DESC, id DESC LIMIT ?", (limit,),
+        ).fetchall()
+
+    def _entry(r):
+        d = dict(r)
+        try:
+            d["status_sequence"] = json.loads(r["status_sequence"]) if r["status_sequence"] else []
+        except (TypeError, ValueError):
+            d["status_sequence"] = []
+        d["became_complete"] = bool(r["became_complete"])
+        return d
+
+    return {"entries": [_entry(r) for r in rows]}
+
+
+@router.delete("/diagnostics")
+def clear_sync_diagnostics():
+    """Empty the connection-sync diagnostics log (developer options only)."""
+    _require_developer_options()
+    with get_db() as conn:
+        conn.execute("DELETE FROM connection_sync_log")
+    return {"ok": True}
 
 
 @router.post("/recategorize")

@@ -2086,6 +2086,117 @@ function DeveloperOptionsSection({ authEnabled }) {
   )
 }
 
+function SyncLogRow({ entry }) {
+  // Degrade gracefully if a timestamp can't be parsed (e.g. a pre-fix malformed value) — show the raw
+  // string rather than "Invalid Date".
+  const parsedWhen = entry.started_at ? new Date(entry.started_at) : null
+  const when = parsedWhen && !isNaN(parsedWhen) ? parsedWhen.toLocaleString() : (entry.started_at || '—')
+  const statuses = entry.status_sequence || []
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', display: 'grid', gap: 6, fontSize: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontWeight: 600, fontSize: 13 }}>{entry.institution || entry.provider || 'Connection'}</span>
+        <span style={{ padding: '1px 7px', borderRadius: 999, background: 'var(--surface2)', color: 'var(--muted)' }}>{entry.mode || '—'}</span>
+        {entry.became_complete ? (
+          <span style={{ padding: '1px 7px', borderRadius: 999, background: 'color-mix(in srgb, var(--success, #16a34a) 16%, var(--surface2))', color: 'var(--success, #16a34a)' }}>backfill complete</span>
+        ) : null}
+        {entry.error ? (
+          <span style={{ padding: '1px 7px', borderRadius: 999, background: 'color-mix(in srgb, var(--danger) 16%, var(--surface2))', color: 'var(--danger)' }}>error</span>
+        ) : null}
+        <span style={{ marginLeft: 'auto', color: 'var(--muted)' }}>{when}</span>
+      </div>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', color: 'var(--muted)' }}>
+        <span>added <b style={{ color: 'var(--text)' }}>{entry.added}</b></span>
+        <span>updated <b style={{ color: 'var(--text)' }}>{entry.updated}</b></span>
+        <span>removed <b style={{ color: 'var(--text)' }}>{entry.removed}</b></span>
+        <span>skipped <b style={{ color: 'var(--text)' }}>{entry.skipped}</b></span>
+        <span>pages <b style={{ color: 'var(--text)' }}>{entry.pages}</b></span>
+        {entry.days_requested != null ? <span>days_requested <b style={{ color: 'var(--text)' }}>{entry.days_requested}</b></span> : null}
+      </div>
+      {statuses.length ? (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ color: 'var(--muted)' }}>status:</span>
+          {statuses.map((s, i) => (
+            <span key={i} style={{ fontFamily: 'monospace', fontSize: 11, padding: '1px 6px', borderRadius: 4, background: 'var(--surface2)' }}>{s == null ? 'null' : s}</span>
+          ))}
+        </div>
+      ) : null}
+      <div style={{ color: 'var(--muted)', fontFamily: 'monospace', fontSize: 11 }}>
+        cursor {entry.cursor_before || 'none'} → {entry.cursor_after || 'none'}
+      </div>
+      {entry.error ? (
+        <div style={{ color: 'var(--danger)', fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-word' }}>{entry.error}</div>
+      ) : null}
+    </div>
+  )
+}
+
+function ConnectionSyncLogSection() {
+  // Read-only viewer over connection_sync_log (populated by routers/sync.py only when developer options are
+  // on). Its point is diagnosing under-fetches: the status sequence shows whether a sync ran to
+  // HISTORICAL_UPDATE_COMPLETE or stopped at the ~30-day Initial Update.
+  const [entries, setEntries] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [clearing, setClearing] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const res = await api.getSyncDiagnostics(200)
+      setEntries(res.entries || [])
+    } catch (e) {
+      setError(e.message || 'Could not load the sync log.')
+      setEntries([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function clearLog() {
+    setClearing(true)
+    setError('')
+    try {
+      await api.clearSyncDiagnostics()
+      setEntries([])
+    } catch (e) {
+      setError(e.message || 'Could not clear the sync log.')
+    } finally {
+      setClearing(false)
+    }
+  }
+
+  return (
+    <Card style={{ display: 'grid', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, maxWidth: 560 }}>
+          One row per connection per sync call — the provider's transaction-readiness status across the
+          drained pages, cursor movement, and row counts. Use it to tell whether a sync ran to the full
+          historical backfill or stopped at the ~30-day Initial Update.
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button small variant="ghost" onClick={load} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</Button>
+          <Button small variant="ghost" onClick={clearLog} disabled={clearing || !(entries && entries.length)}>{clearing ? 'Clearing…' : 'Clear log'}</Button>
+        </div>
+      </div>
+      {error ? <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div> : null}
+      {entries && entries.length === 0 && !loading ? (
+        <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+          No sync calls recorded yet. Run a sync from Accounts → Connections, then Refresh here.
+        </div>
+      ) : null}
+      {entries && entries.length ? (
+        <div style={{ display: 'grid', gap: 8, maxHeight: 480, overflowY: 'auto' }}>
+          {entries.map(e => <SyncLogRow key={e.id} entry={e} />)}
+        </div>
+      ) : null}
+    </Card>
+  )
+}
+
 function RulesTrashSection() {
   // Trashed categorization rules (from the Rules page delete / stale-rule cleanup). Restore brings a rule
   // back to active (refused if an active rule now shares its matcher); purge removes it for good.
@@ -2844,6 +2955,17 @@ export default function Settings() {
               {...bindSection('developerOptions')}
             >
               <DeveloperOptionsSection authEnabled={authEnabled} />
+            </StickySection>
+          )}
+
+          {developerOptionsEnabled && (
+            <StickySection
+              title="Connection sync log"
+              description="Per-connection diagnostics for each provider sync call — status sequence, cursor movement, and counts."
+              scrollContainerRef={settingsScrollRef}
+              {...bindSection('connectionSyncLog')}
+            >
+              <ConnectionSyncLogSection />
             </StickySection>
           )}
 

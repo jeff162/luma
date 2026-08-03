@@ -35,8 +35,11 @@ from backend.services.categorizer import seed_default_rules
 # Data-DB tables deliberately NOT in the regular backup (credentials/encryption config/schema meta).
 # `connection` (per-bank credentials), its legacy predecessor `plaid_item`, and `provider_config`
 # (app-level provider credentials) hold vault-encrypted secrets, which ride the separate credentials
-# backup (export/restore_credentials), not the regular data backup.
-EXCLUDED_TABLES = {"plaid_item", "connection", "provider_config", "backup_recipient", "db_meta"}
+# backup (export/restore_credentials), not the regular data backup. `connection_sync_log` is the
+# provider-sync diagnostic log (developer-options surface) tied to `connection` (also excluded): operational
+# diagnostics, not part of the financial dataset a backup preserves, and pointless to restore against
+# connections the data backup never carries.
+EXCLUDED_TABLES = {"plaid_item", "connection", "connection_sync_log", "provider_config", "backup_recipient", "db_meta"}
 
 # Every other data-DB table maps to a backup payload section. A new table with no entry here fails
 # the coverage guard, which is the point: it can't be silently left out of backups.

@@ -27,6 +27,15 @@ DEFAULT_SESSION_SECRET = "dev-session-secret-change-me"
 PLACEHOLDER_SESSION_SECRET = "change_me_to_a_long_random_value"
 
 
+def developer_options_enabled() -> bool:
+    """Whether the developer-options surface (extra reset tools, the connection sync diagnostics log) is
+    enabled, via the `LUMA_DEVELOPER_OPTIONS` env flag. Off by default. This is a durable operator/developer
+    surface for diagnosing data-connection behavior, not a throwaway — it just stays behind the flag so it is
+    invisible in an ordinary install. The auth status endpoint and import_export/core have their own local
+    readers of the same flag; this is the shared helper new code should use."""
+    return str(os.getenv("LUMA_DEVELOPER_OPTIONS", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 

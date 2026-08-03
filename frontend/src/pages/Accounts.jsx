@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { notifyAccountsChanged } from '../App.jsx'
-import { Card, Button, Spinner, Select, Input, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, DialogActions } from '../components/ui.jsx'
+import { Card, Button, Spinner, Select, Input, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, DialogActions, OverlayBackdrop } from '../components/ui.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import PillTableHeader from '../components/PillTableHeader.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
@@ -615,7 +615,7 @@ function VaultStrip({ vault, onSet, onUnlock, onLock }) {
 }
 
 // Load Plaid Link on demand (so normal visits don't pull the third-party script) exactly once. A cached
-// promise means repeated "Connect bank" attempts reuse the same <script> and global instead of appending a
+// promise means repeated "Connect account" attempts reuse the same <script> and global instead of appending a
 // fresh tag each time — which previously stacked multiple Link handlers, each firing its own onSuccess.
 let plaidScriptPromise = null
 function loadPlaidScript() {
@@ -650,8 +650,27 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // Persisted as the user's default for future connections. Routine syncs pull cursor deltas regardless.
   const [historyDays, setHistoryDays] = useUserPreference('connection.historyDays', 90)
   const [refreshingConnId, setRefreshingConnId] = useState(null)  // connection currently being refreshed
+  const [fetchingHistoryConnId, setFetchingHistoryConnId] = useState(null)  // connection currently deepening history
+  // While a Plaid Link (+ bank OAuth) session is open, the whole app is blocked behind a modal scrim: the
+  // Link handler and its onSuccess closure live in THIS component, so navigating away mid-connect unmounts
+  // it and silently loses the in-flight connection. linkInProgress drives the scrim; plaidHandlerRef lets
+  // the scrim's Cancel exit Link cleanly. Cleared when Link resolves (onSuccess/onExit) or is canceled.
+  const [linkInProgress, setLinkInProgress] = useState(false)
+  const plaidHandlerRef = useRef(null)
   const exchangingRef = useRef(false)  // guards against a double Plaid onSuccess exchanging the same token twice
   const navigate = useNavigate()
+
+  // Browser-level leave guard (refresh / close tab / external nav) while a Link session is open. In-app
+  // (SPA) navigation is already blocked by the scrim capturing every click; this catches the leaves a
+  // click-scrim can't. A true React Router `useBlocker` would additionally guard programmatic route
+  // changes, but that hook only works under a data router — this app mounts `BrowserRouter` — so the scrim
+  // (click capture) + this beforeunload are the equivalent without an app-wide router migration.
+  useEffect(() => {
+    if (!linkInProgress) return
+    const warn = (e) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [linkInProgress])
 
   const isAdmin = !authEnabled || currentUser?.role === 'admin'
   // On a networked (non-loopback) bind, the app secret / bank tokens cross the wire, so connecting needs
@@ -712,7 +731,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   }
 
   async function lockVault() {
-    await api.lockVault().catch(() => {})
+    await api.lockVault().catch(() => { })
     const status = await api.getAuthStatus().catch(() => ({}))
     if (status?.user) setCurrentUser?.(status.user)
     await refresh()
@@ -748,6 +767,11 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
           exchangingRef.current = true
           try {
             const result = await api.exchangeToken(public_token, metadata.institution?.name)
+            // Link + OAuth are done and the token is now a durable connection — lift the modal block here,
+            // BEFORE the (possibly minutes-long) historical backfill, so the app isn't frozen while history
+            // streams in. The sync has its own progress UI and resumes from the cursor if interrupted.
+            setLinkInProgress(false)
+            plaidHandlerRef.current = null
             // Auto-pull history for just this new connection (scoped by connection_id), polling until the
             // provider signals the historical backfill is complete. Fetch depth = the user's saved window.
             if (result?.connection_id) {
@@ -765,14 +789,39 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
             setNotice({ title: 'Could not finish connecting', description: e.message })
           } finally {
             exchangingRef.current = false
+            setLinkInProgress(false)  // idempotent: also covers an exchange that threw before the release above
           }
         },
-        onExit: (err) => { if (err) console.error('Plaid Link error', err) },
+        onExit: (err) => {
+          // The user closed Link, or it errored out — lift the block either way.
+          setLinkInProgress(false)
+          plaidHandlerRef.current = null
+          if (err) console.error('Plaid Link error', err)
+        },
       })
+      // Arm the block right before opening Link, and keep the handle so the scrim's Cancel can exit cleanly.
+      plaidHandlerRef.current = handler
+      setLinkInProgress(true)
       handler.open()
     } catch (e) {
+      setLinkInProgress(false)
+      plaidHandlerRef.current = null
       setNotice({ title: 'Could not start the connection', description: e.message })
     }
+  }
+
+  // Escape hatch for the connect scrim: never let a stalled Link session trap the app. Exits/destroys Link
+  // (which also fires onExit) and lifts the block directly, so the user is freed even if onExit never comes.
+  function cancelPlaidLink() {
+    try {
+      plaidHandlerRef.current?.exit?.({ force: true })
+      plaidHandlerRef.current?.destroy?.()
+    } catch (e) {
+      console.error('Plaid Link cancel failed', e)
+    }
+    plaidHandlerRef.current = null
+    exchangingRef.current = false
+    setLinkInProgress(false)
   }
 
   // Client-driven poll: call /sync repeatedly until the provider reports the historical backfill is
@@ -825,7 +874,9 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
     try {
       const res = await api.refreshConnectionAccounts(provider, connection.external_id)
-      await syncUntilComplete(provider, { days: historyDays, connectionId: res.connection_id })
+      // Recovery syncs at full depth (days=0), independent of the new-connection window: a restore-recovery
+      // should pull back as much as the provider will give, not the shallower default a fresh connect might use.
+      await syncUntilComplete(provider, { days: 0, connectionId: res.connection_id })
       await onAccountsChanged?.()
       await refresh()
     } catch (e) {
@@ -833,6 +884,26 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       setNotice({ title: 'Could not refresh accounts', description: e.message })
     } finally {
       setRefreshingConnId(null)
+    }
+  }
+
+  // Deepen one connection's history: request all available history and poll to completion. For Plaid this
+  // raises days_requested, and the provider backfills the older transactions through the same cursor — no
+  // separate date-range fetch, so cursor-based dedupe stays unified. A bank/plan may cap how far back it goes.
+  async function fetchMoreHistory(provider, connection) {
+    if (fetchingHistoryConnId || refreshingConnId) return
+    if (!vault.unlocked) { setVaultDialog('unlock'); return }
+    setFetchingHistoryConnId(connection.id)
+    setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
+    try {
+      await syncUntilComplete(provider, { days: 0, connectionId: connection.id })
+      await onAccountsChanged?.()
+      await refresh()
+    } catch (e) {
+      setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
+      setNotice({ title: 'Could not fetch more history', description: e.message })
+    } finally {
+      setFetchingHistoryConnId(null)
     }
   }
 
@@ -860,6 +931,26 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
 
   return (
     <div style={{ display: 'grid', gap: 12, width: typeof width === 'number' ? `${width}px` : (width || '100%'), maxWidth: '100%', opacity: disabled ? 0.55 : 1, pointerEvents: disabled ? 'none' : 'auto' }}>
+      {/* Modal block while Plaid Link is open. Plaid's own iframe sits at ~max z-index, so Link stays fully
+          interactive above this scrim; the scrim (z 2000, above app chrome) covers the app so a stray click
+          can't reach nav and unmount this component mid-connect. Cancel is the never-trapped escape hatch. */}
+      {linkInProgress ? (
+        <OverlayBackdrop zIndex={2000}>
+          <div style={{
+            background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12,
+            padding: '20px 22px', maxWidth: 380, textAlign: 'center', display: 'grid', gap: 10,
+            pointerEvents: 'auto', boxShadow: '0 10px 40px rgba(0,0,0,0.28)',
+          }}>
+            <div style={{ fontSize: 15, fontWeight: 600 }}>Connecting your account…</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
+              Finish the steps in the connection window. The rest of the app is paused so a stray click can’t interrupt it.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 4 }}>
+              <Button variant="ghost" small onClick={cancelPlaidLink}>Cancel</Button>
+            </div>
+          </div>
+        </OverlayBackdrop>
+      ) : null}
       <VaultStrip
         vault={vault}
         onSet={() => setVaultDialog('set')}
@@ -879,8 +970,8 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
         const connectDisabled = disabled || (vault.configured && !vault.unlocked) || httpsBlocked
         const connectTitle = !vault.configured ? 'Set a vault passphrase first'
           : !vault.unlocked ? 'Unlock the vault first'
-          : httpsBlocked ? 'Configure HTTPS before connecting on a networked server'
-          : ''
+            : httpsBlocked ? 'Configure HTTPS before connecting on a networked server'
+              : ''
         return (
           <SectionCard
             key={p.provider}
@@ -891,33 +982,36 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
             headerCenter={<EnvBadge env={p.env} />}
           >
             <div style={{ padding: '12px 16px 14px', display: 'grid', gap: 12 }}>
+              {/* One-time connection setup (left) is kept distinct from the ongoing "Sync now" op (right),
+                  so the history-depth selector below reads as governing new connections, not every sync. */}
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 {isAdmin ? <Button variant="ghost" small onClick={() => setConfigTarget(p)}>Configure</Button> : null}
-                <Button small onClick={() => connect(p.provider)} disabled={connectDisabled} title={connectTitle}>+ Connect bank</Button>
+                <Button small onClick={() => connect(p.provider)} disabled={connectDisabled} title={connectTitle}>+ Connect account</Button>
+                {p.source === 'env' ? (
+                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>credentials from <code>.env</code></span>
+                ) : null}
                 <Button variant="ghost" small onClick={() => sync(p.provider)}
                   disabled={ss.syncing || !connections.length}
-                  title={connections.length ? '' : 'Connect a bank before syncing'}>
+                  title={connections.length ? 'Pull new and changed transactions for every connection' : 'Connect an account before syncing'}
+                  style={{ marginLeft: 'auto' }}>
                   {ss.syncing ? 'Syncing…' : '↻ Sync now'}
                 </Button>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
-                  <span>New connection fetches</span>
-                  <Select
-                    value={String(historyDays)}
-                    onChange={v => setHistoryDays(Number(v))}
-                    options={[
-                      { value: '0', label: 'All available history' },
-                      { value: '365', label: 'Last year' },
-                      { value: '90', label: 'Last 90 days' },
-                      { value: '30', label: 'Last 30 days' },
-                    ]}
-                    title="How far back a newly connected (or refreshed) bank pulls. Saved as your default; routine syncs then pull only what changed."
-                    style={{ fontSize: 12, padding: '4px 8px', minWidth: 0, width: 'auto' }}
-                  />
-                </span>
-                {p.source === 'env' ? (
-                  <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 'auto' }}>credentials from <code>.env</code></span>
-                ) : null}
               </div>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
+                <span>New connections fetch</span>
+                <Select
+                  value={String(historyDays)}
+                  onChange={v => setHistoryDays(Number(v))}
+                  options={[
+                    { value: '0', label: 'All available history' },
+                    { value: '365', label: 'Last year' },
+                    { value: '90', label: 'Last 90 days' },
+                    { value: '30', label: 'Last 30 days' },
+                  ]}
+                  title="How far back a newly connected bank pulls on its first sync. Saved as your default. To pull older history for a bank that's already connected, use Fetch more history on its card."
+                  style={{ fontSize: 12, padding: '4px 8px', minWidth: 0, width: 'auto' }}
+                />
+              </span>
 
               {ss.syncing ? (
                 <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: 'var(--muted)' }}>
@@ -958,11 +1052,17 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                               ⚠ {syncSummary.suspects} to review
                             </button>
                           ) : null}
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginLeft: 'auto' }}>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
+                            <Button variant="ghost" small
+                              onClick={() => fetchMoreHistory(p.provider, c)}
+                              disabled={!!fetchingHistoryConnId || !!refreshingConnId || ss.syncing}
+                              title="Pull older transactions for this connection — requests all available history from the provider and imports anything earlier than what's already here. A bank or plan may cap how far back it will return.">
+                              {fetchingHistoryConnId === c.id ? 'Fetching…' : '↻ Fetch more history'}
+                            </Button>
                             <Button variant="ghost" small
                               onClick={() => refreshConnectionAccounts(p.provider, c)}
-                              disabled={!!refreshingConnId || ss.syncing}
-                              title="Rebuild this connection's accounts from its saved credential (no re-linking) and pull all available history. Use this if the accounts are missing — e.g. after restoring a backup.">
+                              disabled={!!refreshingConnId || !!fetchingHistoryConnId || ss.syncing}
+                              title="Rebuild this connection's accounts from its saved credential (no re-linking), then sync. Use this if the accounts are missing — e.g. after restoring a backup. To pull older transactions, use Fetch more history.">
                               {refreshingConnId === c.id ? 'Refreshing…' : '↻ Refresh accounts'}
                             </Button>
                             <Button variant="ghost" small
@@ -985,7 +1085,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                 <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0, lineHeight: 1.6 }}>
                   {p.env === 'sandbox'
                     ? 'Running in Sandbox — use the provider’s test credentials when the connect dialog opens. Switch to Production on Configure once you’re ready for real accounts.'
-                    : 'Connect a bank to keep balances and transactions in sync.'}
+                    : 'Connect an account to keep balances and transactions in sync.'}
                 </p>
               )}
             </div>
@@ -1368,7 +1468,7 @@ function OwnerPill({ owner, editing, draft, onDraftChange, onStartEdit, onCommit
   )
 }
 
-function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onError = () => {}, disabled = false, width, expanded, onExpandedChange, collapsible = true }) {
+function OwnersPanel({ owners, onCreateOwner, onSaveOwner, onDeleteOwner, onError = () => { }, disabled = false, width, expanded, onExpandedChange, collapsible = true }) {
   const visibleOwners = getPersonalOwners(owners)
   const ownersSummary = formatCountSummary(visibleOwners.length, 'owner')
   const [editingOwnerId, setEditingOwnerId] = useState(null)
@@ -1814,7 +1914,7 @@ function AccountRow({
   onRequestRenameOwner,
   onRequestDeleteOwner,
   onRequestTrash,
-  onError = () => {},
+  onError = () => { },
   interactionDisabled = false,
   dragDisabled = false,
   dropActive = false,
@@ -1823,11 +1923,11 @@ function AccountRow({
   allTags = [],
   tagsEditMode = false,
   tagPickerAccountId = null,
-  onOpenTagPicker = () => {},
-  onCloseTagPicker = () => {},
-  onSetAccountTags = () => {},
-  onAccountTagCreated = () => {},
-  onAccountContextMenu = () => {},
+  onOpenTagPicker = () => { },
+  onCloseTagPicker = () => { },
+  onSetAccountTags = () => { },
+  onAccountTagCreated = () => { },
+  onAccountContextMenu = () => { },
 }) {
   const [, setSavingName] = useState(false)
   const [creatingOwner, setCreatingOwner] = useState(false)
@@ -2121,8 +2221,20 @@ function AccountRow({
               </span>
             </button>
           )}
-          {hasChildren && !isChild ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+          {/* Lines under the account name. The connection detail line (institution · ···mask) comes first so
+              it stays paired with the name on line 1; a merged *parent's* expand/collapse control sits below
+              it (line 3). Shown for every account — parent, child, or standalone — so becoming part of a
+              merged group no longer hides which real account a row maps to. (Costs a row of height on merged
+              entries — acceptable given the table stays small.) CSV/manual accounts have no institution/mask,
+              so no detail line renders. */}
+          <div style={{ marginTop: 2, display: 'grid', gap: 1 }}>
+            {(account.institution || account.mask) ? (
+              <div style={{ fontSize: 10, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {account.institution && <span>{account.institution} · </span>}
+                {account.mask && <span>···{account.mask}</span>}
+              </div>
+            ) : null}
+            {hasChildren && !isChild ? (
               <button
                 type="button"
                 onClick={e => { e.stopPropagation(); onToggleCollapse?.() }}
@@ -2137,23 +2249,15 @@ function AccountRow({
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 4,
+                  justifySelf: 'start',
                 }}
                 title={isCollapsed ? 'Show merged accounts' : 'Hide merged accounts'}
               >
                 <span style={{ fontSize: 9 }}>{isCollapsed ? '▶' : '▼'}</span>
                 <span>{hasChildren === 1 ? '1 merged account' : `${hasChildren} merged accounts`}</span>
               </button>
-            </div>
-          ) : (
-            <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {!isChild && (
-                <>
-                  {account.institution && <span>{account.institution} · </span>}
-                  {account.mask && <span>···{account.mask}</span>}
-                </>
-              )}
-            </div>
-          )}
+            ) : null}
+          </div>
         </div>
 
         {isChild ? (
@@ -2466,8 +2570,12 @@ export default function Accounts() {
   const [accountsPanelWidth, setAccountsPanelWidth] = useState(ACCOUNTS_SECTION_BASE_WIDTH)
   const sectionPanelWidth = accountsPanelWidth
 
-  // Active in-page tab, session-scoped (sticks while the app is open, resets to Accounts next launch).
+  // Active in-page tab, session-scoped (sticks while the app is open, resets to Accounts next launch). A
+  // `?tab=` query param (e.g. from a Tasks deep-link that targets a specific tab) takes precedence on arrival.
+  const [searchParams, setSearchParams] = useSearchParams()
   const [tab, setTabState] = useState(() => {
+    const fromUrl = searchParams.get('tab')
+    if (ACCOUNT_TABS.some(([id]) => id === fromUrl)) return fromUrl
     const stored = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(ACCOUNTS_TAB_STORAGE_KEY) : null
     return ACCOUNT_TABS.some(([id]) => id === stored) ? stored : 'accounts'
   })
@@ -2475,6 +2583,19 @@ export default function Accounts() {
     setTabState(next)
     try { sessionStorage.setItem(ACCOUNTS_TAB_STORAGE_KEY, next) } catch { /* sessionStorage unavailable — non-fatal */ }
   }
+  // Honor a `?tab=` deep-link, then strip it so it doesn't linger in the URL or override later manual tab
+  // switches. Runs on arrival and also if a new `?tab=` link is followed while the page is already mounted.
+  useEffect(() => {
+    const fromUrl = searchParams.get('tab')
+    if (!fromUrl) return
+    if (ACCOUNT_TABS.some(([id]) => id === fromUrl)) {
+      setTabState(fromUrl)
+      try { sessionStorage.setItem(ACCOUNTS_TAB_STORAGE_KEY, fromUrl) } catch { /* sessionStorage unavailable — non-fatal */ }
+    }
+    const next = new URLSearchParams(searchParams)
+    next.delete('tab')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
 
   // Resizable account-list columns. Geometry/order persist through the shared preference model; the
   // header (PillTableHeader), each AccountRow, and the draft-create row all render against the one
@@ -3361,411 +3482,411 @@ export default function Accounts() {
 
         <div data-browser-context-passthrough="true" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 32px 32px' }}>
           {tab === 'accounts' && (
-          <>
-          <div
-            onContextMenu={e => {
-              if (showCreateAccount) return
-              e.preventDefault()
-              setContextOpen(prev => !prev)
-            }}
-            style={{ position: 'relative' }}
-          >
-            {contextOpen && (
-              <div style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                zIndex: 40,
-                background: 'var(--surface)',
-                border: '1px solid var(--border)',
-                borderRadius: 10,
-                boxShadow: '0 14px 36px rgba(0, 0, 0, 0.18)',
-                padding: 6,
-              }}>
-                <Button small onClick={openCreateAccount}>Add account</Button>
-                {orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0) && (
-                  <>
-                    <Button small variant="ghost" style={{ display: 'block', width: '100%', marginTop: 4 }} onClick={() => {
-                      setCollapsedGroups(new Set(orderedRootAccounts.filter(r => (childAccountsByParent.get(r.id) || []).length > 0).map(r => r.id)))
-                      setContextOpen(false)
-                    }}>Collapse all groups</Button>
-                    <Button small variant="ghost" style={{ display: 'block', width: '100%', marginTop: 4 }} onClick={() => {
-                      setCollapsedGroups(new Set())
-                      setContextOpen(false)
-                    }}>Expand all groups</Button>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-
-          {loading ? <Spinner /> : (
-            <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-              <div ref={accountsPanelRef} style={{ position: 'relative', width: 'fit-content', maxWidth: '100%' }}>
-                <SectionCard
-                  summary={accountListSummary}
-                  collapsible={false}
-                  headerCenter={ownerWarning ? (
-                    <span style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      padding: '4px 10px',
-                      borderRadius: 999,
-                      background: 'color-mix(in srgb, var(--warning) 10%, var(--surface2))',
-                      border: '1px solid var(--border)',
-                      fontSize: 12,
-                      color: 'var(--text)',
-                      opacity: showCreateAccount ? 0.55 : 1,
-                    }}>
-                      <span>⚠️</span>
-                      <span style={{ whiteSpace: 'nowrap' }}>{ownerWarning}</span>
-                    </span>
-                  ) : null}
-                  width={sectionPanelWidth}
-                  style={{ overflow: 'hidden', alignSelf: 'flex-start' }}
-                >
-                  {rootAccounts.length === 0 && !showCreateAccount ? (
-                    <div style={{ padding: '12px 16px 14px', fontSize: 14, color: 'var(--muted)', lineHeight: 1.4 }}>
-                      No accounts yet.
-                    </div>
-                  ) : displayRootAccounts.length === 0 && !showCreateAccount ? (
-                    <div style={{ padding: '12px 16px 14px', fontSize: 14, color: 'var(--muted)', lineHeight: 1.4 }}>
-                      No accounts match this owner filter.
-                    </div>
-                  ) : (
-                    <>
-                      <div
-                        onContextMenu={e => {
-                          if (!orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0)) return
-                          e.preventDefault()
-                          setListContextMenu({ x: e.clientX, y: e.clientY })
-                        }}
-                        style={{ background: 'var(--surface2)' }}>
-                        <PillTableHeader
-                          columns={[
-                            { key: 'drag', kind: 'spacer', cellPadding: 0 },
-                            {
-                              key: 'name',
-                              label: 'Account',
-                              cellPadding: 0,
-                              contentPadding: '0 9px',
-                              leadingInset: 0,
-                              trailingInset: 0,
-                              resizable: false,
-                              draggable: false,
-                              title: 'Click to sort accounts by name',
-                            },
-                            {
-                              key: 'type',
-                              label: 'Type',
-                              cellPadding: 0,
-                              contentPadding: '0 9px',
-                              leadingInset: 0,
-                              trailingInset: 0,
-                              resizable: true,
-                              draggable: false,
-                              title: 'Click to sort accounts by type',
-                            },
-                            {
-                              key: 'owner',
-                              label: 'Owner',
-                              align: 'center',
-                              cellPadding: 0,
-                              contentPadding: '0 9px',
-                              leadingInset: 0,
-                              trailingInset: 0,
-                              resizable: true,
-                              draggable: false,
-                              title: 'Click to sort accounts by owner',
-                            },
-                            {
-                              key: 'tags',
-                              sortable: false,
-                              resizable: true,
-                              draggable: false,
-                              cellPadding: 0,
-                              contentPadding: '0 9px',
-                              render: () => (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
-                                  <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', letterSpacing: 0.3, textTransform: 'uppercase' }}>Tags</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => { setTagsEditMode(v => !v); setTagPickerAccountId(null) }}
-                                    title={tagsEditMode ? 'Finish editing account tags' : 'Edit account tags (or right-click a row)'}
-                                    style={{
-                                      background: tagsEditMode ? 'color-mix(in srgb, var(--accent) 16%, var(--surface))' : 'none',
-                                      border: '1px solid var(--border)', borderRadius: 999, padding: '1px 8px',
-                                      fontSize: 11, color: tagsEditMode ? 'var(--accent2)' : 'var(--muted)', cursor: 'pointer',
-                                    }}
-                                  >
-                                    {tagsEditMode ? 'Done' : 'Edit tags'}
-                                  </button>
-                                </div>
-                              ),
-                            },
-                            { key: 'actions', kind: 'spacer', cellPadding: 0 },
-                          ]}
-                          gridTemplateColumns={accountGridTemplate}
-                          sortState={sortIndicatorActive ? { key: sortKey, dir: sortDir } : null}
-                          onSort={toggleAccountSort}
-                          onStartResize={startAccountColumnResize}
-                          style={{
-                            gap: ACCOUNT_ROW_GAP,
-                            padding: '6px 10px',
-                            alignItems: 'center',
-                          }}
-                        />
-                      </div>
-                      <div
-                        ref={listRef}
-                        onDragOver={handleListDragOver}
-                        onDrop={handleListDrop}
-                        onContextMenu={e => {
-                          if (!orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0)) return
-                          e.preventDefault()
-                          setListContextMenu({ x: e.clientX, y: e.clientY })
-                        }}
-                        style={{ maxHeight: 640, overflowY: 'auto', position: 'relative' }}
-                      >
-                        {draggingAccount?.parent_account_id ? (
-                          <div
-                            aria-hidden="true"
-                            style={{
-                              position: 'absolute',
-                              top: 8,
-                              bottom: 8,
-                              left: 8,
-                              width: ACCOUNT_DETACH_DROP_ZONE_WIDTH - 16,
-                              borderRadius: 12,
-                              border: `1px dashed ${detachDropActive ? 'color-mix(in srgb, var(--accent) 58%, var(--border))' : 'color-mix(in srgb, var(--border) 88%, transparent)'}`,
-                              background: detachDropActive
-                                ? 'linear-gradient(180deg, color-mix(in srgb, var(--accent) 14%, var(--surface2)), color-mix(in srgb, var(--accent) 8%, var(--surface)))'
-                                : 'color-mix(in srgb, var(--surface2) 42%, transparent)',
-                              boxShadow: detachDropActive ? 'inset 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent)' : 'none',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              textAlign: 'center',
-                              padding: '10px 8px',
-                              color: detachDropActive ? 'var(--accent2)' : 'var(--muted)',
-                              fontSize: 11,
-                              fontWeight: detachDropActive ? 700 : 600,
-                              lineHeight: 1.35,
-                              pointerEvents: 'none',
-                              zIndex: 1,
-                            }}
-                          >
-                            {detachDropActive ? 'Release to ungroup' : 'Pull here to top level'}
-                          </div>
-                        ) : null}
-                        {listContextMenu && (
-                          <div
-                            style={{
-                              position: 'fixed',
-                              left: Math.min(listContextMenu.x, window.innerWidth - 200),
-                              top: Math.min(listContextMenu.y, window.innerHeight - 100),
-                              zIndex: 300,
-                              background: 'var(--surface)',
-                              border: '1px solid var(--border)',
-                              borderRadius: 10,
-                              boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
-                              padding: 4,
-                              minWidth: 180,
-                            }}
-                            onMouseLeave={() => setListContextMenu(null)}
-                          >
-                            {listContextMenu.accountId ? (
-                              <button type="button" onClick={() => {
-                                // Open just this row's picker without toggling the page-wide edit
-                                // mode: the row renders its own "+" anchor while its picker is open
-                                // (see showControls), so dismissing the picker leaves no lingering
-                                // "Done" state to clear.
-                                setTagPickerAccountId(listContextMenu.accountId)
-                                setListContextMenu(null)
-                              }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
-                                Edit tags…
-                              </button>
-                            ) : null}
-                            {orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0) ? (
-                              <>
-                                {listContextMenu.accountId ? <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} /> : null}
-                                <button type="button" onClick={() => {
-                                  setCollapsedGroups(new Set(orderedRootAccounts.filter(r => (childAccountsByParent.get(r.id) || []).length > 0).map(r => r.id)))
-                                  setListContextMenu(null)
-                                }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
-                                  Collapse all
-                                </button>
-                                <button type="button" onClick={() => {
-                                  setCollapsedGroups(new Set())
-                                  setListContextMenu(null)
-                                }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
-                                  Expand all
-                                </button>
-                              </>
-                            ) : null}
-                          </div>
-                        )}
-                        {displayRootAccounts.map(root => {
-                          const children = childAccountsByParent.get(root.id) || []
-                          const isCollapsed = collapsedGroups.has(root.id)
-                          const rootDragDisabled = !!movingAccountId
-                          const groupMergeActive = dropIntent?.kind === 'merge' && dropIntent.targetId === root.id
-                          return (
-                            <div key={root.id}>
-                              <AccountRow
-                                account={root}
-                                gridTemplateColumns={accountGridTemplate}
-                                hasChildren={children.length}
-                                isCollapsed={isCollapsed}
-                                onToggleCollapse={() => setCollapsedGroups(prev => {
-                                  const next = new Set(prev)
-                                  if (next.has(root.id)) next.delete(root.id)
-                                  else next.add(root.id)
-                                  return next
-                                })}
-                                owners={owners}
-                                onSave={saveAccount}
-                                onRequestDelete={requestDelete}
-                                confirmingDelete={confirmDeleteId === root.id}
-                                onCancelDelete={cancelOrConfirmDelete}
-                                onOpenDetail={openAccountDetail}
-                                onCreateOwnerForAccount={createOwnerForAccount}
-                                onRequestRenameOwner={owner => {
-                                  if (!owner?.id) return
-                                  setOwnerRenameDialog({
-                                    id: owner.id,
-                                    name: owner.name || '',
-                                  })
-                                }}
-                                onRequestDeleteOwner={owner => setPendingOwnerDelete(owner)}
-                                onRequestTrash={setPendingTrashAccount}
-                                onError={showAsyncNotice}
-                                interactionDisabled={showCreateAccount || !!movingAccountId}
-                                dragDisabled={rootDragDisabled}
-                                dropActive={groupMergeActive}
-                                onDragStart={handleAccountDragStart}
-                                onDragEnd={handleAccountDragEnd}
-                                {...accountTagProps}
-                              />
-                              {!isCollapsed && children.map((child, childIdx) => (
-                                <AccountRow
-                                  key={child.id}
-                                  account={child}
-                                  gridTemplateColumns={accountGridTemplate}
-                                  parentAccount={root}
-                                  isLastChild={childIdx === children.length - 1}
-                                  owners={owners}
-                                  onSave={saveAccount}
-                                  onRequestDelete={requestDelete}
-                                  confirmingDelete={false}
-                                  onCancelDelete={cancelOrConfirmDelete}
-                                  onOpenDetail={openAccountDetail}
-                                  onCreateOwnerForAccount={createOwnerForAccount}
-                                  onRequestRenameOwner={owner => {
-                                    if (!owner?.id) return
-                                    setOwnerRenameDialog({
-                                      id: owner.id,
-                                      name: owner.name || '',
-                                    })
-                                  }}
-                                  onRequestDeleteOwner={owner => setPendingOwnerDelete(owner)}
-                                  onRequestTrash={setPendingTrashAccount}
-                                  onError={showAsyncNotice}
-                                  interactionDisabled={showCreateAccount || !!movingAccountId}
-                                  dragDisabled={!!movingAccountId}
-                                  dropActive={groupMergeActive}
-                                  onDragStart={handleAccountDragStart}
-                                  onDragEnd={handleAccountDragEnd}
-                                  {...accountTagProps}
-                                />
-                              ))}
-                            </div>
-                          )
-                        })}
-                        {showCreateAccount && (
-                          <DraftAccountRow
-                            owners={owners}
-                            gridTemplateColumns={accountGridTemplate}
-                            creating={creatingAccount}
-                            onCreate={createAccount}
-                            onCancel={() => setShowCreateAccount(false)}
-                          />
-                        )}
-                      </div>
-                    </>
-                  )}
-                </SectionCard>
-                {showCreateAccount && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      left: 'calc(100% + 8px)',
-                      top: 'calc(100% - 48px)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      padding: '7px 8px',
-                      background: 'color-mix(in srgb, var(--surface2) 65%, var(--surface))',
-                      border: '1px solid var(--border)',
-                      borderRadius: 14,
-                      boxShadow: '0 10px 24px rgba(0, 0, 0, 0.10)',
-                    }}
-                  >
-                    <button
-                      type="submit"
-                      form="draft-account-form"
-                      style={{
-                        padding: '6px 14px',
-                        borderRadius: 10,
-                        border: 'none',
-                        cursor: creatingAccount ? 'not-allowed' : 'pointer',
-                        fontSize: 13,
-                        fontWeight: 500,
-                        transition: 'opacity 0.15s',
-                        opacity: creatingAccount ? 0.5 : 1,
-                        background: 'var(--accent)',
-                        color: '#fff',
-                      }}
-                      disabled={creatingAccount}
-                    >
-                      {creatingAccount ? 'Adding...' : 'Add'}
-                    </button>
+            <>
+              <div
+                onContextMenu={e => {
+                  if (showCreateAccount) return
+                  e.preventDefault()
+                  setContextOpen(prev => !prev)
+                }}
+                style={{ position: 'relative' }}
+              >
+                {contextOpen && (
+                  <div style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    zIndex: 40,
+                    background: 'var(--surface)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 10,
+                    boxShadow: '0 14px 36px rgba(0, 0, 0, 0.18)',
+                    padding: 6,
+                  }}>
+                    <Button small onClick={openCreateAccount}>Add account</Button>
+                    {orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0) && (
+                      <>
+                        <Button small variant="ghost" style={{ display: 'block', width: '100%', marginTop: 4 }} onClick={() => {
+                          setCollapsedGroups(new Set(orderedRootAccounts.filter(r => (childAccountsByParent.get(r.id) || []).length > 0).map(r => r.id)))
+                          setContextOpen(false)
+                        }}>Collapse all groups</Button>
+                        <Button small variant="ghost" style={{ display: 'block', width: '100%', marginTop: 4 }} onClick={() => {
+                          setCollapsedGroups(new Set())
+                          setContextOpen(false)
+                        }}>Expand all groups</Button>
+                      </>
+                    )}
                   </div>
                 )}
               </div>
-              <div style={{ width: '100%', display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
-                <Button small onClick={() => setShowCreateAccount(true)} disabled={showCreateAccount}>
-                  +New account
-                </Button>
-              </div>
-            </div>
-          )}
-          </>
+
+              {loading ? <Spinner /> : (
+                <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                  <div ref={accountsPanelRef} style={{ position: 'relative', width: 'fit-content', maxWidth: '100%' }}>
+                    <SectionCard
+                      summary={accountListSummary}
+                      collapsible={false}
+                      headerCenter={ownerWarning ? (
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          padding: '4px 10px',
+                          borderRadius: 999,
+                          background: 'color-mix(in srgb, var(--warning) 10%, var(--surface2))',
+                          border: '1px solid var(--border)',
+                          fontSize: 12,
+                          color: 'var(--text)',
+                          opacity: showCreateAccount ? 0.55 : 1,
+                        }}>
+                          <span>⚠️</span>
+                          <span style={{ whiteSpace: 'nowrap' }}>{ownerWarning}</span>
+                        </span>
+                      ) : null}
+                      width={sectionPanelWidth}
+                      style={{ overflow: 'hidden', alignSelf: 'flex-start' }}
+                    >
+                      {rootAccounts.length === 0 && !showCreateAccount ? (
+                        <div style={{ padding: '12px 16px 14px', fontSize: 14, color: 'var(--muted)', lineHeight: 1.4 }}>
+                          No accounts yet.
+                        </div>
+                      ) : displayRootAccounts.length === 0 && !showCreateAccount ? (
+                        <div style={{ padding: '12px 16px 14px', fontSize: 14, color: 'var(--muted)', lineHeight: 1.4 }}>
+                          No accounts match this owner filter.
+                        </div>
+                      ) : (
+                        <>
+                          <div
+                            onContextMenu={e => {
+                              if (!orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0)) return
+                              e.preventDefault()
+                              setListContextMenu({ x: e.clientX, y: e.clientY })
+                            }}
+                            style={{ background: 'var(--surface2)' }}>
+                            <PillTableHeader
+                              columns={[
+                                { key: 'drag', kind: 'spacer', cellPadding: 0 },
+                                {
+                                  key: 'name',
+                                  label: 'Account',
+                                  cellPadding: 0,
+                                  contentPadding: '0 9px',
+                                  leadingInset: 0,
+                                  trailingInset: 0,
+                                  resizable: false,
+                                  draggable: false,
+                                  title: 'Click to sort accounts by name',
+                                },
+                                {
+                                  key: 'type',
+                                  label: 'Type',
+                                  cellPadding: 0,
+                                  contentPadding: '0 9px',
+                                  leadingInset: 0,
+                                  trailingInset: 0,
+                                  resizable: true,
+                                  draggable: false,
+                                  title: 'Click to sort accounts by type',
+                                },
+                                {
+                                  key: 'owner',
+                                  label: 'Owner',
+                                  align: 'center',
+                                  cellPadding: 0,
+                                  contentPadding: '0 9px',
+                                  leadingInset: 0,
+                                  trailingInset: 0,
+                                  resizable: true,
+                                  draggable: false,
+                                  title: 'Click to sort accounts by owner',
+                                },
+                                {
+                                  key: 'tags',
+                                  sortable: false,
+                                  resizable: true,
+                                  draggable: false,
+                                  cellPadding: 0,
+                                  contentPadding: '0 9px',
+                                  render: () => (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+                                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', letterSpacing: 0.3, textTransform: 'uppercase' }}>Tags</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => { setTagsEditMode(v => !v); setTagPickerAccountId(null) }}
+                                        title={tagsEditMode ? 'Finish editing account tags' : 'Edit account tags (or right-click a row)'}
+                                        style={{
+                                          background: tagsEditMode ? 'color-mix(in srgb, var(--accent) 16%, var(--surface))' : 'none',
+                                          border: '1px solid var(--border)', borderRadius: 999, padding: '1px 8px',
+                                          fontSize: 11, color: tagsEditMode ? 'var(--accent2)' : 'var(--muted)', cursor: 'pointer',
+                                        }}
+                                      >
+                                        {tagsEditMode ? 'Done' : 'Edit tags'}
+                                      </button>
+                                    </div>
+                                  ),
+                                },
+                                { key: 'actions', kind: 'spacer', cellPadding: 0 },
+                              ]}
+                              gridTemplateColumns={accountGridTemplate}
+                              sortState={sortIndicatorActive ? { key: sortKey, dir: sortDir } : null}
+                              onSort={toggleAccountSort}
+                              onStartResize={startAccountColumnResize}
+                              style={{
+                                gap: ACCOUNT_ROW_GAP,
+                                padding: '6px 10px',
+                                alignItems: 'center',
+                              }}
+                            />
+                          </div>
+                          <div
+                            ref={listRef}
+                            onDragOver={handleListDragOver}
+                            onDrop={handleListDrop}
+                            onContextMenu={e => {
+                              if (!orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0)) return
+                              e.preventDefault()
+                              setListContextMenu({ x: e.clientX, y: e.clientY })
+                            }}
+                            style={{ maxHeight: 640, overflowY: 'auto', position: 'relative' }}
+                          >
+                            {draggingAccount?.parent_account_id ? (
+                              <div
+                                aria-hidden="true"
+                                style={{
+                                  position: 'absolute',
+                                  top: 8,
+                                  bottom: 8,
+                                  left: 8,
+                                  width: ACCOUNT_DETACH_DROP_ZONE_WIDTH - 16,
+                                  borderRadius: 12,
+                                  border: `1px dashed ${detachDropActive ? 'color-mix(in srgb, var(--accent) 58%, var(--border))' : 'color-mix(in srgb, var(--border) 88%, transparent)'}`,
+                                  background: detachDropActive
+                                    ? 'linear-gradient(180deg, color-mix(in srgb, var(--accent) 14%, var(--surface2)), color-mix(in srgb, var(--accent) 8%, var(--surface)))'
+                                    : 'color-mix(in srgb, var(--surface2) 42%, transparent)',
+                                  boxShadow: detachDropActive ? 'inset 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent)' : 'none',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  textAlign: 'center',
+                                  padding: '10px 8px',
+                                  color: detachDropActive ? 'var(--accent2)' : 'var(--muted)',
+                                  fontSize: 11,
+                                  fontWeight: detachDropActive ? 700 : 600,
+                                  lineHeight: 1.35,
+                                  pointerEvents: 'none',
+                                  zIndex: 1,
+                                }}
+                              >
+                                {detachDropActive ? 'Release to ungroup' : 'Pull here to top level'}
+                              </div>
+                            ) : null}
+                            {listContextMenu && (
+                              <div
+                                style={{
+                                  position: 'fixed',
+                                  left: Math.min(listContextMenu.x, window.innerWidth - 200),
+                                  top: Math.min(listContextMenu.y, window.innerHeight - 100),
+                                  zIndex: 300,
+                                  background: 'var(--surface)',
+                                  border: '1px solid var(--border)',
+                                  borderRadius: 10,
+                                  boxShadow: '0 8px 32px rgba(0,0,0,0.22)',
+                                  padding: 4,
+                                  minWidth: 180,
+                                }}
+                                onMouseLeave={() => setListContextMenu(null)}
+                              >
+                                {listContextMenu.accountId ? (
+                                  <button type="button" onClick={() => {
+                                    // Open just this row's picker without toggling the page-wide edit
+                                    // mode: the row renders its own "+" anchor while its picker is open
+                                    // (see showControls), so dismissing the picker leaves no lingering
+                                    // "Done" state to clear.
+                                    setTagPickerAccountId(listContextMenu.accountId)
+                                    setListContextMenu(null)
+                                  }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
+                                    Edit tags…
+                                  </button>
+                                ) : null}
+                                {orderedRootAccounts.some(r => (childAccountsByParent.get(r.id) || []).length > 0) ? (
+                                  <>
+                                    {listContextMenu.accountId ? <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} /> : null}
+                                    <button type="button" onClick={() => {
+                                      setCollapsedGroups(new Set(orderedRootAccounts.filter(r => (childAccountsByParent.get(r.id) || []).length > 0).map(r => r.id)))
+                                      setListContextMenu(null)
+                                    }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
+                                      Collapse all
+                                    </button>
+                                    <button type="button" onClick={() => {
+                                      setCollapsedGroups(new Set())
+                                      setListContextMenu(null)
+                                    }} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', color: 'var(--text)', fontSize: 13, padding: '8px 10px', borderRadius: 6, cursor: 'pointer' }}>
+                                      Expand all
+                                    </button>
+                                  </>
+                                ) : null}
+                              </div>
+                            )}
+                            {displayRootAccounts.map(root => {
+                              const children = childAccountsByParent.get(root.id) || []
+                              const isCollapsed = collapsedGroups.has(root.id)
+                              const rootDragDisabled = !!movingAccountId
+                              const groupMergeActive = dropIntent?.kind === 'merge' && dropIntent.targetId === root.id
+                              return (
+                                <div key={root.id}>
+                                  <AccountRow
+                                    account={root}
+                                    gridTemplateColumns={accountGridTemplate}
+                                    hasChildren={children.length}
+                                    isCollapsed={isCollapsed}
+                                    onToggleCollapse={() => setCollapsedGroups(prev => {
+                                      const next = new Set(prev)
+                                      if (next.has(root.id)) next.delete(root.id)
+                                      else next.add(root.id)
+                                      return next
+                                    })}
+                                    owners={owners}
+                                    onSave={saveAccount}
+                                    onRequestDelete={requestDelete}
+                                    confirmingDelete={confirmDeleteId === root.id}
+                                    onCancelDelete={cancelOrConfirmDelete}
+                                    onOpenDetail={openAccountDetail}
+                                    onCreateOwnerForAccount={createOwnerForAccount}
+                                    onRequestRenameOwner={owner => {
+                                      if (!owner?.id) return
+                                      setOwnerRenameDialog({
+                                        id: owner.id,
+                                        name: owner.name || '',
+                                      })
+                                    }}
+                                    onRequestDeleteOwner={owner => setPendingOwnerDelete(owner)}
+                                    onRequestTrash={setPendingTrashAccount}
+                                    onError={showAsyncNotice}
+                                    interactionDisabled={showCreateAccount || !!movingAccountId}
+                                    dragDisabled={rootDragDisabled}
+                                    dropActive={groupMergeActive}
+                                    onDragStart={handleAccountDragStart}
+                                    onDragEnd={handleAccountDragEnd}
+                                    {...accountTagProps}
+                                  />
+                                  {!isCollapsed && children.map((child, childIdx) => (
+                                    <AccountRow
+                                      key={child.id}
+                                      account={child}
+                                      gridTemplateColumns={accountGridTemplate}
+                                      parentAccount={root}
+                                      isLastChild={childIdx === children.length - 1}
+                                      owners={owners}
+                                      onSave={saveAccount}
+                                      onRequestDelete={requestDelete}
+                                      confirmingDelete={false}
+                                      onCancelDelete={cancelOrConfirmDelete}
+                                      onOpenDetail={openAccountDetail}
+                                      onCreateOwnerForAccount={createOwnerForAccount}
+                                      onRequestRenameOwner={owner => {
+                                        if (!owner?.id) return
+                                        setOwnerRenameDialog({
+                                          id: owner.id,
+                                          name: owner.name || '',
+                                        })
+                                      }}
+                                      onRequestDeleteOwner={owner => setPendingOwnerDelete(owner)}
+                                      onRequestTrash={setPendingTrashAccount}
+                                      onError={showAsyncNotice}
+                                      interactionDisabled={showCreateAccount || !!movingAccountId}
+                                      dragDisabled={!!movingAccountId}
+                                      dropActive={groupMergeActive}
+                                      onDragStart={handleAccountDragStart}
+                                      onDragEnd={handleAccountDragEnd}
+                                      {...accountTagProps}
+                                    />
+                                  ))}
+                                </div>
+                              )
+                            })}
+                            {showCreateAccount && (
+                              <DraftAccountRow
+                                owners={owners}
+                                gridTemplateColumns={accountGridTemplate}
+                                creating={creatingAccount}
+                                onCreate={createAccount}
+                                onCancel={() => setShowCreateAccount(false)}
+                              />
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </SectionCard>
+                    {showCreateAccount && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          left: 'calc(100% + 8px)',
+                          top: 'calc(100% - 48px)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          padding: '7px 8px',
+                          background: 'color-mix(in srgb, var(--surface2) 65%, var(--surface))',
+                          border: '1px solid var(--border)',
+                          borderRadius: 14,
+                          boxShadow: '0 10px 24px rgba(0, 0, 0, 0.10)',
+                        }}
+                      >
+                        <button
+                          type="submit"
+                          form="draft-account-form"
+                          style={{
+                            padding: '6px 14px',
+                            borderRadius: 10,
+                            border: 'none',
+                            cursor: creatingAccount ? 'not-allowed' : 'pointer',
+                            fontSize: 13,
+                            fontWeight: 500,
+                            transition: 'opacity 0.15s',
+                            opacity: creatingAccount ? 0.5 : 1,
+                            background: 'var(--accent)',
+                            color: '#fff',
+                          }}
+                          disabled={creatingAccount}
+                        >
+                          {creatingAccount ? 'Adding...' : 'Add'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ width: '100%', display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+                    <Button small onClick={() => setShowCreateAccount(true)} disabled={showCreateAccount}>
+                      +New account
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
           {tab === 'owners' && (
-          <OwnersPanel
-            owners={owners}
-            onCreateOwner={createOwner}
-            onSaveOwner={saveOwner}
-            onDeleteOwner={owner => setPendingOwnerDelete(owner)}
-            onError={showAsyncNotice}
-            disabled={showCreateAccount}
-            width={sectionPanelWidth}
-            collapsible={false}
-          />
+            <OwnersPanel
+              owners={owners}
+              onCreateOwner={createOwner}
+              onSaveOwner={saveOwner}
+              onDeleteOwner={owner => setPendingOwnerDelete(owner)}
+              onError={showAsyncNotice}
+              disabled={showCreateAccount}
+              width={sectionPanelWidth}
+              collapsible={false}
+            />
           )}
 
           {tab === 'connections' && (
-          <DataSourceConnections
-            accounts={rootAccounts}
-            onAccountsChanged={loadData}
-            currentUser={currentUser}
-            setCurrentUser={setCurrentUser}
-            authEnabled={authEnabled}
-            width={sectionPanelWidth}
-            disabled={showCreateAccount}
-          />
+            <DataSourceConnections
+              accounts={rootAccounts}
+              onAccountsChanged={loadData}
+              currentUser={currentUser}
+              setCurrentUser={setCurrentUser}
+              authEnabled={authEnabled}
+              width={sectionPanelWidth}
+              disabled={showCreateAccount}
+            />
           )}
 
           {detailAccounts.map((account, index) => (

@@ -440,6 +440,10 @@ export const api = {
     request(`/sync?days=${days}${connectionId ? `&connection_id=${encodeURIComponent(connectionId)}` : ''}`, { method: 'POST' }),
   recategorize: () => request('/sync/recategorize', { method: 'POST' }),
   getRecategorizePreview: () => request('/sync/recategorize-preview'),
+  // Developer-options connection sync diagnostics: recent per-connection /sync calls (status sequence,
+  // cursor fingerprints, count deltas). Both endpoints 404 when developer options are off.
+  getSyncDiagnostics: (limit = 100) => request(`/sync/diagnostics?limit=${limit}`),
+  clearSyncDiagnostics: () => request('/sync/diagnostics', { method: 'DELETE' }),
 
   getTasks:    () => request('/tasks'),
 
