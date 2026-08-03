@@ -1,20 +1,19 @@
 """
-Data-source sync → period import cards (docs/backlog/sync-import-records-and-dedupe.md, phase 1).
+Data-source sync → cursor-based /transactions/sync, import cards, and cross-source dedup.
 
-A sync groups its inserted rows into one import_batch per (connection, calendar month),
-source_kind='connection_sync', so synced rows carry an import_batch_id and gain a duplicate-review
-home like any imported file. These tests pin: the card is created lazily and reused within a month,
-synced rows are stamped with it, the card's row_count + per-account breakdown accumulate across
-fetches, and a fetch that inserts nothing creates no empty card.
+A sync uses the provider's cursor API: each call pulls added/modified/removed changes since a stored
+per-connection cursor and reports the historical-backfill readiness (`update_status`). The first
+(historical) pull lands on one "initial import" card; routine top-up syncs accrete onto monthly period
+cards (source_kind='connection_sync'). These tests pin the card structure, the cursor/readiness
+lifecycle, added/modified/removed handling, the fetch-depth window, connection scoping, and the
+cross-source duplicate detection that rides the sync insert path.
 """
 
 from __future__ import annotations
 
 import tempfile
 import unittest
-import uuid
 from contextlib import contextmanager
-from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -23,16 +22,32 @@ from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_
 from backend.routers import sync as sync_module
 from backend.routers import providers as providers_module
 
+_DONE = "HISTORICAL_UPDATE_COMPLETE"
+
 
 class _FakeAdapter:
-    def __init__(self, txns, accounts=None):
-        self._txns = txns
-        self._accounts = accounts or []
-        self.calls = []  # start_date of each fetch_transactions call (for window/scoping assertions)
+    """Serves scripted `/transactions/sync` pages in order across calls, recording each call's cursor and
+    days_requested. A page is a dict with any of added/modified/removed/has_more/update_status/next_cursor;
+    missing keys default to an empty, terminal page."""
 
-    def fetch_transactions(self, app_config, credential, *, start_date, end_date):
-        self.calls.append(start_date)
-        return self._txns
+    def __init__(self, pages=None, accounts=None):
+        self._pages = list(pages or [])
+        self._accounts = accounts or []
+        self.calls = []
+        self._idx = 0
+
+    def fetch_transactions_sync(self, app_config, credential, *, cursor=None, days_requested=730):
+        self.calls.append({"cursor": cursor, "days_requested": days_requested})
+        page = self._pages[self._idx] if self._idx < len(self._pages) else {}
+        self._idx += 1
+        return {
+            "added":         page.get("added", []),
+            "modified":      page.get("modified", []),
+            "removed":       page.get("removed", []),
+            "next_cursor":   page.get("next_cursor", f"cur-{self._idx}"),
+            "has_more":      page.get("has_more", False),
+            "update_status": page.get("update_status", _DONE),
+        }
 
     def fetch_accounts(self, app_config, credential):
         return self._accounts
@@ -84,11 +99,22 @@ class SyncPeriodCardTests(unittest.TestCase):
             "is_pending": pending,
         }
 
+    def _complete_initial(self):
+        """Flip the connection past its historical backfill so a following sync uses monthly cards."""
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "UPDATE connection SET initial_sync_complete = 1, transactions_cursor = 'c0' WHERE id = ?",
+                (self.connection_id,),
+            )
+
     @contextmanager
-    def _driven_sync(self, txns, on_date, *, days=30, connection_id=None, adapter=None):
-        """Run run_sync with the provider seam mocked and the clock pinned to `on_date`. Pass an `adapter`
-        to inspect it after (fetch call count / start_date window); otherwise a throwaway one is used."""
-        adapter = adapter if adapter is not None else _FakeAdapter(txns)
+    def _driven_sync(self, added=None, on_date="2026-08-10", *, days=0, connection_id=None, adapter=None, pages=None):
+        """Run run_sync with the provider seam mocked and the clock pinned. Pass `added` for a single
+        terminal page, `pages` for a scripted multi-page/multi-status sequence, or `adapter` to inspect it."""
+        if adapter is None:
+            if pages is None:
+                pages = [{"added": added or [], "has_more": False, "update_status": _DONE}]
+            adapter = _FakeAdapter(pages=pages)
         request = SimpleNamespace(state=SimpleNamespace(user={"id": "u1"}))
         with self._use_db_path(), \
                 mock.patch.object(sync_module.crypto_service, "is_unlocked", return_value=True), \
@@ -105,56 +131,189 @@ class SyncPeriodCardTests(unittest.TestCase):
                 "FROM import_batch WHERE source_kind = 'connection_sync' ORDER BY filename"
             ).fetchall()]
 
-    def test_first_fetch_creates_one_period_card_and_stamps_rows(self):
-        with self._driven_sync([self._txn("t1", -10.0, "Coffee"), self._txn("t2", -20.0, "Lunch")], "2026-08-10") as res:
+    def _connection(self):
+        with self._use_db_path(), get_db() as conn:
+            return dict(conn.execute(
+                "SELECT transactions_cursor, initial_sync_complete FROM connection WHERE id = ?",
+                (self.connection_id,),
+            ).fetchone())
+
+    # ---- card structure -------------------------------------------------
+
+    def test_initial_sync_creates_single_initial_card_and_stamps_rows(self):
+        with self._driven_sync([self._txn("t1", -10.0, "Coffee"), self._txn("t2", -20.0, "Lunch")]) as res:
             self.assertEqual(res["added"], 2)
+            self.assertTrue(res["historical_complete"])
         cards = self._cards()
         self.assertEqual(len(cards), 1)
-        card = cards[0]
-        self.assertEqual(card["connection_id"], self.connection_id)
-        self.assertEqual(card["row_count"], 2)
-        self.assertIn("August 2026", card["filename"])
-        self.assertIn("Example Bank", card["filename"])
+        self.assertIn("Initial import", cards[0]["filename"])
+        self.assertEqual(cards[0]["row_count"], 2)
+        conn_row = self._connection()
+        self.assertEqual(conn_row["initial_sync_complete"], 1)
+        self.assertIsNotNone(conn_row["transactions_cursor"])
         with self._use_db_path(), get_db() as conn:
             stamped = conn.execute(
-                "SELECT COUNT(*) n FROM txn WHERE import_batch_id = ?", (card["id"],)
+                "SELECT COUNT(*) n FROM txn WHERE import_batch_id = ?", (cards[0]["id"],)
             ).fetchone()["n"]
             self.assertEqual(stamped, 2)
-            acct = conn.execute(
-                "SELECT csv_value, account_id, row_count FROM import_batch_account WHERE batch_id = ?",
-                (card["id"],),
-            ).fetchone()
-            self.assertEqual(acct["account_id"], "a1")
-            self.assertEqual(acct["row_count"], 2)
 
-    def test_second_fetch_same_month_reuses_and_extends_the_card(self):
-        with self._driven_sync([self._txn("t1", -10.0, "Coffee")], "2026-08-10"):
-            pass
-        with self._driven_sync([self._txn("t2", -20.0, "Lunch")], "2026-08-25") as res:
+    def test_initial_backfill_polls_to_completion_on_one_card(self):
+        # First poll: only the initial (30-day) pull is ready → rows land, but the connection stays "initial".
+        with self._driven_sync(pages=[{
+            "added": [self._txn("t1", -10.0, "Coffee")], "update_status": "INITIAL_UPDATE_COMPLETE",
+        }]) as res:
+            self.assertFalse(res["historical_complete"])
+            self.assertEqual(res["update_status"], "INITIAL_UPDATE_COMPLETE")
+        self.assertEqual(self._connection()["initial_sync_complete"], 0)
+        # Second poll: backfill done → more rows on the SAME initial card, connection flips complete.
+        with self._driven_sync(pages=[{"added": [self._txn("t2", -20.0, "Lunch")], "update_status": _DONE}]) as res:
+            self.assertTrue(res["historical_complete"])
+        cards = self._cards()
+        self.assertEqual(len(cards), 1, "the whole backfill stays on one initial card across polls")
+        self.assertIn("Initial import", cards[0]["filename"])
+        self.assertEqual(cards[0]["row_count"], 2)
+        self.assertEqual(self._connection()["initial_sync_complete"], 1)
+
+    def test_routine_sync_after_initial_uses_monthly_card(self):
+        self._complete_initial()
+        with self._driven_sync([self._txn("t9", -5.0, "Snack", day="2026-08-15")], "2026-08-15") as res:
             self.assertEqual(res["added"], 1)
         cards = self._cards()
-        self.assertEqual(len(cards), 1, "same month must reuse the one card")
-        self.assertEqual(cards[0]["row_count"], 2)
+        self.assertEqual(len(cards), 1)
+        self.assertIn("August 2026", cards[0]["filename"])
+
+    def test_refetch_with_no_new_rows_creates_no_extra_card(self):
+        with self._driven_sync([self._txn("t1", -10.0, "Coffee")]):
+            pass
+        # Re-serving the same id: idempotent skip, and (now a routine sync) no empty monthly card appears.
+        with self._driven_sync([self._txn("t1", -10.0, "Coffee")]) as res:
+            self.assertEqual(res["added"], 0)
+        cards = self._cards()
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0]["row_count"], 1)
+
+    # ---- cursor / paging / readiness ------------------------------------
+
+    def test_paging_drains_has_more_in_one_call(self):
+        pages = [
+            {"added": [self._txn("t1", -1.0, "A")], "has_more": True, "update_status": "NOT_READY"},
+            {"added": [self._txn("t2", -2.0, "B")], "has_more": True, "update_status": "INITIAL_UPDATE_COMPLETE"},
+            {"added": [self._txn("t3", -3.0, "C")], "has_more": False, "update_status": _DONE},
+        ]
+        with self._driven_sync(pages=pages) as res:
+            self.assertEqual(res["added"], 3)
+            self.assertTrue(res["historical_complete"])
+        self.assertEqual(self._cards()[0]["row_count"], 3)
+
+    def test_cursor_is_persisted_and_sent_back(self):
+        adapter = _FakeAdapter(pages=[{"added": [self._txn("t1", -1.0, "A")], "next_cursor": "cur-XYZ"}])
+        with self._driven_sync(adapter=adapter):
+            pass
+        self.assertEqual(self._connection()["transactions_cursor"], "cur-XYZ")
+        adapter2 = _FakeAdapter(pages=[{}])
+        with self._driven_sync(adapter=adapter2):
+            pass
+        self.assertEqual(adapter2.calls[0]["cursor"], "cur-XYZ", "the stored cursor is sent on the next sync")
+
+    # ---- modified / removed ---------------------------------------------
+
+    def test_modified_updates_provider_fields_preserving_name_edit(self):
+        with self._driven_sync([self._txn("t1", -10.0, "Coffee")]):
+            pass
         with self._use_db_path(), get_db() as conn:
-            self.assertEqual(
-                conn.execute(
-                    "SELECT row_count FROM import_batch_account WHERE batch_id = ?", (cards[0]["id"],)
-                ).fetchone()["row_count"],
-                2,
+            conn.execute(
+                "UPDATE txn SET display_name = 'My Coffee', display_name_source = 'manual' "
+                "WHERE plaid_transaction_id = 't1'"
+            )
+        with self._driven_sync(pages=[{"modified": [self._txn("t1", -12.5, "Coffee Shop")]}]) as res:
+            self.assertEqual(res["updated"], 1)
+        with self._use_db_path(), get_db() as conn:
+            r = conn.execute(
+                "SELECT amount, merchant_name, display_name FROM txn WHERE plaid_transaction_id = 't1'"
+            ).fetchone()
+        self.assertEqual(r["amount"], -12.5)                # provider field refreshed
+        self.assertEqual(r["merchant_name"], "Coffee Shop")
+        self.assertEqual(r["display_name"], "My Coffee")    # user rename preserved
+
+    def test_removed_trashes_the_row(self):
+        with self._driven_sync([self._txn("t1", -10.0, "Coffee")]):
+            pass
+        with self._driven_sync(pages=[{"removed": ["t1"]}]) as res:
+            self.assertEqual(res["removed"], 1)
+        with self._use_db_path(), get_db() as conn:
+            self.assertIsNotNone(
+                conn.execute("SELECT trashed_at FROM txn WHERE plaid_transaction_id = 't1'").fetchone()["trashed_at"]
             )
 
-    def test_next_month_opens_a_new_card(self):
-        with self._driven_sync([self._txn("t1", -10.0, "Coffee", day="2026-08-10")], "2026-08-31"):
+    def test_pending_transaction_posts_in_place_preserving_edits(self):
+        # A pending row lands and the user renames it.
+        with self._driven_sync([self._txn("pend-1", -10.0, "Coffee", pending=True)]) as res:
+            self.assertEqual(res["added"], 1)
+        with self._use_db_path(), get_db() as conn:
+            pk = conn.execute("SELECT id FROM txn WHERE plaid_transaction_id = 'pend-1'").fetchone()["id"]
+            conn.execute(
+                "UPDATE txn SET display_name = 'My Coffee', display_name_source = 'manual' WHERE id = ?", (pk,)
+            )
+        # It posts: the posted txn (new id, references the pending via pending_external_transaction_id) arrives
+        # in a later page than the pending's `removed` — the drain-then-process order must still convert in
+        # place, not trash-then-add.
+        posted = self._txn("posted-1", -10.5, "Coffee Shop", pending=False)
+        posted["pending_external_transaction_id"] = "pend-1"
+        with self._driven_sync(pages=[
+            {"removed": ["pend-1"], "has_more": True, "update_status": "NOT_READY"},
+            {"added": [posted], "has_more": False, "update_status": _DONE},
+        ]) as res:
+            self.assertEqual(res["updated"], 1)
+            self.assertEqual(res["added"], 0)
+            self.assertEqual(res["removed"], 0, "the pending's removed is a no-op once converted in place")
+        with self._use_db_path(), get_db() as conn:
+            row = conn.execute(
+                "SELECT plaid_transaction_id, amount, is_pending, display_name, trashed_at FROM txn WHERE id = ?",
+                (pk,),
+            ).fetchone()
+            self.assertEqual(row["plaid_transaction_id"], "posted-1")   # same row, now the posted id
+            self.assertEqual(row["amount"], -10.5)
+            self.assertEqual(row["is_pending"], 0)
+            self.assertEqual(row["display_name"], "My Coffee")          # user rename preserved
+            self.assertIsNone(row["trashed_at"])
+            total = conn.execute(
+                "SELECT COUNT(*) c FROM txn WHERE plaid_transaction_id IN ('pend-1', 'posted-1')"
+            ).fetchone()["c"]
+            self.assertEqual(total, 1, "no duplicate row for the posted transaction")
+
+    # ---- fetch depth / scoping ------------------------------------------
+
+    def test_all_history_uses_max_days_requested(self):
+        adapter = _FakeAdapter(pages=[{}])
+        with self._driven_sync(adapter=adapter, days=0):
             pass
-        with self._driven_sync([self._txn("t2", -20.0, "Lunch", day="2026-09-02")], "2026-09-01"):
+        self.assertEqual(adapter.calls[0]["days_requested"], sync_module.ALL_HISTORY_DAYS)
+
+    def test_positive_days_bounds_fetch_depth(self):
+        adapter = _FakeAdapter(pages=[{}])
+        with self._driven_sync(adapter=adapter, days=90):
             pass
-        cards = self._cards()
-        self.assertEqual(len(cards), 2)
-        self.assertEqual({c["row_count"] for c in cards}, {1})
+        self.assertEqual(adapter.calls[0]["days_requested"], 90)
+
+    def test_connection_id_scopes_the_sync(self):
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "INSERT INTO connection (id, provider, external_id, credential, institution) "
+                "VALUES ('conn-2', 'plaid', 'item-2', '', 'Other Bank')"
+            )
+        scoped = _FakeAdapter(pages=[{}])
+        with self._driven_sync(adapter=scoped, connection_id=self.connection_id):
+            pass
+        self.assertEqual(len(scoped.calls), 1, "scoped sync fetches only the named connection")
+        unscoped = _FakeAdapter(pages=[{}, {}])
+        with self._driven_sync(adapter=unscoped):
+            pass
+        self.assertEqual(len(unscoped.calls), 2, "unscoped sync fetches every connection")
+
+    # ---- cross-source dedup on the sync path ----------------------------
 
     def _seed_csv_row_on_other_account(self, *, account_id="a2", parent_id=None,
                                        amount=-10.0, name="Coffee", day="2026-08-10"):
-        """A prior CSV/manual row on a *different* account — the thing a re-fetched sync duplicates."""
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 """
@@ -178,34 +337,24 @@ class SyncPeriodCardTests(unittest.TestCase):
                 (account_id, SHARED_OWNER_ID, amount, name, name, name, day),
             )
 
-    def test_sync_soft_flags_a_cross_account_duplicate_on_its_period_card(self):
+    def test_sync_soft_flags_a_cross_account_duplicate_on_its_card(self):
         self._seed_csv_row_on_other_account()
-        with self._driven_sync([self._txn("t1", -10.0, "Coffee", day="2026-08-10")], "2026-08-10") as res:
+        with self._driven_sync([self._txn("t1", -10.0, "Coffee", day="2026-08-10")]) as res:
             self.assertEqual(res["added"], 1)
         with self._use_db_path(), get_db() as conn:
             synced = conn.execute(
-                "SELECT suspect_duplicate_of, suspect_duplicate_reason, import_batch_id, trashed_at "
+                "SELECT suspect_duplicate_of, suspect_duplicate_reason, trashed_at "
                 "FROM txn WHERE plaid_transaction_id = 't1'"
             ).fetchone()
             self.assertEqual(synced["suspect_duplicate_of"], "csv-txn")
             self.assertEqual(synced["suspect_duplicate_reason"], "cross_account")
-            self.assertIsNone(synced["trashed_at"])  # soft flag, not dropped
-            # The suspect surfaces on the period card (its import_batch_id).
-            card_id = synced["import_batch_id"]
-            n = conn.execute(
-                "SELECT COUNT(*) c FROM txn WHERE import_batch_id = ? AND suspect_duplicate_of IS NOT NULL "
-                "AND suspect_resolved_at IS NULL AND trashed_at IS NULL",
-                (card_id,),
-            ).fetchone()["c"]
-            self.assertEqual(n, 1)
+            self.assertIsNone(synced["trashed_at"])
 
     def test_sync_into_already_merged_account_promotes_to_confirmed(self):
-        # The synced account (a1) is already merged under the CSV account (a2): the user has asserted they're
-        # the same physical account, so a cross-account match is really an in-group duplicate → confirmed.
         self._seed_csv_row_on_other_account(account_id="a2", parent_id=None)
         with self._use_db_path(), get_db() as conn:
             conn.execute("UPDATE account SET parent_account_id = 'a2' WHERE id = 'a1'")
-        with self._driven_sync([self._txn("t1", -10.0, "Coffee", day="2026-08-10")], "2026-08-10"):
+        with self._driven_sync([self._txn("t1", -10.0, "Coffee", day="2026-08-10")]):
             pass
         with self._use_db_path(), get_db() as conn:
             synced = conn.execute(
@@ -218,53 +367,11 @@ class SyncPeriodCardTests(unittest.TestCase):
             self.assertEqual(synced["suspect_duplicate_of"], "csv-txn")
 
     def test_synced_rows_get_a_content_hash(self):
-        with self._driven_sync([self._txn("t1", -10.0, "Coffee")], "2026-08-10"):
+        with self._driven_sync([self._txn("t1", -10.0, "Coffee")]):
             pass
         with self._use_db_path(), get_db() as conn:
             h = conn.execute("SELECT content_hash FROM txn WHERE plaid_transaction_id = 't1'").fetchone()["content_hash"]
             self.assertTrue(h)
-
-    def test_fetch_with_no_inserts_creates_no_card(self):
-        # First fetch inserts t1.
-        with self._driven_sync([self._txn("t1", -10.0, "Coffee")], "2026-08-10"):
-            pass
-        # Re-fetch the same posted txn: idempotent skip, nothing inserted, no new card, no phantom row_count.
-        with self._driven_sync([self._txn("t1", -10.0, "Coffee")], "2026-08-11") as res:
-            self.assertEqual(res["added"], 0)
-        cards = self._cards()
-        self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0]["row_count"], 1)
-
-    def test_all_history_window_uses_max_lookback(self):
-        # days=0 means "all available history" → start_date is ALL_HISTORY_DAYS back, not 30.
-        adapter = _FakeAdapter([])
-        with self._driven_sync([], "2026-08-10", days=0, adapter=adapter):
-            pass
-        self.assertEqual(len(adapter.calls), 1)
-        expected = date.fromisoformat("2026-08-10") - timedelta(days=sync_module.ALL_HISTORY_DAYS)
-        self.assertEqual(adapter.calls[0], expected)
-
-    def test_positive_days_uses_that_window(self):
-        adapter = _FakeAdapter([])
-        with self._driven_sync([], "2026-08-10", days=30, adapter=adapter):
-            pass
-        self.assertEqual(adapter.calls[0], date.fromisoformat("2026-08-10") - timedelta(days=30))
-
-    def test_connection_id_scopes_the_sync(self):
-        # A second plaid connection. Scoped sync fetches only the named connection; unscoped fetches both.
-        with self._use_db_path(), get_db() as conn:
-            conn.execute(
-                "INSERT INTO connection (id, provider, external_id, credential, institution) "
-                "VALUES ('conn-2', 'plaid', 'item-2', '', 'Other Bank')"
-            )
-        scoped = _FakeAdapter([])
-        with self._driven_sync([], "2026-08-10", connection_id=self.connection_id, adapter=scoped):
-            pass
-        self.assertEqual(len(scoped.calls), 1, "scoped sync must fetch only the named connection")
-        unscoped = _FakeAdapter([])
-        with self._driven_sync([], "2026-08-10", adapter=unscoped):
-            pass
-        self.assertEqual(len(unscoped.calls), 2, "unscoped sync must fetch every connection")
 
 
 class RefreshAccountsTests(unittest.TestCase):
@@ -293,9 +400,8 @@ class RefreshAccountsTests(unittest.TestCase):
             reset_current_db_path(token)
 
     def test_refresh_recreates_missing_accounts_from_the_connection(self):
-        # No account rows exist (as after a restore that rolled the ledger back before the connect).
         request = SimpleNamespace(state=SimpleNamespace(user={"id": "u1"}))
-        fake = _FakeAdapter([], accounts=[
+        fake = _FakeAdapter(accounts=[
             {"external_account_id": "acct-ext-1", "name": "Joint Checking",
              "type": "depository", "subtype": "checking", "mask": "1188"},
         ])
@@ -327,8 +433,7 @@ class RefreshAccountsTests(unittest.TestCase):
 
 
 class _FrozenDate:
-    """A stand-in for the `date` name inside sync.py that pins `date.today()` while leaving the
-    rest of the type usable (the sync module also does `date.today() - timedelta(...)`)."""
+    """A stand-in for the `date` name inside sync.py that pins `date.today()`."""
 
     def __init__(self, iso):
         from datetime import date as _date

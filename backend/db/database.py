@@ -116,7 +116,7 @@ def get_db(db_path: str | None = None):
 # v20 makes the account→connection link provider-neutral (external_account_id / connection_id / provider,
 # drop plaid_item_id) and drops the vestigial `plaid_item` table.
 
-CURRENT_VERSION = 21
+CURRENT_VERSION = 22
 
 MIGRATIONS = {}
 
@@ -659,6 +659,17 @@ def _add_import_batch_connection_id(conn):
     )
 
 
+@migration(22)
+def _add_connection_sync_cursor(conn):
+    # Cursor-based incremental sync via the provider's /transactions/sync API (Plaid). `transactions_cursor`
+    # persists the paging cursor per connection so routine syncs pull only deltas; `initial_sync_complete`
+    # records whether the historical backfill has finished (HISTORICAL_UPDATE_COMPLETE), which decides
+    # whether synced rows land on the connection's single "initial import" card or the monthly period cards.
+    # Fresh installs get both columns from the connection baseline CREATE TABLE; existing databases here.
+    conn.execute("ALTER TABLE connection ADD COLUMN transactions_cursor TEXT")
+    conn.execute("ALTER TABLE connection ADD COLUMN initial_sync_complete INTEGER NOT NULL DEFAULT 0")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -824,7 +835,14 @@ def init_db(db_path: str | None = None):
                 credential     TEXT NOT NULL DEFAULT '',
                 credential_enc TEXT,
                 institution    TEXT,
-                created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+                -- Cursor for the provider's incremental transaction API (Plaid /transactions/sync). NULL
+                -- until the first cursor-based sync; advanced each page. Lets routine syncs pull only deltas.
+                transactions_cursor TEXT,
+                -- 1 once the provider reports the historical backfill is complete (HISTORICAL_UPDATE_COMPLETE).
+                -- Rows synced while 0 land on the connection's single "initial import" card; after 1, on the
+                -- normal monthly period cards. See routers/sync.py.
+                initial_sync_complete INTEGER NOT NULL DEFAULT 0
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_provider_external
                 ON connection(provider, external_id);

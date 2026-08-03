@@ -56,5 +56,32 @@ class PlaidAdapter(ProviderAdapter):
             for t in plaid_service.fetch_transactions(app_config, credential, start_date=start_date, end_date=end_date)
         ]
 
+    def fetch_transactions_sync(
+        self, app_config: dict, credential: str, cursor: str | None = None, days_requested: int = 730
+    ) -> dict:
+        result = plaid_service.fetch_transactions_sync(app_config, credential, cursor=cursor, days_requested=days_requested)
+
+        def _normalize(t: dict) -> dict:
+            return {
+                "external_transaction_id": t["plaid_transaction_id"],
+                "external_account_id":     t["plaid_account_id"],
+                "amount":                  t["amount"],
+                "merchant_name":           t["merchant_name"],
+                "raw_name":                t["raw_name"],
+                "date":                    t["date"],
+                "is_pending":              t["is_pending"],
+                # The prior pending row's provider id when this posted txn supersedes it (see base.py).
+                "pending_external_transaction_id": t["pending_transaction_id"],
+            }
+
+        return {
+            "added":         [_normalize(t) for t in result["added"]],
+            "modified":      [_normalize(t) for t in result["modified"]],
+            "removed":       result["removed"],  # already provider transaction ids
+            "next_cursor":   result["next_cursor"],
+            "has_more":      result["has_more"],
+            "update_status": result["update_status"],
+        }
+
     def remove(self, app_config: dict, credential: str) -> None:
         plaid_service.remove_item(app_config, credential)

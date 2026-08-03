@@ -3099,6 +3099,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         debit       = cm_dict.get("debit"),
         credit      = cm_dict.get("credit"),
         direction   = cm_dict.get("direction"),
+        pending     = cm_dict.get("pending"),
         description = cm_dict.get("description", ""),
         category    = cm_dict.get("category"),
         notes       = cm_dict.get("notes"),
@@ -3819,8 +3820,21 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             pending_match_key = (acc["id"], parsed_date, raw_desc.lower())
             pending_match = existing_pending_rows.get(pending_match_key)
             if pending_match and not is_pending:
-                conn.execute("DELETE FROM txn WHERE id = ?", (pending_match["id"],))
+                # A posted row supersedes a pending one imported earlier (matched by account + date + source
+                # text). Convert that row in place — clear pending, take the posted amount + refreshed hash,
+                # re-home it to this batch — so the user's category / rename / tag / note edits on the pending
+                # row survive, instead of deleting it and inserting a fresh row that would drop them. The row
+                # is a known transaction transitioning state, so it skips the dedupe chain below. (Mirrors the
+                # provider-sync pending→posted conversion, which matches on the explicit pending id.)
+                conn.execute(
+                    "UPDATE txn SET is_pending = 0, amount = ?, content_hash = ?, import_batch_id = ? WHERE id = ?",
+                    (amount, content_hash, batch_id, pending_match["id"]),
+                )
                 existing_pending_rows.pop(pending_match_key, None)
+                imported += 1
+                row_results.append({"row": row_num, "status": "imported"})
+                reset_footer_detection()
+                continue
 
             if raw_imported_category:
                 imported_category_counts[raw_imported_category] = imported_category_counts.get(raw_imported_category, 0) + 1

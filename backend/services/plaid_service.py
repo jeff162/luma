@@ -20,6 +20,8 @@ from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchan
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.transactions_get_request import TransactionsGetRequest
 from plaid.model.transactions_get_request_options import TransactionsGetRequestOptions
+from plaid.model.transactions_sync_request import TransactionsSyncRequest
+from plaid.model.transactions_sync_request_options import TransactionsSyncRequestOptions
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.products import Products
 from plaid.model.country_code import CountryCode
@@ -130,18 +132,59 @@ def fetch_transactions(
             break
         offset += len(txns)
 
-    result = []
-    for t in all_txns:
-        txn_date = t["date"]
-        result.append({
-            "plaid_transaction_id": t["transaction_id"],
-            "plaid_account_id":     t["account_id"],
-            # Keep Plaid's amount sign convention intact here; downstream categorization
-            # and reporting logic is written against that imported representation.
-            "amount":               float(t["amount"]),
-            "merchant_name":        t.get("merchant_name"),
-            "raw_name":             t.get("name"),
-            "date":                 txn_date.isoformat() if hasattr(txn_date, "isoformat") else str(txn_date),
-            "is_pending":           t.get("pending", False),
-        })
-    return result
+    return [_normalize_txn(t) for t in all_txns]
+
+
+def _normalize_txn(t: dict) -> dict:
+    """Plaid transaction dict → the app's stable field names. Shared by the date-range and cursor paths."""
+    txn_date = t["date"]
+    return {
+        "plaid_transaction_id": t["transaction_id"],
+        "plaid_account_id":     t["account_id"],
+        # Keep Plaid's amount sign convention intact here; downstream categorization
+        # and reporting logic is written against that imported representation.
+        "amount":               float(t["amount"]),
+        "merchant_name":        t.get("merchant_name"),
+        "raw_name":             t.get("name"),
+        "date":                 txn_date.isoformat() if hasattr(txn_date, "isoformat") else str(txn_date),
+        "is_pending":           t.get("pending", False),
+        # When a pending transaction posts, Plaid emits the posted transaction (new id) with this set to the
+        # prior pending transaction's id, so the sync can convert the pending row in place instead of
+        # trashing it and re-adding. NULL for transactions that were never pending.
+        "pending_transaction_id": t.get("pending_transaction_id"),
+    }
+
+
+def fetch_transactions_sync(
+    app_config: dict,
+    access_token: str,
+    cursor: str | None = None,
+    days_requested: int = 730,
+) -> dict:
+    """One page of Plaid's cursor-based `/transactions/sync`. Returns the normalized changes for this page
+    plus the paging/backfill state, so the caller manages the cursor loop and the readiness poll:
+
+      {added:[…], modified:[…], removed:[txn_id…], next_cursor, has_more, update_status}
+
+    `update_status` is Plaid's `transactions_update_status` — the same signal the transactions webhook
+    carries (NOT_READY / INITIAL_UPDATE_COMPLETE / HISTORICAL_UPDATE_COMPLETE), so a caller can tell when
+    the historical backfill is done **without** a webhook endpoint. `cursor=None` starts an initial pull;
+    `days_requested` (1–730) bounds how far back Plaid fetches — the user's history-window choice.
+    """
+    client = _get_client(app_config)
+    kwargs = dict(
+        access_token=access_token,
+        count=500,
+        options=TransactionsSyncRequestOptions(days_requested=max(1, min(int(days_requested or 730), 730))),
+    )
+    if cursor:
+        kwargs["cursor"] = cursor
+    response = client.transactions_sync(TransactionsSyncRequest(**kwargs)).to_dict()
+    return {
+        "added":       [_normalize_txn(t) for t in response.get("added", [])],
+        "modified":    [_normalize_txn(t) for t in response.get("modified", [])],
+        "removed":     [t["transaction_id"] for t in response.get("removed", [])],
+        "next_cursor": response.get("next_cursor"),
+        "has_more":    bool(response.get("has_more")),
+        "update_status": response.get("transactions_update_status"),
+    }

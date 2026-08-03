@@ -2,16 +2,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Sync is the reconciliation path between Plaid's transaction stream and local state.
+Sync is the reconciliation path between a provider's transaction stream and local state.
 
-Its core invariants are idempotence by Plaid transaction id, pending-to-posted
-advancement without rewriting local edits, and reuse of the shared categorization
-engine so imported history and future syncs stay consistent with one another.
+It uses the provider's cursor-based incremental API (Plaid `/transactions/sync`): each call pulls the
+`added` / `modified` / `removed` changes since a stored per-connection cursor and reports the backfill
+readiness (`update_status`), so the client can poll to completion without a webhook. Core invariants:
+idempotence by provider transaction id, pending-to-posted advancement without rewriting local edits,
+reuse of the shared categorization engine, and — for a connection's first (historical) pull — one
+"initial import" card, with routine top-up syncs accreting onto monthly period cards.
 """
 
 import json
 import uuid
-from datetime import date, timedelta
+from datetime import date
 from fastapi import APIRouter, HTTPException, Request
 
 from backend.app_logging import log_warning
@@ -40,12 +43,52 @@ router = APIRouter()
 # like any imported file (see docs/backlog/sync-import-records-and-dedupe.md — record-first, then detection).
 SYNC_SOURCE_KIND = "connection_sync"
 
-# The window used when a caller asks for "all available history" (days <= 0). Plaid's transactions/get
-# returns up to ~24 months for most institutions, so a 2-year window is effectively "everything they
-# have" while staying inside the documented range. The connection module's guiding principle is to pull
-# as much history as possible by default (the initial connect/refresh backfill uses this); routine
-# top-up syncs pass a small explicit window instead.
+# The fetch-depth (`days_requested`) used when a caller asks for "all available history" (days <= 0).
+# Plaid caps transaction history at ~24 months, so 730 is "everything they have". The connection module's
+# guiding principle is to pull as much history as possible; the initial connect/refresh backfill uses this,
+# while a user can pick a shallower window (persisted as their default) to bound the fetch.
 ALL_HISTORY_DAYS = 730
+
+# Plaid's transactions_update_status values, least→most complete. The sync loop marks a connection's
+# historical backfill done at HISTORICAL_UPDATE_COMPLETE; UNKNOWN is treated as terminal so a status the
+# API can't determine never traps the client in an endless poll.
+_HISTORICAL_COMPLETE = "HISTORICAL_UPDATE_COMPLETE"
+_STATUS_UNKNOWN = "TRANSACTIONS_UPDATE_STATUS_UNKNOWN"
+_STATUS_ORDER = {"NOT_READY": 0, "INITIAL_UPDATE_COMPLETE": 1, _HISTORICAL_COMPLETE: 2, _STATUS_UNKNOWN: 2, None: 2}
+
+
+def _is_terminal_status(status) -> bool:
+    """True once a connection's historical pull is complete (or the provider can't report status)."""
+    return status in (_HISTORICAL_COMPLETE, _STATUS_UNKNOWN, None)
+
+
+def resolve_initial_sync_batch(conn, connection) -> str:
+    """The connection's single "initial import" card — one card for the whole first historical backfill
+    (which can span up to ~24 months), rather than splitting it across monthly cards. Created lazily and
+    reused across the paging/polling calls that make up the initial pull (keyed by the `initial_backfill`
+    marker in config_snapshot). Once the backfill completes, later syncs use `resolve_sync_period_batch`."""
+    row = conn.execute(
+        """
+        SELECT id FROM import_batch
+        WHERE  connection_id = ?
+          AND  source_kind = ?
+          AND  json_extract(config_snapshot, '$.initial_backfill') = 1
+        """,
+        (connection["id"], SYNC_SOURCE_KIND),
+    ).fetchone()
+    if row:
+        return row["id"]
+    batch_id = str(uuid.uuid4())
+    institution = connection["institution"] or connection["provider"] or "Data source"
+    filename = f"{institution} · Initial import"
+    conn.execute(
+        """
+        INSERT INTO import_batch (id, filename, status, source_kind, connection_id, config_snapshot)
+        VALUES (?, ?, 'completed', ?, ?, ?)
+        """,
+        (batch_id, filename, SYNC_SOURCE_KIND, connection["id"], json.dumps({"initial_backfill": True})),
+    )
+    return batch_id
 
 
 def resolve_sync_period_batch(conn, connection, on_date: date) -> str:
@@ -82,31 +125,35 @@ def resolve_sync_period_batch(conn, connection, on_date: date) -> str:
     return batch_id
 
 
+_MAX_PAGES_PER_CALL = 50  # safety cap (≤ 25k txns/request) so a misbehaving has_more can't loop forever
+
+
 @router.post("")
-def run_sync(days: int = 30, connection_id: str = None, request: Request = None):
-    # days <= 0 means "all available history" (the connect/refresh backfill); a positive value is an
-    # explicit window (routine top-ups). connection_id scopes the sync to one connection so a backfill
-    # for a just-connected/refreshed bank doesn't re-pull every other connection too; None syncs all.
-    window_days = ALL_HISTORY_DAYS if days <= 0 else days
-    start_date = date.today() - timedelta(days=window_days)
-    added = updated = skipped = 0
+def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
+    # `days` is the provider fetch depth (`days_requested`): <= 0 means "all available history" (the
+    # connect/refresh backfill), a positive value bounds it (the user's shallower window). connection_id
+    # scopes the sync to one connection so a just-connected bank's backfill doesn't re-pull the others.
+    # One call drains the currently-available pages (has_more) then returns `update_status`; the client
+    # re-calls until `historical_complete`, so the async historical backfill is polled to completion.
+    days_requested = ALL_HISTORY_DAYS if days <= 0 else min(days, ALL_HISTORY_DAYS)
+    added = updated = removed = skipped = 0
     touched_ids: list[str] = []  # rows this sync added or advanced — the scope for the recurring rescan
-    # Rows this sync lands on each connection's period card, tallied then flushed to the card's row_count
-    # and per-account breakdown once the insert loop is done (a card is reused across fetches, so the
-    # counts accumulate rather than overwrite).
-    period_batch_added: dict[str, int] = {}                    # batch_id -> rows added this sync
-    period_batch_accounts: dict[tuple[str, str], dict] = {}    # (batch_id, csv_value) -> {account_id, count}
+    cards_touched: set[str] = set()          # cards that received added rows (for the post-sync dedup sweep)
+    card_added: dict[str, int] = {}          # card_id -> rows added this call
+    card_accounts: dict[tuple[str, str], dict] = {}  # (card_id, csv_value) -> {account_id, count}
+    synced_statuses: list = []               # each synced connection's final update_status
 
     with get_db() as conn:
         if connection_id:
             connections = conn.execute(
-                "SELECT id, provider, external_id, credential, credential_enc, institution "
-                "FROM connection WHERE id = ?",
+                "SELECT id, provider, external_id, credential, credential_enc, institution, "
+                "transactions_cursor, initial_sync_complete FROM connection WHERE id = ?",
                 (connection_id,),
             ).fetchall()
         else:
             connections = conn.execute(
-                "SELECT id, provider, external_id, credential, credential_enc, institution FROM connection"
+                "SELECT id, provider, external_id, credential, credential_enc, institution, "
+                "transactions_cursor, initial_sync_complete FROM connection"
             ).fetchall()
 
         # Syncing decrypts each connection's credential under the workspace DEK, so the vault must be
@@ -121,13 +168,145 @@ def run_sync(days: int = 30, connection_id: str = None, request: Request = None)
         # core.py is heavy and imports many services, so pull it in only when a sync actually runs.
         from backend.routers.import_export.core import make_hash
 
-        # Rules are stable across a sync; load once for the per-transaction matcher in the loops below.
+        # Rules are stable across a sync; load once for the per-transaction matcher below.
         rules = load_categorization_rules(conn)
         rule_tags_by_id = load_rule_tags_by_id(conn)
+
+        def _account_for(external_account_id):
+            return conn.execute(
+                "SELECT id, owner_id FROM account WHERE external_account_id = ?",
+                (external_account_id,),
+            ).fetchone()
+
+        def _insert_added(t, get_card) -> bool:
+            """Insert one `added` transaction. `get_card` lazily resolves (and creates) the connection's
+            card only when a row is actually inserted, so a no-op sync leaves no empty card. Idempotent on
+            provider id: a row we already have advances pending state instead of duplicating."""
+            nonlocal added, updated, skipped
+            acc = _account_for(t["external_account_id"])
+            if not acc:
+                skipped += 1
+                return False
+            # Pending → posted: this posted transaction supersedes a pending row we already hold. Convert
+            # that row in place (new posted id + refreshed provider fields), preserving its category/name
+            # edits, tags, card, and identity — rather than trashing the pending (via the matching `removed`)
+            # and inserting a fresh posted row. Processing all `added` before all `removed` (below) makes the
+            # subsequent removed of the pending id a no-op, since its provider id has changed to the posted one.
+            pending_id = t.get("pending_external_transaction_id")
+            if pending_id:
+                pend = conn.execute(
+                    "SELECT id FROM txn WHERE plaid_transaction_id = ? AND trashed_at IS NULL",
+                    (pending_id,),
+                ).fetchone()
+                if pend:
+                    content_hash = make_hash(t["date"], t["amount"], t["raw_name"] or t["merchant_name"] or "")
+                    conn.execute(
+                        """
+                        UPDATE txn SET plaid_transaction_id = ?, amount = ?, date = ?, is_pending = ?,
+                                       merchant_name = ?, raw_name = ?, content_hash = ?
+                        WHERE  id = ?
+                        """,
+                        (t["external_transaction_id"], t["amount"], t["date"], 1 if t["is_pending"] else 0,
+                         t["merchant_name"], t["raw_name"], content_hash, pend["id"]),
+                    )
+                    updated += 1
+                    touched_ids.append(pend["id"])
+                    return False
+            existing = conn.execute(
+                "SELECT id, is_pending FROM txn WHERE plaid_transaction_id = ?",
+                (t["external_transaction_id"],),
+            ).fetchone()
+            if existing:
+                if existing["is_pending"] and not t["is_pending"]:
+                    conn.execute("UPDATE txn SET is_pending = 0 WHERE id = ?", (existing["id"],))
+                    updated += 1
+                    touched_ids.append(existing["id"])
+                else:
+                    skipped += 1
+                return False
+
+            card_id = get_card()
+            result = categorize_transaction(
+                t["merchant_name"], t["raw_name"], t["merchant_name"], t["amount"], conn,
+                owner_id=acc["owner_id"], account_id=acc["id"], rules=rules, rule_tags_by_id=rule_tags_by_id,
+            )
+            cat_id       = result["category_id"] if isinstance(result, dict) else result
+            rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
+            name_effects = rule_scalar_effects(result, fallback_name=t["merchant_name"] or t["raw_name"])
+            display_name = name_effects["display_name"]
+            display_name_source = "rule" if name_effects["renamed_by_rule"] else "import"
+            content_hash = make_hash(t["date"], t["amount"], t["raw_name"] or t["merchant_name"] or "")
+            txn_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO txn
+                    (id, plaid_transaction_id, account_id, owner_id, category_id,
+                     amount, merchant_name, display_name, raw_name, date, is_pending, display_name_source,
+                     content_hash, import_batch_id, needs_review)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+                """,
+                (txn_id, t["external_transaction_id"], acc["id"], acc["owner_id"], cat_id, t["amount"],
+                 t["merchant_name"], display_name, t["raw_name"], t["date"], 1 if t["is_pending"] else 0,
+                 display_name_source, content_hash, card_id),
+            )
+            sync_rule_tags_for_transaction(conn, txn_id, rule_tag_ids)
+            added += 1
+            touched_ids.append(txn_id)
+            cards_touched.add(card_id)
+            card_added[card_id] = card_added.get(card_id, 0) + 1
+            entry = card_accounts.setdefault((card_id, t["external_account_id"]), {"account_id": acc["id"], "count": 0})
+            entry["count"] += 1
+            return True
+
+        def _apply_modified(t) -> None:
+            """A provider-side revision to a known transaction: refresh the provider-owned fields and the
+            content hash, but leave the user's category and display-name edits intact. A modification for a
+            row we don't have locally (outside our window, or dedup-dropped) is ignored."""
+            nonlocal updated, skipped
+            existing = conn.execute(
+                "SELECT id FROM txn WHERE plaid_transaction_id = ?", (t["external_transaction_id"],),
+            ).fetchone()
+            if not existing:
+                skipped += 1
+                return
+            content_hash = make_hash(t["date"], t["amount"], t["raw_name"] or t["merchant_name"] or "")
+            conn.execute(
+                """
+                UPDATE txn SET amount = ?, date = ?, is_pending = ?, merchant_name = ?, raw_name = ?,
+                               content_hash = ?
+                WHERE  id = ?
+                """,
+                (t["amount"], t["date"], 1 if t["is_pending"] else 0, t["merchant_name"], t["raw_name"],
+                 content_hash, existing["id"]),
+            )
+            updated += 1
+            touched_ids.append(existing["id"])
+
+        def _apply_removed(external_transaction_id) -> None:
+            """The provider dropped a transaction (a canceled pending charge, or a correction): trash the
+            local row so it leaves the active ledger. No-op if we never had it."""
+            nonlocal removed
+            cur = conn.execute(
+                "UPDATE txn SET trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
+                "WHERE plaid_transaction_id = ? AND trashed_at IS NULL",
+                (external_transaction_id,),
+            )
+            removed += cur.rowcount or 0
+
         for connection in connections:
-            # The connection's period card, resolved lazily on the first row this fetch actually inserts,
-            # so a fetch that lands nothing (all pending-advance or all skipped) creates no empty card.
-            period_batch_id: str | None = None
+            initial = not connection["initial_sync_complete"]
+            cursor = connection["transactions_cursor"]
+            final_status = None
+            # The card is created lazily on the first actually-inserted row (a no-op sync leaves no empty
+            # card): the initial historical pull → one "initial import" card; a routine sync (backfill
+            # already complete) → the current monthly period card. Defaults bind the per-connection values.
+            card_state = {"id": None}
+
+            def _get_card(connection=connection, initial=initial, card_state=card_state):
+                if card_state["id"] is None:
+                    card_state["id"] = (resolve_initial_sync_batch(conn, connection) if initial
+                                        else resolve_sync_period_batch(conn, connection, date.today()))
+                return card_state["id"]
             try:
                 adapter = get_adapter(connection["provider"])
                 app_config = resolve_app_config(request.state.user, connection["provider"])
@@ -141,121 +320,53 @@ def run_sync(days: int = 30, connection_id: str = None, request: Request = None)
                     request.state.user, connection["provider"], connection["external_id"],
                     connection["credential"], connection["credential_enc"],
                 )
-                txns = adapter.fetch_transactions(
-                    app_config,
-                    credential,
-                    start_date=start_date,
-                    end_date=date.today(),
-                )
+                # Drain the pages available right now (has_more) into one change set, then apply added →
+                # modified → removed. Draining first guarantees every `added` is processed before any
+                # `removed` even when a pending→posted pair straddles a page boundary, so the pending row is
+                # converted in place (in _insert_added) before its `removed` entry would trash it. The cursor
+                # advances per page and is persisted at the end, so a mid-loop failure rolls back the whole
+                # call and the next retry resumes from the last committed cursor.
+                page_added, page_modified, page_removed = [], [], []
+                for _ in range(_MAX_PAGES_PER_CALL):
+                    page = adapter.fetch_transactions_sync(
+                        app_config, credential, cursor=cursor, days_requested=days_requested,
+                    )
+                    page_added.extend(page["added"])
+                    page_modified.extend(page["modified"])
+                    page_removed.extend(page["removed"])
+                    cursor = page["next_cursor"]
+                    final_status = page["update_status"]
+                    if not page["has_more"]:
+                        break
+                for t in page_added:
+                    _insert_added(t, _get_card)
+                for t in page_modified:
+                    _apply_modified(t)
+                for ext_id in page_removed:
+                    _apply_removed(ext_id)
             except UnknownProviderError as e:
+                log_warning(f"[sync] skipping connection {connection['id']}: {e}")
+                continue
+            except NotImplementedError as e:
                 log_warning(f"[sync] skipping connection {connection['id']}: {e}")
                 continue
             except Exception as e:
                 log_warning(f"[sync] error fetching connection {connection['id']}: {e}")
                 continue
 
-            for t in txns:
-                acc = conn.execute(
-                    "SELECT id, owner_id FROM account WHERE external_account_id = ?",
-                    (t["external_account_id"],),
-                ).fetchone()
-                if not acc:
-                    skipped += 1
-                    continue
-
-                existing = conn.execute(
-                    "SELECT id, is_pending FROM txn WHERE plaid_transaction_id = ?",
-                    (t["external_transaction_id"],),
-                ).fetchone()
-
-                if existing:
-                    # Existing Plaid ids are only allowed to advance pending state here;
-                    # category/name edits on already-known rows stay owned by local logic.
-                    if existing["is_pending"] and not t["is_pending"]:
-                        conn.execute(
-                            "UPDATE txn SET is_pending = 0 WHERE id = ?",
-                            (existing["id"],),
-                        )
-                        updated += 1
-                        touched_ids.append(existing["id"])
-                    else:
-                        skipped += 1
-                    continue
-
-                result = categorize_transaction(
-                    t["merchant_name"], t["raw_name"], t["merchant_name"], t["amount"], conn,
-                    owner_id=acc["owner_id"],
-                    account_id=acc["id"],
-                    rules=rules,
-                    rule_tags_by_id=rule_tags_by_id,
-                )
-                cat_id       = result["category_id"] if isinstance(result, dict) else result
-                rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
-                name_effects = rule_scalar_effects(
-                    result, fallback_name=t["merchant_name"] or t["raw_name"]
-                )
-                display_name = name_effects["display_name"]
-                # 'rule' when a rule authored the name, else 'import' (the synced source name).
-                display_name_source = "rule" if name_effects["renamed_by_rule"] else "import"
-                txn_id = str(uuid.uuid4())
-
-                # First insert of this fetch → resolve (creating if needed) the connection's period card, so
-                # the synced row carries an import_batch_id and gains a duplicate-review home like an import.
-                if period_batch_id is None:
-                    period_batch_id = resolve_sync_period_batch(conn, connection, date.today())
-
-                # Same content-hash formula as CSV import (make_hash), so a synced row is a first-class dedupe
-                # citizen — the exact-hash rules and the cross-account sweep can compare it against imported
-                # rows in either direction. Previously synced rows had a NULL content_hash and were invisible
-                # to detection.
-                content_hash = make_hash(
-                    t["date"], t["amount"], t["raw_name"] or t["merchant_name"] or ""
-                )
-
-                conn.execute(
-                    """
-                    INSERT INTO txn
-                        (id, plaid_transaction_id, account_id, owner_id, category_id,
-                         amount, merchant_name, display_name, raw_name, date, is_pending, display_name_source,
-                         content_hash, import_batch_id, needs_review)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
-                    """,
-                    (
-                        txn_id,
-                        t["external_transaction_id"],
-                        acc["id"],
-                        acc["owner_id"],
-                        cat_id,
-                        t["amount"],
-                        t["merchant_name"],
-                        display_name,
-                        t["raw_name"],
-                        t["date"],
-                        1 if t["is_pending"] else 0,
-                        display_name_source,
-                        content_hash,
-                        period_batch_id,
-                    ),
-                )
-                sync_rule_tags_for_transaction(conn, txn_id, rule_tag_ids)
-                added += 1
-                touched_ids.append(txn_id)
-                # Tally toward the card's row_count and per-account breakdown. csv_value is the account's
-                # provider handle (stable per account); the history join renders the account's name from it.
-                period_batch_added[period_batch_id] = period_batch_added.get(period_batch_id, 0) + 1
-                acct_key = (period_batch_id, t["external_account_id"])
-                acct_entry = period_batch_accounts.setdefault(
-                    acct_key, {"account_id": acc["id"], "count": 0}
-                )
-                acct_entry["count"] += 1
-
-        # Flush the period-card tallies. Counts accumulate (a card is reused across fetches in its month),
-        # so both updates add to the existing value rather than overwrite it.
-        for batch_id, n in period_batch_added.items():
+            # Persist the advanced cursor, and flip the connection out of "initial" once the historical
+            # backfill is done — subsequent syncs then accrete onto monthly cards instead of the one card.
+            became_complete = initial and _is_terminal_status(final_status)
             conn.execute(
-                "UPDATE import_batch SET row_count = row_count + ? WHERE id = ?", (n, batch_id)
+                "UPDATE connection SET transactions_cursor = ?, initial_sync_complete = ? WHERE id = ?",
+                (cursor, 1 if (connection["initial_sync_complete"] or became_complete) else 0, connection["id"]),
             )
-        for (batch_id, csv_value), info in period_batch_accounts.items():
+            synced_statuses.append(final_status)
+
+        # Flush the card tallies (a card is reused across calls, so counts accumulate).
+        for card_id, n in card_added.items():
+            conn.execute("UPDATE import_batch SET row_count = row_count + ? WHERE id = ?", (n, card_id))
+        for (card_id, csv_value), info in card_accounts.items():
             conn.execute(
                 """
                 INSERT INTO import_batch_account (batch_id, csv_value, account_id, row_count)
@@ -264,31 +375,24 @@ def run_sync(days: int = 30, connection_id: str = None, request: Request = None)
                 DO UPDATE SET row_count  = row_count + excluded.row_count,
                               account_id = excluded.account_id
                 """,
-                (batch_id, csv_value, info["account_id"], info["count"]),
+                (card_id, csv_value, info["account_id"], info["count"]),
             )
 
-        # Duplicate detection on the freshly-synced rows, mirroring the import finalize (core.py). The gap
-        # this closes: a CSV/manual row re-fetched via a data source is a *cross-account* duplicate (the sync
-        # creates a new account record keyed on the provider handle, distinct from the CSV account until the
-        # user merges them), which same-provider-id idempotence never sees.
-        #   1. mark_import_suspects — soft-flag every cross-account (date, amount, payee) match against an
-        #      existing row on a different account, unless the pair is already declared distinct. The suspect
-        #      is attributed to the period card, so it surfaces on that card's standard duplicates report.
-        #   2. promote_in_group_suspects_to_confirmed — if the synced row landed on an account already merged
-        #      with the matched row's account, the user has already asserted they're the same account, so the
-        #      just-flagged suspect is an in-group duplicate: promote it to confirmed exactly as a merge would.
-        # (Same-account exact re-imports are handled by content_hash on a later CSV import and by provider-id
-        # idempotence on re-sync; the dominant sync gap is the cross-account case above.)
-        for batch_id in period_batch_added:
-            mark_import_suspects(conn, batch_id)
-            batch_account_ids = [
+        # Duplicate detection on the freshly-synced rows, mirroring the import finalize (core.py): a
+        # CSV/manual row re-fetched via a data source is a *cross-account* duplicate (the sync creates a new
+        # account record, distinct from the CSV account until merged), which provider-id idempotence never
+        # sees. mark_import_suspects soft-flags those on the card; promote_in_group_suspects_to_confirmed
+        # confirms the ones whose accounts are already merged. Only cards that received rows are swept.
+        for card_id in cards_touched:
+            mark_import_suspects(conn, card_id)
+            card_account_ids = [
                 str(r["account_id"]) for r in conn.execute(
                     "SELECT DISTINCT account_id FROM txn WHERE import_batch_id = ? AND account_id IS NOT NULL",
-                    (batch_id,),
+                    (card_id,),
                 ).fetchall()
             ]
-            if batch_account_ids:
-                promote_in_group_suspects_to_confirmed(conn, batch_account_ids)
+            if card_account_ids:
+                promote_in_group_suspects_to_confirmed(conn, card_account_ids)
 
     # New/advanced rows change the recurring picture, so refresh detection now rather than waiting for a
     # manual scan. Cheap scoped path: reprocess only the payees this sync touched, not the whole ledger
@@ -301,7 +405,14 @@ def run_sync(days: int = 30, connection_id: str = None, request: Request = None)
         except Exception as e:
             log_warning(f"[sync] recurring auto-scan failed: {e}")
 
-    return {"added": added, "updated": updated, "skipped": skipped}
+    # `historical_complete` is the client's stop-polling signal: true once every synced connection's
+    # backfill is terminal. `update_status` echoes the least-advanced status for display.
+    historical_complete = all(_is_terminal_status(s) for s in synced_statuses)
+    overall_status = min(synced_statuses, key=lambda s: _STATUS_ORDER.get(s, 2), default=None)
+    return {
+        "added": added, "updated": updated, "removed": removed, "skipped": skipped,
+        "update_status": overall_status, "historical_complete": historical_complete,
+    }
 
 
 @router.post("/recategorize")

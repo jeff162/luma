@@ -14,7 +14,7 @@ import { useDismissibleLayer, useDismissiblePopup, useTransientTextEdit } from '
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
-import { useUserPreferences } from '../lib/UserPreferencesContext.jsx'
+import { useUserPreferences, useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { useColumnPreference } from '../lib/useColumnPreference.js'
 
 const ACCOUNTS_SECTIONS_PREF_KEY = 'ui.accounts.sections'
@@ -646,9 +646,9 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // a sync's duplicate review: a synced row lands on a per-(connection, month) import card, and unresolved
   // cross-source duplicates surface here as a badge that jumps to the Import/Export report to resolve them.
   const [syncSummaryByConnection, setSyncSummaryByConnection] = useState({})
-  // Window for a routine "Sync now" (days back). Defaults to a recent window for speed; the initial
-  // connect/refresh backfills ALL history regardless (days=0), per the module's max-history principle.
-  const [syncWindow, setSyncWindow] = useState(30)
+  // How far back a new connection's initial pull fetches (`days_requested`; 0 = all available ~24 months).
+  // Persisted as the user's default for future connections. Routine syncs pull cursor deltas regardless.
+  const [historyDays, setHistoryDays] = useUserPreference('connection.historyDays', 90)
   const [refreshingConnId, setRefreshingConnId] = useState(null)  // connection currently being refreshed
   const exchangingRef = useRef(false)  // guards against a double Plaid onSuccess exchanging the same token twice
   const navigate = useNavigate()
@@ -748,13 +748,12 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
           exchangingRef.current = true
           try {
             const result = await api.exchangeToken(public_token, metadata.institution?.name)
-            // Immediately backfill ALL available history for just this new connection (days=0), scoped by
-            // connection_id so it doesn't re-pull other banks. Max history on add is the module default.
+            // Auto-pull history for just this new connection (scoped by connection_id), polling until the
+            // provider signals the historical backfill is complete. Fetch depth = the user's saved window.
             if (result?.connection_id) {
               setSyncState(prev => ({ ...prev, plaid: { syncing: true, result: null } }))
               try {
-                const synced = await api.runSync(0, result.connection_id)
-                setSyncState(prev => ({ ...prev, plaid: { syncing: false, result: synced } }))
+                await syncUntilComplete('plaid', { days: historyDays, connectionId: result.connection_id })
               } catch (syncErr) {
                 setSyncState(prev => ({ ...prev, plaid: { syncing: false, result: null } }))
                 setNotice({ title: 'Connected, but could not pull history', description: syncErr.message })
@@ -776,13 +775,40 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     }
   }
 
+  // Client-driven poll: call /sync repeatedly until the provider reports the historical backfill is
+  // complete (the response's update_status, which carries the same signal as the transactions webhook), so
+  // the async backfill is pulled to completion without needing a webhook endpoint. Each call drains the
+  // pages available right now; between calls we wait for the provider to backfill more. Running totals +
+  // status are surfaced on syncState[provider] so the UI can show "Importing history… N so far".
+  async function syncUntilComplete(provider, { days, connectionId }) {
+    const MAX_POLLS = 45  // ~3 min at the 4s cadence below — comfortably covers Plaid's historical backfill
+    const totals = { added: 0, updated: 0, removed: 0, skipped: 0 }
+    for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
+      const res = await api.runSync(days, connectionId)
+      totals.added += res.added || 0
+      totals.updated += res.updated || 0
+      totals.removed += res.removed || 0
+      totals.skipped += res.skipped || 0
+      if (res.historical_complete) {
+        setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: { ...totals } } }))
+        return totals
+      }
+      setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null, progress: { ...totals }, status: res.update_status } }))
+      await new Promise(resolve => setTimeout(resolve, 4000))
+    }
+    // Backfill not signaled complete within the poll budget — keep what arrived and let the user re-sync.
+    setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: { ...totals }, incomplete: true } }))
+    return totals
+  }
+
   async function sync(provider) {
     if (syncState[provider]?.syncing) return
     if (!vault.unlocked) { setVaultDialog('unlock'); return }
     setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
     try {
-      const result = await api.runSync(syncWindow)
-      setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result } }))
+      // Routine top-up: cursor deltas across all connections. days=0 keeps each item's maintained window at
+      // max, so a routine sync never narrows history the initial pull already fetched.
+      await syncUntilComplete(provider, { days: 0, connectionId: null })
       await onAccountsChanged?.()
     } catch (e) {
       setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
@@ -790,19 +816,20 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     }
   }
 
-  // Rebuild a connection's account rows from its still-valid credential (no re-link), then backfill ALL
-  // history for it. The one-click recovery after a restore rolled back the accounts but kept the connection.
+  // Rebuild a connection's account rows from its still-valid credential (no re-link), then poll-sync its
+  // history. The one-click recovery after a restore rolled back the accounts but kept the connection.
   async function refreshConnectionAccounts(provider, connection) {
     if (refreshingConnId) return
     if (!vault.unlocked) { setVaultDialog('unlock'); return }
     setRefreshingConnId(connection.id)
+    setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
     try {
       const res = await api.refreshConnectionAccounts(provider, connection.external_id)
-      const synced = await api.runSync(0, res.connection_id)  // days=0 → all available history, scoped
+      await syncUntilComplete(provider, { days: historyDays, connectionId: res.connection_id })
       await onAccountsChanged?.()
       await refresh()
-      setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: synced } }))
     } catch (e) {
+      setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
       setNotice({ title: 'Could not refresh accounts', description: e.message })
     } finally {
       setRefreshingConnId(null)
@@ -872,26 +899,37 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                   title={connections.length ? '' : 'Connect a bank before syncing'}>
                   {ss.syncing ? 'Syncing…' : '↻ Sync now'}
                 </Button>
-                <Select
-                  value={String(syncWindow)}
-                  onChange={v => setSyncWindow(Number(v))}
-                  options={[
-                    { value: '0', label: 'All available history' },
-                    { value: '365', label: 'Last year' },
-                    { value: '90', label: 'Last 90 days' },
-                    { value: '30', label: 'Last 30 days' },
-                  ]}
-                  title="How far back a routine sync pulls. Connecting a new bank always backfills all available history."
-                  style={{ fontSize: 12, padding: '4px 8px', minWidth: 0, width: 'auto' }}
-                />
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
+                  <span>New connection fetches</span>
+                  <Select
+                    value={String(historyDays)}
+                    onChange={v => setHistoryDays(Number(v))}
+                    options={[
+                      { value: '0', label: 'All available history' },
+                      { value: '365', label: 'Last year' },
+                      { value: '90', label: 'Last 90 days' },
+                      { value: '30', label: 'Last 30 days' },
+                    ]}
+                    title="How far back a newly connected (or refreshed) bank pulls. Saved as your default; routine syncs then pull only what changed."
+                    style={{ fontSize: 12, padding: '4px 8px', minWidth: 0, width: 'auto' }}
+                  />
+                </span>
                 {p.source === 'env' ? (
                   <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 'auto' }}>credentials from <code>.env</code></span>
                 ) : null}
               </div>
 
-              {ss.result ? (
+              {ss.syncing ? (
                 <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: 'var(--muted)' }}>
-                  Sync complete — {ss.result.added} added, {ss.result.updated} updated, {ss.result.skipped} skipped
+                  {ss.progress
+                    ? `Importing history… ${ss.progress.added} added so far${ss.status === 'INITIAL_UPDATE_COMPLETE' ? ' (fetching older transactions…)' : ''}`
+                    : 'Importing history…'}
+                </div>
+              ) : ss.result ? (
+                <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: 'var(--muted)' }}>
+                  {ss.incomplete
+                    ? `Synced ${ss.result.added} so far — the bank is still sending history. Click Sync now again in a minute to pull the rest.`
+                    : `Sync complete — ${ss.result.added} added, ${ss.result.updated} updated${ss.result.removed ? `, ${ss.result.removed} removed` : ''}, ${ss.result.skipped} skipped`}
                 </div>
               ) : null}
 

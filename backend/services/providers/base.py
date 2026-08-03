@@ -55,6 +55,26 @@ class ProviderAdapter(ABC):
         self, app_config: dict, credential: str, start_date: date | None = None, end_date: date | None = None
     ) -> list[dict]: ...
 
+    def fetch_transactions_sync(
+        self, app_config: dict, credential: str, cursor: str | None = None, days_requested: int = 730
+    ) -> dict:
+        """Cursor-based incremental pull — one page of changes plus paging/backfill state:
+
+            {added:[txn…], modified:[txn…], removed:[external_transaction_id…], next_cursor, has_more,
+             update_status}
+
+        Each `added` / `modified` transaction dict is the same shape as `fetch_transactions` returns, plus
+        `pending_external_transaction_id`: when a posted transaction supersedes a pending one, this holds the
+        prior pending row's `external_transaction_id` (Plaid's `pending_transaction_id`), so the sync can
+        convert that row in place rather than trash-and-re-add. `removed` is a list of `external_transaction_id`.
+
+        `update_status` is the provider's transaction-readiness signal (for Plaid, `transactions_update_status`:
+        NOT_READY / INITIAL_UPDATE_COMPLETE / HISTORICAL_UPDATE_COMPLETE), letting the sync loop tell when the
+        historical backfill is complete without a webhook. `cursor=None` starts an initial pull; `days_requested`
+        bounds how far back to fetch. Optional: adapters whose provider has no cursor API leave this unimplemented
+        and the caller falls back to `fetch_transactions`."""
+        raise NotImplementedError(f"{self.provider} has no cursor-based sync")
+
     @abstractmethod
     def remove(self, app_config: dict, credential: str) -> None:
         """Revoke the connection at the provider so its credential is invalidated everywhere (the in-app
