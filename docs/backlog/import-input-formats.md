@@ -54,8 +54,13 @@ path **plus** the dedupe subsystem, and no one has asked yet.
 **Suggested approach when picked up.**
 
 - Tolerant parser: OFX 1.x is SGML (unclosed tags, not valid XML), 2.x is XML;
-  all carry a header block. Either a dependency (`ofxparse`, somewhat
-  unmaintained) or a small hand-rolled tolerant parser.
+  all carry a header block. Candidates: `ofxtools` (pure Python, stdlib-only,
+  actively maintained — the best fit for the cross-platform constraint below),
+  `ofxparse` (somewhat unmaintained), [libofx](https://github.com/libofx/libofx)
+  (a C library, so it carries the same per-platform build cost that ruled
+  aqbanking out for the connection track — see
+  [`ofx-direct-connect.md`](ofx-direct-connect.md)), or a small hand-rolled
+  tolerant parser.
 - **Sign flip:** OFX `TRNAMT` is signed with negative = debit; Luma is
   `amount > 0 = money out` — the opposite. Invert exactly.
 - **`FITID` is a high-confidence dedupe key** — a bank-assigned, per-account
@@ -96,6 +101,34 @@ exercised yet.
 - Lighter than Plaid: no Link widget, no link-token endpoint, no paid SDK — two
   HTTP calls and JSON. Much of the account model, sync loop, credential crypto,
   and credentials backup is already proven by the Plaid path.
+
+**The three seam gaps this actually pays for.** The provider seam built in security phases 6a/6b was
+shaped around Plaid, so it assumes a Link-style OAuth provider that has an app-level credential and a
+cursor API. SimpleFIN has none of the three, and neither does any other non-Plaid provider — so these
+are the real cost of a second adapter, and they are generic work rather than SimpleFIN work.
+
+1. **Connect is not Link.** `GET /plaid/link-token` → widget → `POST /plaid/exchange`
+   (`backend/routers/plaid.py`) has no analog for a provider whose connect step is a form or a pasted
+   setup token; that needs a parallel entry point on the adapter interface. Everything *downstream* of
+   the exchange is already provider-agnostic — encrypt the credential, upsert the connection on its
+   `(provider, external_id)` key, `upsert_connection_accounts`, `unmapped_count` — so that tail belongs
+   factored out of `exchange_token` and shared between the two entry points rather than copied. A
+   hand-copy here is exactly the drift `docs/agent-profile.md` warns about in deliberately-parallel
+   surfaces.
+2. **No cursor.** `run_sync` is written cursor-first and *skips* any connection whose adapter has no
+   `fetch_transactions_sync` (`backend/routers/sync.py`). The natural fix is a **range-pull default on
+   the base adapter**: call `fetch_transactions(start, end)` and shape the result into the same
+   `{added, modified, removed, next_cursor, has_more, update_status}` return, so a non-cursor provider
+   rides the existing loop untouched. It is safe because `_insert_added` is already idempotent on
+   `external_transaction_id` — a re-pulled window advances pending rows or skips. Two catches: a routine
+   sync then needs a **bounded look-back window** (there is no cursor to advance, so "all history" would
+   be re-fetched every time), and `removed` is permanently empty — which must be stated on the method, so
+   no later caller reads an empty list as "the provider confirmed nothing was deleted."
+3. **A provider may have no app-level credential.** `resolve_app_config` returning `None` currently means
+   a 409 `provider_not_configured` at connect and a skip at sync — correct for Plaid, wrong for a
+   provider that has no app secret at all. The `provider_config` `(client_id, secret, env)` shape and the
+   Sandbox/Production `EnvBadge` on the Connections card do not apply universally either; a provider
+   without them needs the Configure action and the mode badge to be absent rather than empty.
 
 **Ranking.** XLSX first (small, reuses everything). OFX family second (parser +
 mapping-free flow + FITID dedupe). SimpleFIN is its own track, but arguably the

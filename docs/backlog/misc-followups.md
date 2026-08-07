@@ -22,3 +22,19 @@ category-owner → tag migration — so this entry is still unwritten.
 `[Unreleased]` section, calling out the migration of category ownership to
 tags and pointing at the Help-page topic for users who want the model
 explained.
+
+## Denser layout for the Connections tab
+
+**Context.** At seven-plus connections the tab is a long stack of tall cards. Moving each card's
+five action buttons behind a single "⋯" (see `ui-patterns.md`) removed the button noise, but the
+card *height* is a separate problem the menu doesn't touch — institution name, badges, and one row
+per account, per connection.
+
+**Why deferred (2026-08-07).** Raised as a possible follow-on right after the menu change and
+deliberately not bundled with it: the menu may well have solved enough of the density complaint on
+its own, and rebuilding the card layout before knowing that would be speculative.
+
+**Suggested approach when picked up.** Confirm the density still reads as a problem *after* living
+with the "⋯" change. If it does, a one-row-per-connection layout (institution + accounts inline +
+the existing badges + "⋯") would roughly halve the page height; the accounts list is the card's
+useful content, so it should stay visible rather than move behind an expander.

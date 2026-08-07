@@ -78,6 +78,14 @@ delete the backlog file.
   Deferred: the actual windowing — a per-source recent window with a reachable **"Older imports"** archive
   grouped by year (marketplace cards too), a *reachable* re-bound on the fetch, and an explicit
   batch-history deletion strategy (purge records, not the imported transactions).
+- [ofx-direct-connect.md](ofx-direct-connect.md) — **researched, parked (2026-08-07).** OFX Direct
+  Connect as a data-source provider — the only transaction pull with no aggregator in the middle. Settles
+  the technology (`ofxtools`, pure Python; **not** aqbanking, a per-platform C build whose own consumers
+  have abandoned the path), records that the protocol is being *retired* rather than held stable by
+  Quicken (its successor, EWC+, is closed to third parties), and flags the blocking consequence: an OFX
+  credential **is the bank login** — neither read-only nor revocable in-app — which breaks the
+  conditioning [security-and-deployment-model.md](security-and-deployment-model.md) rests on. Parked on
+  **coverage**: the bundled FI list matched none of the institutions actually in use here.
 
 ### Migrated from `TODO.md` / `TODO-TESTING.md` (2026-07-30)
 

@@ -48,6 +48,30 @@ only where it earns its keep.
 - Watch the placeholder-vs-label and autofill-id semantics above so the count
   doesn't get chased blindly.
 
+## Add `@testing-library/jest-dom` to the vitest setup
+
+**Context.** `package.json` carries `@testing-library/dom` / `/react` / `/user-event` but **not**
+`/jest-dom`, and the vitest block in `vite.config.js` has no `setupFiles`. So the DOM matchers
+everyone reaches for by default — `toBeInTheDocument`, `toHaveStyle`, `toBeDisabled`,
+`toBeEmptyDOMElement` — don't exist, and using one fails with `Invalid Chai property: <name>`.
+The jsdom specs assert on raw DOM properties instead (`el.style.color`, `container.innerHTML`),
+which is correct but wordier, and the wall gets hit fresh by whoever writes the next DOM test.
+
+**Why it's a papercut, not a risk.** The failure mode is loud: an unknown matcher throws rather
+than silently no-opping, so no test can go green because an assertion quietly did nothing. That
+is the version of this that would actually matter, and it isn't the situation.
+
+**Why deferred (2026-08-07).** Only 7 of 29 test files are jsdom today, so the payoff scales with
+how much DOM testing gets added later. Judged worth folding into the next frontend test work rather
+than made its own errand. Existing raw assertions should be left alone when it lands — they are
+correct, and rewriting them is churn.
+
+**Suggested approach when picked up.** Add the devDependency, a one-line setup file importing
+`@testing-library/jest-dom/vitest`, and `setupFiles` in the vitest config. One wrinkle to decide:
+the default environment is `node` with per-file jsdom opt-in, so a global setup file loads for the
+22 pure-logic files too. jest-dom only extends `expect` and touches no DOM at import time, so it is
+harmless — either accept the small import cost or scope it with `environmentMatchGlobs`.
+
 ## Wire up ruff (and replace the bespoke timestamp guard with `flake8-datetimez`)
 
 **Context.** `backend/pyproject.toml` configures ruff (`[tool.ruff]`, selecting

@@ -737,6 +737,12 @@ discussion above:
   trigger.
 - `import-input-formats.md` — lists SimpleFIN as a "Plaid-parallel connection/sync track"; this doc's
   provider-agnostic connection model is the seam that item plugs into.
+- [`ofx-direct-connect.md`](ofx-direct-connect.md) — **the revisit trigger the threat model names.** An
+  OFX Direct Connect credential is the institution's own login: not read-only (it grants full web
+  banking) and not revocable in-app (no item-remove analog, so disconnect deletes a local copy only).
+  Adopting a provider of that shape invalidates the "ongoing *read* access, revocable by disconnecting"
+  conditioning above, so the Threat-model section must be reopened before one is built — not after.
+  Parked on coverage, not on this; the constraint stands whenever it is picked up.
 - Memory `plaid-deferred-until-approval` — **superseded/corrected here:** Plaid BYOK has no approval gate
   (free tier ≈10 accounts), so Plaid is the intended *first* connection provider to test, not a deferred
   one. (Memory updated to match.)

@@ -40,6 +40,8 @@ A key input to that dial: the user does not review most of the code directly and
 
 - Overlay panels should feel deliberate: they should open in sensible positions, be visually distinct from panels behind them, and not disappear unless the user explicitly dismisses them when the decision matters.
 
+- **Calibrate destructive styling to reversibility, not to how alarming the action sounds.** Reserve `danger` (red) for what cannot be undone; an action that is reversible with effort — re-linking a bank, re-syncing history that a cursor reset will pull back — is not danger even when it deletes rows, and its red belongs on the *confirm button*, where the click that actually does the thing lives. Spending the color on recoverable actions leaves nothing to mark the permanent ones. The name is not the signal: "Remove synced transactions" reads worse than "Disconnect" and is the more recoverable of the two.
+
 - Removing an affordance is a real answer, and usually the preferred one. When a control's job is already done automatically at the moment that matters, the control should go rather than be kept "just in case" or relocated — and a picker should offer the choices someone would actually make, not every choice the data model permits. Ask what the affordance still uniquely accomplishes; if the honest answer is a corner case or a variation nobody would deliberately choose, drop it and say what capability that costs. A surface earns density by need, not by completeness.
 
 - When a new screen introduces an existing domain object such as a user, account owner, category, or account, start by checking how that object already behaves elsewhere in the app. Reusing the established interaction is usually better than inventing a local variant.
