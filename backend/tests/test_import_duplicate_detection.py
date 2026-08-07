@@ -221,6 +221,10 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         return {row["account_id"]: dict(row) for row in rows}
 
     async def test_coverage_window_and_terminal_day_reconciliation(self):
+        # The base file spans 11/25–12/08 so that it has BOTH halves to exercise: a fully-covered
+        # stretch (through 12/01) and a soft trailing window (12/02–12/08, the source's declared lag).
+        # A file shorter than its own lag establishes no coverage at all — correct, and the subject of
+        # its own test below — but it cannot exercise the interaction between the two halves.
         rewards_id = self._insert_account("Travel Rewards", account_type="credit", mask="1234")
 
         prior_config = self._account_mapping_config(
@@ -235,7 +239,7 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
             account_map={"Travel Rewards": rewards_id},
         )
         result_one = await self._run_import_fixture("duplicate_prior_base.csv", prior_config)
-        self.assertEqual(result_one["imported"], 6)
+        self.assertEqual(result_one["imported"], 10)
         self.assertEqual(result_one["deduped"], 0)
 
         new_config = self._account_mapping_config(
@@ -303,6 +307,72 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_prior_base_ledger.csv"))
 
+    async def test_a_late_arriving_row_near_a_prior_files_last_date_still_imports(self):
+        # The behavior the trailing window exists for, stated as the user meets it: a source's last
+        # days are the ones it is most likely to be behind on, so a row turning up there in a later
+        # file is more likely to be one the first export had not caught yet than a duplicate.
+        #
+        # The row here is deliberately one the *other* safeguard cannot rescue, since otherwise this
+        # would pass with or without the window and prove nothing. A named row inside a covered range
+        # that matches nothing at all already falls through and imports (`_coverage_reject_verdict`).
+        # What that escape does not cover is a row colliding with a **coincidental same-amount** row —
+        # here a $41.02 gas fill a day earlier — which is enough to reject it and file it under
+        # "covered, no specific match". Verified against the old default: at a window of 1 this row is
+        # hard-rejected, and only the $41.02 collision makes it so.
+        rewards_id = self._insert_account("Travel Rewards", account_type="credit", mask="1234")
+        prior_config = self._account_mapping_config(
+            headers={"date": "Date", "description": "Description", "account": "Account",
+                     "amount": "Amount", "category": "Category", "date_format": "%m/%d/%Y"},
+            account_map={"Travel Rewards": rewards_id},
+        )
+        await self._run_import_fixture("duplicate_prior_base.csv", prior_config)
+
+        late_row = (
+            "Date,Merchant,Category,Account,Original Statement,Notes,Amount,Tags,Owner\n"
+            "2025-12-04,Corner Deli,Dining,CREDIT CARD (...1234),CORNER DELI,,-41.02,,Alex\n"
+        )
+        upload = UploadFile(filename="late_arrival.csv", file=io.BytesIO(late_row.encode("utf-8")))
+        new_config = self._account_mapping_config(
+            headers={"date": "Date", "description": "Merchant", "account": "Account",
+                     "amount": "Amount", "category": "Category", "notes": "Notes",
+                     "date_format": "%Y-%m-%d"},
+            account_map={"CREDIT CARD (...1234)": rewards_id},
+        )
+        with self._use_db_path():
+            result = await run_import(file=upload, config=json.dumps(new_config))
+
+        self.assertEqual(result["imported"], 1, "a row the earlier export had not caught yet must import")
+        self.assertEqual(result["deduped"], 0)
+
+    async def test_a_genuine_duplicate_inside_that_window_is_still_caught(self):
+        # The other half, and the reason widening is cheap: the trailing window does not stop checking,
+        # it stops rejecting *on the date alone*. A row that really does match a prior one is still
+        # reconciled against it one-to-one — by name, which is a better answer than "date covered".
+        rewards_id = self._insert_account("Travel Rewards", account_type="credit", mask="1234")
+        prior_config = self._account_mapping_config(
+            headers={"date": "Date", "description": "Description", "account": "Account",
+                     "amount": "Amount", "category": "Category", "date_format": "%m/%d/%Y"},
+            account_map={"Travel Rewards": rewards_id},
+        )
+        await self._run_import_fixture("duplicate_prior_base.csv", prior_config)
+
+        repeat = (
+            "Date,Merchant,Category,Account,Original Statement,Notes,Amount,Tags,Owner\n"
+            "2025-12-05,Blue Bottle Coffee,Dining,CREDIT CARD (...1234),BLUE BOTTLE,,-6.75,,Alex\n"
+        )
+        upload = UploadFile(filename="repeat.csv", file=io.BytesIO(repeat.encode("utf-8")))
+        new_config = self._account_mapping_config(
+            headers={"date": "Date", "description": "Merchant", "account": "Account",
+                     "amount": "Amount", "category": "Category", "notes": "Notes",
+                     "date_format": "%Y-%m-%d"},
+            account_map={"CREDIT CARD (...1234)": rewards_id},
+        )
+        with self._use_db_path():
+            result = await run_import(file=upload, config=json.dumps(new_config))
+
+        self.assertEqual(result["imported"], 0)
+        self.assertEqual(result["deduped"], 1)
+
     async def test_cross_source_text_match_without_coverage_window(self):
         checking_id = self._insert_account("Home Checking", account_type="depository", mask="4321")
         self._insert_existing_transaction(
@@ -344,6 +414,107 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
                 }
             ],
         )
+
+    # ---- coverage from a data connection, applied to a CSV import -------
+    # `build_dedupe_context` reads the UNION of the two coverage shapes, so a file and a connection
+    # reject each other's re-ingested rows symmetrically. The sync direction (a synced row rejected by a
+    # file's coverage) is pinned in test_sync_dedupe; this is the other direction, where the claim lives
+    # on connection_account and the incoming rows come from a CSV.
+
+    def _connection_with_coverage(self, account_id, *, mode="existing", covers=("2025-11-01", "2025-12-08")):
+        """A connection that has already backfilled `account_id` and claims coverage over `covers`.
+
+        The mode is what decides whether that claim can bear on a CSV import at all: 'existing' says
+        this provider account IS the local account the file is landing in, which is the alias the
+        cross-account coverage rule requires. 'new' points the connection at an account of its own.
+        """
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO connection (id, provider, external_id, credential, institution)"
+                    " VALUES ('conn-1', 'plaid', 'item-1', '', 'Example Bank')"
+                )
+                conn.execute(
+                    """
+                    INSERT INTO connection_account
+                      (connection_id, external_account_id, account_id, mapping_mode, target_account_id,
+                       provider_name, provider_mask, coverage_start_date, coverage_through_date)
+                    VALUES ('conn-1', 'ext-card', ?, ?, ?, 'CREDIT CARD', '6612', ?, ?)
+                    """,
+                    (account_id, mode, account_id if mode == "existing" else None, covers[0], covers[1]),
+                )
+
+    def _connection_covered_config(self, card_id):
+        return self._account_mapping_config(
+            headers={
+                "date": "Date",
+                "description": "Merchant",
+                "account": "Account",
+                "amount": "Amount",
+                "category": "Category",
+                "notes": "Notes",
+                "date_format": "%Y-%m-%d",
+            },
+            account_map={"CREDIT CARD (...6612)": card_id},
+        )
+
+    def _seed_synced_rows(self, card_id):
+        """The two rows the connection already pulled, and the twins the rejected CSV rows must name.
+        Stored positive because these are charges — the file's `-19.99` lands here as `19.99`."""
+        return {
+            "amazon": self._insert_existing_transaction(
+                account_id=card_id, date="2025-11-20", amount=19.99, merchant_name="AMAZON MKTPLACE"),
+            "netflix": self._insert_existing_transaction(
+                account_id=card_id, date="2025-11-28", amount=7.99, merchant_name="NETFLIX.COM"),
+        }
+
+    async def test_a_csv_row_inside_a_connections_covered_range_is_rejected(self):
+        # Coverage runs 11/01–12/08, and the connection's own 7-day lag makes 12/02–12/08 soft, so the
+        # fully-covered stretch ends 12/01. The file's 11/20 and 11/28 rows are inside it and are the
+        # provider's rows arriving a second time through a file; 12/05 (inside the soft trailing edge)
+        # and 12/12 (past the claim entirely) are not covered and must land.
+        card_id = self._insert_account("Northgate Voyager", account_type="credit", mask="6612")
+        synced = self._seed_synced_rows(card_id)
+        self._connection_with_coverage(card_id)
+
+        result = await self._run_import_fixture(
+            "duplicate_connection_covered.csv", self._connection_covered_config(card_id))
+        self.assertEqual(result["imported"], 2)
+        self.assertEqual(result["deduped"], 2)
+
+        duplicates = self._get_duplicates(result["batch_id"])
+        for row in duplicates["rows"]:
+            self.assertEqual(
+                row["reason"],
+                "Falls within the fully covered date range from an earlier import in this account scope",
+            )
+        # Each rejection names the synced row it duplicates rather than reading "no specific match":
+        # the connection's rows are ordinary ledger rows, so the candidate lookup finds them normally.
+        matched_ids = {
+            c["id"] for row in duplicates["rows"]
+            for c in (row["matched_transaction"].get("candidates") or [])
+        }
+        self.assertEqual(matched_ids, set(synced.values()))
+
+        self.assertEqual(
+            [(r["date"], r["amount"]) for r in self._ledger_snapshot()],
+            [("2025-11-20", "19.99"), ("2025-11-28", "7.99"),
+             ("2025-12-05", "6.75"), ("2025-12-12", "41.02")],
+        )
+
+    async def test_the_same_file_imports_when_the_connection_feeds_an_account_of_its_own(self):
+        # The control that shows the mapping does the work, not the mere existence of coverage: mapped
+        # 'new', the provider account is a different physical account, its claim says nothing about the
+        # file's account, and all four rows import. Same precondition the sync direction has.
+        card_id = self._insert_account("Northgate Voyager", account_type="credit", mask="6612")
+        connection_account_id = self._insert_account("CREDIT CARD", account_type="credit", mask="6612")
+        self._seed_synced_rows(connection_account_id)
+        self._connection_with_coverage(connection_account_id, mode="new")
+
+        result = await self._run_import_fixture(
+            "duplicate_connection_covered.csv", self._connection_covered_config(card_id))
+        self.assertEqual(result["imported"], 4)
+        self.assertEqual(result["deduped"], 0)
 
     async def test_import_into_merged_group_auto_confirms_in_group_overlap_only(self):
         # Pre-existing merge / import-order independence. A legacy umbrella "Credit Card" account
@@ -418,147 +589,6 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["imported"], 2)
         self.assertEqual(result["deduped"], 0)
         self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_same_file_allowed_ledger.csv"))
-
-    async def test_duplicate_compare_only_against_linked_existing_account(self):
-        checking_id = self._insert_account("House Checking", account_type="depository", mask="4321")
-
-        base_config = self._account_mapping_config(
-            headers={
-                "date": "Date",
-                "description": "Description",
-                "account": "Account",
-                "amount": "Amount",
-                "category": "Category",
-                "date_format": "%m/%d/%Y",
-            },
-            account_map={"House Checking": checking_id},
-        )
-        result_one = await self._run_import_fixture("duplicate_linked_base.csv", base_config)
-        self.assertEqual(result_one["imported"], 3)
-        self.assertEqual(result_one["deduped"], 0)
-
-        self._insert_existing_transaction(
-            account_id=checking_id,
-            date="2025-10-13",
-            amount=125.00,
-            merchant_name="PAYPAL INST XFER CLEANING CREW",
-            raw_name="PAYPAL INST XFER CLEANING CREW",
-            display_name="PAYPAL INST XFER CLEANING CREW",
-        )
-
-        linked_config = {
-            "filename": "duplicate_linked_compare.csv",
-            "profile_id": None,
-            "account_id": None,
-            "single_account_new": None,
-            "account_map": {},
-            "skip_accounts": [],
-            "new_accounts": [
-                {
-                    "csv_value": "CHECKING (...4321)",
-                    "name": "House Checking Alias",
-                    "type": "depository",
-                    "duplicate_compare_account_id": checking_id,
-                }
-            ],
-            "column_map": {
-                "date": "Date",
-                "description": "Merchant",
-                "account": "Account",
-                "amount": "Amount",
-                "category": "Category",
-                "notes": "Notes",
-            },
-            "date_format": "%Y-%m-%d",
-            "amount_convention": "single_signed",
-            "skip_rows": 0,
-            "apply_categorization": False,
-            "use_imported_categories": False,
-        }
-        result_two = await self._run_import_fixture("duplicate_linked_compare.csv", linked_config)
-        self.assertEqual(result_two["imported"], 1)
-        self.assertEqual(result_two["deduped"], 3)
-
-        duplicates = self._get_duplicates(result_two["batch_id"])
-        reasons = [row["reason"] for row in duplicates["rows"]]
-        # Coverage runs before exact-hash, so the row that is both an exact linked-group match and
-        # inside the in-scope covered range is labeled by coverage — two in-scope coverage reasons,
-        # and no standalone linked-group exact-match label. The text-match row is outside coverage,
-        # so it is unaffected. Counts (deduped=3) are unchanged; only the reason mix shifts.
-        self.assertEqual(sum(reason == "Matches an existing transaction in the linked account group" for reason in reasons), 0)
-        self.assertEqual(sum("Falls within the fully covered date range from an earlier import in this account scope" in reason for reason in reasons), 2)
-        self.assertEqual(sum("Possible cross-source match by date, amount, and source text in the linked account group" in reason for reason in reasons), 1)
-        self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_linked_compare_ledger.csv"))
-
-    async def test_duplicate_compare_only_reasserted_when_alias_account_already_exists(self):
-        # The multi-file / re-import case: the *first* file creates the duplicate-compare alias account,
-        # so a *later* file with the same alias config finds it already created and reuses it by name. The
-        # compare-against-existing instruction is per-import (not stored on the account), so it must be
-        # re-asserted on the already-exists path — otherwise the later file's rows skip the cross-account
-        # duplicate check the first file's rows received (they'd all import as new).
-        checking_id = self._insert_account("House Checking", account_type="depository", mask="4321")
-
-        base_config = self._account_mapping_config(
-            headers={
-                "date": "Date",
-                "description": "Description",
-                "account": "Account",
-                "amount": "Amount",
-                "category": "Category",
-                "date_format": "%m/%d/%Y",
-            },
-            account_map={"House Checking": checking_id},
-        )
-        await self._run_import_fixture("duplicate_linked_base.csv", base_config)
-        self._insert_existing_transaction(
-            account_id=checking_id,
-            date="2025-10-13",
-            amount=125.00,
-            merchant_name="PAYPAL INST XFER CLEANING CREW",
-            raw_name="PAYPAL INST XFER CLEANING CREW",
-            display_name="PAYPAL INST XFER CLEANING CREW",
-        )
-
-        alias_config = {
-            "filename": "duplicate_linked_seed.csv",
-            "profile_id": None,
-            "account_id": None,
-            "single_account_new": None,
-            "account_map": {},
-            "skip_accounts": [],
-            "new_accounts": [
-                {
-                    "csv_value": "CHECKING (...4321)",
-                    "name": "House Checking Alias",
-                    "type": "depository",
-                    "duplicate_compare_account_id": checking_id,
-                }
-            ],
-            "column_map": {
-                "date": "Date",
-                "description": "Merchant",
-                "account": "Account",
-                "amount": "Amount",
-                "category": "Category",
-                "notes": "Notes",
-            },
-            "date_format": "%Y-%m-%d",
-            "amount_convention": "single_signed",
-            "skip_rows": 0,
-            "apply_categorization": False,
-            "use_imported_categories": False,
-        }
-        # First file: creates the "House Checking Alias" account (its one row doesn't overlap checking).
-        seed_result = await self._run_import_fixture("duplicate_linked_seed.csv", alias_config)
-        self.assertEqual(seed_result["imported"], 1)
-        self.assertEqual(seed_result["deduped"], 0)
-
-        # Second file: same alias config, but the alias account now already exists. Its overlapping rows
-        # must still dedupe against the compare target (checking) — 3 duplicates, 1 genuinely new (Venmo).
-        # Before the fix, the compare target wasn't re-asserted on the existing path, so all 4 imported.
-        result_two = await self._run_import_fixture("duplicate_linked_compare.csv", {**alias_config, "filename": "duplicate_linked_compare.csv"})
-        self.assertEqual(result_two["imported"], 1)
-        self.assertEqual(result_two["deduped"], 3)
 
     async def test_group_with_existing_account_dedupes_against_three_account_group(self):
         parent_id = self._insert_account("Merged Checking", account_type="depository", mask="0000")
@@ -796,7 +826,7 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         first_result = await self._run_import_fixture("duplicate_prior_base.csv", config)
-        self.assertEqual(first_result["imported"], 6)
+        self.assertEqual(first_result["imported"], 10)
         self.assertEqual(first_result["deduped"], 0)
         self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_prior_base_ledger.csv"))
 
@@ -805,7 +835,7 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self._ledger_snapshot(), [])
 
         second_result = await self._run_import_fixture("duplicate_prior_base.csv", config)
-        self.assertEqual(second_result["imported"], 6)
+        self.assertEqual(second_result["imported"], 10)
         self.assertEqual(second_result["deduped"], 0)
         self.assertEqual(self._ledger_snapshot(), self._expected_snapshot("expected_prior_base_ledger.csv"))
 
@@ -991,7 +1021,7 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
 
     def test_coverage_reject_substate_classification(self):
         batch = "batch-substate"
-        # row 1: a twin found only at ±2 days → "matched ±2 days"; row 2: no candidate → "no specific
+        # row 1: a twin found only on a nearby day → "matched nearby date"; row 2: no candidate → "no specific
         # match"; row 3: only a cross-account transfer twin → "possible transfer match".
         self._insert_coverage_reject(batch_id=batch, filename="f.csv", row_number=1,
                                      candidates=[{"id": "x", "date": "2023-08-09", "amount": 20.22, "day_offset": -2}])
@@ -999,7 +1029,7 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self._insert_coverage_reject(batch_id=batch, filename="f.csv", row_number=3,
                                      candidates=[{"id": "y", "date": "2023-08-12", "amount": 20.22,
                                                   "cross_account": True, "account_name": "Northgate Checking"}])
-        self.assertEqual(self._entry_for_row(batch, 1)["review_substate"], "matched_2d")
+        self.assertEqual(self._entry_for_row(batch, 1)["review_substate"], "matched_near_date")
         self.assertEqual(self._entry_for_row(batch, 2)["review_substate"], "no_match")
         self.assertEqual(self._entry_for_row(batch, 3)["review_substate"], "transfer_match")
 

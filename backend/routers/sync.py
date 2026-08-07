@@ -14,7 +14,7 @@ reuse of the shared categorization engine, and — for a connection's first (his
 
 import json
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Request
 
 from backend.app_logging import log_warning
@@ -30,7 +30,10 @@ from backend.services.categorizer import (
     recategorize_all,
     rule_scalar_effects,
 )
+from backend.services.connection_dedupe import build_connection_dedupe
+from backend.services.connection_mapping import build_sync_evidence
 from backend.services.duplicate_detection import (
+    evaluate_duplicate,
     mark_import_suspects,
     promote_in_group_suspects_to_confirmed,
 )
@@ -56,6 +59,14 @@ ALL_HISTORY_DAYS = 730
 _HISTORICAL_COMPLETE = "HISTORICAL_UPDATE_COMPLETE"
 _STATUS_UNKNOWN = "TRANSACTIONS_UPDATE_STATUS_UNKNOWN"
 _STATUS_ORDER = {"NOT_READY": 0, "INITIAL_UPDATE_COMPLETE": 1, _HISTORICAL_COMPLETE: 2, _STATUS_UNKNOWN: 2, None: 2}
+
+
+def _parse_txn_date(value):
+    """A transaction's ISO date as a `date`, or None when the provider sent something unparseable."""
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_terminal_status(status) -> bool:
@@ -95,11 +106,16 @@ def resolve_initial_sync_batch(conn, connection) -> str:
 def resolve_sync_period_batch(conn, connection, on_date: date) -> str:
     """Return the id of the (connection, calendar-month) period card, creating it lazily on first use.
 
-    The period is keyed on the fetch date's month, not each transaction's own date: a fetch's rows all
-    land on the *current* period's card for the connection (mirroring how a CSV card is one import event),
-    and later fetches in the same month reuse it, so a daily sync that pulls one or two rows extends the
-    month's card instead of flooding the history with tiny per-fetch cards. `sync_period` in the config
-    snapshot ('YYYY-MM') is the period identity; connection_id (indexed) narrows the lookup first.
+    The period is keyed on the **transaction's own month**, not the month the fetch happened in. A card
+    labelled "July 2026" therefore holds July's transactions, which is the one thing a user reads
+    straight off it; keying on the fetch date filed a July 30th charge arriving August 2nd under
+    "August". One fetch may touch more than one card as a result — the tallies below are all keyed by
+    card id, so that costs nothing.
+    ``sync_period`` in the config snapshot ('YYYY-MM') is the period identity; connection_id (indexed)
+    narrows the lookup first.
+
+    Card volume is unchanged for the daily-sync case this scheme exists for: a fetch touches the current
+    month, plus the tail of the previous one for a few days after rollover.
     """
     period_key = on_date.strftime("%Y-%m")
     row = conn.execute(
@@ -116,6 +132,9 @@ def resolve_sync_period_batch(conn, connection, on_date: date) -> str:
     batch_id = str(uuid.uuid4())
     institution = connection["institution"] or connection["provider"] or "Data source"
     filename = f"{institution} · {on_date.strftime('%B %Y')}"
+    # A card's transaction-month span is NOT a coverage claim: a delta card can span all of July while
+    # holding only the three July rows that happened to arrive. Coverage for a connection lives on
+    # connection_account, and these cards deliberately record none (see _record_sync_coverage).
     conn.execute(
         """
         INSERT INTO import_batch (id, filename, status, source_kind, connection_id, config_snapshot)
@@ -179,6 +198,92 @@ def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
     )
 
 
+def record_sync_duplicate(conn, *, batch_id: str, txn: dict, merchant_name, content_hash: str,
+                          evidence_json, verdict, account_id: str, source_label: str) -> None:
+    """Persist a hard-rejected synced row into its card's duplicate report, through the *same* writer a
+    CSV import uses — so the existing per-batch report, "Import anyway", and Restore all work on a sync
+    card with no changes.
+
+    `row_number` is a running per-batch ordinal rather than a file line: a sync has no lines, but the
+    column is half the report's primary key, so arrivals are counted instead.
+    """
+    # Lazy, like `make_hash` above: core.py pulls in many services, so it is imported only when a sync
+    # actually has a duplicate to record.
+    from backend.routers.import_export.core import save_batch_duplicate_rows
+
+    next_row = int(conn.execute(
+        "SELECT COALESCE(MAX(row_number), 0) + 1 AS n FROM import_batch_duplicate WHERE batch_id = ?",
+        (batch_id,),
+    ).fetchone()["n"])
+    save_batch_duplicate_rows(conn, batch_id, [{
+        "row": next_row,
+        "reason": verdict.reason,
+        # `values` is what the report shows as "the row that was rejected". A CSV puts its raw columns
+        # here; a sync has no columns, so it puts the fields the provider actually supplied.
+        "values": {
+            "Account": source_label,
+            "Date": txn["date"],
+            "Amount": txn["amount"],
+            "Description": txn["raw_name"] or "",
+            **({"Transaction date": txn["authorized_date"]} if txn.get("authorized_date") else {}),
+        },
+        "matched_transaction": verdict.matched or {},
+        # Enough to re-materialize the row if the user imports it anyway.
+        "txn_payload": {
+            "account_id": account_id,
+            "date": txn["date"],
+            "authorized_date": txn.get("authorized_date"),
+            "amount": txn["amount"],
+            "merchant_name": merchant_name,
+            "raw_name": txn["raw_name"],
+            "content_hash": content_hash,
+            "import_evidence_json": evidence_json,
+            "plaid_transaction_id": txn["external_transaction_id"],
+            "display_name_source": "import",
+        },
+    }])
+
+
+def _record_sync_coverage(conn, connection, *, is_range_pull: bool, requested_start: date | None,
+                          synced_accounts: dict) -> None:
+    """Advance the connection's coverage claim after a successful pull.
+
+    The claim belongs to the *chain*, not to any card: `transactions_cursor` + `initial_sync_complete`
+    together assert "every change the provider has reported, back to the backfill window, is in the
+    ledger". A **range pull** (the initial backfill, or Fetch more history) establishes or extends
+    `coverage_start_date` backward to the window it asked for; a **delta** only advances
+    `coverage_through_date`. A failed sync calls none of this, so its coverage simply stops advancing —
+    self-correcting, with no staleness flag to maintain.
+    """
+    today = date.today().isoformat()
+    for external_account_id in synced_accounts:
+        if is_range_pull and requested_start:
+            conn.execute(
+                """
+                UPDATE connection_account
+                SET    coverage_start_date = CASE
+                           WHEN coverage_start_date IS NULL OR coverage_start_date > ?
+                           THEN ? ELSE coverage_start_date END,
+                       coverage_through_date = ?
+                WHERE  connection_id = ? AND external_account_id = ?
+                """,
+                (requested_start.isoformat(), requested_start.isoformat(), today,
+                 connection["id"], external_account_id),
+            )
+        else:
+            # A delta extends the trailing edge only where a range pull already established a start;
+            # without one there is no claim to extend.
+            conn.execute(
+                """
+                UPDATE connection_account
+                SET    coverage_through_date = ?
+                WHERE  connection_id = ? AND external_account_id = ?
+                  AND  coverage_start_date IS NOT NULL
+                """,
+                (today, connection["id"], external_account_id),
+            )
+
+
 @router.post("")
 def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
     # `days` is the provider fetch depth (`days_requested`): <= 0 means "all available history" (the
@@ -187,10 +292,11 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
     # One call drains the currently-available pages (has_more) then returns `update_status`; the client
     # re-calls until `historical_complete`, so the async historical backfill is polled to completion.
     days_requested = ALL_HISTORY_DAYS if days <= 0 else min(days, ALL_HISTORY_DAYS)
-    added = updated = removed = skipped = 0
+    added = updated = removed = skipped = deduped = 0
     touched_ids: list[str] = []  # rows this sync added or advanced — the scope for the recurring rescan
     cards_touched: set[str] = set()          # cards that received added rows (for the post-sync dedup sweep)
     card_added: dict[str, int] = {}          # card_id -> rows added this call
+    card_dupes: dict[str, int] = {}          # card_id -> rows hard-rejected as duplicates this call
     card_accounts: dict[tuple[str, str], dict] = {}  # (card_id, csv_value) -> {account_id, count}
     synced_statuses: list = []               # each synced connection's final update_status
     sync_diagnostics: list[dict] = []        # per-connection diagnostic rows (persisted only in dev mode)
@@ -230,11 +336,11 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
                 (external_account_id,),
             ).fetchone()
 
-        def _insert_added(t, get_card) -> bool:
+        def _insert_added(t, get_card, dedupe) -> bool:
             """Insert one `added` transaction. `get_card` lazily resolves (and creates) the connection's
             card only when a row is actually inserted, so a no-op sync leaves no empty card. Idempotent on
             provider id: a row we already have advances pending state instead of duplicating."""
-            nonlocal added, updated, skipped
+            nonlocal added, updated, skipped, deduped
             acc = _account_for(t["external_account_id"])
             if not acc:
                 skipped += 1
@@ -277,37 +383,84 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
                     skipped += 1
                 return False
 
-            card_id = get_card()
+            # A check number folded into the merchant as "Check #<n>", matching the CSV convention, so
+            # the check discriminator can tell two same-amount checks apart on synced rows too.
+            merchant_name = t.get("merchant_name")
+            if t.get("check_number"):
+                merchant_name = f"Check #{t['check_number']}"
+            source_label = dedupe.label_by_external.get(t["external_account_id"], t["external_account_id"])
+            evidence_json = build_sync_evidence(
+                t, source_label=source_label, captured_fields=dedupe.captured_fields,
+            )
+            content_hash = make_hash(t["date"], t["amount"], t["raw_name"] or t["merchant_name"] or "")
+            txn_payload = {
+                "merchant_name": merchant_name,
+                "display_name": merchant_name or t["raw_name"],
+                "raw_name": t["raw_name"],
+                "import_evidence": json.loads(evidence_json) if evidence_json else None,
+            }
+
+            # The same ladder a CSV import runs. Before this, a sync only checked provider-transaction-id
+            # idempotence, which by construction can never see a row that arrived from another source —
+            # so a charge already imported from a CSV came back as a second copy on a different account.
+            verdict = evaluate_duplicate(
+                context=dedupe.context,
+                receiving_account_id=acc["id"],
+                csv_value=source_label,
+                content_hash=content_hash,
+                parsed_date=t["date"],
+                amount=t["amount"],
+                scope_id=dedupe.context.scope_id_for(acc["id"], source_label),
+                txn_payload=txn_payload,
+                authorized_date=t.get("authorized_date"),
+            )
+            card_id = get_card(t["date"])
+            if verdict.hard_reject:
+                # Recorded, not discarded: the payload lands in the card's duplicate report where the
+                # existing "Import anyway" and Restore actions govern it, exactly as for a CSV.
+                record_sync_duplicate(
+                    conn, batch_id=card_id, txn=t, merchant_name=merchant_name,
+                    content_hash=content_hash, evidence_json=evidence_json, verdict=verdict,
+                    account_id=acc["id"], source_label=source_label,
+                )
+                deduped += 1
+                cards_touched.add(card_id)
+                card_dupes[card_id] = card_dupes.get(card_id, 0) + 1
+                return False
+
             result = categorize_transaction(
                 t["merchant_name"], t["raw_name"], t["merchant_name"], t["amount"], conn,
                 owner_id=acc["owner_id"], account_id=acc["id"], rules=rules, rule_tags_by_id=rule_tags_by_id,
             )
             cat_id       = result["category_id"] if isinstance(result, dict) else result
             rule_tag_ids = result.get("tag_ids", []) if isinstance(result, dict) else []
-            name_effects = rule_scalar_effects(result, fallback_name=t["merchant_name"] or t["raw_name"])
+            name_effects = rule_scalar_effects(result, fallback_name=merchant_name or t["raw_name"])
             display_name = name_effects["display_name"]
             display_name_source = "rule" if name_effects["renamed_by_rule"] else "import"
-            content_hash = make_hash(t["date"], t["amount"], t["raw_name"] or t["merchant_name"] or "")
             txn_id = str(uuid.uuid4())
             conn.execute(
                 """
                 INSERT INTO txn
                     (id, plaid_transaction_id, account_id, owner_id, category_id,
-                     amount, merchant_name, display_name, raw_name, date, is_pending, display_name_source,
-                     content_hash, import_batch_id, needs_review)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+                     amount, merchant_name, display_name, raw_name, date, authorized_date, is_pending,
+                     display_name_source, content_hash, import_evidence_json, import_batch_id,
+                     suspect_duplicate_of, suspect_duplicate_reason, needs_review)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
                 """,
                 (txn_id, t["external_transaction_id"], acc["id"], acc["owner_id"], cat_id, t["amount"],
-                 t["merchant_name"], display_name, t["raw_name"], t["date"], 1 if t["is_pending"] else 0,
-                 display_name_source, content_hash, card_id),
+                 merchant_name, display_name, t["raw_name"], t["date"], t.get("authorized_date"),
+                 1 if t["is_pending"] else 0, display_name_source, content_hash, evidence_json, card_id,
+                 verdict.suspect_of if verdict.soft_flag else None,
+                 verdict.reason_key if verdict.soft_flag else None),
             )
             sync_rule_tags_for_transaction(conn, txn_id, rule_tag_ids)
             added += 1
             touched_ids.append(txn_id)
             cards_touched.add(card_id)
             card_added[card_id] = card_added.get(card_id, 0) + 1
-            entry = card_accounts.setdefault((card_id, t["external_account_id"]), {"account_id": acc["id"], "count": 0})
+            entry = card_accounts.setdefault((card_id, source_label), {"account_id": acc["id"], "count": 0})
             entry["count"] += 1
+            entry.setdefault("dates", set()).add(t["date"])
             return True
 
         def _apply_modified(t) -> None:
@@ -347,6 +500,9 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
 
         for connection in connections:
             initial = not connection["initial_sync_complete"]
+            # `days` is only meaningful as a bounded historical request; the client sends days<=0 for
+            # "everything available", which is what both the first backfill and Fetch-more-history do.
+            is_range_pull = initial or days <= 0
             cursor = connection["transactions_cursor"]
             final_status = None
             # Per-connection diagnostics (persisted only in dev mode): the status sequence across drained
@@ -385,13 +541,23 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
             # already complete) → the current monthly period card. Defaults bind the per-connection values.
             card_state = {"id": None}
 
-            def _get_card(connection=connection, initial=initial, card_state=card_state):
-                if card_state["id"] is None:
-                    card_state["id"] = (resolve_initial_sync_batch(conn, connection) if initial
-                                        else resolve_sync_period_batch(conn, connection, date.today()))
-                return card_state["id"]
+            def _get_card(txn_date=None, connection=connection, initial=initial, card_state=card_state):
+                """The card a row belongs on. The initial backfill keeps ONE card for the whole
+                historical pull (it is a single user-visible event, not 24 monthly ones); a routine
+                delta files each row under its own transaction month, so a card's label matches what it
+                holds even when a row arrives after its month has rolled over."""
+                if initial:
+                    if card_state["id"] is None:
+                        card_state["id"] = resolve_initial_sync_batch(conn, connection)
+                    return card_state["id"]
+                on_date = _parse_txn_date(txn_date) or date.today()
+                key = on_date.strftime("%Y-%m")
+                if key not in card_state:
+                    card_state[key] = resolve_sync_period_batch(conn, connection, on_date)
+                return card_state[key]
             try:
                 adapter = get_adapter(connection["provider"])
+                dedupe = build_connection_dedupe(conn, connection, adapter)
                 app_config = resolve_app_config(request.state.user, connection["provider"])
                 if not app_config:
                     log_warning(
@@ -425,7 +591,7 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
                     if not page["has_more"]:
                         break
                 for t in page_added:
-                    _insert_added(t, _get_card)
+                    _insert_added(t, _get_card, dedupe)
                 for t in page_modified:
                     _apply_modified(t)
                 for ext_id in page_removed:
@@ -450,13 +616,33 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
                 "UPDATE connection SET transactions_cursor = ?, initial_sync_complete = ? WHERE id = ?",
                 (cursor, 1 if (connection["initial_sync_complete"] or became_complete) else 0, connection["id"]),
             )
+            # A RANGE PULL is a call that asked for a bounded history and drained it — the initial
+            # backfill, and equally "Fetch more history" on an already-complete connection. Keying this
+            # off `initial` (i.e. off initial_sync_complete) treated the latter as a routine delta, so a
+            # genuine 24-month backfill never extended the connection's coverage backward.
+            _record_sync_coverage(
+                conn, connection,
+                is_range_pull=is_range_pull,
+                requested_start=date.today() - timedelta(days=days_requested) if is_range_pull else None,
+                synced_accounts=dedupe.label_by_external,
+            )
             synced_statuses.append(final_status)
             _record(became_complete=became_complete)
 
         # Flush the card tallies (a card is reused across calls, so counts accumulate).
         for card_id, n in card_added.items():
             conn.execute("UPDATE import_batch SET row_count = row_count + ? WHERE id = ?", (n, card_id))
+        for card_id, n in card_dupes.items():
+            conn.execute("UPDATE import_batch SET deduped_count = deduped_count + ? WHERE id = ?", (n, card_id))
         for (card_id, csv_value), info in card_accounts.items():
+            # `csv_value` is the provider account's LABEL (e.g. "CREDIT CARD ···6612"), not its opaque
+            # provider id: it is the connection's "source value", it reads like a CSV card's account
+            # column, and it is what a row's evidence records so the terminal-window matcher can identify
+            # a synced row's source account.
+            #
+            # No coverage columns are written. A card holds whatever a delta happened to deliver, which
+            # proves nothing about the dates it spans; the connection's coverage claim lives on
+            # connection_account (see _record_sync_coverage).
             conn.execute(
                 """
                 INSERT INTO import_batch_account (batch_id, csv_value, account_id, row_count)
@@ -508,7 +694,7 @@ def run_sync(days: int = 0, connection_id: str = None, request: Request = None):
     historical_complete = all(_is_terminal_status(s) for s in synced_statuses)
     overall_status = min(synced_statuses, key=lambda s: _STATUS_ORDER.get(s, 2), default=None)
     return {
-        "added": added, "updated": updated, "removed": removed, "skipped": skipped,
+        "added": added, "updated": updated, "removed": removed, "skipped": skipped, "deduped": deduped,
         "update_status": overall_status, "historical_complete": historical_complete,
     }
 

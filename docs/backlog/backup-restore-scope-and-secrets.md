@@ -118,6 +118,28 @@ vault custody. Until then the "connection secrets" bucket is incomplete (the app
 outside both databases and outside any backup). Building the secrets backup before phase 6 would either
 omit app creds or special-case `.env`, both of which get cleaner once phase 6 lands — so this waits.
 
+## Discovered: a data restore leaves a connection's cursor ahead of the ledger
+
+Not introduced by the connection-mapping work, but that work made it visible and it belongs here rather
+than in the feature that surfaced it.
+
+A data restore rolls the ledger back while the live `connection` row — which the restore deliberately
+never wipes, since it is credential data on the other side of the split — **keeps its current
+`transactions_cursor`**. So the next sync resumes from a checkpoint *past* the rows the restore just
+removed, and those rows are never re-fetched. They are simply gone: the provider considers them already
+delivered, and nothing local knows to ask again.
+
+The mapping work sharpened the contradiction rather than causing it. `connection_account.coverage_*`
+rides the **data** backup precisely so a restore moves coverage backward in step with the ledger (a
+surviving claim would hard-reject the very rows a re-sync brings back). Coverage now moves correctly and
+the cursor does not — the two halves of the same assertion disagree after a restore.
+
+The fix is the one `Remove synced transactions` already uses: a data restore should reset
+`transactions_cursor` + `initial_sync_complete` for every connection, so the next sync re-backfills and
+re-establishes both coverage and rows together. Flagged rather than folded into the mapping work because
+it changes what a restore does to the credential side of the split, which is this document's subject and
+has its own blast radius.
+
 ## Open questions
 
 - **Restore-all and the perimeter:** offer-with-confirmation (recommended) vs. an automatic reset. The

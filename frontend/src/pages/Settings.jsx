@@ -2173,7 +2173,7 @@ function ConnectionSyncLogSection() {
     <Card style={{ display: 'grid', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, maxWidth: 560 }}>
-          One row per connection per sync call — the provider's transaction-readiness status across the
+          One row per connection per sync call — the provider&rsquo;s transaction-readiness status across the
           drained pages, cursor movement, and row counts. Use it to tell whether a sync ran to the full
           historical backfill or stopped at the ~30-day Initial Update.
         </div>

@@ -207,7 +207,7 @@ This is a deliberate tradeoff toward local responsiveness. Luma is optimized for
 
 - **Hard-reject recoverability:** exact-match (and other hard-reject) duplicates are never inserted into `txn` at all — the row is dropped at import time and only its full would-be payload is persisted in `import_batch_duplicate` (plus a per-batch `deduped_count`). That payload is re-playable: `POST /import-export/batches/{id}/duplicates/import` re-inserts selected (or all) skipped rows via `_insert_imported_transaction`, independent of the import that originally caused the rejection. These records are scoped to their own batch, so undoing a *different* batch does not touch them — a row that file B skipped because it matched file A stays recorded against file B and remains re-playable even after file A is undone. The flip side is that the system does **not** auto-restore them: undoing file A removes file A's rows but does not survey later batches to re-materialize anything they deduped against A, so those rows simply stay absent (recoverable only by the manual "Import duplicates" action on file B, or by re-importing file B). See TODO ("Auto-restore deduped rows when a contributing import is undone") for the deferred automation and why it is non-trivial.
 
-- **Advisory-review rejects:** a coverage-window hard-reject can fire without pinpointing the specific prior row it matched (the date is inside a covered range but no same-account row matches by date+amount). These surface in the unified report as "Rejected · review" — already rejected, but flagged for a look. The candidate lookup widens display-only from exact→±1→±2 (posting dates can differ by an extra day between sources — pending-vs-posted timing, weekend or holiday settlement, or a foreign charge posting a local calendar day ahead — so the usual ±1 drift stretches to ±2; the ±2 reach is a fallback that never fires when a closer match exists and cannot change the reject verdict), splitting the bucket into report sub-states: **`matched_2d`** (a same-amount twin was found only at ±2 — a near-date duplicate offset by posting-date drift), **`transfer_match`** (no same-account twin, but a same-|amount| row within ±3 days on a *different* account whose name contains the receiving account's name — the funding/deposit leg of a wallet transfer whose bank/card counterpart is already on the books; cross-account and opposite-signed, so the same-account lookup can't see it; a targeted query that only fires on the no-same-account residual, surfaced for confirm/reject and never auto-applied), and **`no_match`** (no twin even at ±2 or across accounts — the one genuinely worth investigating, e.g. a row present in one file but missing from the other, recoverable via "Import anyway"). The user can acknowledge these with **Mark reviewed** (`POST /batches/{id}/duplicates/mark-reviewed`, bulk by `row_number`), which sets `import_batch_duplicate.reviewed_at`; an acknowledged row stays rejected (never imported) but drops out of the needs-attention pills. This acknowledgment is *only* for advisory rejects — soft-flag suspects are still resolved through Keep both / Discard new / Replace existing, which already clear them.
+- **Advisory-review rejects:** a coverage-window hard-reject can fire without pinpointing the specific prior row it matched (the date is inside a covered range but no same-account row matches by date+amount). These surface in the unified report as "Rejected · review" — already rejected, but flagged for a look. The candidate lookup widens display-only from exact→±1→outward, a day at a time, to `CROSS_ACCOUNT_DATE_WINDOW_DAYS` (posting dates differ between sources for several reasons — pending-vs-posted timing, weekend or holiday settlement, a foreign charge posting a local calendar day ahead — and measured skew on a real ledger reached +6; the widened reach is a fallback that never fires when a closer match exists, is ordered closest-day-first, and cannot change the reject verdict), splitting the bucket into report sub-states: **`matched_near_date`** (a same-amount twin was found only on a nearby day, each candidate carrying the `day_offset` the report renders), **`transfer_match`** (no same-account twin, but a same-|amount| row within ±3 days on a *different* account whose name contains the receiving account's name — the funding/deposit leg of a wallet transfer whose bank/card counterpart is already on the books; cross-account and opposite-signed, so the same-account lookup can't see it; a targeted query that only fires on the no-same-account residual, surfaced for confirm/reject and never auto-applied), and **`no_match`** (no twin anywhere in the window or across accounts — the one genuinely worth investigating, e.g. a row present in one file but missing from the other, recoverable via "Import anyway"). The report **replays a stored verdict** — `matched_transaction_json` is written once at import and read back thereafter — so opening it first runs `refresh_unexplained_coverage_candidates`, which recomputes the candidate list for coverage rejects that currently name *nothing* and leaves every other entry untouched. Without it an entry would keep reading "no specific match" forever, even after the lookup improves or a later import brings the twin into the ledger. It is bounded to be safe on a read path: it recomputes only the same-account/scope reach (the cross-account transfer fallback already ran at import time and costs a query per entry, so it is deliberately disabled here), queries only the exact amounts and probe dates of the unexplained entries, and returns after one query when nothing qualifies. It never re-points an explanation that already exists, and never touches the verdict, reason, or `reviewed_at`. The user can acknowledge these with **Mark reviewed** (`POST /batches/{id}/duplicates/mark-reviewed`, bulk by `row_number`), which sets `import_batch_duplicate.reviewed_at`; an acknowledged row stays rejected (never imported) but drops out of the needs-attention pills. This acknowledgment is *only* for advisory rejects — soft-flag suspects are still resolved through Keep both / Discard new / Replace existing, which already clear them.
 
 - **Needs-review contract:** every imported/synced row is flagged `needs_review` so the user can look newly arrived transactions over (see the field in `data-model.md`). Batch summaries expose a per-file `needs_review_count`, and `POST /import-export/batches/{id}/mark-reviewed` clears the flag across a whole file — the CSV-batch counterpart to bulk Mark reviewed on the Transactions filter, available because batches already track which rows belong to a file (data-source syncs don't yet)
 
@@ -388,6 +388,50 @@ phase 6a), so adding Teller or SimpleFIN is an adapter, not a change to the conn
   /api/providers/{provider}/disconnect`, which **revokes the token provider-side** (the adapter's `remove`
   op → Plaid `/item/remove`, so a leaked copy dies too) then drops the local `connection` row, keeping the
   accounts/transactions. Only the deferred account columns (6b-3) remain.
+- **The mapping seam (`connection_account` + `routers/connections.py` + `services/connection_mapping.py`).**
+  Connecting a bank used to create one local account per provider account, with no chance to say "this
+  *is* my existing Northgate Voyager." That was not only a UX gap next to CSV import's account step — **it was
+  the missing input to duplicate detection**, because the ladder's cross-account rules fire only when the
+  receiving account already appears in the matching coverage *or* was explicitly declared an alias, and a
+  sync could satisfy neither. So `POST /plaid/exchange` now records provider accounts into
+  `connection_account` (unmapped) and creates nothing; a **required mapping step** runs after Link and
+  **before the first backfill**, so the very first batch of rows is deduped against whatever the mapped
+  accounts already hold instead of arriving unattached. `upsert_connection_accounts` became
+  *mapping-driven*: it materializes accounts from `connection_account` rather than blindly creating one per
+  provider account, and "Refresh accounts" adds newly-seen provider accounts as unmapped while re-applying
+  existing decisions. Endpoints: `GET /api/connections/{id}/accounts`, `POST .../account-map` (idempotent;
+  triggers the re-scan when a mapping changed), `POST .../captured-fields`.
+  See `data-model.md` → Accounts for the modes and what each buys the ladder.
+- **Captured fields are declared by the adapter, not hardcoded per provider.**
+  `ProviderAdapter.capture_fields()` returns `[{key, label, locked, default_on}]`, so each adapter states
+  its own set and a Teller/SimpleFIN adapter is unaffected by the Plaid choices. **Locked** fields are the
+  ones duplicate detection depends on and are not the user's to disable (`authorized_date`,
+  `provider_description`, `counterparties`, `merchant_entity_id`, `check_number`); optional ones
+  (`location`) are user-selectable and persist as `connection.captured_fields`. `authorized_date` is a
+  first-class `txn` column; everything else goes into `import_evidence_json` **in the identical shape a CSV
+  import writes**, which is what makes a synced row visible to the text matcher and — via
+  `evidence.account.value` — to the terminal-window matcher. Plaid's `personal_finance_category`,
+  `payment_channel`, and `transaction_code` are deliberately not captured (the app's own rules own
+  categorization).
+- **Duplicate detection for connection rows lives in `services/connection_dedupe.py`**, which both the sync
+  path and the re-scan share: one context builder over a connection's mapping, so the two moments a
+  connection's rows meet the ladder ask the same question with the same inputs. The **re-scan** is the
+  retroactive half of the mapping feature — rows synced before a mapping existed were judged with no
+  cross-account premise available, and re-judging them is what turns a mapping decision into a cleanup.
+  It runs **only** from applying a mapping, and has no endpoint or user-facing trigger of its own:
+  every other occasion that changes what a connection's rows should be compared against already runs
+  detection at that moment (a CSV import and a sync each sweep their own batch — and a CSV import's
+  ladder reads the connection's coverage; an account merge scans the newly-unified group), so a
+  user-driven re-check had no state left to reach and was removed rather than kept as a lever whose
+  only remaining job was to change which side of an already-visible pair got flagged.
+  Two properties are load-bearing and directly tested: the pass excludes **the whole connection's own
+  batches** from its candidate pool (excluding only "self" would let two rows from the same connection
+  reject *each other*, trashing both copies of a transaction that has one duplicate), and it removes a row
+  only when it can **name the surviving counterpart** — coverage can hard-reject on the range alone, which
+  is right for a row nobody has seen yet but not for one already in the ledger with a category on it.
+  Removals are trashed, never deleted, carrying `rejection_reason='duplicate_confirmed'` +
+  `dedupe_resolved_by='connection_rescan'` + the `suspect_duplicate_of` audit pointer — the same state an
+  account merge produces, so the card's duplicate report shows them and Restore returns them intact.
 
 ### Storage layers
 

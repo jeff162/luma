@@ -15,15 +15,19 @@ CRUD, backup/restore, the read-only preview — live in the sibling modules (`pr
 `preview`), which import from this module; `core` never imports them, so the package stays a DAG.
 
 This file also owns the shared low-level primitives the workflow (and those siblings) reuse:
-content/file hashing, amount/date/pending and header parsing, effective-account resolution (grouped
-child accounts resolve through their parent), and the imported-category settings codec. The parse
-primitives in particular stay here because `run_import` is their primary caller.
+content/file hashing, amount/date/pending and header parsing, and the imported-category settings
+codec. The parse primitives in particular stay here because `run_import` is their primary caller.
 
-Rough reading order: request models → normalization/settings helpers → dedupe candidate helpers
-(these feed `evaluate_duplicate` from `services/duplicate_detection.py` during a run) → import-row
-insertion + batch-duplicate persistence → category-workspace and rule-suggestion-review state →
-profile signature/column-map helpers → import-source/category primitives → the endpoints (`/run`,
-the duplicate-report family, `/batches…`, category-mappings, the rule-suggestion family, undo).
+Duplicate detection is **not** owned here. A CSV import is one of two ingestion paths — the other is
+data-source sync — so the rule ladder, its candidate/coverage primitives, and the context builder all
+live in `services/duplicate_detection.py`, and this module is a caller like any other: it hands
+`build_dedupe_context` its account-column values and their mapped accounts, then runs each parsed row
+through `evaluate_duplicate`.
+
+Rough reading order: request models → normalization/settings helpers → import-row insertion +
+batch-duplicate persistence → category-workspace and rule-suggestion-review state → profile
+signature/column-map helpers → import-source/category primitives → the endpoints (`/run`, the
+duplicate-report family, `/batches…`, category-mappings, the rule-suggestion family, undo).
 """
 
 import csv
@@ -64,13 +68,29 @@ from backend.services.categorizer import (
 )
 from backend.services.recurring_detection import payee_keys_for_ids, scan_imported_payees
 from backend.services.duplicate_detection import (
-    DedupeContext,
+    EVIDENCE_ROLE_CATEGORICAL,
+    EVIDENCE_ROLE_DESCRIPTIVE,
+    GENERIC_DUPLICATE_TEXT_TOKENS,
     are_distinct_checks,
+    build_dedupe_context,
+    collect_duplicate_match_texts,
+    DEFAULT_TERMINAL_WINDOW_DAYS,
+    compute_import_coverage_window,
     evaluate_duplicate,
+    find_cross_account_transfer_candidates,
+    find_ledger_payment_match,
+    get_effective_account_row,
     list_unified_batch_duplicates,
     mark_import_suspects,
+    match_terminal_day_candidate,
+    MIN_TERMINAL_WINDOW_DAYS,
+    normalize_evidence_text,
+    parse_import_evidence,
     promote_in_group_suspects_to_confirmed,
+    refresh_unexplained_coverage_candidates,
+    tokenize_duplicate_match_text,
 )
+from backend.text_utils import sanitize_rule_merchant_text
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
 from backend.services.import_enrichment import enrich_duplicate_row, undo_duplicate_enrichment, reverse_batch_enrichments
 from backend.services.money_movement import (
@@ -134,10 +154,6 @@ IMPORT_EVIDENCE_HEADER_KEYWORDS = (
     "beneficiary",
     "originator",
 )
-GENERIC_DUPLICATE_TEXT_TOKENS = {
-    "ach", "atm", "card", "cash", "credit", "debit", "deposit", "money", "payment",
-    "purchase", "refcode", "send", "transfer", "transf", "tranno", "withdrawal",
-}
 
 
 def _developer_options_enabled() -> bool:
@@ -409,58 +425,14 @@ def _normalize_import_row_values(row: dict, headers: list[str]) -> dict:
     return normalized
 
 
-def _normalize_import_evidence_text(value: Optional[str]) -> str:
-    normalized = sanitize_rule_merchant_text(str(value or "")).lower()
-    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
-    return " ".join(normalized.split())
 
 
-def _normalize_duplicate_token(token: str) -> str:
-    compact = str(token or "").strip().lower()
-    if len(compact) > 5 and compact.endswith("s"):
-        compact = compact[:-1]
-    return compact
 
 
-def _duplicate_tokens_match(left: str, right: str) -> bool:
-    if not left or not right:
-        return False
-    if left == right:
-        return True
-    shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
-    return len(shorter) >= 4 and longer.startswith(shorter)
 
 
-def _tokenize_duplicate_match_text(value: Optional[str], *, include_generic: bool = False) -> list[str]:
-    text = _normalize_import_evidence_text(value)
-    if not text:
-        return []
-    tokens: list[str] = []
-    for raw_token in text.split():
-        token = _normalize_duplicate_token(raw_token)
-        if len(token) < 3:
-            continue
-        if token.isdigit() and len(token) >= 4:
-            continue
-        if not include_generic and token in GENERIC_DUPLICATE_TEXT_TOKENS:
-            continue
-        if token not in tokens:
-            tokens.append(token)
-    return tokens
 
 
-def _count_fuzzy_token_overlap(left_tokens: list[str], right_tokens: list[str]) -> int:
-    if not left_tokens or not right_tokens:
-        return 0
-    remaining = list(right_tokens)
-    matches = 0
-    for token in left_tokens:
-        match_index = next((index for index, candidate in enumerate(remaining) if _duplicate_tokens_match(token, candidate)), None)
-        if match_index is None:
-            continue
-        matches += 1
-        remaining.pop(match_index)
-    return matches
 
 
 def _header_matches_import_evidence_keyword(header: str) -> bool:
@@ -493,14 +465,9 @@ def _import_evidence_reserved_headers(col: ColumnMap) -> set[str]:
 # column (transaction type, status, currency) draws from a small repeated vocabulary — two unrelated
 # rows routinely share the identical value, so feeding it to the matcher manufactures spurious
 # duplicates. We infer the role from the column's cardinality across the whole file and stamp it on each
-# captured field; _collect_duplicate_match_texts then consumes only descriptive fields. A field with no
+# captured field; collect_duplicate_match_texts then consumes only descriptive fields. A field with no
 # role (legacy evidence pre-dating this, and every descriptive field, which we leave unstamped to keep
 # the stored shape lean) is treated as descriptive.
-EVIDENCE_ROLE_DESCRIPTIVE = "descriptive"
-EVIDENCE_ROLE_CATEGORICAL = "categorical"
-# Categorical = a bounded vocabulary: few distinct values in absolute terms, genuinely repeated, and
-# covering only a small fraction of the rows. Tiny samples never trip this (n - d stays below the
-# repeat floor), so they default to descriptive.
 CATEGORICAL_MAX_DISTINCT = 12
 CATEGORICAL_MAX_DISTINCT_RATIO = 0.5
 CATEGORICAL_MIN_REPEATS = 2
@@ -571,10 +538,15 @@ def _get_or_create_paypal_profile(conn, *, header_fingerprint: str, column_map: 
         name = f"PayPal {suffix}"
     profile_id = str(uuid.uuid4())
     conn.execute(
+        # PayPal is the textbook first-party source: it publishes records it created itself, so only the
+        # export day can be partial and it is one of the few sources that genuinely warrants the
+        # narrowest trailing window. Stated outright rather than inherited from a column default.
         """INSERT INTO csv_import_profile
-             (id, name, header_fingerprint, column_map, date_format, amount_convention, source_kind)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (profile_id, name, header_fingerprint, json.dumps(column_map), date_format, amount_convention, PAYPAL_SOURCE_KIND),
+             (id, name, header_fingerprint, column_map, date_format, amount_convention, source_kind,
+              terminal_window_days)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (profile_id, name, header_fingerprint, json.dumps(column_map), date_format, amount_convention,
+         PAYPAL_SOURCE_KIND, MIN_TERMINAL_WINDOW_DAYS),
     )
     return profile_id
 
@@ -689,314 +661,34 @@ def _extract_check_number(raw_desc: str, row: dict, headers: list[str]) -> Optio
     return None
 
 
-def _parse_import_evidence(raw) -> Optional[dict]:
-    if isinstance(raw, dict):
-        return raw
-    if not raw:
-        return None
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        return None
-    return parsed if isinstance(parsed, dict) else None
 
 
-def _collect_duplicate_match_texts(*, merchant_name: Optional[str], display_name: Optional[str], raw_name: Optional[str], import_evidence: Optional[dict]) -> list[str]:
-    texts: list[str] = []
-
-    def add_text(value: Optional[str]):
-        text = str(value or "").strip()
-        normalized = _normalize_import_evidence_text(text)
-        if text and normalized and normalized not in {_normalize_import_evidence_text(existing) for existing in texts}:
-            texts.append(text)
-
-    add_text(display_name)
-    add_text(merchant_name)
-    add_text(raw_name)
-
-    if isinstance(import_evidence, dict):
-        description = import_evidence.get("description")
-        if isinstance(description, dict):
-            add_text(description.get("value"))
-        for field in import_evidence.get("extra_text_fields") or []:
-            # Categorical fields (bounded vocabularies like transaction type/status) are excluded: two
-            # unrelated rows share the identical value, which would manufacture spurious text matches.
-            # Missing role == descriptive, so legacy evidence and every descriptive field still feed in.
-            if isinstance(field, dict) and str(field.get("role") or "").strip().lower() != EVIDENCE_ROLE_CATEGORICAL:
-                add_text(field.get("value"))
-    return texts
 
 
-def _score_duplicate_text_match(left_text: str, right_text: str) -> tuple[float, dict]:
-    normalized_left = _normalize_import_evidence_text(left_text)
-    normalized_right = _normalize_import_evidence_text(right_text)
-    if not normalized_left or not normalized_right:
-        return 0.0, {}
-    if normalized_left == normalized_right:
-        return 1.0, {"mode": "exact_text"}
-
-    ratio = SequenceMatcher(None, normalized_left, normalized_right).ratio()
-    left_tokens = _tokenize_duplicate_match_text(normalized_left)
-    right_tokens = _tokenize_duplicate_match_text(normalized_right)
-    matched_tokens = _count_fuzzy_token_overlap(left_tokens, right_tokens)
-    overlap = (
-        matched_tokens / max(1, min(len(left_tokens), len(right_tokens)))
-        if left_tokens and right_tokens else 0.0
-    )
-    contains = (
-        min(len(normalized_left), len(normalized_right)) >= 8
-        and (normalized_left in normalized_right or normalized_right in normalized_left)
-    )
-
-    score = max(ratio, overlap)
-    if contains:
-        score = max(score, min(0.92, score + 0.08))
-    if matched_tokens >= 2 and overlap >= 0.67:
-        score = max(score, 0.82)
-    if matched_tokens >= 3 and overlap >= 0.8:
-        score = max(score, 0.9)
-
-    return score, {
-        "mode": "text_similarity",
-        "ratio": ratio,
-        "overlap": overlap,
-        "matched_tokens": matched_tokens,
-        "contains": contains,
-    }
 
 
-def _duplicate_amount_key(date_str: str, amount: float) -> str:
-    return f"{str(date_str or '').strip()}|{float(amount):.2f}"
 
 
-def _compute_import_coverage_window(date_values, terminal_date: Optional[str]) -> tuple[Optional[str], Optional[str]]:
-    unique_dates = sorted({str(value or "").strip() for value in (date_values or []) if str(value or "").strip()})
-    normalized_terminal_date = str(terminal_date or "").strip()
-    covered_dates = [date_value for date_value in unique_dates if not normalized_terminal_date or date_value < normalized_terminal_date]
-    if not covered_dates:
-        return None, None
-    return covered_dates[0], covered_dates[-1]
 
 
-def _date_in_import_coverage_window(date_str: str, start_date: Optional[str], end_date: Optional[str]) -> bool:
-    target = str(date_str or "").strip()
-    start = str(start_date or "").strip()
-    end = str(end_date or "").strip()
-    return bool(target and start and end and start <= target <= end)
 
 
-def _candidate_summary(candidate: Optional[dict]) -> Optional[dict]:
-    if not isinstance(candidate, dict):
-        return None
-    summary = dict(candidate)
-    for key in ("_consumed", "content_hash", "match_texts", "duplicate_scope", "csv_value", "scope_id"):
-        summary.pop(key, None)
-    return summary
 
 
-# A funding/deposit leg on a wallet account (PayPal, Venmo, …) has its money-movement twin on the
-# *funding* account — same magnitude, a day or three off (ACH/settlement lag), named for the wallet
-# ("PAYPAL", "WDRL-ACH PAYPAL …"). That twin is cross-account and opposite-signed, so the same-account
-# coverage lookup never sees it and the leg reads as "no specific match". This ±window is how far the
-# funding post may drift from the leg's date.
-_CROSS_ACCOUNT_TRANSFER_WINDOW_DAYS = 3
 
 
-def _find_cross_account_transfer_candidates(conn, receiving_account_id: str, parsed_date: str,
-                                            amount: float) -> list[dict]:
-    """The transfer counterpart of a coverage-rejected leg that found no same-account match: a row on a
-    *different* account, same |amount|, within a few days, whose name **or captured source text** contains
-    the receiving account's name (the wallet it funds). The source text matters because a bank's cleaned
-    descriptor often drops "PayPal" while the raw statement keeps it — e.g. Mint stores a clean
-    `ELECTRONIC PAYMENT INST XFER` display name but an `Original Description` of
-    `ELECTRONIC PAYMENT PAYPAL INST XFER`; searching only the cleaned name misses the majority of these
-    transfers. Display-only and heuristic — surfaced for the user to confirm or reject, never
-    auto-resolved — so it turns a bare 'no specific match' into a reviewable 'possible transfer match'
-    without changing the (correct) reject verdict. Empty when the account can't be named or nothing
-    plausible exists."""
-    acct = conn.execute(
-        "SELECT COALESCE(NULLIF(display_name,''), name) AS label FROM account WHERE id = ?",
-        (receiving_account_id,),
-    ).fetchone()
-    token = _normalize_import_evidence_text(acct["label"]).replace(" ", "") if acct and acct["label"] else ""
-    try:
-        d = datetime.strptime(str(parsed_date), "%Y-%m-%d").date()
-    except (ValueError, TypeError):
-        d = None
-    if not token or d is None or amount is None:
-        return []
-    low, high = (d - timedelta(days=_CROSS_ACCOUNT_TRANSFER_WINDOW_DAYS)).isoformat(), \
-        (d + timedelta(days=_CROSS_ACCOUNT_TRANSFER_WINDOW_DAYS)).isoformat()
-    rows = conn.execute(
-        """SELECT t.id, t.date, t.amount, t.account_id,
-                  COALESCE(NULLIF(t.display_name,''), NULLIF(t.merchant_name,''), t.raw_name) AS merchant_name,
-                  t.import_evidence_json,
-                  t.import_batch_id,
-                  COALESCE(NULLIF(a.display_name,''), a.name) AS account_name
-           FROM   txn t JOIN account a ON a.id = t.account_id
-           WHERE  ROUND(ABS(t.amount), 2) = ROUND(ABS(?), 2)
-             AND  t.account_id <> ?
-             AND  t.trashed_at IS NULL
-             AND  date(t.date) BETWEEN date(?) AND date(?)""",
-        (float(amount), receiving_account_id, low, high),
-    ).fetchall()
-    out: list[dict] = []
-    for r in rows:
-        # Search the wallet token across the resolved name *and* the captured source text (Mint's
-        # "Original Description" etc.) — the same haystack `match_source_text` rules use — since the
-        # cleaned name frequently omits "PayPal" that the raw statement carries.
-        haystack = _normalize_import_evidence_text(
-            f"{r['merchant_name'] or ''} {source_match_text_from_json(r['import_evidence_json'])}"
-        ).replace(" ", "")
-        if token in haystack:
-            out.append({
-                "id": r["id"], "date": r["date"], "merchant_name": r["merchant_name"],
-                "amount": r["amount"], "account_id": r["account_id"], "account_name": r["account_name"],
-                "import_batch_id": r["import_batch_id"], "cross_account": True,
-            })
-    # Nearest-date first, so the most likely twin leads.
-    out.sort(key=lambda c: abs((datetime.strptime(c["date"][:10], "%Y-%m-%d").date() - d).days))
-    return out
 
 
-# How far a corroborating charge may sit from the payment (card settlement lag is looser than the
-# transfer window). Generic tokens carry no identifying signal, so they never anchor a match.
-_PAYMENT_MATCH_WINDOW_DAYS = 14
-_GENERIC_MERCHANT_TOKENS = frozenset({
-    "payment", "paypal", "purchase", "online", "store", "user", "inc", "llc", "ltd", "the", "and",
-})
 
 
-def _merchant_match_tokens(name: Optional[str]) -> list[str]:
-    """Distinctive tokens of a merchant name for corroboration matching: normalized words of 4+ chars
-    that aren't generic filler. Empty when the name carries nothing identifying."""
-    normalized = _normalize_import_evidence_text(name)
-    return [t for t in normalized.split() if len(t) >= 4 and t not in _GENERIC_MERCHANT_TOKENS]
 
 
-def _find_ledger_payment_match(conn, receiving_account_id: str, parsed_date: str, amount: float,
-                               incoming_merchant: Optional[str]) -> Optional[dict]:
-    """For a coverage-rejected **named** payment with no same-account/transfer candidate: is it actually
-    already in the ledger as a charge elsewhere — e.g. a ``PAYPAL <merchant>`` card charge — or is it a
-    genuinely-new payment the covering aggregator never saw (a balance-funded subscription or P2P send)?
-    Matches by a distinctive merchant token + same |amount| within a couple of weeks on another account.
-
-    Returns a compact candidate dict (a corroborating charge exists → keep rejecting, and the report can
-    show it) or ``None`` (nothing corroborates → the payment is genuinely new and should import). Nameless
-    money-movement rows never reach here — the caller gates on a non-empty merchant — so this only ever
-    decides real payments, never funding legs."""
-    tokens = _merchant_match_tokens(incoming_merchant)
-    try:
-        d = datetime.strptime(str(parsed_date), "%Y-%m-%d").date()
-    except (ValueError, TypeError):
-        d = None
-    if not tokens or d is None or amount is None:
-        return None
-    low, high = (d - timedelta(days=_PAYMENT_MATCH_WINDOW_DAYS)).isoformat(), \
-        (d + timedelta(days=_PAYMENT_MATCH_WINDOW_DAYS)).isoformat()
-    rows = conn.execute(
-        """SELECT t.id, t.date, t.amount, t.account_id,
-                  COALESCE(NULLIF(t.display_name,''), NULLIF(t.merchant_name,''), t.raw_name) AS merchant_name,
-                  t.import_evidence_json, t.import_batch_id,
-                  COALESCE(NULLIF(a.display_name,''), a.name) AS account_name
-           FROM   txn t JOIN account a ON a.id = t.account_id
-           WHERE  ROUND(ABS(t.amount), 2) = ROUND(ABS(?), 2)
-             AND  t.account_id <> ?
-             AND  t.trashed_at IS NULL
-             AND  date(t.date) BETWEEN date(?) AND date(?)""",
-        (float(amount), receiving_account_id, low, high),
-    ).fetchall()
-    for r in rows:
-        haystack = _normalize_import_evidence_text(
-            f"{r['merchant_name'] or ''} {source_match_text_from_json(r['import_evidence_json'])}"
-        ).replace(" ", "")
-        if any(tok in haystack for tok in tokens):
-            return {
-                "id": r["id"], "date": r["date"], "merchant_name": r["merchant_name"],
-                "amount": r["amount"], "account_id": r["account_id"], "account_name": r["account_name"],
-                "import_batch_id": r["import_batch_id"], "cross_account": True, "payment_match": True,
-            }
-    return None
-
-
-def _match_terminal_day_candidate(candidate_rows: list[dict], *, content_hash: str, amount: float, incoming_merchant: Optional[str] = None) -> Optional[dict]:
-    # The terminal-day rule reconciles a fuzzy boundary day and falls back to amount-only matching,
-    # so two different checks with the same amount would match here regardless of hash. Skip any
-    # candidate whose explicit check number differs from the incoming row's — they are not the same
-    # check — so it is neither matched nor consumed.
-    active_rows = [
-        candidate for candidate in candidate_rows
-        if not candidate.get("_consumed")
-        and not are_distinct_checks(incoming_merchant, candidate.get("merchant_name") or candidate.get("display_name"))
-    ]
-    if not active_rows:
-        return None
-    exact_match = next((candidate for candidate in active_rows if candidate.get("content_hash") == content_hash), None)
-    if exact_match:
-        exact_match["_consumed"] = True
-        return exact_match
-    amount_match = next((candidate for candidate in active_rows if float(candidate.get("amount") or 0) == float(amount)), None)
-    if amount_match:
-        amount_match["_consumed"] = True
-        return amount_match
-    return None
-
-
-def _find_textual_duplicate_candidate(candidate_rows: list[dict], txn_payload: dict) -> Optional[dict]:
-    import_texts = _collect_duplicate_match_texts(
-        merchant_name=txn_payload.get("merchant_name"),
-        display_name=txn_payload.get("display_name"),
-        raw_name=txn_payload.get("raw_name"),
-        import_evidence=txn_payload.get("import_evidence"),
-    )
-    best_candidate = None
-    best_score = 0.0
-    for candidate in candidate_rows:
-        candidate_texts = candidate.get("match_texts") or []
-        if not import_texts or not candidate_texts:
-            continue
-        candidate_best_score = 0.0
-        for import_text in import_texts:
-            for candidate_text in candidate_texts:
-                score, _ = _score_duplicate_text_match(import_text, candidate_text)
-                if score > candidate_best_score:
-                    candidate_best_score = score
-        if candidate_best_score >= 0.78 and candidate_best_score > best_score:
-            best_candidate = candidate
-            best_score = candidate_best_score
-    if not best_candidate:
-        return None
-    matched = dict(best_candidate)
-    matched.pop("match_texts", None)
-    matched["duplicate_match_score"] = round(best_score, 3)
-    return matched
 
 
 def _normalize_account_type(value: Optional[str]) -> str:
     return str(value or "").strip().lower()
 
 
-def _get_effective_account_row(conn, account_id: Optional[str]):
-    current_id = str(account_id or "").strip()
-    if not current_id:
-        return None
-    seen: set[str] = set()
-    while current_id and current_id not in seen:
-        seen.add(current_id)
-        row = conn.execute(
-            """
-            SELECT id, name, display_name, type, owner_id, parent_account_id
-            FROM account
-            WHERE id = ?
-            """,
-            (current_id,),
-        ).fetchone()
-        if not row:
-            return None
-        if not row["parent_account_id"]:
-            return row
-        current_id = row["parent_account_id"]
-    return None
 
 
 def _owners_are_group_compatible(source_owner_id: Optional[str], target_owner_id: Optional[str]) -> bool:
@@ -1018,7 +710,7 @@ def _attach_import_created_account_to_group(conn, account_id: str, target_accoun
         """,
         (account_id,),
     ).fetchone()
-    target = _get_effective_account_row(conn, target_account_id)
+    target = get_effective_account_row(conn, target_account_id)
     if not account:
         raise HTTPException(status_code=400, detail="Account not found")
     if not target:
@@ -1070,7 +762,9 @@ def _insert_imported_transaction(conn, batch_id: str, payload: dict) -> str:
     return txn_id
 
 
-def _save_batch_duplicate_rows(conn, batch_id: str, duplicate_rows: list[dict]) -> None:
+def save_batch_duplicate_rows(conn, batch_id: str, duplicate_rows: list[dict]) -> None:
+    """The one writer for a batch's duplicate report, shared by CSV import and data-source sync so both
+    produce records the same report, "Import anyway", and Restore paths can read."""
     if not duplicate_rows:
         return
     conn.executemany(
@@ -2945,24 +2639,6 @@ def _set_batch_imported_category_usage(conn, batch_id: str, is_enabled: bool) ->
         stamp_batch_rule_effects(conn, batch_id)
 
 
-def sanitize_rule_merchant_text(value: str) -> str:
-    normalized = " ".join((value or "").strip().split())
-    if not normalized:
-        return ""
-
-    tokens = normalized.split()
-    while len(tokens) > 1:
-        compact = "".join(ch for ch in tokens[-1] if ch.isalnum())
-        if compact.isdigit() and len(compact) >= 4:
-            tokens.pop()
-            continue
-        break
-
-    sanitized = " ".join(tokens).strip()
-    compact = "".join(ch for ch in sanitized if ch.isalnum())
-    if compact and compact.isdigit():
-        return ""
-    return sanitized
 
 
 def normalize_rule_keyword(value: str) -> str:
@@ -3169,13 +2845,17 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         }
 
         created_account_ids = {}
+        # csv_value → the linked-group root its new account was attached to, so exact-hash matches
+        # resolve across the group. Populated only by a group attachment now: the "compare-only alias"
+        # mapping choice (keep a separate account, but hard-dedupe it against an existing one) was
+        # removed — it had no analogue anywhere else in the app and asserted two accounts were the same
+        # physical account while deliberately keeping them apart. Mapping onto the existing account
+        # expresses that properly; grouping expresses "related but distinct".
         account_duplicate_compare_targets: dict[str, str] = {}
-        # csv_values whose new account was explicitly declared an alias of an existing account via
-        # `duplicate_compare_account_id`. Distinguished from group-attached new accounts: an alias
-        # is asserting "this is the same physical account in a different system" (so cross-account
-        # dedupe rules should fire against the target), whereas a group attachment just means
-        # "this new sibling lives in the same group" (different physical account; medium-confidence
-        # dedupe across siblings would over-collapse).
+        # An explicit alias is the strictly stronger assertion — "this IS that account in another
+        # system" — and is what unlocks the coverage rules. A CSV import can no longer make it (that
+        # was the compare choice); a data connection still can, by mapping a provider account onto an
+        # existing one. Kept as a set rather than inlined so the two ingestion paths keep one shape.
         explicit_alias_csv_values: set[str] = set()
         if single_account_new:
             single_name = str(single_account_new.get("name", "")).strip()
@@ -3205,7 +2885,6 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             acc_name = na.get("name", csv_val).strip()
             acc_type = na.get("type", "depository")
             requested_group_target_id = str(na.get("group_with_account_id") or "").strip()
-            requested_compare_target_id = str(na.get("duplicate_compare_account_id") or "").strip()
             if not acc_name:
                 continue
             # Check if an account with this name already exists — use it rather
@@ -3214,20 +2893,12 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                 "SELECT id FROM account WHERE LOWER(name) = LOWER(?)", (acc_name,)
             ).fetchone()
             if existing:
-                created_account_ids[csv_val] = existing["id"]
                 # A later file in a multi-file import (or a re-import into the same account) finds the
-                # account already created and reuses it by name. A *grouping* relationship persists on the
-                # account (`parent_account_id`), so its dedupe scope is restored automatically. But the
-                # duplicate-compare **alias** ("keep a separate account, but check its rows for duplicates
-                # against an existing one") is a per-import instruction that is not stored on the account —
-                # so re-assert it here, or this file's rows would skip the cross-account duplicate check the
-                # first file's rows received.
-                if requested_compare_target_id:
-                    effective_target = _get_effective_account_row(conn, requested_compare_target_id)
-                    if not effective_target:
-                        raise HTTPException(status_code=400, detail="Duplicate comparison target account not found")
-                    account_duplicate_compare_targets[csv_val] = str(effective_target["id"])
-                    explicit_alias_csv_values.add(csv_val)
+                # account already created and reuses it by name. Nothing to re-assert: a *grouping*
+                # relationship persists on the account itself (`parent_account_id`), so its dedupe scope
+                # is restored automatically. (The per-import compare alias used to need re-asserting
+                # here; it no longer exists.)
+                created_account_ids[csv_val] = existing["id"]
                 continue
             new_acc_id = str(uuid.uuid4())
             conn.execute("""
@@ -3237,18 +2908,10 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             """, (new_acc_id, f"csv_{new_acc_id}", acc_name, acc_name, acc_type, "checking",
                   default_owner_id))
             created_account_ids[csv_val] = new_acc_id
-            compare_target_id = ""
             if requested_group_target_id:
-                compare_target_id = _attach_import_created_account_to_group(conn, new_acc_id, requested_group_target_id) or ""
-            if not compare_target_id and requested_compare_target_id:
-                effective_target = _get_effective_account_row(conn, requested_compare_target_id)
-                if not effective_target:
-                    raise HTTPException(status_code=400, detail="Duplicate comparison target account not found")
-                compare_target_id = str(effective_target["id"]) if effective_target else ""
-                if compare_target_id:
-                    explicit_alias_csv_values.add(csv_val)
-            if compare_target_id:
-                account_duplicate_compare_targets[csv_val] = compare_target_id
+                group_root_id = _attach_import_created_account_to_group(conn, new_acc_id, requested_group_target_id) or ""
+                if group_root_id:
+                    account_duplicate_compare_targets[csv_val] = group_root_id
 
         created_account_owner_map = {}
         if created_account_ids:
@@ -3341,140 +3004,23 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                     },
                 )
 
-        # Pre-load pending rows so a posted transaction can replace the earlier
-        # pending version instead of creating a second copy.
-        relevant_account_ids = set()
-        relevant_effective_account_ids = set(account_duplicate_compare_targets.values())
+        # Pre-load pending rows so a posted transaction can replace the earlier pending version
+        # instead of creating a second copy. Kept separate from the dedupe context: pending rows are
+        # deliberately NOT dedupe candidates (a pending row is superseded in place when it posts, so
+        # matching against it would reject the very row meant to replace it).
+        relevant_account_ids = {str(aid) for aid in effective_map.values() if aid}
         if account_id:
-            relevant_account_ids.add(account_id)
-        for aid in effective_map.values():
-            if aid:
-                relevant_account_ids.add(aid)
-        effective_scope_cache: dict[str, Optional[str]] = {}
-
-        def get_current_duplicate_scope_id(resolved_account_id: Optional[str], csv_value: str) -> Optional[str]:
-            compare_target_id = account_duplicate_compare_targets.get(csv_value)
-            if compare_target_id:
-                return compare_target_id
-            normalized_account_id = str(resolved_account_id or "").strip()
-            if not normalized_account_id:
-                return None
-            if normalized_account_id not in effective_scope_cache:
-                effective_row = _get_effective_account_row(conn, normalized_account_id)
-                effective_scope_cache[normalized_account_id] = str(effective_row["id"]) if effective_row else normalized_account_id
-            return effective_scope_cache[normalized_account_id]
-
+            relevant_account_ids.add(str(account_id))
         existing_pending_rows: dict = {}
-        existing_hashes_by_account: dict[str, dict[str, dict]] = {}
-        existing_hashes_by_effective_account: dict[str, dict[str, dict]] = {}
-        existing_rows_by_account_amount: dict[str, dict[str, list[dict]]] = {}
-        existing_rows_by_effective_account_amount: dict[str, dict[str, list[dict]]] = {}
-        import_coverage_by_csv_value: dict[str, list[dict]] = {}
-        import_coverage_by_scope_id: dict[str, list[dict]] = {}
-        terminal_day_candidates_by_csv_day: dict[tuple[str, str], list[dict]] = {}
-        terminal_day_candidates_by_scope_day: dict[tuple[str, str], list[dict]] = {}
         if relevant_account_ids:
             ph = ",".join("?" * len(relevant_account_ids))
-            rows_db = conn.execute(
-                f"SELECT id, account_id, content_hash, date, raw_name, merchant_name, display_name, amount, is_pending, import_evidence_json, import_batch_id FROM txn "
-                f"WHERE account_id IN ({ph}) AND content_hash IS NOT NULL",
-                list(relevant_account_ids)
-            ).fetchall()
-            for r in rows_db:
-                if r["is_pending"]:
-                    key = (r["account_id"], r["date"], (r["raw_name"] or "").strip().lower())
-                    existing_pending_rows[key] = {"id": r["id"], "content_hash": r["content_hash"]}
-                    continue
-                if not r["content_hash"]:
-                    continue
-                account_hashes = existing_hashes_by_account.setdefault(r["account_id"], {})
-                if r["content_hash"] not in account_hashes:
-                    account_hashes[r["content_hash"]] = {
-                        "id": r["id"],
-                        "date": r["date"],
-                        "merchant_name": r["display_name"] or r["merchant_name"] or r["raw_name"],
-                        "amount": r["amount"],
-                        "account_id": r["account_id"],
-                        "import_batch_id": r["import_batch_id"],
-                    }
-                amount_key = _duplicate_amount_key(r["date"], r["amount"])
-                account_amount_rows = existing_rows_by_account_amount.setdefault(r["account_id"], {}).setdefault(amount_key, [])
-                account_amount_rows.append({
-                    "id": r["id"],
-                    "date": r["date"],
-                    "merchant_name": r["display_name"] or r["merchant_name"] or r["raw_name"],
-                    "amount": r["amount"],
-                    "account_id": r["account_id"],
-                    "import_batch_id": r["import_batch_id"],
-                    "duplicate_scope": "same_account",
-                    "match_texts": _collect_duplicate_match_texts(
-                        merchant_name=r["merchant_name"],
-                        display_name=r["display_name"],
-                        raw_name=r["raw_name"],
-                        import_evidence=_parse_import_evidence(r["import_evidence_json"]),
-                    ),
-                })
-
-        # Accounts with any prior row in the ledger. Used as a precondition on the medium-confidence
-        # cross-account dedupe rules (in-scope coverage, terminal-day reconciliation, text-strategy)
-        # so a brand-new sibling account in a linked group doesn't inherit hard-dedupe behavior from
-        # its siblings. Brand-new accounts let those rows through to the post-insert suspect-flag
-        # sweep in services/duplicate_detection.py, where the user can review them. The hash-exact
-        # cross-account check stays unconditional — same date+amount+payee is high-confidence enough
-        # to drop regardless of the receiving account's history.
-        accounts_with_prior_history: set[str] = set()
-        if relevant_account_ids:
-            ph_all = ",".join("?" * len(relevant_account_ids))
             for r in conn.execute(
-                f"SELECT DISTINCT account_id FROM txn WHERE account_id IN ({ph_all})",
+                f"SELECT id, account_id, content_hash, date, raw_name FROM txn "
+                f"WHERE account_id IN ({ph}) AND is_pending = 1 AND content_hash IS NOT NULL",
                 list(relevant_account_ids),
             ).fetchall():
-                if r["account_id"]:
-                    accounts_with_prior_history.add(str(r["account_id"]))
-
-        if relevant_effective_account_ids:
-            ph = ",".join("?" * len(relevant_effective_account_ids))
-            rows_db = conn.execute(
-                f"""
-                SELECT t.id, t.account_id, t.content_hash, t.date, t.raw_name, t.merchant_name, t.display_name, t.amount,
-                       t.import_evidence_json, t.import_batch_id,
-                       COALESCE(a.parent_account_id, a.id) AS effective_account_id
-                FROM txn t
-                JOIN account a ON a.id = t.account_id
-                WHERE COALESCE(a.parent_account_id, a.id) IN ({ph})
-                  AND t.is_pending = 0
-                  AND t.content_hash IS NOT NULL
-                """,
-                list(relevant_effective_account_ids),
-            ).fetchall()
-            for r in rows_db:
-                scope_hashes = existing_hashes_by_effective_account.setdefault(r["effective_account_id"], {})
-                if r["content_hash"] not in scope_hashes:
-                    scope_hashes[r["content_hash"]] = {
-                        "id": r["id"],
-                        "date": r["date"],
-                        "merchant_name": r["display_name"] or r["merchant_name"] or r["raw_name"],
-                        "amount": r["amount"],
-                        "account_id": r["account_id"],
-                        "import_batch_id": r["import_batch_id"],
-                    }
-                amount_key = _duplicate_amount_key(r["date"], r["amount"])
-                scope_rows = existing_rows_by_effective_account_amount.setdefault(r["effective_account_id"], {}).setdefault(amount_key, [])
-                scope_rows.append({
-                    "id": r["id"],
-                    "date": r["date"],
-                    "merchant_name": r["display_name"] or r["merchant_name"] or r["raw_name"],
-                    "amount": r["amount"],
-                    "account_id": r["account_id"],
-                    "import_batch_id": r["import_batch_id"],
-                    "duplicate_scope": "linked_account_group",
-                    "match_texts": _collect_duplicate_match_texts(
-                        merchant_name=r["merchant_name"],
-                        display_name=r["display_name"],
-                        raw_name=r["raw_name"],
-                        import_evidence=_parse_import_evidence(r["import_evidence_json"]),
-                    ),
-                })
+                key = (r["account_id"], r["date"], (r["raw_name"] or "").strip().lower())
+                existing_pending_rows[key] = {"id": r["id"], "content_hash": r["content_hash"]}
 
         current_csv_values = (
             {
@@ -3485,100 +3031,6 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             if col.account
             else {""}
         )
-        current_scope_ids = {
-            scope_id
-            for scope_id in (
-                get_current_duplicate_scope_id(effective_map.get(csv_value) or account_id or (fallback_acc["id"] if fallback_acc else None), csv_value)
-                for csv_value in current_csv_values
-            )
-            if scope_id
-        }
-
-        prior_coverage_query = """
-            SELECT iba.batch_id, iba.csv_value, iba.account_id, iba.coverage_start_date, iba.coverage_end_date, iba.terminal_date
-            FROM   import_batch_account iba
-            JOIN   import_batch b ON b.id = iba.batch_id
-            WHERE  b.status = 'completed'
-              AND  iba.was_skipped = 0
-        """
-        coverage_params: list[str] = []
-        if replace_batch_id:
-            prior_coverage_query += " AND b.id <> ?"
-            coverage_params.append(replace_batch_id)
-        prior_coverage_rows = conn.execute(prior_coverage_query, coverage_params).fetchall()
-        terminal_batch_lookup: dict[tuple[str, str, str], dict] = {}
-        terminal_batch_ids: set[str] = set()
-        terminal_dates: set[str] = set()
-        for row in prior_coverage_rows:
-            csv_value = str(row["csv_value"] or "").strip()
-            scope_id = get_current_duplicate_scope_id(row["account_id"], csv_value)
-            if csv_value not in current_csv_values and scope_id not in current_scope_ids:
-                continue
-            coverage_entry = {
-                "start_date": row["coverage_start_date"],
-                "end_date": row["coverage_end_date"],
-                "csv_value": csv_value,
-                "account_id": str(row["account_id"] or "").strip() or None,
-                "batch_id": str(row["batch_id"] or "").strip() or None,
-            }
-            if csv_value and coverage_entry.get("start_date") and coverage_entry.get("end_date"):
-                import_coverage_by_csv_value.setdefault(csv_value, []).append(coverage_entry)
-            if scope_id and coverage_entry.get("start_date") and coverage_entry.get("end_date"):
-                import_coverage_by_scope_id.setdefault(scope_id, []).append(coverage_entry)
-            terminal_date = str(row["terminal_date"] or "").strip()
-            if terminal_date:
-                terminal_key = (str(row["batch_id"] or "").strip(), csv_value, terminal_date)
-                terminal_batch_lookup[terminal_key] = {
-                    "batch_id": terminal_key[0],
-                    "csv_value": csv_value,
-                    "terminal_date": terminal_date,
-                    "scope_id": scope_id,
-                }
-                if terminal_key[0]:
-                    terminal_batch_ids.add(terminal_key[0])
-                    terminal_dates.add(terminal_date)
-
-        if terminal_batch_ids and terminal_dates:
-            batch_placeholders = ",".join("?" * len(terminal_batch_ids))
-            date_placeholders = ",".join("?" * len(terminal_dates))
-            terminal_rows = conn.execute(
-                f"""
-                SELECT id, import_batch_id, account_id, content_hash, date, raw_name, merchant_name, display_name, amount, import_evidence_json
-                FROM   txn
-                WHERE  import_batch_id IN ({batch_placeholders})
-                  AND  date IN ({date_placeholders})
-                  AND  is_pending = 0
-                """,
-                [*terminal_batch_ids, *terminal_dates],
-            ).fetchall()
-            for row in terminal_rows:
-                evidence = _parse_import_evidence(row["import_evidence_json"])
-                evidence_account = evidence.get("account") if isinstance(evidence, dict) else None
-                csv_value = str((evidence_account or {}).get("value") or "").strip() if isinstance(evidence_account, dict) else ""
-                terminal_key = (str(row["import_batch_id"] or "").strip(), csv_value, str(row["date"] or "").strip())
-                terminal_meta = terminal_batch_lookup.get(terminal_key)
-                if not terminal_meta:
-                    continue
-                candidate = {
-                    "id": row["id"],
-                    "date": row["date"],
-                    "merchant_name": row["display_name"] or row["merchant_name"] or row["raw_name"],
-                    "amount": row["amount"],
-                    "content_hash": row["content_hash"],
-                    "match_texts": _collect_duplicate_match_texts(
-                        merchant_name=row["merchant_name"],
-                        display_name=row["display_name"],
-                        raw_name=row["raw_name"],
-                        import_evidence=evidence,
-                    ),
-                    "csv_value": csv_value,
-                    "scope_id": terminal_meta.get("scope_id"),
-                    "_consumed": False,
-                }
-                terminal_day_candidates_by_csv_day.setdefault((csv_value, row["date"]), []).append(candidate)
-                scope_id = terminal_meta.get("scope_id")
-                if scope_id:
-                    terminal_day_candidates_by_scope_day.setdefault((scope_id, row["date"]), []).append(candidate)
 
         if replace_batch_id:
             # Reverse any enrichments the batch being replaced applied to existing rows before its
@@ -3617,8 +3069,10 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             },
             UNKNOWN_SOURCE_FALLBACK_KEY: False,
         }
-        if account_duplicate_compare_targets:
-            config_snapshot["account_duplicate_compare"] = account_duplicate_compare_targets
+        # `account_duplicate_compare` is deliberately no longer written into the snapshot. It existed so
+        # the client could restore the compare-only choice into a resumed draft; with that choice gone,
+        # the only thing left in the dict is a group root, which is already durable on the account
+        # (`parent_account_id`) and needs no snapshot to survive. Old batches keep the key harmlessly.
         conn.execute("""
             INSERT INTO import_batch
               (id, profile_id, filename, file_content_hash, row_count, skipped_count, deduped_count, use_imported_categories, config_snapshot, source_kind)
@@ -3653,40 +3107,19 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         footer_error_start_data_index = None
         footer_error_start_row = None
 
-        # Bundle the precomputed dedupe lookups + the small helper functions into one context that
-        # `evaluate_duplicate` can use. The helpers live in this module today; a planned follow-up
-        # cleanup will move them into the dedupe service so this dict goes away.
-        dedupe_context = DedupeContext(
-            existing_hashes_by_account=existing_hashes_by_account,
-            existing_hashes_by_effective_account=existing_hashes_by_effective_account,
-            existing_rows_by_account_amount=existing_rows_by_account_amount,
-            existing_rows_by_effective_account_amount=existing_rows_by_effective_account_amount,
-            import_coverage_by_csv_value=import_coverage_by_csv_value,
-            import_coverage_by_scope_id=import_coverage_by_scope_id,
-            terminal_day_candidates_by_csv_day=terminal_day_candidates_by_csv_day,
-            terminal_day_candidates_by_scope_day=terminal_day_candidates_by_scope_day,
-            accounts_with_prior_history=accounts_with_prior_history,
-            explicit_alias_csv_values=explicit_alias_csv_values,
-            account_duplicate_compare_targets=account_duplicate_compare_targets,
+        # One shared ladder for every ingestion path: the CSV account-column values are this pass's
+        # "source values", and the accounts they resolve to are the mapping. A data-source sync builds
+        # the same context from its provider account labels (see routers/sync.py).
+        dedupe_context = build_dedupe_context(
+            conn,
+            source_values=current_csv_values,
+            account_by_source_value=effective_map,
+            fallback_account_id=account_id or (fallback_acc["id"] if fallback_acc else None),
+            compare_targets=account_duplicate_compare_targets,
+            alias_values=explicit_alias_csv_values,
+            exclude_batch_ids=[replace_batch_id] if replace_batch_id else None,
             coverage_strategy_enabled=coverage_strategy_enabled,
             text_strategy_enabled=text_strategy_enabled,
-            helpers={
-                "date_in_window": _date_in_import_coverage_window,
-                "candidate_summary": _candidate_summary,
-                "match_terminal": _match_terminal_day_candidate,
-                "duplicate_amount_key": _duplicate_amount_key,
-                "find_textual": _find_textual_duplicate_candidate,
-                # Cross-account transfer fallback for a coverage-rejected leg with no same-account twin;
-                # closes over conn (a targeted query only fires on the 'no specific match' residual).
-                "find_cross_account_transfer": (
-                    lambda acct_id, date_str, amt: _find_cross_account_transfer_candidates(conn, acct_id, date_str, amt)
-                ),
-                # Corroboration check for a coverage-rejected *named* payment: is it already in the ledger
-                # as a charge elsewhere (keep rejecting), or genuinely new (let it import)?
-                "find_payment_match": (
-                    lambda acct_id, date_str, amt, merchant: _find_ledger_payment_match(conn, acct_id, date_str, amt, merchant)
-                ),
-            },
         )
 
         def reset_footer_detection():
@@ -3923,7 +3356,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                 content_hash=content_hash,
                 parsed_date=parsed_date,
                 amount=amount,
-                scope_id=get_current_duplicate_scope_id(acc["id"], csv_val),
+                scope_id=dedupe_context.scope_id_for(acc["id"], csv_val),
                 txn_payload=txn_payload,
             )
             duplicate_existing = verdict.matched if verdict.hard_reject else None
@@ -4021,7 +3454,7 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             conn.execute("DELETE FROM import_batch WHERE id = ?", (batch_id,))
             batch_id = None
         else:
-            _save_batch_duplicate_rows(conn, batch_id, duplicate_rows)
+            save_batch_duplicate_rows(conn, batch_id, duplicate_rows)
             # Per-source auto-enrich: for a trusted source, fold each hard-rejected duplicate's novel
             # detail into the existing row it matched — silently, but reported. Only unambiguous rows are
             # touched and only a non-empty delta counts (so a re-import of the same file is a no-op).
@@ -4041,10 +3474,20 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
             import_summary["money_movement_unrecognized_types"] = money_movement["unrecognized_types"]
             config_snapshot[IMPORT_SUMMARY_KEY] = import_summary
             save_batch_snapshot(conn, batch_id, config_snapshot)
+            # A saved data source declares how many trailing days it lags its bank; a one-off file
+            # import has no source and keeps the default of 1 (just the export day).
+            source_terminal_window = DEFAULT_TERMINAL_WINDOW_DAYS
+            if profile_id:
+                profile_row = conn.execute(
+                    "SELECT terminal_window_days FROM csv_import_profile WHERE id = ?", (profile_id,)
+                ).fetchone()
+                if profile_row and profile_row["terminal_window_days"]:
+                    source_terminal_window = max(1, int(profile_row["terminal_window_days"]))
             for csv_val, info in batch_account_stats.items():
-                coverage_start_date, coverage_end_date = _compute_import_coverage_window(
+                coverage_start_date, coverage_end_date = compute_import_coverage_window(
                     info.get("coverage_dates"),
                     batch_terminal_date,
+                    source_terminal_window,
                 )
                 terminal_date = batch_terminal_date
                 conn.execute("""
@@ -4258,6 +3701,12 @@ def get_batch_duplicates_unified(batch_id: str):
         if not batch:
             raise HTTPException(status_code=404, detail="Batch not found")
 
+        # Fill in explanations the import couldn't produce, before rendering. The report replays a
+        # stored verdict, so a coverage reject that named no twin at import time would otherwise show
+        # "no specific match" forever — even once the candidate lookup improves, or once a later import
+        # brings in the twin. Costs one cheap query when there is nothing to fill in, which is the
+        # normal case; it only ever adds a candidate to an entry that had none.
+        refresh_unexplained_coverage_candidates(conn, batch_id)
         entries = list_unified_batch_duplicates(conn, batch_id)
         hard = sum(1 for e in entries if e["kind"] == "hard_reject")
         soft = sum(1 for e in entries if e["kind"] == "soft_flag")
@@ -4571,6 +4020,11 @@ def list_batches():
             SELECT b.id, b.profile_id, b.filename, b.file_content_hash, b.imported_at, b.row_count, b.skipped_count,
                    b.deduped_count, b.status, b.use_imported_categories, b.config_snapshot, b.source_kind,
                    b.connection_id, p.name AS profile_name,
+                   -- Connection provenance for data-source (sync) cards: the provider disambiguates two
+                   -- connections at the same institution (e.g. one "Chase" via Plaid, another via a
+                   -- different provider), and institution is the stable label the group header shows.
+                   conn.provider    AS connection_provider,
+                   conn.institution AS connection_institution,
                    EXISTS(
                        SELECT 1
                        FROM   txn t
@@ -4580,6 +4034,7 @@ def list_batches():
                    ) AS has_imported_categories
             FROM   import_batch b
             LEFT JOIN csv_import_profile p ON p.id = b.profile_id
+            LEFT JOIN connection conn ON conn.id = b.connection_id
             WHERE  b.status = 'completed'
             ORDER  BY b.imported_at DESC
         """).fetchall()

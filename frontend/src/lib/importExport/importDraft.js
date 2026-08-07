@@ -31,7 +31,6 @@ export function getBlankImportSnapshot() {
     account_map: {},
     skip_accounts: [],
     account_new: {},
-    account_duplicate_compare: {},
     account_id: null,
     single_account_new: null,
     date_format: '%m/%d/%Y',

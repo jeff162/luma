@@ -18,6 +18,7 @@ from backend.db.database import get_db
 from backend.db.demo_data import is_demo_data_loaded
 from backend.routers.accounts import resolve_default_owner_id, upsert_connection_accounts
 from backend.services import crypto_service
+from backend.services.connection_mapping import unmapped_count
 from backend.services.providers import get_adapter, resolve_app_config
 
 router = APIRouter()
@@ -123,13 +124,21 @@ def exchange_token(body: PublicTokenExchange, request: Request):
 
         # A connection is item/connection-centric: one exchange can fan out to many accounts, and later
         # sync discovers the credential by connection, matching transactions to accounts by external id.
-        # The shared upsert (also idempotent under the duplicate/racing exchange above) re-stamps only the
-        # connection linkage, so a re-link of a previously-disconnected bank re-attaches cleanly.
+        # This records what the bank *offers* and re-applies any mapping already on file (a re-link of a
+        # previously-disconnected bank re-attaches cleanly); it deliberately does NOT create local
+        # accounts for undecided ones. The mapping step does that — see services/connection_mapping.py.
         upsert_connection_accounts(
             conn, connection_id=connection_id, provider=PROVIDER,
             institution=body.institution_name, accounts=accounts, default_owner_id=default_owner_id,
         )
+        pending_mapping = unmapped_count(conn, connection_id)
 
     # Returning the connection id lets the frontend scope the initial full-history backfill to just this
     # bank (POST /sync?connection_id=…&days=0), rather than re-pulling every other connection too.
-    return {"ok": True, "accounts_added": len(accounts), "connection_id": connection_id, "provider": PROVIDER}
+    # `unmapped` is non-zero on a fresh connect: the client must run the mapping step before the
+    # backfill, since an unmapped provider account has no account to sync into and the mapping is what
+    # gives duplicate detection its cross-account alias.
+    return {
+        "ok": True, "accounts_added": len(accounts), "connection_id": connection_id,
+        "provider": PROVIDER, "unmapped": pending_mapping,
+    }

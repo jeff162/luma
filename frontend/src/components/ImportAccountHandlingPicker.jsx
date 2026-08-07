@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Jeffrey Orlin
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useAnchoredPopupLayout, useDismissiblePopup } from '../lib/uiInteractions.js'
+import { getAccountOptionLabel, selectableAccountOptions } from '../lib/importExport/importAccountMatching.js'
 
 // Account mapping is one user decision expressed three different ways: use a
 // CSV column, force every imported row into one existing account, or create one
@@ -40,6 +41,13 @@ export default function ImportAccountHandlingPicker({
     minWidth: 220,
   })
 
+  // The full list resolves labels and the current selection; the offer list is narrowed to roots plus
+  // whichever merged child this source is already mapped to (see `selectableAccountOptions`). Narrowed
+  // here rather than by every caller, since the component is the thing that knows what is selected.
+  const accountsById = useMemo(() => new Map((accounts || []).map(a => [a.id, a])), [accounts])
+  const offerableAccounts = useMemo(
+    () => selectableAccountOptions(accounts, accountId), [accounts, accountId],
+  )
   const selectedAccount = accounts.find(a => a.id === accountId)
   let closedLabel = <span style={{ color: 'var(--muted)' }}>— Select account or column —</span>
   if (colAccount) {
@@ -50,9 +58,7 @@ export default function ImportAccountHandlingPicker({
       </span>
     )
   } else if (selectedAccount) {
-    closedLabel = (
-      <span>{selectedAccount.name}{selectedAccount.mask ? ` ···${selectedAccount.mask}` : ''}</span>
-    )
+    closedLabel = <span>{getAccountOptionLabel(selectedAccount, accountsById)}</span>
   } else if (singleAccountNew?.enabled) {
     closedLabel = (
       <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -230,7 +236,7 @@ export default function ImportAccountHandlingPicker({
 
             <>
               <div style={{ ...groupLabel, borderTop: '1px solid var(--border)' }}>Map transactions-&gt;single account</div>
-              {accounts.map(a => (
+              {offerableAccounts.map(a => (
                 <div
                   key={a.id}
                   style={itemStyle(accountId === a.id)}
@@ -240,7 +246,7 @@ export default function ImportAccountHandlingPicker({
                     setOpen(false)
                   }}
                 >
-                  <span style={{ flex: 1 }}>{a.name}{a.mask ? ` ···${a.mask}` : ''}</span>
+                  <span style={{ flex: 1 }}>{getAccountOptionLabel(a, accountsById)}</span>
                   {accountId === a.id && <span style={{ fontSize: 11, color: 'var(--accent2)' }}>✓</span>}
                 </div>
               ))}

@@ -9,8 +9,10 @@ import { describe, it, expect } from 'vitest'
 import {
   guessNewAccountTypeFromName,
   findExactAccountNameMatch,
+  getAccountOptionLabel,
   normalizeAccountMatchStem,
   findLikelyAccountMatch,
+  selectableAccountOptions,
   buildAccountImportStateSnapshot,
 } from '../importAccountMatching.js'
 
@@ -21,6 +23,21 @@ describe('normalizeAccountMatchStem', () => {
     expect(normalizeAccountMatchStem('Checking (...1234)')).toBe('checking')
     expect(normalizeAccountMatchStem('Visa ****5678')).toBe('visa')
     expect(normalizeAccountMatchStem('Rewards Card x1234')).toBe('rewards card')
+  })
+
+  it('strips the dot-led mask a data connection labels its accounts with', () => {
+    // `provider_account_label` renders "{provider name} ···{mask}", and that string reaches this same
+    // matcher. Before this it stemmed to "riverstone summit cash 5093" and matched nothing.
+    expect(normalizeAccountMatchStem('Riverstone Summit Cash ···5093')).toBe('riverstone summit cash')
+    expect(normalizeAccountMatchStem('CREDIT CARD ···6612')).toBe('credit card')
+    expect(normalizeAccountMatchStem('Checking•••1111')).toBe('checking')
+    expect(normalizeAccountMatchStem('Savings …7304')).toBe('savings')
+  })
+
+  it('leaves a number that is part of the name alone', () => {
+    // The suffix has to be mask-shaped. "Account 2" is a name, not a masked account.
+    expect(normalizeAccountMatchStem('Riverstone ··· Blue Cash')).toBe('riverstone summit cash')
+    expect(normalizeAccountMatchStem('401k')).toBe('401k')
   })
 })
 
@@ -43,6 +60,14 @@ describe('findLikelyAccountMatch', () => {
   it('suggests the lone account whose stem matches after stripping the mask suffix', () => {
     const accounts = [acc('Checking')]
     expect(findLikelyAccountMatch(accounts, 'Checking (...1234)')).toBe(accounts[0])
+  })
+
+  it('suggests the account a connection label plainly names', () => {
+    // The case from the connection mapping step: the bank calls it "Riverstone Summit Cash ···5093" and the
+    // user already has "Riverstone Summit Cash". Both mask forms have to reduce to the same stem for this to
+    // land, which is the whole point of normalizing before comparing.
+    const accounts = [acc('Riverstone Summit Cash'), acc('Northgate Voyager')]
+    expect(findLikelyAccountMatch(accounts, 'Riverstone Summit Cash ···5093')).toBe(accounts[0])
   })
 
   it('declines when two accounts share the same stem (ambiguous)', () => {
@@ -68,6 +93,64 @@ describe('findLikelyAccountMatch', () => {
   })
 })
 
+describe('selectableAccountOptions', () => {
+  // A mapping picker offers roots, because merging never moves the mappings pointing at an account:
+  // omit the child a mapping is on and the picker renders a live decision as an empty control, invite
+  // the "fix", and silently re-point the source. Offer every child instead and the list doubles with
+  // entries indistinguishable from their own parents.
+  const ROOT_A = { id: 'root-a', name: 'Northgate Rewards' }
+  const ROOT_B = { id: 'root-b', name: 'Northgate Voyager' }
+  const CHILD = { id: 'child', name: 'CREDIT CARD', mask: '2741', parent_account_id: 'root-a' }
+  const OTHER_CHILD = { id: 'child-2', name: 'CREDIT CARD', mask: '6612', parent_account_id: 'root-b' }
+  const ALL = [ROOT_A, ROOT_B, CHILD, OTHER_CHILD]
+
+  it('offers roots only when nothing is selected', () => {
+    expect(selectableAccountOptions(ALL).map(a => a.id)).toEqual(['root-a', 'root-b'])
+    expect(selectableAccountOptions(ALL, '').map(a => a.id)).toEqual(['root-a', 'root-b'])
+  })
+
+  it('offers roots only when the selection is already a root', () => {
+    expect(selectableAccountOptions(ALL, 'root-b').map(a => a.id)).toEqual(['root-a', 'root-b'])
+  })
+
+  it('carries the selected merged child, and only that one', () => {
+    // The reported bug in one assertion: without this the stored id matches no option.
+    expect(selectableAccountOptions(ALL, 'child').map(a => a.id)).toEqual(['root-a', 'root-b', 'child'])
+  })
+
+  it('does not invent an option for an id that is not an account at all', () => {
+    // A mapping pointing at a deleted account must not add a blank row to the list.
+    expect(selectableAccountOptions(ALL, 'gone').map(a => a.id)).toEqual(['root-a', 'root-b'])
+  })
+
+  it('tolerates an absent list', () => {
+    expect(selectableAccountOptions(null, 'child')).toEqual([])
+  })
+})
+
+describe('getAccountOptionLabel', () => {
+  // Account pickers list merged children (a mapping made before a merge still points at one), and a
+  // child routinely carries the same name as the group it was merged into. Without the group suffix
+  // the list shows two identical options and the user cannot tell which one a mapping is on.
+  const parent = { id: 'p', name: 'PayPal', display_name: 'PayPal' }
+  const child = { id: 'c', name: 'PayPal', parent_account_id: 'p' }
+  const byId = new Map([['p', parent]])
+
+  it('leaves a root account as its plain name and mask', () => {
+    expect(getAccountOptionLabel({ name: 'Riverstone Summit Cash', mask: '5093' })).toBe('Riverstone Summit Cash ···5093')
+  })
+
+  it('names the group a merged child sits in', () => {
+    expect(getAccountOptionLabel(child, byId)).toBe('PayPal — in PayPal')
+  })
+
+  it('falls back to the bare name when the group is not in the list', () => {
+    // A partial list must still render something selectable rather than a dangling "— in".
+    expect(getAccountOptionLabel(child, new Map())).toBe('PayPal')
+    expect(getAccountOptionLabel(child)).toBe('PayPal')
+  })
+})
+
 describe('guessNewAccountTypeFromName', () => {
   it('infers an account type from name keywords, blank when unknown', () => {
     expect(guessNewAccountTypeFromName('My Credit Card')).toBe('credit')
@@ -84,18 +167,23 @@ describe('buildAccountImportStateSnapshot', () => {
     const snapshot = buildAccountImportStateSnapshot({
       'CSV-A': { accountId: 'acc1' },
       'CSV-B': { skip: true },
-      'CSV-C': { createNew: true, newName: '  New Checking  ', newType: 'depository', duplicateCompareTargetAccountId: 'acc9' },
+      'CSV-C': { createNew: true, newName: '  New Checking  ', newType: 'depository' },
       'CSV-D': { createNew: true, newName: '' }, // no name → contributes nothing
     })
     expect(snapshot.account_map).toEqual({ 'CSV-A': 'acc1' })
     expect(snapshot.skip_accounts).toEqual(['CSV-B'])
     expect(snapshot.account_new).toEqual({ 'CSV-C': { name: 'New Checking', type: 'depository' } })
-    expect(snapshot.account_duplicate_compare).toEqual({ 'CSV-C': 'acc9' })
   })
 
-  it('omits account_duplicate_compare entirely when no compare target was set', () => {
-    const snapshot = buildAccountImportStateSnapshot({ 'CSV-A': { accountId: 'acc1' } })
+  it('carries no compare-target bucket at all', () => {
+    // The compare-only mapping choice was removed, so the snapshot key it fed is gone with it.
+    // Grouping isn't here either — it lives on the created account (`parent_account_id`), which is
+    // durable, so a resumed draft recovers it from the account rather than from a snapshot.
+    const snapshot = buildAccountImportStateSnapshot({
+      'CSV-A': { createNew: true, newName: 'New Checking', groupWithAccountId: 'acc9' },
+    })
     expect(snapshot).not.toHaveProperty('account_duplicate_compare')
+    expect(Object.keys(snapshot).sort()).toEqual(['account_map', 'account_new', 'skip_accounts'])
   })
 
   it('returns a blank snapshot for empty/missing input', () => {

@@ -50,6 +50,7 @@ TABLE_TO_SECTION = {
     "category_rule": "category_rules",
     "merchant_rename": "merchant_renames",
     "csv_import_profile": "csv_profiles",
+    "connection_account": "connection_accounts",
     "import_batch": "import_batches",
     "import_batch_account": "import_batch_accounts",
     "import_batch_duplicate": "import_batch_duplicates",
@@ -114,6 +115,26 @@ class BackupRestoreTests(unittest.TestCase):
                     )
                 # Merge a1 (the lower rowid) under a2 → the backup dumps a child before its parent.
                 conn.execute("UPDATE account SET parent_account_id = ? WHERE id = ?", (a2, a1))
+
+                # A connection + its account mapping. The connection itself rides the *credentials*
+                # backup (it holds the secret) and is never wiped by a data restore, so it is seeded
+                # here only as the FK parent; connection_account rides this data backup, carrying the
+                # mapping and the connection's coverage claim. Both target columns are populated so the
+                # restore-side reconciliation is exercised on a real value rather than a NULL.
+                conn.execute(
+                    "INSERT INTO connection (id, provider, external_id, institution) VALUES ('fixture-conn', 'plaid', 'item-fixture', 'Fixture Bank')"
+                )
+                conn.execute(
+                    """
+                    INSERT INTO connection_account
+                        (connection_id, external_account_id, account_id, mapping_mode, target_account_id,
+                         provider_name, provider_official_name, provider_type, provider_subtype, provider_mask,
+                         coverage_start_date, coverage_through_date, terminal_window_days)
+                    VALUES ('fixture-conn', 'ext-fixture', ?, 'existing', ?, 'CHECKING', 'Total Checking',
+                            'depository', 'checking', '1111', '2025-01-01', '2026-04-15', 7)
+                    """,
+                    (a2, a2),
+                )
 
                 tag = str(uuid.uuid4())
                 conn.execute("INSERT INTO tag (id, name, color, sort_order) VALUES (?, 'Joint', '#22c55e', 0)", (tag,))

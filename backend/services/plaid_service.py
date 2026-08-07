@@ -96,6 +96,10 @@ def fetch_accounts(app_config: dict, access_token: str) -> list[dict]:
         accounts.append({
             "plaid_account_id": a["account_id"],
             "name":             a["name"],
+            # The bank's formal name for the account ("Northgate Voyager Unlimited") vs. `name`, which is
+            # often a generic product label. Surfaced in the mapping UI so a provider account is
+            # identifiable when the local account has been renamed.
+            "official_name":    a.get("official_name"),
             "type":             str(a["type"]),
             "subtype":          str(a["subtype"]) if a.get("subtype") else None,
             "mask":             a.get("mask"),
@@ -135,9 +139,44 @@ def fetch_transactions(
     return [_normalize_txn(t) for t in all_txns]
 
 
+def _iso_date(value) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def _check_number(t: dict) -> str | None:
+    """The check number, when Plaid says this is a check. It has no field of its own — it arrives in
+    `payment_meta.reference_number`, which only means "check number" when `transaction_code` says so;
+    under other transaction codes the same field carries unrelated references."""
+    if str(t.get("transaction_code") or "").strip().lower() != "check":
+        return None
+    reference = str(((t.get("payment_meta") or {}).get("reference_number")) or "").strip()
+    return reference or None
+
+
+def _counterparty_names(t: dict) -> list[str]:
+    """Plaid's resolved counterparties (merchant, payment processor, …) by name — a far more stable
+    identity than the descriptor string, which every source truncates differently."""
+    names: list[str] = []
+    for c in (t.get("counterparties") or []):
+        name = str((c or {}).get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _location_text(t: dict) -> str | None:
+    """The transaction's place, flattened to one line. Enrichment rather than a matching signal, so
+    it is the one optional capture that defaults off."""
+    loc = t.get("location") or {}
+    parts = [str(loc.get(k) or "").strip() for k in ("address", "city", "region", "postal_code")]
+    joined = ", ".join(p for p in parts if p)
+    return joined or None
+
+
 def _normalize_txn(t: dict) -> dict:
     """Plaid transaction dict → the app's stable field names. Shared by the date-range and cursor paths."""
-    txn_date = t["date"]
     return {
         "plaid_transaction_id": t["transaction_id"],
         "plaid_account_id":     t["account_id"],
@@ -146,12 +185,21 @@ def _normalize_txn(t: dict) -> dict:
         "amount":               float(t["amount"]),
         "merchant_name":        t.get("merchant_name"),
         "raw_name":             t.get("name"),
-        "date":                 txn_date.isoformat() if hasattr(txn_date, "isoformat") else str(txn_date),
+        "date":                 _iso_date(t["date"]),
+        # When the charge was AUTHORIZED, as opposed to `date`, which is when it posted. Two sources for
+        # the same charge routinely disagree by several days because each reports a different one of these
+        # — the gap that made genuine cross-source duplicates read as near-misses on date. Absent when the
+        # provider can't supply it.
+        "authorized_date":      _iso_date(t.get("authorized_date")),
         "is_pending":           t.get("pending", False),
         # When a pending transaction posts, Plaid emits the posted transaction (new id) with this set to the
         # prior pending transaction's id, so the sync can convert the pending row in place instead of
         # trashing it and re-adding. NULL for transactions that were never pending.
         "pending_transaction_id": t.get("pending_transaction_id"),
+        "merchant_entity_id":   t.get("merchant_entity_id"),
+        "counterparties":       _counterparty_names(t),
+        "check_number":         _check_number(t),
+        "location":             _location_text(t),
     }
 
 

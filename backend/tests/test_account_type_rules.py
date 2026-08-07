@@ -164,6 +164,11 @@ class AccountTypeMigrationTests(unittest.TestCase):
                                         account_id TEXT, match_source_text INTEGER DEFAULT 0);
             CREATE TABLE import_batch (id TEXT PRIMARY KEY, source_kind TEXT);
             CREATE TABLE txn (id TEXT PRIMARY KEY, account_id TEXT, import_batch_id TEXT, trashed_at TEXT);
+            -- Not read by v13, but `run_migrations` applies the WHOLE chain from 12 up, and v24 adds a
+            -- column to this table. A real v12 database has it; it is declared here only because the
+            -- fixture is minimal. (v24's *backfill* half tolerates this fixture on its own — see the
+            -- provider-link guard there, same precedent as v20's.)
+            CREATE TABLE csv_import_profile (id TEXT PRIMARY KEY, name TEXT, column_map TEXT);
             -- Two PayPal accounts (generic types) that received PayPal imports, one non-PayPal account.
             INSERT INTO account VALUES ('pp1', 'depository'), ('pp2', 'other'), ('chk', 'depository');
             INSERT INTO category VALUES ('tg', NULL, 'Transfers'), ('mm', 'tg', 'Money movement');

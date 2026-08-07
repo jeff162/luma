@@ -34,7 +34,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from backend.db.control_database import auth_required, get_user_by_id, init_control_db
 from backend.db.database import init_db, reset_current_db_path, set_current_db_path
-from backend.routers import accounts, auth, categories, import_export, owners, plaid, providers, recurring, rules, sync, tags, tasks, transactions
+from backend.routers import accounts, connections, auth, categories, import_export, owners, plaid, providers, recurring, rules, sync, tags, tasks, transactions
 from backend.runtime_config import APP_NAME, runtime_config_status
 
 
@@ -161,6 +161,7 @@ app.include_router(transactions.router, prefix="/api/transactions",  tags=["tran
 app.include_router(categories.router,   prefix="/api/categories",    tags=["categories"])
 app.include_router(plaid.router,        prefix="/api/plaid",         tags=["plaid"])
 app.include_router(providers.router,    prefix="/api/providers",     tags=["providers"])
+app.include_router(connections.router,  prefix="/api/connections",   tags=["connections"])
 app.include_router(sync.router,         prefix="/api/sync",          tags=["sync"])
 app.include_router(rules.router,        prefix="/api/rules",         tags=["rules"])
 app.include_router(owners.router,       prefix="/api/owners",        tags=["owners"])

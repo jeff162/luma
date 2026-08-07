@@ -14,7 +14,7 @@ from __future__ import annotations
 import unittest
 
 from backend.services.duplicate_detection import are_distinct_checks, explicit_check_number
-from backend.routers.import_export.core import _match_terminal_day_candidate
+from backend.services.duplicate_detection import match_terminal_day_candidate
 
 
 class CheckDiscriminatorHelperTests(unittest.TestCase):
@@ -40,7 +40,7 @@ class TerminalDayCheckDiscriminatorTests(unittest.TestCase):
         candidate = self._candidate()
         # Same content hash + amount, but a different check number -> must not match (and so the
         # candidate stays available/unconsumed for a genuine match).
-        result = _match_terminal_day_candidate(
+        result = match_terminal_day_candidate(
             [candidate], content_hash="H", amount=120.0, incoming_merchant="Check #1099"
         )
         self.assertIsNone(result)
@@ -48,7 +48,7 @@ class TerminalDayCheckDiscriminatorTests(unittest.TestCase):
 
     def test_same_check_still_matches(self):
         candidate = self._candidate()
-        result = _match_terminal_day_candidate(
+        result = match_terminal_day_candidate(
             [candidate], content_hash="H", amount=120.0, incoming_merchant="Check #1042"
         )
         self.assertIs(result, candidate)
@@ -57,14 +57,14 @@ class TerminalDayCheckDiscriminatorTests(unittest.TestCase):
     def test_non_check_amount_fallback_is_unaffected(self):
         # The amount-only fallback (different hash, same amount) must keep working for non-checks.
         candidate = self._candidate(content_hash="H1", merchant_name="Coffee Shop")
-        result = _match_terminal_day_candidate(
+        result = match_terminal_day_candidate(
             [candidate], content_hash="H2", amount=120.0, incoming_merchant="Coffee Shop"
         )
         self.assertIs(result, candidate)
 
     def test_backward_compatible_without_incoming_merchant(self):
         candidate = self._candidate()
-        result = _match_terminal_day_candidate([candidate], content_hash="H", amount=120.0)
+        result = match_terminal_day_candidate([candidate], content_hash="H", amount=120.0)
         self.assertIs(result, candidate)
 
 

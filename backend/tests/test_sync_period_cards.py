@@ -52,6 +52,11 @@ class _FakeAdapter:
     def fetch_accounts(self, app_config, credential):
         return self._accounts
 
+    def capture_fields(self):
+        # Part of the ProviderAdapter contract (base.py); an adapter that declares none simply captures
+        # only the locked fields.
+        return []
+
 
 class SyncPeriodCardTests(unittest.TestCase):
     def setUp(self):
@@ -75,6 +80,17 @@ class SyncPeriodCardTests(unittest.TestCase):
                         '1188', ?, NULL, NULL)
                 """,
                 (self.external_account_id, self.connection_id, SHARED_OWNER_ID),
+            )
+            # Sync resolves rows through the connection's account mapping (Part A), so the fixture
+            # states it explicitly: this provider account IS account a1.
+            conn.execute(
+                """
+                INSERT INTO connection_account
+                  (connection_id, external_account_id, account_id, mapping_mode, target_account_id,
+                   provider_name, provider_mask)
+                VALUES (?, ?, 'a1', 'existing', 'a1', 'Joint Checking', '1188')
+                """,
+                (self.connection_id, self.external_account_id),
             )
 
     def tearDown(self):
@@ -399,8 +415,43 @@ class RefreshAccountsTests(unittest.TestCase):
         finally:
             reset_current_db_path(token)
 
-    def test_refresh_recreates_missing_accounts_from_the_connection(self):
+    def _refresh(self, request, fake):
+        with self._use_db_path(), \
+                mock.patch("backend.routers.providers.resolve_app_config", return_value={"client_id": "x"}), \
+                mock.patch.object(providers_module.crypto_service, "decrypt_connection_credential", return_value="tok"), \
+                mock.patch("backend.routers.providers.get_adapter", return_value=fake):
+            return providers_module.refresh_accounts(
+                "plaid", providers_module.RefreshAccountsRequest(external_id="item-1"), request
+            )
+
+    def test_refresh_records_provider_accounts_without_mapping_them(self):
+        # Refresh discovers what the bank offers; it does not decide what any of them *is* locally.
+        # An account nobody has mapped stays unmapped rather than silently becoming a new account.
         request = SimpleNamespace(state=SimpleNamespace(user={"id": "u1"}))
+        fake = _FakeAdapter(accounts=[
+            {"external_account_id": "acct-ext-1", "name": "Joint Checking",
+             "type": "depository", "subtype": "checking", "mask": "1188"},
+        ])
+        self._refresh(request, fake)
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM account").fetchone()["n"], 0)
+            row = conn.execute(
+                "SELECT mapping_mode, provider_mask FROM connection_account WHERE external_account_id = 'acct-ext-1'"
+            ).fetchone()
+        self.assertIsNotNone(row, "the provider account must be recorded for the mapping step")
+        self.assertIsNone(row["mapping_mode"])
+        self.assertEqual(row["provider_mask"], "1188")
+
+    def test_refresh_recreates_missing_accounts_from_the_connection(self):
+        # The recovery case: a restore rolls the ledger back — accounts included — but never the live
+        # connection. The *mapping* survives (it rides the data backup) with its account_id nulled,
+        # which is what lets refresh rebuild the account from the still-valid credential, no re-link.
+        request = SimpleNamespace(state=SimpleNamespace(user={"id": "u1"}))
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "INSERT INTO connection_account (connection_id, external_account_id, mapping_mode, "
+                "provider_name, provider_mask) VALUES ('conn-1', 'acct-ext-1', 'new', 'Joint Checking', '1188')"
+            )
         fake = _FakeAdapter(accounts=[
             {"external_account_id": "acct-ext-1", "name": "Joint Checking",
              "type": "depository", "subtype": "checking", "mask": "1188"},

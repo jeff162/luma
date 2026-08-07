@@ -29,6 +29,7 @@ from pydantic import BaseModel
 from backend.db.database import SHARED_OWNER_NAME, SHARED_OWNER_ID, get_db
 from backend.json_utils import safe_json_dict
 from backend.time_utils import utcnow_iso
+from backend.services.connection_mapping import apply_account_mapping, record_provider_accounts
 from backend.services.duplicate_detection import (
     account_skipped_duplicate_summary,
     clear_account_pair_distinct_for_merge,
@@ -389,39 +390,37 @@ def resolve_default_owner_id(conn, owner_id: Optional[str]) -> Optional[str]:
 def upsert_connection_accounts(conn, *, connection_id: str, provider: str,
                                institution: Optional[str], accounts: list[dict],
                                default_owner_id: Optional[str]) -> int:
-    """Create/re-link the local account rows for a provider connection from a `fetch_accounts` result.
+    """Record the connection's provider accounts and re-apply whatever mapping they already carry.
+
+    This does **not** create a local account per provider account. Connecting records what the bank
+    offers (`connection_account`) and leaves the mapping decision to the user; only
+    `apply_account_mapping` materializes accounts. That indirection is what lets a provider account be
+    mapped onto an existing account, skipped, or declared an alias — and the alias is what the dedupe
+    ladder's cross-account rules need (see `services/connection_mapping.py`).
 
     Shared by the initial connect (token exchange) and the standalone "Refresh accounts" recovery: a
     restore rolls back the ledger — including account rows — but never the live connection (see
-    import_export/backup.py), leaving a connection whose accounts are gone; refresh rebuilds them from
-    the still-valid credential without re-linking. Upsert is keyed on `external_account_id` (the stable
-    provider handle) and re-stamps ONLY the connection linkage (connection_id/provider) — never the
-    user-editable name/display_name/owner/type — so a refresh or a re-link of a previously-disconnected
-    bank re-attaches cleanly without clobbering local edits. Returns the number of accounts processed.
+    import_export/backup.py), leaving a connection whose accounts are gone. Refresh re-records the
+    provider list and re-applies the surviving mapping decisions, rebuilding the accounts from the
+    still-valid credential without a re-link. Re-application is idempotent — an account already linked
+    to a handle is adopted, never duplicated — and never touches the user-editable
+    name/display_name/owner/type. Returns the number of provider accounts processed.
     """
-    for acc in accounts:
-        conn.execute(
-            """
-            INSERT INTO account
-                (id, external_account_id, connection_id, provider, name, display_name, institution, type, subtype, mask, owner_id, parent_account_id, trashed_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)
-            ON CONFLICT(external_account_id) DO UPDATE SET
-                connection_id = excluded.connection_id,
-                provider = excluded.provider
-            """,
-            (
-                str(uuid.uuid4()),
-                acc["external_account_id"],
-                connection_id,
-                provider,
-                acc["name"],
-                acc["name"],
-                institution,
-                acc["type"],
-                acc["subtype"],
-                acc["mask"],
-                default_owner_id,
-            ),
+    record_provider_accounts(conn, connection_id=connection_id, accounts=accounts)
+    decided = {
+        r["external_account_id"]: {
+            "mode": r["mapping_mode"],
+            "target_account_id": r["target_account_id"],
+        }
+        for r in conn.execute(
+            "SELECT * FROM connection_account WHERE connection_id = ? AND mapping_mode IS NOT NULL",
+            (connection_id,),
+        ).fetchall()
+    }
+    if decided:
+        apply_account_mapping(
+            conn, connection_id=connection_id, provider=provider, institution=institution,
+            mappings=decided, default_owner_id=default_owner_id,
         )
     return len(accounts)
 

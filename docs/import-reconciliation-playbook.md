@@ -55,13 +55,16 @@ Reject/Replace decisions are preserved).
 
 When an earlier import already covered a date range, every transaction in that range is expected to
 already be in the ledger, so a new row landing inside it is rejected as a presumed duplicate and paired
-against the existing data by date and amount — the exact date first, then ±1 day, then ±2 days, then a
-cross-account transfer twin. Three of the pairing outcomes are surfaced for review:
+against the existing data by date and amount — the exact date first, then ±1 day, then outward a day at a
+time to a week, then a cross-account transfer twin. Three of the pairing outcomes are surfaced for review:
 
-- **Matched ±2 days** — a same-account counterpart turned up only after the window widened to ±2 days.
+- **Matched nearby date** — a same-account counterpart turned up only after the window widened past the
+  exact day; each row states the gap. The window reaches `CROSS_ACCOUNT_DATE_WINDOW_DAYS` (7), sized from
+  settlement skew measured on a real ledger, and is ordered closest-day-first so a nearer candidate is
+  never displaced. The further apart a pair sits, the more it is worth a glance before clearing.
   Posting dates drift between sources for several reasons — pending-vs-posted timing, weekend or holiday
-  settlement, and time-zone differences on foreign charges — so the same transaction can sit a day or
-  two apart in two sources. After the pair is confirmed, **Mark reviewed** in bulk (or per row) clears
+  settlement, and time-zone differences on foreign charges — so the same transaction can sit several
+  days apart in two sources. After the pair is confirmed, **Mark reviewed** in bulk (or per row) clears
   it from the needs-attention list. If a pair is *not* the same transaction, select the rows and
   **import both**.
 - **Possible transfer match** — nothing matched on this account, but a same-amount transaction that
@@ -74,7 +77,7 @@ cross-account transfer twin. Three of the pairing outcomes are surfaced for revi
   Mint's `Original Description`) — the bank's clean descriptor often drops "PayPal" while the raw
   statement keeps it, so searching only the name misses most of these. A soft signal (opposite-signed,
   cross-account), surfaced for confirmation, never applied automatically.
-- **No specific match** — the date is covered but nothing paired at all, even at ±2 days or across
+- **No specific match** — the date is covered but nothing paired at all, anywhere in the window or across
   accounts. **A *named* payment that reaches this point is auto-rescued:** the importer checks whether
   the same payment already sits in the ledger as a charge elsewhere (a `PAYPAL <merchant>` card charge,
   matched by a distinctive merchant token + amount within ±14 days). If none does, the payment is

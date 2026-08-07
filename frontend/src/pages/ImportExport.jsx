@@ -770,7 +770,11 @@ function ImportTab({ onAmazonDetected }) {
         key: `connection:${connectionId}`,
         kind: 'connection',
         connectionId,
-        label: connectionLabelFromFilename(byImport[0]?.filename),
+        // Prefer the connection's own institution/provider (real fields) over parsing them out of the
+        // card filename; the filename parse stays as a fallback for older cards created before the
+        // provenance was plumbed through.
+        label: byImport[0]?.connection_institution || connectionLabelFromFilename(byImport[0]?.filename),
+        provider: byImport[0]?.connection_provider || null,
         profile: null,
         hasImportedCategories: false,
         batches: byImport,
@@ -953,7 +957,6 @@ function ImportTab({ onAmazonDetected }) {
             newName: val,
             newType: exactMatch?.type || '',
             groupWithAccountId: '',
-            duplicateCompareTargetAccountId: '',
             skip: false,
           }
           continue
@@ -972,7 +975,6 @@ function ImportTab({ onAmazonDetected }) {
             newName: exactMatch.name || val,
             newType: exactMatch.type || entry.newType || 'depository',
             groupWithAccountId: '',
-            duplicateCompareTargetAccountId: '',
             skip: false,
           }
         }
@@ -991,7 +993,6 @@ function ImportTab({ onAmazonDetected }) {
               newName: byName.name,
               newType: byName.type || entry.newType || 'depository',
               groupWithAccountId: '',
-              duplicateCompareTargetAccountId: '',
               skip: false,
             }
             : {
@@ -1000,7 +1001,6 @@ function ImportTab({ onAmazonDetected }) {
               newName: csvVal,
               newType: entry.newType || '',
               groupWithAccountId: '',
-              duplicateCompareTargetAccountId: '',
               skip: false,
             }
         }
@@ -1011,14 +1011,7 @@ function ImportTab({ onAmazonDetected }) {
             newName: csvVal,
             newType: entry.newType || '',
             groupWithAccountId: '',
-            duplicateCompareTargetAccountId: '',
             skip: false,
-          }
-        }
-        if (entry.duplicateCompareTargetAccountId && !accounts.some(a => a.id === entry.duplicateCompareTargetAccountId)) {
-          next[csvVal] = {
-            ...next[csvVal],
-            duplicateCompareTargetAccountId: '',
           }
         }
         if (entry.groupWithAccountId && !accounts.some(a => a.id === entry.groupWithAccountId)) {
@@ -1063,7 +1056,6 @@ function ImportTab({ onAmazonDetected }) {
         newName: csvValue,
         newType: targetAccount?.type || guessNewAccountTypeFromName(csvValue),
         groupWithAccountId: '',
-        duplicateCompareTargetAccountId: '',
         skip: false,
       }
       const current = { ...defaultEntry, ...(prev[csvValue] || {}) }
@@ -1077,7 +1069,6 @@ function ImportTab({ onAmazonDetected }) {
             newName: targetAccount.name || csvValue,
             newType: targetAccount.type || current.newType || 'depository',
             groupWithAccountId: '',
-            duplicateCompareTargetAccountId: '',
             skip: false,
           },
         }
@@ -1092,22 +1083,6 @@ function ImportTab({ onAmazonDetected }) {
             newName: current.newName || csvValue,
             newType: current.newType || targetAccount.type || 'depository',
             groupWithAccountId: targetAccount.id,
-            duplicateCompareTargetAccountId: '',
-            skip: false,
-          },
-        }
-      }
-      if (choice === 'duplicate_compare_only' && targetAccount) {
-        return {
-          ...prev,
-          [csvValue]: {
-            ...current,
-            accountId: '',
-            createNew: true,
-            newName: current.newName || csvValue,
-            newType: current.newType || targetAccount.type || 'depository',
-            groupWithAccountId: '',
-            duplicateCompareTargetAccountId: targetAccount.id,
             skip: false,
           },
         }
@@ -1121,7 +1096,6 @@ function ImportTab({ onAmazonDetected }) {
           newName: current.newName || csvValue,
           newType: current.newType || guessNewAccountTypeFromName(csvValue),
           groupWithAccountId: '',
-          duplicateCompareTargetAccountId: '',
           skip: false,
         },
       }
@@ -1632,32 +1606,30 @@ function ImportTab({ onAmazonDetected }) {
     // Validate each stored account ID against the live accounts list — the account
     // may have been deleted since the profile was last saved. Fall back to name-match,
     // then to createNew so the user is prompted rather than silently sending a dead ID.
-    if (newColAccount && (cm.account_assignments || cm.account_skips || cm.account_new || cm.account_duplicate_compare)) {
+    if (newColAccount && (cm.account_assignments || cm.account_skips || cm.account_new)) {
       const restored = {}
-      const duplicateCompare = cm.account_duplicate_compare || {}
       for (const [csvVal, aid] of Object.entries(cm.account_assignments || {})) {
         const stillExists = accounts.find(a => a.id === aid)
         if (stillExists) {
-          restored[csvVal] = { accountId: aid, createNew: false, newName: stillExists.name, newType: stillExists.type || 'depository', groupWithAccountId: '', duplicateCompareTargetAccountId: '', skip: false }
+          restored[csvVal] = { accountId: aid, createNew: false, newName: stillExists.name, newType: stillExists.type || 'depository', groupWithAccountId: '', skip: false }
         } else {
           const byName = findExactAccountNameMatch(accounts, csvVal)
           if (byName) {
-            restored[csvVal] = { accountId: byName.id, createNew: false, newName: byName.name, newType: byName.type || 'depository', groupWithAccountId: '', duplicateCompareTargetAccountId: '', skip: false }
+            restored[csvVal] = { accountId: byName.id, createNew: false, newName: byName.name, newType: byName.type || 'depository', groupWithAccountId: '', skip: false }
           } else {
-            restored[csvVal] = { accountId: '', createNew: false, newName: csvVal, newType: '', groupWithAccountId: '', duplicateCompareTargetAccountId: '', skip: false }
+            restored[csvVal] = { accountId: '', createNew: false, newName: csvVal, newType: '', groupWithAccountId: '', skip: false }
           }
         }
       }
       for (const csvVal of (cm.account_skips || [])) {
-        restored[csvVal] = { accountId: '', createNew: false, newName: csvVal, newType: '', groupWithAccountId: '', duplicateCompareTargetAccountId: '', skip: true }
+        restored[csvVal] = { accountId: '', createNew: false, newName: csvVal, newType: '', groupWithAccountId: '', skip: true }
       }
       for (const [csvVal, info] of Object.entries(cm.account_new || {})) {
-        const duplicateCompareTargetAccountId = accounts.some(a => a.id === duplicateCompare[csvVal]) ? duplicateCompare[csvVal] : ''
         const existing = findExactAccountNameMatch(accounts, info.name)
         if (existing) {
-          restored[csvVal] = { accountId: existing.id, createNew: false, newName: info.name, newType: info.type, groupWithAccountId: '', duplicateCompareTargetAccountId: '', skip: false }
+          restored[csvVal] = { accountId: existing.id, createNew: false, newName: info.name, newType: info.type, groupWithAccountId: '', skip: false }
         } else {
-          restored[csvVal] = { accountId: '', createNew: true, newName: info.name || csvVal, newType: info?.type ?? '', groupWithAccountId: '', duplicateCompareTargetAccountId, skip: false }
+          restored[csvVal] = { accountId: '', createNew: true, newName: info.name || csvVal, newType: info?.type ?? '', groupWithAccountId: '', skip: false }
         }
       }
       setAccountMap(restored)
@@ -1723,33 +1695,31 @@ function ImportTab({ onAmazonDetected }) {
     setSingleAccountNew(snap.single_account_new && !existingSingleAccount
       ? { enabled: true, name: snap.single_account_new.name || '', type: snap.single_account_new.type || 'depository' }
       : { enabled: false, name: '', type: 'depository' })
-    if (snap.account_map || snap.skip_accounts || snap.account_new || snap.account_duplicate_compare) {
+    if (snap.account_map || snap.skip_accounts || snap.account_new) {
       const restored = {}
       const skips = new Set(snap.skip_accounts || [])
-      const duplicateCompare = snap.account_duplicate_compare || {}
       for (const [val, aid] of Object.entries(snap.account_map || {})) {
         const stillExists = accounts.find(a => a.id === aid)
         if (stillExists) {
-          restored[val] = { accountId: aid, createNew: false, newName: stillExists.name, newType: stillExists.type || 'depository', groupWithAccountId: '', duplicateCompareTargetAccountId: '', skip: false }
+          restored[val] = { accountId: aid, createNew: false, newName: stillExists.name, newType: stillExists.type || 'depository', groupWithAccountId: '', skip: false }
         } else {
           const byName = findExactAccountNameMatch(accounts, val)
           if (byName) {
-            restored[val] = { accountId: byName.id, createNew: false, newName: byName.name, newType: byName.type || 'depository', groupWithAccountId: '', duplicateCompareTargetAccountId: '', skip: false }
+            restored[val] = { accountId: byName.id, createNew: false, newName: byName.name, newType: byName.type || 'depository', groupWithAccountId: '', skip: false }
           } else {
-            restored[val] = { accountId: '', createNew: false, newName: val, newType: '', groupWithAccountId: '', duplicateCompareTargetAccountId: '', skip: false }
+            restored[val] = { accountId: '', createNew: false, newName: val, newType: '', groupWithAccountId: '', skip: false }
           }
         }
       }
       for (const val of skips) {
-        restored[val] = { accountId: '', createNew: false, newName: val, newType: '', groupWithAccountId: '', duplicateCompareTargetAccountId: '', skip: true }
+        restored[val] = { accountId: '', createNew: false, newName: val, newType: '', groupWithAccountId: '', skip: true }
       }
       for (const [val, info] of Object.entries(snap.account_new || {})) {
-        const duplicateCompareTargetAccountId = accounts.some(a => a.id === duplicateCompare[val]) ? duplicateCompare[val] : ''
         const existing = findExactAccountNameMatch(accounts, info?.name)
         if (existing) {
-          restored[val] = { accountId: existing.id, createNew: false, newName: existing.name, newType: existing.type || info?.type || 'depository', groupWithAccountId: '', duplicateCompareTargetAccountId: '', skip: false }
+          restored[val] = { accountId: existing.id, createNew: false, newName: existing.name, newType: existing.type || info?.type || 'depository', groupWithAccountId: '', skip: false }
         } else {
-          restored[val] = { accountId: '', createNew: true, newName: info?.name || val, newType: info?.type ?? '', groupWithAccountId: '', duplicateCompareTargetAccountId, skip: false }
+          restored[val] = { accountId: '', createNew: true, newName: info?.name || val, newType: info?.type ?? '', groupWithAccountId: '', skip: false }
         }
       }
       setAccountMap(restored)
@@ -2255,7 +2225,6 @@ function ImportTab({ onAmazonDetected }) {
                 name: m.newName,
                 type: m.newType,
                 ...(m.groupWithAccountId ? { group_with_account_id: m.groupWithAccountId } : {}),
-                ...(m.duplicateCompareTargetAccountId ? { duplicate_compare_account_id: m.duplicateCompareTargetAccountId } : {}),
               })
             }
             else if (m.accountId) account_map[v] = m.accountId
@@ -3780,7 +3749,6 @@ function ImportTab({ onAmazonDetected }) {
                   newName: csvVal,
                   newType: '',
                   groupWithAccountId: '',
-                  duplicateCompareTargetAccountId: '',
                   skip: false,
                 }
                 const m = { ...DEFAULT_ENTRY, ...(accountMap[csvVal] || {}) }
@@ -3791,7 +3759,7 @@ function ImportTab({ onAmazonDetected }) {
                 const alreadyImported = previousImportAccountsByValue.get(csvVal)
                 const likelyMatch = likelyAccountMatchesByValue[csvVal] || null
                 const likelyMatchLabel = getAccountMatchLabel(likelyMatch) || likelyMatch?.name || ''
-                const relationshipTargetId = m.groupWithAccountId || m.duplicateCompareTargetAccountId || ''
+                const relationshipTargetId = m.groupWithAccountId || ''
                 const relationshipTarget = relationshipTargetId
                   ? accounts.find(account => account.id === relationshipTargetId)
                   : null
@@ -3843,14 +3811,12 @@ function ImportTab({ onAmazonDetected }) {
                                   newName: name,
                                   newType: sibling?.type || guessNewAccountTypeFromName(csvVal),
                                   groupWithAccountId: '',
-                                  duplicateCompareTargetAccountId: '',
                                 })
                               } else {
                                 update({
                                   accountId: v,
                                   createNew: false,
                                   groupWithAccountId: '',
-                                  duplicateCompareTargetAccountId: '',
                                 })
                               }
                             }}
@@ -3883,7 +3849,6 @@ function ImportTab({ onAmazonDetected }) {
                                 createNew: false,
                                 newName: csvVal,
                                 groupWithAccountId: '',
-                                duplicateCompareTargetAccountId: '',
                               })}
                               style={{
                                 flexShrink: 0, background: 'none', border: '1px solid var(--border)',
@@ -3905,7 +3870,6 @@ function ImportTab({ onAmazonDetected }) {
                                 newName: csvVal,
                                 newType: guessNewAccountTypeFromName(csvVal),
                                 groupWithAccountId: '',
-                                duplicateCompareTargetAccountId: '',
                               })
                             }} style={{
                               flexShrink: 0, background: 'none', border: '1px solid var(--border)',
@@ -3923,7 +3887,6 @@ function ImportTab({ onAmazonDetected }) {
                               newName: likelyMatch.name || csvVal,
                               newType: likelyMatch.type || m.newType || 'depository',
                               groupWithAccountId: '',
-                              duplicateCompareTargetAccountId: '',
                               skip: false,
                             })}
                             style={{
@@ -3973,7 +3936,6 @@ function ImportTab({ onAmazonDetected }) {
                             createNew: false,
                             accountId: '',
                             groupWithAccountId: '',
-                            duplicateCompareTargetAccountId: '',
                           })}
                             style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 13, padding: '2px', flexShrink: 0 }}>✕</button>
                         </div>

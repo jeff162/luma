@@ -57,12 +57,16 @@ def _render_csv(headers: list[str], rows: list[tuple]) -> str:
 def _insert_demo_profile(conn, name: str, column_map: dict, *, use_imported_categories: int) -> str:
     """Create a saved data-source profile so the demo's imported files land under a named source (with the
     realistic 'use categories present in the data' default) instead of the unknown-source bucket."""
+    from backend.db.database import DEFAULT_CSV_TERMINAL_WINDOW_DAYS
     pid = str(uuid.uuid4())
     conn.execute(
+        # terminal_window_days is stated rather than left to the column default: on a database that
+        # added the column before the default changed, the default is still the old one.
         """INSERT INTO csv_import_profile
-             (id, name, column_map, date_format, amount_convention, use_imported_categories)
-           VALUES (?, ?, ?, '%Y-%m-%d', 'single_signed', ?)""",
-        (pid, name, json.dumps(column_map), use_imported_categories),
+             (id, name, column_map, date_format, amount_convention, use_imported_categories,
+              terminal_window_days)
+           VALUES (?, ?, ?, '%Y-%m-%d', 'single_signed', ?, ?)""",
+        (pid, name, json.dumps(column_map), use_imported_categories, DEFAULT_CSV_TERMINAL_WINDOW_DAYS),
     )
     return pid
 

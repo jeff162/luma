@@ -64,19 +64,20 @@ const DEFAULT_SORT_STATE = { key: 'kind', dir: 'asc' }
 // with no specific match and not yet resolved → Rejected · review). Returns null for the rest.
 const REVIEW_KIND_PILLS = [
   { key: 'review', label: 'Review', topic: 'cross-account-duplicates' },
-  { key: 'matched_2d', label: 'Matched ±2 days', topic: 'covered-range-review' },
+  { key: 'matched_near_date', label: 'Matched nearby date', topic: 'covered-range-review' },
   { key: 'transfer_match', label: 'Possible transfer match', topic: 'covered-range-review' },
   { key: 'no_match', label: 'No specific match', topic: 'covered-range-review' },
 ]
 
 // Soft flags need a Keep/Discard/Replace decision. Advisory coverage rejects (already rejected,
-// never imported) carry a backend `review_substate`: 'matched_2d' (a same-amount twin was found
-// only at the ±2 timezone fallback) or 'no_match' (no twin anywhere). The backend clears the
+// never imported) carry a backend `review_substate`: 'matched_near_date' (a same-amount twin was found
+// only on a nearby day, not the exact one — the row itself shows how many days) or 'no_match' (no
+// twin anywhere). The backend clears the
 // substate once the row is acknowledged (`reviewed`), so a reviewed row returns null here and
 // drops out of the needs-attention pills.
 function reviewKindOf(entry) {
   if (entry.kind === 'soft_flag') return 'review'
-  if (entry.review_substate === 'matched_2d') return 'matched_2d'
+  if (entry.review_substate === 'matched_near_date') return 'matched_near_date'
   if (entry.review_substate === 'transfer_match') return 'transfer_match'
   if (entry.review_substate === 'no_match') return 'no_match'
   return null
@@ -217,7 +218,7 @@ export default function UnifiedDuplicatesDialog({
   ), [entries, accountFilter])
 
   const reviewKindBreakdown = useMemo(() => {
-    const counts = { review: 0, matched_2d: 0, transfer_match: 0, no_match: 0 }
+    const counts = { review: 0, matched_near_date: 0, transfer_match: 0, no_match: 0 }
     for (const e of scopedEntries) {
       const k = reviewKindOf(e)
       if (k) counts[k] += 1
@@ -592,7 +593,7 @@ export default function UnifiedDuplicatesDialog({
           persistentButton={false}
           style={{ margin: '10px 16px 4px' }}
         />
-        {(ruleBreakdown.length > 0 || reviewKindBreakdown.review || reviewKindBreakdown.matched_2d || reviewKindBreakdown.transfer_match || reviewKindBreakdown.no_match) ? (
+        {(ruleBreakdown.length > 0 || reviewKindBreakdown.review || reviewKindBreakdown.matched_near_date || reviewKindBreakdown.transfer_match || reviewKindBreakdown.no_match) ? (
           <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 6, alignItems: 'baseline', background: 'color-mix(in srgb, var(--surface2) 50%, transparent)' }}>
             <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>Show:</span>
             <button
@@ -633,7 +634,7 @@ export default function UnifiedDuplicatesDialog({
                 </button>
               )
             })}
-            {(reviewKindBreakdown.review || reviewKindBreakdown.matched_2d || reviewKindBreakdown.transfer_match || reviewKindBreakdown.no_match) ? (
+            {(reviewKindBreakdown.review || reviewKindBreakdown.matched_near_date || reviewKindBreakdown.transfer_match || reviewKindBreakdown.no_match) ? (
               <span style={{ width: 1, alignSelf: 'stretch', margin: '0 2px', background: 'var(--border)' }} />
             ) : null}
             {REVIEW_KIND_PILLS.map(k => {

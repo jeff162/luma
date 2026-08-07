@@ -5,15 +5,26 @@ These CSVs are are crafted to exercise the duplicate-detection logic.
 Covered scenarios:
 
 - `duplicate_prior_base.csv`
-  - baseline import that establishes a coverage window ending before the file's terminal day
+  - baseline import that establishes a coverage window ending before the file's soft trailing window
+  - spans 11/25–12/08 deliberately: a source's last several days are treated as still filling in
+    (`terminal_window_days`, default 7), so a file **shorter than its own lag establishes no coverage
+    at all**. The span has to exceed the window for the covered/trailing interaction to exist to test.
 
 - `duplicate_new_overlap.csv`
   - cross-source overlap against that baseline
-  - includes covered-day duplicates on non-terminal days
-  - includes terminal-day overlap plus one genuinely new row on the same day
+  - includes covered-day duplicates (11/26, 11/27 — inside the fully-covered stretch)
+  - includes trailing-window overlap (12/05, 12/08) plus one genuinely new row on the last day,
+    which imports rather than being blanket-rejected — the whole point of the trailing window
 
 - `duplicate_new_exact.csv`
   - exact content-hash duplicate that should be rejected before covered-day logic
+
+- `duplicate_connection_covered.csv`
+  - a file landing in an account a **data connection** already claims coverage over, which is the
+    second direction of the union coverage reads (the first — a synced row rejected by a *file's*
+    coverage — lives in `test_sync_dedupe.py`)
+  - two rows inside the connection's fully-covered stretch, one inside its soft trailing window and
+    one past the claim entirely, so the file exercises both the rejection and its bounds
 
 - `duplicate_new_text_match.csv`
   - cross-source text/evidence duplicate without a prior coverage window

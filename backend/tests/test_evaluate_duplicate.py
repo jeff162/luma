@@ -11,30 +11,16 @@ preconditions and verdict shapes are easiest to reason about.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
-from backend.routers.import_export import (
-    _candidate_summary,
-    _date_in_import_coverage_window,
-    _duplicate_amount_key,
-    _find_textual_duplicate_candidate,
-    _match_terminal_day_candidate,
-)
+from backend.services import duplicate_detection
+
 from backend.services.duplicate_detection import (
     DedupeContext,
     DedupeVerdict,
+    duplicate_amount_key as _duplicate_amount_key,
     evaluate_duplicate,
 )
-
-
-def _helpers_dict() -> dict:
-    """Same helper-callable shape that import_export.py passes into the live evaluator."""
-    return {
-        "date_in_window":       _date_in_import_coverage_window,
-        "candidate_summary":    _candidate_summary,
-        "match_terminal":       _match_terminal_day_candidate,
-        "duplicate_amount_key": _duplicate_amount_key,
-        "find_textual":         _find_textual_duplicate_candidate,
-    }
 
 
 def _empty_context(**overrides) -> DedupeContext:
@@ -54,7 +40,6 @@ def _empty_context(**overrides) -> DedupeContext:
         account_duplicate_compare_targets={},
         coverage_strategy_enabled=True,
         text_strategy_enabled=True,
-        helpers=_helpers_dict(),
     )
     base.update(overrides)
     return DedupeContext(**base)
@@ -144,9 +129,9 @@ class EvaluateDuplicateRuleTests(unittest.TestCase):
     # in the ledger (find_payment_match). Otherwise it is genuinely new — a balance-funded payment the
     # covering import never saw — and must import.
 
-    def _coverage_ctx(self, payment_match):
-        helpers = _helpers_dict()
-        helpers["find_payment_match"] = lambda acct_id, date_str, amt, merchant: payment_match
+    def _coverage_ctx(self):
+        # `conn` only has to be non-None for the evaluator to consult the ledger fallbacks; the
+        # lookup itself is patched per test, so no database is involved.
         return _empty_context(
             import_coverage_by_csv_value={
                 "PayPal": [{
@@ -154,19 +139,25 @@ class EvaluateDuplicateRuleTests(unittest.TestCase):
                     "csv_value": "PayPal", "account_id": "ACCT-1", "batch_id": "BATCH-A",
                 }],
             },
-            helpers=helpers,
+            conn=object(),
         )
 
-    def _eval_covered_payment(self, ctx, merchant):
-        return evaluate_duplicate(
-            context=ctx, receiving_account_id="ACCT-1", csv_value="PayPal",
-            content_hash="unique-hash", parsed_date="2025-10-15", amount=-10.00,
-            scope_id="ACCT-1", txn_payload={"merchant_name": merchant, "display_name": merchant},
-        )
+    def _eval_covered_payment(self, payment_match, merchant):
+        # Both ledger fallbacks are stubbed: the transfer lookup runs first and must find nothing for
+        # the payment-corroboration branch (the one under test) to be reached at all.
+        with mock.patch.object(duplicate_detection, "find_cross_account_transfer_candidates",
+                               return_value=[]), \
+             mock.patch.object(duplicate_detection, "find_ledger_payment_match",
+                               return_value=payment_match):
+            return evaluate_duplicate(
+                context=self._coverage_ctx(), receiving_account_id="ACCT-1", csv_value="PayPal",
+                content_hash="unique-hash", parsed_date="2025-10-15", amount=-10.00,
+                scope_id="ACCT-1", txn_payload={"merchant_name": merchant, "display_name": merchant},
+            )
 
     def test_covered_named_payment_with_no_ledger_charge_imports(self):
-        # No corroborating charge (find_payment_match -> None): genuinely new, so it passes through.
-        verdict = self._eval_covered_payment(self._coverage_ctx(payment_match=None), "VeloViewer Ltd")
+        # No corroborating charge (find_ledger_payment_match -> None): genuinely new, so it passes through.
+        verdict = self._eval_covered_payment(None, "VeloViewer Ltd")
         self.assertTrue(verdict.passthrough)
         self.assertFalse(verdict.hard_reject)
 
@@ -175,7 +166,7 @@ class EvaluateDuplicateRuleTests(unittest.TestCase):
         # rejected, and the corroborating charge is surfaced in the report.
         charge = {"id": "CARD-CHARGE", "date": "2025-10-16", "merchant_name": "PAYPAL RANDONNEURS",
                   "amount": -10.00, "account_id": "ACCT-CARD", "account_name": "Chase", "cross_account": True}
-        verdict = self._eval_covered_payment(self._coverage_ctx(payment_match=charge), "RANDONNEURS USA")
+        verdict = self._eval_covered_payment(charge, "RANDONNEURS USA")
         self.assertTrue(verdict.hard_reject)
         self.assertEqual(verdict.matched["candidate_count"], 1)
         self.assertEqual(verdict.matched["candidates"][0]["id"], "CARD-CHARGE")
@@ -183,8 +174,7 @@ class EvaluateDuplicateRuleTests(unittest.TestCase):
     def test_covered_nameless_money_movement_leg_stays_rejected(self):
         # A nameless money-movement leg is never rescued (the payment path gates on a merchant name),
         # even with the helper wired — it keeps the 'covered, no specific match' hard-reject.
-        ctx = self._coverage_ctx(payment_match=None)
-        verdict = self._eval_covered_payment(ctx, "")
+        verdict = self._eval_covered_payment(None, "")
         self.assertTrue(verdict.hard_reject)
         self.assertEqual(verdict.matched["candidate_count"], 0)
 

@@ -151,18 +151,25 @@ class ProviderAdapterTests(unittest.TestCase):
                         return_value={"access_token": "tok-1", "item_id": "item-1"}):
             self.assertEqual(adapter.exchange(cfg, "public-1"), {"external_id": "item-1", "credential": "tok-1"})
         with mock.patch("backend.services.plaid_service.fetch_accounts", return_value=[
-            {"plaid_account_id": "acct-1", "name": "Checking", "type": "depository", "subtype": "checking", "mask": "0000"}
+            {"plaid_account_id": "acct-1", "name": "Checking", "official_name": "Total Checking",
+             "type": "depository", "subtype": "checking", "mask": "0000"}
         ]):
             self.assertEqual(adapter.fetch_accounts(cfg, "tok-1"), [
-                {"external_account_id": "acct-1", "name": "Checking", "type": "depository", "subtype": "checking", "mask": "0000"}
+                {"external_account_id": "acct-1", "name": "Checking", "official_name": "Total Checking",
+                 "type": "depository", "subtype": "checking", "mask": "0000"}
             ])
+        # The optional capture fields (authorized_date, counterparties, …) ride the same neutral dict;
+        # a provider that can't supply one leaves it absent, and the adapter normalizes it to
+        # None/empty rather than dropping the key, so downstream code never branches on provider.
         with mock.patch("backend.services.plaid_service.fetch_transactions", return_value=[
             {"plaid_transaction_id": "t-1", "plaid_account_id": "acct-1", "amount": 12.5,
              "merchant_name": "Store", "raw_name": "STORE #1", "date": "2026-01-01", "is_pending": False}
         ]):
             self.assertEqual(adapter.fetch_transactions(cfg, "tok-1"), [
                 {"external_transaction_id": "t-1", "external_account_id": "acct-1", "amount": 12.5,
-                 "merchant_name": "Store", "raw_name": "STORE #1", "date": "2026-01-01", "is_pending": False}
+                 "merchant_name": "Store", "raw_name": "STORE #1", "date": "2026-01-01", "is_pending": False,
+                 "authorized_date": None, "merchant_entity_id": None, "counterparties": [],
+                 "check_number": None, "location": None}
             ])
 
 
@@ -180,11 +187,22 @@ class CredentialBackupTests(unittest.TestCase):
         with mock.patch("backend.services.plaid_service.exchange_public_token",
                         return_value={"access_token": "access-sandbox-xyz", "item_id": "item-1"}), \
              mock.patch("backend.services.plaid_service.fetch_accounts", return_value=[
-                 {"plaid_account_id": "acct-1", "name": "Checking", "type": "depository",
-                  "subtype": "checking", "mask": "0000"}
+                 {"plaid_account_id": "acct-1", "name": "Checking", "official_name": "Total Checking",
+                  "type": "depository", "subtype": "checking", "mask": "0000"}
              ]):
             r = client.post("/api/plaid/exchange", json={"public_token": "public-1", "institution_name": "Test Bank"})
         self.assertEqual(r.status_code, 200, r.text)
+        # Connecting records what the bank offers but creates no local account — the mapping step does
+        # (see services/connection_mapping.py). These tests are about the credential/connection seam, so
+        # they run the real two-step flow and take the plain "create a new account" choice. A re-connect
+        # reports `unmapped: 0` (the handle is already adopted) and needs no second mapping call.
+        connection_id = r.json()["connection_id"]
+        if r.json()["unmapped"]:
+            mapped = client.post(
+                f"/api/connections/{connection_id}/account-map",
+                json={"mappings": {"acct-1": {"mode": "new", "name": "Checking"}}},
+            )
+            self.assertEqual(mapped.status_code, 200, mapped.text)
 
     def test_disconnect_revokes_at_provider_and_removes_the_connection(self):
         with api_client() as (client, _):

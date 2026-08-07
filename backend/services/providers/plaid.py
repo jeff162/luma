@@ -33,6 +33,7 @@ class PlaidAdapter(ProviderAdapter):
             {
                 "external_account_id": a["plaid_account_id"],
                 "name":                a["name"],
+                "official_name":       a["official_name"],
                 "type":                a["type"],
                 "subtype":             a["subtype"],
                 "mask":                a["mask"],
@@ -40,19 +41,43 @@ class PlaidAdapter(ProviderAdapter):
             for a in plaid_service.fetch_accounts(app_config, credential)
         ]
 
+    # What Plaid can capture per transaction. `authorized_date`, the descriptor, the counterparties and
+    # the check number are locked on: duplicate detection reads all four, so letting them be turned off
+    # would silently degrade matching. Location is enrichment and defaults off.
+    CAPTURE_FIELDS = [
+        {"key": "authorized_date",      "label": "Transaction date (as well as posted date)", "locked": True,  "default_on": True},
+        {"key": "provider_description", "label": "Original description",                      "locked": True,  "default_on": True},
+        {"key": "counterparties",       "label": "Merchant and counterparties",               "locked": True,  "default_on": True},
+        {"key": "merchant_entity_id",   "label": "Merchant identifier",                       "locked": True,  "default_on": True},
+        {"key": "check_number",         "label": "Check number",                              "locked": True,  "default_on": True},
+        {"key": "location",             "label": "Location",                                  "locked": False, "default_on": False},
+    ]
+
+    def capture_fields(self) -> list[dict]:
+        return [dict(f) for f in self.CAPTURE_FIELDS]
+
+    @staticmethod
+    def _normalize_txn(t: dict) -> dict:
+        return {
+            "external_transaction_id": t["plaid_transaction_id"],
+            "external_account_id":     t["plaid_account_id"],
+            "amount":                  t["amount"],
+            "merchant_name":           t["merchant_name"],
+            "raw_name":                t["raw_name"],
+            "date":                    t["date"],
+            "authorized_date":         t.get("authorized_date"),
+            "is_pending":              t["is_pending"],
+            "merchant_entity_id":      t.get("merchant_entity_id"),
+            "counterparties":          t.get("counterparties") or [],
+            "check_number":            t.get("check_number"),
+            "location":                t.get("location"),
+        }
+
     def fetch_transactions(
         self, app_config: dict, credential: str, start_date: date | None = None, end_date: date | None = None
     ) -> list[dict]:
         return [
-            {
-                "external_transaction_id": t["plaid_transaction_id"],
-                "external_account_id":     t["plaid_account_id"],
-                "amount":                  t["amount"],
-                "merchant_name":           t["merchant_name"],
-                "raw_name":                t["raw_name"],
-                "date":                    t["date"],
-                "is_pending":              t["is_pending"],
-            }
+            self._normalize_txn(t)
             for t in plaid_service.fetch_transactions(app_config, credential, start_date=start_date, end_date=end_date)
         ]
 
@@ -63,13 +88,7 @@ class PlaidAdapter(ProviderAdapter):
 
         def _normalize(t: dict) -> dict:
             return {
-                "external_transaction_id": t["plaid_transaction_id"],
-                "external_account_id":     t["plaid_account_id"],
-                "amount":                  t["amount"],
-                "merchant_name":           t["merchant_name"],
-                "raw_name":                t["raw_name"],
-                "date":                    t["date"],
-                "is_pending":              t["is_pending"],
+                **self._normalize_txn(t),
                 # The prior pending row's provider id when this posted txn supersedes it (see base.py).
                 "pending_external_transaction_id": t["pending_transaction_id"],
             }

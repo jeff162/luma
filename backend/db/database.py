@@ -115,9 +115,19 @@ def get_db(db_path: str | None = None):
 # v18 adds the provider-agnostic `connection` credential store; v19 adds `provider_config` (app creds).
 # v20 makes the account→connection link provider-neutral (external_account_id / connection_id / provider,
 # drop plaid_item_id) and drops the vestigial `plaid_item` table. v23 adds the `connection_sync_log`
-# diagnostics table (dev-options provider-sync log; see routers/sync.py).
+# diagnostics table (dev-options provider-sync log; see routers/sync.py). v24 adds the per-connection
+# account mapping (`connection_account`, the input duplicate detection was missing for synced rows) plus
+# `connection.captured_fields`, `txn.authorized_date`, and `csv_import_profile.terminal_window_days`.
+# v25 flips that last column's default from 1 to 7 and rewrites the rows v24 wrote at 1 — a source is
+# now assumed to lag its bank unless it says otherwise, since the reverse assumption silently drops real
+# transactions (see the migration's own note).
 
-CURRENT_VERSION = 23
+CURRENT_VERSION = 25
+
+# Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
+# It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
+# value is also the DDL default for both `csv_import_profile` and `connection_account`.
+DEFAULT_CSV_TERMINAL_WINDOW_DAYS = 7
 
 MIGRATIONS = {}
 
@@ -704,6 +714,139 @@ def _add_connection_sync_log(conn):
     """)
 
 
+@migration(24)
+def _add_connection_account_mapping(conn):
+    # Per-connection account mapping (the data-source analog of a CSV import's account step) plus the
+    # fields a connection captures. `connection_account` itself is created by init_db's CREATE TABLE IF
+    # NOT EXISTS script on both paths, so only the columns on *existing* tables are added here; its
+    # account_id index is likewise in the baseline script, since the table is new and cannot predate it.
+    #
+    # The mapping is not merely UX: it is the missing input to duplicate detection. The ladder's
+    # cross-account rules fire only when the receiving account already appears in the matching coverage or
+    # was explicitly declared an alias, and a sync could satisfy neither — so a charge already imported
+    # from a CSV came back from the provider as a second copy on a second account. See docs/data-model.md.
+    conn.execute("ALTER TABLE connection ADD COLUMN captured_fields TEXT")
+    # The transaction/authorization date, distinct from `date` (posted). Two sources routinely date the
+    # same charge differently — one reports the transaction date, the other the posted date — so the
+    # ladder tests both. NULL wherever the source publishes only one date, which is most CSVs.
+    conn.execute("ALTER TABLE txn ADD COLUMN authorized_date TEXT")
+    # How many trailing days of a source's covered range are SOFT (reconciled one-to-one rather than
+    # blanket-rejected). See v25, which is what actually moves this off the original single-terminal-day
+    # behavior — the two are split so a database that already ran v24 lands in the same place as one
+    # migrating straight through.
+    conn.execute("ALTER TABLE csv_import_profile ADD COLUMN terminal_window_days INTEGER NOT NULL DEFAULT 7")
+
+    _backfill_connection_account_mapping(conn)
+
+
+def _backfill_connection_account_mapping(conn):
+    """Data half of v24 (also replayed after a restore from an older backup).
+
+    Two fixes, both about existing connections looking like brand-new unmapped ones:
+
+    1. Every account already linked to a connection gets a `connection_account` row recording what is
+       already true — that this local account IS that provider account — as `mapping_mode='existing'`.
+       Without it, a connection the user linked months ago would show every account as undecided and the
+       ladder would treat none of them as an alias.
+    2. Sync cards' `import_batch_account.csv_value` is rewritten from the provider's opaque external
+       account id to the provider account label. Rows keyed on the opaque id are invisible to every
+       source-scoped rule and read as noise in the import history.
+
+    Coverage is deliberately NOT seeded here. It cannot be derived from schema alone — only from the
+    ledger — and a connection with a hole in the middle of its history (a past disconnect or cursor reset)
+    would claim a range it does not cover and hard-reject legitimate rows inside it. That derivation is a
+    local, inspect-before-applying step, not a migration.
+    """
+    # Same guard, and same reason, as v20's: a minimal hand-built fixture may not carry the provider-link
+    # columns v20 introduces, and there is nothing to backfill from without them. A real database always
+    # has them by this point, so this never skips work that exists.
+    account_cols = {r["name"] for r in conn.execute("PRAGMA table_info(account)")}
+    if not {"connection_id", "external_account_id"} <= account_cols:
+        return
+
+    linked = conn.execute(
+        """
+        SELECT a.id, a.connection_id, a.external_account_id, a.name, a.display_name,
+               a.type, a.subtype, a.mask
+        FROM   account a
+        WHERE  a.connection_id IS NOT NULL AND a.external_account_id IS NOT NULL
+        """
+    ).fetchall()
+    for row in linked:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO connection_account
+                (connection_id, external_account_id, account_id, mapping_mode, target_account_id,
+                 provider_name, provider_type, provider_subtype, provider_mask)
+            VALUES (?,?,?,'existing',?,?,?,?,?)
+            """,
+            (row["connection_id"], row["external_account_id"], row["id"], row["id"],
+             row["name"], row["type"], row["subtype"], row["mask"]),
+        )
+
+    # `csv_value` is half of import_batch_account's primary key, so a rewrite can collide with a row that
+    # already carries the label. Update only where no such row exists, and drop the loser otherwise —
+    # its counts have already been folded in by whichever row got there first.
+    for row in conn.execute(
+        """
+        SELECT iba.rowid AS rid, iba.batch_id, iba.csv_value, ca.provider_name, ca.provider_mask
+        FROM   import_batch_account iba
+        JOIN   import_batch b  ON b.id = iba.batch_id
+        JOIN   connection_account ca
+               ON ca.connection_id = b.connection_id AND ca.external_account_id = iba.csv_value
+        WHERE  b.connection_id IS NOT NULL
+        """
+    ).fetchall():
+        name = str(row["provider_name"] or "").strip()
+        mask = str(row["provider_mask"] or "").strip()
+        if name and mask:
+            label = f"{name} ···{mask}"
+        elif name:
+            label = name
+        elif mask:
+            label = f"···{mask}"
+        else:
+            continue  # nothing better to call it than the id it already has
+        clash = conn.execute(
+            "SELECT 1 FROM import_batch_account WHERE batch_id = ? AND csv_value = ?",
+            (row["batch_id"], label),
+        ).fetchone()
+        if clash:
+            conn.execute("DELETE FROM import_batch_account WHERE rowid = ?", (row["rid"],))
+        else:
+            conn.execute(
+                "UPDATE import_batch_account SET csv_value = ? WHERE rowid = ?", (label, row["rid"])
+            )
+
+
+@migration(25)
+def _widen_default_csv_terminal_window(conn):
+    # v24 added `csv_import_profile.terminal_window_days` defaulted to 1 — "only the export day is
+    # incomplete" — on the premise that widening should be opt-in per source. That premise was
+    # backwards. **Most sources lag the thing they describe**: an aggregator waits on the bank, and
+    # even a bank's own export waits on its pending pipeline. Only a first-party export of records the
+    # source itself created (a store, a payment service) has no lag. Defaulting to "no lag" therefore
+    # made the unusual case the default, and its failure mode is the bad one — a real transaction the
+    # earlier export had not caught yet gets blanket-rejected as "already covered" and leaves the
+    # ledger, discoverable only by opening that file's duplicate report. The opposite error costs one
+    # extra one-to-one reconciliation pass, which still catches true duplicates and names them.
+    #
+    # Rewriting stored 1s is sound *only here*, and only once: the setting had no writer of any kind
+    # until the data-source editor gained the field, so at this point every 1 in the table is v24's
+    # column default rather than anyone's decision. After this migration a 1 IS a decision, and nothing
+    # touches it again.
+    _widen_unset_csv_terminal_window(conn)
+
+
+def _widen_unset_csv_terminal_window(conn):
+    """Data half of v25 (also replayed after a restore from a pre-v25 backup, whose profile rows carry
+    the old default)."""
+    conn.execute(
+        "UPDATE csv_import_profile SET terminal_window_days = ? WHERE terminal_window_days = 1",
+        (DEFAULT_CSV_TERMINAL_WINDOW_DAYS,),
+    )
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -737,6 +880,8 @@ POST_RESTORE_DATA_INIT = {
     6:  _backfill_display_name_source,
     13: _backfill_account_types_and_money_movement,
     15: _seed_rule_cleanup_data,
+    24: _backfill_connection_account_mapping,
+    25: _widen_unset_csv_terminal_window,
 }
 
 
@@ -876,10 +1021,65 @@ def init_db(db_path: str | None = None):
                 -- 1 once the provider reports the historical backfill is complete (HISTORICAL_UPDATE_COMPLETE).
                 -- Rows synced while 0 land on the connection's single "initial import" card; after 1, on the
                 -- normal monthly period cards. See routers/sync.py.
-                initial_sync_complete INTEGER NOT NULL DEFAULT 0
+                initial_sync_complete INTEGER NOT NULL DEFAULT 0,
+                -- JSON list of optional per-transaction capture-field keys the user turned on for this
+                -- connection (see ProviderAdapter.capture_fields). NULL = the adapter's defaults. Locked
+                -- fields are always captured and never appear here.
+                captured_fields TEXT
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_provider_external
                 ON connection(provider, external_id);
+
+            -- One row per account a connection offers — the connection's *data source* record, and the
+            -- durable answer to "what does this provider account map to locally?". It is the direct analog
+            -- of a CSV import's account-mapping step: a provider account may be mapped onto an existing
+            -- account, created as a new one, grouped under an existing one, or skipped entirely.
+            -- Without this the mapping was implicit (one new account per provider
+            -- account, no way to revisit) and duplicate detection had no alias to work from.
+            --
+            -- Two things only this table can hold: a provider account the user chose to SKIP (no local
+            -- account row exists to carry that decision, so a refresh would recreate it forever), and the
+            -- provider-reported name/mask/type, kept separately so the mapping UI can still show what the
+            -- *bank* calls an account after it has been mapped onto a locally-renamed one.
+            --
+            -- Coverage lives here rather than on a sync's import_batch card because a cursor delta is not a
+            -- date range — it is "everything new since a checkpoint", scattered across arbitrary dates. The
+            -- *sync chain* is what carries a coverage claim: a range pull establishes coverage_start_date,
+            -- each successful delta advances coverage_through_date, a failed sync simply leaves it unmoved,
+            -- and a cursor reset clears both. See docs/data-model.md.
+            CREATE TABLE IF NOT EXISTS connection_account (
+                connection_id       TEXT NOT NULL REFERENCES connection(id) ON DELETE CASCADE,
+                external_account_id TEXT NOT NULL,
+                -- The local account this provider account feeds. NULL while unmapped, and for 'skip'.
+                account_id          TEXT REFERENCES account(id) ON DELETE SET NULL,
+                -- NULL = not yet mapped (the UI badges these); otherwise
+                -- 'new' | 'existing' | 'group' | 'skip'.
+                mapping_mode        TEXT,
+                -- The existing account this decision points at, per mode: the account adopted
+                -- ('existing') or the parent to nest under ('group'). NULL for 'new' and 'skip'.
+                -- Kept on the mapping row rather than
+                -- inferred from the resulting account so the decision survives the account being rebuilt
+                -- (a restore wipes accounts but not connections), and so re-applying a mapping restores
+                -- the same relationship. Only 'existing' feeds the dedupe ladder's explicit-alias
+                -- precondition — 'group' is a *different* physical account and must not.
+                target_account_id   TEXT REFERENCES account(id) ON DELETE SET NULL,
+                provider_name          TEXT,
+                provider_official_name TEXT,
+                provider_type          TEXT,
+                provider_subtype       TEXT,
+                provider_mask          TEXT,
+                coverage_start_date    TEXT,
+                coverage_through_date  TEXT,
+                -- How many trailing days of the covered range are treated as SOFT (reconciled one-to-one
+                -- rather than blanket-rejected). An aggregator lags the bank by several days, so its most
+                -- recent days are incomplete; 7 covers the observed posting lag. See duplicate_detection.
+                terminal_window_days   INTEGER NOT NULL DEFAULT 7,
+                created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at          TEXT,
+                PRIMARY KEY (connection_id, external_account_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_connection_account_account
+                ON connection_account(account_id);
 
             -- Diagnostic log of provider sync calls (one row per connection per /sync call), captured only
             -- when developer options are enabled. Provider-agnostic by construction: it records the neutral
@@ -1046,6 +1246,12 @@ def init_db(db_path: str | None = None):
                 notes                TEXT,
                 owner_id             TEXT REFERENCES owner(id) ON DELETE SET NULL,
                 content_hash         TEXT,
+                -- When the charge was AUTHORIZED, where `date` is when it POSTED. Providers supply both;
+                -- a CSV usually carries only one, and which one differs by source. Duplicate detection
+                -- matches when EITHER date lines up, which is what turns a genuine cross-source duplicate
+                -- separated by settlement lag into an exact match rather than a near-miss. NULL when the
+                -- source doesn't distinguish them. Reporting and filtering always use `date`.
+                authorized_date      TEXT,
                 import_evidence_json TEXT,
                 import_batch_id      TEXT REFERENCES import_batch(id) ON DELETE SET NULL,
                 trashed_at           TEXT,
@@ -1202,6 +1408,13 @@ def init_db(db_path: str | None = None):
                 use_imported_categories INTEGER NOT NULL DEFAULT 0,
                 notes                TEXT,
                 source_kind          TEXT,
+                -- How many trailing days of this source's exports are treated as SOFT — reconciled
+                -- one-to-one instead of blanket-rejected as already-covered. Most sources lag the thing
+                -- they describe (an aggregator waits on the bank; a bank waits on its own pending
+                -- pipeline), so the default is the lagging case. Lowering it to 1 — just the export
+                -- day — is the opt-in for a first-party export (Amazon, PayPal) that publishes its own
+                -- records and has no lag. See duplicate_detection.DEFAULT_TERMINAL_WINDOW_DAYS.
+                terminal_window_days INTEGER NOT NULL DEFAULT 7,
                 created_at           TEXT NOT NULL DEFAULT (datetime('now'))
             );
 

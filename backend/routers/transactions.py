@@ -912,6 +912,10 @@ def list_transactions(
                 COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) AS excluded_from_totals,
                 b.filename    AS import_batch_filename,
                 b.imported_at AS import_batch_imported_at,
+                -- Data-source (sync) provenance for the origin hover: the provider names which
+                -- connection a synced row came from, so two same-institution connections (both
+                -- labeled e.g. "Chase") are still tellable apart. NULL for CSV/manual batches.
+                bconn.provider AS import_batch_provider,
                 o.name        AS owner_name,
                 o.color       AS owner_color,
                 t.suspect_duplicate_of,
@@ -931,6 +935,7 @@ def list_transactions(
             LEFT JOIN category c ON c.id = t.category_id
             LEFT JOIN category pc ON pc.id = c.parent_id
             LEFT JOIN import_batch b ON b.id = t.import_batch_id
+            LEFT JOIN connection bconn ON bconn.id = b.connection_id
             LEFT JOIN recurring_series rs ON rs.id = t.recurring_series_id
             LEFT JOIN (
                 SELECT txn_id, MIN(series_id) AS series_id

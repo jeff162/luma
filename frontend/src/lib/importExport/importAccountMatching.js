@@ -33,11 +33,48 @@ export function getAccountMatchLabel(account) {
   return String(account?.display_name || account?.name || '').trim()
 }
 
+// What a mapping picker may OFFER, given what it currently points at.
+//
+// Root accounts only. A merged child is not a target anyone picks deliberately — the group root lands
+// rows in the same effective scope for both dedupe and reporting — and offering every child doubles the
+// list with entries that read as near-duplicates of their own parents (merging rewrites a child's
+// display name to its parent's, so "PayPal" merged into "PayPal" yields two identical-looking choices).
+//
+// The exception is the child a mapping is ALREADY on, and it is the reason this function exists rather
+// than a plain root filter: merging an account never moves the mappings pointing at it, so a picker that
+// listed roots alone would find no option matching the stored id and render a decision in force as an
+// empty control — inviting the user to "fix" it and silently re-point the source. That child stays
+// listed, labelled with its group, for exactly as long as it is selected.
+export function selectableAccountOptions(accounts, selectedId = '') {
+  const list = accounts || []
+  const roots = list.filter(account => !account?.parent_account_id)
+  if (!selectedId || roots.some(account => account?.id === selectedId)) return roots
+  const selectedChild = list.find(account => account?.id === selectedId)
+  return selectedChild ? [...roots, selectedChild] : roots
+}
+
+// An account's label in such a picker. Only a merged child ever needs one, and only while it is the
+// selected value — but there the group suffix is load-bearing, since the child's own name is usually
+// its parent's and the entry would otherwise read as a duplicate of a root already in the list.
+export function getAccountOptionLabel(account, accountsById = null) {
+  const base = `${account?.name || ''}${account?.mask ? ` ···${account.mask}` : ''}`
+  const parentId = account?.parent_account_id
+  if (!parentId) return base
+  const parent = accountsById?.get?.(parentId) || null
+  const parentLabel = getAccountMatchLabel(parent)
+  return parentLabel ? `${base} — in ${parentLabel}` : base
+}
+
 export function normalizeAccountMatchStem(value) {
   return String(value || '')
     .trim()
     .toLowerCase()
     .replace(/\(\s*(?:\.\.\.)?\s*\d{2,}\s*\)\s*$/, '')
+    // Dot-led mask suffixes: "Riverstone Summit Cash ···5093". This is the form a data connection's account
+    // label uses (`provider_account_label`), and it reaches the same matcher a CSV value does — so
+    // without this a connection account never stem-matches the account it plainly IS. The separator is
+    // optional because the dots are their own boundary.
+    .replace(/[\s\-_/]*[·•…]+\s*\d{2,}\s*$/, '')
     .replace(/(?:\s+|[-_/])(?:x|xx|xxx|xxxx|\*|[*]{2,}|ending|acct|account)?\s*\d{2,}\s*$/, '')
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -106,10 +143,13 @@ export function findLikelyAccountMatch(accounts, value) {
   return subsetCandidates.length === 1 ? subsetCandidates[0] : null
 }
 
+// Grouping is not carried here: it is applied to the created account (`parent_account_id`) at import
+// time and is durable on the account, so a resumed draft recovers it from the account rather than from
+// a snapshot. The snapshot's former `account_duplicate_compare` key belonged to the removed
+// compare-only mapping choice and is gone with it.
 export function buildAccountImportStateSnapshot(accountMap) {
   const accountAssignments = {}
   const accountNew = {}
-  const accountDuplicateCompare = {}
   const skipAccounts = []
 
   for (const [csvVal, mapping] of Object.entries(accountMap || {})) {
@@ -120,21 +160,14 @@ export function buildAccountImportStateSnapshot(accountMap) {
         name: mapping.newName.trim(),
         type: mapping.newType || '',
       }
-      if (mapping?.duplicateCompareTargetAccountId) {
-        accountDuplicateCompare[csvVal] = mapping.duplicateCompareTargetAccountId
-      }
     } else if (mapping?.accountId) {
       accountAssignments[csvVal] = mapping.accountId
     }
   }
 
-  const snapshot = {
+  return {
     account_map: accountAssignments,
     skip_accounts: skipAccounts,
     account_new: accountNew,
   }
-  if (Object.keys(accountDuplicateCompare).length > 0) {
-    snapshot.account_duplicate_compare = accountDuplicateCompare
-  }
-  return snapshot
 }

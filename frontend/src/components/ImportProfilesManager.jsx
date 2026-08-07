@@ -43,6 +43,20 @@ const DATE_FORMATS = [
   { value: '%b-%d-%Y', label: 'MMM-DD-YYYY' },
 ]
 
+// How many trailing days of an export are treated as still filling in. Most sources lag the thing they
+// describe, so the default assumes a lag; 1 — only the export day itself — is the opt-in for a
+// first-party export (Amazon, PayPal) that publishes its own records. Mirrors the backend clamp and
+// `duplicate_detection.DEFAULT_TERMINAL_WINDOW_DAYS`.
+const MIN_SOURCE_LAG_DAYS = 1
+const DEFAULT_SOURCE_LAG_DAYS = 7
+const MAX_SOURCE_LAG_DAYS = 30
+
+function clampSourceLagDays(value) {
+  const days = parseInt(value, 10)
+  if (!Number.isFinite(days)) return MIN_SOURCE_LAG_DAYS
+  return Math.max(MIN_SOURCE_LAG_DAYS, Math.min(MAX_SOURCE_LAG_DAYS, days))
+}
+
 const ADD_PANEL_WIDTH = 900
 
 function getBlankSuggestedColumns() {
@@ -113,6 +127,8 @@ function ProfileForm({
   const [skipRows] = useState(profile?.skip_rows ?? 0)
   const [applyCat, setApplyCat] = useState(profile?.apply_categorization !== false)
   const [enrichFromSource, setEnrichFromSource] = useState(!!profile?.enrich_from_source)
+  // Kept as a string so the field can be emptied while typing; normalized on save.
+  const [sourceLagDays, setSourceLagDays] = useState(String(profile?.terminal_window_days ?? DEFAULT_SOURCE_LAG_DAYS))
   const [useImportedCategories, setUseImportedCategories] = useState(
     profile?.use_imported_categories != null
       ? !!profile.use_imported_categories
@@ -301,6 +317,7 @@ function ProfileForm({
         apply_categorization: applyCat,
         enrich_from_source: enrichFromSource,
         use_imported_categories: useImportedCategories,
+        terminal_window_days: clampSourceLagDays(sourceLagDays),
         notes: notes.trim() || null,
       },
       {
@@ -478,6 +495,29 @@ function ProfileForm({
           <select id={`${fid}-amtconv`} name="data-source-amount-convention" value={amtConv} onChange={e => setAmtConv(e.target.value)} style={selStyle}>
             {AMOUNT_CONVENTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
           </select>
+        </div>
+        <div>
+          <label htmlFor={`${fid}-sourcelag`} style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
+            Days this source lags the bank
+          </label>
+          <input
+            id={`${fid}-sourcelag`}
+            name="data-source-lag-days"
+            type="number"
+            min={MIN_SOURCE_LAG_DAYS}
+            max={MAX_SOURCE_LAG_DAYS}
+            value={sourceLagDays}
+            onChange={e => setSourceLagDays(e.target.value)}
+            onBlur={() => setSourceLagDays(String(clampSourceLagDays(sourceLagDays)))}
+            style={inputStyle}
+          />
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3, lineHeight: 1.4 }}>
+            An export can be missing recent transactions its own source had not caught up on yet.
+            Those trailing days stay open for matching instead of counting as already imported, so a
+            later file can still bring them in. Lower this to 1 only for a source that publishes its
+            own records and so cannot be behind — a store or payment service, rather than a bank or a
+            budgeting app that relays one.
+          </div>
         </div>
       </div>
 
@@ -811,7 +851,13 @@ export default function ImportProfilesManager({
   }, [])
 
   const refreshManagerData = useCallback(async () => {
-    const [p, a, b] = await Promise.all([api.getImportProfiles(), api.getAccounts(), api.listBatches()])
+    // include_children: a source's single-account mapping keeps pointing at the account it was set to
+    // even after that account is merged into a group, so a root-only list would render a live mapping
+    // as an empty picker (and invite the user to "fix" it by re-pointing the source). The import
+    // mapping grid fetches the same way, for the same reason.
+    const [p, a, b] = await Promise.all([
+      api.getImportProfiles(), api.getAccounts({ include_children: true }), api.listBatches(),
+    ])
     setProfiles(p)
     setAccounts(a)
     setBatches(b)

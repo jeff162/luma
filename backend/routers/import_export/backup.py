@@ -623,6 +623,12 @@ def build_backup_data(conn) -> dict:
             "category_rules": dump("category_rule"),
             "merchant_renames": dump("merchant_rename"),
             "csv_profiles":   dump("csv_import_profile"),
+            # Provider-account mapping + the connection's coverage claim. This rides the DATA backup,
+            # not the credentials one, even though it hangs off `connection`: it holds no secret, and its
+            # coverage MUST move with the ledger. Restoring an older backup removes synced rows, so a
+            # coverage claim that survived would hard-reject the very rows a re-sync brings back;
+            # exported alongside its transactions, coverage is consistent with them by construction.
+            "connection_accounts": dump("connection_account"),
             "import_batches": dump("import_batch"),
             "import_batch_accounts": dump("import_batch_account"),
             "import_batch_duplicates": dump("import_batch_duplicate"),
@@ -831,8 +837,35 @@ def _wipe_user_data_tables(conn):
     # account so it doesn't survive as an orphan / rely on cascade during the deferred-FK wipe.
     conn.execute("DELETE FROM amazon_funding_map")
     conn.execute("DELETE FROM category")
+    conn.execute("DELETE FROM connection_account")
     conn.execute("DELETE FROM account")
     conn.execute("DELETE FROM owner")
+
+
+def _reconcile_restored_connection_accounts(conn, connection_accounts, accounts):
+    """Reconcile restored `connection_account` rows against the live `connection` table.
+
+    The mapping straddles the two backups by nature: it points at `account` (restored from this
+    payload) and at `connection` (credential data, never wiped and not in this payload). So a
+    cross-system restore — or one taken before a bank was disconnected — can carry mappings for
+    connections that do not exist here. Those rows are **dropped** rather than inserted with a
+    dangling FK.
+
+    Account ids survive a restore as-is (the payload carries them), so the FKs only need validating,
+    not re-resolving; a target that didn't survive is nulled, matching how the account table's own
+    link reconciliation treats an absent connection.
+    """
+    valid_conn_ids = {r["id"] for r in conn.execute("SELECT id FROM connection")}
+    valid_account_ids = {row.get("id") for row in accounts if row.get("id")}
+    kept = []
+    for row in connection_accounts:
+        if row.get("connection_id") not in valid_conn_ids:
+            continue
+        for key in ("account_id", "target_account_id"):
+            if row.get(key) and row[key] not in valid_account_ids:
+                row[key] = None
+        kept.append(row)
+    return kept
 
 
 def _reconcile_restored_account_links(conn, accounts, backup_version):
@@ -937,6 +970,7 @@ def restore_backup(body: RestoreRequest):
     category_rules = [dict(row) for row in d.get("category_rules", [])]
     merchant_renames = [dict(row) for row in d.get("merchant_renames", [])]
     csv_profiles = [dict(row) for row in d.get("csv_profiles", [])]
+    connection_accounts = [dict(row) for row in d.get("connection_accounts", [])]
     import_batches = [dict(row) for row in d.get("import_batches", [])]
     import_batch_accounts = [dict(row) for row in d.get("import_batch_accounts", [])]
     import_batch_duplicates = [dict(row) for row in d.get("import_batch_duplicates", [])]
@@ -1101,7 +1135,12 @@ def restore_backup(body: RestoreRequest):
         # Resolve account→connection links against the live connection table (needs `conn`): translate a
         # v7 payload's legacy plaid_* columns and null out any connection_id absent locally.
         _reconcile_restored_account_links(conn, accounts, backup_version)
+        connection_accounts = _reconcile_restored_connection_accounts(conn, connection_accounts, accounts)
         insert_rows("account",          accounts)
+        # After accounts: connection_account references both `account` (restored just above) and the
+        # live `connection` table (never wiped). _reconcile_restored_connection_accounts has already
+        # dropped rows whose connection is absent locally and re-resolved account ids.
+        insert_rows("connection_account", connection_accounts)
         insert_rows("category",         categories)
         insert_rows("category_rule",    category_rules)
         # Tag definitions before any attachment (all reference tag.id); attachments after their

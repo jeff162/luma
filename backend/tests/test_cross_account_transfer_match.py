@@ -5,7 +5,7 @@ A wallet (PayPal/Venmo/…) Activity CSV logs a funding/deposit leg — money in
 real-world twin is the *funding* transaction on the bank/card account: same magnitude, a day or three
 off (ACH/settlement lag), named for the wallet. That twin is cross-account and opposite-signed, so the
 same-account coverage lookup never sees it and the leg reads as a bare "no specific match". These tests
-pin `_find_cross_account_transfer_candidates` (the targeted SQL that finds the twin) directly.
+pin `find_cross_account_transfer_candidates` (the targeted SQL that finds the twin) directly.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
-from backend.routers.import_export.core import _find_cross_account_transfer_candidates
+from backend.services.duplicate_detection import find_cross_account_transfer_candidates
 
 
 class CrossAccountTransferMatchTests(unittest.TestCase):
@@ -60,7 +60,7 @@ class CrossAccountTransferMatchTests(unittest.TestCase):
 
     def _find(self, date, amount):
         with self._use_db_path(), get_db() as conn:
-            return _find_cross_account_transfer_candidates(conn, "paypal", date, amount)
+            return find_cross_account_transfer_candidates(conn, "paypal", date, amount)
 
     def test_finds_the_opposite_signed_funding_twin_named_for_the_wallet(self):
         # Deposit leg into PayPal is stored -716 (a credit); the funding row on Northgate Checking is +716,

@@ -45,6 +45,15 @@ instruction and fix the drift rather than silently choosing the looser version.
 - If a temporary dev server or browser session is genuinely needed for a bug diagnosis, tear down only
   the specific processes or ports launched for that session. Never use broad process-name kills.
 
+- **Never run a state-changing git command to answer a read-only question.** `git stash`,
+  `checkout`, `reset`, and `clean` are not investigation tools, and this repo routinely carries a
+  large uncommitted working tree, so a stash can swallow a session's worth of work. To ask "was this
+  already like that before my change?", read the committed version non-destructively — `git show
+  HEAD:path`, `git diff HEAD -- path`, or a copy into the scratchpad. If a working tree does get
+  disturbed, `git stash pop` conflicts on any file that was both staged and unstaged (`MM`);
+  recover the content from `stash@{0}` and the index from `stash@{0}^2` per file, then confirm with
+  an empty `git diff stash@{0}` before dropping the stash.
+
 ## Implementation Bias
 
 - Aim for first-class code, not just a passing fix. If the right shape suggests a needed refactor
@@ -90,7 +99,16 @@ instruction and fix the drift rather than silently choosing the looser version.
   where possible.
 
 - Prove new guards actually fire. A green result is only meaningful after seeing the same check fail
-  on known-bad input.
+  on known-bad input. This bites hardest when **changing a default or a constant**: run the new test
+  against the old value and require it to fail. A test that passes either way is not testing the
+  change, and the usual cause is a second, unnoticed safeguard already handling the case — find which
+  one owns the behavior before claiming the test covers it.
+
+- When a change alters a precondition, re-check that existing fixtures still *meet* it. A fixture can
+  keep passing while silently no longer exercising the thing it was built for (a date range that no
+  longer establishes coverage, an input that no longer reaches the branch). Prefer extending the
+  fixture so the original scenario still exists over rewriting assertions down to the weaker reality —
+  the assertions are the record of what was meant to be true.
 
 - Backend tests run from `backend/venv`, and direct calls into FastAPI router functions must pass
   every `Query(...)` parameter explicitly because omitted values stay as `FieldInfo` objects outside

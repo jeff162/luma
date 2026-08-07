@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from backend.db.database import get_db
 from backend.json_utils import safe_json_dict
+from backend.services.duplicate_detection import DEFAULT_TERMINAL_WINDOW_DAYS, MIN_TERMINAL_WINDOW_DAYS
 
 from .core import (
     IMPORTED_CATEGORY_SCOPE_ALL,
@@ -54,6 +55,7 @@ class ProfileCreate(BaseModel):
     imported_category_scope_mode: str = IMPORTED_CATEGORY_SCOPE_ALL
     imported_category_owner_ids: list[str] = []
     imported_category_unassigned_account_tokens: list[str] = []
+    terminal_window_days: int = DEFAULT_TERMINAL_WINDOW_DAYS
     notes:                Optional[str] = None
 
 class ProfileUpdate(BaseModel):
@@ -73,6 +75,7 @@ class ProfileUpdate(BaseModel):
     imported_category_scope_mode: Optional[str] = None
     imported_category_owner_ids: Optional[list[str]] = None
     imported_category_unassigned_account_tokens: Optional[list[str]] = None
+    terminal_window_days: Optional[int] = None
     notes:                Optional[str] = None
 
 
@@ -85,6 +88,22 @@ class BatchCreateProfileRequest(BaseModel):
 
 def _normalized_profile_name(value: Optional[str]) -> str:
     return str(value or "").strip()
+
+
+# How many trailing days of a source's range are treated as still filling in (see the terminal-window
+# note in `data-model.md`). Clamped rather than rejected: the low end is a hard invariant the coverage
+# math depends on — a window of 0 would extend coverage *past* the source's own last date — and the
+# high end only guards against a typo, since a source lagging by a month covers so little that the
+# setting stops doing anything useful long before it does damage.
+MAX_TERMINAL_WINDOW_DAYS = 30
+
+
+def _clamped_terminal_window_days(value) -> int:
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_TERMINAL_WINDOW_DAYS
+    return max(MIN_TERMINAL_WINDOW_DAYS, min(MAX_TERMINAL_WINDOW_DAYS, days))
 
 
 def _assert_profile_name_available(conn, name: Optional[str], exclude_profile_id: Optional[str] = None) -> str:
@@ -271,8 +290,9 @@ def create_profile(body: ProfileCreate):
               (id, name, filename_pattern, header_fingerprint, template_filename,
                template_file_hash, column_map,
                account_id, date_format, amount_convention, skip_rows,
-               apply_categorization, enrich_from_source, use_imported_categories, notes)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               apply_categorization, enrich_from_source, use_imported_categories,
+               terminal_window_days, notes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (pid, normalized_name, body.filename_pattern, body.header_fingerprint,
               body.template_filename, body.template_file_hash,
               json.dumps(column_map), body.account_id, body.date_format,
@@ -280,6 +300,7 @@ def create_profile(body: ProfileCreate):
               1 if body.apply_categorization else 0,
               1 if body.enrich_from_source else 0,
               1 if body.use_imported_categories else 0,
+              _clamped_terminal_window_days(body.terminal_window_days),
               body.notes))
     return {"id": pid}
 
@@ -305,6 +326,7 @@ def update_profile(profile_id: str, body: ProfileUpdate):
         if body.apply_categorization is not None: fields.append("apply_categorization = ?"); params.append(1 if body.apply_categorization else 0)
         if body.enrich_from_source   is not None: fields.append("enrich_from_source = ?");   params.append(1 if body.enrich_from_source else 0)
         if body.use_imported_categories is not None: fields.append("use_imported_categories = ?"); params.append(1 if body.use_imported_categories else 0)
+        if body.terminal_window_days is not None: fields.append("terminal_window_days = ?");       params.append(_clamped_terminal_window_days(body.terminal_window_days))
         if body.notes                is not None: fields.append("notes = ?");                params.append(body.notes)
         imported_category_fields_present = (
             body.imported_category_scope_mode is not None or
@@ -482,8 +504,9 @@ def create_profile_from_batch(batch_id: str, body: BatchCreateProfileRequest):
               (id, name, filename_pattern, header_fingerprint, template_filename,
                template_file_hash, column_map,
                account_id, date_format, amount_convention, skip_rows,
-               apply_categorization, enrich_from_source, use_imported_categories, notes)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               apply_categorization, enrich_from_source, use_imported_categories,
+               terminal_window_days, notes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             pid, normalized_name, (body.filename_pattern or None), snapshot.get("header_fingerprint"),
             batch["filename"], batch["file_content_hash"],
@@ -494,6 +517,10 @@ def create_profile_from_batch(batch_id: str, body: BatchCreateProfileRequest):
             1 if snapshot.get("apply_categorization", True) else 0,
             1 if snapshot.get("enrich_from_source") else 0,
             1 if batch["use_imported_categories"] else 0,
+            # Written explicitly rather than left to the column default, which does not move on a
+            # database that added the column before the default changed. A source adopted from a file
+            # already imported is no more likely to publish its own records than any other.
+            DEFAULT_TERMINAL_WINDOW_DAYS,
             None,
         ))
         conn.execute("UPDATE import_batch SET profile_id = ? WHERE id = ?", (pid, batch_id))

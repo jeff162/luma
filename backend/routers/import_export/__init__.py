@@ -25,11 +25,6 @@ from . import backup, core, preview, profiles, amazon
 # for callers and tests exactly as it did when this was a single module.
 from .core import *  # noqa: F401,F403
 from .core import (  # noqa: F401  (underscore-prefixed helpers exercised directly by tests)
-    _candidate_summary,
-    _date_in_import_coverage_window,
-    _duplicate_amount_key,
-    _find_textual_duplicate_candidate,
-    _match_terminal_day_candidate,
     _get_system_rule_suggestion_review_state,
     _save_system_rule_suggestion_review_state,
     _set_batch_imported_category_usage,

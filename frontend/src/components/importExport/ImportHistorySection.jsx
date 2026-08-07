@@ -13,6 +13,7 @@ import TransientTextInput from '../TransientTextInput.jsx'
 import { Button, Card, EmptyState } from '../ui.jsx'
 import { ActionCountBadge, ImportedCategoryUsageInline } from './importPresentational.jsx'
 import { getSuggestedDataSourceName } from '../../lib/importExport/importDraft.js'
+import { providerLabel } from '../../lib/importSourceFields.js'
 import { summarizeImportOutcome } from '../../lib/importExport/importOutcome.js'
 import { MarketplaceImportHistory } from './MarketplaceImportHistory.jsx'
 import ContextualExplainer from '../../help/ContextualExplainer.jsx'
@@ -255,7 +256,12 @@ export function ImportHistorySection({
                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 3, fontSize: 11, color: 'var(--muted)' }}>
                               {isManual ? (
                                 row.manualDraftRecord?.filenamePattern ? <span>{row.manualDraftRecord.filenamePattern}</span> : null
-                              ) : isUnknown || isMarketplace || isConnection ? null : editingSourceDescriptionId === row.profile.id ? (
+                              ) : isConnection ? (
+                                // Muted provenance cue on the group header: which data connection these
+                                // synced cards came from, so multiple same-institution connections (e.g.
+                                // two "Chase") are distinguishable. Mirrors the hover's Connection row.
+                                <span>{row.provider ? `${providerLabel(row.provider)} connection` : 'Data connection'}</span>
+                              ) : isUnknown || isMarketplace ? null : editingSourceDescriptionId === row.profile.id ? (
                                 <TransientTextInput
                                   value={sourceDescriptionDraft}
                                   onChange={setSourceDescriptionDraft}
@@ -556,18 +562,16 @@ export function ImportHistorySection({
                                       // with a minus — so the green check never implies rows loaded when none did.
                                       const noNewRows = !a.was_skipped && count === 0
                                       const muted = a.was_skipped || noNewRows
-                                      // If the CSV's original account label differs from the account it currently
+                                      // If the source's original account label differs from the account it currently
                                       // resolves to, the user mapped it after the import completed. Surface both
-                                      // so the file card matches what the user saw at import time, with the mapped
-                                      // destination as a faded suffix.
-                                      // For a data-source connection the csv_value is the provider's opaque
-                                      // external account id — of no use to the user — so show only the account
-                                      // name it maps to (no id, no mapping arrow). CSV cards keep the raw file
-                                      // label → mapped-account form, which is meaningful (it's what the file
-                                      // called the account, and how the user mapped it).
-                                      const showMapping = !isConnection && !a.was_skipped && mappedLabel && csvLabel && mappedLabel !== csvLabel
+                                      // so the card matches what the user saw at the time, with the mapped
+                                      // destination as a faded suffix. This is one form for every source: a
+                                      // connection's csv_value is its provider account LABEL ("CREDIT CARD ···6612"),
+                                      // not the opaque external id it used to be, so "what the source called the
+                                      // account → where it landed" is as meaningful for a sync card as for a file.
+                                      const showMapping = !a.was_skipped && mappedLabel && csvLabel && mappedLabel !== csvLabel
                                       const truncate = s => (s && s.length > 22 ? s.slice(0, 20) + '…' : s)
-                                      const primary = isConnection ? (mappedLabel || csvLabel) : csvLabel
+                                      const primary = csvLabel
                                       const baseTooltip = showMapping
                                         ? `${csvLabel} → ${mappedLabel}`
                                         : (a.was_skipped ? csvLabel : (mappedLabel || csvLabel))

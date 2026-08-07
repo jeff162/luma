@@ -386,11 +386,14 @@ export function PossibleAccountMatchChooserDialog({
           <Button onClick={() => onSelect?.('map_existing')}>
             Map to existing account
           </Button>
+          {/* Grouping here is a shortcut, not a distinct concept: it is the same end state as creating
+              the account and then merging it on the Accounts page, in one step instead of two. A fourth
+              choice — create a separate account but dedupe it against the existing one — was removed.
+              It had no analogue anywhere else in the app and asserted the two were the same physical
+              account while deliberately keeping them apart; "Map to existing account" says that
+              properly. Don't reintroduce it. */}
           <Button variant="ghost" onClick={() => onSelect?.('group_with_existing')}>
             Create new account and group with existing
-          </Button>
-          <Button variant="ghost" onClick={() => onSelect?.('duplicate_compare_only')}>
-            Create new account, but use existing account for duplicate detection
           </Button>
           <Button variant="ghost" onClick={() => onSelect?.('keep_separate')}>
             Keep separate

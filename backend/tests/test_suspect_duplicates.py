@@ -11,6 +11,7 @@ for each scenario.
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 import uuid
@@ -92,6 +93,7 @@ class SuspectDuplicateTests(unittest.TestCase):
         raw_name: str | None = None,
         batch_id: str | None = None,
         trashed_at: str | None = None,
+        import_evidence_json: str | None = None,
     ) -> str:
         txn_id = str(uuid.uuid4())
         with self._use_db_path():
@@ -100,8 +102,8 @@ class SuspectDuplicateTests(unittest.TestCase):
                     """
                     INSERT INTO txn
                       (id, account_id, owner_id, amount, merchant_name, display_name, raw_name,
-                       date, is_pending, import_batch_id, trashed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                       date, is_pending, import_batch_id, trashed_at, import_evidence_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
                     """,
                     (
                         txn_id,
@@ -114,6 +116,7 @@ class SuspectDuplicateTests(unittest.TestCase):
                         date,
                         batch_id,
                         trashed_at,
+                        import_evidence_json,
                     ),
                 )
         return txn_id
@@ -405,6 +408,129 @@ class SuspectDuplicateTests(unittest.TestCase):
         link = self._suspect_link(new_id)
         self.assertEqual(link["suspect_duplicate_of"], existing_id)
         self.assertEqual(link["suspect_duplicate_reason"], "cross_account")
+
+    def test_import_flags_cross_account_match_via_original_statement_evidence(self):
+        # The motivating regression: a data-connection (Plaid) row carries the raw bank descriptor in
+        # raw_name ("COUNTRY CREAMERY & COFFE", truncated), while a CSV importer cleaned raw_name to the
+        # merchant column ("Country Creamery & Coffee", two e's) and kept the true statement only in an
+        # "Original Statement" evidence field. The OLD matcher keyed on merchant_name and saw "coffe" !=
+        # "coffee" — a miss. The union-of-source-texts matcher compares the CSV's evidence statement
+        # against the Plaid raw_name, finds them byte-identical, and flags an EXACT cross_account match.
+        csv_account = self._insert_account("Northgate Rewards (CSV)")
+        sync_account = self._insert_account("Northgate Rewards (Plaid)")
+        csv_batch = self._insert_batch(filename="monarch.csv")
+        sync_batch = self._insert_batch(filename="Chase · Initial import")
+
+        evidence = json.dumps({
+            "account": {"header": "Account", "value": "Northgate Rewards"},
+            "description": {"header": "Merchant", "value": "Country Creamery & Coffee"},
+            "extra_text_fields": [{"header": "Original Statement", "value": "COUNTRY CREAMERY & COFFE"}],
+        })
+        existing_id = self._insert_txn(
+            account_id=csv_account, date="2026-07-03", amount=-7.75,
+            merchant_name="Country Creamery & Coffee", raw_name="Country Creamery & Coffee",
+            batch_id=csv_batch, import_evidence_json=evidence,
+        )
+        # The synced row: two days later (posted vs. transaction date), truncated provider text, no evidence.
+        new_id = self._insert_txn(
+            account_id=sync_account, date="2026-07-05", amount=-7.75,
+            merchant_name="Country Creamery & Coffe", raw_name="COUNTRY CREAMERY & COFFE",
+            batch_id=sync_batch,
+        )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                marked = mark_import_suspects(conn, sync_batch)
+
+        self.assertEqual(marked, 1)
+        link = self._suspect_link(new_id)
+        self.assertEqual(link["suspect_duplicate_of"], existing_id)
+        # Byte-identical raw descriptor → the high-confidence EXACT tier, not fuzzy.
+        self.assertEqual(link["suspect_duplicate_reason"], "cross_account")
+
+    def test_import_flags_fuzzy_cross_account_match_as_review_only(self):
+        # Same amount + within the date window, but the source texts differ by a single character and
+        # neither side captured the other's exact spelling (no evidence to bridge them). That is the
+        # FUZZY tier: flagged for review under a distinct reason, never treated as a certain match.
+        csv_account = self._insert_account("CSV account")
+        sync_account = self._insert_account("Plaid account")
+        csv_batch = self._insert_batch(filename="export.csv")
+        sync_batch = self._insert_batch(filename="Chase · August 2026")
+
+        existing_id = self._insert_txn(
+            account_id=csv_account, date="2026-07-03", amount=-7.75,
+            merchant_name="Country Creamery & Coffee", raw_name="Country Creamery & Coffee",
+            batch_id=csv_batch,
+        )
+        new_id = self._insert_txn(
+            account_id=sync_account, date="2026-07-05", amount=-7.75,
+            merchant_name="Country Creamery & Coffe", raw_name="COUNTRY CREAMERY & COFFE",
+            batch_id=sync_batch,
+        )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                marked = mark_import_suspects(conn, sync_batch)
+
+        self.assertEqual(marked, 1)
+        link = self._suspect_link(new_id)
+        self.assertEqual(link["suspect_duplicate_of"], existing_id)
+        self.assertEqual(link["suspect_duplicate_reason"], "cross_account_fuzzy")
+
+    def test_import_does_not_fuzzy_match_distinct_check_numbers(self):
+        # Two genuinely different checks share amount + date + "Check #" and differ by a single digit
+        # ("#1042" vs "#1043") — close enough to trip the fuzzy ratio. The check-number discriminator
+        # must veto the pair so distinct checks are never flagged as duplicates.
+        account_a = self._insert_account("Checking A")
+        account_b = self._insert_account("Checking B")
+        prior_batch = self._insert_batch(filename="prior.csv")
+        new_batch = self._insert_batch(filename="new.csv")
+
+        self._insert_txn(
+            account_id=account_a, date="2026-07-03", amount=-50.00,
+            merchant_name="Check #1042", batch_id=prior_batch,
+        )
+        new_id = self._insert_txn(
+            account_id=account_b, date="2026-07-03", amount=-50.00,
+            merchant_name="Check #1043", batch_id=new_batch,
+        )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                marked = mark_import_suspects(conn, new_batch)
+
+        self.assertEqual(marked, 0)
+        self.assertIsNone(self._suspect_link(new_id)["suspect_duplicate_of"])
+
+    def test_merge_does_not_auto_confirm_fuzzy_suspect(self):
+        # A FUZZY cross-account soft-flag is review-only: merging the two accounts must NOT silently
+        # trash it (that is reserved for the byte-identical exact tier). The flag survives the promote
+        # sweep so the user still decides. Contrast test_attach_promotes_in_group_suspects_to_confirmed,
+        # which promotes an exact 'cross_account' flag.
+        parent = self._insert_account("Parent")
+        child_existing = self._insert_account("Child Existing")
+        child_new = self._insert_account("Child New")
+
+        existing_id = self._insert_txn(account_id=child_existing, date="2026-07-03", amount=-7.75, merchant_name="Country Creamery & Coffee")
+        new_id = self._insert_txn(account_id=child_new, date="2026-07-05", amount=-7.75, merchant_name="Country Creamery & Coffe")
+
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE account SET parent_account_id = ? WHERE id = ?", (parent, child_existing))
+                conn.execute(
+                    "UPDATE txn SET suspect_duplicate_of = ?, suspect_duplicate_reason = 'cross_account_fuzzy' WHERE id = ?",
+                    (existing_id, new_id),
+                )
+                conn.execute("UPDATE account SET parent_account_id = ? WHERE id = ?", (parent, child_new))
+                promoted = promote_in_group_suspects_to_confirmed(conn, [child_new, child_existing, parent])
+
+        self.assertEqual(promoted, 0, "fuzzy suspects must not be auto-confirmed on merge")
+        link = self._suspect_link(new_id)
+        self.assertIsNone(link["trashed_at"])
+        self.assertIsNone(link["rejection_reason"])
+        # Still an active suspect awaiting the user's review.
+        self.assertEqual(link["suspect_duplicate_of"], existing_id)
+        self.assertEqual(link["suspect_duplicate_reason"], "cross_account_fuzzy")
 
     # ---- account-merge-time behavior ------------------------------------
 

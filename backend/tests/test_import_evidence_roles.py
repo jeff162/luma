@@ -10,7 +10,7 @@ A captured column is one of two shapes:
     though it still feeds the hover, rules, and enrich.
 
 The role is inferred from the column's cardinality across the file and stamped on each captured field;
-_collect_duplicate_match_texts consumes only descriptive fields. Columns are captured from the keyword
+collect_duplicate_match_texts consumes only descriptive fields. Columns are captured from the keyword
 auto-detect (capped) plus the user's explicit `evidence_columns` picks (honored over the cap).
 """
 
@@ -31,6 +31,7 @@ from backend.db.database import (
     set_current_db_path,
 )
 from backend.routers.import_export import run_import
+from backend.services.duplicate_detection import collect_duplicate_match_texts
 from backend.routers.import_export.core import (
     EVIDENCE_ROLE_CATEGORICAL,
     EVIDENCE_ROLE_DESCRIPTIVE,
@@ -38,7 +39,6 @@ from backend.routers.import_export.core import (
     ColumnMap,
     _build_evidence_column_plan,
     _classify_evidence_column_role,
-    _collect_duplicate_match_texts,
     _forced_evidence_headers,
     sniff_paypal_activity,
 )
@@ -178,7 +178,7 @@ class CollectDuplicateMatchTextsTests(unittest.TestCase):
                 {"header": "Type", "value": "Bank Deposit", "role": "categorical"},   # excluded
             ],
         }
-        texts = _collect_duplicate_match_texts(
+        texts = collect_duplicate_match_texts(
             merchant_name="Clinton Moon", display_name="Clinton Moon", raw_name=None, import_evidence=evidence
         )
         self.assertIn("Pats tix", texts)

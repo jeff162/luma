@@ -552,7 +552,7 @@ export const HELP_TOPICS = [
     section: 'duplicates',
     title: 'Reading the duplicate-detection report',
     surfaces: ['Import / Export (file ↗ report)', 'Duplicate-detection report'],
-    summary: 'When the same activity arrives from more than one source, this report resolves the clear cases and groups the rest into pills. Review is an undecided match that needs a decision — and the only category counted as pending work (the file’s “to review” count and the Tasks warning). Rejected · review (Matched ±2 days, No specific match) are already rejected and advisory: examine it, Import anyway if it shouldn’t have been rejected, or Mark reviewed. Click a pill to show just that group; hover a pill for a short explanation.',
+    summary: 'When the same activity arrives from more than one source, this report resolves the clear cases and groups the rest into pills. Review is an undecided match that needs a decision — and the only category counted as pending work (the file’s “to review” count and the Tasks warning). Rejected · review (Matched nearby date, No specific match) are already rejected and advisory: examine it, Import anyway if it shouldn’t have been rejected, or Mark reviewed. Click a pill to show just that group; hover a pill for a short explanation.',
     body: () => (
       <>
         <p>
@@ -567,13 +567,13 @@ export const HELP_TOPICS = [
             category that counts as <strong>pending work</strong>: it drives the file&rsquo;s
             &ldquo;to review&rdquo; count and the &ldquo;Possible duplicate transactions&rdquo; item on the
             Tasks page.</li>
-          <li><strong>Rejected &middot; review</strong> &mdash; <strong>Matched &plusmn;2 days</strong> and
+          <li><strong>Rejected &middot; review</strong> &mdash; <strong>Matched nearby date</strong> and
             <strong> No specific match</strong>. These were already rejected at import and are
             <em> advisory</em> &mdash; they do <strong>not</strong> count as pending work. Examine them to
             confirm the rejection was right; a row that should <em>not</em> have been rejected can be kept
             with <strong>Import anyway</strong>, and the rest can be left alone or cleared from the pills
             with <strong>Mark reviewed</strong> (in bulk). Often a <strong> No specific match</strong> transaction
-            can be matched to a transaction further outside of the ±2 day window but sometimes it really is a
+            can be matched to a transaction further out than the pairing window reaches, but sometimes it really is a
             transaction which should be included. See{' '}
             <HelpLink to="/help/covered-range-review">covered-range review</HelpLink>.</li>
         </ul>
@@ -667,23 +667,25 @@ export const HELP_TOPICS = [
   {
     id: 'covered-range-review',
     section: 'duplicates',
-    title: 'Reviewing covered-range duplicates (±2 days / transfer / no match)',
+    title: 'Reviewing covered-range duplicates (nearby date / transfer / no match)',
     surfaces: ['Duplicate-detection report'],
-    summary: 'When an earlier import already covered a date range, every transaction in that range is expected to already be present, so each new row landing in it is paired against the existing data by date and amount (exact, then ±1, then ±2 days, then a cross-account transfer twin). Three pairing outcomes are surfaced for review: Matched ±2 days (a same-account counterpart turned up only after widening the window), Possible transfer match (a same-amount row naming this account sits on another account — a wallet funding leg whose twin is already on your books), and No specific match (nothing paired at all, so the row may be genuinely missing from the earlier import).',
+    summary: 'When an earlier import already covered a date range, every transaction in that range is expected to already be present, so each new row landing in it is paired against the existing data by date and amount (the exact date first, then ±1 day, then outward to a week, then a cross-account transfer twin). Three pairing outcomes are surfaced for review: Matched nearby date (a same-account counterpart turned up only after widening the window, and the row shows how many days apart), Possible transfer match (a same-amount row naming this account sits on another account — a wallet funding leg whose twin is already on your books), and No specific match (nothing paired at all, so the row may be genuinely missing from the earlier import).',
     body: () => (
       <>
         <p>
           When an earlier import already covered a date range, every transaction in that range is expected to
           already be in the ledger, so a newly-imported row landing inside it is rejected as a presumed
           duplicate and paired against the existing data by date and amount &mdash; the exact date first, then
-          &plusmn;1 day, then &plusmn;2 days, and finally a cross-account transfer twin. Three of the pairing
-          outcomes are surfaced for review:
+          &plusmn;1 day, then outward a day at a time to a week, and finally a cross-account transfer twin.
+          Three of the pairing outcomes are surfaced for review:
         </p>
         <ul>
-          <li><strong>Matched &plusmn;2 days</strong> &mdash; a counterpart turned up only after the date
-            window widened to &plusmn;2 days. Posting dates drift between sources for several reasons &mdash;
-            pending vs. posted timing, weekend or holiday settlement, and time-zone differences on foreign
-            charges &mdash; so the same transaction can sit a day or two apart in two sources. Once the pair
+          <li><strong>Matched nearby date</strong> &mdash; a counterpart turned up only after the date
+            window widened past the exact day; each row states how far apart the two are. Posting dates drift
+            between sources for several reasons &mdash; pending vs. posted timing, weekend or holiday
+            settlement, and time-zone differences on foreign charges &mdash; so the same transaction can sit
+            several days apart in two sources, and the further apart the pair sits the more it is worth a
+            glance before clearing. Once the pair
             looks right, <strong>Mark reviewed</strong> (in bulk from the pill, or per row) clears it from the
             needs-attention list. If a pair turns out <em>not</em> to be the same transaction, select the rows
             and import both.</li>
@@ -694,7 +696,7 @@ export const HELP_TOPICS = [
             books, so the leg is correctly not re-imported. <strong>Mark reviewed</strong> to confirm, or
             <strong> Import anyway</strong> if they really are separate.</li>
           <li><strong>No specific match</strong> &mdash; the date is covered but nothing paired with it at
-            all, even at &plusmn;2 days or across accounts. That makes it the row to actually investigate: it
+            all, anywhere in the window or across accounts. That makes it the row to actually investigate: it
             is usually present in one source and genuinely missing from the other, in which case
             <strong> Import anyway</strong> keeps it.</li>
         </ul>

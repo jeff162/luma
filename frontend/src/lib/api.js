@@ -356,6 +356,20 @@ export const api = {
       body: JSON.stringify({ public_token, institution_name }),
     }),
 
+  // Per-connection account mapping — the data-source analog of a CSV import's account step. Connecting
+  // records what the bank offers; nothing lands in an account until a mapping is applied, which is also
+  // what gives duplicate detection its cross-account alias.
+  getConnectionAccounts: (connectionId) => request(`/connections/${connectionId}/accounts`),
+  setConnectionCapturedFields: (connectionId, fields) =>
+    request(`/connections/${connectionId}/captured-fields`, {
+      method: 'POST',
+      body: JSON.stringify({ fields }),
+    }),
+  setConnectionAccountMap: (connectionId, mappings) =>
+    request(`/connections/${connectionId}/account-map`, {
+      method: 'POST',
+      body: JSON.stringify({ mappings }),
+    }),
   updateMerchant:      (id, name)   => request(`/transactions/${id}/merchant`, { method: 'PATCH', body: JSON.stringify({ merchant_name: name }) }),
   updateNotes:         (id, notes)  => request(`/transactions/${id}/notes`,    { method: 'PATCH', body: JSON.stringify({ notes }) }),
   updateTransactionTag: (id, tag_id, present) =>

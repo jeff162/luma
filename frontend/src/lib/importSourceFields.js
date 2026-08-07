@@ -27,6 +27,17 @@ const CATEGORIZED_BY_LABEL = {
   manual: 'manual edit',
 }
 
+// Display names for data-connection providers. A synced batch's `import_batch_provider` is the raw
+// provider key (e.g. 'plaid'); this renders it for the origin hover / group header so a user can tie a
+// transaction back to which connection it came from. Unknown keys fall back to a capitalized form.
+const PROVIDER_LABELS = { plaid: 'Plaid', teller: 'Teller', simplefin: 'SimpleFIN' }
+
+export function providerLabel(provider) {
+  const key = String(provider || '').toLowerCase()
+  if (PROVIDER_LABELS[key]) return PROVIDER_LABELS[key]
+  return key ? key[0].toUpperCase() + key.slice(1) : ''
+}
+
 export function parseImportEvidence(txn) {
   if (!txn?.import_evidence_json) return null
   try {
@@ -63,15 +74,26 @@ export function getTxnOriginRows(txn) {
     const importedAt = txn.import_batch_imported_at
       ? String(txn.import_batch_imported_at).slice(0, 16).replace('T', ' ')
       : null
+    // Labeled "Source" (not "Source file") because a data-connection batch isn't a file. For a synced
+    // batch the provider is surfaced as its own row below so two same-institution connections stay
+    // distinguishable from the hover alone (the group header carries the same provider cue).
     rows.push({
       key: 'source_file',
-      label: 'Source file',
+      label: 'Source',
       value: txn.import_batch_filename,
       suffix: importedAt ? `imported ${importedAt}` : null,
       scope: 'meta',
     })
+    if (txn.import_batch_provider) {
+      rows.push({
+        key: 'connection',
+        label: 'Connection',
+        value: providerLabel(txn.import_batch_provider),
+        scope: 'meta',
+      })
+    }
   } else {
-    rows.push({ key: 'source_file', label: 'Source file', value: '— (not from an import)', scope: 'meta' })
+    rows.push({ key: 'source_file', label: 'Source', value: '— (not from an import)', scope: 'meta' })
   }
 
   if (txn.imported_category) {

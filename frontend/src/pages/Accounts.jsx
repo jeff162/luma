@@ -5,13 +5,14 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { notifyAccountsChanged } from '../App.jsx'
-import { Card, Button, Spinner, Select, Input, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, DialogActions, OverlayBackdrop } from '../components/ui.jsx'
+import { Card, Button, Spinner, Select, Input, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, DialogActions, OverlayBackdrop, COMPACT_ACTION_BTN_STYLE } from '../components/ui.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import PillTableHeader from '../components/PillTableHeader.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useDismissibleLayer, useDismissiblePopup, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from '../components/TransientTextInput.jsx'
+import ConnectionAccountMapDialog from '../components/accounts/ConnectionAccountMapDialog.jsx'
 import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useUserPreferences, useUserPreference } from '../lib/UserPreferencesContext.jsx'
@@ -651,6 +652,15 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   const [historyDays, setHistoryDays] = useUserPreference('connection.historyDays', 90)
   const [refreshingConnId, setRefreshingConnId] = useState(null)  // connection currently being refreshed
   const [fetchingHistoryConnId, setFetchingHistoryConnId] = useState(null)  // connection currently deepening history
+  // The account-mapping step. `pendingBackfill` marks the post-Link case, where mapping is required and
+  // the historical pull runs only once it is resolved — an unmapped provider account has nowhere to sync
+  // into, and the mapping is what gives dedupe its cross-account alias. Reopened from a connection card
+  // (without `pendingBackfill`) it is a plain edit.
+  const [mapTarget, setMapTarget] = useState(null)   // { connection, accounts, pendingBackfill, days }
+  const [mapLoading, setMapLoading] = useState(false)
+  const [mapSaving, setMapSaving] = useState(false)
+  const [mapError, setMapError] = useState(null)
+  const [unmappedByConnection, setUnmappedByConnection] = useState({})
   // While a Plaid Link (+ bank OAuth) session is open, the whole app is blocked behind a modal scrim: the
   // Link handler and its onSuccess closure live in THIS component, so navigating away mid-connect unmounts
   // it and silently loses the in-flight connection. linkInProgress drives the scrim; plaidHandlerRef lets
@@ -700,6 +710,19 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       entry.cards += 1
     }
     setSyncSummaryByConnection(summary)
+    // How many of each connection's provider accounts still have no destination. Drives the "N to map"
+    // nudge on the card: an unmapped account is silently skipped by every sync until it is resolved, so
+    // the state has to be visible rather than inferred from missing transactions.
+    const unmapped = {}
+    await Promise.all(
+      (provResp.providers || []).flatMap(p => (p.connections || []).map(async c => {
+        try {
+          const res = await api.getConnectionAccounts(c.id)
+          unmapped[c.id] = res.unmapped || 0
+        } catch { /* a connection whose accounts can't be read just shows no badge */ }
+      })),
+    )
+    setUnmappedByConnection(unmapped)
     setLoading(false)
   }, [currentUser])
 
@@ -711,6 +734,12 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   const accountsForConnectionId = useCallback((connectionId) => {
     return (accounts || []).filter(a => a.connection_id === connectionId)
   }, [accounts])
+
+  // Resolves a merged child's group name for the card's account rows.
+  const accountLabelById = useMemo(
+    () => new Map((accounts || []).map(a => [a.id, a.display_name || a.name])),
+    [accounts],
+  )
 
   async function saveConfig(provider, payload) {
     const result = await api.saveProviderConfig(provider, payload)
@@ -772,9 +801,20 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
             // streams in. The sync has its own progress UI and resumes from the cursor if interrupted.
             setLinkInProgress(false)
             plaidHandlerRef.current = null
-            // Auto-pull history for just this new connection (scoped by connection_id), polling until the
-            // provider signals the historical backfill is complete. Fetch depth = the user's saved window.
             if (result?.connection_id) {
+              await refresh()
+              if (result.unmapped) {
+                // Accounts still need a destination. The mapping step owns the backfill from here: it
+                // runs once every account is resolved, so the first rows pulled are deduped against the
+                // accounts they were mapped onto rather than landing unattached.
+                await openAccountMap(
+                  { id: result.connection_id, provider: result.provider || 'plaid', institution: metadata.institution?.name },
+                  { pendingBackfill: true, days: historyDays },
+                )
+                return
+              }
+              // Everything was already mapped (a re-link of a bank Luma still knows), so pull straight
+              // away — polling until the provider signals the historical backfill is complete.
               setSyncState(prev => ({ ...prev, plaid: { syncing: true, result: null } }))
               try {
                 await syncUntilComplete('plaid', { days: historyDays, connectionId: result.connection_id })
@@ -862,6 +902,95 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     } catch (e) {
       setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
       setNotice({ title: 'Sync failed', description: e.message })
+    }
+  }
+
+  // Open the account-mapping step for a connection. `pendingBackfill` (post-Link) makes every account
+  // require a decision and defers the historical pull until they have one; without it this is a plain
+  // edit of an existing mapping.
+  async function openAccountMap(connection, { pendingBackfill = false, days = null } = {}) {
+    setMapError(null)
+    setMapLoading(true)
+    setMapTarget({ connection, accounts: [], captureFields: [], pendingBackfill, days })
+    try {
+      const res = await api.getConnectionAccounts(connection.id)
+      setMapTarget({
+        connection: res.connection || connection,
+        accounts: res.accounts || [],
+        captureFields: res.capture_fields || [],
+        pendingBackfill, days,
+      })
+      setUnmappedByConnection(prev => ({ ...prev, [connection.id]: res.unmapped || 0 }))
+    } catch (e) {
+      setMapError(e.message)
+    } finally {
+      setMapLoading(false)
+    }
+  }
+
+  // Optional capture fields are saved as they are toggled rather than with the mapping: they are a
+  // per-connection setting, not part of the mapping decision, and persisting immediately means a user
+  // who closes the dialog without saving a mapping change still keeps the capture choice.
+  async function toggleCaptureField(key, enabled) {
+    const target = mapTarget
+    if (!target) return
+    const next = (target.captureFields || []).map(f => (f.key === key ? { ...f, enabled } : f))
+    setMapTarget(prev => (prev ? { ...prev, captureFields: next } : prev))
+    try {
+      const res = await api.setConnectionCapturedFields(
+        target.connection.id,
+        next.filter(f => !f.locked && f.enabled).map(f => f.key),
+      )
+      setMapTarget(prev => (prev ? { ...prev, captureFields: res.capture_fields || next } : prev))
+    } catch (e) {
+      setMapError(e.message)
+    }
+  }
+
+  async function saveAccountMap(mappings) {
+    const target = mapTarget
+    if (!target) return
+    setMapSaving(true)
+    setMapError(null)
+    try {
+      const res = await api.setConnectionAccountMap(target.connection.id, mappings)
+      setUnmappedByConnection(prev => ({ ...prev, [target.connection.id]: res.unmapped || 0 }))
+      setMapTarget(null)
+      await onAccountsChanged?.()
+      // Post-Link: the accounts now exist, so the deferred historical pull can run. It is deliberately
+      // after the mapping rather than before, so the very first batch of rows is deduped against
+      // whatever the mapped accounts already hold instead of arriving unattached.
+      if (target.pendingBackfill) {
+        const provider = target.connection.provider || 'plaid'
+        setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
+        try {
+          await syncUntilComplete(provider, { days: target.days ?? historyDays, connectionId: target.connection.id })
+        } catch (syncErr) {
+          setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
+          setNotice({ title: 'Mapped, but could not pull history', description: syncErr.message })
+        }
+        await onAccountsChanged?.()
+      }
+      // A mapping change re-checks whatever this connection had already synced, since the decision
+      // just made is what those rows were missing. Silent when it finds nothing; reported when it
+      // acts, because it removed transactions the user could otherwise see vanish unexplained.
+      const removed = (res.rescan?.hard_rejected || 0) + (res.rescan?.promoted || 0)
+      const flagged = (res.rescan?.soft_flagged || 0) + (res.rescan?.swept || 0)
+      if (removed || flagged) {
+        const parts = []
+        if (removed) parts.push(`${removed} removed as ${removed === 1 ? 'a duplicate' : 'duplicates'}`)
+        if (flagged) parts.push(`${flagged} flagged for review`)
+        setNotice({
+          title: 'Mapping applied — already-synced transactions re-checked',
+          description: `${parts.join(', ')}. Removed transactions keep their category and can be restored `
+            + 'from this connection’s cards in Import / Export history.',
+        })
+      }
+      await refresh()
+    } catch (e) {
+      setMapError(e.message)
+    } finally {
+      setMapSaving(false)
     }
   }
 
@@ -1052,20 +1181,46 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                               ⚠ {syncSummary.suspects} to review
                             </button>
                           ) : null}
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
-                            <Button variant="ghost" small
+                          {unmappedByConnection[c.id] > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => openAccountMap(c)}
+                              title={`${unmappedByConnection[c.id]} account${unmappedByConnection[c.id] === 1 ? '' : 's'} from this data source ${unmappedByConnection[c.id] === 1 ? 'has' : 'have'} no destination yet — transactions for ${unmappedByConnection[c.id] === 1 ? 'it' : 'them'} are skipped until mapped`}
+                              style={{
+                                display: 'inline-flex', alignItems: 'center', gap: 4,
+                                padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                                background: 'color-mix(in srgb, var(--accent2) 12%, var(--surface2))',
+                                color: 'var(--accent2)',
+                                border: '1px solid color-mix(in srgb, var(--accent2) 50%, var(--border))',
+                              }}
+                            >
+                              {unmappedByConnection[c.id]} to map
+                            </button>
+                          ) : null}
+                          {/* Card-level maintenance, not the tab's main verb — these sit in the shared
+                              compact action-button footprint (the same one the duplicate report's row
+                              actions use) so a row of four reads as a quiet toolbar and leaves "Sync now"
+                              above as the only full-weight control on the tab. */}
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
+                            <Button variant="ghost" small style={COMPACT_ACTION_BTN_STYLE}
+                              onClick={() => openAccountMap(c)}
+                              disabled={!!refreshingConnId || !!fetchingHistoryConnId || ss.syncing}
+                              title="Choose what each account from this data source maps to — an existing account, a new one, or skipped. Also how Luma recognizes transactions already imported from a file.">
+                              Accounts…
+                            </Button>
+                            <Button variant="ghost" small style={COMPACT_ACTION_BTN_STYLE}
                               onClick={() => fetchMoreHistory(p.provider, c)}
                               disabled={!!fetchingHistoryConnId || !!refreshingConnId || ss.syncing}
                               title="Pull older transactions for this connection — requests all available history from the provider and imports anything earlier than what's already here. A bank or plan may cap how far back it will return.">
                               {fetchingHistoryConnId === c.id ? 'Fetching…' : '↻ Fetch more history'}
                             </Button>
-                            <Button variant="ghost" small
+                            <Button variant="ghost" small style={COMPACT_ACTION_BTN_STYLE}
                               onClick={() => refreshConnectionAccounts(p.provider, c)}
                               disabled={!!refreshingConnId || !!fetchingHistoryConnId || ss.syncing}
                               title="Rebuild this connection's accounts from its saved credential (no re-linking), then sync. Use this if the accounts are missing — e.g. after restoring a backup. To pull older transactions, use Fetch more history.">
                               {refreshingConnId === c.id ? 'Refreshing…' : '↻ Refresh accounts'}
                             </Button>
-                            <Button variant="ghost" small
+                            <Button variant="ghost" small style={COMPACT_ACTION_BTN_STYLE}
                               onClick={() => setDisconnectTarget({ provider: p.provider, external_id: c.external_id, institution: c.institution })}>
                               Disconnect
                             </Button>
@@ -1075,8 +1230,26 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                           <div key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: 'var(--muted)' }}>
                             <span style={{ color: 'var(--text)' }}>{a.display_name || a.name}</span>
                             {a.mask ? <span>····{a.mask}</span> : null}
+                            {/* Named because a merged account is otherwise indistinguishable here from a
+                                standalone one, and the group is where its transactions are read. */}
+                            {a.parent_account_id ? (
+                              <span style={{ fontSize: 11 }}>
+                                in {accountLabelById.get(a.parent_account_id) || 'a merged group'}
+                              </span>
+                            ) : null}
                           </div>
-                        )) : <span style={{ fontSize: 12, color: 'var(--muted)' }}>No accounts imported yet — use “Refresh accounts” to pull them in.</span>}
+                        )) : (
+                          // Two different empty states wearing one message before: a connection whose
+                          // provider accounts were never pulled needs "Refresh accounts", while one
+                          // whose accounts are pulled but undecided needs the mapping step. Sending the
+                          // second case to Refresh is advice that cannot work — the accounts are already
+                          // here, they just have nowhere to go.
+                          <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                            {unmappedByConnection[c.id] > 0
+                              ? `${unmappedByConnection[c.id]} account${unmappedByConnection[c.id] === 1 ? '' : 's'} from this data source ${unmappedByConnection[c.id] === 1 ? 'has' : 'have'} no destination yet — use “Accounts…” to map ${unmappedByConnection[c.id] === 1 ? 'it' : 'them'}.`
+                              : 'No accounts imported yet — use “Refresh accounts” to pull them in.'}
+                          </span>
+                        )}
                       </div>
                     )
                   })}
@@ -1124,6 +1297,22 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
           cancelDisabled={disconnecting}
           onConfirm={confirmDisconnect}
           onCancel={() => setDisconnectTarget(null)}
+        />
+      ) : null}
+
+      {mapTarget ? (
+        <ConnectionAccountMapDialog
+          connection={mapTarget.connection}
+          providerAccounts={mapTarget.accounts}
+          captureFields={mapTarget.captureFields}
+          accounts={accounts}
+          onToggleCaptureField={toggleCaptureField}
+          loading={mapLoading}
+          saving={mapSaving}
+          error={mapError}
+          requireAll={mapTarget.pendingBackfill}
+          onSave={saveAccountMap}
+          onClose={() => { setMapTarget(null); setMapError(null) }}
         />
       ) : null}
 
@@ -3879,7 +4068,13 @@ export default function Accounts() {
 
           {tab === 'connections' && (
             <DataSourceConnections
-              accounts={rootAccounts}
+              // Merged children included, deliberately. A connection maps onto whatever account the
+              // user pointed it at, and merging that account into a group does not move the mapping —
+              // so a root-only list drops exactly the accounts whose mappings are still in force,
+              // leaving the card claiming nothing was imported and the mapping dialog rendering a
+              // live decision as an empty select. Same reasoning as the CSV mapping grid's own
+              // include_children fetch.
+              accounts={activeAccounts}
               onAccountsChanged={loadData}
               currentUser={currentUser}
               setCurrentUser={setCurrentUser}
