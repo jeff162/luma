@@ -45,6 +45,14 @@ instruction and fix the drift rather than silently choosing the looser version.
 - If a temporary dev server or browser session is genuinely needed for a bug diagnosis, tear down only
   the specific processes or ports launched for that session. Never use broad process-name kills.
 
+- **A bug in one of two deliberately-parallel surfaces is a bug in the family — check every sibling
+  before fixing one.** This repo has several sets of surfaces built to behave identically on purpose
+  (the CSV import account grid, the connection mapping dialog, and the data-source editor's
+  single-account picker; the CSV and connection dedupe paths). A defect in the shared *idea* reaches
+  all of them, and the copies drift in which have been fixed: one may already carry the fix with a
+  comment naming the failure, while a third has it live and unreported. Enumerate the family first and
+  fix them together, rather than patching the one that was reported.
+
 - **Never run a state-changing git command to answer a read-only question.** `git stash`,
   `checkout`, `reset`, and `clean` are not investigation tools, and this repo routinely carries a
   large uncommitted working tree, so a stash can swallow a session's worth of work. To ask "was this

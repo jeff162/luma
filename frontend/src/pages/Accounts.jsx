@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { notifyAccountsChanged } from '../App.jsx'
-import { Card, Button, Spinner, Select, Input, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, DialogActions, OverlayBackdrop, COMPACT_ACTION_BTN_STYLE } from '../components/ui.jsx'
+import { Card, Button, Spinner, Select, Input, PasswordInput, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, DialogActions, OverlayBackdrop } from '../components/ui.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
 import PillTableHeader from '../components/PillTableHeader.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
@@ -13,6 +13,8 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useDismissibleLayer, useDismissiblePopup, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import ConnectionAccountMapDialog from '../components/accounts/ConnectionAccountMapDialog.jsx'
+import { EditedTransactionsWarning } from '../components/EditedTransactionsWarning.jsx'
+import { ActionMenu, ActionMenuButton } from '../components/ActionMenu.jsx'
 import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useUserPreferences, useUserPreference } from '../lib/UserPreferencesContext.jsx'
@@ -386,22 +388,47 @@ function EnvBadge({ env }) {
   )
 }
 
-function ProviderConfigDialog({ provider, initial, onSave, onClose }) {
+function ProviderConfigDialog({ provider, initial, onSave, onClose, onVaultLocked }) {
   const [clientId, setClientId] = useState(initial?.client_id || '')
   const [secret, setSecret] = useState('')
   const [env, setEnv] = useState(initial?.env || 'sandbox')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  // What Show fetched, kept so an untouched reveal doesn't save the same secret back and re-encrypt it.
+  const [revealedSecret, setRevealedSecret] = useState(null)
   const hasSecret = !!initial?.has_secret
+
+  // The stored secret is write-only everywhere else, so revealing it means fetching it — a diagnostic for
+  // checking the saved value against the provider's dashboard. Throwing keeps the field hidden rather than
+  // showing an empty box that would read as "the secret is blank".
+  async function revealStoredSecret() {
+    if (secret) return               // already showing something typed (or previously revealed)
+    if (!hasSecret) return
+    setError('')
+    try {
+      const res = await api.getProviderSecret(provider)
+      setSecret(res.secret || '')
+      setRevealedSecret(res.secret || '')
+    } catch (e) {
+      if (e.status === 423) {
+        setError('Unlock the vault to view the stored secret.')
+        onVaultLocked?.()
+      } else {
+        setError(e.message || 'Could not read the stored secret')
+      }
+      throw e
+    }
+  }
 
   async function submit() {
     setSaving(true)
     setError('')
     try {
       // A blank secret field leaves the stored secret unchanged (write-only), so an edit that only
-      // changes client_id/env never forces re-entering the secret.
+      // changes client_id/env never forces re-entering the secret. A revealed-but-unedited secret is
+      // the same case: it is the stored value, so re-sending it would only churn the ciphertext.
       const payload = { client_id: clientId, env }
-      if (secret) payload.secret = secret
+      if (secret && secret !== revealedSecret) payload.secret = secret
       await onSave(payload)
     } catch (e) {
       setError(e.message || 'Could not save credentials')
@@ -429,9 +456,16 @@ function ProviderConfigDialog({ provider, initial, onSave, onClose }) {
         </div>
         <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
           <span style={{ color: 'var(--muted)' }}>Secret</span>
-          <Input type="password" value={secret} onChange={setSecret}
+          <PasswordInput value={secret} onChange={setSecret}
             placeholder={hasSecret ? '•••••••• (leave blank to keep)' : 'Provider secret'}
+            onReveal={hasSecret ? revealStoredSecret : undefined}
             {...SENSITIVE_FIELD_PROPS} />
+          {hasSecret ? (
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+              Show reveals the stored secret — for checking it against the provider’s dashboard. Leave the
+              field untouched to keep it.
+            </span>
+          ) : null}
         </div>
         <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
           <span style={{ color: 'var(--muted)' }}>Environment</span>
@@ -643,6 +677,12 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   const [notice, setNotice] = useState(null)
   const [disconnectTarget, setDisconnectTarget] = useState(null) // { provider, external_id, institution }
   const [disconnecting, setDisconnecting] = useState(false)
+  // "Remove synced transactions": a preflight (how much would go, and which of it was hand-edited since
+  // it synced) feeds the confirm dialog before anything is deleted.
+  const [removeSyncTarget, setRemoveSyncTarget] = useState(null) // { connection, summary }
+  const [removingSync, setRemovingSync] = useState(false)
+  // The open connection card's "⋯" menu. One at a time, so it lives on the tab rather than per card.
+  const [cardMenu, setCardMenu] = useState(null) // { connectionId, provider, connection, anchorRect }
   // Per-connection sync-record summary (connection_id -> { suspects, cards }), the Connections-tab home for
   // a sync's duplicate review: a synced row lands on a per-(connection, month) import card, and unresolved
   // cross-source duplicates surface here as a badge that jumps to the Import/Export report to resolve them.
@@ -1036,6 +1076,46 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     }
   }
 
+  // Remove everything a connection has synced. The cursor reset that comes with it is why this is a
+  // connection-level action rather than a per-card Undo: a routine sync only pulls changes since the
+  // cursor, so rows deleted without it would be beyond the reach of any later sync. The dialog opens on
+  // the preflight rather than on cached card counts, since the numbers it states are what gets deleted.
+  async function openRemoveSynced(connection) {
+    setRemoveSyncTarget({ connection, summary: null })
+    try {
+      const summary = await api.getConnectionSyncedTransactions(connection.id)
+      setRemoveSyncTarget({ connection, summary })
+    } catch (e) {
+      setRemoveSyncTarget(null)
+      setNotice({ title: 'Could not read this connection’s synced transactions', description: e.message })
+    }
+  }
+
+  async function confirmRemoveSynced(force) {
+    const target = removeSyncTarget
+    if (!target) return
+    setRemovingSync(true)
+    try {
+      const res = await api.removeConnectionSyncedTransactions(target.connection.id, force)
+      setRemoveSyncTarget(null)
+      await onAccountsChanged?.()
+      await refresh()
+      // The restored count is reported because it is the one effect with no visible home: rows on other
+      // imports that had been removed as duplicates of this connection's copies come back to the ledger.
+      setNotice({
+        title: 'Synced transactions removed',
+        description: `${res.removed} transaction${res.removed === 1 ? '' : 's'} removed.`
+          + (res.restored ? ` ${res.restored} transaction${res.restored === 1 ? '' : 's'} from other imports, previously removed as duplicates of them, ${res.restored === 1 ? 'is' : 'are'} back in the ledger.` : '')
+          + ' The next sync re-imports this history from the provider.',
+      })
+    } catch (e) {
+      setRemoveSyncTarget(null)
+      setNotice({ title: 'Could not remove synced transactions', description: e.message })
+    } finally {
+      setRemovingSync(false)
+    }
+  }
+
   async function confirmDisconnect() {
     if (!disconnectTarget) return
     setDisconnecting(true)
@@ -1197,33 +1277,24 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                               {unmappedByConnection[c.id]} to map
                             </button>
                           ) : null}
-                          {/* Card-level maintenance, not the tab's main verb — these sit in the shared
-                              compact action-button footprint (the same one the duplicate report's row
-                              actions use) so a row of four reads as a quiet toolbar and leaves "Sync now"
-                              above as the only full-weight control on the tab. */}
-                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
-                            <Button variant="ghost" small style={COMPACT_ACTION_BTN_STYLE}
-                              onClick={() => openAccountMap(c)}
-                              disabled={!!refreshingConnId || !!fetchingHistoryConnId || ss.syncing}
-                              title="Choose what each account from this data source maps to — an existing account, a new one, or skipped. Also how Luma recognizes transactions already imported from a file.">
-                              Accounts…
-                            </Button>
-                            <Button variant="ghost" small style={COMPACT_ACTION_BTN_STYLE}
-                              onClick={() => fetchMoreHistory(p.provider, c)}
-                              disabled={!!fetchingHistoryConnId || !!refreshingConnId || ss.syncing}
-                              title="Pull older transactions for this connection — requests all available history from the provider and imports anything earlier than what's already here. A bank or plan may cap how far back it will return.">
-                              {fetchingHistoryConnId === c.id ? 'Fetching…' : '↻ Fetch more history'}
-                            </Button>
-                            <Button variant="ghost" small style={COMPACT_ACTION_BTN_STYLE}
-                              onClick={() => refreshConnectionAccounts(p.provider, c)}
-                              disabled={!!refreshingConnId || !!fetchingHistoryConnId || ss.syncing}
-                              title="Rebuild this connection's accounts from its saved credential (no re-linking), then sync. Use this if the accounts are missing — e.g. after restoring a backup. To pull older transactions, use Fetch more history.">
-                              {refreshingConnId === c.id ? 'Refreshing…' : '↻ Refresh accounts'}
-                            </Button>
-                            <Button variant="ghost" small style={COMPACT_ACTION_BTN_STYLE}
-                              onClick={() => setDisconnectTarget({ provider: p.provider, external_id: c.external_id, institution: c.institution })}>
-                              Disconnect
-                            </Button>
+                          {/* Card maintenance lives behind one "⋯" rather than a row of buttons. These
+                              actions are real but rare, and five permanent controls per card meant a
+                              screenful of them at seven connections — louder than the badges above, which
+                              are the part of the card that is actually asking for something. Busy state
+                              still shows on the trigger's own label, since the menu it lives in is closed
+                              while the work runs. */}
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
+                            {fetchingHistoryConnId === c.id || refreshingConnId === c.id ? (
+                              <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                                {fetchingHistoryConnId === c.id ? 'Fetching…' : 'Refreshing…'}
+                              </span>
+                            ) : null}
+                            <ActionMenuButton
+                              open={cardMenu?.connectionId === c.id}
+                              title={`Actions for ${c.institution || 'this connection'}`}
+                              disabled={!!refreshingConnId || !!fetchingHistoryConnId || ss.syncing || removingSync}
+                              onOpen={rect => setCardMenu({ connectionId: c.id, provider: p.provider, connection: c, anchorRect: rect })}
+                            />
                           </div>
                         </div>
                         {accts.length ? accts.map(a => (
@@ -1243,11 +1314,12 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                           // provider accounts were never pulled needs "Refresh accounts", while one
                           // whose accounts are pulled but undecided needs the mapping step. Sending the
                           // second case to Refresh is advice that cannot work — the accounts are already
-                          // here, they just have nowhere to go.
+                          // here, they just have nowhere to go. Both name the menu they now live in,
+                          // since neither is a visible button any more.
                           <span style={{ fontSize: 12, color: 'var(--muted)' }}>
                             {unmappedByConnection[c.id] > 0
-                              ? `${unmappedByConnection[c.id]} account${unmappedByConnection[c.id] === 1 ? '' : 's'} from this data source ${unmappedByConnection[c.id] === 1 ? 'has' : 'have'} no destination yet — use “Accounts…” to map ${unmappedByConnection[c.id] === 1 ? 'it' : 'them'}.`
-                              : 'No accounts imported yet — use “Refresh accounts” to pull them in.'}
+                              ? `${unmappedByConnection[c.id]} account${unmappedByConnection[c.id] === 1 ? '' : 's'} from this data source ${unmappedByConnection[c.id] === 1 ? 'has' : 'have'} no destination yet — map ${unmappedByConnection[c.id] === 1 ? 'it' : 'them'} in ⋯ → “Connection settings…”.`
+                              : 'No accounts imported yet — pull them in with ⋯ → “↻ Refresh accounts”.'}
                           </span>
                         )}
                       </div>
@@ -1280,6 +1352,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
           provider={configTarget.provider}
           initial={configTarget}
           onSave={(payload) => saveConfig(configTarget.provider, payload)}
+          onVaultLocked={() => setVaultDialog('unlock')}
           onClose={() => setConfigTarget(null)}
         />
       ) : null}
@@ -1299,6 +1372,87 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
           onCancel={() => setDisconnectTarget(null)}
         />
       ) : null}
+
+      {/* Grouped by what the action is for: the mapping decision, then the two provider re-pulls, then
+          the two that take something away. Only Disconnect is styled danger — it revokes the token at
+          the provider, so coming back means a fresh Link the bank (or the plan) may not grant. Removing
+          synced transactions reads more destructive than it is: the cursor reset is what makes the next
+          sync pull the same history back, so its red belongs on the confirm button, not here. */}
+      {cardMenu ? (
+        <ActionMenu
+          anchorRect={cardMenu.anchorRect}
+          onClose={() => setCardMenu(null)}
+          minWidth={220}
+          items={[
+            {
+              label: 'Connection settings…',
+              title: 'Choose what each account from this data source maps to — an existing account, a new one, or skipped — and which details future syncs capture. The mapping is also how Luma recognizes transactions already imported from a file.',
+              onClick: () => openAccountMap(cardMenu.connection),
+            },
+            {
+              label: '↻ Fetch more history',
+              separatorBefore: true,
+              title: 'Pull older transactions for this connection — requests all available history from the provider and imports anything earlier than what’s already here. A bank or plan may cap how far back it will return.',
+              onClick: () => fetchMoreHistory(cardMenu.provider, cardMenu.connection),
+            },
+            {
+              label: '↻ Refresh accounts',
+              title: 'Rebuild this connection’s accounts from its saved credential (no re-linking), then sync. Use this if the accounts are missing — e.g. after restoring a backup. To pull older transactions, use Fetch more history.',
+              onClick: () => refreshConnectionAccounts(cardMenu.provider, cardMenu.connection),
+            },
+            {
+              label: 'Remove synced transactions',
+              separatorBefore: true,
+              title: 'Delete every transaction this connection has synced and reset how far it has pulled, so the next sync re-imports that history from the provider. The connection, its accounts, and their mapping are kept.',
+              onClick: () => openRemoveSynced(cardMenu.connection),
+            },
+            {
+              label: 'Disconnect',
+              danger: true,
+              title: 'Revoke this connection at the provider. Existing accounts and transactions are kept, but reconnecting means linking the bank again.',
+              onClick: () => setDisconnectTarget({
+                provider: cardMenu.provider,
+                external_id: cardMenu.connection.external_id,
+                institution: cardMenu.connection.institution,
+              }),
+            },
+          ]}
+        />
+      ) : null}
+
+      {removeSyncTarget ? (() => {
+        const summary = removeSyncTarget.summary
+        const edited = summary?.edited_transactions || []
+        const count = summary?.transaction_count || 0
+        return (
+          <AppConfirmDialog
+            title={`Remove synced transactions from ${removeSyncTarget.connection.institution || 'this bank'}?`}
+            confirmLabel={removingSync ? 'Removing…'
+              : edited.length ? 'Remove all anyway'
+                : count ? `Remove ${count} transaction${count === 1 ? '' : 's'}`
+                  : 'Reset sync history'}
+            confirmVariant="danger"
+            confirmDisabled={!summary || removingSync}
+            cancelDisabled={removingSync}
+            onConfirm={() => confirmRemoveSynced(edited.length > 0)}
+            onCancel={() => setRemoveSyncTarget(null)}
+          >
+            {!summary ? <Spinner /> : (
+              <>
+                <EditedTransactionsWarning rows={edited} suffix="after syncing" />
+                <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+                  {count
+                    ? `${count} transaction${count === 1 ? '' : 's'} synced from this connection will be permanently deleted, along with ${summary.card_count === 1 ? 'its sync card' : `their ${summary.card_count} sync cards`} in the import history.`
+                    : 'No synced transactions are recorded for this connection.'}
+                  {' '}The connection stays linked and its accounts and mapping are kept. What resets is how
+                  far this connection has pulled, so the next sync re-imports its history from the provider
+                  rather than only changes since the last one.
+                </div>
+              </>
+            )}
+          </AppConfirmDialog>
+        )
+      })() : null}
 
       {mapTarget ? (
         <ConnectionAccountMapDialog

@@ -12,6 +12,7 @@ import TransactionDetail from '../components/TransactionDetail.jsx'
 import PeriodDetail from '../components/PeriodDetail.jsx'
 import TagDetail from '../components/TagDetail.jsx'
 import RuleSuggestionToast from '../components/RuleSuggestionToast.jsx'
+import { ActionMenu } from '../components/ActionMenu.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useFilters } from '../lib/FilterContext.jsx'
 import { useDismissibleLayer } from '../lib/uiInteractions.js'
@@ -864,55 +865,6 @@ function MissingTagsToast({ reportName, onDismiss, onSuppress }) {
           Don&apos;t remind me again
         </button>
       </div>
-    </div>
-  )
-}
-
-/*
- * Tiny popover menu shown next to the picker when a saved tag report is the active
- * option. Offers Rename and Delete; opening it via right-click on the picker uses
- * the same component. Dismissed on outside click or Escape.
- */
-function PickerManageMenu({ anchorRect, onRename, onDelete, onClose }) {
-  const ref = useRef(null)
-
-  // Shared dismissal (outside-click + Escape), replacing a bespoke document-listener pair.
-  useDismissibleLayer({ open: true, onClose, refs: [ref] })
-
-  if (!anchorRect) return null
-  const top = anchorRect.bottom + 4
-  const left = anchorRect.left
-  return (
-    <div
-      ref={ref}
-      style={{
-        position: 'fixed',
-        top, left, zIndex: 1400,
-        background: 'var(--surface)',
-        border: '1px solid var(--border)',
-        borderRadius: 8,
-        padding: 4,
-        minWidth: 140,
-        boxShadow: '0 12px 36px rgba(15, 23, 42, 0.32)',
-      }}
-    >
-      {[
-        { label: 'Rename', onClick: onRename },
-        { label: 'Delete', onClick: onDelete, danger: true },
-      ].map(item => (
-        <button
-          key={item.label}
-          onClick={() => { item.onClick(); onClose() }}
-          style={{
-            display: 'block', width: '100%', textAlign: 'left',
-            background: 'none', border: 'none', padding: '6px 10px',
-            cursor: 'pointer', borderRadius: 6, fontSize: 13,
-            color: item.danger ? 'var(--danger)' : 'var(--text)',
-          }}
-        >
-          {item.label}
-        </button>
-      ))}
     </div>
   )
 }
@@ -3131,12 +3083,18 @@ export default function Dashboard() {
           onSave={handleSaveTagReport}
         />
       )}
+      {/* Deleting a saved report drops it from the preference list with nothing to restore it from,
+          which is what `danger` is reserved for — see ActionMenu. */}
       {pickerMenuOpen && (
-        <PickerManageMenu
+        <ActionMenu
           anchorRect={pickerMenuOpen.anchorRect}
-          onRename={() => setRenameTargetId(pickerMenuOpen.id)}
-          onDelete={() => setDeleteTargetId(pickerMenuOpen.id)}
+          align="start"
+          minWidth={140}
           onClose={() => setPickerMenuOpen(null)}
+          items={[
+            { label: 'Rename', onClick: () => setRenameTargetId(pickerMenuOpen.id) },
+            { label: 'Delete', danger: true, onClick: () => setDeleteTargetId(pickerMenuOpen.id) },
+          ]}
         />
       )}
       {renameTargetId && (() => {

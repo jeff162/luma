@@ -402,6 +402,15 @@ phase 6a), so adding Teller or SimpleFIN is an adapter, not a change to the conn
   existing decisions. Endpoints: `GET /api/connections/{id}/accounts`, `POST .../account-map` (idempotent;
   triggers the re-scan when a mapping changed), `POST .../captured-fields`.
   See `data-model.md` → Accounts for the modes and what each buys the ladder.
+- **`routers/connections.py` also owns the reverse: `GET`/`DELETE /api/connections/{id}/synced-transactions`,**
+  the preflight and the removal of everything a connection has synced. Its rows go through
+  `import_export/core.py`'s `undo_batches` — the one path a file's Undo, a re-import's replace, and this
+  share — and it then resets the chain that *describes* what has been pulled: cursor,
+  `initial_sync_complete`, and the connection's coverage columns. That reset is the point of the endpoint
+  existing at all (a cursor left advanced past deleted rows makes them unreachable), and it is the only
+  writer of the "a cursor reset clears both coverage columns" invariant. No provider call and no
+  credential are involved, so unlike sync/disconnect/refresh it works with the vault locked.
+  See `data-model.md` → "Sync import cards" and `ui-patterns.md` for the decisions behind it.
 - **Captured fields are declared by the adapter, not hardcoded per provider.**
   `ProviderAdapter.capture_fields()` returns `[{key, label, locked, default_on}]`, so each adapter states
   its own set and a Teller/SimpleFIN adapter is unaffected by the Plaid choices. **Locked** fields are the

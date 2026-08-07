@@ -20,6 +20,7 @@ from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.accounts import attach_account, detach_account, AccountAttachRequest
+from backend.routers.import_export.core import undo_batches
 from backend.services.duplicate_detection import (
     clear_account_pair_distinct_for_merge,
     count_active_suspects,
@@ -1266,26 +1267,7 @@ class SuspectDuplicateTests(unittest.TestCase):
         self.assertEqual(visible, len(pairs))
         self.assertEqual(trashed, len(pairs))
 
-    def test_undo_dangling_pointer_cleanup_after_canonical_side_deleted(self):
-        # Edge case: a suspect was confirmed-rejected (trashed + rejection_reason), THEN the
-        # batch containing the canonical row gets undone. The canonical row vanishes, leaving
-        # the confirmed-rejected suspect's suspect_duplicate_of pointing at a deleted id. The
-        # undo handler's dangling-pointer cleanup should clear the pointer; the row stays
-        # trashed/rejected (the user's decision is preserved), it just no longer claims a
-        # specific match.
-        canonical_batch_id = self._insert_batch(filename="canonical_batch.csv")
-        suspect_batch_id   = self._insert_batch(filename="suspect_batch.csv")
-        existing_account = self._insert_account("Existing")
-        new_account = self._insert_account("New")
-        canonical_id = self._insert_txn(
-            account_id=existing_account, date="2025-11-26", amount=-13.38,
-            merchant_name="GULF OIL", batch_id=canonical_batch_id,
-        )
-        suspect_id = self._insert_txn(
-            account_id=new_account, date="2025-11-26", amount=-13.38,
-            merchant_name="Gulf Oil", batch_id=suspect_batch_id,
-        )
-
+    def _confirm_as_duplicate(self, suspect_id: str, canonical_id: str, resolved_by: str) -> None:
         with self._use_db_path():
             with get_db() as conn:
                 conn.execute(
@@ -1293,33 +1275,80 @@ class SuspectDuplicateTests(unittest.TestCase):
                     UPDATE txn
                     SET    trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
                            rejection_reason = 'duplicate_confirmed',
+                           dedupe_resolved_by = ?,
                            suspect_duplicate_of = ?,
                            suspect_duplicate_reason = 'cross_account',
                            suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                     WHERE  id = ?
                     """,
-                    (canonical_id, suspect_id),
-                )
-                # Simulate the dangling-pointer cleanup that undo_batch runs after deleting the
-                # batch's txn rows. Same SQL as in undo_batch.
-                conn.execute("DELETE FROM txn WHERE import_batch_id = ?", (canonical_batch_id,))
-                conn.execute(
-                    """
-                    UPDATE txn
-                    SET    suspect_duplicate_of = NULL,
-                           suspect_duplicate_reason = NULL,
-                           suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                    WHERE  suspect_duplicate_of IS NOT NULL
-                      AND  suspect_duplicate_of NOT IN (SELECT id FROM txn)
-                    """
+                    (resolved_by, canonical_id, suspect_id),
                 )
 
-        suspect_link = self._suspect_link(suspect_id)
-        # Pointer is cleared (no longer dangling).
-        self.assertIsNone(suspect_link["suspect_duplicate_of"])
-        # The user's confirmation decision is preserved — the row stays trashed and rejected.
-        self.assertIsNotNone(suspect_link["trashed_at"])
-        self.assertEqual(suspect_link["rejection_reason"], "duplicate_confirmed")
+    def test_undo_restores_rows_removed_as_duplicates_of_the_undone_batch(self):
+        # A suspect was confirmed as a duplicate (trashed + rejection_reason), THEN the batch holding
+        # the canonical row it deferred to is undone. The decision's premise goes with that row — "the
+        # same transaction is already here" stops being true — so the deferring copy comes back to the
+        # ledger as an ordinary transaction, dedupe tags and all.
+        #
+        # This is deliberately unlike restore_auto_merged_after_detach, which restores only 'auto_merge'
+        # rows: a detach leaves the canonical row in place, so an explicit user Reject still has a
+        # referent. Here it does not, which is why BOTH markers are restored.
+        canonical_batch_id = self._insert_batch(filename="canonical_batch.csv")
+        suspect_batch_id   = self._insert_batch(filename="suspect_batch.csv")
+        existing_account = self._insert_account("Existing")
+        new_account = self._insert_account("New")
+        by_marker = {}
+        for marker, amount in (("user", -13.38), ("auto_merge", -21.75)):
+            canonical_id = self._insert_txn(
+                account_id=existing_account, date="2025-11-26", amount=amount,
+                merchant_name="GULF OIL", batch_id=canonical_batch_id,
+            )
+            by_marker[marker] = self._insert_txn(
+                account_id=new_account, date="2025-11-26", amount=amount,
+                merchant_name="Gulf Oil", batch_id=suspect_batch_id,
+            )
+            self._confirm_as_duplicate(by_marker[marker], canonical_id, marker)
+
+        with self._use_db_path():
+            with get_db() as conn:
+                result = undo_batches(conn, [canonical_batch_id])
+
+        self.assertEqual(result["restored"], 2)
+        for marker, suspect_id in by_marker.items():
+            link = self._suspect_link(suspect_id)
+            self.assertIsNone(link["trashed_at"], f"{marker} copy should be back in the ledger")
+            self.assertIsNone(link["rejection_reason"])
+            self.assertIsNone(link["dedupe_resolved_by"])
+            self.assertIsNone(link["suspect_duplicate_of"], "no surviving twin to point at")
+
+    def test_undo_clears_a_dangling_pointer_on_an_unresolved_suspect(self):
+        # The other half of the same cleanup: an *unresolved* soft-flag whose canonical row is deleted.
+        # Nothing was removed on its account, so there is nothing to restore — the row simply stops
+        # claiming a match it can no longer name, and is marked resolved so the report skips it.
+        canonical_batch_id = self._insert_batch(filename="canonical_batch.csv")
+        suspect_batch_id   = self._insert_batch(filename="suspect_batch.csv")
+        canonical_id = self._insert_txn(
+            account_id=self._insert_account("Existing"), date="2025-11-26", amount=-13.38,
+            merchant_name="GULF OIL", batch_id=canonical_batch_id,
+        )
+        suspect_id = self._insert_txn(
+            account_id=self._insert_account("New"), date="2025-11-26", amount=-13.38,
+            merchant_name="Gulf Oil", batch_id=suspect_batch_id,
+        )
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE txn SET suspect_duplicate_of = ?, suspect_duplicate_reason = 'cross_account' "
+                    "WHERE id = ?",
+                    (canonical_id, suspect_id),
+                )
+                result = undo_batches(conn, [canonical_batch_id])
+
+        self.assertEqual(result["restored"], 0)
+        link = self._suspect_link(suspect_id)
+        self.assertIsNone(link["suspect_duplicate_of"])
+        self.assertIsNone(link["trashed_at"])
+        self.assertIsNotNone(link["suspect_resolved_at"])
 
     def test_resolve_reject_marks_resolution_as_user(self):
         # The dedupe_resolved_by marker is what protects user-Reject decisions from being

@@ -154,12 +154,18 @@ export default function ConnectionAccountMapDialog({
 
   return (
     <>
+      {/* Two modes, two titles. Post-Link the mapping IS the job — the backfill is waiting on it — so the
+          title names that one task. Reopened from the connection card it is a settings surface covering
+          both the mapping and what the source captures, and a title naming only the mapping would leave
+          the second section undiscoverable. */}
       <AppDialog
-        title={`Map accounts from ${connection?.institution || 'this data source'}`}
+        title={requireAll
+          ? `Map accounts from ${connection?.institution || 'this data source'}`
+          : `${connection?.institution || 'Connection'} settings`}
         description={
           requireAll
             ? 'Choose what each account from this data source is. Transactions are pulled once every account has a destination — mapping an account onto one already in Luma is also what lets duplicate detection recognize transactions imported from a file.'
-            : 'Adjust what each account from this data source maps to. Changing a mapping re-checks the transactions already pulled for duplicates.'
+            : 'Adjust what each account from this data source maps to, and which details future syncs capture. Changing a mapping re-checks the transactions already pulled for duplicates.'
         }
         width="min(760px, 100%)"
         onClose={saving ? undefined : onClose}

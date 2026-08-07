@@ -191,6 +191,58 @@ class ProviderConfigEndpointTests(unittest.TestCase):
             self.assertEqual(r.status_code, 400)
             self.assertIn("vault passphrase", r.json()["detail"])
 
+    # ---- revealing the stored secret (the Configure dialog's Show) ----------
+    #
+    # The one read path for a stored app secret. It is a deliberate, narrow exception to the write-only
+    # rule everywhere else, so each edge is pinned: the vault gates it, an unlocked vault is sufficient
+    # (no second challenge), a `.env` secret needs no unlock because nothing is encrypted, and the
+    # status payload it sits beside still never carries the value.
+
+    def test_reveal_returns_the_stored_secret_when_unlocked(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/providers/plaid/config", json={"client_id": "cid", "secret": "sek"})
+            r = client.get("/api/providers/plaid/secret")
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["secret"], "sek")
+            self.assertEqual(r.json()["source"], "vault")
+
+    def test_reveal_needs_the_vault_unlocked(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/providers/plaid/config", json={"client_id": "cid", "secret": "sek"})
+            cs.lock_all()
+            r = client.get("/api/providers/plaid/secret")
+            self.assertEqual(r.status_code, 423)
+            self.assertEqual(r.json()["detail"]["code"], "vault_locked")
+
+    def test_reveal_without_a_secret_on_file_is_409(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/providers/plaid/config", json={"client_id": "cid"})  # client_id only
+            r = client.get("/api/providers/plaid/secret")
+            self.assertEqual(r.status_code, 409)
+            self.assertEqual(r.json()["detail"]["code"], "no_secret")
+
+    def test_reveal_of_an_env_secret_needs_no_unlock(self):
+        # Nothing is encrypted in the `.env` bootstrap case, and the value is already readable by anyone
+        # who can read the file — so requiring an unlock here would gate nothing.
+        self._noenv.stop()
+        try:
+            with api_client() as (client, _), \
+                    mock.patch.dict(os.environ, {"PLAID_CLIENT_ID": "envcid", "PLAID_SECRET": "envsek"}):
+                cs.lock_all()
+                r = client.get("/api/providers/plaid/secret")
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertEqual(r.json()["secret"], "envsek")
+                self.assertEqual(r.json()["source"], "env")
+        finally:
+            self._noenv.start()
+
+    def test_reveal_of_an_unknown_provider_is_404(self):
+        with api_client() as (client, _):
+            self.assertEqual(client.get("/api/providers/nope/secret").status_code, 404)
+
     def test_app_credential_rides_the_credentials_backup(self):
         with api_client() as (client, _):
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})

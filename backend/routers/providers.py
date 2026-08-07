@@ -5,8 +5,10 @@
 Per-provider app-credential configuration — the Configure card's backend (security-and-deployment-model
 phase 6b). Admin-gated to configure; the app credential lives in the vaulted DB (`provider_config`), the
 secret encrypted under the workspace DEK. Reading status never returns the secret, only whether one is on
-file and from where (vaulted DB vs. `.env` bootstrap). This is where provider configuration moves to,
-out of the Settings environment form.
+file and from where (vaulted DB vs. `.env` bootstrap). The secret is readable in exactly one place, and
+only on request: `GET /{provider}/secret`, the Configure dialog's reveal (see its docstring for why that
+is a narrow exception rather than a hole in the write-only rule). This is where provider configuration
+moves to, out of the Settings environment form.
 """
 
 from fastapi import APIRouter, HTTPException, Request
@@ -102,6 +104,42 @@ def save_config(provider: str, body: ProviderConfigRequest, request: Request):
     if warning:
         result["transport_warning"] = warning
     return result
+
+
+@router.get("/{provider}/secret")
+def get_secret(provider: str, request: Request):
+    """Return the app secret in the clear, for the Configure dialog's reveal.
+
+    A diagnostic, not part of the normal flow: the one thing it answers is "does the secret stored here
+    match the one on the provider's dashboard", which nothing else can settle — the value is write-only
+    everywhere else (`get_provider_config_status` returns `has_secret` and never the secret, and the
+    Configure field keeps its blank-means-unchanged semantics).
+
+    It deliberately does **not** re-prompt for the vault passphrase when the vault is already unlocked.
+    An unlocked vault is the app's authorization boundary and sync/disconnect/refresh all ride it; a
+    second challenge only here would be inconsistent without raising the bar. The reveal is a separate
+    call rather than a field on the status payload precisely so a plaintext secret can only ever appear
+    in a response the user explicitly asked for.
+
+    Reuses `resolve_app_config` — the same decryption path a sync takes — so there is one way to turn a
+    stored credential back into plaintext. A `.env`-sourced secret needs no unlock: nothing is encrypted,
+    and it is already readable by anyone who can read the file.
+    """
+    _require_admin_or_local(request)
+    _validate_provider(provider)
+    try:
+        app_config = resolve_app_config(request.state.user, provider)
+    except crypto_service.VaultLocked:
+        raise HTTPException(status_code=423, detail={
+            "code": "vault_locked",
+            "message": "Unlock the vault to view this data source's secret.",
+        })
+    if not app_config or not app_config.get("secret"):
+        raise HTTPException(status_code=409, detail={
+            "code": "no_secret",
+            "message": "This data source has no secret on file.",
+        })
+    return {"secret": app_config["secret"], "source": get_provider_config_status(provider)["source"]}
 
 
 @router.post("/{provider}/disconnect")

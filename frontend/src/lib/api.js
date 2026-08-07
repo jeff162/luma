@@ -128,6 +128,10 @@ export const api = {
   getProviderConfig: (provider) => request(`/providers/${provider}/config`),
   saveProviderConfig: (provider, data) =>
     request(`/providers/${provider}/config`, { method: 'POST', body: JSON.stringify(data) }),
+  // The one read path for a stored app secret — a diagnostic for checking it against the provider's
+  // dashboard, kept off the status payload so plaintext only ever appears when explicitly asked for.
+  // 423 when the vault is locked; 409 when nothing is on file.
+  getProviderSecret: (provider) => request(`/providers/${provider}/secret`),
   // Revoke a linked connection at the provider (invalidates the token everywhere) and drop it locally.
   disconnectProvider: (provider, external_id) =>
     request(`/providers/${provider}/disconnect`, { method: 'POST', body: JSON.stringify({ external_id }) }),
@@ -370,6 +374,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ mappings }),
     }),
+  // Removing a connection's synced transactions also resets its cursor + coverage, so a later sync
+  // re-backfills them — the summary is the preflight the confirm dialog states its counts from, and
+  // `force` skips the manually-edited-rows guard (409 without it), as a file's Undo does.
+  getConnectionSyncedTransactions: (connectionId) =>
+    request(`/connections/${connectionId}/synced-transactions`),
+  removeConnectionSyncedTransactions: (connectionId, force = false) =>
+    request(`/connections/${connectionId}/synced-transactions${force ? '?force=true' : ''}`, { method: 'DELETE' }),
   updateMerchant:      (id, name)   => request(`/transactions/${id}/merchant`, { method: 'PATCH', body: JSON.stringify({ merchant_name: name }) }),
   updateNotes:         (id, notes)  => request(`/transactions/${id}/notes`,    { method: 'PATCH', body: JSON.stringify({ notes }) }),
   updateTransactionTag: (id, tag_id, present) =>

@@ -40,6 +40,8 @@ A key input to that dial: the user does not review most of the code directly and
 
 - Overlay panels should feel deliberate: they should open in sensible positions, be visually distinct from panels behind them, and not disappear unless the user explicitly dismisses them when the decision matters.
 
+- Removing an affordance is a real answer, and usually the preferred one. When a control's job is already done automatically at the moment that matters, the control should go rather than be kept "just in case" or relocated — and a picker should offer the choices someone would actually make, not every choice the data model permits. Ask what the affordance still uniquely accomplishes; if the honest answer is a corner case or a variation nobody would deliberately choose, drop it and say what capability that costs. A surface earns density by need, not by completeness.
+
 - When a new screen introduces an existing domain object such as a user, account owner, category, or account, start by checking how that object already behaves elsewhere in the app. Reusing the established interaction is usually better than inventing a local variant.
 
 - The reasoning matters here: users learn objects more than they learn pages. If the same object edits differently on each screen, the product feels less coherent and small “special case” implementations are more likely to drift into bugs or inconsistent fixes later.

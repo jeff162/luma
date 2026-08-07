@@ -776,6 +776,11 @@ export function Input({ value, onChange, placeholder, style, id, suppressAutofil
 // Password field with an inline show/hide reveal. Controlled like `Input` (value/onChange as a string).
 // `wrapperStyle` sizes the field (e.g. a maxWidth so it doesn't stretch to the full card); the reveal
 // button is non-tabbable so it never sits between the field and the submit button in tab order.
+//
+// `onReveal` (optional, may be async) runs before the field is revealed, for a value the browser does
+// not hold yet — the provider secret is stored write-only, so showing it means fetching it first. If it
+// throws, the field stays hidden: a failed fetch (locked vault, no secret on file) must not flip the
+// control to "revealed" over an empty box, which would read as "the stored secret is blank".
 export function PasswordInput({
   value,
   onChange,
@@ -785,12 +790,30 @@ export function PasswordInput({
   id,
   suppressAutofillId = false,
   wrapperStyle,
+  onReveal,
   ...rest
 }) {
   // `suppressAutofillId`: render with no id/name so the browser has no handle to key form-field
   // history on — see the Input component for the full rationale (reused `useId` leaks suggestions).
   const autoId = useId()
   const [revealed, setRevealed] = useState(false)
+  const [revealing, setRevealing] = useState(false)
+
+  async function toggleReveal() {
+    if (revealed) { setRevealed(false); return }
+    if (onReveal) {
+      setRevealing(true)
+      try {
+        await onReveal()
+      } catch {
+        return  // the host reports why; staying hidden keeps an empty field from reading as the value
+      } finally {
+        setRevealing(false)
+      }
+    }
+    setRevealed(true)
+  }
+
   return (
     <div style={{ position: 'relative', ...wrapperStyle }}>
       <input
@@ -807,15 +830,16 @@ export function PasswordInput({
       <button
         type="button"
         tabIndex={-1}
-        onClick={() => setRevealed(v => !v)}
+        disabled={disabled || revealing}
+        onClick={toggleReveal}
         aria-label={revealed ? 'Hide password' : 'Show password'}
         style={{
           position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
           background: 'transparent', border: 'none', color: 'var(--muted)',
-          fontSize: 12, fontWeight: 600, cursor: disabled ? 'default' : 'pointer', padding: '4px 6px',
+          fontSize: 12, fontWeight: 600, cursor: (disabled || revealing) ? 'default' : 'pointer', padding: '4px 6px',
         }}
       >
-        {revealed ? 'Hide' : 'Show'}
+        {revealing ? '…' : revealed ? 'Hide' : 'Show'}
       </button>
     </div>
   )

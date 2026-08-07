@@ -2,22 +2,27 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-Per-connection account mapping — the data-source analog of a CSV import's account step.
+Per-connection setup and data lifecycle — everything about a connection that is *local* state rather
+than a provider call (those live in `providers.py` / `sync.py`).
 
-A connection offers accounts; this router is where the user says what each one *is* locally. The
-mapping is durable and revisitable (`connection_account`), which matters beyond convenience: it is
-the input duplicate detection needs, and for a metered provider a re-link to "start over" may not be
-available. See `services/connection_mapping.py` for the modes and what each buys the dedupe ladder.
+Its main job is account mapping, the data-source analog of a CSV import's account step: a connection
+offers accounts; this router is where the user says what each one *is* locally. The mapping is durable
+and revisitable (`connection_account`), which matters beyond convenience: it is the input duplicate
+detection needs, and for a metered provider a re-link to "start over" may not be available. See
+`services/connection_mapping.py` for the modes and what each buys the dedupe ladder. Its other job is
+the reverse: removing what a connection has synced, and resetting the chain that describes it.
 """
 
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
 
 from backend.db.database import get_db
 from backend.routers.accounts import resolve_default_owner_id
+from backend.routers.sync import SYNC_SOURCE_KIND
 from backend.services.connection_dedupe import rescan_connection_duplicates
 from backend.services.connection_mapping import (
     MAPPING_MODES,
@@ -129,6 +134,118 @@ def set_connection_account_map(connection_id: str, body: AccountMappingRequest):
         remaining = unmapped_count(conn, connection_id)
 
     return {**result, "accounts": accounts, "unmapped": remaining, "rescan": rescan}
+
+
+# Manual edits that make removing a synced row destructive rather than merely undoing a fetch. Kept
+# identical to the CSV Undo guard (import_export/core.py) so the preflight below can never warn about
+# rows the unforced delete would have gone ahead and removed.
+_EDITED_SYNCED_ROWS_SQL = """
+    SELECT t.id, t.date, COALESCE(t.display_name, t.merchant_name, t.raw_name) AS merchant_name, t.amount,
+           c.name AS category_name
+    FROM   txn t
+    LEFT JOIN category c ON c.id = t.category_id
+    WHERE  t.import_batch_id IN ({placeholders})
+      AND  t.category_overridden = 1
+      AND  COALESCE(t.category_source, 'manual') = 'manual'
+    ORDER  BY t.date DESC
+"""
+
+
+def _sync_card_ids(conn, connection_id: str) -> list[str]:
+    """Every import card this connection's syncs have written to — the initial backfill card plus each
+    monthly period card (`routers/sync.py`)."""
+    return [row["id"] for row in conn.execute(
+        "SELECT id FROM import_batch WHERE connection_id = ? AND source_kind = ?",
+        (connection_id, SYNC_SOURCE_KIND),
+    ).fetchall()]
+
+
+def _edited_synced_rows(conn, card_ids: list[str]) -> list[dict]:
+    if not card_ids:
+        return []
+    placeholders = ",".join("?" * len(card_ids))
+    return [dict(r) for r in conn.execute(
+        _EDITED_SYNCED_ROWS_SQL.format(placeholders=placeholders), card_ids
+    ).fetchall()]
+
+
+@router.get("/{connection_id}/synced-transactions")
+def get_synced_transactions_summary(connection_id: str):
+    """What removing this connection's synced data would take with it — the transaction and card counts
+    the confirm dialog states, plus the manually-edited rows it must warn about before proceeding."""
+    with get_db() as conn:
+        _get_connection(conn, connection_id)
+        card_ids = _sync_card_ids(conn, connection_id)
+        count = 0
+        if card_ids:
+            placeholders = ",".join("?" * len(card_ids))
+            count = int(conn.execute(
+                f"SELECT COUNT(*) AS n FROM txn WHERE import_batch_id IN ({placeholders})", card_ids
+            ).fetchone()["n"] or 0)
+        edited = _edited_synced_rows(conn, card_ids)
+    return {"transaction_count": count, "card_count": len(card_ids), "edited_transactions": edited}
+
+
+@router.delete("/{connection_id}/synced-transactions")
+def remove_synced_transactions(connection_id: str, force: bool = Query(False)):
+    """Remove everything this connection has synced and put it back to its pre-sync state.
+
+    The rows go through the same path a file's Undo does (`undo_batches`), and the connection's sync
+    cards are then **deleted** rather than left as 'undone' tombstones: a sync card records rows, not a
+    user-supplied file, so with its rows gone and the cursor reset it records nothing — and the card
+    resolvers key on (connection, backfill/period) without regard to status, so a tombstone would be
+    silently reused by the re-backfill and its rows would land on a card the history filters out.
+
+    Resetting `transactions_cursor` + `initial_sync_complete` is what makes this recoverable rather than
+    destructive, and is the reason the action is connection-level in the first place: a routine sync only
+    pulls changes *since* the cursor, so deleting synced rows while leaving the cursor advanced past them
+    would put them beyond the reach of any later sync. The paired clear of the connection's
+    `coverage_start_date` / `coverage_through_date` is the same invariant seen from the dedupe side — a
+    coverage claim outliving the rows that backed it would blanket-reject the very transactions the
+    re-backfill pulls back (`docs/data-model.md` → "coverage has two shapes").
+
+    Manual edits are guarded exactly as a file Undo guards them: 409 with the edited rows unless
+    `force`. No provider call and no credential are involved, so this works with the vault locked.
+    """
+    with get_db() as conn:
+        _get_connection(conn, connection_id)
+        card_ids = _sync_card_ids(conn, connection_id)
+
+        if not force:
+            edited = _edited_synced_rows(conn, card_ids)
+            if edited:
+                return JSONResponse(status_code=409, content={
+                    "detail": "Some synced transactions were manually edited",
+                    "edited_transactions": edited,
+                })
+
+        # Lazy, as elsewhere for this module: core.py pulls in many services, and a connection with
+        # nothing synced never needs it.
+        from backend.routers.import_export.core import undo_batches
+
+        result = undo_batches(conn, card_ids)
+        if card_ids:
+            placeholders = ",".join("?" * len(card_ids))
+            conn.execute(f"DELETE FROM import_batch WHERE id IN ({placeholders})", card_ids)
+        conn.execute(
+            "UPDATE connection SET transactions_cursor = NULL, initial_sync_complete = 0 WHERE id = ?",
+            (connection_id,),
+        )
+        conn.execute(
+            """
+            UPDATE connection_account
+            SET    coverage_start_date = NULL, coverage_through_date = NULL
+            WHERE  connection_id = ?
+            """,
+            (connection_id,),
+        )
+
+    return {
+        "ok": True,
+        "removed": result["deleted"],
+        "restored": result["restored"],
+        "cards_removed": len(card_ids),
+    }
 
 
 @router.post("/{connection_id}/captured-fields")

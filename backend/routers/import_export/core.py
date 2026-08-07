@@ -3033,13 +3033,10 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
         )
 
         if replace_batch_id:
-            # Reverse any enrichments the batch being replaced applied to existing rows before its
-            # duplicate records (which hold the deltas) are superseded.
-            reverse_batch_enrichments(conn, replace_batch_id)
-            reverse_batch_money_movement_links(conn, replace_batch_id)
-            from .amazon import reverse_batch_amazon_links  # lazy: avoid the core↔amazon import cycle
-            reverse_batch_amazon_links(conn, replace_batch_id)
-            conn.execute("DELETE FROM txn WHERE import_batch_id = ?", (replace_batch_id,))
+            # The replaced batch's rows go away exactly as they would under Undo, so it takes the same
+            # path: reversing what they did to rows outside the batch, and restoring any row trashed as
+            # a confirmed duplicate of one of them (the twin's "duplicate of that" no longer has a that).
+            undo_batches(conn, [replace_batch_id])
             conn.execute("UPDATE import_batch SET status = 'undone' WHERE id = ?", (replace_batch_id,))
 
         # Snapshot the import decisions up front so undo, review, and batch-resume flows
@@ -5169,6 +5166,81 @@ def update_batch_imported_category_usage(batch_id: str, body: BatchImportedCateg
     )
 
 
+def undo_batches(conn, batch_ids) -> dict:
+    """Reverse the ledger effect of one or more import batches: delete the transactions they imported and
+    the per-batch dedupe state they left behind, and undo everything those rows did to rows *outside* the
+    batch. Shared by the per-file Undo, the re-import replace path, and the connection-level "Remove
+    synced transactions", so the three cannot drift. What happens to the `import_batch` row itself is the
+    caller's: a file keeps an 'undone' tombstone, a sync card is deleted outright.
+
+    Three orderings are load-bearing:
+
+      1. Enrichments and the wallet/marketplace links are reversed while the batch's rows still exist.
+         Those records hold the delta needed to restore a *pre-existing* row the batch changed, which
+         would otherwise be orphaned and unreversible.
+      2. A row trashed as a confirmed duplicate of a row that is about to be deleted is restored
+         *before* the dangling-pointer sweep, which is what would otherwise erase the very pointer
+         naming its twin.
+      3. The sweep runs once after all batches rather than per batch — it scans all of `txn`.
+
+    Restoring the twin covers deliberate user Rejects as well as merge-time auto-promotions, unlike
+    `restore_auto_merged_after_detach`: a detach leaves the canonical row in place, so the user's "yes,
+    this is the duplicate" still has a referent, whereas here that row is being deleted and the
+    decision's premise goes with it. The row comes back as an ordinary transaction rather than an active
+    suspect — with the twin gone there is nothing left to re-judge it against.
+
+    Deleting the batch's own dedupe records matters for two reasons beyond tidiness: its hard-reject
+    records describe a decision about an import that no longer exists (they would surface as stale
+    entries in the unified duplicate report), and its coverage records tell future imports "this date
+    range was already covered", which would spuriously hard-reject rows on those dates.
+    """
+    ids = [str(b) for b in batch_ids if b]
+    if not ids:
+        return {"deleted": 0, "restored": 0}
+    placeholders = ",".join("?" * len(ids))
+
+    from .amazon import reverse_batch_amazon_links  # lazy: avoid the core↔amazon import cycle
+    for batch_id in ids:
+        reverse_batch_enrichments(conn, batch_id)
+        reverse_batch_money_movement_links(conn, batch_id)
+        reverse_batch_amazon_links(conn, batch_id)
+
+    restored = conn.execute(
+        f"""
+        UPDATE txn
+        SET    trashed_at           = NULL,
+               rejection_reason     = NULL,
+               dedupe_resolved_by   = NULL,
+               suspect_duplicate_of = NULL
+        WHERE  rejection_reason = 'duplicate_confirmed'
+          AND  suspect_duplicate_of IN (
+                   SELECT id FROM txn WHERE import_batch_id IN ({placeholders})
+               )
+        """,
+        ids,
+    ).rowcount or 0
+
+    deleted = conn.execute(
+        f"DELETE FROM txn WHERE import_batch_id IN ({placeholders})", ids
+    ).rowcount or 0
+    conn.execute(f"DELETE FROM import_batch_duplicate WHERE batch_id IN ({placeholders})", ids)
+    conn.execute(f"DELETE FROM import_batch_account WHERE batch_id IN ({placeholders})", ids)
+
+    # Soft-flags on OTHER batches may point at rows that just got deleted; clear those dangling
+    # pointers so the unified report doesn't carry orphaned entries.
+    conn.execute(
+        """
+        UPDATE txn
+        SET    suspect_duplicate_of = NULL,
+               suspect_duplicate_reason = NULL,
+               suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE  suspect_duplicate_of IS NOT NULL
+          AND  suspect_duplicate_of NOT IN (SELECT id FROM txn)
+        """
+    )
+    return {"deleted": deleted, "restored": restored}
+
+
 @router.delete("/batches/{batch_id}")
 def undo_batch(batch_id: str, force: bool = Query(False)):
     """
@@ -5201,45 +5273,7 @@ def undo_batch(batch_id: str, force: bool = Query(False)):
                     "edited_transactions": [dict(r) for r in edited],
                 })
 
-        # Reverse any enrichments this batch applied to existing rows *before* deleting its duplicate
-        # records below — those records hold the delta needed to undo the change to the pre-existing
-        # (non-batch) target rows, which otherwise would be orphaned and un-reversible.
-        reverse_batch_enrichments(conn, batch_id)
-        # Drop the wallet funding-leg links this batch created (their rows are deleted below, but the link
-        # row has no FK to txn so it must be removed explicitly). Runs before the delete so the links are
-        # still reachable via their members.
-        reverse_batch_money_movement_links(conn, batch_id)
-        # Same concern for Amazon links: the matched card charge sits *outside* this batch, so restore
-        # its prior category from the link metadata before the batch's item rows are deleted. Imported
-        # lazily — amazon.py imports from this module, so a top-level import would be circular.
-        from .amazon import reverse_batch_amazon_links
-        reverse_batch_amazon_links(conn, batch_id)
-
-        conn.execute("DELETE FROM txn WHERE import_batch_id = ?", (batch_id,))
-
-        # Clean up dedupe state the batch left behind. Three concerns:
-        #   1. The batch's own hard-reject records (import_batch_duplicate) describe a decision
-        #      about an import that no longer exists. Keeping them around would surface stale
-        #      entries in the unified duplicate report.
-        #   2. The batch's coverage records (import_batch_account) tell future imports "this
-        #      date range was already covered." Once the batch is undone that premise is gone;
-        #      leaving the records in place would cause future imports to spuriously hard-reject
-        #      rows on those dates.
-        #   3. Soft-flags on OTHER batches may point at txns that just got deleted (their
-        #      suspect_duplicate_of references rows from this batch). Clear those dangling
-        #      pointers so the unified report doesn't carry orphaned entries.
-        conn.execute("DELETE FROM import_batch_duplicate WHERE batch_id = ?", (batch_id,))
-        conn.execute("DELETE FROM import_batch_account WHERE batch_id = ?", (batch_id,))
-        conn.execute(
-            """
-            UPDATE txn
-            SET    suspect_duplicate_of = NULL,
-                   suspect_duplicate_reason = NULL,
-                   suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE  suspect_duplicate_of IS NOT NULL
-              AND  suspect_duplicate_of NOT IN (SELECT id FROM txn)
-            """
-        )
+        undo_batches(conn, [batch_id])
 
         conn.execute(
             "UPDATE import_batch SET status = 'undone' WHERE id = ?", (batch_id,)

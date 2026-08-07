@@ -47,7 +47,9 @@ def _env_fallback(provider: str) -> dict | None:
 
 def get_provider_config_status(provider: str) -> dict:
     """Non-secret view for the Configure UI: whether the app credential is set and from where (vaulted DB
-    vs. `.env` bootstrap), the client_id and env, and whether a secret is on file — never the secret itself."""
+    vs. `.env` bootstrap), the client_id and env, and whether a secret is on file — never the secret itself.
+    Revealing it is a separate, explicit call (`GET /api/providers/{provider}/secret`), so a plaintext
+    secret never rides along in a payload the caller did not ask for it in."""
     with get_db() as conn:
         row = _row(conn, provider)
     if row and (row["secret_enc"] or row["secret"] or row["client_id"]):

@@ -189,6 +189,23 @@ on disk. This is **uniform across providers**: Plaid's `client_id`/`secret`, Tel
 SimpleFIN's URL all live in the DB under the vault. `.env` may remain a bootstrap/override, but the DB is
 the home. Admin-gated to *configure*; any vaulted user can *use*.
 
+**The app secret is readable back, on request — the per-connection token is not.** The Configure dialog's
+**Show** reveals the stored app secret (`GET /api/providers/{provider}/secret`, admin-gated, 423 while the
+vault is locked). This is a deliberate exception to the otherwise write-only handling, and the asymmetry is
+the point: an app credential is one the operator *owns and can already read on the provider's dashboard*,
+and the only question the reveal answers — "does what Luma has match what the dashboard shows" — is a real
+diagnostic that nothing else can settle. A per-connection `access_token` has no such counterpart: it is
+live bank access with no dashboard to compare against and no reason a human would ever read it, so no
+reveal exists for one and none should be added.
+
+Three properties keep the exception narrow. It is a **separate call**, never a field on the status payload,
+so plaintext can only appear in a response that explicitly asked for it. It **reuses `resolve_app_config`**,
+the same decryption path a sync takes, so there is exactly one way a stored credential becomes plaintext.
+And it takes **no second challenge when the vault is already unlocked** — an unlocked vault is this app's
+authorization boundary and sync/disconnect/refresh all ride it, so re-prompting only here would add
+friction without raising the bar. (A `.env`-sourced secret is returned without an unlock: nothing is
+encrypted, and it is already readable by anyone who can read the file.)
+
 **No provider imposes a per-user boundary** — the API only needs its credentials + a connection token and
 has no notion of which human is calling. So *any* boundary between users is one **Luma** builds, entirely
 via **who can decrypt which per-connection secret**.
