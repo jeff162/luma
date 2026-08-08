@@ -22,7 +22,12 @@ from backend.db import control_database as cdb
 from backend.db import database
 from backend.services import plaid_service
 from backend.services.connection_mapping import build_sync_evidence, captured_field_keys
-from backend.services.duplicate_detection import collect_duplicate_match_texts, parse_import_evidence
+from backend.services.duplicate_detection import (
+    collect_duplicate_match_texts,
+    parse_import_evidence,
+    source_match_texts,
+)
+from backend.services.import_evidence import EVIDENCE_ROLE_CATEGORICAL
 from backend.services.providers import PlaidAdapter
 
 
@@ -150,6 +155,22 @@ class SyncEvidenceTests(unittest.TestCase):
     def test_empty_values_are_omitted_rather_than_stored_blank(self):
         ev = self._evidence(merchant_entity_id=None, check_number="", counterparties=[], _captured=set())
         self.assertEqual({f["header"] for f in ev.get("extra_text_fields", [])}, {"Authorized date"})
+
+    def test_only_the_counterparty_is_offered_to_the_duplicate_text_matcher(self):
+        # A CSV infers roles from column cardinality; a sync stamps them, because it knows what each
+        # field is. Everything but the counterparty is structured metadata two unrelated charges can
+        # carry identically — the authorized date most of all, since every synced row has one and the
+        # cross-account sweep already spends the date as its ±7-day window. Leaving these unstamped
+        # made any two same-amount rows sharing an authorized date an exact-tier duplicate.
+        ev = self._evidence()
+        roles = {f["header"]: f.get("role") for f in ev["extra_text_fields"]}
+        self.assertIsNone(roles["Counterparty"])
+        for header in ("Merchant ID", "Check number", "Authorized date", "Location"):
+            self.assertEqual(roles[header], EVIDENCE_ROLE_CATEGORICAL, header)
+
+        # The behavior the roles buy: only the counterparty reaches the cross-account matcher.
+        texts = source_match_texts("CVS Caremark", "CAREMARK MAIL", json.dumps(ev))
+        self.assertEqual(texts, {"cvs caremark", "caremark mail"})
 
 
 class CapturedFieldSelectionTests(unittest.TestCase):

@@ -67,9 +67,11 @@ from backend.services.categorizer import (
     bump_rule_effect_dates,
 )
 from backend.services.recurring_detection import payee_keys_for_ids, scan_imported_payees
-from backend.services.duplicate_detection import (
+from backend.services.import_evidence import (
     EVIDENCE_ROLE_CATEGORICAL,
     EVIDENCE_ROLE_DESCRIPTIVE,
+)
+from backend.services.duplicate_detection import (
     GENERIC_DUPLICATE_TEXT_TOKENS,
     are_distinct_checks,
     build_dedupe_context,
@@ -459,15 +461,10 @@ def _import_evidence_reserved_headers(col: ColumnMap) -> set[str]:
     }
 
 
-# An extra evidence column is one of two shapes, and the fuzzy duplicate text-matcher must treat them
-# differently. A *descriptive* column (memos, item titles, counterparty names) is high-cardinality free
-# text — an exact/near match between two rows is meaningful, so it may feed the matcher. A *categorical*
-# column (transaction type, status, currency) draws from a small repeated vocabulary — two unrelated
-# rows routinely share the identical value, so feeding it to the matcher manufactures spurious
-# duplicates. We infer the role from the column's cardinality across the whole file and stamp it on each
-# captured field; collect_duplicate_match_texts then consumes only descriptive fields. A field with no
-# role (legacy evidence pre-dating this, and every descriptive field, which we leave unstamped to keep
-# the stored shape lean) is treated as descriptive.
+# How a CSV column earns its evidence role (services/import_evidence.py defines what the roles mean
+# and why text matching must exclude the categorical ones). A file gives us the one signal a sync
+# can't: the column's cardinality across every row. A column drawing from a small, repeated
+# vocabulary is categorical; anything else is free text where a match between two rows means something.
 CATEGORICAL_MAX_DISTINCT = 12
 CATEGORICAL_MAX_DISTINCT_RATIO = 0.5
 CATEGORICAL_MIN_REPEATS = 2

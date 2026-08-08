@@ -122,7 +122,9 @@ Local-first also means the security model is easy to reason about — but it's w
 
 - **Data-source tokens are the one secret Luma encrypts at rest.** A connected provider (such as Plaid) issues a token that grants **ongoing, read-only** access to an account's transactions and balances — it cannot move money. Because that access is live until revoked, the token is kept in a passphrase-protected vault rather than in plain text. The vault passphrase is separate from the sign-in password and is never stored; losing it simply means re-linking the data sources.
 
-- **If a database or backup is lost or copied by someone else:** the historical transactions it holds should be treated as exposed, since they were never encrypted. Any connected data source should be **disconnected** — which revokes its token at the provider, so a stolen copy can no longer pull new data — and, for a deliberate compromise, the vault passphrase rotated. Cancelling a token limits the damage to what was already in the copied files.
+- **If a database or backup is lost or copied by someone else:** the historical transactions it holds should be treated as exposed, since they were never encrypted. Any connected data source should be **revoked**, so a stolen copy can no longer pull new data, and — for a deliberate compromise — the vault passphrase rotated. Cancelling a credential limits the damage to what was already in the copied files.
+
+- **Revoking works differently per provider, and the app says which applies.** Where a provider supports it (Plaid), **Disconnect** revokes the credential at the provider and the access genuinely ends. Some providers publish no way for another app to revoke a credential (SimpleFIN); there, Disconnect removes only Luma's copy, and revoking means signing in to the provider and doing it there. The disconnect confirmation states which of the two is about to happen, so a connection is never left live while appearing closed.
 
 ## Features
 

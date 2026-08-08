@@ -12,6 +12,24 @@ export function formatDate(dateStr) {
   return format(parseISO(dateStr), 'MMM d, yyyy')
 }
 
+// A past moment ("last used", "last synced") as an absolute date and time, deliberately **not** as
+// "5 minutes ago". A relative label is computed when the component renders, so on a page left open it
+// silently drifts — "5m ago" can be an hour old with nothing to indicate it, and the reader has no way to
+// tell a fresh render from a stale one. An absolute timestamp is true whenever it happens to be drawn.
+// Returns null for a missing or unparseable value so callers can supply their own empty-state wording.
+export function formatTimestamp(value) {
+  if (!value) return null
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return null
+  return parsed.toLocaleString([], {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 export function currentMonth() {
   return format(new Date(), 'yyyy-MM')
 }

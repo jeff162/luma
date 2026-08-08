@@ -27,6 +27,7 @@ from backend.services.duplicate_detection import (
     forget_account_pair_distinct,
     list_distinct_account_pairs,
     list_suspects,
+    list_unified_batch_duplicates,
     mark_import_suspects,
     promote_in_group_suspects_to_confirmed,
     resolve_suspect,
@@ -502,6 +503,120 @@ class SuspectDuplicateTests(unittest.TestCase):
 
         self.assertEqual(marked, 0)
         self.assertIsNone(self._suspect_link(new_id)["suspect_duplicate_of"])
+
+    def test_import_does_not_flag_on_a_shared_categorical_evidence_value(self):
+        # Regression: two synced rows on different accounts, unrelated merchants, same amount, one day
+        # apart — a pair the SQL gate hands to the text gate on purpose, expecting the text to reject
+        # it. Both carry the same `Authorized date` because both providers publish one and the two
+        # charges happen to have been authorized the same day. That value is stamped categorical, so it
+        # must not reach the matcher: admitting it made the pair byte-identical on the date string and
+        # flagged it at the EXACT tier ('cross_account'), which auto-confirms on merge.
+        account_a = self._insert_account("Bank A")
+        account_b = self._insert_account("Bank B")
+        prior_batch = self._insert_batch(filename="prior-sync")
+        new_batch = self._insert_batch(filename="new-sync")
+
+        same_day_evidence = json.dumps({
+            "account": {"header": "Account", "value": "SAVINGS"},
+            "extra_text_fields": [
+                {"header": "Authorized date", "value": "2026-08-02", "role": "categorical"},
+            ],
+        })
+        self._insert_txn(
+            account_id=account_a, date="2026-08-03", amount=-10.00,
+            merchant_name="Transit Fare", raw_name="TRANSIT FARE",
+            batch_id=prior_batch, import_evidence_json=same_day_evidence,
+        )
+        new_id = self._insert_txn(
+            account_id=account_b, date="2026-08-02", amount=-10.00,
+            merchant_name="Corner Bait Shop", raw_name="CORNER BAIT SHOP",
+            batch_id=new_batch, import_evidence_json=same_day_evidence,
+        )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                marked = mark_import_suspects(conn, new_batch)
+
+        self.assertEqual(marked, 0)
+        self.assertIsNone(self._suspect_link(new_id)["suspect_duplicate_of"])
+
+    def test_import_still_flags_on_a_shared_descriptive_evidence_value(self):
+        # The other half of the pair above: excluding categorical fields must not blunt the rule. The
+        # same two accounts/dates/amount, but now the shared captured value is a Counterparty — free
+        # text that names the charge — and the sweep must still flag it, even though neither row's
+        # merchant_name or raw_name overlaps (the union-of-captured-texts behavior this rule exists for).
+        account_a = self._insert_account("Bank A")
+        account_b = self._insert_account("Bank B")
+        prior_batch = self._insert_batch(filename="prior-sync")
+        new_batch = self._insert_batch(filename="new-sync")
+
+        def evidence(counterparty: str) -> str:
+            return json.dumps({
+                "extra_text_fields": [
+                    {"header": "Counterparty", "value": counterparty},
+                    {"header": "Authorized date", "value": "2026-08-02", "role": "categorical"},
+                ],
+            })
+
+        existing_id = self._insert_txn(
+            account_id=account_a, date="2026-08-03", amount=-10.00,
+            merchant_name="TRANSIT AUTHORITY 0031", raw_name="TRANSIT AUTHORITY 0031",
+            batch_id=prior_batch, import_evidence_json=evidence("Metro Transit"),
+        )
+        new_id = self._insert_txn(
+            account_id=account_b, date="2026-08-02", amount=-10.00,
+            merchant_name="Metro Transit", raw_name="METRO TRANSIT MTICKET",
+            batch_id=new_batch, import_evidence_json=evidence("Metro Transit"),
+        )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                marked = mark_import_suspects(conn, new_batch)
+
+        self.assertEqual(marked, 1)
+        link = self._suspect_link(new_id)
+        self.assertEqual(link["suspect_duplicate_of"], existing_id)
+        self.assertEqual(link["suspect_duplicate_reason"], "cross_account")
+
+    def test_report_carries_captured_origin_for_both_sides_of_a_flag(self):
+        # The report summarizes each side as date · merchant · amount, which is exactly the projection
+        # that omits what the rules actually compared. Both sides therefore carry `origin` — the same
+        # captured-field shape the ledger's hover renders — so "why did these match?" is answerable
+        # from the report instead of by hunting each row down in the register.
+        account_a = self._insert_account("Bank A")
+        account_b = self._insert_account("Bank B")
+        prior_batch = self._insert_batch(filename="prior.csv")
+        new_batch = self._insert_batch(filename="new.csv")
+
+        existing_id = self._insert_txn(
+            account_id=account_a, date="2026-08-03", amount=-10.00,
+            merchant_name="Metro Transit", raw_name="METRO TRANSIT 0031", batch_id=prior_batch,
+            import_evidence_json=json.dumps({"account": {"header": "Account", "value": "CREDIT CARD"}}),
+        )
+        new_id = self._insert_txn(
+            account_id=account_b, date="2026-08-02", amount=-10.00,
+            merchant_name="Metro Transit", raw_name="METRO TRANSIT MTICKET", batch_id=new_batch,
+            import_evidence_json=json.dumps({"account": {"header": "Account", "value": "SAVINGS"}}),
+        )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                mark_import_suspects(conn, new_batch)
+                entries = list_unified_batch_duplicates(conn, new_batch)
+
+        entry = next(e for e in entries if e["incoming"].get("txn_id") == new_id)
+        incoming_origin = entry["incoming"]["origin"]
+        matched_origin = entry["matched"]["origin"]
+
+        # The raw descriptors differ between the two sources — the detail the merchant column hides,
+        # and the whole reason the hover is worth having.
+        self.assertEqual(incoming_origin["raw_name"], "METRO TRANSIT MTICKET")
+        self.assertEqual(matched_origin["raw_name"], "METRO TRANSIT 0031")
+        self.assertEqual(matched_origin["id"], existing_id)
+        # Provenance, so two rows from different sources are tellable apart on the card itself.
+        self.assertEqual(incoming_origin["import_batch_filename"], "new.csv")
+        self.assertEqual(matched_origin["import_batch_filename"], "prior.csv")
+        self.assertIn("SAVINGS", incoming_origin["import_evidence_json"])
 
     def test_merge_does_not_auto_confirm_fuzzy_suspect(self):
         # A FUZZY cross-account soft-flag is review-only: merging the two accounts must NOT silently

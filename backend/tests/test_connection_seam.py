@@ -10,17 +10,24 @@ Pins the three edges of the seam that must hold before Teller/SimpleFIN can plug
 
 from __future__ import annotations
 
+import base64
+import json
 import tempfile
 import unittest
 from contextlib import contextmanager
+from datetime import date, timedelta
 from pathlib import Path
 from unittest import mock
 
 from backend.db import control_database as cdb
 from backend.db import database
+from backend.db.database import get_db
 from backend.routers.import_export.backup import _load_json_or_zip_payload
+from backend.services.ledger_currency import DEFAULT_LEDGER_CURRENCY, currency_matches
 from backend.services import crypto_service as cs
 from backend.services.providers import PlaidAdapter, UnknownProviderError, get_adapter
+from backend.services.providers.base import ProviderAdapter
+from backend.services.providers.simplefin import SimpleFinError
 from backend.tests._api_client import api_client
 
 
@@ -124,6 +131,143 @@ class ConnectionMigrationTests(unittest.TestCase):
         self.assertEqual((rows["a2"]["connection_id"], rows["a2"]["provider"]), (None, "csv"))
         self.assertEqual((rows["a3"]["connection_id"], rows["a3"]["provider"]), (None, "manual"))
 
+    def test_v26_renames_the_provider_transaction_id_preserving_values_and_uniqueness(self):
+        # The column has held any provider's transaction id since 6a; v26 gives it the name to match, the
+        # way v20 did for the account handle. A rename must carry the values (they are what makes a sync
+        # idempotent) and the UNIQUE constraint (which is what stops a re-pull duplicating a row).
+        with database.get_db(db_path=self.data_path) as conn:
+            conn.execute("DROP TABLE txn")
+            conn.execute("""
+                CREATE TABLE txn (
+                    id TEXT PRIMARY KEY, plaid_transaction_id TEXT UNIQUE, amount REAL, date TEXT)
+            """)
+            conn.execute("INSERT INTO txn (id, plaid_transaction_id, amount, date) "
+                         "VALUES ('t1', 'prov-1', 1.0, '2026-01-01')")
+            conn.execute("INSERT INTO txn (id, plaid_transaction_id, amount, date) "
+                         "VALUES ('t2', NULL, 2.0, '2026-01-02')")
+            database._rename_txn_provider_transaction_id(conn)
+
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(txn)")}
+            self.assertIn("external_transaction_id", cols)
+            self.assertNotIn("plaid_transaction_id", cols)
+            self.assertEqual(
+                conn.execute("SELECT external_transaction_id FROM txn WHERE id = 't1'").fetchone()[0],
+                "prov-1",
+            )
+            with self.assertRaises(Exception):
+                conn.execute("INSERT INTO txn (id, external_transaction_id, amount, date) "
+                             "VALUES ('t3', 'prov-1', 3.0, '2026-01-03')")
+
+    def test_v26_is_idempotent(self):
+        with database.get_db(db_path=self.data_path) as conn:
+            database._rename_txn_provider_transaction_id(conn)   # baseline is already post-rename
+            database._rename_txn_provider_transaction_id(conn)
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(txn)")}
+        self.assertIn("external_transaction_id", cols)
+
+    def test_v27_adds_sync_status_columns_to_existing_connections(self):
+        with database.get_db(db_path=self.data_path) as conn:
+            conn.execute("DROP TABLE connection")
+            conn.execute("""
+                CREATE TABLE connection (
+                    id TEXT PRIMARY KEY, provider TEXT NOT NULL, external_id TEXT,
+                    credential TEXT NOT NULL DEFAULT '', institution TEXT)
+            """)
+            conn.execute("INSERT INTO connection (id, provider, external_id) VALUES ('c1','plaid','item-1')")
+            database._add_connection_sync_status(conn)
+            row = conn.execute(
+                "SELECT last_synced_at, last_sync_error, consecutive_sync_failures, last_sync_warnings "
+                "FROM connection WHERE id = 'c1'"
+            ).fetchone()
+        # A pre-existing connection has no recorded history, and NULL is the honest answer: nothing
+        # recorded the time of syncs that happened before the column existed.
+        self.assertIsNone(row["last_synced_at"])
+        self.assertIsNone(row["last_sync_error"])
+        self.assertIsNone(row["last_sync_warnings"])
+        # Explicitly backfilled rather than left to the DDL default, which does not apply retroactively.
+        self.assertEqual(row["consecutive_sync_failures"], 0)
+
+    def test_v27_is_idempotent(self):
+        with database.get_db(db_path=self.data_path) as conn:
+            database._add_connection_sync_status(conn)   # baseline already has the columns
+            database._add_connection_sync_status(conn)
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection)")}
+        self.assertIn("last_synced_at", cols)
+
+    def test_v28_adds_per_account_history_state(self):
+        with database.get_db(db_path=self.data_path) as conn:
+            conn.execute("DROP TABLE connection_account")
+            conn.execute("""
+                CREATE TABLE connection_account (
+                    connection_id TEXT NOT NULL, external_account_id TEXT NOT NULL,
+                    account_id TEXT, mapping_mode TEXT, coverage_start_date TEXT,
+                    PRIMARY KEY (connection_id, external_account_id))
+            """)
+            conn.execute(
+                "INSERT INTO connection_account (connection_id, external_account_id, mapping_mode, "
+                "coverage_start_date) VALUES ('c1','ext-1','new','2026-02-01')"
+            )
+            database._per_account_history_state(conn)
+            row = conn.execute(
+                "SELECT history_complete, history_empty_streak FROM connection_account"
+            ).fetchone()
+        # Not presumed complete. An account whose end was previously concluded at the *connection* level
+        # costs one extra window on the next deep pull; guessing the other way would leave history that is
+        # never fetched again.
+        self.assertEqual(row["history_complete"], 0)
+        self.assertEqual(row["history_empty_streak"], 0)
+
+    def test_v28_is_idempotent(self):
+        with database.get_db(db_path=self.data_path) as conn:
+            database._per_account_history_state(conn)   # baseline already has the columns
+            database._per_account_history_state(conn)
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection_account)")}
+        self.assertIn("history_complete", cols)
+
+    def test_v29_leaves_existing_accounts_unrestricted(self):
+        # NULL reads as "the provider did not state a currency", which is treated as supported. Anything
+        # else would stop working connections on no evidence: every one of them predates the column and was
+        # syncing without complaint. The next connect or "Refresh accounts" fills the real value in.
+        with database.get_db(db_path=self.data_path) as conn:
+            conn.execute("DROP TABLE connection_account")
+            conn.execute("""
+                CREATE TABLE connection_account (
+                    connection_id TEXT NOT NULL, external_account_id TEXT NOT NULL,
+                    account_id TEXT, mapping_mode TEXT,
+                    PRIMARY KEY (connection_id, external_account_id))
+            """)
+            conn.execute("INSERT INTO connection_account (connection_id, external_account_id, "
+                         "mapping_mode) VALUES ('c1','ext-1','new')")
+            database._connection_account_currency(conn)
+            row = conn.execute("SELECT provider_currency FROM connection_account").fetchone()
+        self.assertIsNone(row["provider_currency"])
+        self.assertTrue(currency_matches(DEFAULT_LEDGER_CURRENCY, row["provider_currency"]))
+
+    def test_v29_is_idempotent(self):
+        with database.get_db(db_path=self.data_path) as conn:
+            database._connection_account_currency(conn)   # baseline already has the column
+            database._connection_account_currency(conn)
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection_account)")}
+        self.assertIn("provider_currency", cols)
+
+    def test_v30_starts_every_connection_as_not_needing_a_reconnect(self):
+        with database.get_db(db_path=self.data_path) as conn:
+            conn.execute("DROP TABLE connection")
+            conn.execute("CREATE TABLE connection (id TEXT PRIMARY KEY, provider TEXT NOT NULL)")
+            conn.execute("INSERT INTO connection (id, provider) VALUES ('c1','plaid')")
+            database._connection_reauth_required(conn)
+            row = conn.execute("SELECT reauth_required FROM connection").fetchone()
+        # Explicitly backfilled rather than left to the DDL default, which does not apply retroactively.
+        # A genuinely revoked connection raises the flag on its very next sync, so 0 is safe both ways.
+        self.assertEqual(row["reauth_required"], 0)
+
+    def test_v30_is_idempotent(self):
+        with database.get_db(db_path=self.data_path) as conn:
+            database._connection_reauth_required(conn)   # baseline already has the column
+            database._connection_reauth_required(conn)
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection)")}
+        self.assertIn("reauth_required", cols)
+
     def test_backfill_is_idempotent(self):
         with database.get_db(db_path=self.data_path) as conn:
             self._add_legacy_plaid_schema(conn)
@@ -156,7 +300,10 @@ class ProviderAdapterTests(unittest.TestCase):
         ]):
             self.assertEqual(adapter.fetch_accounts(cfg, "tok-1"), [
                 {"external_account_id": "acct-1", "name": "Checking", "official_name": "Total Checking",
-                 "type": "depository", "subtype": "checking", "mask": "0000"}
+                 "type": "depository", "subtype": "checking", "mask": "0000",
+                 # Absent from the provider payload above, so normalized to None — "not stated", which
+                 # reads as a match everywhere downstream rather than as a rejection.
+                 "currency": None}
             ])
         # The optional capture fields (authorized_date, counterparties, …) ride the same neutral dict;
         # a provider that can't supply one leaves it absent, and the adapter normalizes it to
@@ -169,8 +316,307 @@ class ProviderAdapterTests(unittest.TestCase):
                 {"external_transaction_id": "t-1", "external_account_id": "acct-1", "amount": 12.5,
                  "merchant_name": "Store", "raw_name": "STORE #1", "date": "2026-01-01", "is_pending": False,
                  "authorized_date": None, "merchant_entity_id": None, "counterparties": [],
-                 "check_number": None, "location": None}
+                 "check_number": None, "location": None, "currency": None}
             ])
+
+
+class PlaidCurrencyTests(unittest.TestCase):
+    """Plaid reports a currency, so the adapter judges rows on it.
+
+    Two layers, deliberately tested separately. `plaid_service` resolves Plaid's *two* currency fields
+    into one string — `iso_currency_code` for real ISO-4217 codes, `unofficial_currency_code` for crypto
+    and currencies Plaid does not officially support — and the adapter above it only ever compares that
+    string against the ledger's. The split matters because an unofficial code can never equal an ISO one,
+    which is the correct answer for it and needs no special case anywhere higher up.
+
+    Rows are judged **per transaction**, not per account: Plaid states a currency on every row, so the
+    number in `amount` can be judged on its own terms rather than on an assumption about its account.
+    """
+
+    CFG = {"client_id": "cid", "secret": "sek", "env": "sandbox"}
+
+    def _page(self, *transactions):
+        return {"added": list(transactions), "modified": [], "removed": [],
+                "next_cursor": "c1", "has_more": False,
+                "update_status": "HISTORICAL_UPDATE_COMPLETE"}
+
+    def _txn(self, txn_id, account, currency):
+        """A transaction in the shape `plaid_service` hands up — already normalized, since that is the
+        layer the adapter actually consumes."""
+        return {"plaid_transaction_id": txn_id, "plaid_account_id": account, "amount": 12.5,
+                "merchant_name": "Store", "raw_name": "STORE", "date": "2026-01-01",
+                "authorized_date": None, "is_pending": False, "pending_transaction_id": None,
+                "merchant_entity_id": None, "counterparties": [], "check_number": None,
+                "location": None, "currency": currency}
+
+    def _sync(self, page, ledger_currency="USD"):
+        from backend.services import plaid_service
+        with mock.patch.object(plaid_service, "fetch_transactions_sync", return_value=page):
+            return get_adapter("plaid").fetch_transactions_sync(
+                self.CFG, "tok-1", ledger_currency=ledger_currency)
+
+    # ---- resolving Plaid's two fields ------------------------------------
+
+    def test_the_service_resolves_either_currency_field(self):
+        from backend.services.plaid_service import _currency_code
+        self.assertEqual(_currency_code({"iso_currency_code": "USD"}), "USD")
+        # Crypto and unsupported currencies arrive only here. Returned as-is so the comparison above can
+        # do its work — "BTC" simply never equals an ISO ledger.
+        self.assertEqual(_currency_code({"unofficial_currency_code": "BTC"}), "BTC")
+        self.assertEqual(_currency_code({"iso_currency_code": "USD", "unofficial_currency_code": "BTC"}), "USD")
+        # Plaid can state neither, which reads as "not stated" rather than as a rejection.
+        self.assertIsNone(_currency_code({}))
+        self.assertIsNone(_currency_code({"iso_currency_code": None, "unofficial_currency_code": ""}))
+
+    # ---- what the adapter does with it -----------------------------------
+
+    def test_a_row_in_another_currency_never_reaches_the_ledger(self):
+        result = self._sync(self._page(
+            self._txn("t-usd", "acct-1", "USD"),
+            self._txn("t-eur", "acct-2", "EUR"),
+        ))
+        self.assertEqual({t["external_transaction_id"] for t in result["added"]}, {"t-usd"})
+        self.assertEqual(result["unsupported_currency"], {"acct-2": "EUR"})
+
+    def test_the_ledgers_currency_is_what_it_is_compared_against(self):
+        # The mirror of the SimpleFIN case: on an AUD ledger, AUD is kept and USD is the mismatch. This is
+        # what proves the comparison follows the setting rather than a privileged currency.
+        result = self._sync(self._page(
+            self._txn("t-aud", "acct-1", "AUD"),
+            self._txn("t-usd", "acct-2", "USD"),
+        ), ledger_currency="AUD")
+        self.assertEqual({t["external_transaction_id"] for t in result["added"]}, {"t-aud"})
+        self.assertEqual(result["unsupported_currency"], {"acct-2": "USD"})
+
+    def test_an_unofficial_currency_is_rejected_and_named(self):
+        result = self._sync(self._page(self._txn("t-btc", "acct-1", "BTC")))
+        self.assertEqual(result["added"], [])
+        self.assertEqual(result["unsupported_currency"], {"acct-1": "BTC"})
+
+    def test_a_row_stating_no_currency_is_imported(self):
+        # "Not stated" is not "not ours" — rejecting the row would discard real data over a reporting gap.
+        result = self._sync(self._page(self._txn("t-1", "acct-1", None)))
+        self.assertEqual(len(result["added"]), 1)
+        self.assertEqual(result["unsupported_currency"], {})
+
+    def test_modified_rows_are_filtered_on_the_same_rule(self):
+        # An update to a row is as capable of carrying a foreign amount as a new one, and it writes to the
+        # same column. Filtering only `added` would let the second path store what the first refused.
+        page = self._page()
+        page["modified"] = [self._txn("t-eur", "acct-2", "EUR")]
+        result = self._sync(page)
+        self.assertEqual(result["modified"], [])
+        self.assertEqual(result["unsupported_currency"], {"acct-2": "EUR"})
+
+    def test_the_offered_account_list_carries_its_currency(self):
+        # Recorded at connect time so the mapping step can warn before an account that can never fill is
+        # given a destination.
+        from backend.services import plaid_service
+        with mock.patch.object(plaid_service, "fetch_accounts", return_value=[
+            {"plaid_account_id": "acct-1", "name": "Travel", "official_name": None,
+             "type": "depository", "subtype": "checking", "mask": "0001", "currency": "EUR"},
+        ]):
+            accounts = get_adapter("plaid").fetch_accounts(self.CFG, "tok-1")
+        self.assertEqual(accounts[0]["currency"], "EUR")
+
+
+class RangePullDefaultTests(unittest.TestCase):
+    """The base adapter's `fetch_transactions_sync`, which is what a provider with no change feed rides.
+
+    It exists so a non-cursor provider needs no special case in the sync loop — the loop asks the same
+    question and gets the same shaped answer, with the differences (no deletions, a real coverage figure)
+    stated in the payload rather than inferred from which provider answered.
+    """
+
+    class _RangeOnly(ProviderAdapter):
+        provider = "rangeonly"
+
+        def __init__(self):
+            self.calls = []
+
+        def connect(self, app_config, payload):
+            raise NotImplementedError
+
+        def fetch_accounts(self, app_config, credential):
+            return []
+
+        def fetch_transactions(self, app_config, credential, start_date=None, end_date=None):
+            self.calls.append((start_date, end_date))
+            return [{"external_transaction_id": "t-1", "external_account_id": "a-1", "amount": 1.0,
+                     "merchant_name": "Shop", "raw_name": "SHOP", "date": "2026-01-01", "is_pending": False}]
+
+        def remove(self, app_config, credential):
+            pass
+
+    def test_it_presents_a_window_as_one_complete_page(self):
+        adapter = self._RangeOnly()
+        page = adapter.fetch_transactions_sync({}, "cred", days_requested=30)
+        self.assertEqual(len(page["added"]), 1)
+        self.assertFalse(page["has_more"], "a range pull has nothing to page to")
+        self.assertTrue(page["backfill_complete"])
+        self.assertFalse(page["resume_later"])
+
+    def test_removed_is_empty_because_the_provider_cannot_report_deletions(self):
+        # Load-bearing: the empty list must never be read as the provider confirming nothing was deleted.
+        self.assertEqual(self._RangeOnly().fetch_transactions_sync({}, "cred")["removed"], [])
+
+    def test_it_reports_the_window_it_actually_fetched_per_targeted_account(self):
+        adapter = self._RangeOnly()
+        page = adapter.fetch_transactions_sync({}, "cred", days_requested=30, account_targets=[
+            {"external_account_id": "acct-1", "from_date": "2020-01-01"},
+        ])
+        reached = (date.today() - timedelta(days=30)).isoformat()
+        self.assertEqual(page["account_coverage"], {"acct-1": {"reached": reached, "complete": False}})
+
+    def test_a_plain_range_pull_never_concludes_an_accounts_history_has_ended(self):
+        # It returns what the range holds and says no more. Claiming completeness would stop a later,
+        # deeper request from ever looking further back.
+        adapter = self._RangeOnly()
+        page = adapter.fetch_transactions_sync({}, "cred", days_requested=30, account_targets=[
+            {"external_account_id": "acct-1", "from_date": "2020-01-01"},
+        ])
+        self.assertFalse(page["account_coverage"]["acct-1"]["complete"])
+
+    def test_the_requested_depth_bounds_the_window(self):
+        adapter = self._RangeOnly()
+        adapter.fetch_transactions_sync({}, "cred", days_requested=7)
+        start, end = adapter.calls[0]
+        self.assertEqual((end - start).days, 7)
+
+
+class GenericConnectTests(unittest.TestCase):
+    """`POST /api/providers/{provider}/connect` — the entry point for a provider whose authorization is not
+    a Link widget, and the proof that it lands in the same place Link does."""
+
+    def setUp(self):
+        cs.lock_all()
+
+    def tearDown(self):
+        cs.lock_all()
+
+    ACCESS_URL = "https://u:p@bridge.example/simplefin"
+    TOKEN = base64.b64encode(b"https://bridge.example/simplefin/claim/DEMO-abc").decode()
+
+    def _connect(self, client):
+        with mock.patch("backend.services.providers.simplefin._http") as http:
+            http.side_effect = [
+                self.ACCESS_URL.encode(),                       # the claim POST
+                json.dumps({"errlist": [], "accounts": [       # the balances-only accounts read
+                    {"id": "2930002", "name": "Savings", "conn_id": "C1", "currency": "USD",
+                     "balance": "1.00", "balance-date": 978366153},
+                ], "connections": [{"conn_id": "C1", "org_name": "My Bank"}]}).encode(),
+            ]
+            return client.post("/api/providers/simplefin/connect",
+                               json={"payload": {"setup_token": self.TOKEN}})
+
+    def test_a_token_provider_connects_and_records_its_accounts(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            r = self._connect(client)
+            self.assertEqual(r.status_code, 200, r.text)
+            body = r.json()
+            self.assertEqual(body["provider"], "simplefin")
+            self.assertEqual(body["accounts_added"], 1)
+            self.assertEqual(body["unmapped"], 1, "a fresh connect leaves the mapping decision to the user")
+
+    def test_the_credential_is_vaulted_and_the_handle_is_not_the_credential(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            self._connect(client)
+            with get_db() as conn:
+                row = conn.execute("SELECT external_id, credential, credential_enc FROM connection").fetchone()
+        self.assertTrue(row["external_id"].startswith("sfin_"))
+        self.assertNotIn("bridge.example", row["external_id"])
+        self.assertEqual(row["credential"], "", "no plaintext credential may be stored")
+        self.assertTrue(row["credential_enc"])
+
+    def test_connecting_requires_an_unlocked_vault_like_every_other_provider(self):
+        with api_client() as (client, _):
+            r = self._connect(client)
+        self.assertEqual(r.status_code, 409, r.text)
+        self.assertEqual(r.json()["detail"]["code"], "vault_not_configured")
+
+    def test_a_provider_with_no_sandbox_requires_a_production_strength_vault(self):
+        real_token = base64.b64encode(b"https://bridge.example/simplefin/claim/REAL-abc").decode()
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "short"})
+            r = client.post("/api/providers/simplefin/connect",
+                            json={"payload": {"setup_token": real_token}})
+        self.assertEqual(r.status_code, 400, r.text)
+        self.assertEqual(r.json()["detail"]["code"], "weak_vault")
+
+    def test_a_provider_with_no_app_credential_reports_configured_once_connected(self):
+        # "Configured" answers a different question for a provider with nothing to configure: it must not
+        # sit in the add-a-data-source list forever, nor claim setup that never happened.
+        with api_client() as (client, _):
+            def _simplefin():
+                return next(p for p in client.get("/api/providers").json()["providers"]
+                            if p["provider"] == "simplefin")
+
+            before = _simplefin()
+            self.assertFalse(before["configured"])
+            self.assertFalse(before["requires_app_config"])
+            self.assertIsNone(before["env"], "no sandbox/production distinction to badge")
+            self.assertEqual(before["connect_spec"]["style"], "token")
+
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            self._connect(client)
+            self.assertTrue(_simplefin()["configured"])
+
+    def test_the_provider_list_carries_each_connections_sync_health(self):
+        # The Connections card has to be able to report "this stopped working" while collapsed, so the
+        # health travels with the connection list rather than behind a separate call a collapsed card
+        # would have no reason to make.
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            self._connect(client)
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE connection SET last_synced_at = '2026-08-06T12:00:00Z',"
+                    " last_sync_error = 'bank unavailable', consecutive_sync_failures = 4,"
+                    " last_sync_warnings = ?", (json.dumps(["Other Bank: authentication required"]),),
+                )
+            connection = next(p for p in client.get("/api/providers").json()["providers"]
+                              if p["provider"] == "simplefin")["connections"][0]
+        self.assertEqual(connection["last_synced_at"], "2026-08-06T12:00:00Z")
+        self.assertEqual(connection["last_sync_error"], "bank unavailable")
+        self.assertEqual(connection["consecutive_sync_failures"], 4)
+        self.assertEqual(connection["last_sync_warnings"], ["Other Bank: authentication required"])
+
+    def test_a_provider_refusal_is_a_502_carrying_the_providers_own_message(self):
+        # Not a 500. The provider refused or could not be reached, which is neither an internal fault nor
+        # something the user should report as a bug — and the adapter's message is the only thing that says
+        # what actually went wrong, so collapsing it into "Internal Server Error" is what turns a
+        # five-second fix into a debugging session.
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            with mock.patch("backend.services.providers.simplefin._http",
+                            side_effect=SimpleFinError("SimpleFIN returned 403: error code: 1010.")):
+                r = client.post("/api/providers/simplefin/connect",
+                                json={"payload": {"setup_token": self.TOKEN}})
+        self.assertEqual(r.status_code, 502, r.text)
+        self.assertEqual(r.json()["detail"]["code"], "provider_error")
+        self.assertIn("1010", r.json()["detail"]["message"])
+
+    def test_configuring_a_provider_that_has_nothing_to_configure_is_refused(self):
+        with api_client() as (client, _):
+            r = client.post("/api/providers/simplefin/config", json={"client_id": "x", "secret": "y"})
+        self.assertEqual(r.status_code, 409, r.text)
+        self.assertEqual(r.json()["detail"]["code"], "no_app_credential")
+
+    def test_disconnect_succeeds_even_though_nothing_can_be_revoked(self):
+        # SimpleFIN has no revocation call, so remove() is a no-op. Disconnect must still drop the local
+        # connection rather than fail — the part that did not happen is carried in the UI's confirm copy.
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            external_id = self._connect(client).json() and None
+            with get_db() as conn:
+                external_id = conn.execute("SELECT external_id FROM connection").fetchone()["external_id"]
+            r = client.post("/api/providers/simplefin/disconnect", json={"external_id": external_id})
+            self.assertEqual(r.status_code, 200, r.text)
+            simplefin = next(p for p in client.get("/api/providers").json()["providers"]
+                             if p["provider"] == "simplefin")
+            self.assertEqual(len(simplefin["connections"]), 0)
 
 
 class CredentialBackupTests(unittest.TestCase):

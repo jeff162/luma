@@ -82,8 +82,17 @@ credential is never anything less than live bank access.
 
 The provider-seam work OFX would need — a connect flow that is not Link, a range-pull fallback for
 providers with no cursor API, and support for a provider with no app-level credential — is **not**
-OFX-specific and is not tracked here. SimpleFIN needs all three, so they belong to that entry in
-[`import-input-formats.md`](import-input-formats.md).
+OFX-specific. **All three now exist** (built with the SimpleFIN adapter, 2026-08-07; see
+[`security-and-deployment-model.md`](security-and-deployment-model.md) → phase 6c): `connect_spec` +
+the shared `establish_connection`, the base adapter's range-pull `fetch_transactions_sync`, and
+`requires_app_config = False`. OFX would declare the same capabilities rather than add new ones, which
+removes most of what made this look expensive.
+
+Two of its remaining differences are also already modelled. `revokes_on_disconnect = False` is exactly
+the SimpleFIN case — a provider whose disconnect deletes only the local copy — so the confirm-dialog
+disclosure comes for free. And `connect_requires_production_vault` already gates a provider with no
+sandbox, which OFX is. What is **not** modelled, and remains the blocker below, is a credential that is
+not read-only.
 
 Assuming that seam work exists, what is left is a `ProviderAdapter` over `ofxtools`, normalizing to the
 neutral contract in `backend/services/providers/base.py`. Notes, not a spec:

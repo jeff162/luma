@@ -132,7 +132,12 @@ export const api = {
   // dashboard, kept off the status payload so plaintext only ever appears when explicitly asked for.
   // 423 when the vault is locked; 409 when nothing is on file.
   getProviderSecret: (provider) => request(`/providers/${provider}/secret`),
-  // Revoke a linked connection at the provider (invalidates the token everywhere) and drop it locally.
+  // Connect a data source whose authorization is not a Link widget — the payload shape is whatever that
+  // provider's `connect_spec` asked the UI to collect (e.g. { setup_token }).
+  connectProvider: (provider, payload) =>
+    request(`/providers/${provider}/connect`, { method: 'POST', body: JSON.stringify({ payload }) }),
+  // Drop a linked connection. Where the provider supports it this also revokes the credential at the
+  // provider; where it does not (SimpleFIN has no revocation call) only the local copy goes.
   disconnectProvider: (provider, external_id) =>
     request(`/providers/${provider}/disconnect`, { method: 'POST', body: JSON.stringify({ external_id }) }),
   // Rebuild a connection's local account rows from its still-valid credential (no re-link) — the recovery
@@ -461,8 +466,19 @@ export const api = {
 
   // days <= 0 means "all available history" (the connect/refresh backfill). connectionId scopes the sync
   // to one connection so a backfill doesn't re-pull every other bank; omit it to sync all connections.
-  runSync: (days = 30, connectionId = null) =>
-    request(`/sync?days=${days}${connectionId ? `&connection_id=${encodeURIComponent(connectionId)}` : ''}`, { method: 'POST' }),
+  // `fullHistory` marks a request for everything available (the initial backfill, and Fetch more history)
+  // as opposed to a routine top-up, which sends the same `days`. The two are not interchangeable: only a
+  // full-history pull may widen a connection's coverage claim backward, and on a provider with no cursor
+  // only it re-walks history rather than fetching a bounded recent window. `provider` scopes the sync to
+  // one data source so syncing one card cannot spend another provider's request budget.
+  runSync: (days = 30, connectionId = null, { provider = null, fullHistory = false } = {}) =>
+    request(
+      `/sync?days=${days}`
+      + (connectionId ? `&connection_id=${encodeURIComponent(connectionId)}` : '')
+      + (provider ? `&provider=${encodeURIComponent(provider)}` : '')
+      + (fullHistory ? '&full_history=true' : ''),
+      { method: 'POST' },
+    ),
   recategorize: () => request('/sync/recategorize', { method: 'POST' }),
   getRecategorizePreview: () => request('/sync/recategorize-preview'),
   // Developer-options connection sync diagnostics: recent per-connection /sync calls (status sequence,
@@ -589,6 +605,11 @@ export const api = {
   mergeUnaccountedAmazonCharges: (body) => request('/import-export/amazon/merge-unaccounted-charges', { method: 'POST', body: JSON.stringify(body) }),
   markAmazonChargesNotDuplicates: (body) => request('/import-export/amazon/charges-not-duplicates', { method: 'POST', body: JSON.stringify(body) }),
   unlinkAmazonOrderCharges: (body) => request('/import-export/amazon/unlink-charges', { method: 'POST', body: JSON.stringify(body) }),
+  // The ledger's currency — tenant-wide, not a per-user preference: everyone is reading the same numbers.
+  // `setLedgerCurrency` answers 409 when the ledger already holds transactions and `confirm` was not sent;
+  // the caller shows what the 409 says and retries verbatim with confirm: true.
+  getLedgerCurrency:          ()     => request('/currency'),
+  setLedgerCurrency:          (code, confirm = false) => request('/currency', { method: 'PUT', body: JSON.stringify({ code, confirm }) }),
   getAmazonFundingCategory:   ()     => request('/import-export/amazon/funding-category'),
   setAmazonFundingCategory:   (categoryId) => request('/import-export/amazon/funding-category', { method: 'PUT', body: JSON.stringify({ category_id: categoryId }) }),
   getAmazonFundingSources:    ()     => request('/import-export/amazon/funding-sources'),

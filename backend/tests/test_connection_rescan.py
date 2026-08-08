@@ -35,8 +35,7 @@ from backend.routers import connections as connections_router
 from backend.routers import sync as sync_module
 from backend.services.connection_dedupe import RESCAN_RESOLVED_BY, rescan_connection_duplicates
 from backend.services.duplicate_detection import list_unified_batch_duplicates
-
-_DONE = "HISTORICAL_UPDATE_COMPLETE"
+from backend.tests._fake_adapter import FakeCursorAdapter
 
 
 class _FrozenDate(date):
@@ -47,20 +46,20 @@ class _FrozenDate(date):
         return cls._today
 
 
-class _Adapter:
+class _Adapter(FakeCursorAdapter):
+    """One batch of `added` rows, delivered on the first call and never again."""
+
     def __init__(self, added):
+        super().__init__()
         self._added = added
 
-    def fetch_transactions_sync(self, app_config, credential, *, cursor=None, days_requested=730):
+    def fetch_transactions_sync(self, app_config, credential, *, cursor=None, days_requested=730,
+                                account_targets=None, **kwargs):
         added, self._added = self._added, []
-        return {"added": added, "modified": [], "removed": [], "next_cursor": "c1",
-                "has_more": False, "update_status": _DONE}
-
-    def fetch_accounts(self, app_config, credential):
-        return []
-
-    def capture_fields(self):
-        return []
+        return {**super().fetch_transactions_sync(app_config, credential, cursor=cursor,
+                                                  days_requested=days_requested,
+                                                  account_targets=account_targets, **kwargs),
+                "added": added, "next_cursor": "c1"}
 
 
 class ConnectionRescanTests(unittest.TestCase):

@@ -322,6 +322,35 @@ class BackupRestoreTests(unittest.TestCase):
                          ("csv_x", None, "csv"))
         self.assertEqual((rows["a3"]["connection_id"], rows["a3"]["provider"]), (None, "manual"))
 
+    def test_restore_v8_translates_the_legacy_transaction_id_column(self):
+        # A pre-v9 backup carries `plaid_transaction_id`, renamed to `external_transaction_id` in v26.
+        # `insert_rows` drops keys the schema doesn't have, so without the translation every restored
+        # transaction would come back with no provider id — and that id is what makes a sync idempotent,
+        # so the next sync would re-add every one of them as a fresh row.
+        with self._use_db_path():
+            payload = {
+                "version": 8,
+                "schema_version": 20,
+                "owners": [{"id": "o1", "name": "Me", "color": "#111111"}],
+                "accounts": [
+                    {"id": "a1", "external_account_id": "acct-9", "name": "Bank", "display_name": "Bank",
+                     "type": "depository", "owner_id": "o1", "parent_account_id": None},
+                ],
+                "transactions": [
+                    {"id": "t1", "plaid_transaction_id": "prov-1", "account_id": "a1", "owner_id": "o1",
+                     "amount": 5.0, "date": "2026-01-01", "merchant_name": "Shop"},
+                    {"id": "t2", "plaid_transaction_id": None, "account_id": "a1", "owner_id": "o1",
+                     "amount": 6.0, "date": "2026-01-02", "merchant_name": "Manual"},
+                ],
+            }
+            restore_backup(RestoreRequest(data=payload, force=True))
+            with get_db() as conn:
+                rows = {r["id"]: r for r in conn.execute(
+                    "SELECT id, external_transaction_id FROM txn"
+                )}
+        self.assertEqual(rows["t1"]["external_transaction_id"], "prov-1")
+        self.assertIsNone(rows["t2"]["external_transaction_id"])
+
     def test_restore_rejects_unsupported_version(self):
         with self._use_db_path():
             with self.assertRaises(HTTPException):

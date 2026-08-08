@@ -14,6 +14,7 @@ import {
   inferUnambiguousImportMappingFromPreview,
 } from '../lib/importColumnInference.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
+import { formatTimestamp } from '../lib/utils.js'
 import {
   IMPORT_DEFAULT_CATEGORY_USAGE_MODE_PREF_KEY,
   IMPORT_CATEGORY_USAGE_MODE_ALL,
@@ -1003,16 +1004,7 @@ export default function ImportProfilesManager({
   }
 
   function formatLastUsed(value) {
-    if (!value) return 'Never used'
-    const parsed = new Date(value)
-    if (Number.isNaN(parsed.getTime())) return value
-    return parsed.toLocaleString([], {
-      year: 'numeric',
-      month: 'numeric',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+    return formatTimestamp(value) || 'Never used'
   }
 
   const profileImportStats = useMemo(() => {

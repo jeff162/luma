@@ -36,7 +36,9 @@ import { api } from '../lib/api.js'
 import { formatTransactionAmount } from '../lib/moneyDisplay.js'
 import { useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { DUPLICATE_REPORT_COLUMNS_PREF_KEY } from '../lib/importExport/constants.js'
-import { Button, COMPACT_ACTION_BTN_STYLE } from './ui.jsx'
+import { hasFileOriginDetail } from '../lib/importSourceFields.js'
+import { Button, COMPACT_ACTION_BTN_STYLE, Tooltip, ROW_HOVER_OPEN_DELAY_MS } from './ui.jsx'
+import { MerchantOriginHoverCard } from './OriginFields.jsx'
 import { MatchReport } from './importExport/MatchReport.jsx'
 import { TransactionMatchCell, SourceFileLink } from './importExport/TransactionMatchCell.jsx'
 import {
@@ -96,6 +98,23 @@ function formatAmount(value) {
 // constants, no props/state, so they live at module scope: stable identities that don't need to be listed
 // as hook dependencies where the selection summary and sort/render use them.
 const entryId = (entry) => `${entry.kind}:${entry.incoming?.txn_id || entry.incoming?.row_number || ''}`
+
+// Every side of an entry is summarized as "date · merchant · amount" — which is exactly the projection
+// that hides *why* the pair matched, since the rules compare captured source text and two rows can match
+// on a descriptor neither visible merchant shows. The backend attaches `origin` (the same captured-field
+// shape a ledger row carries) to each side that names a transaction; this wraps the cell in the ledger's
+// own hover card so the raw text, evidence fields, and originating connection are one hover away instead
+// of a hunt through the register. Returns the node untouched when a side carries no captured detail.
+function withOriginHover(node, origin) {
+  if (!origin || !hasFileOriginDetail(origin)) return node
+  return (
+    // The dwell matches the transaction list's — it keeps the card from strobing as rows scroll under
+    // a resting cursor.
+    <Tooltip content={<MerchantOriginHoverCard txn={origin} />} maxWidth={380} triggerStyle={{ minWidth: 0 }} openDelay={ROW_HOVER_OPEN_DELAY_MS}>
+      <div>{node}</div>
+    </Tooltip>
+  )
+}
 
 // A duplicate can enrich its match when exactly one existing transaction is unambiguously matched —
 // a coverage reject with a single candidate, or a terminal/exact reject matched to one row directly.
@@ -401,7 +420,13 @@ export default function UnifiedDuplicatesDialog({
 
   function partyBlock(side, sourceInfo = null) {
     if (!side) return <TransactionMatchCell record={null} />
-    return <TransactionMatchCell record={{ ...side, source: sourceInfo || undefined }} onDrillThrough={onDrillThrough} />
+    // `origin` feeds the hover, not the cell — keep it out of the record so the cell's contract stays
+    // "what this row renders".
+    const { origin, ...record } = side
+    return withOriginHover(
+      <TransactionMatchCell record={{ ...record, source: sourceInfo || undefined }} onDrillThrough={onDrillThrough} />,
+      origin,
+    )
   }
 
   function matchedBlock(matched, reasonText) {
@@ -451,21 +476,23 @@ export default function UnifiedDuplicatesDialog({
           {sourceInfo && candidates.length === 0 ? sourceFileLink(sourceInfo) : null}
           {candidates.map((c, idx) => (
             <div key={c.id || idx} style={{ fontSize: 11, paddingLeft: 6, borderLeft: '2px solid color-mix(in srgb, var(--accent2) 30%, var(--border))' }}>
-              <div>
-                <span style={{ fontVariantNumeric: 'tabular-nums' }}>{c.date || ''}</span>
-                {c.day_offset ? (
-                  <span style={{ marginLeft: 4, fontSize: 9.5, fontWeight: 600, color: 'var(--accent2)', whiteSpace: 'nowrap' }}>
-                    ({Math.abs(c.day_offset)} day{Math.abs(c.day_offset) === 1 ? '' : 's'} {c.day_offset < 0 ? 'earlier' : 'later'})
-                  </span>
-                ) : null}
-                {' · '}<span>{c.merchant_name || ''}</span>
-                {' · '}<span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{formatAmount(c.amount)}</span>
-                {c.cross_account && c.account_name ? (
-                  <span style={{ marginLeft: 4, fontSize: 9.5, fontWeight: 600, color: 'var(--accent2)', whiteSpace: 'nowrap' }}>
-                    on {c.account_name}
-                  </span>
-                ) : null}
-              </div>
+              {withOriginHover((
+                <div>
+                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>{c.date || ''}</span>
+                  {c.day_offset ? (
+                    <span style={{ marginLeft: 4, fontSize: 9.5, fontWeight: 600, color: 'var(--accent2)', whiteSpace: 'nowrap' }}>
+                      ({Math.abs(c.day_offset)} day{Math.abs(c.day_offset) === 1 ? '' : 's'} {c.day_offset < 0 ? 'earlier' : 'later'})
+                    </span>
+                  ) : null}
+                  {' · '}<span>{c.merchant_name || ''}</span>
+                  {' · '}<span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{formatAmount(c.amount)}</span>
+                  {c.cross_account && c.account_name ? (
+                    <span style={{ marginLeft: 4, fontSize: 9.5, fontWeight: 600, color: 'var(--accent2)', whiteSpace: 'nowrap' }}>
+                      on {c.account_name}
+                    </span>
+                  ) : null}
+                </div>
+              ), c.origin)}
               {c.source_filename ? sourceFileLink({
                 filename:   c.source_filename,
                 batchId:    c.source_batch_id,
@@ -503,6 +530,7 @@ export default function UnifiedDuplicatesDialog({
         amount:              matched.amount,
         account_name:        matched.account_name,
         account_merged_into: matched.account_merged_into,
+        origin:              matched.origin,
       }, sourceInfo)
     }
     return <div style={{ color: 'var(--muted)', fontSize: 11 }}>{reasonText || '—'}</div>

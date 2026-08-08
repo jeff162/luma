@@ -32,8 +32,7 @@ from unittest import mock
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers import sync as sync_module
-
-_DONE = "HISTORICAL_UPDATE_COMPLETE"
+from backend.tests._fake_adapter import FakeCursorAdapter
 
 
 class _FrozenDate(date):
@@ -46,22 +45,25 @@ class _FrozenDate(date):
         return cls._today
 
 
-class _Adapter:
+class _Adapter(FakeCursorAdapter):
+    """One batch of `added` rows, delivered on the first call and never again — so a test can sync twice
+    and see the second pull bring nothing new."""
+
     def __init__(self, added):
+        super().__init__()
         self._added = added
-        self.calls = []
+        # Set by a test that wants the per-account reporting a range-pull provider does; left None to
+        # behave like a cursor provider, which reports none.
+        self.account_coverage = None
 
-    def fetch_transactions_sync(self, app_config, credential, *, cursor=None, days_requested=730):
-        self.calls.append({"cursor": cursor, "days_requested": days_requested})
+    def fetch_transactions_sync(self, app_config, credential, *, cursor=None, days_requested=730,
+                                account_targets=None, **kwargs):
         added, self._added = self._added, []
-        return {"added": added, "modified": [], "removed": [], "next_cursor": "c1",
-                "has_more": False, "update_status": _DONE}
-
-    def fetch_accounts(self, app_config, credential):
-        return []
-
-    def capture_fields(self):
-        return []
+        return {**super().fetch_transactions_sync(app_config, credential, cursor=cursor,
+                                                  days_requested=days_requested,
+                                                  account_targets=account_targets, **kwargs),
+                "added": added, "next_cursor": "c1",
+                "account_coverage": self.account_coverage}
 
 
 class _FailingAdapter(_Adapter):
@@ -71,7 +73,7 @@ class _FailingAdapter(_Adapter):
     def __init__(self):
         super().__init__([])
 
-    def fetch_transactions_sync(self, app_config, credential, *, cursor=None, days_requested=730):
+    def fetch_transactions_sync(self, app_config, credential, **kwargs):
         raise RuntimeError("provider unavailable")
 
 
@@ -163,7 +165,7 @@ class SyncDedupeTests(unittest.TestCase):
             "is_pending": False,
         }
 
-    def _sync(self, added, days=0, adapter=None):
+    def _sync(self, added, days=0, adapter=None, full_history=False):
         request = SimpleNamespace(state=SimpleNamespace(user={"id": "u1"}))
         adapter = adapter or _Adapter(added)
         token = set_current_db_path(str(self.db_path))
@@ -173,7 +175,8 @@ class SyncDedupeTests(unittest.TestCase):
                  mock.patch.object(sync_module, "resolve_app_config", return_value={"client_id": "x"}), \
                  mock.patch.object(sync_module, "get_adapter", return_value=adapter), \
                  mock.patch.object(sync_module, "date", _FrozenDate):
-                return sync_module.run_sync(days=days, connection_id="conn-1", request=request)
+                return sync_module.run_sync(days=days, connection_id="conn-1", request=request,
+                                            full_history=full_history)
         finally:
             reset_current_db_path(token)
 
@@ -275,7 +278,7 @@ class SyncDedupeTests(unittest.TestCase):
                 "SELECT deduped_count FROM import_batch WHERE id = ?", (row["batch_id"],)
             ).fetchone()
         payload = json.loads(row["txn_payload_json"])
-        self.assertEqual(payload["plaid_transaction_id"], "p1")
+        self.assertEqual(payload["external_transaction_id"], "p1")
         self.assertEqual(payload["amount"], -21.25)
         self.assertEqual(card["deduped_count"], 1, "the card's duplicate tally drives the report badge")
 
@@ -340,11 +343,7 @@ class SyncDedupeTests(unittest.TestCase):
         self.assertIsNotNone(row["coverage_start_date"])
         self.assertEqual(row["coverage_through_date"], "2026-08-10")
 
-    def test_fetch_more_history_on_a_complete_connection_extends_coverage_backward(self):
-        # The bug this fixes: `initial` is derived from initial_sync_complete, so a genuine 24-month
-        # backfill requested AFTER the first sync was treated as a routine delta and never widened the
-        # connection's coverage.
-        self._map("new")
+    def _complete_connection_with_coverage(self):
         with self._db() as conn:
             conn.execute(
                 "UPDATE connection SET initial_sync_complete = 1, transactions_cursor = 'c0'"
@@ -353,11 +352,62 @@ class SyncDedupeTests(unittest.TestCase):
                 "UPDATE connection_account SET coverage_start_date = '2026-06-01',"
                 " coverage_through_date = '2026-08-01'"
             )
-        self._sync([self._synced("p1", "2025-01-05", -5.0, "Old", "OLD")], days=0)
+
+    def test_fetch_more_history_on_a_complete_connection_extends_coverage_backward(self):
+        # The bug this fixes: `initial` is derived from initial_sync_complete, so a genuine 24-month
+        # backfill requested AFTER the first sync was treated as a routine delta and never widened the
+        # connection's coverage.
+        self._map("new")
+        self._complete_connection_with_coverage()
+        self._sync([self._synced("p1", "2025-01-05", -5.0, "Old", "OLD")], days=0, full_history=True)
         with self._db() as conn:
             row = conn.execute("SELECT coverage_start_date FROM connection_account").fetchone()
         self.assertLess(row["coverage_start_date"], "2026-06-01",
                         "a range pull must widen coverage backward, not leave it where a delta put it")
+
+    def test_a_pull_records_only_the_depth_each_account_actually_reached(self):
+        # The over-claim this model exists to prevent, asserted end to end: when the adapter reports per
+        # account, `_record_sync_coverage` must write each account's own reach and must not touch an
+        # account the pull never fetched for. Coverage that overstates itself makes the ladder hard-reject
+        # genuine transactions — a later CSV import of that period discarded as a duplicate of rows
+        # nothing ever fetched.
+        self._map("new")
+        with self._db() as conn:
+            conn.execute(
+                "INSERT INTO connection_account (connection_id, external_account_id, account_id,"
+                " mapping_mode, coverage_start_date) VALUES ('conn-1', 'ext-other', ?, 'new', '2026-01-01')",
+                (self.CSV_ACCOUNT,),
+            )
+
+        adapter = _Adapter([self._synced("p1", "2026-07-30", -5.0, "A", "A")])
+        adapter.account_coverage = {self.EXTERNAL: {"reached": "2026-06-15", "complete": False,
+                                                    "empty_streak": 1}}
+        self._sync([], adapter=adapter, days=0, full_history=True)
+
+        with self._db() as conn:
+            rows = {r["external_account_id"]: dict(r) for r in conn.execute(
+                "SELECT external_account_id, coverage_start_date, history_complete, history_empty_streak"
+                " FROM connection_account"
+            )}
+        self.assertEqual(rows[self.EXTERNAL]["coverage_start_date"], "2026-06-15",
+                         "the account records what it reached, not the depth requested")
+        self.assertEqual(rows[self.EXTERNAL]["history_empty_streak"], 1)
+        self.assertEqual(rows["ext-other"]["coverage_start_date"], "2026-01-01",
+                         "an account this pull did not fetch for must be left exactly as it was")
+
+    def test_a_routine_sync_does_not_claim_coverage_it_never_fetched(self):
+        # The counterpart to the test above, and the reason a range pull has to be declared rather than
+        # inferred from `days<=0`: a routine top-up sends the same depth but pulls only a delta, so
+        # treating it as a range pull backdated the coverage claim to a range nothing had fetched.
+        self._map("new")
+        self._complete_connection_with_coverage()
+        self._sync([self._synced("p1", "2026-08-09", -5.0, "New", "NEW")], days=0)
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT coverage_start_date, coverage_through_date FROM connection_account"
+            ).fetchone()
+        self.assertEqual(row["coverage_start_date"], "2026-06-01", "a delta must not widen coverage back")
+        self.assertEqual(row["coverage_through_date"], "2026-08-10", "a delta still advances the leading edge")
 
     def test_a_connections_own_coverage_never_rejects_its_own_late_arrival(self):
         # The self-exclusion asymmetry. A CSV re-import of a covered range IS a duplicate; a sync delta

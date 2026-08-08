@@ -71,12 +71,31 @@ def _capture_field_state(conn, connection):
 
 def _get_connection(conn, connection_id: str):
     row = conn.execute(
-        "SELECT id, provider, external_id, institution FROM connection WHERE id = ?",
+        "SELECT id, provider, external_id, institution, transactions_cursor FROM connection WHERE id = ?",
         (connection_id,),
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Connection not found")
     return row
+
+
+def _accounts_awaiting_history(conn, connection_id: str) -> list[str]:
+    """Mapped accounts on this connection that hold no history yet.
+
+    Read from coverage rather than tracked separately: every account present during a history pull came
+    away with a `coverage_start_date`, so a mapped account that still has none either joined the connection
+    later or has never been backfilled. Both want the same thing — the next history pull — and the sync
+    builds its own targets from the same fact, so nothing has to be scheduled or remembered here. This is
+    purely so the caller knows a pull is worth running now rather than leaving the account visibly empty.
+    """
+    return [r["external_account_id"] for r in conn.execute(
+        """
+        SELECT external_account_id FROM connection_account
+        WHERE  connection_id = ? AND mapping_mode IN ('new', 'existing', 'group')
+               AND account_id IS NOT NULL AND coverage_start_date IS NULL
+        """,
+        (connection_id,),
+    ).fetchall()]
 
 
 @router.get("/{connection_id}/accounts")
@@ -130,10 +149,14 @@ def set_connection_account_map(connection_id: str, body: AccountMappingRequest):
             default_owner_id=resolve_default_owner_id(conn, None),
         )
         rescan = rescan_connection_duplicates(conn, connection) if result["changed"] else None
+        awaiting_history = _accounts_awaiting_history(conn, connection_id)
         accounts = list_connection_accounts(conn, connection_id)
         remaining = unmapped_count(conn, connection_id)
 
-    return {**result, "accounts": accounts, "unmapped": remaining, "rescan": rescan}
+    # `awaiting_history` names accounts with no history yet, so the caller knows a pull is worth running
+    # now rather than leaving a just-mapped account looking empty until some later sync collects it.
+    return {**result, "accounts": accounts, "unmapped": remaining, "rescan": rescan,
+            "awaiting_history": awaiting_history}
 
 
 # Manual edits that make removing a synced row destructive rather than merely undoing a fetch. Kept

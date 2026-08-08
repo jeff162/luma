@@ -6,6 +6,9 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  MONEY_DISPLAY_CONFIG,
+  applyLedgerCurrency,
+  currencySymbolFor,
   formatMoneyMagnitude,
   formatSignedMoneyAmount,
   formatSignedAxisTick,
@@ -63,5 +66,52 @@ describe('transaction amount: the bank→UI sign flip', () => {
     expect(getTransactionAmountColor(-50)).toBe('var(--success)') // displays positive → income
     expect(getTransactionAmountColor(50)).toBe('var(--text)')     // displays negative → spending
     expect(getTransactionAmountColor(50, { negativeColor: 'red' })).toBe('red')
+  })
+})
+
+describe('ledger currency', () => {
+  // The app holds one currency at a time and which one is a user setting, so the symbol has to follow it.
+  // The bug this guards is the inverse of a formatting slip: a ledger set to AUD still rendering `$` is
+  // *correct* (narrow symbol), while one set to EUR rendering `$` would mislabel every figure on screen.
+  const restore = () => applyLedgerCurrency('USD')
+
+  it('derives the symbol from the code rather than a hand-kept table', () => {
+    expect(currencySymbolFor('USD')).toBe('$')
+    expect(currencySymbolFor('EUR')).toBe('€')
+    expect(currencySymbolFor('GBP')).toBe('£')
+  })
+
+  it('uses the narrow symbol, so an AUD ledger reads as $ not A$', () => {
+    // Within an Australian ledger there is no other dollar to disambiguate from, and `A$12.00` on every
+    // row would be noise rather than information.
+    expect(currencySymbolFor('AUD')).toBe('$')
+  })
+
+  it('falls back to the code itself when there is no symbol', () => {
+    // The backend validates a code's *shape*, not its membership of ISO-4217, so an unknown-but-plausible
+    // code reaches here. Showing the code beats defaulting to a `$` that would be actively wrong.
+    expect(currencySymbolFor('XYZ')).toBe('XYZ')
+  })
+
+  it('applying a currency changes what every formatter renders', () => {
+    try {
+      applyLedgerCurrency('EUR')
+      expect(MONEY_DISPLAY_CONFIG.currencyCode).toBe('EUR')
+      expect(formatMoneyMagnitude(1234.5)).toBe('€1,234.50')
+      expect(formatSignedMoneyAmount(-50)).toBe('-€50.00')
+    } finally {
+      restore()
+    }
+  })
+
+  it('normalizes case and falls back to the default when given nothing', () => {
+    try {
+      expect(applyLedgerCurrency('eur')).toBe('€')
+      expect(MONEY_DISPLAY_CONFIG.currencyCode).toBe('EUR')
+      applyLedgerCurrency('')
+      expect(MONEY_DISPLAY_CONFIG.currencyCode).toBe('USD')
+    } finally {
+      restore()
+    }
   })
 })

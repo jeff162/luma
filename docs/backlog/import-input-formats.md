@@ -1,8 +1,8 @@
 # Import / input formats
 
-**Status: deferred, not started (migrated from `TODO.md` 2026-07-30).** New ingestion formats,
-ranked. XLSX and OFX share a **parse-seam extraction** prerequisite; SimpleFIN is a separate
-connection/sync track that parallels Plaid.
+**Status: file formats deferred, not started (migrated from `TODO.md` 2026-07-30); SimpleFIN built
+2026-08-07.** New ingestion formats, ranked. XLSX and OFX share a **parse-seam extraction**
+prerequisite; SimpleFIN was a separate connection/sync track that parallels Plaid, and has shipped.
 
 The import pipeline has a sharp **parse seam**: a format-specific stage
 (`bytes → decode → _detect_header_row_index → csv.DictReader → headers:list +
@@ -71,65 +71,42 @@ path **plus** the dedupe subsystem, and no one has asked yet.
 - Dates are OFX timestamps (`YYYYMMDDHHMMSS[.XXX][TZ]`); categories are usually
   absent, so the imported-category workspace mostly doesn't apply.
 
-## SimpleFIN — connection/sync (NOT a file import)
+## SimpleFIN — connection/sync — **BUILT 2026-08-07**
 
-**Context.** SimpleFIN is an open read-only **aggregation protocol** (SimpleFIN
-Bridge), not a file format — so it parallels the existing **Plaid** integration
-(`backend/routers/plaid.py` + `backend/routers/sync.py`), not the CSV parse
-seam. Flow: a setup token → claim POST → an **access URL** with HTTP Basic creds
-embedded → `GET {accessUrl}/accounts` → clean JSON (accounts + `transactions`:
-`id`/`posted`(epoch)/`amount`(signed decimal)/`description`/`payee`/`memo`).
-Strong philosophical fit for local-first/self-hosted: open, cheap, privacy-
-friendly, no per-connection Plaid pricing.
+Shipped as the second provider adapter. The design and the protocol facts now live with the code
+(`backend/services/providers/simplefin.py`) and in
+[`security-and-deployment-model.md`](security-and-deployment-model.md) → phase 6c; this entry is kept
+only for the part that is still useful to a *reader of this file*: why it was never a file-import item,
+and what the three "seam gaps" listed here turned out to cost.
 
-**Why deferred.** It's a recurring-sync integration (connection-integration
-sized), a distinct track from one-off file import, and Plaid itself isn't
-exercised yet.
+**It was never a file format.** SimpleFIN is an open read-only aggregation protocol (SimpleFIN Bridge), so
+it parallels the Plaid integration, not the CSV parse seam above. That framing was right and is why it
+sits in this document at all — a reader looking for "how do I get data in" will keep finding it here.
 
-**Suggested approach when picked up.**
+**The three seam gaps were the real cost, and they were generic.** As predicted, none of the work was
+SimpleFIN-specific: connect-is-not-Link became a shared `establish_connection` plus a `connect_spec`
+declaration; the missing cursor became a **range-pull default** on the base adapter; the missing
+app-level credential became `requires_app_config`. Each is now a declared adapter capability rather than
+a branch on provider name, which is what a third adapter inherits. Two things the prediction missed:
 
-- Mirror the Plaid seams: a connect/claim flow; **credential storage** — the
-  access URL is a secret, so encrypt via `services/crypto_service.py` and carry
-  it in the **credentials** backup (not the regular backup), e.g. a
-  `simplefin_connection` table; a sync path (≈ `sync.py::run_sync`) that pulls
-  `/accounts` and feeds rows into the existing insert/dedupe/categorize
-  pipeline; account linking.
-- The per-transaction `id` is a **stable per-account dedupe key** (like `FITID`
-  / `plaid_transaction_id`) — key off it.
-- **Sign flip** (negative = money out → Luma positive) and **epoch
-  timestamps**, same as OFX.
-- Lighter than Plaid: no Link widget, no link-token endpoint, no paid SDK — two
-  HTTP calls and JSON. Much of the account model, sync loop, credential crypto,
-  and credentials backup is already proven by the Plaid path.
+- **The range-pull default was necessary but not sufficient.** Presenting a window as one page is the easy
+  half. The hard half was that a range-pull provider forces apart three questions a cursor provider lets
+  you conflate — *more right now?*, *history complete?*, *resume later?* — plus a fourth, how far back the
+  pull *actually* reached versus what it asked for. Collapsing any of them is a data-loss or
+  false-coverage bug, not a cosmetic one.
+- **A published request budget is a first-class constraint.** SimpleFIN allows ~24 requests/day and
+  *disables the token* if exceeded, which the existing sync shape would have blown on the first click (a
+  45-iteration poll loop, and a routine "Sync now" that requested full history). Bounding a routine pull
+  and stopping the poll loop were the load-bearing fixes. Worth carrying forward as a question to ask of
+  any future provider, since nothing in the seam would have surfaced it.
+- **The live server contradicts the published guide, so trust the server.** Two facts only appeared on a
+  real call: the recommended date-range width is **45 days**, not the 90 the developer guide states (a
+  90-day request returns a deprecation notice warning it "may be capped" later), and the Bridge sits
+  behind a **CDN that rejects unnamed HTTP clients** — urllib's default agent gets a bare
+  `403 error code: 1010` with nothing in it to suggest the User-Agent is the cause. Both were invisible to
+  a test suite that mocks the HTTP layer, which is the general lesson: an adapter's *transport* deserves
+  at least one test that inspects what actually goes on the wire.
 
-**The three seam gaps this actually pays for.** The provider seam built in security phases 6a/6b was
-shaped around Plaid, so it assumes a Link-style OAuth provider that has an app-level credential and a
-cursor API. SimpleFIN has none of the three, and neither does any other non-Plaid provider — so these
-are the real cost of a second adapter, and they are generic work rather than SimpleFIN work.
-
-1. **Connect is not Link.** `GET /plaid/link-token` → widget → `POST /plaid/exchange`
-   (`backend/routers/plaid.py`) has no analog for a provider whose connect step is a form or a pasted
-   setup token; that needs a parallel entry point on the adapter interface. Everything *downstream* of
-   the exchange is already provider-agnostic — encrypt the credential, upsert the connection on its
-   `(provider, external_id)` key, `upsert_connection_accounts`, `unmapped_count` — so that tail belongs
-   factored out of `exchange_token` and shared between the two entry points rather than copied. A
-   hand-copy here is exactly the drift `docs/agent-profile.md` warns about in deliberately-parallel
-   surfaces.
-2. **No cursor.** `run_sync` is written cursor-first and *skips* any connection whose adapter has no
-   `fetch_transactions_sync` (`backend/routers/sync.py`). The natural fix is a **range-pull default on
-   the base adapter**: call `fetch_transactions(start, end)` and shape the result into the same
-   `{added, modified, removed, next_cursor, has_more, update_status}` return, so a non-cursor provider
-   rides the existing loop untouched. It is safe because `_insert_added` is already idempotent on
-   `external_transaction_id` — a re-pulled window advances pending rows or skips. Two catches: a routine
-   sync then needs a **bounded look-back window** (there is no cursor to advance, so "all history" would
-   be re-fetched every time), and `removed` is permanently empty — which must be stated on the method, so
-   no later caller reads an empty list as "the provider confirmed nothing was deleted."
-3. **A provider may have no app-level credential.** `resolve_app_config` returning `None` currently means
-   a 409 `provider_not_configured` at connect and a skip at sync — correct for Plaid, wrong for a
-   provider that has no app secret at all. The `provider_config` `(client_id, secret, env)` shape and the
-   Sandbox/Production `EnvBadge` on the Connections card do not apply universally either; a provider
-   without them needs the Configure action and the mode badge to be absent rather than empty.
-
-**Ranking.** XLSX first (small, reuses everything). OFX family second (parser +
-mapping-free flow + FITID dedupe). SimpleFIN is its own track, but arguably the
-best fit if live bank connectivity matters more than ingesting one-off exports.
+**Ranking (unchanged for what remains).** XLSX first (small, reuses everything). OFX family second
+(parser + mapping-free flow + FITID dedupe). Both are still file-import work gated on the parse-seam
+extraction above.

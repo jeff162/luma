@@ -1048,6 +1048,41 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
             mark_batch_duplicates_reviewed(batch, BatchDuplicateReviewRequest(row_numbers=[1], reviewed=False))
         self.assertEqual(self._entry_for_row(batch, 1)["review_substate"], "no_match")
 
+    def test_rejected_row_origin_is_reconstructed_from_its_stored_payload(self):
+        # A hard-rejected row never became a `txn`, so the report can't look its origin up the way it
+        # does for the matched side — it rebuilds the same shape from the stored payload, with the
+        # provenance of the import being reported on. Without this, the one row in the report whose
+        # source text you most want to read (it was discarded, and you're auditing whether that was
+        # right) is the only one with no hover.
+        batch = "batch-origin"
+        payload = {
+            "date": "2023-08-11", "amount": 20.22,
+            "merchant_name": "Toll Authority", "raw_name": "TOLL CO EZPASS REBILL",
+            "imported_category": "Auto & Transport",
+            "import_evidence": {"description": {"header": "Description", "value": "TOLL CO EZPASS REBILL"}},
+        }
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("INSERT OR IGNORE INTO import_batch (id, filename, status) VALUES (?, ?, 'completed')",
+                             (batch, "tolls.csv"))
+                conn.execute(
+                    """
+                    INSERT INTO import_batch_duplicate
+                      (batch_id, row_number, reason, values_json, matched_transaction_json, txn_payload_json)
+                    VALUES (?, 1, 'Matches an existing transaction', '{}', '{}', ?)
+                    """,
+                    (batch, json.dumps(payload)),
+                )
+
+        origin = self._entry_for_row(batch, 1)["incoming"]["origin"]
+        self.assertEqual(origin["raw_name"], "TOLL CO EZPASS REBILL")
+        self.assertEqual(origin["merchant_name"], "Toll Authority")
+        self.assertEqual(origin["imported_category"], "Auto & Transport")
+        # The evidence dict is re-serialized, because the frontend seam parses the stored column shape.
+        self.assertEqual(json.loads(origin["import_evidence_json"])["description"]["value"],
+                         "TOLL CO EZPASS REBILL")
+        self.assertEqual(origin["import_batch_filename"], "tolls.csv")
+
 
 if __name__ == "__main__":
     unittest.main()

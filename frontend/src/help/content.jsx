@@ -735,6 +735,17 @@ export const HELP_TOPICS = [
           {APP_NAME} tries to infer the convention from the file, but it’s worth confirming &mdash; an amount
           mapped with the wrong convention flips income and expense.
         </p>
+        <p>
+          <strong>Amounts are all in one currency, set on the Settings page.</strong> An amount is stored
+          as a plain number with no currency recorded beside it, so two currencies kept together would be
+          indistinguishable and both would join every total and budget. The setting says which one the
+          numbers are in; it converts nothing, so changing it relabels existing amounts rather than
+          restating them &mdash; which is why it asks for confirmation once transactions exist, and why
+          changing it back undoes it just as cleanly. Where a connected data source reports that an
+          account is held in a <em>different</em> currency, its transactions are <strong>not
+          imported</strong> &mdash; the account mapping screen marks it, and syncs say so rather than
+          leaving the account mysteriously empty. Skipping such an account keeps it out of the way.
+        </p>
       </>
     ),
   },
@@ -1371,6 +1382,23 @@ export const HELP_TOPICS = [
           from and unaffected by the account sign-in password policy &mdash; so they stay protected even
           where the rest of the database does not. The sign-in side of access is covered in{' '}
           <HelpLink to="/help/account-security">account security</HelpLink>.
+        </p>
+        <p>
+          If a database file or an unencrypted backup ever gets loose, the transactions it held are
+          already exposed &mdash; but the live access can still be cut off, and that is the part worth
+          acting on. <strong>Disconnect</strong> on the Connections tab is the way to do it.{' '}
+          <strong>How far it reaches depends on the provider:</strong> some accept a revocation from{' '}
+          {APP_NAME}, which ends the access outright; others offer no such call, so Disconnect removes
+          only {APP_NAME}’s copy and the access stays valid until it is revoked at the provider itself.
+          The confirmation shown before disconnecting says which of the two applies, so a connection is
+          never left live while appearing closed.
+        </p>
+        <p>
+          Revoking at the provider instead works too, and the Connections tab notices: once the provider
+          stops accepting the stored credential, the card reports <strong>reconnect needed</strong> rather
+          than counting failed syncs. That is a different message from an ordinary sync failure on purpose
+          &mdash; a failing connection may recover on its own, while a revoked one never will until it is
+          set up again.
         </p>
       </>
     ),

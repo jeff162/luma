@@ -41,6 +41,8 @@ import sqlite3
 import uuid
 from typing import Optional
 
+from backend.services.import_evidence import EVIDENCE_ROLE_CATEGORICAL
+from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.time_utils import utcnow_iso
 
 # The mapping decisions a provider account can carry. NULL/absent means "not yet decided" — the
@@ -72,15 +74,16 @@ def record_provider_accounts(conn: sqlite3.Connection, *, connection_id: str, ac
             """
             INSERT INTO connection_account
                 (connection_id, external_account_id, provider_name, provider_official_name,
-                 provider_type, provider_subtype, provider_mask,
+                 provider_type, provider_subtype, provider_mask, provider_currency,
                  account_id, mapping_mode, target_account_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(connection_id, external_account_id) DO UPDATE SET
                 provider_name          = excluded.provider_name,
                 provider_official_name = excluded.provider_official_name,
                 provider_type          = excluded.provider_type,
                 provider_subtype       = excluded.provider_subtype,
-                provider_mask          = excluded.provider_mask
+                provider_mask          = excluded.provider_mask,
+                provider_currency      = excluded.provider_currency
             """,
             (
                 connection_id,
@@ -90,6 +93,9 @@ def record_provider_accounts(conn: sqlite3.Connection, *, connection_id: str, ac
                 acc.get("type"),
                 acc.get("subtype"),
                 acc.get("mask"),
+                # NULL from a provider that does not report one. Distinct from a stated currency and read
+                # as "not stated" throughout, never as "not the ledger's" — see `services/ledger_currency.py`.
+                (acc.get("currency") or "").strip() or None,
                 adopted_id,
                 "existing" if adopted_id else None,
                 adopted_id,
@@ -129,11 +135,17 @@ def list_connection_accounts(conn: sqlite3.Connection, connection_id: str) -> li
         """,
         (connection_id,),
     ).fetchall()
+    # Resolved once for the whole list rather than per row — it is one setting, and re-reading it per
+    # account would let a mid-loop change split one response between two currencies.
+    ledger_currency = get_ledger_currency(conn)
     out = []
     for r in rows:
         entry = dict(r)
         entry["source_label"] = provider_account_label(r)
         entry["mapped"] = bool(r["mapping_mode"])
+        # Decided here rather than in the UI so "which currency can this ledger hold" has one answer in
+        # one place. The client renders the verdict; it does not know the rule or the ledger's currency.
+        entry["currency_supported"] = currency_matches(ledger_currency, entry.get("provider_currency"))
         out.append(entry)
     return out
 
@@ -337,23 +349,36 @@ def build_sync_evidence(txn: dict, *, source_label: str, captured_fields: set[st
 
     `captured_fields` gates only the *optional* keys; the ones duplicate detection depends on are
     always written (see `ProviderAdapter.capture_fields`).
+
+    A CSV infers each column's role from its cardinality across the file; a sync has no file to
+    measure, but it knows exactly what it is writing, so the role is stamped per field here. Only the
+    counterparty is free text that *names* the transaction — everything else is structured metadata
+    that two unrelated rows can carry identically, so it is marked categorical and kept out of
+    duplicate text matching (see services/import_evidence.py for what went wrong when it wasn't).
     """
     extras: list[dict] = []
 
-    def add(header: str, value) -> None:
+    def add(header: str, value, *, role: str | None = None) -> None:
         text = str(value or "").strip()
         if text:
-            extras.append({"header": header, "value": text})
+            field: dict = {"header": header, "value": text}
+            if role:
+                field["role"] = role
+            extras.append(field)
 
     for name in (txn.get("counterparties") or []):
         add("Counterparty", name)
-    add("Merchant ID", txn.get("merchant_entity_id"))
-    add("Check number", txn.get("check_number"))
+    # An opaque provider id and a checkbook number that restarts at 1 on every account: worth reading,
+    # worthless as evidence two rows are the same charge (two accounts both writing check #1042 is
+    # ordinary, and a shared merchant id says the same *merchant*, not the same transaction).
+    add("Merchant ID", txn.get("merchant_entity_id"), role=EVIDENCE_ROLE_CATEGORICAL)
+    add("Check number", txn.get("check_number"), role=EVIDENCE_ROLE_CATEGORICAL)
     # Recorded as text so the authorized/posted disagreement is visible on the row itself, not only
-    # inferable from the column.
-    add("Authorized date", txn.get("authorized_date"))
+    # inferable from the column. The dedupe sweep reads the real `authorized_date` column for its date
+    # window; this copy is for display and must never re-enter matching as text.
+    add("Authorized date", txn.get("authorized_date"), role=EVIDENCE_ROLE_CATEGORICAL)
     if "location" in captured_fields:
-        add("Location", txn.get("location"))
+        add("Location", txn.get("location"), role=EVIDENCE_ROLE_CATEGORICAL)
 
     evidence: dict = {
         # The provider account label, so this row can serve as a terminal-window candidate. Keyed

@@ -1,0 +1,48 @@
+{
+  "accounts": [
+    {
+      "available-balance": "114405.51",
+      "balance": "114405.51",
+      "balance-date": 1786233600,
+      "conn_id": "CON-SIMPLEFIN-DEMO",
+      "currency": "USD",
+      "holdings": [],
+      "id": "Demo Savings",
+      "name": "SimpleFIN Savings",
+      "transactions": []
+    },
+    {
+      "available-balance": "24668.87",
+      "balance": "24668.87",
+      "balance-date": 1786233600,
+      "conn_id": "CON-SIMPLEFIN-DEMO",
+      "currency": "USD",
+      "holdings": [],
+      "id": "Demo Checking",
+      "name": "SimpleFIN Checking",
+      "transactions": []
+    },
+    {
+      "available-balance": "0.00",
+      "balance": "0.00",
+      "balance-date": 1786233600,
+      "conn_id": "CON-SIMPLEFIN-DEMO",
+      "currency": "USD",
+      "holdings": [],
+      "id": "Demo Empty Account",
+      "name": "SimpleFIN Empty Account",
+      "transactions": []
+    }
+  ],
+  "connections": [
+    {
+      "conn_id": "CON-SIMPLEFIN-DEMO",
+      "name": "SimpleFIN Demo",
+      "org_id": "simplefin.demoorg",
+      "org_name": "SimpleFIN Bridge",
+      "org_url": "https://beta-bridge.simplefin.org",
+      "sfin_url": "https://beta-bridge.simplefin.org/simplefin"
+    }
+  ],
+  "errlist": []
+}

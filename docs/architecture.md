@@ -355,11 +355,136 @@ phase 6a), so adding Teller or SimpleFIN is an adapter, not a change to the conn
   `plaid_account_id`) is the provider's per-account handle / sync upsert key. CSV and manual accounts have
   `connection_id IS NULL`.
 - **Adapter interface.** `backend/services/providers/` exposes `get_adapter(provider)` over a
-  `ProviderAdapter` (`create_link_token` / `exchange` → `{external_id, credential}` / `fetch_accounts` /
-  `fetch_transactions`), normalized to provider-neutral dict keys (`external_account_id`,
-  `external_transaction_id`, …). `PlaidAdapter` is the first adapter; it delegates SDK details to the thin
-  `plaid_service` boundary and translates its Plaid-shaped dicts. The connect (`routers/plaid.py`) and
-  sync (`routers/sync.py`) paths speak only the adapter + `connection` table — never a Plaid field name.
+  `ProviderAdapter` (`connect(app_config, payload)` → `{external_id, credential, institution}` /
+  `fetch_accounts` / `fetch_transactions` / `fetch_transactions_sync` / `remove`), normalized to
+  provider-neutral dict keys (`external_account_id`, `external_transaction_id`, …). Adapters delegate SDK
+  details to a thin per-provider boundary (`plaid_service`) or speak the protocol directly (`simplefin`).
+  The connect and sync paths speak only the adapter + `connection` table — never a provider's field name.
+- **Capability declarations, not branches on provider name.** The seam was first built around Plaid, and
+  several of its traits turned out not to be universal. Each is now a class attribute an adapter declares,
+  so a caller asks the adapter rather than knowing which providers are special: `connect_spec` (a Link-style
+  widget vs. a pasted token — it also drives what the connect UI renders), `requires_app_config`,
+  `has_cursor`, `max_history_days`, `routine_lookback_days`, `revokes_on_disconnect`, and
+  `connect_requires_production_vault(payload)`. Adding a provider means declaring these; it should not mean
+  editing the routers, the sync loop, or the Connections tab.
+- **One connect flow, two entry points.** `providers.establish_connection` is the whole flow after the
+  handshake — demo/vault gates, credential encryption, the `(provider, external_id)` upsert,
+  `upsert_connection_accounts`, the unmapped count. Link-style providers reach it via `POST
+  /plaid/exchange` (which needs its own route only because the payload arrives from the widget's callback);
+  everything else via the generic `POST /api/providers/{provider}/connect`. Both converge on its first
+  line: a second copy of that tail would be free to drift on credential custody and account adoption,
+  which is exactly what the seam exists to prevent.
+- **Sync speaks to cursor and non-cursor providers identically.** `fetch_transactions_sync` defaults on the
+  base class to a **range pull** (fetch a window, present it as one complete page), so a provider with no
+  change feed needs no special case in `run_sync`. Its return separates three questions that a
+  cursor provider lets you conflate: `has_more`/`update_status` (more to deliver *right now* — the
+  poll-again signal), `backfill_complete` (history fetched to its *end*), and `resume_later` (stop polling,
+  but the backfill is unfinished — resume on a later sync, which is how a metered provider pauses without
+  the connection being marked done and its remaining history stranded). `account_coverage` reports how far
+  back the pull *actually* reached **per account**, since a walk that stops early — out of history, or out
+  of request budget — covers less than it asked for, and may have covered some accounts and not others.
+  Overstating either makes duplicate detection reject genuine rows (`docs/data-model.md` → "coverage has
+  two shapes"). `removed` is unavoidably empty on the range-pull
+  path: the provider *cannot report* deletions, which is not the same as confirming there were none.
+  `run_sync` takes `full_history` to tell an initial/deepening pull from a routine top-up (they otherwise
+  send identical arguments), and `provider` to scope a sync so one card cannot spend another provider's
+  request budget. A pull may also return **`warnings`** — problems that did not fail it, such as one bank
+  on a multi-bank credential needing re-authentication while the rest delivered. These are reported rather
+  than only logged because the pull *succeeds*: a partial failure wearing the appearance of a clean sync
+  is the one failure mode nothing downstream would ever notice.
+- **An account added on the provider's side is discovered by syncing, but never mapped by it.** Sync does
+  not ask a provider what accounts it has — it matches incoming transactions to accounts by external id —
+  so an account added after a connection was built would otherwise be invisible: its transactions match
+  nothing, are counted as skipped, and are dropped. When a transaction arrives for an id with no
+  `connection_account` row, the sync fetches the provider's account list once and records the newcomers as
+  **unmapped**, which is what raises the existing "N to map" nudge. The guard is the `connection_account`
+  row and *not* whether a local account exists: those differ precisely for an account the user chose to
+  **skip**, which has a row and no account, and keying off the account would re-fetch the provider's list
+  on every sync forever. Discovery deliberately stops short of creating anything — auto-creating a local
+  account per provider account is the behaviour the mapping seam exists to replace.
+- **History state is per account, and the caller owns it.** How far back an account has been fetched
+  (`coverage_start_date`) and whether it has any older data at all (`history_complete`) live on
+  `connection_account`, because both are facts about an individual account: a connection's accounts do not
+  advance together once one is added on the provider's side later. `run_sync` therefore decides the work —
+  which accounts still want older data, and how far back — and passes `account_targets` down; the adapter
+  fetches and answers with `account_coverage`, what it *actually* reached per account. The adapter holds no
+  history state of its own.
+
+  This is what makes one loop serve a first backfill, a deepening pull, and a late-arriving account alike:
+  they differ only in which accounts are targets. A newcomer needs no instruction and no scheduling — it
+  simply has no coverage, so it is a target like any other, and budget exhaustion needs no parking because
+  each account's recorded reach *is* where it resumes. An earlier design bolted a separate catch-up
+  instruction beside a connection-level `history_exhausted` flag; that mechanism existed only to work
+  around the state being stored at the wrong level, and disappeared once it moved.
+
+  A cursor provider reports no `account_coverage` (it maintains one window across the whole item, so the
+  requested depth is the accurate claim) and ignores `account_targets` — a cursor is a checkpoint in a
+  change feed, not a date range, so there is no way to ask it for one account's history.
+- **A window is bounded by a date range, not an account**, which decides when to filter. One unfiltered
+  request advances every account that wants that period, so filtering a plural set would multiply requests
+  without fetching anything more (three accounts over three years: 25 requests unfiltered, 75 filtered).
+  The rule is therefore to fetch unfiltered whenever two or more accounts want a window and to narrow only
+  when one does — where it costs the same and saves bandwidth. Re-fetching rows already held is free in the
+  rationed dimension: they are idempotent-skipped on `external_transaction_id` before reaching duplicate
+  detection.
+- **A walk that has moved back from today spends its first request on the recent window.** Every window
+  such a walk fetches is old, so without this no *new* transaction would arrive for however many days the
+  walk takes to finish — and the recent ledger is the part a user actually looks at, while history is what
+  they consult later. A walk still starting at today skips it, since its own first window already covers
+  that period. The watermark this advances (`through`, where the next top-up begins) moves **only** after
+  the fetch: advancing it for a pull that fetched only old windows would silently skip everything between
+  the real last top-up and the new watermark.
+- **The ledger's currency is a setting, and adapters are *told* it rather than assuming one.**
+  `services/ledger_currency.py` owns the value (tenant state in `import_workflow_state`, default USD);
+  `run_sync` resolves it per connection and passes `ledger_currency` into `fetch_transactions_sync`, the
+  same "the caller owns the database, so it owns the facts in it" rule that governs `account_targets`. An
+  adapter drops transactions from an account the provider states is denominated differently and reports
+  them as `unsupported_currency`. **The question is "does this match the ledger", never "is this dollars"**
+  — the app's constraint is one currency at a time, so a consistently-AUD ledger is entirely correct, and
+  an earlier hardcoded `"USD"` comparison would have discarded every transaction of a non-US user whose
+  data was never wrong. Nothing outside `ledger_currency.py` may compare against `DEFAULT_LEDGER_CURRENCY`.
+  Both adapters implement it, and *where* each judges differs because the providers report differently:
+  SimpleFIN states a currency per **account**, so its walk skips a mismatched account wholesale; Plaid
+  states one per **transaction** (resolving `iso_currency_code` / `unofficial_currency_code` — the latter
+  being crypto and unsupported currencies, which can never equal an ISO ledger), so its adapter filters
+  `added` and `modified` row by row. Per-row is the stricter reading, and Plaid's data supports it: the
+  number in `amount` is judged on its own terms rather than on an assumption about its account.
+  `GET`/`PUT /api/currency` read and write it; the PUT answers **409** when the ledger already holds rows
+  and the caller has not confirmed, because the change converts nothing and therefore silently relabels
+  every historical amount (and, for the same reason, is perfectly reversible — a confirmation is the right
+  guard rather than a prohibition). The frontend's `MONEY_DISPLAY_CONFIG` mirrors it at boot, with the
+  symbol derived from `Intl` rather than a maintained table; Settings reloads after saving because the
+  money formatters read that config at call time and nothing would otherwise re-render.
+- **The provider's own conformance checklist is a design input, not a formality.** SimpleFIN publishes one
+  (protocol page → *Checklist*), and three of its items are things reasoning from the protocol description
+  does not produce, because they are about the *user's* security posture rather than the request: a failed
+  claim must be reported as a possible **interception** (a setup token is single-use, so a claim that fails
+  may mean someone else spent it, and only the user can disable it at the Bridge — "generate a new one" is
+  the reassuring reading of identical evidence); a 403 on a data call must be handled as its own condition;
+  and error text from the provider must be sanitized before display. React escaping covers injection, so the
+  live risk there is **volume** — provider strings are clipped in the adapter (`_clip`, `_MAX_MESSAGE_CHARS`)
+  at the boundary rather than at each consumer. One item is deliberately not followed to the letter:
+  "display error messages from `/accounts` to the user" is applied to bank-level codes only, with request
+  advisories routed to the log, because a note about our own date range sitting beside "your bank needs
+  re-authentication" trains the user to ignore both. **Check a new provider's conformance list before
+  writing its adapter, not after.**
+- **Sync health is recorded per connection and travels with the connection list.** `run_sync` stamps
+  `last_synced_at` on success only (so a failing connection reads as stale rather than recently synced),
+  counts `consecutive_sync_failures` (reset, not decremented, by any success — what distinguishes a blip
+  from a connection that has stopped working), and stores the most recent error and warning set. These
+  ride `GET /api/providers` alongside each connection rather than sitting behind their own call,
+  because the Connections card has to surface them **while collapsed** — a failure that only appears once
+  a card is expanded is one nobody sees. See `docs/data-model.md` for what each field may and may not mean.
+- **"Reconnect this" is a separate signal from "syncing failed", because only one of them is actionable.**
+  An adapter raises `ProviderCredentialRejected` (`services/providers/base.py`) when the provider has
+  stopped accepting the stored credential; `run_sync` sets `connection.reauth_required` (migration **v30**),
+  which is sticky until a pull succeeds and is what the card leads with, suppressing the ordinary failure
+  pill so the two do not say the same thing twice. Everything *else* is deliberately left undifferentiated —
+  a user cannot act on the difference between a network blip and a provider outage, only on how long it has
+  been going on, which the failure count already says. This matters most for a provider with no revocation
+  API (SimpleFIN): revoking at the Bridge is the only way a user *can* revoke, and the refusal recorded here
+  is the only notice the app ever gets that they did. Today only the SimpleFIN adapter raises it (403 on a
+  data call); Plaid's `ITEM_LOGIN_REQUIRED` is the obvious second source and is not yet wired.
 - **Credential continuity.** `crypto_service.encrypt/decrypt_connection_credential` binds the ciphertext
   to `(provider, external_id)`; for `provider='plaid'` it reuses the exact pre-6a AAD
   (`plaid_item|<item_id>|access_token`), so tokens written before the cutover decrypt unchanged — the
@@ -371,6 +496,11 @@ phase 6a), so adding Teller or SimpleFIN is an adapter, not a change to the conn
   returns the decrypted `{client_id, secret, env}` the adapter needs — a saved row is authoritative,
   else it falls back to the **`.env` bootstrap** (`PLAID_*`), so pre-6b installs keep working with no
   action. Every adapter method takes this resolved `app_config` (never reads the environment itself).
+  A provider that has **no** app-level credential (`requires_app_config = False`, e.g. SimpleFIN) receives
+  `{}`: for it, "nothing configured" is the permanent normal state rather than setup left undone, so it
+  reports itself *configured* once it has a connection, offers no Configure action and no environment
+  badge, and — having no sandbox — is gated on a Production-strength vault at **connect** time, there
+  being no later moment at which to ask.
   Admin-gated CRUD is `GET/POST /api/providers/{provider}/config` (`routers/providers.py`); saving the
   secret needs the vault unlocked (`423`), and switching a provider to Production still runs the all-slots
   vault gate. App credentials ride the **credentials backup** (`provider_configs`) alongside connections.
@@ -385,9 +515,12 @@ phase 6a), so adding Teller or SimpleFIN is an adapter, not a change to the conn
   and — on a networked (non-loopback) bind — real HTTPS (`transport.is_https` from `/auth/status`), so a
   bank secret never crosses the wire in cleartext. Each card lists its **connections** (from
   `GET /api/providers`, which returns them per provider) with a **Disconnect** action → `POST
-  /api/providers/{provider}/disconnect`, which **revokes the token provider-side** (the adapter's `remove`
-  op → Plaid `/item/remove`, so a leaked copy dies too) then drops the local `connection` row, keeping the
-  accounts/transactions. Only the deferred account columns (6b-3) remain.
+  /api/providers/{provider}/disconnect`, which **revokes the token provider-side where the provider allows
+  it** (the adapter's `remove` op → Plaid `/item/remove`, so a leaked copy dies too) then drops the local
+  `connection` row, keeping the accounts/transactions. Where it does not (`revokes_on_disconnect = False`
+  — SimpleFIN publishes no revocation call), `remove` is a documented no-op and only Luma's copy goes; the
+  confirm dialog says which of the two is happening, because a user who believes access ended when it did
+  not is worse off than one who knows to go and revoke it at the provider.
 - **The mapping seam (`connection_account` + `routers/connections.py` + `services/connection_mapping.py`).**
   Connecting a bank used to create one local account per provider account, with no chance to say "this
   *is* my existing Northgate Voyager." That was not only a UX gap next to CSV import's account step — **it was

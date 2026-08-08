@@ -1,0 +1,142 @@
+{
+  "accounts": [
+    {
+      "available-balance": "114545.51",
+      "balance": "114545.51",
+      "balance-date": 1786147200,
+      "conn_id": "CON-SIMPLEFIN-DEMO",
+      "currency": "USD",
+      "holdings": [
+        {
+          "cost_basis": "55.00",
+          "created": 345427200,
+          "currency": "USD",
+          "description": "Shares of Apple",
+          "id": "25bc4910-4cb4-437b-9924-ee98003651c5",
+          "market_value": "105884.8",
+          "purchase_price": "0.10",
+          "shares": "550.0",
+          "symbol": "AAPL"
+        }
+      ],
+      "id": "Demo Savings",
+      "name": "SimpleFIN Savings",
+      "transactions": [
+        {
+          "amount": "-125.50",
+          "description": "Fishing bait",
+          "id": "1782374400",
+          "mcc": "5812",
+          "memo": "JOHNS FISHIN SHACK BAIT",
+          "payee": "John's Fishin Shack",
+          "posted": 1782374400,
+          "transacted_at": 1782374400
+        },
+        {
+          "amount": "-15.50",
+          "description": "Grocery store",
+          "id": "1782403200",
+          "mcc": "5411",
+          "memo": "LOCAL GROCER STORE #1133",
+          "payee": "Grocery store",
+          "posted": 1782403200,
+          "transacted_at": 1782403200
+        },
+        {
+          "amount": "-130.00",
+          "description": "Fishing bait",
+          "id": "1782460800",
+          "mcc": "5812",
+          "memo": "JOHNS FISHIN SHACK BAIT",
+          "payee": "John's Fishin Shack",
+          "posted": 1782460800,
+          "transacted_at": 1782460800
+        },
+        {
+          "amount": "-10.00",
+          "description": "Grocery store",
+          "id": "1782489600",
+          "mcc": "5411",
+          "memo": "LOCAL GROCER STORE #1133",
+          "payee": "Grocery store",
+          "posted": 1782489600,
+          "transacted_at": 1782489600
+        }
+      ]
+    },
+    {
+      "available-balance": "24851.19",
+      "balance": "24851.19",
+      "balance-date": 1786147200,
+      "conn_id": "CON-SIMPLEFIN-DEMO",
+      "currency": "USD",
+      "holdings": [],
+      "id": "Demo Checking",
+      "name": "SimpleFIN Checking",
+      "transactions": [
+        {
+          "amount": "-163.36",
+          "description": "Fishing bait",
+          "id": "1782374400",
+          "mcc": "5812",
+          "memo": "JOHNS FISHIN SHACK BAIT",
+          "payee": "John's Fishin Shack",
+          "posted": 1782374400,
+          "transacted_at": 1782374400
+        },
+        {
+          "amount": "-19.96",
+          "description": "Grocery store",
+          "id": "1782403200",
+          "mcc": "5411",
+          "memo": "LOCAL GROCER STORE #1133",
+          "payee": "Grocery store",
+          "posted": 1782403200,
+          "transacted_at": 1782403200
+        },
+        {
+          "amount": "-170.01",
+          "description": "Fishing bait",
+          "id": "1782460800",
+          "mcc": "5812",
+          "memo": "JOHNS FISHIN SHACK BAIT",
+          "payee": "John's Fishin Shack",
+          "posted": 1782460800,
+          "transacted_at": 1782460800
+        },
+        {
+          "amount": "-13.31",
+          "description": "Grocery store",
+          "id": "1782489600",
+          "mcc": "5411",
+          "memo": "LOCAL GROCER STORE #1133",
+          "payee": "Grocery store",
+          "posted": 1782489600,
+          "transacted_at": 1782489600
+        }
+      ]
+    },
+    {
+      "available-balance": "0.00",
+      "balance": "0.00",
+      "balance-date": 1786147200,
+      "conn_id": "CON-SIMPLEFIN-DEMO",
+      "currency": "USD",
+      "holdings": [],
+      "id": "Demo Empty Account",
+      "name": "SimpleFIN Empty Account",
+      "transactions": []
+    }
+  ],
+  "connections": [
+    {
+      "conn_id": "CON-SIMPLEFIN-DEMO",
+      "name": "SimpleFIN Demo",
+      "org_id": "simplefin.demoorg",
+      "org_name": "SimpleFIN Bridge",
+      "org_url": "https://beta-bridge.simplefin.org",
+      "sfin_url": "https://beta-bridge.simplefin.org/simplefin"
+    }
+  ],
+  "errlist": []
+}

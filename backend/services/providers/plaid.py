@@ -15,14 +15,37 @@ from __future__ import annotations
 from datetime import date
 
 from backend.services import plaid_service
+from backend.services.ledger_currency import DEFAULT_LEDGER_CURRENCY, currency_matches
 from backend.services.providers.base import ProviderAdapter
+
+# Plaid's `transactions_update_status` values that mean the historical backfill will not advance further.
+# UNKNOWN and a missing status count as terminal so a status Plaid cannot determine never traps the client
+# in an endless poll. This vocabulary is Plaid's own, which is why it lives with the adapter rather than in
+# the sync loop — every other provider reports readiness differently, or not at all.
+_TERMINAL_UPDATE_STATUSES = frozenset({
+    "HISTORICAL_UPDATE_COMPLETE",
+    "TRANSACTIONS_UPDATE_STATUS_UNKNOWN",
+    None,
+})
 
 
 class PlaidAdapter(ProviderAdapter):
     provider = "plaid"
 
+    # Link-style: the frontend opens Plaid's widget against a minted link token, so there is no payload
+    # form to describe. Plaid caps transaction history at ~24 months, which is what "all history" means here.
+    connect_spec = None
+    max_history_days = 730
+    has_cursor = True
+
     def create_link_token(self, app_config: dict, user_id: str = "local-user") -> str:
         return plaid_service.create_link_token(app_config, user_id)
+
+    def connect(self, app_config: dict, payload: dict) -> dict:
+        # Link hands back a short-lived public_token; the institution name comes from Link's metadata on
+        # the client side rather than from Plaid here, so it rides the payload.
+        result = self.exchange(app_config, payload["public_token"])
+        return {**result, "institution": payload.get("institution_name")}
 
     def exchange(self, app_config: dict, public_token: str) -> dict:
         result = plaid_service.exchange_public_token(app_config, public_token)
@@ -37,6 +60,9 @@ class PlaidAdapter(ProviderAdapter):
                 "type":                a["type"],
                 "subtype":             a["subtype"],
                 "mask":                a["mask"],
+                # Recorded so the mapping step can warn before an account whose transactions will be
+                # discarded is given a destination — the same contract SimpleFIN's adapter answers.
+                "currency":            a.get("currency"),
             }
             for a in plaid_service.fetch_accounts(app_config, credential)
         ]
@@ -71,6 +97,8 @@ class PlaidAdapter(ProviderAdapter):
             "counterparties":          t.get("counterparties") or [],
             "check_number":            t.get("check_number"),
             "location":                t.get("location"),
+            # Carried through so the sync path can judge the row rather than inferring from its account.
+            "currency":                t.get("currency"),
         }
 
     def fetch_transactions(
@@ -82,8 +110,12 @@ class PlaidAdapter(ProviderAdapter):
         ]
 
     def fetch_transactions_sync(
-        self, app_config: dict, credential: str, cursor: str | None = None, days_requested: int = 730
+        self, app_config: dict, credential: str, cursor: str | None = None, days_requested: int = 730,
+        account_targets: list[dict] | None = None, ledger_currency: str = DEFAULT_LEDGER_CURRENCY,
     ) -> dict:
+        # `account_targets` is ignored: a cursor is a checkpoint in a change feed, not a date range, so
+        # there is no way to ask this API for one account's history. Plaid reaches it by raising
+        # `days_requested`, which backfills every account on the item through the same cursor.
         result = plaid_service.fetch_transactions_sync(app_config, credential, cursor=cursor, days_requested=days_requested)
 
         def _normalize(t: dict) -> dict:
@@ -93,13 +125,50 @@ class PlaidAdapter(ProviderAdapter):
                 "pending_external_transaction_id": t["pending_transaction_id"],
             }
 
+        # Rows denominated in something other than the ledger's currency are dropped before they can be
+        # stored as bare numbers (see base.py / services/ledger_currency.py). Judged **per transaction**
+        # rather than per account, which is the stricter reading and the one Plaid's data supports: it
+        # states a currency on every row, so the number in `amount` can be judged on its own terms rather
+        # than on an assumption about the account it belongs to.
+        dropped: dict[str, str] = {}
+
+        def _keep(t: dict) -> bool:
+            if currency_matches(ledger_currency, t.get("currency")):
+                return True
+            dropped[t["external_account_id"]] = str(t.get("currency"))
+            return False
+
+        added    = [t for t in (_normalize(t) for t in result["added"]) if _keep(t)]
+        modified = [t for t in (_normalize(t) for t in result["modified"]) if _keep(t)]
+
+        # For a cursor provider "stop polling" and "history is complete" are the same fact, so
+        # backfill_complete restates the terminal-status check the sync loop already applied. It is
+        # reported explicitly anyway: the two questions diverge for a range-pull provider, and a caller
+        # that has to remember which providers conflate them would get it wrong.
+        status = result["update_status"]
         return {
-            "added":         [_normalize(t) for t in result["added"]],
-            "modified":      [_normalize(t) for t in result["modified"]],
+            "added":         added,
+            "modified":      modified,
+            # Left unfiltered: these are bare ids, and removing a row that was never stored is already a
+            # no-op. Filtering them would mean guessing at a currency the payload does not carry.
             "removed":       result["removed"],  # already provider transaction ids
             "next_cursor":   result["next_cursor"],
             "has_more":      result["has_more"],
-            "update_status": result["update_status"],
+            "update_status": status,
+            "backfill_complete": status in _TERMINAL_UPDATE_STATUSES,
+            # Plaid streams its backfill: an unfinished one is finished by polling, never by waiting a day.
+            "resume_later": False,
+            # Omitted: Plaid maintains exactly the window `days_requested` asked for, and does so for every
+            # account on the item alike, so the caller's own requested depth is the accurate claim and there
+            # is nothing per-account to correct.
+            "account_coverage": None,
+            # A Plaid item is one institution, so there is no "some of it worked" state to report: an
+            # item needing re-authentication fails the call outright rather than returning partial data.
+            "warnings": [],
+            # Accounts this page discarded rows for. Unlike SimpleFIN's, this reflects only what actually
+            # came through the cursor — but the sync layer's warning is driven by the stored
+            # `provider_currency` anyway, precisely so it does not depend on what a given page contained.
+            "unsupported_currency": dropped,
         }
 
     def remove(self, app_config: dict, credential: str) -> None:

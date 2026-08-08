@@ -1,8 +1,44 @@
 # Internationalization (display formatting)
 
-**Status: deferred, not started (migrated from `TODO.md` 2026-07-30).** Tier 1 only —
-currency symbol + number/date *formatting*, not language translation. Tiers 2 (multi-currency)
-and 3 (translation) are explicitly out of scope here.
+**Status: partly landed 2026-08-08 — the currency half shipped; the date/number half has not.**
+Tier 1 only — currency symbol + number/date *formatting*, not language translation. Tiers 2
+(multi-currency) and 3 (translation) are explicitly out of scope here.
+
+## What landed (2026-08-08), and where this file's plan was wrong
+
+A **currency** setting shipped ahead of the rest of Tier 1, driven by a real need rather than the
+speculative one this file was written against: a user with an all-AUD ledger, plus a connection-provider
+bug that made the gap urgent (the SimpleFIN adapter compared account currencies against a hardcoded
+`"USD"`, so a non-US user's entirely-correct accounts would have had every transaction discarded).
+
+- The value lives in `services/ledger_currency.py`, read/written via `GET`/`PUT /api/currency`, surfaced
+  as a **Currency** section in Settings. Provider adapters are *told* it per call (`ledger_currency` on
+  `fetch_transactions_sync`); an account denominated differently has its rows dropped and reported.
+  See `docs/data-model.md` → "the ledger holds one currency at a time".
+- **The naming is deliberately narrow and expected to change.** It is called "Currency", not
+  "Internationalization" or "Locale", because a section named for a category it does not yet cover
+  promises settings that are not there. **Rename it when the date-format setting joins it** (decided with
+  the user, 2026-08-08) — that is the moment the broader name starts being accurate.
+
+Two things this file recommended that the implementation deliberately did **not** do:
+
+- **Not `ui_preference`.** This file proposed the per-user preference infra. That is wrong for currency:
+  `docs/data-model.md`'s dividing line puts per-user *chrome* in `ui_preference` and shared *data state*
+  elsewhere, and the currency a ledger is denominated in is not a personal display choice — everyone in a
+  workspace reads the same numbers, and a per-user copy would be orphaned by a restore into another
+  profile. It lives in `import_workflow_state` (tenant-wide, carried by backups). **A date-format
+  setting is the opposite case** and `ui_preference` is right for it: two people can legitimately prefer
+  different date orders while looking at the same ledger. Do not "make them consistent" — they differ
+  because the questions differ.
+- **Not `Intl.NumberFormat(style: 'currency')`, yet.** Only the *symbol* is derived from `Intl`
+  (`currencyDisplay: 'narrowSymbol'`, so an AUD ledger reads `$12.00` rather than `A$12.00`); the
+  `en-US` grouping formatter is untouched. This file's recommendation to switch wholesale is still the
+  right end state — it is what gets separators and symbol *placement* right (`1.234,56 €`) — but it
+  changes the rendered string everywhere at once, so it belongs with the rest of Bucket A rather than
+  riding a setting that only had to answer "which currency is this ledger in".
+
+**Still open, in rough priority:** the `en-US` number formatter (separators/placement), the date-format
+setting and `formatDate`/`monthLabel`, the ~9 raw ISO `{x.date}` renders, and all of Bucket B.
 
 ## Tier 1 — app-wide currency symbol + number/date format
 
@@ -87,6 +123,18 @@ provider updates) instead of `MONEY_DISPLAY_CONFIG`'s defaults.
     has to reach the backend (pass it alongside `quick_filter`, or have the
     backend read the same stored preference). This is the one place Tier 1
     isn't purely frontend.
+- **CSV amount parsing has the same separator hazard** (noted 2026-08-08, not
+  previously recorded here). `import_export/core.py` and `amazon_import.py`
+  both strip `$` and `,` unconditionally before parsing a number, so a `€`
+  amount loses nothing but survives unrecognized, and a `1.234,56` amount
+  parses as `1.234` — silently, as a hundredth of the real figure. The
+  currency *setting* does not touch this: it says what the numbers mean, not
+  how a file writes them. Note this is genuinely separate from the
+  already-format-inferring **date** column parsing called out below; amounts
+  get no such inference. Whether the fix is a locale-aware parser or a
+  per-source amount-format option (alongside the existing amount-convention
+  choice, which is where a user already answers questions of this shape) is
+  undecided.
 
 **What is *not* a hazard (verified, so it doesn't get over-engineered).**
 

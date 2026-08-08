@@ -14,6 +14,7 @@ re-entering the credential once via the Configure card is all the migration ther
 
 from __future__ import annotations
 
+import json
 import os
 
 from backend.db.database import get_db
@@ -49,7 +50,28 @@ def get_provider_config_status(provider: str) -> dict:
     """Non-secret view for the Configure UI: whether the app credential is set and from where (vaulted DB
     vs. `.env` bootstrap), the client_id and env, and whether a secret is on file — never the secret itself.
     Revealing it is a separate, explicit call (`GET /api/providers/{provider}/secret`), so a plaintext
-    secret never rides along in a payload the caller did not ask for it in."""
+    secret never rides along in a payload the caller did not ask for it in.
+
+    A provider with **no app-level credential** answers a different question with the same word: there is
+    nothing for an operator to enter, so `configured` reports whether it has been *connected* instead.
+    Reporting it unconfigured forever would strand it in the "add a data source" list with a Configure
+    dialog that has no fields, while reporting it configured from the start would claim setup that never
+    happened. `env`/`has_secret` are None/False so the UI can drop the mode badge rather than render a
+    blank one.
+    """
+    # Imported here rather than at module scope: the adapter registry imports this module, so a top-level
+    # import would close the cycle.
+    from backend.services.providers import get_adapter
+
+    if not get_adapter(provider).requires_app_config:
+        return {
+            "provider":   provider,
+            "configured": bool(list_connections(provider)),
+            "source":     None,
+            "client_id":  "",
+            "env":        None,
+            "has_secret": False,
+        }
     with get_db() as conn:
         row = _row(conn, provider)
     if row and (row["secret_enc"] or row["secret"] or row["client_id"]):
@@ -77,13 +99,39 @@ def get_provider_config_status(provider: str) -> dict:
 
 def list_connections(provider: str) -> list[dict]:
     """Non-secret view of a provider's linked connections (for the Connections cards + disconnect). Returns
-    the stable external handle and institution only — never the credential."""
+    the stable external handle, institution, and sync health — never the credential.
+
+    The health fields are here rather than behind a separate call because the connection card must be able
+    to say "this stopped working" while **collapsed**: a failure a user has to expand a card to discover is
+    one they will not discover. `last_synced_at` is the freshness of the *data* (successful pulls only),
+    which is why it can sit next to a non-zero failure count and still be the honest number.
+    """
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT id, external_id, institution FROM connection WHERE provider = ? ORDER BY rowid",
+            "SELECT id, external_id, institution, last_synced_at, last_sync_error, last_sync_error_at, "
+            "consecutive_sync_failures, last_sync_warnings, reauth_required "
+            "FROM connection WHERE provider = ? ORDER BY rowid",
             (provider,),
         ).fetchall()
-    return [{"id": r["id"], "external_id": r["external_id"], "institution": r["institution"]} for r in rows]
+    out = []
+    for r in rows:
+        try:
+            warnings = json.loads(r["last_sync_warnings"]) if r["last_sync_warnings"] else []
+        except (TypeError, ValueError):
+            warnings = []
+        out.append({
+            "id": r["id"], "external_id": r["external_id"], "institution": r["institution"],
+            "last_synced_at": r["last_synced_at"],
+            "last_sync_error": r["last_sync_error"],
+            "last_sync_error_at": r["last_sync_error_at"],
+            "consecutive_sync_failures": r["consecutive_sync_failures"] or 0,
+            "last_sync_warnings": warnings,
+            # Separate from the failure count on purpose: the count says how long something has been
+            # wrong, this says the user has to do something about it, and only one of the two is
+            # actionable. A card showing both should lead with this one.
+            "reauth_required": bool(r["reauth_required"]),
+        })
+    return out
 
 
 def resolve_app_config(user: dict, provider: str) -> dict | None:

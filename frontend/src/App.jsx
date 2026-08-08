@@ -10,6 +10,7 @@ import FilterBar from './components/FilterBar.jsx'
 import AuthScreen from './components/AuthScreen.jsx'
 import RuntimeConfigScreen from './components/RuntimeConfigScreen.jsx'
 import { api } from './lib/api.js'
+import { applyLedgerCurrency } from './lib/moneyDisplay.js'
 import { HELP_HINTS_ENABLED_PREF_KEY } from './help/preferences.js'
 import { UserPreferencesProvider, useUserPreference } from './lib/UserPreferencesContext.jsx'
 import { THEME_PREF_KEY, THEME_SYSTEM, applyTheme, normalizeThemeChoice, reconcileThemeCacheForDb } from './lib/theme.js'
@@ -942,6 +943,8 @@ export default function App() {
   // Demo-data mode: a global app strip + the guard that blocks new imports/connections while the
   // explorable demo set is loaded (see the demo-data marker in the backend).
   const [demoLoaded, setDemoLoaded] = useState(false)
+  // Held in state purely so applying it re-renders; the value itself is read from MONEY_DISPLAY_CONFIG.
+  const [, setLedgerCurrencyCode] = useState('')
   const [pendingDemoClear, setPendingDemoClear] = useState(false)
   const [clearingDemo, setClearingDemo] = useState(false)
   const [demoClearError, setDemoClearError] = useState('')
@@ -1439,6 +1442,25 @@ export default function App() {
     api.getDemoDataStatus()
       .then(result => { if (!cancelled) setDemoLoaded(!!result?.loaded) })
       .catch(() => { if (!cancelled) setDemoLoaded(false) })
+    return () => { cancelled = true }
+  }, [dbInstanceId, activeLocalProfile?.id])
+
+  // The ledger's currency symbol, applied to the shared money formatters. Keyed on the database identity
+  // because it is tenant state: switching profile or restoring a backup can bring a differently
+  // denominated ledger, and the symbol has to follow the data rather than the browser.
+  //
+  // Failure is deliberately silent and leaves the default in place — a currency lookup is not a reason to
+  // block the app, and every amount still renders, just with the symbol it has always had.
+  useEffect(() => {
+    let cancelled = false
+    api.getLedgerCurrency()
+      .then(result => {
+        if (cancelled || !result?.code) return
+        // A state bump so the tree re-renders with the new symbol. The formatters read the config at call
+        // time, so they are already correct — this is only what makes React ask them again.
+        if (applyLedgerCurrency(result.code)) setLedgerCurrencyCode(result.code)
+      })
+      .catch(() => { })
     return () => { cancelled = true }
   }, [dbInstanceId, activeLocalProfile?.id])
 

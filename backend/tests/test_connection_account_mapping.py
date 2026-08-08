@@ -11,6 +11,7 @@ duplicate-account generator.
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from backend.db import control_database as cdb
 from backend.db import database
+from backend.routers import connections as connections_router
 from backend.routers.accounts import upsert_connection_accounts
 from backend.services.connection_mapping import (
     MAPPING_MODES,
@@ -103,6 +105,40 @@ class ConnectionAccountMappingTests(unittest.TestCase):
             self.assertEqual({r["source_label"] for r in rows},
                              {"CHECKING ···1111", "CREDIT CARD ···6612"})
             self.assertTrue(all(not r["mapped"] for r in rows))
+
+    def test_the_account_currency_is_recorded_and_its_verdict_travels_with_the_row(self):
+        # Recorded before any mapping decision so the mapping grid can warn rather than let the user create
+        # an account whose transactions are all discarded. The *verdict* is computed server-side so the
+        # client never has to know which currencies the ledger can hold.
+        with database.get_db() as conn:
+            record_provider_accounts(conn, connection_id="conn-1", accounts=[
+                {"external_account_id": "ext-usd", "name": "Checking", "currency": "USD"},
+                {"external_account_id": "ext-eur", "name": "Travel", "currency": "EUR"},
+                {"external_account_id": "ext-none", "name": "Quiet"},
+            ])
+            rows = {r["external_account_id"]: r for r in list_connection_accounts(conn, "conn-1")}
+        self.assertEqual(rows["ext-eur"]["provider_currency"], "EUR")
+        self.assertFalse(rows["ext-eur"]["currency_supported"])
+        self.assertTrue(rows["ext-usd"]["currency_supported"])
+        # A provider that states nothing is not thereby suspect: the field is optional, so absence means
+        # "not stated". Rejecting the account would discard real data over a formatting gap.
+        self.assertIsNone(rows["ext-none"]["provider_currency"])
+        self.assertTrue(rows["ext-none"]["currency_supported"])
+
+    def test_a_refresh_updates_a_currency_that_changed(self):
+        # `provider_currency` is provider-reported detail, not a user decision, so it is overwritten by a
+        # refresh like the other provider_* columns — an account redenominated at the bank must not keep
+        # being judged on a stale value.
+        with database.get_db() as conn:
+            record_provider_accounts(conn, connection_id="conn-1", accounts=[
+                {"external_account_id": "ext-1", "name": "Travel", "currency": "EUR"},
+            ])
+            record_provider_accounts(conn, connection_id="conn-1", accounts=[
+                {"external_account_id": "ext-1", "name": "Travel", "currency": "USD"},
+            ])
+            row = list_connection_accounts(conn, "conn-1")[0]
+        self.assertEqual(row["provider_currency"], "USD")
+        self.assertTrue(row["currency_supported"])
 
     def test_provider_label_falls_back_when_name_or_mask_missing(self):
         with database.get_db() as conn:
@@ -309,6 +345,64 @@ class ConnectionAccountMappingTests(unittest.TestCase):
             result = self._apply(conn, {"ext-nope": {"mode": "new", "name": "Ghost"}})
             self.assertEqual(result["created"], [])
             self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM account").fetchone()["n"], 0)
+
+
+class AccountsAwaitingHistoryTests(unittest.TestCase):
+    """Which accounts still hold no history — derived from coverage rather than tracked separately.
+
+    Every account present during a history pull came away with a `coverage_start_date`, so a mapped account
+    that still has none either joined the connection later or has never been backfilled. Both want the same
+    thing, so no flag has to be set anywhere and nothing can drift out of step with the data.
+    """
+
+    def setUp(self):
+        self._stack = _isolated_db()
+        self.data_path = self._stack.__enter__()
+        with database.get_db() as conn:
+            conn.execute(
+                "INSERT INTO connection (id, provider, external_id, institution) "
+                "VALUES ('conn-1','simplefin','sfin_x','SimpleFIN Bridge')"
+            )
+            conn.execute(
+                "INSERT INTO account (id, name, display_name, type, owner_id) "
+                "VALUES ('acct-1','A','A','credit', (SELECT id FROM owner LIMIT 1))"
+            )
+
+    def tearDown(self):
+        self._stack.__exit__(None, None, None)
+
+    def _row(self, conn, external_id, *, mode, coverage, account_id="acct-1"):
+        conn.execute(
+            "INSERT INTO connection_account (connection_id, external_account_id, account_id, "
+            "mapping_mode, coverage_start_date) VALUES ('conn-1', ?, ?, ?, ?)",
+            (external_id, account_id, mode, coverage),
+        )
+
+    def _awaiting(self, conn):
+        return connections_router._accounts_awaiting_history(conn, "conn-1")
+
+    def test_a_mapped_account_with_no_coverage_is_awaiting_history(self):
+        with database.get_db() as conn:
+            self._row(conn, "simplefin:old", mode="new", coverage="2026-02-01")
+            self._row(conn, "simplefin:new", mode="new", coverage=None)
+            self.assertEqual(self._awaiting(conn), ["simplefin:new"])
+
+    def test_an_account_that_already_has_coverage_is_not(self):
+        with database.get_db() as conn:
+            self._row(conn, "simplefin:old", mode="new", coverage="2026-02-01")
+            self.assertEqual(self._awaiting(conn), [])
+
+    def test_a_skipped_account_is_never_awaiting_history(self):
+        # Nothing to fill: `skip` means the user declined it a destination.
+        with database.get_db() as conn:
+            self._row(conn, "simplefin:skipped", mode="skip", coverage=None, account_id=None)
+            self.assertEqual(self._awaiting(conn), [])
+
+    def test_an_undecided_account_is_not_awaiting_history_either(self):
+        # It has nowhere to put transactions yet; the mapping decision comes first.
+        with database.get_db() as conn:
+            self._row(conn, "simplefin:undecided", mode=None, coverage=None, account_id=None)
+            self.assertEqual(self._awaiting(conn), [])
 
 
 if __name__ == "__main__":

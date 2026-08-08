@@ -6,8 +6,17 @@ const DECIMAL_FORMATTER = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 2,
 })
 
+export const DEFAULT_LEDGER_CURRENCY = 'USD'
+
 export const MONEY_DISPLAY_CONFIG = {
+  // The symbol every amount in the app is prefixed with. Mutable and set once at boot from the ledger's
+  // currency setting (`applyLedgerCurrency`) rather than passed through props: every formatter below
+  // already reads it as a *default argument*, which is evaluated per call, so assigning it propagates to
+  // everything that renders afterwards without threading a context through several hundred call sites.
+  // The cost of that is honest — a change does not re-render on its own — which is why the Settings
+  // screen reloads after saving rather than pretending the update is reactive.
   currencySymbol: '$',
+  currencyCode: DEFAULT_LEDGER_CURRENCY,
   transaction: {
     positiveSign: 'none',
     negativeSign: 'minus',
@@ -15,6 +24,30 @@ export const MONEY_DISPLAY_CONFIG = {
     negativeColor: null,
     zeroColor: null,
   },
+}
+
+export function currencySymbolFor(code) {
+  // Asked of Intl rather than kept as a table: the browser already ships CLDR, and a hand-maintained map
+  // would be one more thing to update per currency — the exact kind of omission that blocks a user for no
+  // real reason. `narrowSymbol` is deliberate: an Australian ledger should read `$12.00`, not `A$12.00`,
+  // because within it there is no other dollar to disambiguate from.
+  try {
+    const parts = new Intl.NumberFormat(undefined, {
+      style: 'currency', currency: code, currencyDisplay: 'narrowSymbol',
+    }).formatToParts(0)
+    return parts.find(p => p.type === 'currency')?.value || code
+  } catch {
+    // An unknown-but-well-formed code (the backend validates shape, not membership) has no symbol. The
+    // code itself is a perfectly readable stand-in and is better than falling back to a wrong `$`.
+    return code
+  }
+}
+
+export function applyLedgerCurrency(code) {
+  const normalized = String(code || '').trim().toUpperCase() || DEFAULT_LEDGER_CURRENCY
+  MONEY_DISPLAY_CONFIG.currencyCode = normalized
+  MONEY_DISPLAY_CONFIG.currencySymbol = currencySymbolFor(normalized)
+  return MONEY_DISPLAY_CONFIG.currencySymbol
 }
 
 export function formatMoneyMagnitude(amount, { currencySymbol = MONEY_DISPLAY_CONFIG.currencySymbol } = {}) {

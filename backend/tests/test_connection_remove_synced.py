@@ -23,33 +23,7 @@ from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_
 from backend.routers import connections as connections_module
 from backend.routers import sync as sync_module
 
-_DONE = "HISTORICAL_UPDATE_COMPLETE"
-
-
-class _FakeAdapter:
-    """Serves scripted `/transactions/sync` pages in order across calls (same seam as
-    test_sync_period_cards.py), recording the cursor each call was made with."""
-
-    def __init__(self, pages=None):
-        self._pages = list(pages or [])
-        self.calls = []
-        self._idx = 0
-
-    def fetch_transactions_sync(self, app_config, credential, *, cursor=None, days_requested=730):
-        self.calls.append({"cursor": cursor, "days_requested": days_requested})
-        page = self._pages[self._idx] if self._idx < len(self._pages) else {}
-        self._idx += 1
-        return {
-            "added":         page.get("added", []),
-            "modified":      page.get("modified", []),
-            "removed":       page.get("removed", []),
-            "next_cursor":   page.get("next_cursor", f"cur-{self._idx}"),
-            "has_more":      page.get("has_more", False),
-            "update_status": page.get("update_status", _DONE),
-        }
-
-    def capture_fields(self):
-        return []
+from backend.tests._fake_adapter import DONE as _DONE, FakeCursorAdapter as _FakeAdapter
 
 
 class _FrozenDate:
@@ -177,7 +151,7 @@ class RemoveSyncedTransactionsTests(unittest.TestCase):
     def _synced_txn_count(self):
         with self._use_db_path(), get_db() as conn:
             return conn.execute(
-                "SELECT COUNT(*) AS n FROM txn WHERE plaid_transaction_id IS NOT NULL"
+                "SELECT COUNT(*) AS n FROM txn WHERE external_transaction_id IS NOT NULL"
             ).fetchone()["n"]
 
     # ---- what the removal takes and resets -------------------------------
@@ -261,7 +235,7 @@ class RemoveSyncedTransactionsTests(unittest.TestCase):
                 "VALUES ('csvb', 'ledger.csv', 2, 'completed')"
             )
             synced = [r["id"] for r in conn.execute(
-                "SELECT id FROM txn WHERE plaid_transaction_id IN ('t1', 't2') ORDER BY plaid_transaction_id"
+                "SELECT id FROM txn WHERE external_transaction_id IN ('t1', 't2') ORDER BY external_transaction_id"
             ).fetchall()]
             for csv_id, canonical, marker in (("csv-1", synced[0], "user"),
                                               ("csv-2", synced[1], "auto_merge")):
@@ -298,7 +272,7 @@ class RemoveSyncedTransactionsTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 "UPDATE txn SET category_overridden = 1, category_source = 'manual' "
-                "WHERE plaid_transaction_id = 't1'"
+                "WHERE external_transaction_id = 't1'"
             )
 
     def test_manually_edited_rows_block_removal_until_forced(self):
@@ -329,7 +303,7 @@ class RemoveSyncedTransactionsTests(unittest.TestCase):
         with self._use_db_path(), get_db() as conn:
             conn.execute(
                 "UPDATE txn SET category_overridden = 1, category_source = 'rule' "
-                "WHERE plaid_transaction_id = 't1'"
+                "WHERE external_transaction_id = 't1'"
             )
         self.assertEqual(self._summary()["edited_transactions"], [])
         self.assertEqual(self._remove()["removed"], 3)

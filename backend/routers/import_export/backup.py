@@ -17,9 +17,10 @@ otherwise independent of the import-run workflow:
   and rebuilds in FK-safe order. The payload is stamped with the source `instance_id` +
   `access_mode`; restore's compatibility guard uses these to refuse a silent cross-system/cross-mode
   wipe (409 unless `force`) while still allowing an empty target or a same-instance self-restore.
-  (Payload is version 8; version 7 is still accepted and its legacy account columns
-  — `plaid_account_id`/`plaid_item_id` — are translated to the 6b-3 shape on restore. Older
-  versions are no longer accepted.)
+  (Payload is version 9; versions 7 and 8 are still accepted, with their pre-rename columns
+  translated on restore — v7's account columns `plaid_account_id`/`plaid_item_id` to the 6b-3
+  shape, and pre-v9's `plaid_transaction_id` to `external_transaction_id`. Older versions are no
+  longer accepted.)
 - **Credentials backup/restore** (`/backup/credentials`, `/restore/credentials`) — the Plaid
   access tokens, kept deliberately separate from the regular backup so an ordinary backup never
   carries secrets (see `docs/data-model.md` → Backups).
@@ -600,7 +601,7 @@ def build_backup_data(conn) -> dict:
         return [dict(r) for r in conn.execute(q).fetchall()]
 
     return _stamp_content_hash({
-            "version":        8,
+            "version":        9,
             # Two independent version axes. `version` is the *payload format* (this JSON's shape),
             # bumped by hand when the envelope changes; restore hard-rejects anything but the format
             # it understands. `schema_version` is the *DB migration level* the data conforms to
@@ -634,7 +635,7 @@ def build_backup_data(conn) -> dict:
             "import_batch_duplicates": dump("import_batch_duplicate"),
             "import_workflow_states": dump("import_workflow_state"),
             "transactions":   dump("txn",
-                                   "SELECT id, plaid_transaction_id, account_id, owner_id, "
+                                   "SELECT id, external_transaction_id, account_id, owner_id, "
                                    "category_id, amount, merchant_name, display_name, raw_name, date, "
                                    "is_pending, category_overridden, category_source, imported_category, notes, content_hash, "
                                    "import_evidence_json, needs_review, recurring_series_id, "
@@ -868,6 +869,22 @@ def _reconcile_restored_connection_accounts(conn, connection_accounts, accounts)
     return kept
 
 
+def _translate_legacy_transaction_columns(transactions, backup_version):
+    """Map a pre-v9 backup's `plaid_transaction_id` onto the current `external_transaction_id`.
+
+    The column was renamed once it stopped being Plaid-specific (v26, following `plaid_account_id` →
+    `external_account_id` in v20). `insert_rows` silently drops keys the schema does not have, so without
+    this every restored transaction would come back with no provider id at all — and since that id is what
+    makes a sync idempotent, the next sync would re-add every one of them as a fresh row.
+    """
+    if backup_version is None or backup_version >= 9:
+        return transactions
+    for row in transactions:
+        if "plaid_transaction_id" in row and row.get("external_transaction_id") is None:
+            row["external_transaction_id"] = row.pop("plaid_transaction_id")
+    return transactions
+
+
 def _reconcile_restored_account_links(conn, accounts, backup_version):
     """Reconcile each restored account's connection link against the live `connection` table (which is
     credential data — never wiped or carried in the payload). Two jobs:
@@ -916,7 +933,7 @@ def restore_backup(body: RestoreRequest):
     """
     d = body.data
     backup_version = d.get("version")
-    if backup_version not in (7, 8):
+    if backup_version not in (7, 8, 9):
         raise HTTPException(status_code=400, detail="Unrecognized or unsupported backup version")
     # Integrity check before anything destructive: a corrupted/truncated file must not get as far as
     # wiping the target. No-op for older backups that predate the hash field.
@@ -1158,7 +1175,7 @@ def restore_backup(body: RestoreRequest):
         insert_rows("import_workflow_state", import_workflow_states)
         # After category/account (its parents), before txn (which links to it via recurring_series_id).
         insert_rows("recurring_series", recurring_series)
-        insert_rows("txn",          transactions)
+        insert_rows("txn", _translate_legacy_transaction_columns(transactions, backup_version))
         # After both txn and recurring_series (it references each).
         insert_rows("recurring_membership_override", recurring_membership_overrides)
         # Links after txn (members reference txn); with deferred FK checks the order is flexible anyway.

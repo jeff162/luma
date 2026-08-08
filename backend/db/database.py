@@ -122,7 +122,7 @@ def get_db(db_path: str | None = None):
 # now assumed to lag its bank unless it says otherwise, since the reverse assumption silently drops real
 # transactions (see the migration's own note).
 
-CURRENT_VERSION = 25
+CURRENT_VERSION = 30
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -847,6 +847,93 @@ def _widen_unset_csv_terminal_window(conn):
     )
 
 
+@migration(26)
+def _rename_txn_provider_transaction_id(conn):
+    # The column has held *any* provider's transaction id since the connection seam (6a) — the key that
+    # makes a sync idempotent — but kept the name it was given when Plaid was the only provider. A second
+    # provider makes that actively misleading, so it follows plaid_account_id → external_account_id (v20).
+    # An in-place RENAME COLUMN carries the inline UNIQUE constraint's implicit index with it; nothing else
+    # references the column by name. Fresh installs get the final name from init_db's baseline CREATE and
+    # never reach here.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(txn)")}
+    if "external_transaction_id" in cols or "plaid_transaction_id" not in cols:
+        return  # already migrated, or a minimal hand-built fixture without the legacy column
+    conn.execute("ALTER TABLE txn RENAME COLUMN plaid_transaction_id TO external_transaction_id")
+
+
+@migration(27)
+def _add_connection_sync_status(conn):
+    # Sync health, so the Connections card can report it while collapsed — a failure a user must expand a
+    # card to discover is one they will not discover. Four columns rather than one because they answer
+    # different questions (see the baseline CREATE for what each means and why they are not collapsed).
+    # Existing rows start with no history: NULL last_synced_at reads as "never synced here", which is the
+    # honest answer — nothing recorded the time of syncs that happened before this column existed.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection)")}
+    # An empty set means the table isn't there at all — a minimal hand-built fixture in the isolated
+    # per-migration tests, which build only the table under test.
+    if not cols or "last_synced_at" in cols:
+        return
+    conn.execute("ALTER TABLE connection ADD COLUMN last_synced_at TEXT")
+    conn.execute("ALTER TABLE connection ADD COLUMN last_sync_error TEXT")
+    conn.execute("ALTER TABLE connection ADD COLUMN last_sync_error_at TEXT")
+    # A DDL default does not apply retroactively on an existing DB, so the backfill is explicit — and every
+    # insert site states the value rather than relying on the default.
+    conn.execute("ALTER TABLE connection ADD COLUMN consecutive_sync_failures INTEGER NOT NULL DEFAULT 0")
+    conn.execute("UPDATE connection SET consecutive_sync_failures = 0 WHERE consecutive_sync_failures IS NULL")
+    conn.execute("ALTER TABLE connection ADD COLUMN last_sync_warnings TEXT")
+
+
+@migration(28)
+def _per_account_history_state(conn):
+    # Backfill depth and completeness move from the connection's opaque resume token onto the account they
+    # actually describe. See the baseline CREATE for what each column means and why `history_complete` is
+    # not derivable from `coverage_start_date`.
+    #
+    # Existing rows take the defaults, and both are right: `history_complete = 0` says only "we have not
+    # established that this account's history has ended", which is the honest position for an account whose
+    # end was previously concluded at the connection level. The cost of that conservatism is one extra
+    # window fetched per account on the next deep pull; the cost of guessing the other way would be
+    # history that is never fetched again.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection_account)")}
+    if not cols or "history_complete" in cols:
+        return  # already migrated, or a minimal hand-built fixture without the table
+    # A DDL default does not apply retroactively on an existing DB, so both are set explicitly here — and
+    # every insert site states the value rather than relying on the default.
+    conn.execute("ALTER TABLE connection_account ADD COLUMN history_complete INTEGER NOT NULL DEFAULT 0")
+    conn.execute("ALTER TABLE connection_account ADD COLUMN history_empty_streak INTEGER NOT NULL DEFAULT 0")
+    conn.execute("UPDATE connection_account SET history_complete = 0, history_empty_streak = 0")
+
+
+@migration(29)
+def _connection_account_currency(conn):
+    # The provider account's denomination, so an account the ledger cannot hold is visible at mapping time
+    # rather than discovered as an account that syncs cleanly and stays empty. See the baseline CREATE.
+    #
+    # Existing rows take NULL, which reads as "not stated" and therefore as supported — the right default:
+    # every connection predating this column was syncing without complaint, so treating them as unsupported
+    # would stop working connections on no evidence. The next connect or "Refresh accounts" fills the value
+    # in from the provider.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection_account)")}
+    if not cols or "provider_currency" in cols:
+        return  # already migrated, or a minimal hand-built fixture without the table
+    conn.execute("ALTER TABLE connection_account ADD COLUMN provider_currency TEXT")
+
+
+@migration(30)
+def _connection_reauth_required(conn):
+    # Whether the provider has stopped accepting this connection's credential — the one sync failure the
+    # user can act on, kept apart from the failure count. See the baseline CREATE.
+    #
+    # A DDL default does not apply retroactively on an existing DB, so the value is set explicitly here, and
+    # every insert site states it. 0 is right for existing rows in both directions: a connection that is
+    # working is unaffected, and one that is genuinely revoked raises the flag on its very next sync.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection)")}
+    if not cols or "reauth_required" in cols:
+        return  # already migrated, or a minimal hand-built fixture without the table
+    conn.execute("ALTER TABLE connection ADD COLUMN reauth_required INTEGER NOT NULL DEFAULT 0")
+    conn.execute("UPDATE connection SET reauth_required = 0")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -1025,7 +1112,33 @@ def init_db(db_path: str | None = None):
                 -- JSON list of optional per-transaction capture-field keys the user turned on for this
                 -- connection (see ProviderAdapter.capture_fields). NULL = the adapter's defaults. Locked
                 -- fields are always captured and never appear here.
-                captured_fields TEXT
+                captured_fields TEXT,
+                -- Sync health, so the Connections card can report it without being expanded. These four
+                -- describe DIFFERENT things and are deliberately not collapsed into one:
+                --   last_synced_at            the last *successful* pull — the freshness of the data, not
+                --                             the time of the last attempt, so a failing connection reads
+                --                             as stale rather than as recently synced.
+                --   last_sync_error(_at)      the most recent failure; cleared by any success.
+                --   consecutive_sync_failures how many in a row — what separates a transient blip from a
+                --                             connection that has stopped working. Reset (not decremented)
+                --                             on success: one good pull settles the question.
+                --   last_sync_warnings        JSON list of problems reported by a pull that otherwise
+                --                             SUCCEEDED (one bank on a multi-bank credential needing
+                --                             re-auth). Replaced each pull, so a fixed bank stops being
+                --                             reported without anyone dismissing anything.
+                last_synced_at            TEXT,
+                last_sync_error           TEXT,
+                last_sync_error_at        TEXT,
+                consecutive_sync_failures INTEGER NOT NULL DEFAULT 0,
+                last_sync_warnings        TEXT,
+                -- 1 when the provider has stopped accepting the stored credential and the user must
+                -- connect again. Deliberately NOT derived from consecutive_sync_failures: that counts how
+                -- long something has been wrong, while this says retrying cannot fix it, and a card should
+                -- lead with the second. Sticky until a pull succeeds, so the network errors that follow a
+                -- revocation don't bury it. For a provider with no revocation API (SimpleFIN) the user
+                -- revokes at the provider's own site, and the refusal recorded here is the ONLY notice
+                -- this app ever gets that they did.
+                reauth_required           INTEGER NOT NULL DEFAULT 0
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_provider_external
                 ON connection(provider, external_id);
@@ -1068,12 +1181,35 @@ def init_db(db_path: str | None = None):
                 provider_type          TEXT,
                 provider_subtype       TEXT,
                 provider_mask          TEXT,
+                -- The account's denomination as the provider states it, NULL when it states none. The
+                -- ledger holds one currency at a time (a user setting; services/ledger_currency.py) and `txn.amount`
+                -- carries no denomination beside it, so an account in another currency has its transactions
+                -- DISCARDED rather than imported at face value — otherwise its amounts would silently join
+                -- every total. Recorded at connect/refresh time, before any mapping decision, so the
+                -- mapping UI can warn instead of letting the user create an account that can never fill.
+                -- NULL means "not stated", never "not the ledger's": the field is optional in the
+                -- protocols, and rejecting an account over a missing field would discard real data.
+                provider_currency      TEXT,
                 coverage_start_date    TEXT,
                 coverage_through_date  TEXT,
                 -- How many trailing days of the covered range are treated as SOFT (reconciled one-to-one
                 -- rather than blanket-rejected). An aggregator lags the bank by several days, so its most
                 -- recent days are incomplete; 7 covers the observed posting lag. See duplicate_detection.
                 terminal_window_days   INTEGER NOT NULL DEFAULT 7,
+                -- History-fetch state, per account, because that is the level the facts are true at. A
+                -- connection's accounts do not advance together: one added on the provider's side later
+                -- starts with no history while its siblings are years deep.
+                --   history_complete      this account has no OLDER data — a different claim from
+                --                         coverage_start_date, which says only how far back we fetched and
+                --                         cannot tell "history ran out" from "we stopped where asked" or
+                --                         "we ran out of request budget". Only the first may stop a later,
+                --                         deeper request from looking again.
+                --   history_empty_streak  consecutive empty windows for THIS account, the per-account form
+                --                         of the two-empty-windows stop (one empty window is a quiet
+                --                         quarter; two is the end of history). Persisted so a walk that
+                --                         pauses resumes counting rather than starting the streak over.
+                history_complete       INTEGER NOT NULL DEFAULT 0,
+                history_empty_streak   INTEGER NOT NULL DEFAULT 0,
                 created_at          TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at          TEXT,
                 PRIMARY KEY (connection_id, external_account_id)
@@ -1225,7 +1361,11 @@ def init_db(db_path: str | None = None):
             -- imported categories already present in the data, or explicit user action.
             CREATE TABLE IF NOT EXISTS txn (
                 id                   TEXT PRIMARY KEY,
-                plaid_transaction_id TEXT UNIQUE,
+                -- The provider's own id for this transaction, for any data-source provider — the key that
+                -- makes a sync idempotent. Named for Plaid when Plaid was the only one (renamed in v26,
+                -- following plaid_account_id -> external_account_id in v20); NULL for rows from a file
+                -- import or entered by hand.
+                external_transaction_id TEXT UNIQUE,
                 account_id           TEXT NOT NULL REFERENCES account(id),
                 category_id          TEXT REFERENCES category(id) ON DELETE SET NULL,
                 amount               REAL NOT NULL,

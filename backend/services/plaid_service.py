@@ -103,6 +103,7 @@ def fetch_accounts(app_config: dict, access_token: str) -> list[dict]:
             "type":             str(a["type"]),
             "subtype":          str(a["subtype"]) if a.get("subtype") else None,
             "mask":             a.get("mask"),
+            "currency":         _currency_code(a.get("balances") or {}),
         })
     return accounts
 
@@ -137,6 +138,26 @@ def fetch_transactions(
         offset += len(txns)
 
     return [_normalize_txn(t) for t in all_txns]
+
+
+def _currency_code(source: dict) -> str | None:
+    """The denomination Plaid reports, from whichever of its two fields carries one.
+
+    Plaid splits this in a way worth preserving rather than collapsing: `iso_currency_code` holds a real
+    ISO-4217 code, and `unofficial_currency_code` holds everything outside that list — crypto, and
+    currencies Plaid does not officially support. Both are returned here as a plain string because the
+    ledger's question is only ever "does this match", and an unofficial code can never match an ISO one,
+    which is the correct answer for it.
+
+    None when Plaid states neither, which it can. That reads as "not stated" downstream and therefore as
+    a match — the same rule every other adapter follows, since refusing an account over an absent field
+    would discard real data on a reporting gap.
+    """
+    for key in ("iso_currency_code", "unofficial_currency_code"):
+        code = str(source.get(key) or "").strip()
+        if code:
+            return code
+    return None
 
 
 def _iso_date(value) -> str | None:
@@ -200,6 +221,10 @@ def _normalize_txn(t: dict) -> dict:
         "counterparties":       _counterparty_names(t),
         "check_number":         _check_number(t),
         "location":             _location_text(t),
+        # Per transaction, not only per account. Plaid states it on both, and the row's own is what governs
+        # the number in `amount` — an account whose currency changed, or a row Plaid reports in something
+        # other than its account's denomination, is judged on what it actually says.
+        "currency":             _currency_code(t),
     }
 
 

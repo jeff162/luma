@@ -105,6 +105,7 @@ from typing import Any, Callable, Iterable, Optional
 
 from backend.services.categorizer import source_match_text_from_json
 from backend.services.connection_mapping import provider_account_label
+from backend.services.import_evidence import evidence_field_feeds_text_match
 from backend.text_utils import sanitize_rule_merchant_text
 
 
@@ -187,12 +188,19 @@ def _normalize_match_text(value) -> str:
 def source_match_texts(merchant_name, raw_name, evidence_json) -> set[str]:
     """The set of normalized "as the source delivered it" texts a row can be matched on for cross-
     account duplicate detection: `merchant_name`, `raw_name`, and — from `import_evidence_json` — the
-    normalized description slot plus every `extra_text_fields` value (an "Original Statement", etc.).
+    normalized description slot plus each **descriptive** `extra_text_fields` value (an "Original
+    Statement", a counterparty, …).
 
     Comparing the union (rather than a single preferred field) is what lets a byte-identical bank
     descriptor match across sources that stored it in different columns. `display_name` is deliberately
     excluded — a user rename or a rule's clean_name must neither create nor hide a match. Empty strings
     are dropped, so a nameless money-movement leg contributes nothing and never text-matches.
+
+    Categorical fields are excluded via `evidence_field_feeds_text_match`: they are values two
+    unrelated rows share by coincidence (a date, a check number, a transaction type), so admitting
+    them turns the *strong* half of the cross-account test into a restatement of the weak half. This
+    function used to admit every captured field, which made every pair of synced rows sharing an
+    amount and an `authorized_date` an exact-tier match — see services/import_evidence.py.
     """
     texts: set[str] = set()
     for value in (merchant_name, raw_name):
@@ -213,7 +221,7 @@ def source_match_texts(merchant_name, raw_name, evidence_json) -> set[str]:
                 if norm:
                     texts.add(norm)
             for field_entry in (evidence.get("extra_text_fields") or []):
-                if isinstance(field_entry, dict):
+                if evidence_field_feeds_text_match(field_entry):
                     norm = _normalize_match_text(field_entry.get("value"))
                     if norm:
                         texts.add(norm)
@@ -275,17 +283,9 @@ GENERIC_DUPLICATE_TEXT_TOKENS = {
     "purchase", "refcode", "send", "transfer", "transf", "tranno", "withdrawal",
 }
 
-# An extra evidence column is one of two shapes, and the fuzzy text-matcher must treat them
-# differently. A *descriptive* column (memos, item titles, counterparty names) is high-cardinality
-# free text — an exact/near match between two rows is meaningful, so it may feed the matcher. A
-# *categorical* column (transaction type, status, currency) draws from a small repeated vocabulary,
-# so two unrelated rows routinely share the identical value and feeding it to the matcher
-# manufactures spurious duplicates. The import path infers the role from the column's cardinality
-# and stamps it on each captured field; `collect_duplicate_match_texts` consumes only descriptive
-# ones. A field with no role (legacy evidence, and every descriptive field, left unstamped to keep
-# the stored shape lean) is treated as descriptive.
-EVIDENCE_ROLE_DESCRIPTIVE = "descriptive"
-EVIDENCE_ROLE_CATEGORICAL = "categorical"
+# Which captured evidence fields may be compared as source text is decided by
+# `evidence_field_feeds_text_match` (see services/import_evidence.py for the descriptive/categorical
+# split and why it exists). Both text collectors in this module go through it.
 
 
 def normalize_evidence_text(value: Optional[str]) -> str:
@@ -387,7 +387,7 @@ def collect_duplicate_match_texts(*, merchant_name: Optional[str], display_name:
         if isinstance(description, dict):
             add_text(description.get("value"))
         for field_entry in import_evidence.get("extra_text_fields") or []:
-            if isinstance(field_entry, dict) and str(field_entry.get("role") or "").strip().lower() != EVIDENCE_ROLE_CATEGORICAL:
+            if evidence_field_feeds_text_match(field_entry):
                 add_text(field_entry.get("value"))
     return texts
 
@@ -2216,6 +2216,78 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
     return updated
 
 
+# The captured-origin fields the frontend's import-source seam (lib/importSourceFields.js) turns into
+# a hover card. Deliberately named exactly as the transaction list names them, so the report reuses the
+# ledger's own origin component instead of growing a second renderer. The duplicate report needs them
+# because its "date · merchant · amount" summary is precisely the projection that *hides* why two rows
+# matched: the rules compare captured source text, and a pair can match on a descriptor neither side's
+# visible merchant shows.
+_ORIGIN_COLUMNS_SQL = """
+    SELECT t.id,
+           t.display_name,
+           t.merchant_name,
+           t.raw_name,
+           t.imported_category,
+           t.import_evidence_json,
+           b.filename    AS import_batch_filename,
+           b.imported_at AS import_batch_imported_at,
+           bc.provider   AS import_batch_provider
+    FROM   txn t
+    LEFT JOIN import_batch b  ON b.id  = t.import_batch_id
+    LEFT JOIN connection  bc  ON bc.id = b.connection_id
+    WHERE  t.id IN ({placeholders})
+"""
+
+# SQLite's bound-parameter ceiling is well above this; chunking is about not building a single
+# multi-thousand-placeholder statement for a large re-import's report.
+_ORIGIN_LOOKUP_CHUNK = 400
+
+
+def _txn_origin_map(conn: sqlite3.Connection, txn_ids) -> dict[str, dict]:
+    """`txn.id` → its captured-origin fields, for the ids a report references. Ids with no surviving
+    row simply don't appear, so callers attach nothing rather than rendering an empty card."""
+    ids = sorted({str(i) for i in txn_ids if i})
+    out: dict[str, dict] = {}
+    for start in range(0, len(ids), _ORIGIN_LOOKUP_CHUNK):
+        chunk = ids[start:start + _ORIGIN_LOOKUP_CHUNK]
+        for row in conn.execute(_ORIGIN_COLUMNS_SQL.format(placeholders=_placeholders(chunk)), chunk).fetchall():
+            out[str(row["id"])] = dict(row)
+    return out
+
+
+def _attach_origins(conn: sqlite3.Connection, entries: list[dict]) -> None:
+    """Attach `origin` to every side of every entry that names a real ledger row: the incoming row (soft
+    flags and confirmed duplicates, which DID land), the matched-existing row, and each coverage
+    candidate. One pass over the finished entries, one query — rather than widening each of the queries
+    above and defining the origin shape three times. Hard-rejected incoming rows never became `txn`
+    rows; they get their origin from the stored payload at build time instead."""
+    referenced: set[str] = set()
+
+    def sides(entry: dict):
+        """Every dict in an entry that may carry a `txn.id`, paired with the key holding it."""
+        incoming = entry.get("incoming")
+        if isinstance(incoming, dict):
+            yield incoming, "txn_id"
+        matched = entry.get("matched")
+        if isinstance(matched, dict):
+            yield matched, "id"
+            for candidate in (matched.get("candidates") or []):
+                if isinstance(candidate, dict):
+                    yield candidate, "id"
+
+    for entry in entries:
+        for side, id_key in sides(entry):
+            if side.get(id_key):
+                referenced.add(str(side[id_key]))
+
+    origins = _txn_origin_map(conn, referenced)
+    for entry in entries:
+        for side, id_key in sides(entry):
+            origin = origins.get(str(side.get(id_key) or ""))
+            if origin:
+                side["origin"] = origin
+
+
 def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> list[dict]:
     """Return the combined list of hard-reject and soft-flag dedupe entries for a single batch.
     Each entry has the same outer shape; `kind` distinguishes the two pools. Hard rejects carry
@@ -2225,17 +2297,32 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
     `source_imported_at` so the UI can show where the row came from and offer a drill-through
     into the source file's transactions. Coverage-rule hard-rejects already carry source info on
     their `covered` block (the prior import whose date range caused the rejection).
+
+    Each side that names a transaction also carries `origin` — the captured source detail the ledger's
+    own hover card renders (see `_attach_origins`), so the report can answer "what did each source
+    actually say?" without a trip to the register.
     """
     # Load a batch_id → filename/imported_at map once. Used to enrich every matched-existing
     # reference (specific rows AND coverage entries) with human-readable source context.
     batch_meta: dict[str, dict] = {}
     for row in conn.execute(
-        "SELECT id, filename, imported_at FROM import_batch"
+        "SELECT b.id, b.filename, b.imported_at, c.provider "
+        "FROM import_batch b LEFT JOIN connection c ON c.id = b.connection_id"
     ).fetchall():
         batch_meta[str(row["id"])] = {
             "source_filename":     row["filename"],
             "source_imported_at":  row["imported_at"],
+            "source_provider":     row["provider"],
         }
+
+    # This report's own batch, for the hard-reject incoming side: those rows never became `txn` rows,
+    # so their provenance is "the import currently being reported on".
+    this_batch = batch_meta.get(str(batch_id), {})
+    report_batch_origin = {
+        "import_batch_filename":    this_batch.get("source_filename"),
+        "import_batch_imported_at": this_batch.get("source_imported_at"),
+        "import_batch_provider":    this_batch.get("source_provider"),
+    }
 
     def enrich_with_source(target: dict, source_batch_id: Optional[str]) -> dict:
         """Merge filename/imported_at into target if we know the source batch. No-op if unknown."""
@@ -2352,6 +2439,18 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
                 # report be scoped to one account — e.g. opened from an empty account's detail panel.
                 "account_id": txn_payload.get("account_id"),
                 "csv_values": values if isinstance(values, dict) else {},
+                # Reconstructed from the stored payload — this row never became a `txn`, so
+                # `_attach_origins` can't reach it, but the payload holds the same captured detail.
+                # `import_evidence` rides the payload as a dict; the seam reads the serialized column.
+                "origin": {
+                    "display_name":         txn_payload.get("display_name"),
+                    "merchant_name":        txn_payload.get("merchant_name"),
+                    "raw_name":             txn_payload.get("raw_name"),
+                    "imported_category":    txn_payload.get("imported_category"),
+                    "import_evidence_json": json.dumps(txn_payload["import_evidence"])
+                                            if isinstance(txn_payload.get("import_evidence"), dict) else None,
+                    **report_batch_origin,
+                },
             },
             "matched": enriched_matched,
         })
@@ -2455,6 +2554,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
                 "matched": matched,
             })
 
+    _attach_origins(conn, entries)
     return entries
 
 

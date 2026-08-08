@@ -212,6 +212,49 @@ Settings uses collapsible top-level sections.
 
 - Longer explanatory text belongs inside the expanded pane, near the controls it explains.
 
+### What a collapsed card must still be able to say
+
+Collapsing is only worth offering when what it hides is routine detail. Two kinds of thing therefore have
+to survive it, or collapsing quietly costs the user something:
+
+- **Anything asking to be acted on.** Attention counts, failure states, "N to map", "N to review" — a nudge
+  that only appears once a card is expanded is a nudge that will not be seen, and a card people collapse to
+  get it out of the way is exactly the one they will stop expanding. These belong in the collapsed header,
+  not merely inside.
+
+- **The routine action itself.** If the thing a user comes to the card to do most often (the connection
+  cards' "Sync now") requires expanding first, collapsing has a recurring cost and stops being used. Note a
+  mechanical constraint here: a collapsible header is itself a `<button>`, so an action placed in it must
+  be rendered as a **sibling** of the toggle rather than inside it — a nested button is invalid HTML and
+  would also toggle the card on every click. `SectionCard`'s `headerActions` slot is that seam.
+
+The counterpart is what a collapsed header should *not* carry: context that answers no question and asks
+for nothing (a mode badge, a provider's environment) can sit last or be dropped entirely.
+
+**Two badges must not describe the same thing at two levels of usefulness.** A connection needing to be
+reconnected is also, technically, a failing connection — but showing "1 failing" beside "reconnect needed"
+adds a count of attempts for something that will never succeed on its own, and the reader has to work out
+that both refer to one connection. The specific, actionable pill wins and *suppresses* the generic one
+(`providerSummary` excludes `reauth_required` connections from `failing`). The rule generalizes: when one
+state is a strict subset of another, the narrower badge replaces the broader one rather than joining it.
+
+**A per-card notice earns its place beside a header badge when it names which item.** The collapsed header
+has to summarize across everything under it, so with several connections it can only say "2 need
+reconnecting" and put the names in a tooltip. Restating it on each card is not duplication — it is where
+the user is standing when they act, and the only place that identifies the one they are looking at.
+
+### Show a past moment as an absolute timestamp, not as "5 minutes ago"
+
+A relative label is computed when the component renders, so it is only correct at that instant. On a page
+left open — or one whose data has since been refetched without a re-render — it drifts silently: "5m ago"
+can be an hour old, and nothing about it says so. Worse, the reader has no way to distinguish a fresh
+label from a stale one, so the friendlier-looking format is the less trustworthy one.
+
+An absolute date and time is true whenever it happens to be drawn, which removes the whole class of
+problem rather than papering over it with a refresh timer. Use `formatTimestamp` (`lib/utils.js`);
+callers supply their own empty-state wording ("Never synced", "Never used"). This is what the connection
+cards and the import-profile list both show.
+
 ## Row editing
 
 For account rows, owner rows, and similar editable lists:
@@ -334,6 +377,8 @@ A "Bulk Edit" toggle puts a transaction table into bulk mode: a leading checkbox
 - Wired on: the Transactions page, the Categories matching-transactions list, both Dashboard single-period drill tables (selected category, selected group), and the floating detail panels — PeriodDetail, CategoryDetail, AccountDetail, ImportBatchDetail, and TagDetail. The duplicate-detection dialog deliberately stays on its own `row_number`-keyed selection (its finite, non-server-filter selection doesn't fit this model).
 
 **Report dialogs use a lighter intersection bulk bar, not the transaction bulk controller.** The `MatchReport`-based reports (the duplicate-detection report and the Amazon reconciliation report) bulk-resolve via `MatchReport`'s built-in `selectable` checkbox column plus a report-owned bar below the filter pills: each bulk button shows the count of *selected rows that support that action* (the intersection — e.g. Merge only counts mergeable duplicate rows, Accept/Dismiss only split suggestions) and disables at zero. The intended workflow is filter-to-one-kind → select-all → apply. Actions that need a per-row choice (pick which duplicate copy survives, pick which charges cover an order) are deliberately not bulk actions; a per-row button should only be offered where it will actually succeed (the Merge button is gated on the backend's `mergeable` flag rather than letting a guarded call error).
+
+**Every transaction a match report names carries the ledger's origin hover.** A `MatchReport` row summarizes each side as "date · merchant · amount" — which is exactly the projection that hides *why* the two rows were paired, since the dedupe rules compare captured source text and a pair can match on a descriptor neither visible merchant shows. So each side of a duplicate-report entry (incoming, matched-existing, and every coverage candidate) carries an `origin` object — the same captured-field shape a ledger row exposes — and the dialog wraps the cell in the shared `MerchantOriginHoverCard` (`components/OriginFields.jsx`, the same card the transaction list and the Amazon reports use, at the same `ROW_HOVER_OPEN_DELAY_MS` dwell). Without it, auditing a flagged pair means leaving the report to find both rows in the register, which is where the answer was all along. Backend side: `_attach_origins` fills `origin` in one pass over the finished entries for anything with a `txn.id`; a hard-rejected row never became a `txn`, so its origin is rebuilt from the stored `txn_payload` plus the reporting batch's own provenance. A side with no captured detail renders no hover rather than an empty card (`hasFileOriginDetail`).
 
 **Applying a rule to existing rows reconciles the same way — in place, not by re-fetch.** When the per-row "create rule" toast (`RuleSuggestionToast`) applies a rule to existing transactions, the rows it recategorizes must update *on screen but stay on the list* — re-running a scoped query (e.g. an "uncategorized only" drill) would drop the now-recategorized rows out of view, which reads as the data silently vanishing or, worse, lingering with the old category. So the apply endpoint (`POST /rules/{id}/apply`) returns the **`transaction_ids` it changed**, threaded through the toast's `onSaved`, and the host calls the shared `reconcileRowsAfterRuleApply(rows, ids, setRows)` (`lib/txnMutations.js`): it re-fetches just the affected rows that are *currently on screen* by id (the transaction-list endpoint's `ids=` filter) and merges them back in place, so they keep their slot with the new category. Wired on the in-place surfaces that surface the toast — the Dashboard drills, the Categories matching list, and the payee `TransactionDetail`. The Transactions ledger is the deliberate exception: as the one paginated source of truth it stays on a full `load()` (matching its bulk-edit `onReload`).
 

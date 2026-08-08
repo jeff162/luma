@@ -16,6 +16,7 @@ import ConnectionAccountMapDialog from '../components/accounts/ConnectionAccount
 import { EditedTransactionsWarning } from '../components/EditedTransactionsWarning.jsx'
 import { ActionMenu, ActionMenuButton } from '../components/ActionMenu.jsx'
 import { ACCOUNT_TYPES } from '../lib/accountTypes.js'
+import { formatTimestamp } from '../lib/utils.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useUserPreferences, useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { useColumnPreference } from '../lib/useColumnPreference.js'
@@ -277,7 +278,11 @@ function OwnerFilterPill({ label, count, active, onClick }) {
 // A section panel with an optional collapse toggle. On the tabbed Accounts page each section is the only
 // thing on its tab, so it is rendered `collapsible={false}`: a static header (no toggle) with the content
 // always shown. The collapsible form is retained for any other caller that still wants it.
-function SectionCard({ title, summary = '', headerCenter = null, expanded, onExpandedChange, collapsible = true, disabled = false, width, children, style }) {
+// `headerActions` are controls that live in the header but must NOT toggle the card — a "Sync now" that
+// stays reachable while collapsed. They cannot be part of `headerInner`: a collapsible header *is* a
+// <button>, so nesting one inside it is invalid HTML and every click would also collapse the card. They
+// are rendered as a sibling of the toggle, inside a flex row that the toggle grows to fill.
+function SectionCard({ title, summary = '', headerCenter = null, headerActions = null, expanded, onExpandedChange, collapsible = true, disabled = false, width, children, style }) {
   const open = collapsible ? expanded : true
   const headerInner = (
     <>
@@ -314,8 +319,8 @@ function SectionCard({ title, summary = '', headerCenter = null, expanded, onExp
     color: 'var(--text)',
     textAlign: 'left',
   }
-  // A header with neither a title nor summary nor headerCenter would just be empty chrome — skip it.
-  const hasHeader = collapsible || title || summary || headerCenter
+  // A header with nothing in it would just be empty chrome — skip it.
+  const hasHeader = collapsible || title || summary || headerCenter || headerActions
   return (
     <Card style={{
       width: typeof width === 'number' ? `${width}px` : (width || 'fit-content'),
@@ -326,13 +331,21 @@ function SectionCard({ title, summary = '', headerCenter = null, expanded, onExp
       ...style,
     }}>
       {hasHeader ? (
-        collapsible ? (
-          <button type="button" onClick={() => onExpandedChange?.(!open)} style={{ ...headerStyle, cursor: 'pointer' }}>
-            {headerInner}
-          </button>
-        ) : (
-          <div style={headerStyle}>{headerInner}</div>
-        )
+        <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+          {collapsible ? (
+            <button type="button" onClick={() => onExpandedChange?.(!open)}
+              style={{ ...headerStyle, cursor: 'pointer', flex: 1, minWidth: 0 }}>
+              {headerInner}
+            </button>
+          ) : (
+            <div style={{ ...headerStyle, flex: 1, minWidth: 0 }}>{headerInner}</div>
+          )}
+          {headerActions ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '0 16px 0 8px', flexShrink: 0 }}>
+              {headerActions}
+            </span>
+          ) : null}
+        </div>
       ) : null}
       {open ? (
         <div style={hasHeader ? { borderTop: '1px solid var(--border)' } : undefined}>
@@ -367,6 +380,32 @@ const PROVIDER_LABELS = { plaid: 'Plaid', teller: 'Teller', simplefin: 'SimpleFI
 
 function providerLabel(provider) {
   return PROVIDER_LABELS[provider] || (provider ? provider[0].toUpperCase() + provider.slice(1) : 'Provider')
+}
+
+// A small pill for the connection cards' at-a-glance state. `tone` picks the colour role rather than a
+// literal colour, so the same component covers "needs attention" and "something is wrong".
+function StatusPill({ tone = 'accent2', children, title, onClick }) {
+  const color = tone === 'danger' ? 'var(--danger, #dc2626)'
+    : tone === 'warning' ? 'var(--warning)'
+      : 'var(--accent2)'
+  const Tag = onClick ? 'button' : 'span'
+  return (
+    <Tag
+      {...(onClick ? { type: 'button', onClick } : {})}
+      title={title}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600,
+        background: `color-mix(in srgb, ${color} 12%, var(--surface2))`,
+        color,
+        border: `1px solid color-mix(in srgb, ${color} 50%, var(--border))`,
+        cursor: onClick ? 'pointer' : 'default',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {children}
+    </Tag>
+  )
 }
 
 function EnvBadge({ env }) {
@@ -478,6 +517,102 @@ function ProviderConfigDialog({ provider, initial, onSave, onClose, onVaultLocke
         <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
           Switching to Production requires a strong vault passphrase first, so live bank tokens are never protected by a weak secret.
         </p>
+        {error ? <div style={{ fontSize: 13, color: '#dc2626' }}>{error}</div> : null}
+      </div>
+    </AppDialog>
+  )
+}
+
+// How far back a newly connected data source pulls on its first sync. Shared by the connect dialog and the
+// Plaid card so the two cannot drift apart. "All available history" is bounded by whatever the provider
+// itself will return, which for a cursor provider is its published cap and for a walking provider is where
+// its history actually runs out.
+const HISTORY_DEPTH_OPTIONS = [
+  { value: '0', label: 'All available history' },
+  { value: '730', label: 'Last 2 years' },
+  { value: '365', label: 'Last year' },
+  { value: '90', label: 'Last 90 days' },
+  { value: '30', label: 'Last 30 days' },
+]
+
+const HISTORY_DEPTH_TITLE = "How far back this data source pulls on its first sync. Saved as your default for future connections. To pull older history for a source that's already connected, use Fetch more history on its card."
+
+// Connect a provider whose authorization is a value the user pastes rather than a widget that opens.
+// Everything shown is driven by the provider's `connect_spec` — label, help link, placeholder — so adding
+// another token-style provider needs no change here.
+//
+// The history depth is asked for HERE rather than on the provider's card, because for a provider with no
+// app-level credential the card does not exist until a connection does — so a setting living there could
+// not be reached at the one moment it applies, and every first connection silently took the default.
+function TokenConnectDialog({ provider, spec, historyDays, onConnect, onClose }) {
+  const [token, setToken] = useState('')
+  // Held locally and handed to `onConnect`, rather than written straight to the shared preference: the
+  // connect that follows must use exactly what is on screen, and reading it back from state the click
+  // just scheduled is the kind of ordering question worth not having.
+  const [days, setDays] = useState(historyDays)
+  const [connecting, setConnecting] = useState(false)
+  const [error, setError] = useState('')
+
+  async function submit() {
+    setConnecting(true)
+    setError('')
+    try {
+      await onConnect(token.trim(), days)
+    } catch (e) {
+      // Staying open with the message is deliberate: these tokens are single-use, and the most common
+      // failure is a token already claimed — which the user resolves by pasting a fresh one right here.
+      setError(e.message || 'Could not connect')
+      setConnecting(false)
+    }
+  }
+
+  return (
+    <AppDialog
+      title={`Connect ${providerLabel(provider)}`}
+      description={`Paste the ${(spec?.label || 'token').toLowerCase()} to link accounts. It is exchanged for a credential that is stored in the encrypted vault.`}
+      onClose={onClose}
+      width="min(560px, 100%)"
+      actions={
+        <DialogActions>
+          <Button variant="ghost" small onClick={onClose}>Cancel</Button>
+          <Button small onClick={submit} disabled={connecting || !token.trim()}>
+            {connecting ? 'Connecting…' : 'Connect'}
+          </Button>
+        </DialogActions>
+      }
+    >
+      <div style={{ display: 'grid', gap: 12 }}>
+        <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+          <span style={{ color: 'var(--muted)' }}>{spec?.label || 'Token'}</span>
+          {/* A plain Input rather than a masked or multiline field: a setup token is one long opaque
+              string, it is single-use and short-lived, and the user needs to see that the paste landed
+              intact — the common failure here is a truncated copy. */}
+          <Input
+            value={token}
+            onChange={setToken}
+            placeholder={spec?.placeholder || ''}
+            autoFocus
+            {...SENSITIVE_FIELD_PROPS}
+          />
+          {spec?.hint ? (
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>{spec.hint}</span>
+          ) : null}
+        </div>
+        {spec?.help_url ? (
+          <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
+            Get one at{' '}
+            <a href={spec.help_url} target="_blank" rel="noreferrer noopener">{spec.help_url}</a>.
+          </p>
+        ) : null}
+        <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+          <span style={{ color: 'var(--muted)' }}>Fetch history</span>
+          <Select
+            value={String(days)}
+            onChange={v => setDays(Number(v))}
+            options={HISTORY_DEPTH_OPTIONS}
+            title={HISTORY_DEPTH_TITLE}
+          />
+        </div>
         {error ? <div style={{ fontSize: 13, color: '#dc2626' }}>{error}</div> : null}
       </div>
     </AppDialog>
@@ -673,6 +808,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   const [loading, setLoading] = useState(true)
   const [syncState, setSyncState] = useState({})       // provider -> { syncing, result }
   const [configTarget, setConfigTarget] = useState(null)
+  const [connectTarget, setConnectTarget] = useState(null)  // provider whose token-connect dialog is open
   const [vaultDialog, setVaultDialog] = useState(null) // 'set' | 'unlock'
   const [notice, setNotice] = useState(null)
   const [disconnectTarget, setDisconnectTarget] = useState(null) // { provider, external_id, institution }
@@ -690,6 +826,10 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // How far back a new connection's initial pull fetches (`days_requested`; 0 = all available ~24 months).
   // Persisted as the user's default for future connections. Routine syncs pull cursor deltas regardless.
   const [historyDays, setHistoryDays] = useUserPreference('connection.historyDays', 90)
+  // Which provider cards are expanded, keyed by provider and remembered across visits — the tab is a
+  // place people return to, and re-collapsing the same cards every visit is the kind of small tax that
+  // makes a feature not worth using. Absent = the per-card default (see the render).
+  const [expandedProviders, setExpandedProviders] = useUserPreference('connection.expandedProviders', {})
   const [refreshingConnId, setRefreshingConnId] = useState(null)  // connection currently being refreshed
   const [fetchingHistoryConnId, setFetchingHistoryConnId] = useState(null)  // connection currently deepening history
   // The account-mapping step. `pendingBackfill` marks the post-Link case, where mapping is required and
@@ -701,6 +841,8 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   const [mapSaving, setMapSaving] = useState(false)
   const [mapError, setMapError] = useState(null)
   const [unmappedByConnection, setUnmappedByConnection] = useState({})
+  // local account id -> the institution the provider says it is at, for a connection spanning several banks
+  const [institutionByAccountId, setInstitutionByAccountId] = useState({})
   // While a Plaid Link (+ bank OAuth) session is open, the whole app is blocked behind a modal scrim: the
   // Link handler and its onSuccess closure live in THIS component, so navigating away mid-connect unmounts
   // it and silently loses the in-flight connection. linkInProgress drives the scrim; plaidHandlerRef lets
@@ -754,15 +896,26 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     // nudge on the card: an unmapped account is silently skipped by every sync until it is resolved, so
     // the state has to be visible rather than inferred from missing transactions.
     const unmapped = {}
+    // The institution each mapped account actually sits at, which the connection heading cannot say when
+    // one credential spans several banks (a SimpleFIN access URL does). It rides the same fetch as the
+    // mapping counts because `connection_account` is where the provider's own naming is kept — a local
+    // account carries the name the user gave it, not the bank's.
+    const institutions = {}
     await Promise.all(
       (provResp.providers || []).flatMap(p => (p.connections || []).map(async c => {
         try {
           const res = await api.getConnectionAccounts(c.id)
           unmapped[c.id] = res.unmapped || 0
+          for (const pa of res.accounts || []) {
+            if (pa.account_id && pa.provider_official_name) {
+              institutions[pa.account_id] = pa.provider_official_name
+            }
+          }
         } catch { /* a connection whose accounts can't be read just shows no badge */ }
       })),
     )
     setUnmappedByConnection(unmapped)
+    setInstitutionByAccountId(institutions)
     setLoading(false)
   }, [currentUser])
 
@@ -806,7 +959,10 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     await refresh()
   }
 
-  function connect(provider) {
+  // The connect affordance comes from the provider's own `connect_spec`, not from its name: a Link-style
+  // provider opens its widget, a token-style one collects a pasted value. The vault and HTTPS gates are
+  // shared, since they are about the credential this produces rather than how it was obtained.
+  function connect(p) {
     if (!vault.configured) { setVaultDialog('set'); return }
     if (!vault.unlocked) { setVaultDialog('unlock'); return }
     if (httpsBlocked) {
@@ -816,11 +972,40 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       })
       return
     }
-    if (provider !== 'plaid') {
-      setNotice({ title: 'Not yet available', description: `${providerLabel(provider)} connections are coming soon.` })
-      return
-    }
+    if (p.connect_spec?.style === 'token') { setConnectTarget(p); return }
     startPlaidLink()
+  }
+
+  // Finish a token-style connect: the same tail Link takes after its callback — refresh, then either the
+  // mapping step (which owns the backfill from there) or a straight historical pull.
+  async function connectWithToken(provider, token, days) {
+    const result = await api.connectProvider(provider, { setup_token: token })
+    // Remember the depth chosen in the dialog as the default for next time, but go on using the value that
+    // was actually on screen — the persisted copy is a convenience, not the source of truth for this pull.
+    if (days !== historyDays) setHistoryDays(days)
+    setConnectTarget(null)
+    await refresh()
+    if (result?.connection_id) {
+      if (result.unmapped) {
+        await openAccountMap(
+          { id: result.connection_id, provider, institution: result.institution },
+          { pendingBackfill: true, days },
+        )
+        return
+      }
+      setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
+      try {
+        await syncUntilComplete(provider, {
+          days, connectionId: result.connection_id,
+          fullHistory: true
+        })
+      } catch (syncErr) {
+        setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
+        setNotice({ title: 'Connected, but could not pull history', description: syncErr.message })
+      }
+    }
+    await onAccountsChanged?.()
+    await refresh()
   }
 
   async function startPlaidLink() {
@@ -857,7 +1042,10 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
               // away — polling until the provider signals the historical backfill is complete.
               setSyncState(prev => ({ ...prev, plaid: { syncing: true, result: null } }))
               try {
-                await syncUntilComplete('plaid', { days: historyDays, connectionId: result.connection_id })
+                await syncUntilComplete('plaid', {
+                  days: historyDays, connectionId: result.connection_id,
+                  fullHistory: true
+                })
               } catch (syncErr) {
                 setSyncState(prev => ({ ...prev, plaid: { syncing: false, result: null } }))
                 setNotice({ title: 'Connected, but could not pull history', description: syncErr.message })
@@ -909,17 +1097,22 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // the async backfill is pulled to completion without needing a webhook endpoint. Each call drains the
   // pages available right now; between calls we wait for the provider to backfill more. Running totals +
   // status are surfaced on syncState[provider] so the UI can show "Importing history… N so far".
-  async function syncUntilComplete(provider, { days, connectionId }) {
+  async function syncUntilComplete(provider, { days, connectionId, fullHistory = false }) {
     const MAX_POLLS = 45  // ~3 min at the 4s cadence below — comfortably covers Plaid's historical backfill
     const totals = { added: 0, updated: 0, removed: 0, skipped: 0 }
     for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
-      const res = await api.runSync(days, connectionId)
+      const res = await api.runSync(days, connectionId, { provider, fullHistory })
       totals.added += res.added || 0
       totals.updated += res.updated || 0
       totals.removed += res.removed || 0
       totals.skipped += res.skipped || 0
       if (res.historical_complete) {
-        setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: { ...totals } } }))
+        // A paused connection also reports nothing-more-right-now, so the loop ends either way; `paused`
+        // is what distinguishes "finished" from "stopped, with more to come on a later sync".
+        setSyncState(prev => ({
+          ...prev,
+          [provider]: { syncing: false, result: { ...totals }, paused: res.paused || [] },
+        }))
         return totals
       }
       setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null, progress: { ...totals }, status: res.update_status } }))
@@ -935,13 +1128,21 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     if (!vault.unlocked) { setVaultDialog('unlock'); return }
     setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
     try {
-      // Routine top-up: cursor deltas across all connections. days=0 keeps each item's maintained window at
-      // max, so a routine sync never narrows history the initial pull already fetched.
+      // Routine top-up across this provider's connections. days=0 keeps a cursor provider's maintained
+      // window at max, so a routine sync never narrows history the initial pull already fetched; a
+      // provider with no cursor reads it as "top up", and its own look-back bounds the fetch.
       await syncUntilComplete(provider, { days: 0, connectionId: null })
       await onAccountsChanged?.()
+      // A sync changes server-side state this card renders — each connection's last-synced time, its
+      // failure count, the review counts — and `onAccountsChanged` only refreshes the *accounts* list.
+      // Without this the card keeps showing pre-sync values until something else happens to refetch.
+      await refresh()
     } catch (e) {
       setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
       setNotice({ title: 'Sync failed', description: e.message })
+      // Refresh on failure too: the failure was recorded server-side, and the badge reporting it is
+      // least useful if it only appears after an unrelated reload.
+      await refresh()
     }
   }
 
@@ -1000,11 +1201,18 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       // Post-Link: the accounts now exist, so the deferred historical pull can run. It is deliberately
       // after the mapping rather than before, so the very first batch of rows is deduped against
       // whatever the mapped accounts already hold instead of arriving unattached.
-      if (target.pendingBackfill) {
+      // Two occasions need a pull right after mapping, and they are the same pull: the post-connect
+      // backfill, and an account that joined an existing connection later (discovered by sync) and so has
+      // no history yet. Without running it here, a just-mapped account sits visibly empty until some later
+      // sync happens to collect it.
+      if (target.pendingBackfill || res.awaiting_history?.length) {
         const provider = target.connection.provider || 'plaid'
         setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
         try {
-          await syncUntilComplete(provider, { days: target.days ?? historyDays, connectionId: target.connection.id })
+          await syncUntilComplete(provider, {
+            days: target.days ?? historyDays,
+            connectionId: target.connection.id, fullHistory: true
+          })
         } catch (syncErr) {
           setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
           setNotice({ title: 'Mapped, but could not pull history', description: syncErr.message })
@@ -1045,7 +1253,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       const res = await api.refreshConnectionAccounts(provider, connection.external_id)
       // Recovery syncs at full depth (days=0), independent of the new-connection window: a restore-recovery
       // should pull back as much as the provider will give, not the shallower default a fresh connect might use.
-      await syncUntilComplete(provider, { days: 0, connectionId: res.connection_id })
+      await syncUntilComplete(provider, { days: 0, connectionId: res.connection_id, fullHistory: true })
       await onAccountsChanged?.()
       await refresh()
     } catch (e) {
@@ -1056,16 +1264,19 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     }
   }
 
-  // Deepen one connection's history: request all available history and poll to completion. For Plaid this
-  // raises days_requested, and the provider backfills the older transactions through the same cursor — no
-  // separate date-range fetch, so cursor-based dedupe stays unified. A bank/plan may cap how far back it goes.
+  // Deepen one connection's history: request all available history and poll to completion. `fullHistory`
+  // is what separates this from a routine top-up, which sends the same `days` — for Plaid it raises
+  // days_requested and the provider backfills older transactions through the same cursor, while a provider
+  // with no cursor reads it as "walk further back" rather than "fetch the recent window again". It is also
+  // the only kind of pull permitted to widen the connection's coverage claim backward. A bank/plan may cap
+  // how far back it goes.
   async function fetchMoreHistory(provider, connection) {
     if (fetchingHistoryConnId || refreshingConnId) return
     if (!vault.unlocked) { setVaultDialog('unlock'); return }
     setFetchingHistoryConnId(connection.id)
     setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
     try {
-      await syncUntilComplete(provider, { days: 0, connectionId: connection.id })
+      await syncUntilComplete(provider, { days: 0, connectionId: connection.id, fullHistory: true })
       await onAccountsChanged?.()
       await refresh()
     } catch (e) {
@@ -1135,8 +1346,34 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   if (loading) return <Card style={{ width: typeof width === 'number' ? `${width}px` : (width || 'fit-content'), maxWidth: '100%', padding: 0 }}><Spinner /></Card>
 
   const list = providers || []
+  // The card menu and the disconnect dialog need a provider's declared capabilities, and both are rendered
+  // outside the per-provider loop that has them in hand.
+  const providerById = Object.fromEntries(list.map(p => [p.provider, p]))
   const configured = list.filter(p => p.configured)
   const unconfigured = list.filter(p => !p.configured)
+
+  // Everything the collapsed header has to be able to say, so that collapsing a card never hides
+  // something that is asking to be acted on. A card is only worth collapsing if what it conceals is
+  // routine detail; a failing connection or an unmapped account is neither.
+  function providerSummary(p) {
+    const connections = p.connections || []
+    const reauth = connections.filter(c => c.reauth_required)
+    // A connection needing reconnection is also failing, but it is reported only as the former: the two
+    // pills would say the same thing twice, and only one of them names something the user can do.
+    const failing = connections.filter(c => (c.consecutive_sync_failures || 0) > 0 && !c.reauth_required)
+    const warned = connections.filter(c => (c.last_sync_warnings || []).length > 0)
+    const synced = connections.map(c => c.last_synced_at).filter(Boolean).sort()
+    const unmapped = connections.reduce((n, c) => n + (unmappedByConnection[c.id] || 0), 0)
+    const review = connections.reduce((n, c) => n + (syncSummaryByConnection[c.id]?.suspects || 0), 0)
+    return {
+      connections, reauth, failing, warned, unmapped, review,
+      // The OLDEST of the successful pulls, not the newest: the card speaks for every connection under
+      // it, so the honest headline is the one that is furthest behind. Taking the newest would let one
+      // healthy connection make a card look current while another had not synced in a month.
+      lastSynced: synced.length === connections.length && synced.length ? synced[0] : (synced[0] || null),
+      allSynced: synced.length === connections.length && synced.length > 0,
+    }
+  }
 
   return (
     <div style={{ display: 'grid', gap: 12, width: typeof width === 'number' ? `${width}px` : (width || '100%'), maxWidth: '100%', opacity: disabled ? 0.55 : 1, pointerEvents: disabled ? 'none' : 'auto' }}>
@@ -1181,46 +1418,118 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
           : !vault.unlocked ? 'Unlock the vault first'
             : httpsBlocked ? 'Configure HTTPS before connecting on a networked server'
               : ''
+        const s = providerSummary(p)
+        const lastSyncedLabel = formatTimestamp(s.lastSynced)
+        const expanded = expandedProviders[p.provider] !== undefined
+          ? expandedProviders[p.provider]
+          // Default: open while there is nothing to sync yet (the card is a setup step, and collapsing
+          // it would hide the only action available), collapsed once it is connected and doing its job.
+          : connections.length === 0
         return (
           <SectionCard
             key={p.provider}
             title={providerLabel(p.provider)}
-            summary={connections.length ? `${connections.length} connection${connections.length === 1 ? '' : 's'}` : 'Not connected'}
-            collapsible={false}
+            summary={
+              connections.length
+                ? `${connections.length} connection${connections.length === 1 ? '' : 's'}`
+                + (lastSyncedLabel ? ` · last synced ${lastSyncedLabel}` : ' · never synced')
+                : 'Not connected'
+            }
+            collapsible
+            expanded={expanded}
+            onExpandedChange={(next) => setExpandedProviders({ ...expandedProviders, [p.provider]: next })}
             width={width}
-            headerCenter={<EnvBadge env={p.env} />}
+            headerCenter={
+              // Everything here has to survive collapsing, because each item is asking for something and
+              // a nudge only visible after expanding a card is a nudge that will not be seen. The env
+              // badge is the exception and stays last: it is context, not a request.
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                {s.reauth.length ? (
+                  // First, and its own pill rather than another failure count. Every other sync failure
+                  // resolves itself or does not; this one waits on the user, and a count of attempts is
+                  // exactly the wrong thing to show for a connection that will never succeed again.
+                  <StatusPill tone="danger"
+                    title={s.reauth.map(c => `${c.institution || 'Connection'}: ${c.last_sync_error || 'the provider no longer accepts this connection'}`).join('\n')}>
+                    ⚠ {s.reauth.length === 1 ? 'reconnect needed' : `${s.reauth.length} need reconnecting`}
+                  </StatusPill>
+                ) : null}
+                {s.failing.length ? (
+                  <StatusPill tone="danger"
+                    title={s.failing.map(c => `${c.institution || 'Connection'}: ${c.last_sync_error || 'sync failed'} (${c.consecutive_sync_failures} in a row)`).join('\n')}>
+                    ⚠ {s.failing.length === connections.length && connections.length > 1
+                      ? 'all connections failing'
+                      : `${s.failing.length} failing`}
+                  </StatusPill>
+                ) : null}
+                {s.warned.length ? (
+                  // Labelled as a message from the provider rather than as "partly synced": the pill
+                  // cannot tell a bank that failed to deliver from a server advisory about the request
+                  // itself, and asserting missing data when none is missing would send the user looking
+                  // for a problem that isn't there. The text they need is the provider's own, in the
+                  // tooltip — which says "authentication required" when that is what happened.
+                  <StatusPill tone="warning"
+                    title={s.warned.map(c => `${c.institution || 'Connection'}: ${(c.last_sync_warnings || []).join('; ')}`).join('\n')}>
+                    ⚠ provider notice
+                  </StatusPill>
+                ) : null}
+                {s.unmapped ? (
+                  <StatusPill tone="accent2"
+                    title={`${s.unmapped} account${s.unmapped === 1 ? '' : 's'} from this data source ${s.unmapped === 1 ? 'has' : 'have'} no destination yet — transactions for ${s.unmapped === 1 ? 'it' : 'them'} are skipped until mapped`}>
+                    {s.unmapped} to map
+                  </StatusPill>
+                ) : null}
+                {s.review ? (
+                  <StatusPill tone="warning" onClick={() => navigate('/import-export')}
+                    title={`${s.review} synced transaction${s.review === 1 ? '' : 's'} may duplicate an existing row — open the Import / Export history to review`}>
+                    ⚠ {s.review} to review
+                  </StatusPill>
+                ) : null}
+                {/* No badge for a provider with no test mode: an empty or invented one would imply a
+                    sandbox/production distinction it does not have. */}
+                {p.env ? <EnvBadge env={p.env} /> : null}
+              </span>
+            }
+            headerActions={
+              // Kept out of the collapsed body on purpose: syncing is the one thing a user comes to this
+              // card to do routinely, and needing to expand first would make collapsing cost something.
+              <Button variant="ghost" small onClick={() => sync(p.provider)}
+                disabled={ss.syncing || !connections.length}
+                title={connections.length ? 'Pull new and changed transactions for every connection' : 'Connect an account before syncing'}>
+                {ss.syncing ? 'Syncing…' : '↻ Sync now'}
+              </Button>
+            }
           >
             <div style={{ padding: '12px 16px 14px', display: 'grid', gap: 12 }}>
               {/* One-time connection setup (left) is kept distinct from the ongoing "Sync now" op (right),
                   so the history-depth selector below reads as governing new connections, not every sync. */}
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                {isAdmin ? <Button variant="ghost" small onClick={() => setConfigTarget(p)}>Configure</Button> : null}
-                <Button small onClick={() => connect(p.provider)} disabled={connectDisabled} title={connectTitle}>+ Connect account</Button>
+                {/* Configure only where there is something to configure — a provider with no app-level
+                    credential would open a dialog with no fields in it. */}
+                {isAdmin && p.requires_app_config !== false
+                  ? <Button variant="ghost" small onClick={() => setConfigTarget(p)}>Configure</Button> : null}
+                <Button small onClick={() => connect(p)} disabled={connectDisabled} title={connectTitle}>+ Connect account</Button>
                 {p.source === 'env' ? (
                   <span style={{ fontSize: 12, color: 'var(--muted)' }}>credentials from <code>.env</code></span>
                 ) : null}
-                <Button variant="ghost" small onClick={() => sync(p.provider)}
-                  disabled={ss.syncing || !connections.length}
-                  title={connections.length ? 'Pull new and changed transactions for every connection' : 'Connect an account before syncing'}
-                  style={{ marginLeft: 'auto' }}>
-                  {ss.syncing ? 'Syncing…' : '↻ Sync now'}
-                </Button>
+                {/* "Sync now" lives in the card header, not here — it is the routine action, so it has to
+                    stay reachable while the card is collapsed. */}
               </div>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
-                <span>New connections fetch</span>
-                <Select
-                  value={String(historyDays)}
-                  onChange={v => setHistoryDays(Number(v))}
-                  options={[
-                    { value: '0', label: 'All available history' },
-                    { value: '365', label: 'Last year' },
-                    { value: '90', label: 'Last 90 days' },
-                    { value: '30', label: 'Last 30 days' },
-                  ]}
-                  title="How far back a newly connected bank pulls on its first sync. Saved as your default. To pull older history for a bank that's already connected, use Fetch more history on its card."
-                  style={{ fontSize: 12, padding: '4px 8px', minWidth: 0, width: 'auto' }}
-                />
-              </span>
+              {/* Only for a provider whose connect step opens straight into the provider's own widget:
+                  there is no dialog of ours to ask in, so the depth has to be chosen before the button is
+                  pressed. A token-style provider asks inside its connect dialog instead, at the moment it
+                  applies — a second copy here would be a control for a choice already made. */}
+              {p.connect_spec?.style !== 'token' ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
+                  <span>New connections fetch</span>
+                  <Select
+                    value={String(historyDays)}
+                    onChange={v => setHistoryDays(Number(v))}
+                    options={HISTORY_DEPTH_OPTIONS}
+                    title={HISTORY_DEPTH_TITLE}
+                    style={{ fontSize: 12, padding: '4px 8px', minWidth: 0, width: 'auto' }}
+                  />
+                </span>
+              ) : null}
 
               {ss.syncing ? (
                 <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: 'var(--muted)' }}>
@@ -1232,7 +1541,11 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                 <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: 'var(--muted)' }}>
                   {ss.incomplete
                     ? `Synced ${ss.result.added} so far — the bank is still sending history. Click Sync now again in a minute to pull the rest.`
-                    : `Sync complete — ${ss.result.added} added, ${ss.result.updated} updated${ss.result.removed ? `, ${ss.result.removed} removed` : ''}, ${ss.result.skipped} skipped`}
+                    : ss.paused?.length
+                      // Named for what the user sees and what to do about it. Retrying now would not help
+                      // and would push the provider toward cutting the connection off entirely.
+                      ? `Synced ${ss.result.added} transactions — exhausted ${providerLabel(p.provider)} limit on requests/day. History retrieval will restart on the next sync after the limit resets.`
+                      : `Sync complete — ${ss.result.added} added, ${ss.result.updated} updated${ss.result.removed ? `, ${ss.result.removed} removed` : ''}, ${ss.result.skipped} skipped`}
                 </div>
               ) : null}
 
@@ -1297,10 +1610,31 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                             />
                           </div>
                         </div>
+                        {/* Stated on the card as well as in the header pill. The pill has to work while
+                            collapsed, so it summarizes across connections; this is where the user is when
+                            they act, and with several connections under one provider it is the only place
+                            that says which one. */}
+                        {c.reauth_required ? (
+                          <div style={{
+                            fontSize: 12, lineHeight: 1.5, borderRadius: 6, padding: '6px 9px',
+                            background: 'color-mix(in srgb, var(--danger) 10%, var(--surface2))',
+                            border: '1px solid color-mix(in srgb, var(--danger) 40%, var(--border))',
+                            color: 'var(--danger)',
+                          }}>
+                            {c.last_sync_error || 'This data source no longer accepts this connection.'}
+                            {' '}Syncing stays stopped until it is connected again.
+                          </div>
+                        ) : null}
                         {accts.length ? accts.map(a => (
                           <div key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: 'var(--muted)' }}>
                             <span style={{ color: 'var(--text)' }}>{a.display_name || a.name}</span>
                             {a.mask ? <span>····{a.mask}</span> : null}
+                            {/* One credential can cover several banks (a SimpleFIN access URL does), so the
+                                card's own institution name does not identify which bank an account is at.
+                                Shown only when it adds something the card heading doesn't already say. */}
+                            {institutionByAccountId[a.id] && institutionByAccountId[a.id] !== c.institution ? (
+                              <span style={{ fontSize: 11 }}>{institutionByAccountId[a.id]}</span>
+                            ) : null}
                             {/* Named because a merged account is otherwise indistinguishable here from a
                                 standalone one, and the group is where its transactions are read. */}
                             {a.parent_account_id ? (
@@ -1328,6 +1662,8 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                 </div>
               ) : (
                 <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0, lineHeight: 1.6 }}>
+                  {/* The sandbox note only makes sense for a provider that has one; for the rest it would
+                      describe a mode they cannot be in. */}
                   {p.env === 'sandbox'
                     ? 'Running in Sandbox — use the provider’s test credentials when the connect dialog opens. Switch to Production on Configure once you’re ready for real accounts.'
                     : 'Connect an account to keep balances and transactions in sync.'}
@@ -1338,13 +1674,32 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
         )
       })}
 
-      {unconfigured.length && isAdmin ? (
+      {/* Adding a data source means whatever its first step actually is: entering app credentials for a
+          provider that has them, and connecting straight away for one that has none — for which a
+          Configure dialog would open with nothing in it. Providers needing credentials stay admin-only;
+          one that needs none is gated on the vault like any other connect. */}
+      {unconfigured.length && unconfigured.some(p => isAdmin || p.requires_app_config === false) ? (
         <Card style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13, color: 'var(--muted)' }}>Add a data source:</span>
-          {unconfigured.map(p => (
-            <Button key={p.provider} variant="ghost" small onClick={() => setConfigTarget(p)}>+ {providerLabel(p.provider)}</Button>
-          ))}
+          {unconfigured
+            .filter(p => isAdmin || p.requires_app_config === false)
+            .map(p => (
+              <Button key={p.provider} variant="ghost" small
+                onClick={() => (p.requires_app_config === false ? connect(p) : setConfigTarget(p))}>
+                + {providerLabel(p.provider)}
+              </Button>
+            ))}
         </Card>
+      ) : null}
+
+      {connectTarget ? (
+        <TokenConnectDialog
+          provider={connectTarget.provider}
+          spec={connectTarget.connect_spec}
+          historyDays={historyDays}
+          onConnect={(token, days) => connectWithToken(connectTarget.provider, token, days)}
+          onClose={() => setConnectTarget(null)}
+        />
       ) : null}
 
       {configTarget ? (
@@ -1364,7 +1719,13 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       {disconnectTarget ? (
         <AppConfirmDialog
           title={`Disconnect ${disconnectTarget.institution || 'this bank'}?`}
-          description="This revokes the connection at the provider, so it can no longer pull transactions (and any leaked copy of the token also stops working). Existing accounts and their transactions are kept. Reconnecting later means linking the bank again."
+          // Two materially different outcomes, so they get two different sentences. Where the provider can
+          // be told to revoke, disconnecting really does end the access. Where it cannot, only Luma's copy
+          // of the credential goes and the credential itself stays live — saying otherwise would leave
+          // someone believing they had cut off access they still have.
+          description={disconnectTarget.revokes
+            ? 'This revokes the connection at the provider, so it can no longer pull transactions (and any leaked copy of the token also stops working). Existing accounts and their transactions are kept. Reconnecting later means linking the bank again.'
+            : `This removes the connection from Luma, so it stops pulling transactions here. Existing accounts and their transactions are kept. ${providerLabel(disconnectTarget.provider)} has no way to revoke a credential from another app, so the access itself stays valid until it is revoked at the provider.`}
           confirmLabel={disconnecting ? 'Disconnecting…' : 'Disconnect'}
           confirmDisabled={disconnecting}
           cancelDisabled={disconnecting}
@@ -1409,11 +1770,14 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
             {
               label: 'Disconnect',
               danger: true,
-              title: 'Revoke this connection at the provider. Existing accounts and transactions are kept, but reconnecting means linking the bank again.',
+              title: providerById[cardMenu.provider]?.revokes_on_disconnect === false
+                ? 'Remove this connection from Luma. Existing accounts and transactions are kept. This provider has no way to revoke a credential from here, so revoking it means going to the provider.'
+                : 'Revoke this connection at the provider. Existing accounts and transactions are kept, but reconnecting means linking the bank again.',
               onClick: () => setDisconnectTarget({
                 provider: cardMenu.provider,
                 external_id: cardMenu.connection.external_id,
                 institution: cardMenu.connection.institution,
+                revokes: providerById[cardMenu.provider]?.revokes_on_disconnect !== false,
               }),
             },
           ]}

@@ -69,6 +69,47 @@ path. Pick-up-cold summary below; build phases at the end.
   uniquely precious "crown jewels" overstated it; the honest framing is below. **This conditioning is on
   read-only** — adding a payment-capable token (Teller payments) or `auth`/`identity` would enlarge the
   blast radius past the ledger and this section must be revisited.
+- **The two clauses are independent, and SimpleFIN breaks one of them (2026-08-07).** The conditioning
+  above bundles *read-only* and *revocable in-app*; a second provider shows they vary separately. A
+  SimpleFIN access URL is **read-only** — more robustly than Plaid's, since the protocol has no write side
+  at all rather than merely not requesting one. But SimpleFIN publishes **no revocation call**: nothing
+  Luma can send invalidates an access URL. Disconnecting deletes Luma's copy; the credential stays live
+  until the user revokes it at the Bridge.
+
+  What that changes: for such a provider the compromise playbook's "disconnect to revoke" step **does not
+  apply**, and the mitigation becomes an action at the provider. What it does not change: the exposure is
+  still ongoing *read* access, still narrower than the plaintext ledger already on disk. So it widens *who
+  must act to stop it*, not *what a leak costs*.
+
+  The rule this settles: **a provider may fail either clause independently, and the consequences differ.**
+  Losing *read-only* enlarges the blast radius and reopens the custody design (the Teller-payments /
+  `auth` case above, and [`ofx-direct-connect.md`](ofx-direct-connect.md), which fails **both**). Losing
+  *revocable in-app* leaves the blast radius intact and becomes a **disclosure** obligation — the
+  disconnect confirmation must say what it does and does not do, since a user who believes access ended
+  when it did not is worse off than one who knows to go and revoke it. Adapters declare this
+  (`revokes_on_disconnect`) rather than the UI assuming it.
+
+  **The reverse direction also needs handling, and it is not symmetric (2026-08-08).** If the user *does*
+  revoke at the provider, nothing announces it — Luma finds out only when a request is refused. So a refused
+  credential raises `ProviderCredentialRejected` and sets `connection.reauth_required`, which the card
+  reports as **reconnect needed** rather than as another failed sync. This matters more for a provider with
+  no revocation call than for one with it: for Plaid, revocation normally happens *through* Luma and the
+  connection is gone; for SimpleFIN, the revocation happens elsewhere and this refusal is the only notice
+  there will ever be. A connection left counting failures after a deliberate revocation reads as broken
+  rather than as closed, which is precisely the confusion the disclosure rule above exists to prevent.
+
+- **A provider's own conformance checklist is part of its threat model, and gets read before the adapter is
+  written (2026-08-08).** SimpleFIN publishes one, and it was consulted *after* its adapter shipped. Six of
+  its nine items were already satisfied — but those were the ones the protocol forces on any working client.
+  The three that were not are exactly the ones reasoning-from-the-protocol does not reach, because they are
+  about the **user's** security posture rather than about making a correct request:
+  a failed claim must be reported as a possible **interception** (a setup token is single-use; a claim that
+  fails may mean someone else spent it, and only the user can disable it at the Bridge — the adapter's
+  earlier "generate a new one" was the reassuring reading of identical evidence); a 403 on a data call is a
+  condition of its own, not an outage; and displayed provider text must be bounded (escaping covers
+  injection, so the live risk is volume). Generalized: **when a provider publishes conformance guidance,
+  read it before writing the adapter — a checklist is a list of what the protocol's authors know goes wrong,
+  and the security-posture items are the ones no amount of careful protocol reading substitutes for.**
 - **Consequences & responsibilities (what a user must actually protect, and what a compromise means).**
   Because the ledger is plaintext at rest, an attacker who copies the **database files or an unencrypted
   backup** already has the full transaction history *without breaking anything* — so the user's real
@@ -76,9 +117,12 @@ path. Pick-up-cold summary below; build phases at the end.
   anything that leaves the machine. The **app password** protects *network* access to the running app, not
   the files on disk. The **vault passphrase** protects only the provider token, and only against **future**
   pulls after a file theft — so if the DB leaks, the historical exposure is already done and the right
-  action is to **disconnect/revoke the connection** (kills any stolen token) and, for a hostile exposure,
-  rotate the vault. Losing the vault passphrase itself costs nothing but the connections (re-link). This is
-  the plain-language content the README "Security" section (below) must convey.
+  action is to **revoke the connection** and, for a hostile exposure, rotate the vault. Where the provider
+  supports it, Luma's **Disconnect** is that revocation; where it does not (SimpleFIN), disconnecting only
+  removes the local copy and the revocation has to be done **at the provider** — the disconnect
+  confirmation says which of the two it is. Losing the vault passphrase itself costs nothing but the
+  connections (re-link). This is the plain-language content the README "Security" section (below) must
+  convey.
 
 ## Identity & the network perimeter (settled)
 
@@ -225,6 +269,12 @@ provider-neutral. Generalize the Plaid-specific edges into a connection abstract
 - **Sequencing:** ship the seam with **Plaid as the first adapter**, then **Teller**, then **SimpleFIN**
   (already noted in `import-input-formats.md` as a Plaid-parallel connection track). Teller/SimpleFIN are
   more self-serve than Plaid but Plaid's free tier is enough to build against first.
+  **Amended (2026-08-07): SimpleFIN went second, ahead of Teller.** The order above was a guess at
+  difficulty; the useful ordering turned out to be *how differently a provider is shaped*. SimpleFIN
+  differs from Plaid on every axis the seam had quietly assumed (Link-style connect, an app-level
+  credential, a cursor API), so building it second forced those assumptions out into declared adapter
+  capabilities while there were still only two providers to reconcile. Teller, which shares more of Plaid's
+  shape, would have left them buried.
 - **UI home (settled): per-provider data-source cards on the Accounts → Connections tab.** Connections
   already live there (`Accounts / Owners / Connections`; the "+ Connect bank" / "Sync now" surface) — not
   Import/Export, not a new Settings card (connections *produce* accounts; edit where the data is viewed).
@@ -715,6 +765,58 @@ discussion above:
   now returns each provider's `connections`; the card renders per-connection groups with a **Disconnect**
   action (confirm dialog). This is the in-app version of "revoke on the provider's website" the threat
   model relies on. Not admin-gated (symmetric with connect/sync); needs the vault unlocked.
+
+6c. **[DONE 2026-08-07]** **SimpleFIN as the second adapter — and the seam generalizations it paid for.**
+   The 6a/6b seam was Plaid-shaped in three ways that were never universal, all of which became declared
+   **adapter capabilities** rather than branches on provider name (`services/providers/base.py`):
+
+   - **Connect is not always Link.** `connect(app_config, payload)` is now the one abstract authorization
+     op, with `connect_spec` describing what the UI must collect (a Link widget, or a pasted token). The
+     whole tail after it — vault gates, credential encryption, the `(provider, external_id)` upsert,
+     account recording — is one shared `providers.establish_connection`; `/plaid/exchange` and the new
+     generic `POST /api/providers/{provider}/connect` converge on its first line, so the two paths cannot
+     drift on credential custody or account adoption.
+   - **Not every provider has a cursor.** `ProviderAdapter.fetch_transactions_sync` now *defaults* to a
+     range pull, so a change-feed-less provider needs no special case in the sync loop. Its return grew
+     three fields that were previously conflated into one: `backfill_complete` (is the history fetched to
+     its end?) separate from the poll-stop signal, `resume_later` (stop polling but the backfill is
+     unfinished — pick it up on a later sync), and `account_coverage` (how far back the pull *actually*
+     reached, **per account**, as against what it asked for). Collapsing the first two strands un-fetched
+     history behind a short routine look-back; overstating the third makes duplicate detection reject
+     genuine rows.
+
+     **Refined (6c-1).** History state — depth reached, and whether an account has any older data —
+     originally lived per *connection* in the adapter's resume token, with a bolted-on "catch-up"
+     instruction to cover accounts added on the provider's side later. Those facts are per *account*, and
+     storing them a level up produced all three of: a coverage over-claim (one figure written to every
+     account), a shared catch-up frontier that could not express two accounts at different depths, and the
+     catch-up mechanism itself. They now live on `connection_account` (`history_complete`,
+     `history_empty_streak`, migration v28); `run_sync` builds `account_targets` from them and the adapter
+     holds no history state at all. The catch-up, its scheduling hook, and the connection-level flags were
+     deleted rather than refactored. See `docs/architecture.md` → "Provider connections".
+   - **Not every provider has an app-level credential.** `requires_app_config = False` stops "nothing
+     configured" reading as "setup unfinished": such a provider counts as configured once *connected*,
+     shows no Configure action and no environment badge, and — having no sandbox — is gated on a
+     Production-strength vault at **connect** time, since it has no later moment at which to ask.
+
+   Also: `run_sync` gained explicit `full_history` and `provider` parameters. `full_history` separates the
+   initial/deepening pull from a routine top-up, which sent identical arguments — benign for Plaid, whose
+   maintained window really did span the claimed range, but on a range-pull provider it both re-walked all
+   history every sync and backdated the coverage claim. `provider` scopes a sync so one card's "Sync now"
+   cannot spend a metered provider's request budget.
+
+   **The SimpleFIN adapter itself** (`services/providers/simplefin.py`, stdlib only) is where the protocol
+   facts live: the claim/access-URL handshake, the date-range window cap, the sign inversion, `transacted_at`
+   → `authorized_date`, and the two things with no Plaid analog — a **backward walk** that must *discover*
+   where history ends (the protocol reports no coverage start, so it takes two consecutive empty windows to
+   conclude it, since one is indistinguishable from a quiet quarter) and a **request budget** whose penalty
+   for being exceeded is token disablement (so the walk meters itself and pauses rather than pushing on).
+   Its resume checkpoint lives in `connection.transactions_cursor`, which was always defined as an opaque
+   provider resume token — a provider with no change feed simply resumes from something that is not a cursor.
+
+   **Also landed here:** `txn.plaid_transaction_id` → `external_transaction_id` (migration **v26**,
+   following `plaid_account_id` → `external_account_id` in v20 — it has held any provider's id since 6a),
+   with backup payload **8 → 9** and pre-v9 translation on restore.
 
 ## Docs to write (deferred to after phase 3/6)
 

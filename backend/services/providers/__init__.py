@@ -15,6 +15,7 @@ from backend.services.providers.config import (
     set_provider_config,
 )
 from backend.services.providers.plaid import PlaidAdapter
+from backend.services.providers.simplefin import SimpleFinAdapter
 
 
 class UnknownProviderError(ValueError):
@@ -23,6 +24,7 @@ class UnknownProviderError(ValueError):
 
 _ADAPTERS: dict[str, ProviderAdapter] = {
     PlaidAdapter.provider: PlaidAdapter(),
+    SimpleFinAdapter.provider: SimpleFinAdapter(),
 }
 
 

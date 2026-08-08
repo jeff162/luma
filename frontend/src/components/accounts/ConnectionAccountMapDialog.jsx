@@ -35,6 +35,7 @@ import {
   selectableAccountOptions,
 } from '../../lib/importExport/importAccountMatching.js'
 import { GENERIC_IMPORT_ACCOUNT_TYPES, isMarketplaceAccountType } from '../../lib/accountTypes.js'
+import { MONEY_DISPLAY_CONFIG } from '../../lib/moneyDisplay.js'
 import {
   defaultConnectionMapEntry,
   entryFromProviderAccount,
@@ -242,6 +243,19 @@ export default function ConnectionAccountMapDialog({
                     {pa.provider_official_name && pa.provider_official_name !== pa.provider_name ? (
                       <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {pa.provider_official_name}
+                      </div>
+                    ) : null}
+                    {/* Said here, where the account is being given a destination, because mapping it is
+                        the decision this changes: its transactions are discarded, so the account would
+                        otherwise be created, sync cleanly, and stay permanently empty. The backend
+                        decides which currencies qualify (`currency_is_supported`) — this only renders
+                        the verdict. */}
+                    {pa.currency_supported === false ? (
+                      <div
+                        style={{ fontSize: 11, color: 'var(--danger)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        title={`This ledger is in ${MONEY_DISPLAY_CONFIG.currencyCode} and holds one currency at a time, so amounts in ${pa.provider_currency} cannot be stored alongside it. Transactions from this account are not imported — skipping it keeps it out of the way. The ledger's currency is set in Settings.`}
+                      >
+                        Held in {pa.provider_currency} — transactions not imported
                       </div>
                     ) : null}
                   </div>
