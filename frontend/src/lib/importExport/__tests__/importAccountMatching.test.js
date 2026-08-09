@@ -93,6 +93,48 @@ describe('findLikelyAccountMatch', () => {
   })
 })
 
+describe('findLikelyAccountMatch across merged accounts', () => {
+  // Where this matcher fails *silently*: a suppressed suggestion raises nothing, it just leaves a row
+  // looking as though Luma holds no such account. Merging is what provokes it — the child keeps the
+  // name it was created with, which is usually the name its new parent already has, so before
+  // candidates were collapsed onto their group roots every account that had ever been grouped counted
+  // as two rivals and the ambiguity guard threw both away.
+
+  it('suggests the group root when a merged child shares its name', () => {
+    const accounts = [
+      { id: 'root-cash', name: 'Harborline Cash Card', mask: '5093' },
+      { id: 'child-cash', name: 'Harborline Cash Card', parent_account_id: 'root-cash' },
+    ]
+    expect(findLikelyAccountMatch(accounts, 'Harborline Cash (5093)')?.id).toBe('root-cash')
+  })
+
+  it('suggests the root when only the merged child carries a matching name', () => {
+    // Children stay candidates on the way in. Grouping does not oblige the root to keep a name any
+    // data source would recognize — an umbrella account named for the group holds children named for
+    // the real cards — so the child is what matches and the root is what the mapping points at.
+    const accounts = [
+      { id: 'root-umbrella', name: 'Legacy Card' },
+      { id: 'child-rewards', name: 'Riverstone Rewards', parent_account_id: 'root-umbrella' },
+    ]
+    expect(findLikelyAccountMatch(accounts, 'Riverstone Rewards ···6612')?.id).toBe('root-umbrella')
+  })
+
+  it('still declines when candidates belong to different groups', () => {
+    const accounts = [
+      { id: 'root-first', name: 'Riverstone Checking', mask: '1111' },
+      { id: 'child-first', name: 'Riverstone Checking', parent_account_id: 'root-first' },
+      { id: 'root-second', name: 'Riverstone Checking', mask: '2222' },
+    ]
+    expect(findLikelyAccountMatch(accounts, 'Riverstone Checking (1111)')).toBeNull()
+  })
+
+  it('survives a parent chain that points at itself', () => {
+    // Corrupt data must not hang the render the suggestion is computed during.
+    const accounts = [{ id: 'loop', name: 'Riverstone Rewards', parent_account_id: 'loop' }]
+    expect(findLikelyAccountMatch(accounts, 'Riverstone Rewards ···6612')?.id).toBe('loop')
+  })
+})
+
 describe('selectableAccountOptions', () => {
   // A mapping picker offers roots, because merging never moves the mappings pointing at an account:
   // omit the child a mapping is on and the picker renders a live decision as an empty control, invite

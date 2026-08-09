@@ -123,13 +123,26 @@ def get_tasks(request: Request = None):
 
         # Soft-detected duplicates flagged at import time (new account on either side) or after
         # an account merge. They never auto-trash, so they linger here until the user reviews.
-        suspect_dupes = conn.execute("""
-            SELECT COUNT(*) AS n
-            FROM   txn
-            WHERE  suspect_duplicate_of IS NOT NULL
-              AND  suspect_resolved_at  IS NULL
-              AND  trashed_at           IS NULL
-        """).fetchone()["n"]
+        # Counted alongside how many of the pairs are on accounts that have since been merged into one,
+        # because the task's sentence names the relationship and a merge retires the cross-account half
+        # of it — the same re-derivation the duplicate report does (`_IN_ACCOUNT_RULE_KEYS`). LEFT JOINs
+        # so a flag whose matched row has been deleted still counts toward the total it always did.
+        suspect_row = conn.execute("""
+            SELECT COUNT(*) AS n,
+                   SUM(CASE
+                         WHEN COALESCE(a1.parent_account_id, a1.id) = COALESCE(a2.parent_account_id, a2.id)
+                         THEN 1 ELSE 0
+                       END) AS in_account
+            FROM   txn t1
+            LEFT   JOIN txn t2     ON t2.id = t1.suspect_duplicate_of
+            LEFT   JOIN account a1 ON a1.id = t1.account_id
+            LEFT   JOIN account a2 ON a2.id = t2.account_id
+            WHERE  t1.suspect_duplicate_of IS NOT NULL
+              AND  t1.suspect_resolved_at  IS NULL
+              AND  t1.trashed_at           IS NULL
+        """).fetchone()
+        suspect_dupes = suspect_row["n"]
+        in_account_dupes = suspect_row["in_account"] or 0
 
         if suspect_dupes:
             # The unified duplicate-detection report is scoped to a single import batch and
@@ -137,11 +150,18 @@ def get_tasks(request: Request = None):
             # its own entry-point pill, and collapsed data-source rows surface an aggregate
             # badge). Linking the task here to /import-export lets the user pick which
             # batch's report to open rather than dropping them into a global cross-batch view.
+            verb = "s match" if suspect_dupes != 1 else " matches"
+            if in_account_dupes == 0:
+                relationship = "an existing row on a different account"
+            elif in_account_dupes == suspect_dupes:
+                relationship = "another row on the same account"
+            else:
+                relationship = "an existing row already in the ledger"
             tasks.append({
                 "id":          "suspect_duplicates",
                 "title":       "Possible duplicate transactions",
-                "description": f"{suspect_dupes} transaction{'s match' if suspect_dupes != 1 else ' matches'} "
-                               "an existing row on a different account. Open the import that flagged them to review each one.",
+                "description": f"{suspect_dupes} transaction{verb} {relationship}. "
+                               "Open the import that flagged them to review each one.",
                 "count":       suspect_dupes,
                 "link":        "/import-export",
                 "link_label":  "Open Import / Export",

@@ -511,9 +511,14 @@ phase 6a), so adding Teller or SimpleFIN is an adapter, not a change to the conn
   **Configure** (the app credential — moved off the Settings form entirely; that section now only points
   here), **Connect bank**, **Sync now**, and the linked accounts. It also hosts the **vault set-passphrase
   / unlock** affordance (phase 3 deferred the vault UI to "ride the connection cards") — set/unlock post to
-  `/auth/vault/*` and refresh the session's vault flags. **Connect** is gated: vault configured + unlocked,
-  and — on a networked (non-loopback) bind — real HTTPS (`transport.is_https` from `/auth/status`), so a
-  bank secret never crosses the wire in cleartext. Each card lists its **connections** (from
+  `/auth/vault/*` and refresh the session's vault flags. Everything here needing an open vault (connect,
+  sync, deepen history, refresh accounts, disconnect, the app-secret reveal/save) goes through one gate,
+  `lib/useVaultGate.js`: it raises the passphrase dialog and the action **resumes** when the unlock lands,
+  so a locked vault costs a passphrase rather than a passphrase plus a repeated gesture, and a `423` is
+  handled as that same gate arriving late rather than surfaced as a failure (see `ui-patterns.md`).
+  **Connect** additionally requires — on a networked (non-loopback) bind — real HTTPS
+  (`transport.is_https` from `/auth/status`), so a bank secret never crosses the wire in cleartext; that
+  one is a refusal, since no dialog on the page can resolve it. Each card lists its **connections** (from
   `GET /api/providers`, which returns them per provider) with a **Disconnect** action → `POST
   /api/providers/{provider}/disconnect`, which **revokes the token provider-side where the provider allows
   it** (the adapter's `remove` op → Plaid `/item/remove`, so a leaked copy dies too) then drops the local

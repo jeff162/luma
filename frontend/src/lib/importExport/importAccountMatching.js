@@ -7,6 +7,9 @@
 // builder that flattens the in-progress account-mapping UI state into the
 // account_map / skip_accounts / account_new payload the import flow persists.
 //
+// A suggestion always names a group *root*, even when a merged child is what matched:
+// the root is the account a picker offers and the scope dedupe and reporting already use.
+//
 // Matching deliberately uses an account's raw `name` (the data-source identifier),
 // not `display_name`: display_name is overwritten to the parent's when an account
 // is grouped on the Accounts page, and import mapping must stay aligned with what
@@ -113,17 +116,58 @@ function getAccountRawMatchName(account) {
   return String(account?.name || '').trim()
 }
 
+// Candidates → the one account to suggest, or null when they disagree.
+//
+// Candidates are collapsed onto their group roots *before* the "exactly one" test, and the reason is
+// that merging duplicates a name: a merged child keeps the name it was created with, which is usually
+// the name its new parent already has. Counting the two as rival candidates suppressed the suggestion
+// for every account that had ever been grouped — the ambiguity guard firing on a group that is, by
+// construction, one account. Collapsing first also fixes what the guard let through: a lone child was
+// suggested as itself, so accepting the chip pointed the source at a child the picker does not even
+// offer (`selectableAccountOptions` lists roots).
+//
+// A child is still a candidate on the way in. Grouping does not oblige the root to carry a name that
+// matches the source — a card merged under an umbrella account keeps the only name the source would
+// ever recognize — so dropping children outright would lose those matches instead of resolving them.
+function suggestSingleRootFrom(candidates, accountsById) {
+  const roots = new Map()
+  for (const candidate of candidates) {
+    const root = effectiveAccountRoot(candidate, accountsById)
+    // Keyed by id where there is one, and by the account itself where there is not: only a *child*
+    // needs an id here (to find its parent), so requiring one of every candidate would collapse a
+    // perfectly good root match to nothing.
+    if (root) roots.set(root.id || root, root)
+  }
+  return roots.size === 1 ? [...roots.values()][0] : null
+}
+
+// The top of an account's merge group. Bounded by a visited set so a corrupt parent loop cannot hang
+// the render, and stops at a missing parent rather than discarding the account.
+function effectiveAccountRoot(account, accountsById) {
+  let current = account
+  const seen = new Set()
+  while (current?.parent_account_id && !seen.has(current.id)) {
+    seen.add(current.id)
+    const parent = accountsById.get(current.parent_account_id)
+    if (!parent) break
+    current = parent
+  }
+  return current
+}
+
 export function findLikelyAccountMatch(accounts, value) {
   const exactMatch = findExactAccountNameMatch(accounts, value)
   if (exactMatch) return null
   const normalized = normalizeAccountMatchStem(value)
   if (!normalized) return null
+  const accountsById = new Map((accounts || []).map(account => [account?.id, account]))
   // 1. Strong signal: stems are byte-identical after stripping the mask suffix. e.g.,
   //    "Checking (...1234)" and "Checking" both reduce to "checking" — exactly one such match
-  //    is a high-confidence suggestion.
+  //    is a high-confidence suggestion. A stem match that resolves to rival groups suggests
+  //    nothing at all rather than falling through: the weaker stage cannot break a tie the
+  //    stronger one could not.
   const stemMatches = accounts.filter(account => normalizeAccountMatchStem(getAccountRawMatchName(account)) === normalized)
-  if (stemMatches.length === 1) return stemMatches[0]
-  if (stemMatches.length > 1) return null
+  if (stemMatches.length) return suggestSingleRootFrom(stemMatches, accountsById)
   // 2. Fallback: token-subset match in either direction. e.g., csv ["foo", "bar"] is a subset
   //    of an existing account's ["acme", "foo", "bar"]. Require at least one non-generic token
   //    in the subset side so generics like "Savings (...0000)" don't surface every savings
@@ -140,7 +184,7 @@ export function findLikelyAccountMatch(accounts, value) {
     if (!subset || !hasNonGenericToken(subset)) continue
     subsetCandidates.push(account)
   }
-  return subsetCandidates.length === 1 ? subsetCandidates[0] : null
+  return suggestSingleRootFrom(subsetCandidates, accountsById)
 }
 
 // Grouping is not carried here: it is applied to the created account (`parent_account_id`) at import

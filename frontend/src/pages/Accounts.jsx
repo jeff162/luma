@@ -21,6 +21,7 @@ import { formatTimestamp } from '../lib/utils.js'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { useUserPreferences, useUserPreference } from '../lib/UserPreferencesContext.jsx'
 import { useColumnPreference } from '../lib/useColumnPreference.js'
+import { useVaultGate } from '../lib/useVaultGate.js'
 
 const ACCOUNTS_SECTIONS_PREF_KEY = 'ui.accounts.sections'
 const ACCOUNTS_SECTIONS_STORAGE_KEY_PREFIX = 'luma.accounts.sections'
@@ -516,7 +517,7 @@ function EnvBadge({ env }) {
   )
 }
 
-function ProviderConfigDialog({ provider, initial, onSave, onClose, onVaultLocked }) {
+function ProviderConfigDialog({ provider, initial, onSave, onClose, ensureVault }) {
   const [clientId, setClientId] = useState(initial?.client_id || '')
   const [secret, setSecret] = useState('')
   const [env, setEnv] = useState(initial?.env || 'sandbox')
@@ -526,40 +527,66 @@ function ProviderConfigDialog({ provider, initial, onSave, onClose, onVaultLocke
   const [revealedSecret, setRevealedSecret] = useState(null)
   const hasSecret = !!initial?.has_secret
 
+  async function loadStoredSecret() {
+    const res = await api.getProviderSecret(provider)
+    setSecret(res.secret || '')
+    setRevealedSecret(res.secret || '')
+  }
+
   // The stored secret is write-only everywhere else, so revealing it means fetching it — a diagnostic for
   // checking the saved value against the provider's dashboard. Throwing keeps the field hidden rather than
   // showing an empty box that would read as "the secret is blank".
+  //
+  // The fetch needs the vault, so the gate is *awaited* here rather than reported as a failure:
+  // PasswordInput holds the field hidden until this resolves, which is what lets an unlock reveal the
+  // secret on the same press of Show. A declined prompt throws, leaving the field hidden and silent.
   async function revealStoredSecret() {
     if (secret) return               // already showing something typed (or previously revealed)
     if (!hasSecret) return
     setError('')
+    if (!(await ensureVault())) throw new Error('The vault is still locked.')
     try {
-      const res = await api.getProviderSecret(provider)
-      setSecret(res.secret || '')
-      setRevealedSecret(res.secret || '')
+      await loadStoredSecret()
     } catch (e) {
-      if (e.status === 423) {
-        setError('Unlock the vault to view the stored secret.')
-        onVaultLocked?.()
-      } else {
-        setError(e.message || 'Could not read the stored secret')
+      let failure = e
+      // The gate passes on cached flags, so a 423 here means the server dropped the key under us
+      // (restart or idle timeout) — the same gate arriving late. Re-prompt and retry once, so this
+      // still costs a single press of Show.
+      if (failure.status === 423 && await ensureVault({ force: true })) {
+        try {
+          await loadStoredSecret()
+          return
+        } catch (retryFailure) { failure = retryFailure }
       }
-      throw e
+      setError(failure.status === 423
+        ? 'Unlock the vault to view the stored secret.'
+        : (failure.message || 'Could not read the stored secret'))
+      throw failure
     }
   }
 
   async function submit() {
     setSaving(true)
     setError('')
+    // A blank secret field leaves the stored secret unchanged (write-only), so an edit that only
+    // changes client_id/env never forces re-entering the secret. A revealed-but-unedited secret is
+    // the same case: it is the stored value, so re-sending it would only churn the ciphertext.
+    const payload = { client_id: clientId, env }
+    if (secret && secret !== revealedSecret) payload.secret = secret
+    // Only storing a secret encrypts anything, so the prompt is raised for that save alone; a declined
+    // prompt leaves the form exactly as it was.
+    if (payload.secret && !(await ensureVault())) { setSaving(false); return }
     try {
-      // A blank secret field leaves the stored secret unchanged (write-only), so an edit that only
-      // changes client_id/env never forces re-entering the secret. A revealed-but-unedited secret is
-      // the same case: it is the stored value, so re-sending it would only churn the ciphertext.
-      const payload = { client_id: clientId, env }
-      if (secret && secret !== revealedSecret) payload.secret = secret
       await onSave(payload)
     } catch (e) {
-      setError(e.message || 'Could not save credentials')
+      let failure = e
+      if (failure.status === 423 && await ensureVault({ force: true })) {
+        try {
+          await onSave(payload)
+          return
+        } catch (retryFailure) { failure = retryFailure }
+      }
+      setError(failure.message || 'Could not save credentials')
       setSaving(false)
     }
   }
@@ -809,6 +836,10 @@ function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
         ? 'The vault encrypts your data-source credentials at rest. You will enter this passphrase once per session to connect or sync.'
         : 'Enter your vault passphrase to connect and sync data sources this session.'}
       onClose={onClose}
+      // Above the standard dialog layer: this is the one dialog that opens *on top of* another one —
+      // a connect or a disconnect confirmation raises it and waits behind it — and at the shared
+      // z-index the dialog underneath would paint over the passphrase field.
+      zIndex={1400}
       width="min(460px, 100%)"
       actions={
         <DialogActions>
@@ -899,7 +930,9 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   const [syncState, setSyncState] = useState({})       // provider -> { syncing, result }
   const [configTarget, setConfigTarget] = useState(null)
   const [connectTarget, setConnectTarget] = useState(null)  // provider whose token-connect dialog is open
-  const [vaultDialog, setVaultDialog] = useState(null) // 'set' | 'unlock'
+  // Every action needing an open vault goes through this gate: it prompts and the action then continues
+  // itself (see lib/useVaultGate.js). `vaultDialog` is only which passphrase dialog to render.
+  const { mode: vaultDialog, ensureVault, openVault, closeVault } = useVaultGate(vault)
   const [notice, setNotice] = useState(null)
   const [disconnectTarget, setDisconnectTarget] = useState(null) // { provider, external_id, institution }
   const [disconnecting, setDisconnecting] = useState(false)
@@ -1047,13 +1080,15 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     setConfigTarget(null)
   }
 
+  // The dialog is dismissed only after the session's vault flags have been re-read, so whatever action
+  // was waiting on the gate resumes against the state the unlock actually produced.
   async function submitVault(passphrase) {
     const resp = vaultDialog === 'set'
       ? await api.setVaultPassphrase(passphrase)
       : await api.unlockVault(passphrase)
     if (resp?.user) setCurrentUser?.(resp.user)
-    setVaultDialog(null)
     await refresh()
+    closeVault(true)
   }
 
   async function lockVault() {
@@ -1063,12 +1098,22 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     await refresh()
   }
 
+  // A 423 is the gate arriving late: this page's "the vault is open" is a cached answer, and the server
+  // drops the key on restart and on its idle timeout. So it is answered the same way a locked vault is —
+  // prompt, then run the action again — rather than reported as a failure whose remedy the user has to
+  // infer. Returns whether the error was this case and has been dealt with.
+  async function retriedAfterUnlock(error, action) {
+    if (error?.status !== 423) return false
+    if (await ensureVault({ force: true })) await action()
+    return true
+  }
+
   // The connect affordance comes from the provider's own `connect_spec`, not from its name: a Link-style
   // provider opens its widget, a token-style one collects a pasted value. The vault and HTTPS gates are
-  // shared, since they are about the credential this produces rather than how it was obtained.
-  function connect(p) {
-    if (!vault.configured) { setVaultDialog('set'); return }
-    if (!vault.unlocked) { setVaultDialog('unlock'); return }
+  // shared, since they are about the credential this produces rather than how it was obtained. HTTPS is
+  // the one gate that stays a refusal: no dialog can resolve it from here.
+  async function connect(p) {
+    if (!(await ensureVault())) return
     if (httpsBlocked) {
       setNotice({
         title: 'HTTPS required to connect',
@@ -1083,7 +1128,17 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // Finish a token-style connect: the same tail Link takes after its callback — refresh, then either the
   // mapping step (which owns the backfill from there) or a straight historical pull.
   async function connectWithToken(provider, token, days) {
-    const result = await api.connectProvider(provider, { setup_token: token })
+    let result
+    try {
+      result = await api.connectProvider(provider, { setup_token: token })
+    } catch (e) {
+      // The vault can be dropped between opening this dialog and submitting it, so prompt and send the
+      // same token again — a 423 never reached the provider, so a single-use setup token is still good.
+      // Anything else (including a declined prompt) goes back to the dialog, which keeps the token on
+      // screen and reports the reason.
+      if (e.status !== 423 || !(await ensureVault({ force: true }))) throw e
+      result = await api.connectProvider(provider, { setup_token: token })
+    }
     // Remember the depth chosen in the dialog as the default for next time, but go on using the value that
     // was actually on screen — the persisted copy is a convenience, not the source of truth for this pull.
     if (days !== historyDays) setHistoryDays(days)
@@ -1097,19 +1152,28 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
         )
         return
       }
-      setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
-      try {
-        await syncUntilComplete(provider, {
-          days, connectionId: result.connection_id,
-          fullHistory: true
-        })
-      } catch (syncErr) {
-        setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
-        setNotice({ title: 'Connected, but could not pull history', description: syncErr.message })
-      }
+      await pullConnectionHistory(provider, {
+        connectionId: result.connection_id, days,
+        failureTitle: 'Connected, but could not pull history',
+      })
     }
     await onAccountsChanged?.()
     await refresh()
+  }
+
+  // The historical pull that follows a connect or a mapping decision — the same three moves each time:
+  // mark the provider syncing, poll to completion, and report a failure without implying the step it
+  // followed (the connect, the mapping save) failed with it. A locked vault is handled rather than
+  // reported, since the credential is needed by this pull alone and the operation before it is done.
+  async function pullConnectionHistory(provider, { connectionId, days, failureTitle }) {
+    setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
+    try {
+      await syncUntilComplete(provider, { days, connectionId, fullHistory: true })
+    } catch (e) {
+      setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
+      if (await retriedAfterUnlock(e, () => pullConnectionHistory(provider, { connectionId, days, failureTitle }))) return
+      setNotice({ title: failureTitle, description: e.message })
+    }
   }
 
   async function startPlaidLink() {
@@ -1144,16 +1208,10 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
               }
               // Everything was already mapped (a re-link of a bank Luma still knows), so pull straight
               // away — polling until the provider signals the historical backfill is complete.
-              setSyncState(prev => ({ ...prev, plaid: { syncing: true, result: null } }))
-              try {
-                await syncUntilComplete('plaid', {
-                  days: historyDays, connectionId: result.connection_id,
-                  fullHistory: true
-                })
-              } catch (syncErr) {
-                setSyncState(prev => ({ ...prev, plaid: { syncing: false, result: null } }))
-                setNotice({ title: 'Connected, but could not pull history', description: syncErr.message })
-              }
+              await pullConnectionHistory('plaid', {
+                connectionId: result.connection_id, days: historyDays,
+                failureTitle: 'Connected, but could not pull history',
+              })
             }
             await onAccountsChanged?.()
             await refresh()
@@ -1178,6 +1236,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     } catch (e) {
       setLinkInProgress(false)
       plaidHandlerRef.current = null
+      if (await retriedAfterUnlock(e, startPlaidLink)) return
       setNotice({ title: 'Could not start the connection', description: e.message })
     }
   }
@@ -1229,7 +1288,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
 
   async function sync(provider) {
     if (syncState[provider]?.syncing) return
-    if (!vault.unlocked) { setVaultDialog('unlock'); return }
+    if (!(await ensureVault())) return
     setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
     try {
       // Routine top-up across this provider's connections. days=0 keeps a cursor provider's maintained
@@ -1243,10 +1302,11 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       await refresh()
     } catch (e) {
       setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
-      setNotice({ title: 'Sync failed', description: e.message })
       // Refresh on failure too: the failure was recorded server-side, and the badge reporting it is
       // least useful if it only appears after an unrelated reload.
       await refresh()
+      if (await retriedAfterUnlock(e, () => sync(provider))) return
+      setNotice({ title: 'Sync failed', description: e.message })
     }
   }
 
@@ -1310,17 +1370,11 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       // no history yet. Without running it here, a just-mapped account sits visibly empty until some later
       // sync happens to collect it.
       if (target.pendingBackfill || res.awaiting_history?.length) {
-        const provider = target.connection.provider || 'plaid'
-        setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
-        try {
-          await syncUntilComplete(provider, {
-            days: target.days ?? historyDays,
-            connectionId: target.connection.id, fullHistory: true
-          })
-        } catch (syncErr) {
-          setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
-          setNotice({ title: 'Mapped, but could not pull history', description: syncErr.message })
-        }
+        await pullConnectionHistory(target.connection.provider || 'plaid', {
+          connectionId: target.connection.id,
+          days: target.days ?? historyDays,
+          failureTitle: 'Mapped, but could not pull history',
+        })
         await onAccountsChanged?.()
       }
       // A mapping change re-checks whatever this connection had already synced, since the decision
@@ -1350,7 +1404,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // history. The one-click recovery after a restore rolled back the accounts but kept the connection.
   async function refreshConnectionAccounts(provider, connection) {
     if (refreshingConnId) return
-    if (!vault.unlocked) { setVaultDialog('unlock'); return }
+    if (!(await ensureVault())) return
     setRefreshingConnId(connection.id)
     setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
     try {
@@ -1362,6 +1416,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       await refresh()
     } catch (e) {
       setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
+      if (await retriedAfterUnlock(e, () => refreshConnectionAccounts(provider, connection))) return
       setNotice({ title: 'Could not refresh accounts', description: e.message })
     } finally {
       setRefreshingConnId(null)
@@ -1376,16 +1431,15 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // how far back it goes.
   async function fetchMoreHistory(provider, connection) {
     if (fetchingHistoryConnId || refreshingConnId) return
-    if (!vault.unlocked) { setVaultDialog('unlock'); return }
+    if (!(await ensureVault())) return
     setFetchingHistoryConnId(connection.id)
-    setSyncState(prev => ({ ...prev, [provider]: { syncing: true, result: null } }))
     try {
-      await syncUntilComplete(provider, { days: 0, connectionId: connection.id, fullHistory: true })
+      await pullConnectionHistory(provider, {
+        connectionId: connection.id, days: 0,
+        failureTitle: 'Could not fetch more history',
+      })
       await onAccountsChanged?.()
       await refresh()
-    } catch (e) {
-      setSyncState(prev => ({ ...prev, [provider]: { syncing: false, result: null } }))
-      setNotice({ title: 'Could not fetch more history', description: e.message })
     } finally {
       setFetchingHistoryConnId(null)
     }
@@ -1431,8 +1485,13 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     }
   }
 
+  // Disconnecting revokes the credential where the provider allows it, so it needs the vault open. The
+  // prompt deliberately comes *after* the confirmation rather than gating the menu item: a passphrase is
+  // only worth asking for once the user has committed to disconnecting. The confirm dialog stays open
+  // underneath, so backing out of the prompt returns to the decision instead of discarding it.
   async function confirmDisconnect() {
     if (!disconnectTarget) return
+    if (!(await ensureVault())) return
     setDisconnecting(true)
     try {
       await api.disconnectProvider(disconnectTarget.provider, disconnectTarget.external_id)
@@ -1440,6 +1499,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       await onAccountsChanged?.()
       await refresh()
     } catch (e) {
+      if (await retriedAfterUnlock(e, confirmDisconnect)) return
       setDisconnectTarget(null)
       setNotice({ title: 'Could not disconnect', description: e.message })
     } finally {
@@ -1503,8 +1563,8 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       ) : null}
       <VaultStrip
         vault={vault}
-        onSet={() => setVaultDialog('set')}
-        onUnlock={() => setVaultDialog('unlock')}
+        onSet={() => openVault('set')}
+        onUnlock={() => openVault('unlock')}
         onLock={lockVault}
       />
 
@@ -1520,11 +1580,14 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
         // Any connection of this provider reporting a live sync — the server's own view, which outlives
         // the page that started it (see `sync_started_at`).
         const serverSyncing = connections.some(c => c.syncing)
-        const connectDisabled = disabled || (vault.configured && !vault.unlocked) || httpsBlocked
-        const connectTitle = !vault.configured ? 'Set a vault passphrase first'
-          : !vault.unlocked ? 'Unlock the vault first'
-            : httpsBlocked ? 'Configure HTTPS before connecting on a networked server'
-              : ''
+        // A locked vault deliberately does NOT disable this: clicking asks for the passphrase and then
+        // goes on to connect. What still disables is what no dialog here can resolve — missing HTTPS,
+        // and a vault this user holds no slot in (there is no passphrase they could enter).
+        const noVaultSlot = vault.configured && !vault.hasPassphrase
+        const connectDisabled = disabled || noVaultSlot || httpsBlocked
+        const connectTitle = noVaultSlot ? 'The vault was set up by another user'
+          : httpsBlocked ? 'Configure HTTPS before connecting on a networked server'
+            : ''
         const s = providerSummary(p)
         const lastSyncedLabel = formatTimestamp(s.lastSynced)
         const expanded = expandedProviders[p.provider] !== undefined
@@ -1859,13 +1922,13 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
           provider={configTarget.provider}
           initial={configTarget}
           onSave={(payload) => saveConfig(configTarget.provider, payload)}
-          onVaultLocked={() => setVaultDialog('unlock')}
+          ensureVault={ensureVault}
           onClose={() => setConfigTarget(null)}
         />
       ) : null}
 
       {vaultDialog ? (
-        <VaultPassphraseDialog mode={vaultDialog} onSubmit={submitVault} onClose={() => setVaultDialog(null)} />
+        <VaultPassphraseDialog mode={vaultDialog} onSubmit={submitVault} onClose={() => closeVault(false)} />
       ) : null}
 
       {disconnectTarget ? (

@@ -18,6 +18,13 @@ instruction and fix the drift rather than silently choosing the looser version.
   path, then edit code only on an explicit action word (go / build it / do it / fix it / add it). The
   user picking among options you offered, or a detailed design answer, is not itself the go.
 
+- **A "why not X?" question scopes the work to X.** Asked why some flagged rows had not been matched,
+  the honest answer was about how a stored verdict is labeled and tiered; the response instead designed
+  an automatic pairing mechanism the user had not asked for and had to be pulled back from it. Answer
+  the question that was asked, propose the smallest change that answers it, and surface a larger design
+  as an option rather than exploring it unprompted — the more so once a session has already run long,
+  since a long investigation is itself a cost the user is paying.
+
 - The user handles commits and pushes. Leave changes in the working tree and do not ask whether to
   commit at the end.
 
@@ -52,6 +59,16 @@ instruction and fix the drift rather than silently choosing the looser version.
   all of them, and the copies drift in which have been fixed: one may already carry the fix with a
   comment naming the failure, while a third has it live and unreported. Enumerate the family first and
   fix them together, rather than patching the one that was reported.
+
+- **`get_db()` commits when its block exits, so anything that must be visible to *another* request
+  mid-operation needs its own short transaction.** A long-running endpoint holds one connection open
+  for its whole run; a row written on it — a progress marker, a lock, a heartbeat — does not become
+  visible to any other request until that run finishes, which for such a value means never being
+  visible when it matters. The naive version compiles, passes a single-request test, and silently does
+  nothing. Write it through a separate `get_db()` before the long block opens, and clear it after the
+  block exits (in a `finally`, so a raised request cannot leave the marker behind). Assert the
+  visibility property from *inside* the long operation through a second connection — that is the only
+  form of the test that would fail on the naive implementation.
 
 - **Never run a state-changing git command to answer a read-only question.** `git stash`,
   `checkout`, `reset`, and `clean` are not investigation tools, and this repo routinely carries a
@@ -106,6 +123,23 @@ instruction and fix the drift rather than silently choosing the looser version.
   serialization, and migration tests should use complete realistic data and include omission guards
   where possible.
 
+- **After changing a matcher or a normalizer, re-run a corpus comparison over real data — the suite is
+  not enough.** A processor-tag strip applied *in place* passed every test and silently destroyed five
+  near-miss pairs, because one source spells a tag with its separator and another spells it as a plain
+  word: stripping one side leaves two texts that resemble each other less than the originals did. Only a
+  before/after tally over the whole ledger (classification counts per tier, plus the pairs that moved)
+  showed it. Tests prove the cases you thought of; the corpus scan finds the direction you did not.
+
+- **A negative guard must fail under the specific relaxation it claims to prevent.** A control written
+  to stop a "one text is a prefix of the other" rule from being loosened into "the two share a long
+  common prefix" passed even *with* the rule loosened — an unrelated constraint was rejecting the
+  fixture, so the guard tested nothing. Prove it by making the exact edit the guard exists to forbid,
+  not by disabling the feature wholesale; the two fail differently and only the former is the claim.
+
+- **Figures from a live ledger are only comparable within a single run.** The user works in the app
+  while a session is open, so rows get resolved, synced, or trashed between two scans. Re-derive every
+  number a comparison depends on in the same pass rather than quoting an earlier run's totals.
+
 - Prove new guards actually fire. A green result is only meaningful after seeing the same check fail
   on known-bad input. This bites hardest when **changing a default or a constant**: run the new test
   against the old value and require it to fail. A test that passes either way is not testing the
@@ -121,6 +155,13 @@ instruction and fix the drift rather than silently choosing the looser version.
 - Backend tests run from `backend/venv`, and direct calls into FastAPI router functions must pass
   every `Query(...)` parameter explicitly because omitted values stay as `FieldInfo` objects outside
   the HTTP layer.
+
+- **A test that depends on an env flag must pin it, never inherit it.** Any test importing
+  `backend.main` runs `load_dotenv()`, which puts the developer's own `.env` into `os.environ` for the
+  whole session — so a flag set locally silently reaches every test that runs after it. The failure
+  shape is nasty: the test passes in isolation, fails only in a full-suite run, and in between has been
+  asserting the *opposite* of what it claims. Wrap the flag with `mock.patch.dict(os.environ, ...)` in
+  `setUp` and assert both directions where the behavior is supposed to be flag-independent.
 
 ## Where Durable Project State Belongs
 

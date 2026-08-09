@@ -327,9 +327,21 @@ export default function ConnectionAccountMapDialog({
                       {!entry.accountId && suggestionLabel ? (
                         <button
                           type="button"
-                          onClick={() => openChooser(pa, suggestion)}
+                          // The chip maps; it does not ask. Accepting a suggestion is the one-click
+                          // path in the CSV grid, and the relationship question belongs to `+New`,
+                          // where creating a second account for something Luma may already hold is
+                          // what deserves the second look. Opening the chooser from here made
+                          // agreeing with the suggestion the *longer* of the two routes.
+                          onClick={() => update(externalId, {
+                            accountId: suggestion.id,
+                            createNew: false,
+                            newName: suggestion.name || pa.source_label,
+                            newType: suggestion.type || entry.newType || 'depository',
+                            groupWithAccountId: '',
+                            skip: false,
+                          })}
                           style={{ ...chipStyle, justifySelf: 'end' }}
-                          title={`Decide how this relates to ${suggestionLabel}`}
+                          title={`Map to ${suggestionLabel}`}
                         >
                           Possible match: {suggestionLabel}
                         </button>

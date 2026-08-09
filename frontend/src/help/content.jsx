@@ -618,6 +618,13 @@ export const HELP_TOPICS = [
           a <em>Review</em> item. There are three actions, and the right one depends on the outcome you
           want:
         </p>
+        <p>
+          Once the two accounts have been merged, the same pair is described as a <strong>possible
+          duplicate in this account</strong> instead &mdash; the merge settled the account question, so
+          the report stops calling it cross-account. The evidence and the three actions below are
+          unchanged: a near-miss on text is not conclusive on its own, so such a pair stays in review
+          rather than being removed automatically.
+        </p>
         <ul>
           <li><strong>Keep both</strong> &mdash; they really are two different transactions. This also
             asserts <em>these two accounts are distinct</em>, so future imports stop re-flagging the pair.</li>

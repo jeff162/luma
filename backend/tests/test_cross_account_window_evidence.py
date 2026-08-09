@@ -22,6 +22,7 @@ stored positive because these are all charges (positive = money out).
 
 from __future__ import annotations
 
+import os.path
 import tempfile
 import unittest
 import uuid
@@ -45,9 +46,10 @@ MEASURED_PAIRS = [
     ("CVS",           3, "CVS Caremark",         "CVS Caremark",        20.00, "cross_account"),
     ("CVS again",     3, "CVS Caremark",         "CVS Caremark",        32.15, "cross_account"),
     ("Whole Foods",   4, "WHOLE FOODS",          "WHOLE FOODS",          7.49, "cross_account"),
-    # The only near-miss in the set: the provider truncated the descriptor. 0.97 character similarity,
-    # comfortably over CROSS_ACCOUNT_FUZZY_RATIO, and review-only — never auto-confirmed on merge.
-    ("Rancatore",     6, "Rancatores Ice Cream", "RANCATORES ICE CREA", 11.25, "cross_account_fuzzy"),
+    # The provider truncated the descriptor mid-word. Hand-verified as the same charge when these pairs
+    # were measured, and the matcher now reads it that way too: a text that is another with its tail
+    # clipped is not a disagreement, so it lands in the exact tier rather than in review.
+    ("Rancatore",     6, "Rancatores Ice Cream", "RANCATORES ICE CREA", 11.25, "cross_account"),
 ]
 
 # The false positives at those same distances: two $44 Zelle payments to different people, one day
@@ -167,6 +169,24 @@ class CrossAccountWindowEvidenceTests(unittest.TestCase):
                               connection_text=ZELLE_CONNECTION_TEXT, amount=ZELLE_AMOUNT)
         with mock.patch.object(duplicate_detection, "CROSS_ACCOUNT_DATE_WINDOW_DAYS", 30):
             self.assertNotIn(incoming, self._sweep(), "no window makes these two payments the same one")
+
+    def test_two_receipts_differing_only_in_their_last_digit_are_not_one_truncated_descriptor(self):
+        # Why the truncation rule is written as "one text is the OTHER ENTIRE TEXT plus a short tail"
+        # rather than "the two share a long common prefix". These two payments to the same person carry
+        # consecutive reference numbers: 33 characters agree and each ends in a single differing digit.
+        # A common-prefix reading sees a long agreement and a one-character tail — a truncation — and
+        # promotes them to the tier a merge auto-removes. A prefix-of reading cannot, because neither
+        # text is contained in the other.
+        #
+        # They stay eligible for REVIEW (a character ratio this high is worth a human look); the claim
+        # here is only that nothing auto-removes one of two real payments.
+        first  = "Zelle payment to Marcy 22781140388"
+        second = "Zelle payment to Marcy 22781140389"
+        self.assertEqual(len(os.path.commonprefix([first, second])), 33)
+        self.assertFalse(first.startswith(second) or second.startswith(first))
+
+        incoming = self._pair(gap=2, csv_text=first, connection_text=second, amount=61.00)
+        self.assertNotEqual(self._sweep().get(incoming), "cross_account")
 
     def test_the_control_shares_everything_with_the_measured_pairs_except_its_text(self):
         # Guards the control against going vacuous: the Zelle rows must differ from a genuine pair ONLY

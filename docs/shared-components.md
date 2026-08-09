@@ -88,6 +88,7 @@ not in these tables.
 | **`useAmazonImportDetailViewer` (`AmazonImportDetailViewerContext` + `AmazonImportDetailDialog`)** — the app-level Amazon *import-detail* report viewer (what an import did: orders / items matched / discarded / duplicates / payments, with source-file provenance), opened from a file card's outcome pills pre-selected to a category. Built on `useDetachedReportViewer` | opening a bespoke import-outcome report | `contexts/AmazonImportDetailViewerContext.jsx`, `components/importExport/AmazonImportDetailDialog.jsx` |
 | **`MinimizedReportPill`** — the nav-bar restore chip for any minimized detached report viewer (label + optional attention badge + tone) | a bespoke minimized-report nav chip | `components/MinimizedReportPill.jsx` |
 | **`useUserPreference` (`UserPreferencesContext`)** — persisted per-user UI preferences | storing UI prefs ad-hoc | `lib/UserPreferencesContext.jsx` |
+| **`useVaultGate`** — the credential-vault gate: `await ensureVault()` before any action needing an unlocked vault, and the action resumes itself once the passphrase lands (`force` re-prompts on a late `423`); the host renders the dialog for `mode` and answers with `closeVault(true/false)` | an inline "vault locked?" check that opens a dialog and returns (it drops the action, costing a second press), or disabling a control because the vault is locked | `lib/useVaultGate.js` |
 
 ## Recurring patterns without a shared control yet (watchlist)
 

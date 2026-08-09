@@ -80,3 +80,41 @@ two steps:
 - Undo reuses existing inverses (`restore_rejected_duplicate`, remove the
   `account_pair_distinct` pair + re-flag, un-trash the replaced row) — it's
   replaying a soft-delete inverse, not new recovery logic.
+
+## Bank-side transaction-type prefixes — revisit once a second provider feeds the same account
+
+**Context.** The cross-account text comparison drops a leading payment-processor tag (`<tag> *MERCHANT`)
+before matching, because sources disagree about passing that tag through — see `data-model.md` for why
+that disagreement is what makes it worth normalizing. A bank's own leading transaction-type token (a
+withdrawal/ATM marker such as `WDRL`, `WDRL-ACH`, `WDRLATM`) looks like the same shape and is a natural
+next candidate. It is deliberately not stripped.
+
+**Why deferred.** Measured over a real ledger it bought nothing. Stripping the leading token changed no
+pair's classification — not one new exact match, not even a new near-miss — and the generalized version
+(dropping leading `GENERIC_DUPLICATE_TEXT_TOKENS`: `ach`, `atm`, `card`, `debit`, `payment`, `transfer`,
+`withdrawal`, …) also recovered nothing while moving several more pairs into review. The asymmetry is
+real — a sizeable minority of same-amount, in-window cross-account candidate pairs carried the prefix on
+one side only — but in each of them the *rest* of the descriptor was what differed, so removing the
+prefix bridged nothing. The prefix is applied by the institution rather than by the charge's originator,
+so it rides along consistently with whatever that institution feeds.
+
+**Why it may change.** The measurement describes one ledger fed by one connection provider. A second
+provider syncing the same account may spell those charges differently, and the prefix could then sit
+between two records of one charge the way a processor tag does. Two observations make that likely enough
+to be worth re-checking:
+
+- Rows arriving by sync are far barer than the docs imply: on the ledger measured, of 346 connection
+  rows only 30 carried `import_evidence_json` and only 3 carried `authorized_date` — though
+  `architecture.md` describes sync writing evidence in the same shape a CSV import writes, and
+  `data-model.md` treats `authorized_date` as the real fix for the date-window tail. Whether that is
+  provider-specific or a capture gap is itself worth settling.
+- More captured text per row changes the input to every text tier, so the earlier null result does not
+  carry over to a differently-shaped feed.
+
+**How to re-measure (cheap, read-only).** Against a real ledger: collect each non-trashed row's
+`source_match_texts`, group by rounded amount, pair rows on different accounts within
+`CROSS_ACCOUNT_DATE_WINDOW_DAYS`, and tally `classify_text_match` for each pair — first as shipped, then
+with a leading-token strip added as an *extra* comparison form (never in place; see the processor-tag
+note in `data-model.md` for why in-place strips pull the bare-tag spelling apart). The number that
+decides it is transitions into the exact tier, not the count of rows carrying the prefix. Compare only
+figures from a single run: a live ledger changes between runs.

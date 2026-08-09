@@ -178,11 +178,46 @@ def _placeholders(values) -> str:
     return ",".join("?" * len(values))
 
 
+# A payment processor stamps its own tag on the front of the descriptor it forwards ("<tag> *MERCHANT"),
+# and whether a given source passes that tag through is a property of the source, not of the charge — so
+# one side carrying it while the other does not is the single most common reason two records of the same
+# charge are not byte-identical. Matched as a shape (a short leading token followed by `*`) rather than a
+# list of processor names: measured pair-for-pair against a hand-written name list over a real ledger the
+# two produce identical results, and the shape also covers processors not yet seen.
+#
+# Deliberately NOT shared with `sanitize_rule_merchant_text`, which strips reference digits off the other
+# end of the string and is also the rules engine's primitive. Rule text is authored by the user and
+# matched unanchored, so a typed tag is a deliberate choice there; dedupe reads whatever pre-processing a
+# source happened to apply, which the user never chose. Same-looking cleanup, different question.
+_PROCESSOR_TAG_RE = re.compile(r"^[a-z0-9]{2,6}\s*\*\s*")
+
+# Below this, what survives the strip is too short to identify a merchant, so no variant is offered
+# rather than one that would collide with unrelated rows on a generic word.
+_MIN_TEXT_AFTER_PROCESSOR_TAG = 4
+
+
 def _normalize_match_text(value) -> str:
     """Lowercase, collapse internal whitespace, strip. The shared normalization both sides of a cross-
     account text comparison pass through — a LOWER(TRIM(...)) that also folds runs of whitespace so two
     sources differing only in spacing still line up."""
     return " ".join(str(value or "").split()).lower()
+
+
+def _processor_tag_stripped(text: str) -> Optional[str]:
+    """The text without its leading processor tag, or None if it carries none (or too little would be
+    left to identify anything).
+
+    Offered as an ADDITIONAL text to match on rather than replacing the original, because sources
+    disagree about the tag in two directions: one may drop it entirely ("MERCHANT") while another keeps
+    it either punctuated ("SQ *MERCHANT") or bare ("SQ MERCHANT"). Stripping in place matches the first
+    pair but pulls the second apart — the bare form has no `*` to strip, so it would be compared against
+    a stripped counterpart it no longer resembles. Keeping both forms matches whichever the other side
+    happens to hold.
+    """
+    stripped = _PROCESSOR_TAG_RE.sub("", text)
+    if stripped == text or len(stripped) < _MIN_TEXT_AFTER_PROCESSOR_TAG:
+        return None
+    return stripped
 
 
 def source_match_texts(merchant_name, raw_name, evidence_json) -> set[str]:
@@ -225,22 +260,68 @@ def source_match_texts(merchant_name, raw_name, evidence_json) -> set[str]:
                     norm = _normalize_match_text(field_entry.get("value"))
                     if norm:
                         texts.add(norm)
+    # A tagged descriptor is offered both as delivered and with the tag removed, so it lines up with a
+    # source that dropped the tag and with one that kept it (see `_processor_tag_stripped`).
+    texts.update(filter(None, (_processor_tag_stripped(text) for text in list(texts))))
     return texts
+
+
+# Truncation limits are per-descriptor, not per-source — one charge in a real ledger carried 22-, 24- and
+# 25-character forms at once, and both sides publish descriptors past 100 characters — so there is no
+# source length to derive and compare. What identifies a truncation is the shape of the disagreement: the
+# two texts agree from the first character and diverge only at the tail.
+#
+# The test is deliberately asymmetric — one string is a PREFIX OF the other, never "they share a long
+# common prefix". Two distinct receipts from the same service differ only after a long shared run
+# ("zelle payment to <name> <ref>"), and a common-prefix rule would merge them; a prefix-of rule cannot,
+# because neither is a prefix of the other. That pair is the negative control in
+# test_cross_account_window_evidence.py and is the reason this rule has the form it has.
+_MAX_TRUNCATED_TAIL = 4       # a longer tail is a different descriptor, not a clipped one
+_MIN_TRUNCATION_PREFIX = 12   # floor on what must already agree, in the spirit of `_duplicate_tokens_match`
+_MIN_WORD_BOUNDARY_PREFIX = 20
+
+
+def _is_truncation_of(shorter: str, longer: str) -> bool:
+    """Whether `shorter` is `longer` with its tail clipped, rather than a shorter distinct descriptor.
+
+    A cut that lands MID-WORD is the strong case: a length limit sliced through a word, which nothing
+    else plausibly does. A cut on a word boundary is weaker — it also describes a source that simply
+    carried extra trailing words ("<merchant>" vs "<merchant> <branch>") — so it has to clear a longer
+    agreement before it counts.
+    """
+    if not longer.startswith(shorter) or shorter == longer:
+        return False
+    tail = longer[len(shorter):]
+    if len(tail) > _MAX_TRUNCATED_TAIL or len(shorter) < _MIN_TRUNCATION_PREFIX:
+        return False
+    cut_is_mid_word = not tail.startswith(" ")
+    return cut_is_mid_word or len(shorter) >= _MIN_WORD_BOUNDARY_PREFIX
 
 
 def classify_text_match(texts_a: set[str], texts_b: set[str]) -> Optional[str]:
     """How two rows' `source_match_texts` sets relate:
-        'exact' — some captured text is byte-identical across the two (high confidence)
+        'exact' — some captured text is byte-identical across the two, or is the same text with one side
+                  truncated (high confidence)
         'fuzzy' — no exact overlap, but a pair is >= CROSS_ACCOUNT_FUZZY_RATIO similar (near-miss)
         None    — neither.
     Empty sets never match. The fuzzy comparison is over the cross-product of the two (small) sets,
     taking the best ratio — an O(a*b) character diff that is cheap because each set holds a handful
     of short strings and the caller only reaches here for same-amount, same-date-window candidates.
+
+    A truncation counts as exact rather than as a near-miss because the two texts do not actually
+    disagree — one source simply stopped early. That tier is what auto-confirms once the two accounts are
+    merged, and it is also the primary sort key when several candidates compete for the same row, so a
+    clipped descriptor now binds to its twin ahead of a merely similar one.
     """
     if not texts_a or not texts_b:
         return None
     if texts_a & texts_b:
         return "exact"
+    for a in texts_a:
+        for b in texts_b:
+            shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+            if _is_truncation_of(shorter, longer):
+                return "exact"
     best = 0.0
     for a in texts_a:
         for b in texts_b:
@@ -1914,6 +1995,16 @@ _RULE_LABELS = {
                                         "Same amount and date, with very similar — but not identical — source text on a different account. Surfaced for review; not auto-removed on merge."),
     "cross_account_fuzzy_confirmed":   ("Possible cross-account match (confirmed)",
                                         "You confirmed this near-match is the same real-world transaction as one on a different account; the row stays out of the active ledger."),
+    # The same four flags once the two accounts have become one (see `_IN_ACCOUNT_RULE_KEYS`). Same
+    # evidence, same tiers — only the account relationship the badge asserts is different.
+    "in_account":                      ("Duplicate in this account",
+                                        "Same date, amount, and payee as another transaction on this account, reported by a second source. Surfaced for review so you can decide which copy to keep."),
+    "in_account_confirmed":            ("Duplicate in this account (confirmed)",
+                                        "Confirmed as the same real-world transaction as another on this account; the row stays out of the active ledger."),
+    "in_account_fuzzy":                ("Possible duplicate in this account",
+                                        "Same amount and a nearby date, with very similar — but not identical — source text, on this same account. Similarity alone is not conclusive, so it is surfaced for review rather than removed."),
+    "in_account_fuzzy_confirmed":      ("Possible duplicate in this account (confirmed)",
+                                        "You confirmed this near-match is the same real-world transaction as another on this account; the row stays out of the active ledger."),
     # Legacy keys retained so labels still render correctly for old rows that may exist before
     # the migration sweep has touched them. New rows use the cross_account key above.
     "import_new_account":              ("Cross-account match",
@@ -1930,6 +2021,23 @@ _RULE_LABELS = {
                                         "This synced row arrived before its account was mapped, so it was never checked for duplicates. A re-scan matched it to a transaction already in the ledger and removed it; Restore brings it back with its category and edits intact."),
     "other_hard":                      ("Other (hard-reject)", "Hard-rejected with a reason this report does not yet have a friendly label for."),
     "other_soft":                      ("Other (review)",     "Soft-flagged with a reason this report does not yet have a friendly label for."),
+}
+
+
+# A suspect's stored reason records the account relationship that *created* the flag, and a later merge
+# retires that premise: the two rows are now on one account, so "cross-account match" states something
+# the ledger no longer says — on a report whose two sides then print the same account name, it reads as
+# a contradiction. The pair is therefore described by the grouping in force when the report is read,
+# using the same effective-root test `promote_in_group_suspects_to_confirmed` applies. Deriving rather
+# than storing is what makes it hold in both directions: a merge re-describes every existing flag with
+# no backfill, and a detach restores the cross-account reading with no bookkeeping to get wrong.
+#
+# Only the account relationship is re-derived. The *tier* (exact vs near-miss) is evidence about the two
+# rows, which a merge does not change — so an exact in-group match is still auto-confirmed and a fuzzy
+# one is still review-only, exactly as before.
+_IN_ACCOUNT_RULE_KEYS = {
+    "cross_account": "in_account",
+    "cross_account_fuzzy": "in_account_fuzzy",
 }
 
 
@@ -2471,6 +2579,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             t1.account_id               AS new_account_id,
             a1.name                     AS new_account_name,
             COALESCE(NULLIF(a1p.display_name, ''), a1p.name) AS new_account_merged_into,
+            COALESCE(a1.parent_account_id, a1.id)            AS new_account_root,
             t1.suspect_duplicate_reason AS reason_key,
             t1.suspect_resolved_at      AS resolved_at,
             t1.rejection_reason         AS rejection_reason,
@@ -2480,6 +2589,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
             COALESCE(NULLIF(t2.display_name, ''), NULLIF(t2.merchant_name, ''), NULLIF(t2.raw_name, '')) AS existing_merchant,
             a2.name                     AS existing_account_name,
             COALESCE(NULLIF(a2p.display_name, ''), a2p.name) AS existing_account_merged_into,
+            COALESCE(a2.parent_account_id, a2.id)            AS existing_account_root,
             t2.import_batch_id          AS existing_batch_id
         FROM   txn t1
         JOIN   txn t2                ON t2.id = t1.suspect_duplicate_of
@@ -2499,6 +2609,11 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
     ).fetchall():
         is_confirmed = row["rejection_reason"] == "duplicate_confirmed"
         base_rule_key, confidence = _classify_soft_flag_reason(row["reason_key"])
+        # Re-derive the account relationship from the grouping in force now (see `_IN_ACCOUNT_RULE_KEYS`).
+        same_account_now = bool(row["new_account_root"]) and row["new_account_root"] == row["existing_account_root"]
+        if same_account_now:
+            base_rule_key = _IN_ACCOUNT_RULE_KEYS.get(base_rule_key, base_rule_key)
+        matched_side = "this account" if same_account_now else "a different account"
         rule_key = f"{base_rule_key}_confirmed" if is_confirmed else base_rule_key
         rule_label, rule_description = rule_label_for(rule_key)
         # Account labels here are the as-imported account names (`account.name`), NOT the merged
@@ -2536,7 +2651,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
                 "rule_label": rule_label,
                 "rule_description": rule_description,
                 "confidence": "medium",
-                "reason_text": "Confirmed duplicate of a transaction on a different account (resolved from soft-flag review)",
+                "reason_text": f"Confirmed duplicate of a transaction on {matched_side} (resolved from soft-flag review)",
                 "resolved": True,
                 "incoming": incoming,
                 "matched": matched,
@@ -2548,7 +2663,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
                 "rule_label": rule_label,
                 "rule_description": rule_description,
                 "confidence": confidence,
-                "reason_text": "Suspect duplicate of a transaction on a different account",
+                "reason_text": f"Suspect duplicate of a transaction on {matched_side}",
                 "resolved": False,
                 "incoming": incoming,
                 "matched": matched,
@@ -2862,6 +2977,10 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
     review-only FUZZY tier (`'cross_account_fuzzy'`, a near-miss text match) is deliberately left for the
     user to resolve, so a merge never silently trashes a row on similarity alone. This is the merge-time
     resolution sweep; exact soft-flags are created at import time (and by the merge-time fresh scan).
+
+    A fuzzy flag left here is not left *undescribed*: the report re-derives its account relationship from
+    the current grouping (`_IN_ACCOUNT_RULE_KEYS`), so it reads as an in-account near-match rather than
+    continuing to claim a cross-account premise this merge just retired.
     """
     account_id_list = [aid for aid in (account_ids or []) if aid]
     if not account_id_list:

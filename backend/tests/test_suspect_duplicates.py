@@ -20,7 +20,7 @@ from pathlib import Path
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
 from backend.routers.accounts import attach_account, detach_account, AccountAttachRequest
-from backend.routers.import_export.core import undo_batches
+from backend.routers.import_export.core import get_batch_duplicates_unified, undo_batches
 from backend.services.duplicate_detection import (
     clear_account_pair_distinct_for_merge,
     count_active_suspects,
@@ -34,6 +34,7 @@ from backend.services.duplicate_detection import (
     scan_scope_for_cross_account_duplicates,
     restore_auto_merged_after_detach,
     restore_rejected_duplicate,
+    source_match_texts,
 )
 
 
@@ -412,31 +413,35 @@ class SuspectDuplicateTests(unittest.TestCase):
         self.assertEqual(link["suspect_duplicate_reason"], "cross_account")
 
     def test_import_flags_cross_account_match_via_original_statement_evidence(self):
-        # The motivating regression: a data-connection (Plaid) row carries the raw bank descriptor in
-        # raw_name ("COUNTRY CREAMERY & COFFE", truncated), while a CSV importer cleaned raw_name to the
-        # merchant column ("Country Creamery & Coffee", two e's) and kept the true statement only in an
-        # "Original Statement" evidence field. The OLD matcher keyed on merchant_name and saw "coffe" !=
-        # "coffee" — a miss. The union-of-source-texts matcher compares the CSV's evidence statement
-        # against the Plaid raw_name, finds them byte-identical, and flags an EXACT cross_account match.
-        csv_account = self._insert_account("Northgate Rewards (CSV)")
-        sync_account = self._insert_account("Northgate Rewards (Plaid)")
-        csv_batch = self._insert_batch(filename="monarch.csv")
-        sync_batch = self._insert_batch(filename="Chase · Initial import")
+        # The motivating regression: a data-connection row carries the raw bank descriptor in raw_name,
+        # while a CSV importer replaced raw_name with a cleaned merchant column and kept the true
+        # statement only in an "Original Statement" evidence field. The OLD matcher keyed on
+        # merchant_name and compared a cleaned name against a raw statement — a miss. The
+        # union-of-source-texts matcher compares the CSV's evidence statement against the connection's
+        # raw_name, finds them byte-identical, and flags an EXACT cross_account match.
+        #
+        # The two cleaned names share nothing, so the evidence field is the ONLY thing that can bridge
+        # this pair — see the companion test below, which removes it and expects no flag at all.
+        csv_account = self._insert_account("Card (file)")
+        sync_account = self._insert_account("Card (connection)")
+        csv_batch = self._insert_batch(filename="export.csv")
+        sync_batch = self._insert_batch(filename="Card · Initial import")
 
-        evidence = json.dumps({
-            "account": {"header": "Account", "value": "Northgate Rewards"},
-            "description": {"header": "Merchant", "value": "Country Creamery & Coffee"},
-            "extra_text_fields": [{"header": "Original Statement", "value": "COUNTRY CREAMERY & COFFE"}],
-        })
         existing_id = self._insert_txn(
             account_id=csv_account, date="2026-07-03", amount=-7.75,
-            merchant_name="Country Creamery & Coffee", raw_name="Country Creamery & Coffee",
-            batch_id=csv_batch, import_evidence_json=evidence,
+            merchant_name="Creamery Downtown", raw_name="Creamery Downtown",
+            batch_id=csv_batch,
+            import_evidence_json=json.dumps({
+                "description": {"header": "Merchant", "value": "Creamery Downtown"},
+                "extra_text_fields": [
+                    {"header": "Original Statement", "value": "COUNTRY CREAMERY 4471 BOSTON"},
+                ],
+            }),
         )
-        # The synced row: two days later (posted vs. transaction date), truncated provider text, no evidence.
+        # The synced row: two days later (posted vs. transaction date), raw provider text, no evidence.
         new_id = self._insert_txn(
             account_id=sync_account, date="2026-07-05", amount=-7.75,
-            merchant_name="Country Creamery & Coffe", raw_name="COUNTRY CREAMERY & COFFE",
+            merchant_name="Country Creamery 4471 Boston", raw_name="COUNTRY CREAMERY 4471 BOSTON",
             batch_id=sync_batch,
         )
 
@@ -450,14 +455,44 @@ class SuspectDuplicateTests(unittest.TestCase):
         # Byte-identical raw descriptor → the high-confidence EXACT tier, not fuzzy.
         self.assertEqual(link["suspect_duplicate_reason"], "cross_account")
 
-    def test_import_flags_fuzzy_cross_account_match_as_review_only(self):
-        # Same amount + within the date window, but the source texts differ by a single character and
-        # neither side captured the other's exact spelling (no evidence to bridge them). That is the
-        # FUZZY tier: flagged for review under a distinct reason, never treated as a certain match.
-        csv_account = self._insert_account("CSV account")
-        sync_account = self._insert_account("Plaid account")
+    def test_without_the_original_statement_the_same_pair_does_not_match(self):
+        # Keeps the test above honest. Same two rows with the evidence field removed: the cleaned
+        # merchant names alone are not a match at any tier, so the flag really did come from the captured
+        # statement rather than from the names happening to resemble each other.
+        csv_account = self._insert_account("Card (file)")
+        sync_account = self._insert_account("Card (connection)")
         csv_batch = self._insert_batch(filename="export.csv")
-        sync_batch = self._insert_batch(filename="Chase · August 2026")
+        sync_batch = self._insert_batch(filename="Card · Initial import")
+
+        self._insert_txn(
+            account_id=csv_account, date="2026-07-03", amount=-7.75,
+            merchant_name="Creamery Downtown", raw_name="Creamery Downtown", batch_id=csv_batch,
+        )
+        new_id = self._insert_txn(
+            account_id=sync_account, date="2026-07-05", amount=-7.75,
+            merchant_name="Country Creamery 4471 Boston", raw_name="COUNTRY CREAMERY 4471 BOSTON",
+            batch_id=sync_batch,
+        )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                marked = mark_import_suspects(conn, sync_batch)
+
+        self.assertEqual(marked, 0)
+        self.assertIsNone(self._suspect_link(new_id)["suspect_duplicate_of"])
+
+    def test_import_flags_fuzzy_cross_account_match_as_review_only(self):
+        # Same amount + within the date window, but the source texts disagree MID-STRING and neither side
+        # captured the other's exact spelling (no evidence to bridge them). That is the FUZZY tier:
+        # flagged for review under a distinct reason, never treated as a certain match.
+        #
+        # The disagreement is deliberately mid-string rather than at the tail. A tail-only difference is
+        # a truncation, which the matcher reads as the same descriptor cut short (exact tier) — using one
+        # here would leave the review-only tier with no fixture at all.
+        csv_account = self._insert_account("CSV account")
+        sync_account = self._insert_account("Connection account")
+        csv_batch = self._insert_batch(filename="export.csv")
+        sync_batch = self._insert_batch(filename="Card · August 2026")
 
         existing_id = self._insert_txn(
             account_id=csv_account, date="2026-07-03", amount=-7.75,
@@ -466,7 +501,7 @@ class SuspectDuplicateTests(unittest.TestCase):
         )
         new_id = self._insert_txn(
             account_id=sync_account, date="2026-07-05", amount=-7.75,
-            merchant_name="Country Creamery & Coffe", raw_name="COUNTRY CREAMERY & COFFE",
+            merchant_name="Country Cremery & Coffee", raw_name="COUNTRY CREMERY & COFFEE",
             batch_id=sync_batch,
         )
 
@@ -478,6 +513,160 @@ class SuspectDuplicateTests(unittest.TestCase):
         link = self._suspect_link(new_id)
         self.assertEqual(link["suspect_duplicate_of"], existing_id)
         self.assertEqual(link["suspect_duplicate_reason"], "cross_account_fuzzy")
+
+    # ---- the two ways one charge arrives spelled two ways ----------------
+
+    def test_a_processor_tag_on_one_side_only_still_matches_exactly(self):
+        # A payment processor stamps its tag on the descriptor it forwards, and whether a source passes
+        # that tag through is a property of the source, not of the charge. One side carrying it is the
+        # single most common reason two records of the same charge are not byte-identical — so the tag is
+        # normalized away and the pair reaches the EXACT tier, not review.
+        csv_account = self._insert_account("Card (file)")
+        sync_account = self._insert_account("Card (connection)")
+        csv_batch = self._insert_batch(filename="export.csv")
+        sync_batch = self._insert_batch(filename="Card · August 2026")
+
+        existing_id = self._insert_txn(
+            account_id=csv_account, date="2026-06-29", amount=-9.00,
+            merchant_name="Riverside Creamery", raw_name="Riverside Creamery", batch_id=csv_batch,
+            import_evidence_json=json.dumps({
+                "extra_text_fields": [
+                    {"header": "Original Statement", "value": "SQ *RIVERSIDE CREAMERY ARSENAL"},
+                ],
+            }),
+        )
+        new_id = self._insert_txn(
+            account_id=sync_account, date="2026-06-30", amount=-9.00,
+            merchant_name="Riverside Creamery Arsenal", raw_name="RIVERSIDE CREAMERY ARSENAL",
+            batch_id=sync_batch,
+        )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                self.assertEqual(mark_import_suspects(conn, sync_batch), 1)
+
+        link = self._suspect_link(new_id)
+        self.assertEqual(link["suspect_duplicate_of"], existing_id)
+        self.assertEqual(link["suspect_duplicate_reason"], "cross_account")
+
+    def test_a_tagged_descriptor_is_offered_both_with_and_without_its_tag(self):
+        # Sources disagree about the tag in two directions — dropped entirely, kept punctuated, or kept
+        # bare — so both forms are offered and whichever the other side holds is the one that matches.
+        # Stripping in place instead would match "SQ *X" to "X" while pulling "SQ *X" and "SQ X" apart.
+        self.assertEqual(
+            source_match_texts("SQ *Corner Store", "TST* CORNER STORE 0042", None),
+            {"sq *corner store", "corner store", "tst* corner store 0042", "corner store 0042"},
+        )
+        # No variant when too little would survive: a two-letter residue identifies no merchant and
+        # would collide with unrelated rows.
+        self.assertEqual(source_match_texts("SQ *AB", None, None), {"sq *ab"})
+        # An untagged descriptor is left exactly as it was — nothing here changes the ordinary case.
+        self.assertEqual(source_match_texts("Corner Store", None, None), {"corner store"})
+
+    def test_a_tagged_descriptor_still_matches_a_source_that_kept_the_tag_unpunctuated(self):
+        # The direction an in-place strip breaks. One source writes the tag with its separator, another
+        # writes the same tag as a plain word. Removing the tag from only the punctuated side leaves
+        # "<merchant>" against "<tag> <merchant>", which resembles each other far less than the two
+        # originals did — so a pair that used to be caught would stop matching at any tier.
+        account_a = self._insert_account("Card A")
+        account_b = self._insert_account("Card B")
+        prior_batch = self._insert_batch(filename="prior.csv")
+        new_batch = self._insert_batch(filename="new.csv")
+
+        self._insert_txn(
+            account_id=account_a, date="2026-06-20", amount=-31.00,
+            merchant_name="SQ *Cafe Nation", raw_name="SQ *CAFE NATION", batch_id=prior_batch,
+        )
+        new_id = self._insert_txn(
+            account_id=account_b, date="2026-06-21", amount=-31.00,
+            merchant_name="SQ Cafe Nation", raw_name="SQ CAFE NATION", batch_id=new_batch,
+        )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                self.assertEqual(mark_import_suspects(conn, new_batch), 1)
+
+        self.assertIsNotNone(self._suspect_link(new_id)["suspect_duplicate_of"])
+
+    def test_a_truncated_descriptor_matches_the_full_one(self):
+        # The other spelling mechanism: one source clipped the descriptor. The cut lands mid-word, which
+        # nothing but a length limit plausibly does, so the two texts do not actually disagree.
+        csv_account = self._insert_account("Card (file)")
+        sync_account = self._insert_account("Card (connection)")
+        csv_batch = self._insert_batch(filename="export.csv")
+        sync_batch = self._insert_batch(filename="Card · August 2026")
+
+        existing_id = self._insert_txn(
+            account_id=csv_account, date="2026-06-26", amount=-95.00,
+            merchant_name="Riverside Parks & Recreation", raw_name="Riverside Parks & Recreation",
+            batch_id=csv_batch,
+        )
+        new_id = self._insert_txn(
+            account_id=sync_account, date="2026-06-28", amount=-95.00,
+            merchant_name="Riverside Parks & Recrea", raw_name="RIVERSIDE PARKS & RECREA",
+            batch_id=sync_batch,
+        )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                self.assertEqual(mark_import_suspects(conn, sync_batch), 1)
+
+        link = self._suspect_link(new_id)
+        self.assertEqual(link["suspect_duplicate_of"], existing_id)
+        self.assertEqual(link["suspect_duplicate_reason"], "cross_account")
+
+    def test_a_short_descriptor_with_extra_words_is_not_a_truncation(self):
+        # The boundary the truncation rule has to hold. "<place> parking" vs "<place> parking lex" agrees
+        # to a word boundary and then continues with a whole extra word — which describes a second
+        # location just as well as a clipped descriptor, and 14 characters is not enough agreement to
+        # call it. A real pair from a live ledger; it must not reach the exact tier, where a merge would
+        # auto-remove one of them.
+        account_a = self._insert_account("Card A")
+        account_b = self._insert_account("Card B")
+        prior_batch = self._insert_batch(filename="prior.csv")
+        new_batch = self._insert_batch(filename="new.csv")
+
+        self._insert_txn(
+            account_id=account_a, date="2026-06-26", amount=-4.00,
+            merchant_name="Woburn Parking", raw_name="Woburn Parking", batch_id=prior_batch,
+        )
+        new_id = self._insert_txn(
+            account_id=account_b, date="2026-06-27", amount=-4.00,
+            merchant_name="Woburn Parking Lex", raw_name="Woburn Parking Lex", batch_id=new_batch,
+        )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                mark_import_suspects(conn, new_batch)
+
+        self.assertNotEqual(self._suspect_link(new_id)["suspect_duplicate_reason"], "cross_account")
+
+    def test_a_word_boundary_cut_matches_once_enough_has_already_agreed(self):
+        # The same word-boundary shape as above, but past the point where coincidence is a real
+        # explanation: 22 characters agree before the tail. Both sides are themselves clipped forms of
+        # one bank descriptor, which is exactly how a card payment reaches two sources.
+        account_a = self._insert_account("Card A")
+        account_b = self._insert_account("Card B")
+        prior_batch = self._insert_batch(filename="prior.csv")
+        new_batch = self._insert_batch(filename="new.csv")
+
+        existing_id = self._insert_txn(
+            account_id=account_a, date="2026-06-16", amount=16.98,
+            merchant_name="Payment Thank You Bill Pa", raw_name="Payment Thank You Bill Pa",
+            batch_id=prior_batch,
+        )
+        new_id = self._insert_txn(
+            account_id=account_b, date="2026-06-16", amount=16.98,
+            merchant_name="Payment Thank You Bill", raw_name="PAYMENT THANK YOU BILL", batch_id=new_batch,
+        )
+
+        with self._use_db_path():
+            with get_db() as conn:
+                self.assertEqual(mark_import_suspects(conn, new_batch), 1)
+
+        link = self._suspect_link(new_id)
+        self.assertEqual(link["suspect_duplicate_of"], existing_id)
+        self.assertEqual(link["suspect_duplicate_reason"], "cross_account")
 
     def test_import_does_not_fuzzy_match_distinct_check_numbers(self):
         # Two genuinely different checks share amount + date + "Check #" and differ by a single digit
@@ -627,8 +816,10 @@ class SuspectDuplicateTests(unittest.TestCase):
         child_existing = self._insert_account("Child Existing")
         child_new = self._insert_account("Child New")
 
+        # Mid-string disagreement, so the texts are what the sweep would really tier as fuzzy — the
+        # reason below is planted directly, and a fixture the sweep would tier differently would rot.
         existing_id = self._insert_txn(account_id=child_existing, date="2026-07-03", amount=-7.75, merchant_name="Country Creamery & Coffee")
-        new_id = self._insert_txn(account_id=child_new, date="2026-07-05", amount=-7.75, merchant_name="Country Creamery & Coffe")
+        new_id = self._insert_txn(account_id=child_new, date="2026-07-05", amount=-7.75, merchant_name="Country Cremery & Coffee")
 
         with self._use_db_path():
             with get_db() as conn:
@@ -647,6 +838,118 @@ class SuspectDuplicateTests(unittest.TestCase):
         # Still an active suspect awaiting the user's review.
         self.assertEqual(link["suspect_duplicate_of"], existing_id)
         self.assertEqual(link["suspect_duplicate_reason"], "cross_account_fuzzy")
+
+    # ---- how a flag describes itself after a merge ----------------------
+
+    def _pair_from_two_sources_on_one_card(self, *, exact_text: bool, merge: bool):
+        """The live shape this behavior exists for: a data connection syncing into an account that was
+        merged with the file-imported account already holding the same charges. The connection spells the
+        payee slightly differently and posts a day later than the file did, so the pair lands in the
+        near-miss tier unless `exact_text` asks for the byte-identical one.
+
+        The near-miss spelling differs mid-string on purpose. These tests are about how a flag DESCRIBES
+        itself after a merge, and a tail-only difference would be read as a truncation — exact tier, which
+        the merge then auto-confirms — turning them into tests of tiering instead.
+
+        Returns (batch the report is read for, the incoming row, the two account ids).
+        """
+        file_account = self._insert_account("Card statements")
+        sync_account = self._insert_account("CARD")
+        file_batch = self._insert_batch(filename="statements-export.csv")
+        sync_batch = self._insert_batch(filename="Card · August 2026")
+
+        payee = "Riverside Parks & Recreation"
+        near_miss = "Riverside Parks & Recration"
+        self._insert_txn(
+            account_id=file_account, date="2026-06-26", amount=-95.00,
+            merchant_name=payee, raw_name=payee, batch_id=file_batch,
+        )
+        new_id = self._insert_txn(
+            account_id=sync_account,
+            date="2026-06-26" if exact_text else "2026-06-28",
+            amount=-95.00,
+            merchant_name=payee if exact_text else near_miss,
+            raw_name=payee if exact_text else near_miss.upper(),
+            batch_id=sync_batch,
+        )
+        with self._use_db_path():
+            with get_db() as conn:
+                self.assertEqual(mark_import_suspects(conn, sync_batch), 1)
+        if merge:
+            with self._use_db_path():
+                attach_account(sync_account, AccountAttachRequest(parent_account_id=file_account))
+        return sync_batch, new_id, (sync_account, file_account)
+
+    def _report_entry(self, batch_id: str, txn_id: str) -> dict:
+        with self._use_db_path():
+            with get_db() as conn:
+                entries = list_unified_batch_duplicates(conn, batch_id)
+        return next(e for e in entries if e["incoming"].get("txn_id") == txn_id)
+
+    def test_report_describes_a_merged_pairs_flag_as_a_duplicate_in_this_account(self):
+        # The stored reason records the relationship that CREATED the flag, and the merge retired it:
+        # the two rows now sit on one account, and the report prints the same account name on both
+        # sides. Continuing to badge that "cross-account" states something the ledger no longer says.
+        # The pair is still only a near-miss, so it stays in review — described accurately.
+        batch, new_id, _ = self._pair_from_two_sources_on_one_card(exact_text=False, merge=True)
+        entry = self._report_entry(batch, new_id)
+
+        self.assertEqual(entry["kind"], "soft_flag")
+        self.assertEqual(entry["rule_key"], "in_account_fuzzy")
+        self.assertEqual(entry["rule_label"], "Possible duplicate in this account")
+        self.assertIn("this account", entry["reason_text"])
+        # Still awaiting the user; the merge changed how it reads, not whether it was decided.
+        self.assertFalse(entry["resolved"])
+        self.assertIsNone(self._suspect_link(new_id)["trashed_at"])
+
+    def test_report_keeps_the_cross_account_description_for_two_separate_accounts(self):
+        # The other half: a pair that really does straddle two accounts must keep saying so, or the
+        # re-description would just be a blanket rename.
+        batch, new_id, _ = self._pair_from_two_sources_on_one_card(exact_text=False, merge=False)
+        entry = self._report_entry(batch, new_id)
+
+        self.assertEqual(entry["rule_key"], "cross_account_fuzzy")
+        self.assertEqual(entry["rule_label"], "Possible cross-account match")
+        self.assertIn("a different account", entry["reason_text"])
+
+    def test_detaching_the_accounts_restores_the_cross_account_description(self):
+        # The property that makes deriving the description worth it over storing one: grouping moves in
+        # both directions, and a detach has to put the pair back to reading as cross-account. Nothing is
+        # written on either transition, so there is no stored state to migrate or to get out of step.
+        batch, new_id, (sync_account, _) = self._pair_from_two_sources_on_one_card(exact_text=False, merge=True)
+        self.assertEqual(self._report_entry(batch, new_id)["rule_key"], "in_account_fuzzy")
+
+        with self._use_db_path():
+            detach_account(sync_account)
+
+        self.assertEqual(self._report_entry(batch, new_id)["rule_key"], "cross_account_fuzzy")
+
+    def test_a_confirmed_in_group_duplicate_also_reads_as_in_account_and_stays_removed(self):
+        # The exact tier is auto-confirmed by the merge, and it gets the same re-description — otherwise
+        # one report would show two rows of the same account pair under contradictory account labels.
+        # The resolution itself is untouched: the row stays trashed and confirmed.
+        batch, new_id, _ = self._pair_from_two_sources_on_one_card(exact_text=True, merge=True)
+        entry = self._report_entry(batch, new_id)
+
+        self.assertEqual(entry["kind"], "hard_reject")
+        self.assertEqual(entry["rule_key"], "in_account_confirmed")
+        self.assertEqual(entry["rule_label"], "Duplicate in this account (confirmed)")
+        link = self._suspect_link(new_id)
+        self.assertIsNotNone(link["trashed_at"])
+        self.assertEqual(link["rejection_reason"], "duplicate_confirmed")
+        self.assertEqual(link["dedupe_resolved_by"], "auto_merge")
+
+    def test_the_reports_filter_pill_follows_the_in_account_description(self):
+        # The pill strip is a rollup of the same keys, so it must not keep offering a "cross-account"
+        # filter for a set of rows none of which claims to be cross-account any more.
+        batch, _, _ = self._pair_from_two_sources_on_one_card(exact_text=False, merge=True)
+        with self._use_db_path():
+            payload = get_batch_duplicates_unified(batch)
+
+        keys = {rule["rule_key"] for rule in payload["rule_breakdown"]}
+        self.assertIn("in_account_fuzzy", keys)
+        self.assertNotIn("cross_account_fuzzy", keys)
+        self.assertEqual(payload["soft_flag_count"], 1)
 
     # ---- account-merge-time behavior ------------------------------------
 

@@ -114,5 +114,111 @@ class TasksUncategorizedCountTests(unittest.TestCase):
         self.assertEqual(self._uncategorized_count(), 0)
 
 
+class TasksSuspectDuplicateDescriptionTests(unittest.TestCase):
+    """The suspect-duplicate task names the *relationship* between the two rows, and a merge retires
+    the cross-account half of it — the same premise the duplicate report re-derives. Without this the
+    Tasks page keeps sending the user to look for a second account that no longer exists."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tempdir.name) / "tasks-suspects.db"
+        init_db(str(self.db_path))
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    @contextmanager
+    def _use_db_path(self):
+        token = set_current_db_path(str(self.db_path))
+        try:
+            yield
+        finally:
+            reset_current_db_path(token)
+
+    def _insert_account(self, name: str, parent_account_id: str | None = None) -> str:
+        account_id = str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO account
+                      (id, external_account_id, provider, name, display_name, type, subtype,
+                       mask, owner_id, parent_account_id, trashed_at)
+                    VALUES (?, ?, 'fixture', ?, ?, 'credit', 'credit_card', NULL, ?, ?, NULL)
+                    """,
+                    (account_id, f"ext_{account_id}", name, name, SHARED_OWNER_ID, parent_account_id),
+                )
+        return account_id
+
+    def _insert_flagged_pair(self, suspect_account: str, canonical_account: str) -> None:
+        canonical_id, suspect_id = str(uuid.uuid4()), str(uuid.uuid4())
+        with self._use_db_path():
+            with get_db() as conn:
+                for txn_id, account_id in ((canonical_id, canonical_account), (suspect_id, suspect_account)):
+                    conn.execute(
+                        """
+                        INSERT INTO txn
+                          (id, account_id, owner_id, amount, merchant_name, display_name, raw_name,
+                           date, is_pending, trashed_at)
+                        VALUES (?, ?, ?, -20.00, 'Merchant', 'Merchant', 'Merchant', '2026-04-10', 0, NULL)
+                        """,
+                        (txn_id, account_id, SHARED_OWNER_ID),
+                    )
+                conn.execute(
+                    "UPDATE txn SET suspect_duplicate_of = ?, suspect_duplicate_reason = 'cross_account_fuzzy' WHERE id = ?",
+                    (canonical_id, suspect_id),
+                )
+
+    def _description(self) -> str:
+        with self._use_db_path():
+            result = get_tasks()
+        return next(t["description"] for t in result["tasks"] if t["id"] == "suspect_duplicates")
+
+    def test_two_separate_accounts_still_read_as_a_cross_account_match(self):
+        first = self._insert_account("Account A")
+        second = self._insert_account("Account B")
+        self._insert_flagged_pair(first, second)
+
+        self.assertIn("1 transaction matches an existing row on a different account", self._description())
+
+    def test_a_merged_pair_reads_as_the_same_account(self):
+        root = self._insert_account("Card statements")
+        child = self._insert_account("CARD")
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE account SET parent_account_id = ? WHERE id = ?", (root, child))
+        self._insert_flagged_pair(child, root)
+
+        description = self._description()
+        self.assertIn("1 transaction matches another row on the same account", description)
+        self.assertNotIn("different account", description)
+
+    def test_a_mixed_queue_claims_neither_relationship(self):
+        root = self._insert_account("Card statements")
+        child = self._insert_account("CARD")
+        other = self._insert_account("Account B")
+        unrelated = self._insert_account("Account C")
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("UPDATE account SET parent_account_id = ? WHERE id = ?", (root, child))
+        self._insert_flagged_pair(child, root)
+        self._insert_flagged_pair(other, unrelated)
+
+        description = self._description()
+        self.assertIn("2 transactions match an existing row already in the ledger", description)
+
+    def test_a_flag_whose_matched_row_was_deleted_still_counts(self):
+        # The count predates this wording split and must not shrink because of it: a dangling pointer
+        # (matched row deleted by an undo) is still a row the user has to resolve.
+        first = self._insert_account("Account A")
+        second = self._insert_account("Account B")
+        self._insert_flagged_pair(first, second)
+        with self._use_db_path():
+            with get_db() as conn:
+                conn.execute("DELETE FROM txn WHERE suspect_duplicate_of IS NULL")
+
+        self.assertIn("1 transaction matches", self._description())
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
