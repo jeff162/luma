@@ -12,6 +12,7 @@
 import TransientTextInput from '../TransientTextInput.jsx'
 import { Button, Card, EmptyState } from '../ui.jsx'
 import { ActionCountBadge, ImportedCategoryUsageInline } from './importPresentational.jsx'
+import { SourceAccountChip } from './SourceAccountChip.jsx'
 import { getSuggestedDataSourceName } from '../../lib/importExport/importDraft.js'
 import { providerLabel } from '../../lib/importSourceFields.js'
 import { summarizeImportOutcome } from '../../lib/importExport/importOutcome.js'
@@ -553,53 +554,15 @@ export function ImportHistorySection({
                                         amongst the account chips. */}
                                     {b.accounts?.length > 0 ? (
                                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                                    {b.accounts.map((a, i) => {
-                                      const count = Number(a.row_count || 0)
-                                      const csvLabel = a.csv_value || a.account_name || ''
-                                      const mappedLabel = a.account_name || ''
-                                      // Not skipped by the user, but contributed no new rows (every row was a duplicate of
-                                      // an earlier file, or the rows were later removed). It reads as a third state — muted
-                                      // with a minus — so the green check never implies rows loaded when none did.
-                                      const noNewRows = !a.was_skipped && count === 0
-                                      const muted = a.was_skipped || noNewRows
-                                      // If the source's original account label differs from the account it currently
-                                      // resolves to, the user mapped it after the import completed. Surface both
-                                      // so the card matches what the user saw at the time, with the mapped
-                                      // destination as a faded suffix. This is one form for every source: a
-                                      // connection's csv_value is its provider account LABEL ("CREDIT CARD ···6612"),
-                                      // not the opaque external id it used to be, so "what the source called the
-                                      // account → where it landed" is as meaningful for a sync card as for a file.
-                                      const showMapping = !a.was_skipped && mappedLabel && csvLabel && mappedLabel !== csvLabel
-                                      const truncate = s => (s && s.length > 22 ? s.slice(0, 20) + '…' : s)
-                                      const primary = csvLabel
-                                      const baseTooltip = showMapping
-                                        ? `${csvLabel} → ${mappedLabel}`
-                                        : (a.was_skipped ? csvLabel : (mappedLabel || csvLabel))
-                                      const tooltip = noNewRows ? `${baseTooltip} · no new transactions` : baseTooltip
-                                      return (
-                                        <span key={i} title={tooltip} style={{
-                                          display: 'inline-flex', alignItems: 'center', gap: 4,
-                                          fontSize: 11, padding: '2px 7px', borderRadius: 99,
-                                          background: muted
-                                            ? 'var(--surface2)'
-                                            : 'color-mix(in srgb, var(--accent) 10%, var(--surface2))',
-                                          color: muted ? 'var(--muted)' : 'var(--text)',
-                                          border: '1px solid var(--border)',
-                                        }}>
-                                          <span style={{ color: muted ? 'var(--muted)' : 'var(--success)', fontWeight: 600 }}>
-                                            {a.was_skipped ? '✕' : noNewRows ? '−' : '✓'}
-                                          </span>
-                                          {truncate(primary)}
-                                          {showMapping ? (
-                                            <>
-                                              <span style={{ color: 'var(--muted)', opacity: 0.7 }}>→</span>
-                                              <span style={{ color: 'var(--muted)' }}>{truncate(mappedLabel)}</span>
-                                            </>
-                                          ) : null}
-                                          {count > 0 && <span style={{ color: 'var(--muted)' }}>{count}</span>}
-                                        </span>
-                                      )
-                                    })}
+                                    {b.accounts.map((a, i) => (
+                                      <SourceAccountChip
+                                        key={i}
+                                        label={a.csv_value || a.account_name || ''}
+                                        mappedLabel={a.account_name || ''}
+                                        count={a.row_count}
+                                        skipped={a.was_skipped}
+                                      />
+                                    ))}
                                       </div>
                                     ) : null}
                                     {(summary.rejectedCount > 0 || (summary.dedupedCount + Number(b.suspect_duplicate_count || 0)) > 0 || Number(b.needs_review_count || 0) > 0) ? (

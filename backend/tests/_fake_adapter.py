@@ -55,6 +55,10 @@ class FakeCursorAdapter(ProviderAdapter):
             "account_coverage": page.get("account_coverage"),
             "warnings":      page.get("warnings", []),
             "unsupported_currency": page.get("unsupported_currency", {}),
+            # Included only when a page scripts it, so the default shape is an adapter that predates the
+            # field — which the sync loop must tolerate, since the contract's default lives in the base
+            # class and an override is free not to copy it.
+            **({"advisories": page["advisories"]} if "advisories" in page else {}),
         }
 
     def connect(self, app_config, payload):

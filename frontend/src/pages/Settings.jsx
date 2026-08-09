@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useState, useEffect, useRef, useId, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { txnMutations } from '../lib/txnMutations.js'
 import { APP_NAME, APP_VERSION } from '../lib/appConfig.js'
@@ -2092,7 +2093,12 @@ function SyncLogRow({ entry }) {
   // string rather than "Invalid Date".
   const parsedWhen = entry.started_at ? new Date(entry.started_at) : null
   const when = parsedWhen && !isNaN(parsedWhen) ? parsedWhen.toLocaleString() : (entry.started_at || '—')
-  const statuses = entry.status_sequence || []
+  // The provider's backfill-readiness signal, one entry per page drained — Plaid's
+  // `transactions_update_status`. A provider with no such concept reports nothing (SimpleFIN sends one
+  // only when its walk pauses on the request budget), so absent entries are dropped rather than rendered:
+  // this is a user-facing log, and a row reading `status: null` says "something is broken" when it in fact
+  // means "this provider does not report one". With none left, the row itself is omitted.
+  const statuses = (entry.status_sequence || []).filter(s => s != null)
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', display: 'grid', gap: 6, fontSize: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -2118,7 +2124,7 @@ function SyncLogRow({ entry }) {
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           <span style={{ color: 'var(--muted)' }}>status:</span>
           {statuses.map((s, i) => (
-            <span key={i} style={{ fontFamily: 'monospace', fontSize: 11, padding: '1px 6px', borderRadius: 4, background: 'var(--surface2)' }}>{s == null ? 'null' : s}</span>
+            <span key={i} style={{ fontFamily: 'monospace', fontSize: 11, padding: '1px 6px', borderRadius: 4, background: 'var(--surface2)' }}>{s}</span>
           ))}
         </div>
       ) : null}
@@ -2128,24 +2134,88 @@ function SyncLogRow({ entry }) {
       {entry.error ? (
         <div style={{ color: 'var(--danger)', fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-word' }}>{entry.error}</div>
       ) : null}
+      {/* Warnings are the bank-level ones the connection card also shows; advisories are the ones nobody
+          can act on (what the provider said about our request, and rows that had nowhere to be imported),
+          which is why this log is their only home. `×N` is how many of the call's requests drew the same
+          remark — on a windowed history walk, "every one of them" reads very differently from "one". */}
+      {(entry.warnings || []).map((w, i) => (
+        <div key={`w${i}`} style={{ color: 'var(--warning)', fontSize: 11, wordBreak: 'break-word' }}>⚠ {w}</div>
+      ))}
+      {(entry.advisories || []).map((a, i) => (
+        <div key={`a${i}`} style={{ color: 'var(--muted)', fontSize: 11, wordBreak: 'break-word' }}>
+          {a.message}{a.count > 1 ? <b style={{ color: 'var(--text)' }}> ×{a.count}</b> : null}
+          {/* The request that drew it. Kept out of the message so the same remark from every window of a
+              walk stays one counted entry; shown as "first:" alongside a count, since with several
+              occurrences this names one of them rather than all. */}
+          {a.context ? (
+            <span style={{ opacity: 0.75 }}> ({a.count > 1 ? 'first: ' : ''}{a.context})</span>
+          ) : null}
+        </div>
+      ))}
     </div>
   )
 }
 
-function ConnectionSyncLogSection() {
-  // Read-only viewer over connection_sync_log (populated by routers/sync.py only when developer options are
-  // on). Its point is diagnosing under-fetches: the status sequence shows whether a sync ran to
-  // HISTORICAL_UPDATE_COMPLETE or stopped at the ~30-day Initial Update.
+// Plain-text rendering of the visible log, for pasting into a bug report or a support thread. Everything
+// here is already non-identifying at the source — cursors are stored as fingerprints (length + leading
+// slice, never the token) and the table holds no transaction data — so this needs no redaction pass of its
+// own. Keep it that way: anything added to a log row shows up here too.
+function syncLogAsText(entries, scopeLabel) {
+  const lines = [`Luma connection sync log${scopeLabel ? ` — ${scopeLabel}` : ''} (${entries.length} calls, newest first)`, '']
+  for (const e of entries) {
+    lines.push(`${e.started_at || '?'}  ${e.institution || e.provider || 'connection'} [${e.provider || '?'}] ${e.mode || '?'}`)
+    lines.push(`  added ${e.added} · updated ${e.updated} · removed ${e.removed} · skipped ${e.skipped} · pages ${e.pages} · days_requested ${e.days_requested ?? '—'}`)
+    // Same reasoning as the rendered row: drop statuses the provider never reported. The completion
+    // marker shared this line, so it is kept on its own rather than lost along with them.
+    const statuses = (e.status_sequence || []).filter(s => s != null)
+    const state = [
+      statuses.length ? `status ${statuses.join(' → ')}` : null,
+      e.became_complete ? 'backfill complete' : null,
+    ].filter(Boolean)
+    if (state.length) lines.push(`  ${state.join(' · ')}`)
+    lines.push(`  cursor ${e.cursor_before || 'none'} → ${e.cursor_after || 'none'}`)
+    if (e.error) lines.push(`  ERROR: ${e.error}`)
+    for (const w of e.warnings || []) lines.push(`  WARNING: ${w}`)
+    for (const a of e.advisories || []) {
+      const times = a.count > 1 ? ` (×${a.count})` : ''
+      const where = a.context ? ` [${a.count > 1 ? 'first: ' : ''}${a.context}]` : ''
+      lines.push(`  note: ${a.message}${times}${where}`)
+    }
+    lines.push('')
+  }
+  return lines.join('\n')
+}
+
+function ConnectionSyncLogSection({ initialConnectionId = '' }) {
+  // Read-only viewer over connection_sync_log. It answers the two questions a connection can't answer
+  // about itself: "did this sync fetch everything?" (the status sequence — a full historical backfill vs.
+  // a stop at the ~30-day Initial Update) and "why did nothing arrive?" (the warnings and advisories,
+  // which for the second reason are recorded nowhere else).
   const [entries, setEntries] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [clearing, setClearing] = useState(false)
+  const [copied, setCopied] = useState(false)
+  // Scoped by the deep link from a connection card, then adjustable here. Filtered server-side so a
+  // one-connection view doesn't ship the whole retention window to be thrown away in the browser.
+  const [connectionId, setConnectionId] = useState(initialConnectionId || '')
+  // Only for naming the scoped connection in the banner and the export header — the log's own rows carry
+  // a denormalized provider/institution, so a disconnected connection still reads correctly without this.
+  const [connections, setConnections] = useState([])
+
+  useEffect(() => { setConnectionId(initialConnectionId || '') }, [initialConnectionId])
+
+  useEffect(() => {
+    api.getProviders()
+      .then(res => setConnections((res.providers || []).flatMap(p => p.connections || [])))
+      .catch(() => setConnections([]))   // a label is a nicety; the log stands on its own without one
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      const res = await api.getSyncDiagnostics(200)
+      const res = await api.getSyncDiagnostics(200, connectionId || null)
       setEntries(res.entries || [])
     } catch (e) {
       setError(e.message || 'Could not load the sync log.')
@@ -2153,7 +2223,7 @@ function ConnectionSyncLogSection() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [connectionId])
 
   useEffect(() => { load() }, [load])
 
@@ -2170,23 +2240,60 @@ function ConnectionSyncLogSection() {
     }
   }
 
+  const scoped = connections.find(c => c.id === connectionId)
+  const scopeLabel = scoped ? (scoped.institution || scoped.provider || 'this connection') : ''
+
+  async function copyForSupport() {
+    try {
+      await navigator.clipboard.writeText(syncLogAsText(entries || [], scopeLabel))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (e) {
+      setError(e.message || 'Could not copy the log.')
+    }
+  }
+
   return (
     <Card style={{ display: 'grid', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, maxWidth: 560 }}>
-          One row per connection per sync call — the provider&rsquo;s transaction-readiness status across the
-          drained pages, cursor movement, and row counts. Use it to tell whether a sync ran to the full
-          historical backfill or stopped at the ~30-day Initial Update.
+          One row per connection per sync call — how much arrived, whether the full history was fetched or
+          the pull stopped early, and anything the provider or the import reported along the way. This is
+          the place to look when a connection brings in nothing, or less than expected.
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Button small variant="ghost" onClick={load} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</Button>
+          <Button small variant="ghost" onClick={copyForSupport} disabled={!(entries && entries.length)}
+            title="Copy this log as text, to paste into a bug report. Contains no transaction data and no credentials.">
+            {copied ? 'Copied' : 'Copy for support'}
+          </Button>
           <Button small variant="ghost" onClick={clearLog} disabled={clearing || !(entries && entries.length)}>{clearing ? 'Clearing…' : 'Clear log'}</Button>
         </div>
       </div>
+      {scoped ? (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+          padding: '6px 10px', borderRadius: 8, fontSize: 12,
+          background: 'color-mix(in srgb, var(--accent) 8%, var(--surface2))',
+        }}>
+          <span style={{ color: 'var(--muted)' }}>
+            Showing only <strong style={{ color: 'var(--text)' }}>{scopeLabel}</strong>.
+          </span>
+          <button
+            type="button"
+            onClick={() => setConnectionId('')}
+            style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent2)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}
+          >
+            Show all connections
+          </button>
+        </div>
+      ) : null}
       {error ? <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div> : null}
       {entries && entries.length === 0 && !loading ? (
         <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-          No sync calls recorded yet. Run a sync from Accounts → Connections, then Refresh here.
+          {scoped
+            ? `No sync calls recorded for ${scopeLabel} yet.`
+            : 'No sync calls recorded yet. Run a sync from Accounts → Connections, then Refresh here.'}
         </div>
       ) : null}
       {entries && entries.length ? (
@@ -2947,6 +3054,22 @@ export default function Settings() {
   const [sectionOpenState, setSectionOpenState] = useUserPreference(SETTINGS_SECTIONS_PREF_KEY, EMPTY_SECTION_STATE)
   const settingsScrollRef = useRef(null)
 
+  // Deep link from elsewhere in the app: `?section=<key>` opens that section on arrival (a link landing on
+  // a collapsed card has not actually taken the user anywhere) and `?connection=<id>` scopes the sync log
+  // to one connection. Captured once, so clearing the filter or re-collapsing the section afterwards
+  // sticks instead of the URL springing it back. Opening writes through the normal section preference
+  // rather than overriding the render: the section then behaves like any other, and "open" survives as
+  // the user's state — which is right, since they just asked to look at it.
+  const [searchParams] = useSearchParams()
+  const [deepLink] = useState(() => ({
+    section: searchParams.get('section') || '',
+    connectionId: searchParams.get('connection') || '',
+  }))
+  const deepLinkSection = deepLink.section
+  useEffect(() => {
+    if (deepLinkSection) setSectionOpenState(prev => ({ ...prev, [deepLinkSection]: true }))
+  }, [deepLinkSection, setSectionOpenState])
+
   function bindSection(sectionKey, defaultCollapsed = true) {
     const isOpen = sectionOpenState[sectionKey] ?? !defaultCollapsed
     return {
@@ -3077,16 +3200,17 @@ export default function Settings() {
             </StickySection>
           )}
 
-          {developerOptionsEnabled && (
-            <StickySection
-              title="Connection sync log"
-              description="Per-connection diagnostics for each provider sync call — status sequence, cursor movement, and counts."
-              scrollContainerRef={settingsScrollRef}
-              {...bindSection('connectionSyncLog')}
-            >
-              <ConnectionSyncLogSection />
-            </StickySection>
-          )}
+          {/* Deliberately NOT behind developer options (unlike the destructive tools above): this is the
+              only in-app answer to "why did this connection import nothing?", and gating it meant nothing
+              was even recorded until someone set an env var and reproduced the problem. */}
+          <StickySection
+            title="Connection sync log"
+            description="What each data connection did on every sync — how much arrived, whether the full history was fetched, and anything the provider reported."
+            scrollContainerRef={settingsScrollRef}
+            {...bindSection('connectionSyncLog')}
+          >
+            <ConnectionSyncLogSection initialConnectionId={deepLink.connectionId} />
+          </StickySection>
 
           <StickySection
             title="Transaction tags"

@@ -223,6 +223,42 @@ class ConnectionScenarioTests(unittest.TestCase):
         self.assertLessEqual(abs(drift), 2,
                              "the newcomer should reach essentially as far back as its siblings")
 
+    def test_two_accounts_issuing_the_same_transaction_ids_both_import(self):
+        # The bug this guards against, seen against the Bridge's own demo server: it derives each
+        # transaction id from the posting instant and runs every account on one schedule, so two accounts
+        # issue byte-identical ids. The ledger treats `external_transaction_id` as globally unique (a UNIQUE
+        # column, and every sync lookup queries it unscoped), which holds for Plaid but is not something
+        # SimpleFIN promises — its ids are unique only *within* an account. So the second account's rows
+        # each matched the first's on that lookup and were counted as already-held: the account imported
+        # nothing, and the sync reported success. The adapter namespaces the id by account to keep the
+        # ledger's invariant true (see `_normalize_txn`).
+        #
+        # The signature to recognize if this ever regresses is `added == skipped` exactly, with one account
+        # empty — which is how it was found.
+        collision_ids = ["shared-1", "shared-2", "shared-3"]
+        self.sim.ledger = [
+            Txn(txn_id=txn_id, account=account, posted="2026-08-01", amount="-10.00",
+                description=f"{account} charge")
+            for txn_id in collision_ids
+            for account in ("Demo Checking", "Demo Savings")
+        ]
+        checking = self._offer(CHECKING)
+        savings = self._offer(SAVINGS)
+        self._sync(days=90, full_history=True)
+
+        with self._db() as conn:
+            held = {
+                name: {r["external_transaction_id"] for r in conn.execute(
+                    "SELECT external_transaction_id FROM txn WHERE account_id = ? AND trashed_at IS NULL",
+                    (account_id,),
+                )}
+                for name, account_id in (("checking", checking), ("savings", savings))
+            }
+        self.assertEqual(len(held["checking"]), len(collision_ids), "the second account imported nothing")
+        self.assertEqual(len(held["savings"]), len(collision_ids))
+        # Namespaced, so the two accounts' copies of one bank id coexist rather than colliding.
+        self.assertEqual(held["checking"] & held["savings"], set())
+
     def test_a_skipped_account_is_never_claimed_and_never_re_fetched(self):
         self._offer(CHECKING)
         self._offer(SAVINGS, mapped=False, mode="skip")

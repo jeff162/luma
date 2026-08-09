@@ -115,14 +115,18 @@ def get_db(db_path: str | None = None):
 # v18 adds the provider-agnostic `connection` credential store; v19 adds `provider_config` (app creds).
 # v20 makes the account→connection link provider-neutral (external_account_id / connection_id / provider,
 # drop plaid_item_id) and drops the vestigial `plaid_item` table. v23 adds the `connection_sync_log`
-# diagnostics table (dev-options provider-sync log; see routers/sync.py). v24 adds the per-connection
+# diagnostics table (provider-sync log; see routers/sync.py). v24 adds the per-connection
 # account mapping (`connection_account`, the input duplicate detection was missing for synced rows) plus
 # `connection.captured_fields`, `txn.authorized_date`, and `csv_import_profile.terminal_window_days`.
 # v25 flips that last column's default from 1 to 7 and rewrites the rows v24 wrote at 1 — a source is
 # now assumed to lag its bank unless it says otherwise, since the reverse assumption silently drops real
-# transactions (see the migration's own note).
+# transactions (see the migration's own note). v31 adds `connection_sync_log.warnings`/`.advisories`, so a
+# sync that succeeded while importing nothing stops looking identical to one that had nothing to import.
+# v32 splits that log's `skipped` into the half that means data was lost and the half that is routine, and
+# adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
+# running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 30
+CURRENT_VERSION = 33
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -934,6 +938,59 @@ def _connection_reauth_required(conn):
     conn.execute("UPDATE connection SET reauth_required = 0")
 
 
+@migration(31)
+def _sync_log_messages(conn):
+    # The sync log recorded a hard `error` and nothing else, so a pull that *succeeded* while quietly
+    # importing nothing — a bank reporting a problem alongside its siblings' data, an account whose rows
+    # had nowhere to land — left a row that looked clean. Both message lists land here as JSON: `warnings`
+    # (user-actionable, mirroring the connection card) and `advisories` ([{message, count}], nobody's to
+    # act on and recorded nowhere else). See the baseline CREATE for the full note.
+    #
+    # Nullable with no DDL default, since a default would not apply to existing rows anyway: NULL reads as
+    # "this call recorded none", which is exactly right for rows written before the columns existed. Every
+    # insert site states both values (`_write_sync_diagnostics`).
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection_sync_log)")}
+    if not cols:
+        return  # a minimal hand-built fixture without the table
+    if "warnings" not in cols:
+        conn.execute("ALTER TABLE connection_sync_log ADD COLUMN warnings TEXT")
+    if "advisories" not in cols:
+        conn.execute("ALTER TABLE connection_sync_log ADD COLUMN advisories TEXT")
+
+
+@migration(32)
+def _sync_log_skip_breakdown(conn):
+    # `skipped` was one number covering three unrelated events, only one of which means data was lost, so
+    # it could not be surfaced anywhere without crying wolf on every routine sync (the incremental overlap
+    # re-asks for days already held on purpose). Split into the alarming half, the routine half, and a
+    # per-account breakdown — see the baseline CREATE. The total stays as it was.
+    #
+    # Counts default to 0 and the ALTER applies that to existing rows, which is the honest reading: rows
+    # written before the split recorded no breakdown, and 0 is what "not recorded" looks like in a sum.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection_sync_log)")}
+    if not cols:
+        return  # a minimal hand-built fixture without the table
+    if "skipped_no_account" not in cols:
+        conn.execute("ALTER TABLE connection_sync_log ADD COLUMN skipped_no_account INTEGER NOT NULL DEFAULT 0")
+    if "skipped_already_held" not in cols:
+        conn.execute("ALTER TABLE connection_sync_log ADD COLUMN skipped_already_held INTEGER NOT NULL DEFAULT 0")
+    if "account_counts" not in cols:
+        conn.execute("ALTER TABLE connection_sync_log ADD COLUMN account_counts TEXT")
+
+
+@migration(33)
+def _connection_sync_in_progress(conn):
+    # Marks a sync that is currently running, so the in-progress state survives the page that started it —
+    # the poll loop lives in component state, so navigating away re-enabled "Sync now" and invited a second
+    # concurrent pull. NULL means idle, which is the right value for every existing row: nothing was running
+    # when this migration applied. See the baseline CREATE for why it is written outside the pull's own
+    # transaction, and `sync_marker_is_live` for why it expires.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection)")}
+    if not cols or "sync_started_at" in cols:
+        return  # already migrated, or a minimal hand-built fixture without the table
+    conn.execute("ALTER TABLE connection ADD COLUMN sync_started_at TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -1138,7 +1195,15 @@ def init_db(db_path: str | None = None):
                 -- revocation don't bury it. For a provider with no revocation API (SimpleFIN) the user
                 -- revokes at the provider's own site, and the refusal recorded here is the ONLY notice
                 -- this app ever gets that they did.
-                reauth_required           INTEGER NOT NULL DEFAULT 0
+                reauth_required           INTEGER NOT NULL DEFAULT 0,
+                -- When a sync of this connection started, or NULL when none is running. Written and
+                -- cleared **outside** the pull's own transaction (see `_set_sync_running`), because a
+                -- marker announcing a sync is worthless if it only becomes visible once that sync has
+                -- finished. It exists so the in-progress state outlives the page that started it: the poll
+                -- loop lives in component state, so navigating away used to re-enable "Sync now" and invite
+                -- a second concurrent pull. Believed only for `_SYNC_MARKER_STALE_AFTER`, so a process that
+                -- dies mid-sync cannot leave a connection looking permanently busy.
+                sync_started_at           TEXT
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_provider_external
                 ON connection(provider, external_id);
@@ -1246,7 +1311,24 @@ def init_db(db_path: str | None = None):
                 status_sequence TEXT,     -- JSON array of transactions_update_status, one per drained page
                 final_status    TEXT,
                 became_complete INTEGER NOT NULL DEFAULT 0,
-                error           TEXT
+                error           TEXT,
+                -- Non-fatal messages from this call, both JSON arrays. `warnings` are the user-actionable
+                -- ones (a bank needing re-auth) and mirror what the connection card shows; `advisories`
+                -- are [{message, count}] for things nobody can act on — what the provider said about our
+                -- own request, and the sync's own "nothing importable because…" notices. The card
+                -- deliberately shows only the former; the log keeps both, per call.
+                warnings        TEXT,
+                advisories      TEXT,
+                -- The half of `skipped` that means data was lost (no local account to put a row in) kept
+                -- apart from the half that is routine (a row already held — the incremental overlap
+                -- re-asks for days on purpose). One number could not be shown anywhere without crying
+                -- wolf on every sync; `already_held` on an *initial* pull is separately a contradiction.
+                skipped_no_account   INTEGER NOT NULL DEFAULT 0,
+                skipped_already_held INTEGER NOT NULL DEFAULT 0,
+                -- {provider account id: {added, updated, skipped_*}} for this call. Keyed by the provider's
+                -- id, not the local account's, so an account with no local destination still appears —
+                -- a breakdown built from what landed can never mention the account that received nothing.
+                account_counts  TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_connection_sync_log_started
                 ON connection_sync_log(started_at);

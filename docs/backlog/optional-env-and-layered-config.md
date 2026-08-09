@@ -67,6 +67,15 @@ in-app toggle either.
 - **`LUMA_DEVELOPER_OPTIONS` stays env-only — deliberately.** It is a *gate* that unlocks destructive dev
   reset tools, not a user preference; it should not be toggleable from the UI (not something to invite
   people to flip). A deliberate exception to the "move preferences into the DB" default.
+  - **Resolved 2026-08-08 — the flag is unchanged, but the connection sync log left it.** The open
+    question below ("revisit if a legitimate in-app need appears") turned up one: `connection_sync_log`
+    was gated on the flag *including its writes*, so a user with connection trouble who found the flag
+    got an empty table and had to reproduce the failure — while the log is the only in-app answer to "why
+    did this connection import nothing?" and the thing they would attach to a help request. It had
+    inherited the gate by being added as a neighbouring Settings card, not by needing one. It is now
+    always written and always readable; the destructive reset tools keep the gate exactly as described
+    above. **The precedent is narrow:** decoupling a read-only surface that was mis-filed behind the gate,
+    *not* softening the gate. Anything destructive still belongs behind it.
 - **`LUMA_EXPERIMENTAL_SECURITY_SETTINGS` is expected to go away** once the security project (phases 4–6)
   completes. If it survives, it does **not** become a normal DB setting either: keep it env-only if it
   must be defined early, **or** fold it under the developer-options card (gated by
@@ -92,8 +101,10 @@ gate.
 
 ## Open questions
 
-- **`LUMA_DEVELOPER_OPTIONS`** — confirmed env-only for now, but flagged as "somewhat undecided"; revisit
-  if a legitimate in-app need appears (kept out deliberately for now).
+- ~~**`LUMA_DEVELOPER_OPTIONS`** — confirmed env-only for now, but flagged as "somewhat undecided"; revisit
+  if a legitimate in-app need appears (kept out deliberately for now).~~ **Settled 2026-08-08:** the need
+  appeared (the connection sync log) and was met by taking that one surface *out* from behind the gate
+  rather than by making the gate toggleable — see the decision above. The flag itself stays env-only.
 - Where auto-generated `SESSION_SECRET` should live — control DB row vs. a sibling secret file (backup and
   file-permission implications differ).
 

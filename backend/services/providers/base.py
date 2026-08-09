@@ -169,7 +169,7 @@ class ProviderAdapter(ABC):
         """One pull's worth of change, plus the state the sync loop needs to decide what happens next:
 
             {added:[txn…], modified:[txn…], removed:[external_transaction_id…], next_cursor, has_more,
-             update_status, backfill_complete, resume_later, account_coverage, warnings,
+             update_status, backfill_complete, resume_later, account_coverage, warnings, advisories,
              unsupported_currency}
 
         Each `added` / `modified` transaction dict is the same shape as `fetch_transactions` returns, plus
@@ -203,6 +203,21 @@ class ProviderAdapter(ABC):
         the pull *succeeds*: nothing else would ever tell the user that part of their data quietly stopped
         arriving, and a partial failure that looks like a success is the one failure mode a sync cannot
         self-correct. A pull that fails outright raises instead.
+
+        `advisories` is the other half of that split: `[{"message": str, "count": int, "context": str|None}]`
+        for things the provider said about **our own request** rather than about the user's bank — a date
+        range wider than it recommends, a deprecated parameter. Nothing a user can act on, so these never
+        reach the connection card (a note about our request shape sitting beside "your bank needs
+        re-authentication" teaches people to ignore both), but they belong in the sync log, which is where a
+        change in a provider's limits becomes visible without periodically probing for one.
+
+        `count` and `context` answer different questions and neither replaces the other. A windowed history
+        walk provokes the same advisory on every request, so `count` ("24 times") says whether one request
+        was special or the whole pull was — a plain list would either repeat the message 24 times or lose
+        that. `context` names **one concrete request** that drew it (the first), because the message alone
+        cannot say which, and that is the first thing anyone reading the log wants. They stay separate
+        fields on purpose: folding the request into the message would make every window its own entry and
+        destroy the aggregation.
 
         `ledger_currency` is the currency this ledger's amounts are in — a **user setting**, passed down
         for the same reason `account_targets` is: the caller owns the database, so it owns every fact
@@ -259,6 +274,7 @@ class ProviderAdapter(ABC):
                 for t in (account_targets or [])
             },
             "warnings": [],
+            "advisories": [],
             # An adapter that cannot report an account's denomination cannot know it dropped anything for
             # it, so the default is silence rather than a claim that everything was in the ledger's currency.
             "unsupported_currency": {},

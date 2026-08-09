@@ -14,14 +14,15 @@ reuse of the shared categorization engine, and — for a connection's first (his
 
 import json
 import uuid
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Request
 
 from backend.app_logging import log_warning
 from backend.db.database import get_db
-from backend.runtime_config import developer_options_enabled
 from backend.services import crypto_service
 from backend.services.providers import UnknownProviderError, get_adapter, resolve_app_config
+from backend.services.providers.config import set_sync_running
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.services.providers.base import ProviderCredentialRejected
 from backend.services.categorizer import (
@@ -170,13 +171,74 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+# Per-account bookkeeping for one sync call, keyed by the **provider's** account id rather than the local
+# one — because the account that most needs counting is the one with no local account at all, and any
+# tally keyed on what the rows landed in can only ever count what landed. An account importing nothing is
+# invisible to `import_batch_account` (a card exists only where rows exist), which is exactly how an
+# account silently receiving none of its transactions went unnoticed.
+#
+# `skipped` is deliberately three separate keys. It used to be one number covering "no local account to
+# put this in" (data lost), "we already hold this" (routine — the incremental overlap re-asks for days on
+# purpose, so it is non-zero on every top-up), and "a revision to a row we never had" (routine). Shown as
+# one number on a card it would cry wolf on every sync; split, the first is a real alarm and the second is
+# a contradiction whenever it appears on an *initial* pull.
+def _bump(tally: dict | None, external_account_id: str, key: str) -> None:
+    if tally is None:
+        return
+    tally.setdefault(external_account_id, Counter())[key] += 1
+
+
+def _add_advisory(store: dict | None, message: str, *, count: int = 1, context: str | None = None) -> None:
+    """Fold an advisory into a connection's running set, keyed on the message so the same remark from many
+    requests is one entry with a count rather than many near-identical ones. The first `context` wins: it
+    names a concrete request to go look at, and unlike a list it does not grow with the pull. Mirrors
+    `_merge_advisories` in the SimpleFIN adapter, which does the same for one adapter's own windows."""
+    if store is None or not message:
+        return
+    slot = store.get(message)
+    if slot is None:
+        store[message] = {"message": message, "count": count, "context": context}
+    else:
+        slot["count"] += count
+        if slot.get("context") is None:
+            slot["context"] = context
+
+
+# How much of a resume token's value may be shown before it is elided. Anything longer than a date, a
+# count, or a short status is assumed to be the opaque part and is never printed.
+_FINGERPRINT_VALUE_CHARS = 24
+
+
 def _cursor_fingerprint(cursor: str | None) -> str | None:
-    """A short, non-reversible marker for a provider cursor — its length plus a leading slice — so the
-    diagnostics log can show whether the cursor was present and whether it advanced, without persisting the
-    full opaque paging token."""
+    """A short, non-reversible marker for a provider's resume token, so the log can show whether it was
+    present and whether it advanced without persisting the token itself.
+
+    Two shapes, because `transactions_cursor` holds two different things. Plaid's is an **opaque** paging
+    token, where a length plus a leading slice is the only marker available and reads fine. A provider with
+    no change feed stores its own **JSON checkpoint** there instead (see the SimpleFIN adapter), and slicing
+    that yields `{"throug` — meaningless, and looking for all the world like a truncation bug, while hiding
+    the two facts actually worth having: how far the walk has reached and how much of the request budget it
+    has spent. A checkpoint is therefore summarized as its own short scalars.
+
+    Values longer than `_FINGERPRINT_VALUE_CHARS` are elided rather than printed: a JSON token is not
+    automatically non-secret just because it parses, so the "never store the whole token" rule holds for
+    both shapes.
+    """
     if not cursor:
         return None
-    return f"len={len(cursor)}·{cursor[:8]}"
+    try:
+        parsed = json.loads(cursor)
+    except (TypeError, ValueError):
+        parsed = None
+    if not isinstance(parsed, dict):
+        return f"len={len(cursor)}·{cursor[:8]}"
+    parts = []
+    for key, value in parsed.items():
+        if not isinstance(value, (str, int, float, bool)):
+            continue  # a nested structure has nothing short to say about itself
+        text = str(value)
+        parts.append(f"{key}={text}" if len(text) <= _FINGERPRINT_VALUE_CHARS else f"{key}=…")
+    return ", ".join(parts) if parts else f"len={len(cursor)}"
 
 
 def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
@@ -188,8 +250,9 @@ def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
             INSERT INTO connection_sync_log
                 (id, connection_id, provider, institution, started_at, finished_at, mode, days_requested,
                  cursor_before, cursor_after, pages, added, updated, removed, skipped, status_sequence,
-                 final_status, became_complete, error)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 final_status, became_complete, error, warnings, advisories,
+                 skipped_no_account, skipped_already_held, account_counts)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 str(uuid.uuid4()), r["connection_id"], r["provider"], r["institution"], r["started_at"],
@@ -197,6 +260,13 @@ def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
                 r["pages"], r["added"], r["updated"], r["removed"], r["skipped"],
                 json.dumps(r["status_sequence"]), r["final_status"], 1 if r["became_complete"] else 0,
                 r["error"],
+                # Stated at the insert rather than left to a column default: the ALTER that added these to
+                # an existing database carries no default, so every write has to supply the value.
+                json.dumps(r["warnings"]) if r.get("warnings") else None,
+                json.dumps(r["advisories"]) if r.get("advisories") else None,
+                r.get("skipped_no_account") or 0,
+                r.get("skipped_already_held") or 0,
+                json.dumps(r["account_counts"]) if r.get("account_counts") else None,
             ),
         )
     conn.execute(
@@ -303,7 +373,8 @@ def _record_sync_failure(conn, connection_id: str, message: str, *, reauth_requi
     )
 
 
-def _currency_warnings(conn, connection_id: str, unsupported: dict, ledger_currency: str) -> list[str]:
+def _currency_warnings(conn, connection_id: str, unsupported: dict, ledger_currency: str,
+                       advisories: dict | None = None) -> list[str]:
     """Tell the user about mapped accounts whose transactions cannot be imported for their currency.
 
     Driven primarily by the **stored** `provider_currency`, recorded when the connection listed its
@@ -318,6 +389,11 @@ def _currency_warnings(conn, connection_id: str, unsupported: dict, ledger_curre
     regardless of currency, so there is nothing here its owner has lost and nothing to decide; those go to
     the log, which is where the question "why is this account empty" gets answered. A **mapped** account is
     the opposite case: the user asked for it, and it will sit permanently empty with nothing to say why.
+
+    `advisories` is that log. The unmapped case used to reach the server console only, which answered the
+    question for whoever could read the console and nobody else; it now also lands in the sync card's
+    record. The card/log split is unchanged — this is still not a message, because there is still nothing
+    for the user to act on — but "not worth a card" was never a reason to leave it unrecorded.
     """
     rows = conn.execute(
         """
@@ -342,10 +418,11 @@ def _currency_warnings(conn, connection_id: str, unsupported: dict, ledger_curre
             f"were not imported — every amount in Luma is {ledger_currency}."
         )
     if unmapped:
-        log_warning(
-            f"[sync] connection {connection_id}: unmapped non-{ledger_currency} accounts, "
-            f"nothing imported: {', '.join(unmapped)}"
+        detail = (
+            f"Unmapped non-{ledger_currency} accounts, nothing imported: {', '.join(unmapped)}"
         )
+        log_warning(f"[sync] connection {connection_id}: {detail}")
+        _add_advisory(advisories, detail)
     return messages
 
 
@@ -463,6 +540,37 @@ def _record_sync_coverage(conn, connection, *, is_range_pull: bool, requested_st
 @router.post("")
 def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
              full_history: bool = False, request: Request = None):
+    """Announce the run, do it, and always take the announcement back down.
+
+    The marker is set and cleared **outside** the pull's own transaction, and the bracket is a `finally`
+    rather than a trailing line: a sync that raises must not leave every connection it touched looking
+    permanently busy, which would disable "Sync now" until the staleness bound expired — a worse failure
+    than the concurrent sync the marker exists to prevent.
+    """
+    marked = _connections_in_scope(connection_id, provider)
+    set_sync_running(marked, True)
+    try:
+        return _run_sync(days=days, connection_id=connection_id, provider=provider,
+                         full_history=full_history, request=request)
+    finally:
+        set_sync_running(marked, False)
+
+
+def _connections_in_scope(connection_id: str | None, provider: str | None) -> list[str]:
+    """The connection ids this call will touch. Read in its own short transaction, before the pull opens
+    the long one — the ids are needed to announce the run, and the pull's own connection cannot publish
+    anything until it commits."""
+    where, params = "", []
+    if connection_id:
+        where, params = "WHERE id = ?", [connection_id]
+    elif provider:
+        where, params = "WHERE provider = ?", [provider]
+    with get_db() as conn:
+        return [r["id"] for r in conn.execute(f"SELECT id FROM connection {where}", params).fetchall()]
+
+
+def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
+              full_history: bool = False, request: Request = None):
     # `days` is the provider fetch depth (`days_requested`): <= 0 means "as far back as this provider
     # goes", a positive value bounds it (the user's shallower window). `connection_id` scopes the sync to
     # one connection so a just-connected bank's backfill doesn't re-pull the others; `provider` scopes it to
@@ -521,7 +629,8 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 (external_account_id,),
             ).fetchone()
 
-        def _discover_new_provider_accounts(connection, adapter, app_config, credential, seen_unknown) -> int:
+        def _discover_new_provider_accounts(connection, adapter, app_config, credential, seen_unknown,
+                                            connection_advisories) -> int:
             """Record provider accounts that showed up in the data but that this connection has never
             offered — the case of an account added on the provider's side after the connection was built.
 
@@ -556,20 +665,29 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             record_provider_accounts(conn, connection_id=connection["id"], accounts=offered)
             newly_recorded = {a["external_account_id"] for a in offered} & (seen_unknown - known)
             if newly_recorded:
-                log_warning(
-                    f"[sync] connection {connection['id']}: discovered {len(newly_recorded)} new provider "
-                    f"account(s); their transactions are skipped until mapped"
+                # Recorded as well as logged: "the provider started offering an account you have not
+                # mapped" is one of the two stock answers to "why did this sync import nothing", and until
+                # now it was only ever visible to whoever could read the server console.
+                detail = (
+                    f"Discovered {len(newly_recorded)} new provider account(s); their transactions are "
+                    f"skipped until mapped"
                 )
+                log_warning(f"[sync] connection {connection['id']}: {detail}")
+                _add_advisory(connection_advisories, detail)
             return len(newly_recorded)
 
-        def _insert_added(t, get_card, dedupe, seen_unknown=None) -> bool:
+        def _insert_added(t, get_card, dedupe, seen_unknown=None, tally=None) -> bool:
             """Insert one `added` transaction. `get_card` lazily resolves (and creates) the connection's
             card only when a row is actually inserted, so a no-op sync leaves no empty card. Idempotent on
-            provider id: a row we already have advances pending state instead of duplicating."""
+            provider id: a row we already have advances pending state instead of duplicating.
+
+            `tally` is this connection's per-account bookkeeping (see `_bump`). It is what lets the card
+            distinguish the one skip that means data was lost from the two that are routine."""
             nonlocal added, updated, skipped, deduped
             acc = _account_for(t["external_account_id"])
             if not acc:
                 skipped += 1
+                _bump(tally, t["external_account_id"], "skipped_no_account")
                 # Noted rather than merely counted: an id with no local account is either an account the
                 # user skipped or one the provider has added since — and only the second is worth acting
                 # on. `_discover_new_provider_accounts` tells them apart after the page is applied.
@@ -599,6 +717,7 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                          t["merchant_name"], t["raw_name"], content_hash, pend["id"]),
                     )
                     updated += 1
+                    _bump(tally, t["external_account_id"], "updated")
                     touched_ids.append(pend["id"])
                     return False
             existing = conn.execute(
@@ -609,9 +728,14 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 if existing["is_pending"] and not t["is_pending"]:
                     conn.execute("UPDATE txn SET is_pending = 0 WHERE id = ?", (existing["id"],))
                     updated += 1
+                    _bump(tally, t["external_account_id"], "updated")
                     touched_ids.append(existing["id"])
                 else:
                     skipped += 1
+                    # Routine on a top-up — the incremental overlap re-asks for days already held, so this
+                    # is non-zero by design. On an *initial* pull it is a contradiction, and that is the
+                    # signal `_sync_outcome` reads: nothing can already be held before the first import.
+                    _bump(tally, t["external_account_id"], "skipped_already_held")
                 return False
 
             # A check number folded into the merchant as "Check #<n>", matching the CSV convention, so
@@ -686,6 +810,7 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             )
             sync_rule_tags_for_transaction(conn, txn_id, rule_tag_ids)
             added += 1
+            _bump(tally, t["external_account_id"], "added")
             touched_ids.append(txn_id)
             cards_touched.add(card_id)
             card_added[card_id] = card_added.get(card_id, 0) + 1
@@ -694,7 +819,7 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             entry.setdefault("dates", set()).add(t["date"])
             return True
 
-        def _apply_modified(t) -> None:
+        def _apply_modified(t, tally=None) -> None:
             """A provider-side revision to a known transaction: refresh the provider-owned fields and the
             content hash, but leave the user's category and display-name edits intact. A modification for a
             row we don't have locally (outside our window, or dedup-dropped) is ignored."""
@@ -704,6 +829,10 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             ).fetchone()
             if not existing:
                 skipped += 1
+                # Its own bucket rather than folded into either above: the row is not held and never was
+                # (it fell outside our window, or dedupe dropped it), so ignoring the revision is correct
+                # and it is neither a blocked import nor a re-fetch.
+                _bump(tally, t["external_account_id"], "skipped_not_held")
                 return
             content_hash = make_hash(t["date"], t["amount"], t["raw_name"] or t["merchant_name"] or "")
             conn.execute(
@@ -741,10 +870,17 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             resume_later = False
             account_coverage: dict = {}
             connection_warnings: list[str] = []   # non-fatal provider problems, for the card's badge
+            # Everything that is not a failure and not the user's to act on: what the provider said about
+            # our own requests, and the sync layer's own "nothing could be imported because…" notices.
+            # Counted, because the same remark on every request of a walk means the whole walk, not a blip.
+            # Log-only by design — see `_currency_warnings` for why these are not card messages.
+            connection_advisories: dict[str, dict] = {}
+            # {provider account id: Counter(added/updated/skipped_*)} for this call — see `_bump`.
+            account_tally: dict[str, Counter] = {}
             days_requested = ALL_HISTORY_DAYS
-            # Per-connection diagnostics (persisted only in dev mode): the status sequence across drained
-            # pages is what tells whether the historical backfill actually completed or the call stopped at
-            # the Initial Update. Count deltas are snapshotted here and differenced after the connection runs.
+            # Per-connection diagnostics: the status sequence across drained pages is what tells whether the
+            # historical backfill actually completed or the call stopped at the Initial Update. Count deltas
+            # are snapshotted here and differenced after the connection runs.
             started_at = _utcnow_iso()
             cursor_before = connection["transactions_cursor"]
             status_sequence: list = []
@@ -771,6 +907,16 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     "final_status":   final_status,
                     "became_complete": became_complete,
                     "error":          error,
+                    # The card shows only `warnings`, and only the most recent pull's. The log keeps both
+                    # lists per call, which is what makes "it started failing three syncs ago" answerable.
+                    "warnings":       list(connection_warnings),
+                    "advisories":     list(connection_advisories.values()),
+                    # The connection-level split of `skipped`, plus the per-account breakdown it is summed
+                    # from. Both are stored: the totals are what a card reads at a glance, the breakdown is
+                    # what names *which* account received nothing.
+                    "skipped_no_account":   sum(c.get("skipped_no_account", 0) for c in account_tally.values()),
+                    "skipped_already_held": sum(c.get("skipped_already_held", 0) for c in account_tally.values()),
+                    "account_counts": {a: dict(c) for a, c in account_tally.items()},
                 })
 
             # The card is created lazily on the first actually-inserted row (a no-op sync leaves no empty
@@ -851,8 +997,16 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     for w in page.get("warnings") or []:
                         if w not in connection_warnings:
                             connection_warnings.append(w)
+                    # An adapter with nothing to say omits the key entirely, which is why this reads
+                    # defensively rather than requiring the contract's default to have been copied.
+                    for entry in page.get("advisories") or []:
+                        if isinstance(entry, dict) and entry.get("message"):
+                            _add_advisory(connection_advisories, entry["message"],
+                                          count=int(entry.get("count") or 1),
+                                          context=entry.get("context"))
                     for w in _currency_warnings(
-                        conn, connection["id"], page.get("unsupported_currency") or {}, ledger_currency
+                        conn, connection["id"], page.get("unsupported_currency") or {}, ledger_currency,
+                        connection_advisories,
                     ):
                         if w not in connection_warnings:
                             connection_warnings.append(w)
@@ -862,13 +1016,13 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                         break
                 seen_unknown: set[str] = set()
                 for t in page_added:
-                    _insert_added(t, _get_card, dedupe, seen_unknown)
+                    _insert_added(t, _get_card, dedupe, seen_unknown, account_tally)
                 for t in page_modified:
-                    _apply_modified(t)
+                    _apply_modified(t, account_tally)
                 for ext_id in page_removed:
                     _apply_removed(ext_id)
                 discovered += _discover_new_provider_accounts(
-                    connection, adapter, app_config, credential, seen_unknown,
+                    connection, adapter, app_config, credential, seen_unknown, connection_advisories,
                 )
             except ProviderCredentialRejected as e:
                 # The one failure a user can act on, and the one retrying cannot fix. Flagged separately so
@@ -979,9 +1133,12 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             if card_account_ids:
                 promote_in_group_suspects_to_confirmed(conn, card_account_ids)
 
-        # Persist the sync diagnostics (dev-mode only). Best-effort: a logging failure must never fail the
-        # sync that already did its work, so it is guarded and swallowed.
-        if sync_diagnostics and developer_options_enabled():
+        # Persist the sync diagnostics. Written unconditionally: a diagnostic that only records while a
+        # flag is on cannot explain a failure that already happened — enabling the flag afterwards yields
+        # an empty table and the user has to reproduce the problem to see anything, which is backwards for
+        # the one case this log exists for. Best-effort: a logging failure must never fail the sync that
+        # already did its work, so it is guarded and swallowed.
+        if sync_diagnostics:
             try:
                 _write_sync_diagnostics(conn, sync_diagnostics)
             except Exception as e:
@@ -1016,33 +1173,46 @@ def run_sync(days: int = 0, connection_id: str = None, provider: str = None,
     }
 
 
-def _require_developer_options():
-    # The sync diagnostics log is a developer/testing aid; its endpoints 404 (rather than 403) when the
-    # feature is off, so the surface is invisible unless LUMA_DEVELOPER_OPTIONS is set — matching how the
-    # rest of the developer-options surface behaves (import_export/core._require_developer_access).
-    if not developer_options_enabled():
-        raise HTTPException(status_code=404, detail="Developer options are not enabled")
+# The sync log is deliberately NOT behind `LUMA_DEVELOPER_OPTIONS`. That flag gates *destructive* dev
+# reset tools and is env-only so it can't be casually flipped; this is a read-only record of what each
+# sync did, and it is the only in-app answer to "why did this connection import nothing?" — which every
+# user needs, and needs without an env var or a reproduction.
 
 
 @router.get("/diagnostics")
-def sync_diagnostics(limit: int = 100):
-    """Recent connection-sync diagnostic rows, newest first (developer options only). One row per connection
-    per /sync call: the status sequence, cursor fingerprints, count deltas, and whether the call completed
-    the initial backfill — enough to see whether a sync stopped at the Initial Update or ran to HISTORICAL_
-    UPDATE_COMPLETE, and why an under-fetch happened."""
-    _require_developer_options()
+def sync_diagnostics(limit: int = 100, connection_id: str | None = None):
+    """Recent connection-sync diagnostic rows, newest first. One row per connection per /sync call: the
+    status sequence, cursor fingerprints, count deltas, any warnings/advisories the pull produced, and
+    whether the call completed the initial backfill — enough to see whether a sync stopped at the Initial
+    Update or ran to HISTORICAL_UPDATE_COMPLETE, and why an under-fetch happened.
+
+    `connection_id` scopes the list to one connection, so opening the log from a connection card doesn't
+    ship the whole retention window to be filtered client-side."""
     limit = max(1, min(limit, _SYNC_LOG_RETENTION))
+    where, params = "", []
+    if connection_id:
+        where = "WHERE connection_id = ?"
+        params.append(connection_id)
+    params.append(limit)
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM connection_sync_log ORDER BY started_at DESC, id DESC LIMIT ?", (limit,),
+            f"SELECT * FROM connection_sync_log {where} ORDER BY started_at DESC, id DESC LIMIT ?",
+            params,
         ).fetchall()
+
+    def _json_list(value):
+        try:
+            parsed = json.loads(value) if value else []
+        except (TypeError, ValueError):
+            return []
+        return parsed if isinstance(parsed, list) else []
 
     def _entry(r):
         d = dict(r)
-        try:
-            d["status_sequence"] = json.loads(r["status_sequence"]) if r["status_sequence"] else []
-        except (TypeError, ValueError):
-            d["status_sequence"] = []
+        d["status_sequence"] = _json_list(r["status_sequence"])
+        # Older rows predate these columns, so a missing key reads as "none recorded" rather than absent.
+        d["warnings"] = _json_list(d.get("warnings"))
+        d["advisories"] = _json_list(d.get("advisories"))
         d["became_complete"] = bool(r["became_complete"])
         return d
 
@@ -1051,8 +1221,7 @@ def sync_diagnostics(limit: int = 100):
 
 @router.delete("/diagnostics")
 def clear_sync_diagnostics():
-    """Empty the connection-sync diagnostics log (developer options only)."""
-    _require_developer_options()
+    """Empty the connection-sync diagnostics log."""
     with get_db() as conn:
         conn.execute("DELETE FROM connection_sync_log")
     return {"ok": True}

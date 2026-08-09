@@ -483,7 +483,9 @@ export const api = {
   getRecategorizePreview: () => request('/sync/recategorize-preview'),
   // Developer-options connection sync diagnostics: recent per-connection /sync calls (status sequence,
   // cursor fingerprints, count deltas). Both endpoints 404 when developer options are off.
-  getSyncDiagnostics: (limit = 100) => request(`/sync/diagnostics?limit=${limit}`),
+  getSyncDiagnostics: (limit = 100, connectionId = null) => request(
+    `/sync/diagnostics?limit=${limit}${connectionId ? `&connection_id=${encodeURIComponent(connectionId)}` : ''}`,
+  ),
   clearSyncDiagnostics: () => request('/sync/diagnostics', { method: 'DELETE' }),
 
   getTasks:    () => request('/tasks'),

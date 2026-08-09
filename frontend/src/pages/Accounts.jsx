@@ -7,6 +7,7 @@ import { api } from '../lib/api.js'
 import { notifyAccountsChanged } from '../App.jsx'
 import { Card, Button, Spinner, Select, Input, PasswordInput, AppDialog, AppConfirmDialog, AppNoticeDialog, AppTextEntryDialog, DialogActions, OverlayBackdrop } from '../components/ui.jsx'
 import AccountDetail from '../components/AccountDetail.jsx'
+import { SourceAccountChip, OutcomeChip } from '../components/importExport/SourceAccountChip.jsx'
 import PillTableHeader from '../components/PillTableHeader.jsx'
 import TagPickerWithCreate from '../components/TagPickerWithCreate.jsx'
 import FeatureExplainer from '../help/FeatureExplainer.jsx'
@@ -376,7 +377,7 @@ function controlStyle(extra = {}) {
 // so connecting/syncing needs the vault unlocked, and — on a networked bind — HTTPS. Only Plaid ships an
 // adapter today; the layout is provider-generic for Teller/SimpleFIN later.
 
-const PROVIDER_LABELS = { plaid: 'Plaid', teller: 'Teller', simplefin: 'SimpleFIN' }
+const PROVIDER_LABELS = { plaid: 'Plaid', teller: 'Teller', simplefin: 'SimpleFIN Bridge' }
 
 function providerLabel(provider) {
   return PROVIDER_LABELS[provider] || (provider ? provider[0].toUpperCase() + provider.slice(1) : 'Provider')
@@ -405,6 +406,94 @@ function StatusPill({ tone = 'accent2', children, title, onClick }) {
     >
       {children}
     </Tag>
+  )
+}
+
+// Wording for the last sync's outcome. The outcome itself is decided in `services/providers/config.py`
+// (`_sync_outcome`) and only rendered here, so the card and the sync log can never describe the same call
+// differently. Each label names the effect on the user's data rather than the mechanism behind it: a walk
+// that stopped on the provider's request budget is "more history to fetch", because "budget paused" means
+// nothing to someone who does not know the provider meters requests.
+const SYNC_OUTCOMES = {
+  failed: {
+    label: 'Sync failed', tone: 'danger',
+    title: 'The last sync did not complete. Nothing new was imported.',
+  },
+  attention: {
+    label: 'Synced · check the log', tone: 'warning',
+    title: 'The sync succeeded, but some transactions did not make it into the ledger. Open the sync log for the detail.',
+  },
+  incomplete: {
+    label: 'Synced · more history to fetch', tone: 'accent2',
+    title: 'Everything the provider offered this time was imported, and older history is still outstanding — the next sync continues from where this one stopped.',
+  },
+  ok: { label: 'Synced', tone: null, title: 'The last sync completed and imported everything it was offered.' },
+}
+
+// The outcome of the last sync, laid out like the Import/Export history card's own outcome row and built
+// from the same chips (`SourceAccountChip`) — a sync and a file import answer the same question, and a
+// user reads the two surfaces minutes apart, so they should not look like different features.
+function LastSyncSummary({ lastSync, syncing, providerAccounts = [], onOpenLog }) {
+  if (syncing) {
+    return (
+      <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+        <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>Syncing…</span>{' '}
+        importing transactions from this data source.
+      </div>
+    )
+  }
+  if (!lastSync) return null
+  const outcome = SYNC_OUTCOMES[lastSync.outcome] || SYNC_OUTCOMES.ok
+  const n = (v) => Number(v || 0).toLocaleString()
+  const rowTotal = (lastSync.added || 0) + (lastSync.updated || 0) + (lastSync.removed || 0)
+  // Every account the connection offers, not only those that received something. An account that imported
+  // nothing is exactly what this exists to surface, and it cannot appear in a tally built from what landed
+  // — which is why the chips are driven from the offered list and the counts merely joined onto it.
+  const chips = providerAccounts.map(pa => ({
+    ...pa,
+    added: lastSync.accounts?.[pa.external_account_id]?.added || 0,
+  }))
+  const lost = lastSync.skipped_no_account || 0
+  // Nothing can already be held before a first import, so on an initial pull this is a contradiction
+  // rather than the routine re-fetch it is on a top-up.
+  const heldOnInitial = lastSync.mode === 'initial' ? (lastSync.skipped_already_held || 0) : 0
+
+  return (
+    <div style={{ display: 'grid', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ color: 'var(--muted)' }}>Last sync</span>
+        {outcome.tone
+          ? <StatusPill tone={outcome.tone} title={outcome.title} onClick={onOpenLog}>{outcome.label}</StatusPill>
+          : <span title={outcome.title} style={{ color: 'var(--text)' }}>{outcome.label}</span>}
+        <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+          {rowTotal ? `${n(rowTotal)} row${rowTotal === 1 ? '' : 's'}` : 'no new transactions'}
+        </span>
+      </div>
+      {chips.length ? (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {chips.map(c => (
+            <SourceAccountChip
+              key={c.external_account_id}
+              label={c.label}
+              count={c.added}
+              skipped={c.mapping_mode === 'skip'}
+            />
+          ))}
+          {heldOnInitial ? (
+            <OutcomeChip
+              label="Already imported" count={heldOnInitial} tone="warning" onClick={onOpenLog}
+              title="Reported as already imported during a first import, which should not happen — open the sync log."
+            />
+          ) : null}
+          {lost ? (
+            <OutcomeChip
+              label="No destination" count={lost} tone="warning" onClick={onOpenLog}
+              title="These transactions had no account to go into. Map the account to import them."
+            />
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -801,7 +890,8 @@ function loadPlaidScript() {
   return plaidScriptPromise
 }
 
-function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCurrentUser, authEnabled, width, disabled }) {
+function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCurrentUser, authEnabled, width, disabled,
+  onOpenAccountDetail }) {
   const [providers, setProviders] = useState(null)
   const [transport, setTransport] = useState(null)
   const [vault, setVault] = useState({ configured: false, hasPassphrase: false, unlocked: false })
@@ -841,6 +931,9 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   const [mapSaving, setMapSaving] = useState(false)
   const [mapError, setMapError] = useState(null)
   const [unmappedByConnection, setUnmappedByConnection] = useState({})
+  // {connectionId: [{external_account_id, label, mapped, mapping_mode}]} — names the last sync's
+  // per-account counts, including accounts that received nothing.
+  const [providerAccountsByConnection, setProviderAccountsByConnection] = useState({})
   // local account id -> the institution the provider says it is at, for a connection spanning several banks
   const [institutionByAccountId, setInstitutionByAccountId] = useState({})
   // While a Plaid Link (+ bank OAuth) session is open, the whole app is blocked behind a modal scrim: the
@@ -896,6 +989,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     // nudge on the card: an unmapped account is silently skipped by every sync until it is resolved, so
     // the state has to be visible rather than inferred from missing transactions.
     const unmapped = {}
+    const providerAccounts = {}
     // The institution each mapped account actually sits at, which the connection heading cannot say when
     // one credential spans several banks (a SimpleFIN access URL does). It rides the same fetch as the
     // mapping counts because `connection_account` is where the provider's own naming is kept — a local
@@ -906,6 +1000,15 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
         try {
           const res = await api.getConnectionAccounts(c.id)
           unmapped[c.id] = res.unmapped || 0
+          // Kept for the last-sync breakdown: it is keyed by the *provider's* account id, and only this
+          // list can name one that has no local account — which is exactly the row worth showing, since an
+          // account receiving nothing cannot appear in any tally built from what landed.
+          providerAccounts[c.id] = (res.accounts || []).map(pa => ({
+            external_account_id: pa.external_account_id,
+            label: pa.source_label || pa.provider_name || pa.external_account_id,
+            mapped: !!pa.mapped,
+            mapping_mode: pa.mapping_mode,
+          }))
           for (const pa of res.accounts || []) {
             if (pa.account_id && pa.provider_official_name) {
               institutions[pa.account_id] = pa.provider_official_name
@@ -915,6 +1018,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       })),
     )
     setUnmappedByConnection(unmapped)
+    setProviderAccountsByConnection(providerAccounts)
     setInstitutionByAccountId(institutions)
     setLoading(false)
   }, [currentUser])
@@ -1413,6 +1517,9 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       {configured.map(p => {
         const connections = p.connections || []
         const ss = syncState[p.provider] || {}
+        // Any connection of this provider reporting a live sync — the server's own view, which outlives
+        // the page that started it (see `sync_started_at`).
+        const serverSyncing = connections.some(c => c.syncing)
         const connectDisabled = disabled || (vault.configured && !vault.unlocked) || httpsBlocked
         const connectTitle = !vault.configured ? 'Set a vault passphrase first'
           : !vault.unlocked ? 'Unlock the vault first'
@@ -1492,10 +1599,18 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
             headerActions={
               // Kept out of the collapsed body on purpose: syncing is the one thing a user comes to this
               // card to do routinely, and needing to expand first would make collapsing cost something.
+              // `ss.syncing` is this component's memory of a sync *it* started, and it dies with the
+              // component — navigating away and back used to re-enable the button while the pull was still
+              // running, inviting a second one. `serverSyncing` is the connection's own state, so the
+              // button reflects what is actually happening regardless of which page or tab began it.
               <Button variant="ghost" small onClick={() => sync(p.provider)}
-                disabled={ss.syncing || !connections.length}
-                title={connections.length ? 'Pull new and changed transactions for every connection' : 'Connect an account before syncing'}>
-                {ss.syncing ? 'Syncing…' : '↻ Sync now'}
+                disabled={ss.syncing || serverSyncing || !connections.length}
+                title={!connections.length
+                  ? `Connect ${providerLabel(p.provider)} before syncing`
+                  : (ss.syncing || serverSyncing)
+                    ? 'A sync is already running for this data source'
+                    : 'Pull new and changed transactions for every connection'}>
+                {(ss.syncing || serverSyncing) ? 'Syncing…' : '↻ Sync now'}
               </Button>
             }
           >
@@ -1507,7 +1622,13 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                     credential would open a dialog with no fields in it. */}
                 {isAdmin && p.requires_app_config !== false
                   ? <Button variant="ghost" small onClick={() => setConfigTarget(p)}>Configure</Button> : null}
-                <Button small onClick={() => connect(p)} disabled={connectDisabled} title={connectTitle}>+ Connect account</Button>
+                {/* Named for the provider, not "account". What this adds is a *connection* to the data
+                    source; the accounts belong to that source and arrive with it — and "account" already
+                    means a ledger account everywhere else in the app, so using it here named the wrong
+                    thing twice over. */}
+                <Button small onClick={() => connect(p)} disabled={connectDisabled} title={connectTitle}>
+                  + Connect {providerLabel(p.provider)}
+                </Button>
                 {p.source === 'env' ? (
                   <span style={{ fontSize: 12, color: 'var(--muted)' }}>credentials from <code>.env</code></span>
                 ) : null}
@@ -1625,10 +1746,41 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
                             {' '}Syncing stays stopped until it is connected again.
                           </div>
                         ) : null}
+                        <LastSyncSummary
+                          lastSync={c.last_sync}
+                          syncing={!!c.syncing}
+                          providerAccounts={providerAccountsByConnection[c.id] || []}
+                          onOpenLog={() => navigate(
+                            `/settings?section=connectionSyncLog&connection=${encodeURIComponent(c.id)}`,
+                          )}
+                        />
+                        {/* Titled because the block above it is now also a list of accounts — the sync's
+                            per-account outcome — and without a heading the two read as one confusing run
+                            of names. These are the local accounts the connection feeds; those were the
+                            provider's own accounts and what each contributed. */}
+                        {accts.length ? (
+                          <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 2 }}>
+                            Connected accounts
+                          </div>
+                        ) : null}
                         {accts.length ? accts.map(a => (
                           <div key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: 'var(--muted)' }}>
                             <span style={{ color: 'var(--text)' }}>{a.display_name || a.name}</span>
                             {a.mask ? <span>····{a.mask}</span> : null}
+                            {/* The same launcher the Accounts tab uses, on the same handler — a connection's
+                                account list is a place a user wants to go *look at* the account, and having
+                                to find the row again on another tab is friction with no reason behind it. */}
+                            <button
+                              type="button"
+                              onClick={() => onOpenAccountDetail?.({
+                                id: a.id, name: a.display_name || a.name, mask: a.mask,
+                              })}
+                              title={`View ${a.display_name || a.name}`}
+                              style={{
+                                background: 'none', border: 'none', padding: '0 2px', cursor: 'pointer',
+                                color: 'var(--accent2)', fontSize: 11, lineHeight: 1, opacity: 0.75,
+                              }}
+                            >↗</button>
                             {/* One credential can cover several banks (a SimpleFIN access URL does), so the
                                 card's own institution name does not identify which bank an account is at.
                                 Shown only when it adds something the card heading doesn't already say. */}
@@ -1760,6 +1912,14 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
               label: '↻ Refresh accounts',
               title: 'Rebuild this connection’s accounts from its saved credential (no re-linking), then sync. Use this if the accounts are missing — e.g. after restoring a backup. To pull older transactions, use Fetch more history.',
               onClick: () => refreshConnectionAccounts(cardMenu.provider, cardMenu.connection),
+            },
+            {
+              label: 'View sync log',
+              separatorBefore: true,
+              title: 'What every sync of this connection actually did — how much arrived, whether the full history was fetched, and anything the provider reported. The place to look when a connection brings in nothing, or less than expected.',
+              onClick: () => navigate(
+                `/settings?section=connectionSyncLog&connection=${encodeURIComponent(cardMenu.connection.id)}`,
+              ),
             },
             {
               label: 'Remove synced transactions',
@@ -4594,6 +4754,9 @@ export default function Accounts() {
               // include_children fetch.
               accounts={activeAccounts}
               onAccountsChanged={loadData}
+              // The same panel the Accounts tab opens, from the same handler — a connection's account list
+              // is a place a user wants to look at the account, not a dead end that sends them elsewhere.
+              onOpenAccountDetail={openAccountDetail}
               currentUser={currentUser}
               setCurrentUser={setCurrentUser}
               authEnabled={authEnabled}

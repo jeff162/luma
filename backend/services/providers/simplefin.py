@@ -224,7 +224,26 @@ def _problem_messages(payload: dict) -> tuple[list[str], list[str]]:
     return actionable[:_MAX_MESSAGES], advisory[:_MAX_MESSAGES]
 
 
-def _check_payload(payload: dict, *, context: str) -> list[str]:
+def _merge_advisories(store: dict, entries: list[dict]) -> None:
+    """Fold one request's advisories into a pull's running set, keyed on the message.
+
+    Keyed on the message alone because that is what makes the aggregation useful: a remark about our
+    request shape repeats on every window of a walk, and one entry saying "×24" is the diagnostic, where
+    24 near-identical entries are noise. The *first* context is kept rather than the last or all of them —
+    it names a concrete request to go look at, which is what a reader wants, and it does not grow with the
+    walk. The count then says whether that one window was special or the whole pull was."""
+    for entry in entries:
+        message = entry.get("message")
+        if not message:
+            continue
+        slot = store.get(message)
+        if slot is None:
+            store[message] = {"message": message, "count": 1, "context": entry.get("context")}
+        else:
+            slot["count"] += 1
+
+
+def _check_payload(payload: dict, *, context: str) -> tuple[list[str], list[dict]]:
     """One access URL can cover several institutions, so a problem is rarely total: a bank needing
     re-authentication reports an error while every other bank on the same URL still returns its accounts.
     Failing the whole call there would let one stale login block every other account from ever syncing.
@@ -232,17 +251,28 @@ def _check_payload(payload: dict, *, context: str) -> list[str]:
     So an error *alongside* usable data is returned as a **warning** and the data kept; only an error with
     nothing to show for it is raised. Returning rather than merely logging matters: the pull succeeds, so
     without surfacing it nothing would ever tell the user that one of their banks quietly stopped
-    delivering — a partial failure wearing the appearance of a clean sync."""
+    delivering — a partial failure wearing the appearance of a clean sync.
+
+    Returns `(actionable, advisory)`. Both are logged as they always were — the console stays a sink, it
+    just stopped being the *only* one. Advisories are now returned too rather than swallowed here: they
+    still never reach the connection card, but the sync log is where they belong, since a user who cannot
+    read the server's console otherwise has no way to see that a provider changed its limits.
+
+    Each advisory carries the `context` of the request that drew it (`{"message", "context"}`). The message
+    alone is what the caller aggregates on — an advisory about our request shape repeats identically across
+    a walk's every window, and collapsing those to one entry with a count is the whole point — but the
+    message alone also cannot say *which* request provoked it, which is the first thing anyone reading the
+    log wants. Folding the window into the message instead would make each window its own entry and undo
+    the aggregation, so the two travel separately."""
     actionable, advisory = _problem_messages(payload)
     if advisory:
-        # Logged, never surfaced: these describe our own request, so there is nothing for a user to do
-        # about one, and the log is where a change in the server's limits stays visible.
         log_warning(f"[simplefin] {context}: {'; '.join(advisory)}")
+    advisory_entries = [{"message": m, "context": context} for m in advisory]
     if not actionable:
-        return []
+        return [], advisory_entries
     if payload.get("accounts"):
         log_warning(f"[simplefin] {context}: {'; '.join(actionable)}")
-        return actionable
+        return actionable, advisory_entries
     raise SimpleFinError(_clip("; ".join(actionable)))
 
 
@@ -390,7 +420,9 @@ class SimpleFinAdapter(ProviderAdapter):
     # ---- fetching --------------------------------------------------------
 
     def _get_accounts(self, credential: str, params: dict, *, context: str,
-                      repeated: dict[str, list[str]] | None = None) -> tuple[dict, list[str]]:
+                      repeated: dict[str, list[str]] | None = None) -> tuple[dict, list[str], list[str]]:
+        """`(payload, warnings, advisories)` — see `_check_payload` for the split between the two message
+        lists."""
         # `repeated` carries parameters the protocol expects more than once (`account=a&account=b`), which
         # a plain dict cannot express.
         base, username, password = _split_access_url(credential)
@@ -422,7 +454,8 @@ class SimpleFinAdapter(ProviderAdapter):
             payload = json.loads(body)
         except ValueError as exc:
             raise SimpleFinError("SimpleFIN returned a response that could not be read.") from exc
-        return payload, _check_payload(payload, context=context)
+        warnings, advisories = _check_payload(payload, context=context)
+        return payload, warnings, advisories
 
     @staticmethod
     def _org_names(payload: dict) -> dict:
@@ -442,8 +475,8 @@ class SimpleFinAdapter(ProviderAdapter):
         # this credential offer", and its caller (connect / refresh-accounts) shows the answer immediately,
         # so a bank missing from the list is visible on the spot. The sync path has no such moment, which
         # is why it carries them through instead.
-        payload, _ = self._get_accounts(credential, {"balances-only": 1, "version": 2},
-                                        context="fetching accounts")
+        payload, _, _ = self._get_accounts(credential, {"balances-only": 1, "version": 2},
+                                           context="fetching accounts")
         org_names = self._org_names(payload)
         accounts = []
         for a in payload.get("accounts") or []:
@@ -481,7 +514,16 @@ class SimpleFinAdapter(ProviderAdapter):
     @staticmethod
     def _normalize_txn(account_external_id: str, t: dict) -> dict:
         return {
-            "external_transaction_id": str(t.get("id")),
+            # **Namespaced by account, exactly as the account id itself is namespaced by provider.** The
+            # ledger treats `external_transaction_id` as globally unique (a UNIQUE column, and every sync
+            # lookup queries it unscoped), which is true of Plaid's ids and is NOT something SimpleFIN
+            # promises: the protocol only makes a transaction id meaningful *within* its account. The Bridge's
+            # demo server derives ids from the posting instant and runs every account on one schedule, so two
+            # accounts issue byte-identical ids — and the second account's rows then matched the first's on
+            # that unscoped lookup and were dropped as already-held. Silent, and total: the account imported
+            # nothing while the sync reported success. Prefixing here keeps the ledger's invariant true at
+            # the boundary that knows it isn't, rather than weakening it for every provider.
+            "external_transaction_id": f"{account_external_id}:{t.get('id')}",
             "external_account_id":     account_external_id,
             "amount":                  _to_amount(t.get("amount")),
             # Three name-ish fields, and which is which is not what their names suggest. Observed on a
@@ -505,9 +547,10 @@ class SimpleFinAdapter(ProviderAdapter):
                       account_ids: list[str] | None = None,
                       ledger_currency: str = DEFAULT_LEDGER_CURRENCY,
                       *, end_of_day: bool,
-                      ) -> tuple[list[dict], list[str], dict[str, str]]:
-        """One request: transactions in one window, plus any non-fatal problems reported alongside them,
-        plus the accounts whose rows were discarded for being in another currency.
+                      ) -> tuple[list[dict], list[str], list[dict], dict[str, str]]:
+        """One request: transactions in one window, the non-fatal problems reported alongside them split
+        into `(warnings, advisories)`, and the accounts whose rows were discarded for being in another
+        currency.
 
         `account_ids` narrows the response to specific provider accounts. It reduces the *payload*, not the
         number of requests — a range is still a range — so it does not by itself make a deep pull cheaper.
@@ -537,7 +580,7 @@ class SimpleFinAdapter(ProviderAdapter):
             "pending":    1,
             "version":    2,
         }
-        payload, warnings = self._get_accounts(credential, params, context=(
+        payload, warnings, advisories = self._get_accounts(credential, params, context=(
             f"fetching {start.isoformat()}..{end.isoformat()}"
         ), repeated={"account": [_strip_prefix(a) for a in account_ids]} if account_ids else None)
         out = []
@@ -557,7 +600,7 @@ class SimpleFinAdapter(ProviderAdapter):
                 row = self._normalize_txn(account_external_id, t)
                 if row["date"]:
                     out.append(row)
-        return out, warnings, dropped
+        return out, warnings, advisories, dropped
 
     def fetch_transactions(
         self, app_config: dict, credential: str, start_date: date | None = None, end_date: date | None = None
@@ -568,8 +611,9 @@ class SimpleFinAdapter(ProviderAdapter):
         a bounded range a caller has already reasoned about. Routine syncing and backfills go through
         `fetch_transactions_sync`, which walks and meters.
 
-        Rows in another currency are dropped here as everywhere, but not *reported*: the signature returns
-        a bare list with nowhere to put them. That is why this is not the syncing path."""
+        Rows in another currency are dropped here as everywhere, but not *reported*, and neither are the
+        server's warnings or advisories: the signature returns a bare list with nowhere to put any of them
+        (they still reach the console via `_check_payload`). That is why this is not the syncing path."""
         end = end_date or date.today()
         start = start_date or (end - timedelta(days=self.routine_lookback_days))
         rows: list[dict] = []
@@ -580,7 +624,7 @@ class SimpleFinAdapter(ProviderAdapter):
             # the slice after them. Note this end may be a historical date rather than today — clipping it
             # to midnight would drop the very last day the caller asked for.
             rows.extend(self._fetch_window(credential, window_start, window_end,
-                                           end_of_day=window_end == end)[0])
+                                           end_of_day=window_end == end)[0])  # advisories: see docstring
             window_start = window_end
         return rows
 
@@ -611,7 +655,7 @@ class SimpleFinAdapter(ProviderAdapter):
         return True
 
     def _fetch_recent(self, credential: str, state: dict, today: date, warnings: dict,
-                      dropped: dict[str, str], ledger_currency: str) -> list[dict]:
+                      advisories: dict, dropped: dict[str, str], ledger_currency: str) -> list[dict]:
         """The recent window — one request, overlapping what is already held.
 
         The overlap is the provider's own guidance and covers a real case: a transaction can post with a
@@ -621,18 +665,19 @@ class SimpleFinAdapter(ProviderAdapter):
         """
         through = date.fromisoformat(state["through"]) if state.get("through") else today
         window_start = min(through - timedelta(days=INCREMENTAL_OVERLAP_DAYS), today)
-        rows, window_warnings, window_dropped = self._fetch_window(
+        rows, window_warnings, window_advisories, window_dropped = self._fetch_window(
             credential, window_start, today, ledger_currency=ledger_currency,
             # The top-up is always the newest bound there is, so its end runs to the close of today —
             # otherwise every sync would miss whatever posted since midnight and never come back for it.
             end_of_day=True)
         warnings.update(dict.fromkeys(window_warnings))
+        _merge_advisories(advisories, window_advisories)
         dropped.update(window_dropped)
         state["through"] = today.isoformat()
         return rows
 
     def _walk_history(self, credential: str, state: dict, targets: list[dict], today: date,
-                      warnings: dict, dropped: dict[str, str],
+                      warnings: dict, advisories: dict, dropped: dict[str, str],
                       ledger_currency: str) -> tuple[list[dict], dict, bool]:
         """Walk backward until every targeted account has reached its requested depth or run out of history.
 
@@ -674,7 +719,7 @@ class SimpleFinAdapter(ProviderAdapter):
                 break
             window_end = max(frontier[a] for a in active)
             window_start = window_end - timedelta(days=WINDOW_DAYS)
-            rows, window_warnings, window_dropped = self._fetch_window(
+            rows, window_warnings, window_advisories, window_dropped = self._fetch_window(
                 credential, window_start, window_end, active if len(active) == 1 else None,
                 ledger_currency=ledger_currency,
                 # The walk moves backward, so its end is normally a date something newer already covers —
@@ -684,6 +729,11 @@ class SimpleFinAdapter(ProviderAdapter):
                 end_of_day=window_end == today,
             )
             warnings.update(dict.fromkeys(window_warnings))
+            # Counted rather than set-deduped: a walk provokes the same advisory on every one of its ~24
+            # requests, and "24 times" is the diagnostic signal — it says the whole walk was affected, not
+            # one stray request. Warnings stay a plain ordered set above; they describe a bank, and how many
+            # windows re-reported it says nothing about the bank.
+            _merge_advisories(advisories, window_advisories)
             dropped.update(window_dropped)
             added.extend(rows)
 
@@ -722,6 +772,9 @@ class SimpleFinAdapter(ProviderAdapter):
         # Deduplicated in order: the same bank reports the same problem in every window the walk touches,
         # and a user reading the connection card needs the distinct problems, not one per request.
         warnings: dict[str, None] = {}
+        # Counted, not merely deduplicated: an advisory describes *our request*, so how many of a walk's
+        # requests provoked it is the useful part. See the `advisories` note in `ProviderAdapter`.
+        advisories: dict[str, dict] = {}
         coverage: dict[str, dict] = {}
         # Accounts whose rows this pull discarded for being in another currency. Accumulated across every
         # window rather than per window, since one account's denomination does not change between them.
@@ -740,7 +793,8 @@ class SimpleFinAdapter(ProviderAdapter):
                 # actually looks at — while history fills in behind it.
                 if self._spend(state, today):
                     added.extend(self._fetch_recent(
-                        credential, state, today, warnings, dropped_currency, ledger_currency))
+                        credential, state, today, warnings, advisories, dropped_currency,
+                        ledger_currency))
                 else:
                     resume_later = True
             else:
@@ -749,13 +803,14 @@ class SimpleFinAdapter(ProviderAdapter):
                 state["through"] = today.isoformat()
 
             walk_added, coverage, walk_resume = self._walk_history(
-                credential, state, account_targets, today, warnings, dropped_currency, ledger_currency,
+                credential, state, account_targets, today, warnings, advisories, dropped_currency,
+                ledger_currency,
             )
             added.extend(walk_added)
             resume_later = resume_later or walk_resume
         elif self._spend(state, today):
             added.extend(self._fetch_recent(
-                        credential, state, today, warnings, dropped_currency, ledger_currency))
+                credential, state, today, warnings, advisories, dropped_currency, ledger_currency))
         else:
             resume_later = True
 
@@ -792,6 +847,11 @@ class SimpleFinAdapter(ProviderAdapter):
             "account_coverage": coverage,
             # Banks on this access URL that reported a problem while the others delivered normally.
             "warnings": list(warnings),
+            # What the server said about *our* requests — a range it considers too wide, and so on. Never
+            # shown on the connection card (nothing here is the user's to fix), but recorded in the sync
+            # log, which is the only place a change in the provider's limits is visible without reading
+            # the server console. `count` is how many of this pull's requests drew the same remark.
+            "advisories": list(advisories.values()),
             # Accounts whose rows were discarded as not being in the ledger's currency. Left for the caller
             # to judge: only it knows which of these the user actually mapped, and so which are a real loss
             # rather than an account already being ignored.

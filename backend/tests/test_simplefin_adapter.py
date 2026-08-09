@@ -38,6 +38,16 @@ from backend.services.providers.simplefin import (
 
 ACCESS_URL = "https://user-abc:pass-xyz@beta-bridge.simplefin.org/simplefin"
 
+
+def _ext_id(bank_txn_id, bank_account_id="2930002"):
+    """The `external_transaction_id` the adapter produces for a bank's own transaction id.
+
+    A SimpleFIN transaction id is unique only within its account, so the adapter namespaces it by the
+    (already provider-namespaced) account id. Stated once here rather than spelled out per assertion, so
+    these tests read as "the row for t1" and do not have to be rewritten if the format moves."""
+    return f"simplefin:{bank_account_id}:{bank_txn_id}"
+
+
 # The demo token from the Bridge's developer guide: base64 of a claim URL under /claim/DEMO-.
 DEMO_TOKEN = (
     "aHR0cHM6Ly9iZXRhLWJyaWRnZS5zaW1wbGVmaW4ub3JnL3NpbXBsZWZpbi9jbGFpbS9ERU1PLXYyLTE2QjA5NDU1RTY4MUIxMjE1ODM2"
@@ -141,8 +151,8 @@ class SimpleFinNormalizationTests(unittest.TestCase):
         server = _Server(payload=_payload([_txn("t1", "2026-08-01", "-33.87", "COFFEE"),
                                            _txn("t2", "2026-08-02", "1200.00", "PAYROLL")]))
         rows = {r["external_transaction_id"]: r for r in self._sync(server)["added"]}
-        self.assertEqual(rows["t1"]["amount"], 33.87)
-        self.assertEqual(rows["t2"]["amount"], -1200.00)
+        self.assertEqual(rows[_ext_id("t1")]["amount"], 33.87)
+        self.assertEqual(rows[_ext_id("t2")]["amount"], -1200.00)
 
     def test_transacted_at_becomes_authorized_date(self):
         server = _Server(payload=_payload([
@@ -259,6 +269,50 @@ class SimpleFinErrorTests(unittest.TestCase):
             ])
         self.assertGreater(len(server.requested_windows), 1, "this must actually span several windows")
         self.assertEqual(result["warnings"], ["Authentication required"])
+
+    def test_a_request_advisory_is_returned_as_well_as_logged(self):
+        # An advisory describes our own request, so it is not a warning and never reaches the connection
+        # card. It used to reach only the server console, which answered "why is this happening?" for
+        # whoever could read the console and nobody else. Both sinks now, not one.
+        server = _Server(payload=_payload(
+            [_txn("t1", "2026-08-01", "-5.00", "SHOP")],
+            errlist=[{"code": "gen.api", "msg": "Requested date range exceeds recommended range of 45 days."}],
+        ))
+        with mock.patch("backend.services.providers.simplefin._http", server), \
+                mock.patch("backend.services.providers.simplefin.date", _FrozenDate("2026-08-07")), \
+                mock.patch("backend.services.providers.simplefin.log_warning") as logged:
+            result = self.adapter.fetch_transactions_sync({}, ACCESS_URL, days_requested=WINDOW_DAYS)
+        self.assertEqual(result["warnings"], [], "an advisory is not a bank problem")
+        self.assertEqual(len(result["advisories"]), 1)
+        entry = result["advisories"][0]
+        self.assertEqual(entry["message"],
+                         "[gen.api] Requested date range exceeds recommended range of 45 days.")
+        self.assertEqual(entry["count"], 1)
+        # The window that drew it — the detail the console line always carried and the log used to lose.
+        # Derived from the request the server actually saw rather than restated, so this asserts the
+        # context *identifies the request* instead of pinning a date the fixture happens to produce.
+        start, end = server.requested_windows[0]
+        self.assertEqual(entry["context"], f"fetching {start.isoformat()}..{end.isoformat()}")
+        self.assertTrue(logged.called, "the console stays a sink; it just stopped being the only one")
+
+    def test_the_same_advisory_across_many_windows_is_counted_not_repeated(self):
+        # The counterpart of the warning test above, and the reason advisories carry a count where warnings
+        # do not: a walk provokes the same remark on every request, and how *many* is the diagnostic —
+        # it says the whole walk was affected rather than one stray window.
+        server = _Server(payload=_payload(
+            [_txn("t1", "2026-08-01", "-5.00", "SHOP")],
+            errlist=[{"code": "gen.api", "msg": "Requested date range exceeds recommended range of 45 days."}],
+        ))
+        with mock.patch("backend.services.providers.simplefin._http", server), \
+                mock.patch("backend.services.providers.simplefin._utc_today", lambda: date(2026, 8, 7)):
+            result = self.adapter.fetch_transactions_sync({}, ACCESS_URL, account_targets=[
+                {"external_account_id": "simplefin:2930002", "from_date": "2016-01-01",
+                 "reached": None, "empty_streak": 0},
+            ])
+        windows = len(server.requested_windows)
+        self.assertGreater(windows, 1, "this must actually span several windows")
+        self.assertEqual(len(result["advisories"]), 1, "one entry, however many windows drew it")
+        self.assertEqual(result["advisories"][0]["count"], windows)
 
     def test_legacy_string_errors_are_understood(self):
         server = _Server(payload={"errors": ["Connection needs attention"], "accounts": []})
@@ -603,7 +657,7 @@ class SimpleFinWalkTests(unittest.TestCase):
             (w3[0].isoformat(), w3[1].isoformat()): [_txn("t2", "2026-04-20", "-9.00", "B")],
         })
         result = self._sync(server, self._targets("simplefin:2930002"))
-        self.assertIn("t2", {r["external_transaction_id"] for r in result["added"]})
+        self.assertIn(_ext_id("t2"), {r["external_transaction_id"] for r in result["added"]})
 
     def test_reaching_the_requested_depth_is_not_the_same_as_being_complete(self):
         # Only an account whose own windows came back empty has ENDED. One that merely hit the depth asked
@@ -812,7 +866,8 @@ class SimpleFinCurrencyTests(unittest.TestCase):
     def test_transactions_in_another_currency_never_enter_the_ledger(self):
         result = self._sync(self._accounts_payload("EUR"))
         ids = {t["external_transaction_id"] for t in result["added"]}
-        self.assertEqual(ids, {"t-usd"}, "a foreign-currency row would be stored as if it were dollars")
+        self.assertEqual(ids, {_ext_id("t-usd", "usd-1")},
+                         "a foreign-currency row would be stored as if it were dollars")
 
     def test_the_drop_is_reported_per_account_with_its_currency(self):
         # Reported as data rather than as a warning string: the adapter knows nothing of mappings, and
@@ -832,13 +887,15 @@ class SimpleFinCurrencyTests(unittest.TestCase):
         payload = self._accounts_payload("USD")
         del payload["accounts"][1]["currency"]
         result = self._sync(payload)
-        self.assertEqual({t["external_transaction_id"] for t in result["added"]}, {"t-usd", "t-other"})
+        self.assertEqual({t["external_transaction_id"] for t in result["added"]},
+                         {_ext_id("t-usd", "usd-1"), _ext_id("t-other", "other-1")})
         self.assertEqual(result["unsupported_currency"], {})
 
     def test_currency_matching_is_not_case_sensitive(self):
         payload = self._accounts_payload("usd")
         result = self._sync(payload)
-        self.assertEqual({t["external_transaction_id"] for t in result["added"]}, {"t-usd", "t-other"})
+        self.assertEqual({t["external_transaction_id"] for t in result["added"]},
+                         {_ext_id("t-usd", "usd-1"), _ext_id("t-other", "other-1")})
 
     def test_an_account_with_no_activity_is_not_reported(self):
         # Nothing was lost, so there is nothing to tell the user. Reporting every foreign account on every

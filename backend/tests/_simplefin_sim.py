@@ -220,9 +220,15 @@ class SimpleFinSim:
 
     def expected_ids(self, account_id: str, since: str, until: str) -> set[str]:
         """The transaction ids this bank holds for an account in a range — what a ledger claiming to cover
-        that range must contain. Takes the namespaced id, as the rest of this class's queries do."""
+        that range must contain. Takes the namespaced id, as the rest of this class's queries do.
+
+        Returned in the form the *ledger* stores, `"<namespaced account>:<bank's id>"`, because a SimpleFIN
+        transaction id is only unique within its account and the adapter namespaces it on the way in (see
+        `_normalize_txn`). Comparing bare ids here would have made this invariant blind to precisely the bug
+        that motivates the namespacing: two accounts issuing the same ids, the second silently importing
+        nothing."""
         bare = account_id.split(":", 1)[-1]
-        return {t.id for t in self.ledger
+        return {f"{account_id}:{t.id}" for t in self.ledger
                 if t.account == bare and since <= t.posted_date <= until}
 
 
