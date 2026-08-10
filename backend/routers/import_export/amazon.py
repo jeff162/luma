@@ -358,7 +358,15 @@ def _order_evidence(order: AmazonOrder) -> dict:
 def _create_order_txn(conn, order, amount, *, account_id, owner_id, batch_id, category_id) -> str:
     """Create the single spending transaction for one order in the Amazon account (amount = net cash;
     the item list is the memo; per-item reference detail rides in evidence). One row per order — never
-    per item."""
+    per item.
+
+    A **$0 order is a real record here** — fully gift-carded, promotional, or a return that nets out —
+    not a pending charge awaiting an amount, which is why this source keeps them where CSV import refuses
+    them (`SOURCE_AMAZON` in `services/source_capabilities.py`). Reconciliation depends on it: a $0 order
+    that never landed would read as an order whose charge could not be found. Keeping them means there is
+    no filter to write here; the declaration is held to the behaviour by test, not by a branch that can
+    never fire.
+    """
     label = _order_label(order)
     return _insert_imported_transaction(conn, batch_id, {
         "account_id": account_id,

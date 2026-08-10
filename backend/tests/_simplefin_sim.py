@@ -226,10 +226,19 @@ class SimpleFinSim:
         transaction id is only unique within its account and the adapter namespaces it on the way in (see
         `_normalize_txn`). Comparing bare ids here would have made this invariant blind to precisely the bug
         that motivates the namespacing: two accounts issuing the same ids, the second silently importing
-        nothing."""
+        nothing.
+
+        A $0 transaction is excluded, because the ledger is *right* not to hold it: this provider declares
+        `zero_amount_rows = "reject"`, so such a row is refused on purpose and reported as a rejected row
+        rather than lost. The exclusion is stated here, from the fixture's own knowledge of the amount it
+        published, rather than by importing the policy — an invariant that resolved the question the same
+        way the code does would agree with the code about a row it wrongly dropped. Note what stays
+        covered: a non-zero row going missing still fails, which is the silent-skip bug this exists for.
+        """
         bare = account_id.split(":", 1)[-1]
         return {f"{account_id}:{t.id}" for t in self.ledger
-                if t.account == bare and since <= t.posted_date <= until}
+                if t.account == bare and since <= t.posted_date <= until
+                and float(t.amount) != 0}
 
 
 def build_ledger(accounts=("Demo Checking", "Demo Savings"), start="2024-01-01", end="2026-08-08"):
@@ -326,6 +335,11 @@ def _deliberate_patterns(accounts, end):
                     memo="MERCHANT REFUND", payee="Grocery store"))
     rows.append(Txn("payroll-1", primary, at(14), "2400.00", "Payroll",
                     memo="ACME CORP PAYROLL", payee="Acme Corp"))
+    # Neither in nor out: an authorization published before it carries an amount. SimpleFIN declares
+    # `zero_amount_rows = "reject"` (nothing here can ever revise a held row into its settled amount), so
+    # this row must be refused and reported as a rejected row — not imported, and not silently dropped.
+    # It is the fixture for that policy end to end; deleting it as pointless would take the coverage with
+    # it. `expected_ids` knows to exclude it, which is what keeps the completeness invariant honest.
     rows.append(Txn("zero-1", primary, at(12), "0.00", "Card authorization",
                     memo="AUTH HOLD", payee="Fuel Stop"))
 

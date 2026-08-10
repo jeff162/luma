@@ -94,6 +94,13 @@ from backend.services.duplicate_detection import (
 )
 from backend.text_utils import sanitize_rule_merchant_text
 from backend.services.transaction_tags import sync_rule_tags_for_transaction
+from backend.services.source_capabilities import (
+    SOURCE_CSV,
+    ZERO_AMOUNT_REJECTION_KIND,
+    ZERO_AMOUNT_REJECTION_REASON,
+    rejects_zero_amount,
+    zero_amount_policy_for_source,
+)
 from backend.services.import_enrichment import enrich_duplicate_row, undo_duplicate_enrichment, reverse_batch_enrichments
 from backend.services.money_movement import (
     suppress_batch_funding_legs,
@@ -2810,6 +2817,9 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
     invalid_rows_suspected = False
     invalid_rows_message = None
     zero_amount_rows = []
+    # Resolved once per import rather than per row: the policy is a property of the source, and reading it
+    # inside the loop would invite a future edit that varies it by row.
+    reject_zero_amount_rows = rejects_zero_amount(zero_amount_policy_for_source(SOURCE_CSV))
     validation_error_rows = []
     duplicate_rows = []
     skip_set = set(skip_accounts_cfg)
@@ -3206,12 +3216,18 @@ def run_import_core(text: str, cfg: dict, *, filename: str = "upload.csv", conn=
                     skipped += remaining
                     break
                 continue
-            if amount == 0:
+            # Declared rather than decided here: a $0 row means different things from different sources,
+            # and the rule (plus what goes wrong either way) lives in `services/source_capabilities.py`.
+            # For a CSV it is a pending charge published before it settled, and nothing can ever revise it
+            # — no identity carries between files — so the settled charge arrives in a later file as an
+            # ordinary new row while the placeholder lingers as a permanent near-miss for duplicate
+            # detection. Refused, and reported on the card rather than silently discarded.
+            if reject_zero_amount_rows and amount == 0:
                 skipped += 1
                 zero_amount_rows.append({
                     "row": row_num,
-                    "kind": "zero_amount",
-                    "reason": "Zero amount",
+                    "kind": ZERO_AMOUNT_REJECTION_KIND,
+                    "reason": ZERO_AMOUNT_REJECTION_REASON,
                     "values": _normalize_import_row_values(row, headers),
                 })
                 row_results.append({"row": row_num, "status": "zero_amount"})

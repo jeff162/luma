@@ -66,6 +66,7 @@ from abc import ABC, abstractmethod
 from datetime import date, timedelta
 
 from backend.services.ledger_currency import DEFAULT_LEDGER_CURRENCY
+from backend.services.source_capabilities import ZeroAmountPolicy
 
 # The ledger's currency is **not** defined here, and no adapter may assume one. It is a user setting
 # (`services/ledger_currency.py`) and reaches an adapter the same way `account_targets` does: passed down
@@ -131,6 +132,12 @@ class ProviderAdapter(ABC):
     # which the disconnect confirmation has to say, because it is the difference between "this can no
     # longer read my bank" and "this still can, and I have one more thing to do".
     revokes_on_disconnect: bool = True
+
+    # Whether this provider's $0 transactions are kept or refused. **Deliberately has no default**: the
+    # answer turns on what a $0 row means coming from this particular provider, which does not generalize
+    # from one to the next, so a new adapter must state it rather than inherit a guess. The rule for
+    # deciding, and what goes wrong either way, is in `services/source_capabilities.py`.
+    zero_amount_rows: ZeroAmountPolicy
 
     # How far back a *routine* (non-backfill) sync reaches on a provider with no cursor. Deliberately not
     # applied to a cursor provider: for Plaid `days_requested` sets the window the item *maintains*, so

@@ -364,9 +364,15 @@ phase 6a), so adding Teller or SimpleFIN is an adapter, not a change to the conn
   several of its traits turned out not to be universal. Each is now a class attribute an adapter declares,
   so a caller asks the adapter rather than knowing which providers are special: `connect_spec` (a Link-style
   widget vs. a pasted token — it also drives what the connect UI renders), `requires_app_config`,
-  `has_cursor`, `max_history_days`, `routine_lookback_days`, `revokes_on_disconnect`, and
-  `connect_requires_production_vault(payload)`. Adding a provider means declaring these; it should not mean
-  editing the routers, the sync loop, or the Connections tab.
+  `has_cursor`, `max_history_days`, `routine_lookback_days`, `revokes_on_disconnect`, `zero_amount_rows`,
+  and `connect_requires_production_vault(payload)`. Adding a provider means declaring these; it should not
+  mean editing the routers, the sync loop, or the Connections tab. `zero_amount_rows` is the one with **no
+  default** — what a $0 row means does not generalize between sources, so an undeclared one must fail
+  rather than inherit. It also spans beyond adapters: the CSV and Amazon importers are data sources with no
+  class to hold an attribute, so they declare through the registry in `services/source_capabilities.py`.
+  **See `docs/building-a-connector.md`** for the full checklist of provider traits that turned out not to
+  be universal (id uniqueness, currency, budgets, coverage claims, reporting refusals) and the failures
+  each one prevents.
 - **One connect flow, two entry points.** `providers.establish_connection` is the whole flow after the
   handshake — demo/vault gates, credential encryption, the `(provider, external_id)` upsert,
   `upsert_connection_accounts`, the unmapped count. Link-style providers reach it via `POST

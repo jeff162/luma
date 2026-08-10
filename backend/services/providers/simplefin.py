@@ -52,6 +52,7 @@ from datetime import date, datetime, timedelta, timezone
 from backend.app_logging import log_warning
 from backend.services.ledger_currency import DEFAULT_LEDGER_CURRENCY, currency_matches
 from backend.services.providers.base import ProviderAdapter, ProviderCredentialRejected
+from backend.services.source_capabilities import REJECT_ZERO_AMOUNT
 
 # The stride of a history walk, and the widest single date-range query made.
 #
@@ -343,6 +344,10 @@ class SimpleFinAdapter(ProviderAdapter):
     revokes_on_disconnect = False     # no revocation call exists; only the user, at the Bridge, can revoke
     max_history_days = None           # the Bridge publishes no history cap; the walk finds the end itself
     routine_lookback_days = 30
+    # Rejected: the Bridge publishes no change feed and no pending pointer, so nothing can ever revise a
+    # row already held — a settling charge arrives under a *new* id as its own row, leaving the $0 one
+    # stranded (duplicate detection cannot pair them; the amounts differ). Same dead weight as a CSV's.
+    zero_amount_rows = REJECT_ZERO_AMOUNT
     connect_spec = {
         "style": "token",
         "label": "Setup token",

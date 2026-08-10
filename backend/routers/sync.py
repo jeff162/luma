@@ -10,6 +10,18 @@ readiness (`update_status`), so the client can poll to completion without a webh
 idempotence by provider transaction id, pending-to-posted advancement without rewriting local edits,
 reuse of the shared categorization engine, and — for a connection's first (historical) pull — one
 "initial import" card, with routine top-up syncs accreting onto monthly period cards.
+
+Zero-amount rows are the provider's call, not this loop's. A source often publishes a pending charge
+before it carries an amount and revises it on settlement; that revision reaches us keyed on the provider
+transaction id, as a `modified` or through `pending_external_transaction_id`. Both paths update a row
+already held and ignore a revision naming one that is not (`_apply_modified` counts it `skipped_not_held`)
+— so where a provider revises in place, the $0 row is precisely what the settled amount lands on and
+filtering it would discard the charge rather than delay it. Where a provider *cannot* revise in place
+(SimpleFIN: no change feed, no pending pointer, and a settling charge arrives under a new id) the
+placeholder is unreachable and is refused instead, exactly as a CSV's is. Each adapter therefore declares
+`zero_amount_rows` and `_insert_added` honors it; the rule for choosing, and the failure each way, is in
+`services/source_capabilities.py` and `docs/building-a-connector.md`. A refusal is reported on the card
+as a rejected row, never dropped silently.
 """
 
 import json
@@ -34,6 +46,11 @@ from backend.services.categorizer import (
     rule_scalar_effects,
 )
 from backend.services.connection_dedupe import build_connection_dedupe
+from backend.services.source_capabilities import (
+    ZERO_AMOUNT_REJECTION_KIND,
+    ZERO_AMOUNT_REJECTION_REASON,
+    rejects_zero_amount,
+)
 from backend.services.connection_mapping import build_sync_evidence, record_provider_accounts
 from backend.services.duplicate_detection import (
     evaluate_duplicate,
@@ -324,6 +341,74 @@ def record_sync_duplicate(conn, *, batch_id: str, txn: dict, merchant_name, cont
             "display_name_source": "import",
         },
     }])
+
+
+# The columns a synced rejected row is shown under. A CSV names the file's own headers here; a sync has
+# none, so it publishes the same four fields `record_sync_duplicate` reports a rejected duplicate with —
+# one vocabulary for both reports, and the dialog renders them without knowing which produced it.
+_SYNC_REJECTED_HEADERS = ["Date", "Description", "Account", "Amount"]
+
+# Matches the CSV importer's own cap: the report is a sample that shows the user *what kind* of row was
+# refused, not a second copy of the feed.
+_MAX_REJECTED_ROWS = 20
+
+
+def record_sync_zero_amount_rejection(conn, *, batch_id: str, txn: dict, source_label: str) -> None:
+    """File a refused $0 row onto its card's rejected-row report, in the shape CSV import already writes.
+
+    The counts **accumulate** rather than being written once. A CSV summarizes one file at the end of one
+    import; a monthly sync period card is added to by every top-up for the rest of the month, so a summary
+    that overwrote would silently reset the count on each sync and report only the latest one's rejects.
+    """
+    # Lazy for the same reason `record_sync_duplicate` is: core.py pulls in many services, and the key is
+    # taken from it rather than restated here so the two reports cannot drift onto different snapshot keys.
+    from backend.routers.import_export.core import IMPORT_SUMMARY_KEY
+
+    snapshot = _card_config_snapshot(conn, batch_id)
+    summary = snapshot.get(IMPORT_SUMMARY_KEY) or {}
+
+    rejected_rows = list(summary.get("rejected_rows") or [])
+    if len(rejected_rows) < _MAX_REJECTED_ROWS:
+        rejected_rows.append({
+            # A running ordinal, not a file line — the same substitution `record_sync_duplicate` makes,
+            # and for the same reason: a sync has no lines but the report is keyed by row.
+            "row": int(summary.get("zero_amount_count") or 0) + 1,
+            "kind": ZERO_AMOUNT_REJECTION_KIND,
+            "reason": ZERO_AMOUNT_REJECTION_REASON,
+            "values": {
+                "Date": txn["date"],
+                "Description": txn["raw_name"] or txn.get("merchant_name") or "",
+                "Account": source_label,
+                "Amount": txn["amount"],
+            },
+        })
+
+    zero_amount_count = int(summary.get("zero_amount_count") or 0) + 1
+    validation_error_count = int(summary.get("validation_error_count") or 0)
+    summary.update({
+        "zero_amount_count": zero_amount_count,
+        "validation_error_count": validation_error_count,
+        "rejected_count": zero_amount_count + validation_error_count,
+        "rejected_rows": rejected_rows,
+        "rejected_headers": _SYNC_REJECTED_HEADERS,
+    })
+    snapshot[IMPORT_SUMMARY_KEY] = summary
+    conn.execute("UPDATE import_batch SET config_snapshot = ? WHERE id = ?",
+                 (json.dumps(snapshot), batch_id))
+
+
+def _card_config_snapshot(conn, batch_id: str) -> dict:
+    """A card's `config_snapshot` as a dict. The card's identity markers (`initial_backfill`,
+    `sync_period`) live in the same blob and are resolved by `json_extract`, so it is read and rewritten
+    whole rather than replaced — dropping them would orphan the card from its own lookup."""
+    row = conn.execute("SELECT config_snapshot FROM import_batch WHERE id = ?", (batch_id,)).fetchone()
+    if not row or not row["config_snapshot"]:
+        return {}
+    try:
+        snapshot = json.loads(row["config_snapshot"])
+    except (TypeError, ValueError):
+        return {}
+    return snapshot if isinstance(snapshot, dict) else {}
 
 
 def _record_sync_success(conn, connection_id: str, warnings: list) -> None:
@@ -693,6 +778,26 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 # on. `_discover_new_provider_accounts` tells them apart after the page is applied.
                 if seen_unknown is not None:
                     seen_unknown.add(t["external_account_id"])
+                return False
+            # Refused before any lookup or write, so a $0 row from a rejecting provider never touches
+            # ledger state. See the zero-amount invariant in this module's docstring for why the answer
+            # differs by provider, and `services/source_capabilities.py` for the rule that decides it.
+            # Reported on the card exactly as a rejected CSV row is, rather than silently dropped — which
+            # is also why the card is resolved here: a sync whose only content is refusals still has
+            # something to tell the user. (Tentative: if an otherwise-empty card proves more noise than
+            # signal in practice, suppressing it is the intended alternative — see the doc.)
+            if rejects_zero_amount(adapter.zero_amount_rows) and t["amount"] == 0:
+                skipped += 1
+                # Its own bucket, never folded into `skipped_no_account`: that one is the alarm that means
+                # data was lost, and a refusal we chose is routine. Rides in `account_counts` (no column).
+                _bump(tally, t["external_account_id"], "skipped_zero_amount")
+                record_sync_zero_amount_rejection(
+                    conn, batch_id=get_card(t["date"]), txn=t,
+                    source_label=dedupe.label_by_external.get(
+                        t["external_account_id"], t["external_account_id"]),
+                )
+                # Deliberately not added to `cards_touched`: that drives the post-sync duplicate sweep,
+                # and nothing was inserted for it to examine.
                 return False
             # Pending → posted: this posted transaction supersedes a pending row we already hold. Convert
             # that row in place (new posted id + refreshed provider fields), preserving its category/name

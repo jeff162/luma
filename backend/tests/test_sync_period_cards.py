@@ -25,6 +25,7 @@ from backend.routers import sync as sync_module
 from backend.routers import providers as providers_module
 
 from backend.tests._fake_adapter import DONE as _DONE, FakeCursorAdapter as _FakeAdapter
+from backend.services.source_capabilities import KEEP_ZERO_AMOUNT, REJECT_ZERO_AMOUNT
 
 
 class SyncPeriodCardTests(unittest.TestCase):
@@ -300,6 +301,78 @@ class SyncPeriodCardTests(unittest.TestCase):
                 "SELECT COUNT(*) c FROM txn WHERE external_transaction_id IN ('pend-1', 'posted-1')"
             ).fetchone()["c"]
             self.assertEqual(total, 1, "no duplicate row for the posted transaction")
+
+    def test_a_zero_amount_row_is_kept_so_its_settlement_has_somewhere_to_land(self):
+        # Why sync must NOT filter $0 rows, even though CSV import rejects them (core.py, and the
+        # zero-amount invariant in the sync module docstring — read it before "cleaning this up").
+        # A source often publishes a pending charge before it carries an amount; the settled amount
+        # arrives later keyed on the provider transaction id. `_apply_modified` ignores a revision for
+        # a row it does not hold, so filtering the placeholder does not delay the transaction — it
+        # discards it. The two halves are asserted together because either alone reads as arbitrary.
+        with self._driven_sync([self._txn("auth-1", 0.0, "Fuel Stop")]) as res:
+            self.assertEqual(res["added"], 1,
+                             "a $0 row must import: filtering it here leaves the later settlement with "
+                             "no row to update, which drops the charge entirely (see sync.py docstring)")
+
+        with self._driven_sync(pages=[{"modified": [self._txn("auth-1", -41.80, "Fuel Stop")]}]) as res:
+            self.assertEqual(res["updated"], 1)
+        with self._use_db_path(), get_db() as conn:
+            rows = [dict(r) for r in conn.execute(
+                "SELECT amount FROM txn WHERE external_transaction_id = 'auth-1' AND trashed_at IS NULL")]
+        self.assertEqual([r["amount"] for r in rows], [-41.80],
+                         "the settlement must land on the placeholder as one row carrying the real "
+                         "amount — not a second row, and not a $0 row left behind")
+
+    def test_the_adapters_declared_policy_is_what_decides_not_the_sync_path(self):
+        # The same row, the same code path, opposite outcomes — so the behaviour is demonstrably driven by
+        # the declaration rather than by anything hardcoded about $0 in `_insert_added`.
+        rejecting = _FakeAdapter(pages=[{"added": [self._txn("auth-1", 0.0, "Fuel Stop")]}])
+        rejecting.zero_amount_rows = REJECT_ZERO_AMOUNT
+        with self._driven_sync(adapter=rejecting) as res:
+            self.assertEqual(res["added"], 0)
+        with self._use_db_path(), get_db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) c FROM txn WHERE external_transaction_id = 'auth-1'").fetchone()["c"], 0)
+
+        keeping = _FakeAdapter(pages=[{"added": [self._txn("auth-2", 0.0, "Fuel Stop")]}])
+        keeping.zero_amount_rows = KEEP_ZERO_AMOUNT
+        with self._driven_sync(adapter=keeping) as res:
+            self.assertEqual(res["added"], 1)
+
+    def test_a_refused_row_is_reported_on_the_card_and_accumulates_across_syncs(self):
+        # A rejected row the user cannot see is indistinguishable from a bug, so it lands on the card's
+        # rejected report exactly as a CSV's would. The second sync is the point: a period card is added
+        # to all month, and a summary that overwrote would report only the latest sync's refusals.
+        # Past the backfill, so both syncs file onto the same monthly period card and the accumulation
+        # being tested is a real one rather than two rows landing on two different cards.
+        self._complete_initial()
+        for txn_id in ("auth-1", "auth-2"):
+            adapter = _FakeAdapter(pages=[{"added": [self._txn(txn_id, 0.0, "Fuel Stop")]}])
+            adapter.zero_amount_rows = REJECT_ZERO_AMOUNT
+            with self._driven_sync(adapter=adapter):
+                pass
+
+        cards = self._cards()
+        self.assertEqual(len(cards), 1, "both refusals belong on the one period card for their month")
+        summary = json.loads(cards[0]["config_snapshot"] or "{}")["import_summary"]
+        self.assertEqual(summary["zero_amount_count"], 2, "the second sync's refusal overwrote the first")
+        self.assertEqual(summary["rejected_count"], 2)
+        self.assertEqual(len(summary["rejected_rows"]), 2)
+        self.assertEqual(summary["rejected_headers"], ["Date", "Description", "Account", "Amount"])
+        self.assertEqual(summary["rejected_rows"][0]["reason"], "Zero amount")
+
+    def test_a_settlement_for_a_row_we_never_kept_is_lost_rather_than_imported(self):
+        # The counterfactual that gives the test above its force, stated rather than implied: this is
+        # exactly what a $0 filter on the insert path would cause. A revision naming a row we do not
+        # hold is deliberately ignored — it is not an insert — so the charge never enters the ledger.
+        with self._driven_sync(pages=[{"modified": [self._txn("never-held", -41.80, "Fuel Stop")]}]) as res:
+            self.assertEqual(res["updated"], 0)
+        with self._use_db_path(), get_db() as conn:
+            held = conn.execute(
+                "SELECT COUNT(*) c FROM txn WHERE external_transaction_id = 'never-held'").fetchone()["c"]
+        self.assertEqual(held, 0,
+                         "a revision cannot resurrect a row the sync declined to insert — which is why "
+                         "the $0 placeholder is kept in the first place")
 
     # ---- sync health (what the collapsed connection card reports) --------
 

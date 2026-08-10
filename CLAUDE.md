@@ -61,6 +61,8 @@ branch state from the injected snapshot.
   verification)
 - `docs/architecture.md` — structure, data flow, cross-subsystem contracts
 - `docs/data-model.md` — field semantics & invariants (what each field may and may not mean)
+- `docs/building-a-connector.md` — adding a data source (provider adapter or file importer):
+  capability declarations & the traits that turned out to be Plaid-specific
 - `docs/ui-patterns.md` — shared UI behavior & interaction models
 - `docs/shared-components.md` — the "what shared component do I use for X?" index; **consult before
   building any UI element** (reuse is the default; a one-off needs justification)

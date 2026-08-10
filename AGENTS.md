@@ -105,6 +105,8 @@ When working on the codebase:
 
   - `docs/data-model.md` — data semantics, invariants, what each field means and what it is *not* allowed to mean
 
+  - `docs/building-a-connector.md` — adding a data source (provider adapter or file importer): the capability declarations, and the checklist of traits that turned out to be one provider's rather than universal
+
   - `docs/ui-patterns.md` — shared UI behavior and interaction models
 
   - `docs/shared-components.md` — the "what shared component do I use for X?" index; consult **before building any UI element** (reuse is the default; a new one-off requires explicit justification)

@@ -15,6 +15,7 @@ scenario only has to describe what happened; what must always be true is stated 
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -180,6 +181,33 @@ class ConnectionScenarioTests(unittest.TestCase):
             self.sim.advance_days(1)
             self._sync(days=90)
         self.assertEqual(self._row_count(), after_backfill, "routine syncs invented rows")
+
+    def test_a_zero_amount_row_is_refused_and_reported_rather_than_imported(self):
+        # The fixture's `zero-1` authorization, pinned end to end through a real pull. SimpleFIN declares
+        # `zero_amount_rows = "reject"`: nothing it publishes can revise a held row into its settled
+        # amount (no change feed, no pending pointer — a settling charge arrives under a new id), so the
+        # placeholder is unreachable dead weight, exactly as in a CSV. The contrasting half lives in
+        # `test_sync_period_cards`, where a cursor provider keeps it because a `modified` can land on it.
+        self._offer(CHECKING)
+        self._sync(days=90, full_history=True)
+        with self._db() as conn:
+            held = conn.execute(
+                "SELECT COUNT(*) c FROM txn WHERE external_transaction_id LIKE '%:zero-1' "
+                "AND trashed_at IS NULL").fetchone()["c"]
+        self.assertEqual(held, 0, "a $0 SimpleFIN row was imported; nothing can ever settle it, so it "
+                                  "would sit in the ledger forever (see source_capabilities.py)")
+
+        # Refused, not silently dropped — the whole reason rejection is acceptable here.
+        with self._db() as conn:
+            summary = json.loads(conn.execute(
+                "SELECT config_snapshot FROM import_batch WHERE connection_id = ? "
+                "AND source_kind = 'connection_sync'", (CONNECTION_ID,),
+            ).fetchone()["config_snapshot"])["import_summary"]
+        self.assertEqual(summary["zero_amount_count"], 1)
+        self.assertEqual(summary["rejected_count"], 1)
+        self.assertEqual([r["kind"] for r in summary["rejected_rows"]], ["zero_amount"],
+                         "the refused row must be on the card's rejected report, where a rejected CSV "
+                         "row would be — a refusal the user cannot see is indistinguishable from a bug")
 
     def test_a_deep_backfill_pauses_on_budget_and_resumes_the_next_day(self):
         # The scenario the invariants were written for: a walk that cannot finish in one day must claim

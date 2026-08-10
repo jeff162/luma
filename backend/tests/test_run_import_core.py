@@ -106,6 +106,33 @@ class RunImportCoreTests(unittest.TestCase):
         self.assertGreater(flagged, 0)
 
 
+    def test_a_zero_amount_row_is_refused_and_reported(self):
+        # CSV declares `zero_amount_rows = "reject"` (see services/source_capabilities.py): a $0 line is a
+        # pending charge published before it settled, and nothing carries identity between files, so the
+        # settled charge arrives later as its own row while the placeholder would linger forever as a
+        # same-date/payee near-miss for duplicate detection. Behaviour as old as the importer and, until
+        # now, pinned by nothing — a refusal is only acceptable while it stays visible on the card.
+        with get_db(str(self.db_path)) as conn:
+            conn.execute(*_account_sql("acc-chk", "Checking", "depository"))
+        csv = (
+            "Date,Description,Amount,Account\n"
+            "2026-01-05,Whole Foods,54.20,Checking\n"
+            "2026-01-06,Pending Authorization,0.00,Checking\n"
+        )
+        with self._use_db_path():
+            result = run_import_core(
+                csv, self._cfg({"Checking": "acc-chk"}, use_imported_categories=False),
+                filename="bank.csv",
+            )
+        self.assertEqual(result.get("imported"), 1)
+        summary = result["import_summary"]
+        self.assertEqual(summary["zero_amount_count"], 1)
+        self.assertEqual(summary["rejected_count"], 1)
+        self.assertEqual([r["kind"] for r in summary["rejected_rows"]], ["zero_amount"])
+        self.assertEqual(summary["rejected_rows"][0]["reason"], "Zero amount")
+        with get_db(str(self.db_path)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0], 1)
+
     def test_caller_conn_owns_the_commit(self):
         # A caller-supplied connection makes the import part of THAT transaction — run_import_core must
         # not commit on its own. This is what lets the demo loader build everything atomically; if the
