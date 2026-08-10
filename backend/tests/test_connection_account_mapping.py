@@ -53,7 +53,7 @@ PROVIDER_ACCOUNTS = [
     {"external_account_id": "ext-checking", "name": "CHECKING", "official_name": "Total Checking",
      "type": "depository", "subtype": "checking", "mask": "1111"},
     {"external_account_id": "ext-card", "name": "CREDIT CARD", "official_name": "Voyager Unlimited",
-     "type": "credit", "subtype": "credit card", "mask": "6612"},
+     "type": "credit", "subtype": "credit card", "mask": "4103"},
 ]
 
 
@@ -103,7 +103,7 @@ class ConnectionAccountMappingTests(unittest.TestCase):
             self.assertEqual(unmapped_count(conn, "conn-1"), 2)
             rows = list_connection_accounts(conn, "conn-1")
             self.assertEqual({r["source_label"] for r in rows},
-                             {"CHECKING ···1111", "CREDIT CARD ···6612"})
+                             {"CHECKING ···1111", "CREDIT CARD ···4103"})
             self.assertTrue(all(not r["mapped"] for r in rows))
 
     def test_the_account_currency_is_recorded_and_its_verdict_travels_with_the_row(self):
@@ -179,7 +179,7 @@ class ConnectionAccountMappingTests(unittest.TestCase):
             self._apply(conn, {"ext-card": {"mode": "existing", "target_account_id": "acct-csv"}})
             inputs = dedupe_inputs_for_connection(conn, "conn-1")
 
-            label = "CREDIT CARD ···6612"
+            label = "CREDIT CARD ···4103"
             self.assertEqual(inputs["account_by_source_value"], {label: "acct-csv"})
             self.assertEqual(inputs["compare_targets"], {label: "acct-csv"})
             self.assertIn(label, inputs["alias_values"])
@@ -200,7 +200,7 @@ class ConnectionAccountMappingTests(unittest.TestCase):
             ).fetchone()["parent_account_id"], "acct-parent")
 
             inputs = dedupe_inputs_for_connection(conn, "conn-1")
-            self.assertEqual(inputs["compare_targets"], {"CREDIT CARD ···6612": "acct-parent"})
+            self.assertEqual(inputs["compare_targets"], {"CREDIT CARD ···4103": "acct-parent"})
             self.assertEqual(inputs["alias_values"], set())
 
     def test_group_nests_under_the_target_s_root_not_a_child_target(self):

@@ -93,28 +93,28 @@ class IdentityModelTests(unittest.TestCase):
     # --- one-time unification ------------------------------------------------
 
     def test_unify_creates_users_rekeys_prefs_and_drops_table(self):
-        jeff = self._seed_legacy_profile("Jeff")
+        mark = self._seed_legacy_profile("Mark")
         sam = self._seed_legacy_profile("Sam")
-        self._set_pref(jeff, "ui.theme", '"dark"')
+        self._set_pref(mark, "ui.theme", '"dark"')
         self._set_pref(sam, "ui.theme", '"light"')
 
         cdb._unify_local_profiles_into_users()
 
         users = {u["username"]: u for u in cdb.list_users()}
-        self.assertEqual(set(users), {"Jeff", "Sam"})
+        self.assertEqual(set(users), {"Mark", "Sam"})
         # Passwordless and not forced-to-change: an ordinary perimeter-off identity.
-        self.assertFalse(cdb.get_login_account("Jeff")["password_set"])
-        self.assertFalse(cdb.get_login_account("Jeff")["must_change_password"])
+        self.assertFalse(cdb.get_login_account("Mark")["password_set"])
+        self.assertFalse(cdb.get_login_account("Mark")["must_change_password"])
         # Preferences followed the identity from profile id to user id.
-        self.assertEqual(self._pref(users["Jeff"]["id"], "ui.theme"), '"dark"')
+        self.assertEqual(self._pref(users["Mark"]["id"], "ui.theme"), '"dark"')
         self.assertEqual(self._pref(users["Sam"]["id"], "ui.theme"), '"light"')
-        self.assertIsNone(self._pref(jeff, "ui.theme"))
+        self.assertIsNone(self._pref(mark, "ui.theme"))
         # The legacy table is retired, and auth stays off (no latch).
         self.assertFalse(self._table_exists("local_preference_profile"))
         self.assertFalse(cdb.auth_required())
 
     def test_unify_is_idempotent_and_shares_one_tenant(self):
-        self._seed_legacy_profile("Jeff")
+        self._seed_legacy_profile("Mark")
         self._seed_legacy_profile("Sam")
         cdb._unify_local_profiles_into_users()
         cdb._unify_local_profiles_into_users()  # no table now: a no-op, not a crash
@@ -123,34 +123,34 @@ class IdentityModelTests(unittest.TestCase):
         self.assertEqual(len(tenants), 1)  # one shared workspace, multiple identities
 
     def test_unify_folds_profile_into_same_named_existing_account(self):
-        existing = cdb.create_local_identity("Jeff")
+        existing = cdb.create_local_identity("Mark")
         self._set_pref("legacy-scope", "ui.theme", '"dark"')
         # Point the seeded profile's preferences at it, then migrate.
-        pid = self._seed_legacy_profile("Jeff")
+        pid = self._seed_legacy_profile("Mark")
         self._set_pref(pid, "ui.density", '"compact"')
 
         cdb._unify_local_profiles_into_users()
 
         # No duplicate account; the profile's preferences fold into the existing user.
-        self.assertEqual([u["username"] for u in cdb.list_users()], ["Jeff"])
+        self.assertEqual([u["username"] for u in cdb.list_users()], ["Mark"])
         self.assertEqual(self._pref(existing["id"], "ui.density"), '"compact"')
 
     # --- enable / disable as flag flips -------------------------------------
 
     def test_enable_with_admin_claims_and_forces_others(self):
-        jeff = cdb.create_local_identity("Jeff")
+        mark = cdb.create_local_identity("Mark")
         sam = cdb.create_local_identity("Sam")
         guest = cdb.create_local_identity("Guest")
 
         admin = cdb.enable_auth_with_admin(
-            jeff["id"], "password123", initial_passwords={sam["id"]: "sam-password"}
+            mark["id"], "password123", initial_passwords={sam["id"]: "sam-password"}
         )
 
         self.assertEqual(admin["role"], "admin")
         self.assertTrue(cdb.auth_required())
         # Claimed identity: real password, admin, not forced to change.
-        self.assertTrue(cdb.get_login_account("Jeff")["password_set"])
-        self.assertFalse(cdb.get_login_account("Jeff")["must_change_password"])
+        self.assertTrue(cdb.get_login_account("Mark")["password_set"])
+        self.assertFalse(cdb.get_login_account("Mark")["must_change_password"])
         # Seeded member: usable password but still must change it.
         self.assertTrue(cdb.get_login_account("Sam")["password_set"])
         self.assertTrue(cdb.get_login_account("Sam")["must_change_password"])
@@ -161,42 +161,42 @@ class IdentityModelTests(unittest.TestCase):
         self.assertIsNone(cdb.authenticate_user("Guest", "anything"))
 
     def test_enable_rejects_weak_admin_password_before_any_write(self):
-        jeff = cdb.create_local_identity("Jeff")
+        mark = cdb.create_local_identity("Mark")
         cdb.create_local_identity("Sam")
         with self.assertRaises(ValueError):
-            cdb.enable_auth_with_admin(jeff["id"], "short")  # < min_8
+            cdb.enable_auth_with_admin(mark["id"], "short")  # < min_8
         self.assertFalse(cdb.auth_required())
-        self.assertFalse(cdb.get_login_account("Jeff")["password_set"])
+        self.assertFalse(cdb.get_login_account("Mark")["password_set"])
 
     def test_disable_is_lossless_flag_flip(self):
-        jeff = cdb.create_local_identity("Jeff")
-        cdb.enable_auth_with_admin(jeff["id"], "password123")
+        mark = cdb.create_local_identity("Mark")
+        cdb.enable_auth_with_admin(mark["id"], "password123")
         self.assertTrue(cdb.auth_required())
 
         cdb.disable_auth_mode()
         self.assertFalse(cdb.auth_required())
         # The account and its password hash survive, so re-enabling is seamless.
-        self.assertIn("Jeff", [u["username"] for u in cdb.list_users()])
-        self.assertTrue(cdb.get_login_account("Jeff")["password_set"])
-        self.assertIsNotNone(cdb.authenticate_user("Jeff", "password123"))
+        self.assertIn("Mark", [u["username"] for u in cdb.list_users()])
+        self.assertTrue(cdb.get_login_account("Mark")["password_set"])
+        self.assertIsNotNone(cdb.authenticate_user("Mark", "password123"))
 
     def test_delete_last_identity_allowed_when_perimeter_off(self):
         # Local mode auto-promotes the earliest identity to admin, but with sign-in off the
         # "keep one admin" guard must not apply — clearing local identities down to none has to work
         # (it lands back on the first-run chooser). See the delete_user guard.
-        jeff = cdb.create_local_identity("Jeff")
-        cdb.get_user_by_id(jeff["id"])  # exists
-        cdb.delete_user(jeff["id"])
+        mark = cdb.create_local_identity("Mark")
+        cdb.get_user_by_id(mark["id"])  # exists
+        cdb.delete_user(mark["id"])
         self.assertEqual(cdb.list_users(), [])
 
     def test_delete_last_admin_blocked_when_perimeter_on(self):
-        jeff = cdb.create_local_identity("Jeff")
-        cdb.enable_auth_with_admin(jeff["id"], "password123")
+        mark = cdb.create_local_identity("Mark")
+        cdb.enable_auth_with_admin(mark["id"], "password123")
         with self.assertRaises(ValueError):
-            cdb.delete_user(jeff["id"])  # would strand the workspace with no admin
+            cdb.delete_user(mark["id"])  # would strand the workspace with no admin
 
     def test_latch_dropped_multiple_passwordless_users_stay_local(self):
-        cdb.create_local_identity("Jeff")
+        cdb.create_local_identity("Mark")
         cdb.create_local_identity("Sam")
         cdb.create_local_identity("Guest")
         # Three accounts, flag off => still perimeter-off (the old user_count()>1 latch is gone).
@@ -209,7 +209,7 @@ class IdentityModelTests(unittest.TestCase):
         # user_account table must adopt that surviving tenant, not mint a second one on the same
         # db_path (which would violate the unique tenant.db_path). Regression for the welcome-screen
         # 500 after a "reset to first-run".
-        first = cdb.create_local_identity("Jeff")
+        first = cdb.create_local_identity("Mark")
         original_tenant = cdb.get_user_by_id(first["id"])["tenant_id"]
         cdb.delete_user(first["id"])
         self.assertEqual(cdb.list_users(), [])
@@ -218,9 +218,9 @@ class IdentityModelTests(unittest.TestCase):
         self.assertEqual(cdb.get_user_by_id(second["id"])["tenant_id"], original_tenant)
 
     def test_create_local_identity_is_passwordless(self):
-        user = cdb.create_local_identity("Jeff")
+        user = cdb.create_local_identity("Mark")
         self.assertEqual(user["role"], "member")
-        acct = cdb.get_login_account("Jeff")
+        acct = cdb.get_login_account("Mark")
         self.assertFalse(acct["password_set"])
         self.assertFalse(acct["must_change_password"])
 
@@ -313,26 +313,26 @@ def _client_stack():
 class PerimeterOffSessionTests(unittest.TestCase):
     def test_select_identity_establishes_session_and_scopes_prefs(self):
         with _client_stack() as client:
-            jeff = client.post("/api/auth/identities", json={"name": "Jeff"}).json()["identity"]
+            mark = client.post("/api/auth/identities", json={"name": "Mark"}).json()["identity"]
 
             # No session yet: a protected route is unauthenticated.
             self.assertEqual(client.get("/api/auth/me").status_code, 401)
 
-            selected = client.post("/api/auth/select-identity", json={"user_id": jeff["id"]})
+            selected = client.post("/api/auth/select-identity", json={"user_id": mark["id"]})
             self.assertEqual(selected.status_code, 200, selected.text)
-            self.assertEqual(selected.json()["user"]["username"], "Jeff")
+            self.assertEqual(selected.json()["user"]["username"], "Mark")
 
             # The session now carries the identity; preferences scope to it.
             me = client.get("/api/auth/me")
             self.assertEqual(me.status_code, 200, me.text)
-            self.assertEqual(me.json()["user"]["id"], jeff["id"])
+            self.assertEqual(me.json()["user"]["id"], mark["id"])
             client.post("/api/auth/preferences", json={"key": "ui.theme", "value": "dark"})
             self.assertEqual(client.get("/api/auth/preferences").json()["preferences"]["ui.theme"], "dark")
 
     def test_pwless_session_rejected_once_perimeter_comes_up(self):
         with _client_stack() as client:
-            jeff = client.post("/api/auth/identities", json={"name": "Jeff"}).json()["identity"]
-            client.post("/api/auth/select-identity", json={"user_id": jeff["id"]})
+            mark = client.post("/api/auth/identities", json={"name": "Mark"}).json()["identity"]
+            client.post("/api/auth/select-identity", json={"user_id": mark["id"]})
             self.assertEqual(client.get("/api/auth/me").status_code, 200)
 
             # Another admin turns the perimeter on out of band; the existing pwless session is now stale.
@@ -344,17 +344,17 @@ class PerimeterOffSessionTests(unittest.TestCase):
 class EnableDisableFlowTests(unittest.TestCase):
     def test_enable_claims_admin_and_member_claims_at_login(self):
         with _client_stack() as client:
-            jeff = client.post("/api/auth/identities", json={"name": "Jeff"}).json()["identity"]
+            mark = client.post("/api/auth/identities", json={"name": "Mark"}).json()["identity"]
             client.post("/api/auth/identities", json={"name": "Sam"})
 
             enable = client.post("/api/auth/enable", json={
                 "enabled": True,
-                "claim_user_id": jeff["id"],
+                "claim_user_id": mark["id"],
                 "admin_password": "password123",
                 "initial_passwords": {},
             })
             self.assertEqual(enable.status_code, 200, enable.text)
-            self.assertEqual(enable.json()["user"]["username"], "Jeff")
+            self.assertEqual(enable.json()["user"]["username"], "Mark")
 
             client.post("/api/auth/logout")
 
@@ -372,10 +372,10 @@ class EnableDisableFlowTests(unittest.TestCase):
 
     def test_enable_applies_chosen_password_policy(self):
         with _client_stack() as client:
-            jeff = client.post("/api/auth/identities", json={"name": "Jeff"}).json()["identity"]
+            mark = client.post("/api/auth/identities", json={"name": "Mark"}).json()["identity"]
             resp = client.post("/api/auth/enable", json={
                 "enabled": True,
-                "claim_user_id": jeff["id"],
+                "claim_user_id": mark["id"],
                 "admin_password": "x",  # allowed only because the policy is 'none'
                 "password_policy": "none",
             })
@@ -384,10 +384,10 @@ class EnableDisableFlowTests(unittest.TestCase):
 
     def test_enable_rejects_password_below_chosen_policy(self):
         with _client_stack() as client:
-            jeff = client.post("/api/auth/identities", json={"name": "Jeff"}).json()["identity"]
+            mark = client.post("/api/auth/identities", json={"name": "Mark"}).json()["identity"]
             resp = client.post("/api/auth/enable", json={
                 "enabled": True,
-                "claim_user_id": jeff["id"],
+                "claim_user_id": mark["id"],
                 "admin_password": "short",
                 "password_policy": "strong",
             })
@@ -396,9 +396,9 @@ class EnableDisableFlowTests(unittest.TestCase):
 
     def test_disable_returns_to_perimeter_off_and_keeps_accounts(self):
         with _client_stack() as client:
-            jeff = client.post("/api/auth/identities", json={"name": "Jeff"}).json()["identity"]
+            mark = client.post("/api/auth/identities", json={"name": "Mark"}).json()["identity"]
             client.post("/api/auth/enable", json={
-                "enabled": True, "claim_user_id": jeff["id"], "admin_password": "password123",
+                "enabled": True, "claim_user_id": mark["id"], "admin_password": "password123",
             })
             self.assertTrue(client.get("/api/auth/status").json()["auth_enabled"])
 
@@ -408,36 +408,36 @@ class EnableDisableFlowTests(unittest.TestCase):
             self.assertFalse(status["auth_enabled"])
             # The identity survives and can be re-selected in perimeter-off mode.
             names = [i["display_name"] for i in client.get("/api/auth/identities").json()["identities"]]
-            self.assertIn("Jeff", names)
+            self.assertIn("Mark", names)
 
     def test_reset_after_enable_disables_then_deletes_every_user(self):
         # The developer "reset to first-run" chain in auth mode: disable (admin), which drops to local
         # mode, then delete every identity including the former admin — leaving an empty workspace.
         with _client_stack() as client:
-            jeff = client.post("/api/auth/identities", json={"name": "Jeff"}).json()["identity"]
+            mark = client.post("/api/auth/identities", json={"name": "Mark"}).json()["identity"]
             client.post("/api/auth/identities", json={"name": "Sam"})
             client.post("/api/auth/enable", json={
-                "enabled": True, "claim_user_id": jeff["id"], "admin_password": "password123",
+                "enabled": True, "claim_user_id": mark["id"], "admin_password": "password123",
             })
             self.assertTrue(client.get("/api/auth/status").json()["auth_enabled"])
 
             self.assertEqual(client.post("/api/auth/disable").status_code, 200)
             # Now perimeter-off: the identity endpoints are reachable and no admin guard blocks deletion.
-            # Delete the session's own identity (Jeff) LAST, as the reset flow does — deleting it first
+            # Delete the session's own identity (Mark) LAST, as the reset flow does — deleting it first
             # would invalidate the session and 401 the rest.
             ids = [i["id"] for i in client.get("/api/auth/identities").json()["identities"]]
-            ordered = [i for i in ids if i != jeff["id"]] + [jeff["id"]]
+            ordered = [i for i in ids if i != mark["id"]] + [mark["id"]]
             for ident_id in ordered:
                 self.assertEqual(client.delete(f"/api/auth/identities/{ident_id}").status_code, 200)
             self.assertEqual(client.get("/api/auth/identities").json()["identities"], [])
 
     def test_disable_requires_admin(self):
         with _client_stack() as client:
-            jeff = client.post("/api/auth/identities", json={"name": "Jeff"}).json()["identity"]
+            mark = client.post("/api/auth/identities", json={"name": "Mark"}).json()["identity"]
             client.post("/api/auth/identities", json={"name": "Sam"})
             client.post("/api/auth/enable", json={
                 "enabled": True,
-                "claim_user_id": jeff["id"],
+                "claim_user_id": mark["id"],
                 "admin_password": "password123",
                 "initial_passwords": {},
             })
@@ -451,8 +451,8 @@ class EnableDisableFlowTests(unittest.TestCase):
     def test_data_provider_intent_endpoint_and_status(self):
         with _client_stack() as client:
             # Config endpoints run as the current identity, so select one first (as the app always has).
-            jeff = client.post("/api/auth/identities", json={"name": "Jeff"}).json()["identity"]
-            client.post("/api/auth/select-identity", json={"user_id": jeff["id"]})
+            mark = client.post("/api/auth/identities", json={"name": "Mark"}).json()["identity"]
+            client.post("/api/auth/select-identity", json={"user_id": mark["id"]})
             self.assertFalse(client.get("/api/auth/status").json()["data_provider_intended"])
             saved = client.post("/api/auth/data-provider-intent", json={"intended": True})
             self.assertEqual(saved.status_code, 200, saved.text)

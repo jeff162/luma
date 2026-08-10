@@ -105,8 +105,10 @@ const entryId = (entry) => `${entry.kind}:${entry.incoming?.txn_id || entry.inco
 // shape a ledger row carries) to each side that names a transaction; this wraps the cell in the ledger's
 // own hover card so the raw text, evidence fields, and originating connection are one hover away instead
 // of a hunt through the register. Returns the node untouched when a side carries no captured detail.
+const originHoverApplies = (origin) => !!origin && hasFileOriginDetail(origin)
+
 function withOriginHover(node, origin) {
-  if (!origin || !hasFileOriginDetail(origin)) return node
+  if (!originHoverApplies(origin)) return node
   return (
     // The dwell matches the transaction list's — it keeps the card from strobing as rows scroll under
     // a resting cursor.
@@ -422,9 +424,16 @@ export default function UnifiedDuplicatesDialog({
     if (!side) return <TransactionMatchCell record={null} />
     // `origin` feeds the hover, not the cell — keep it out of the record so the cell's contract stays
     // "what this row renders".
-    const { origin, ...record } = side
+    const { origin, csv_values, ...record } = side
+    // Only ONE of the two hovers may be attached. The cell renders `csv_values` as a native `title`,
+    // and the origin card already shows everything that dump would (raw text, evidence extras such as
+    // an "Original Statement" column, source file, imported category, source account label) — the rest
+    // is the date and amount printed in the cell itself. Leaving both on stacked two tooltips over one
+    // cell, the native one arriving a beat later on the browser's own dwell and vanishing on any
+    // keypress. The cell keeps its fallback for the sides that carry no origin detail.
+    const cellRecord = originHoverApplies(origin) ? record : { ...record, csv_values }
     return withOriginHover(
-      <TransactionMatchCell record={{ ...record, source: sourceInfo || undefined }} onDrillThrough={onDrillThrough} />,
+      <TransactionMatchCell record={{ ...cellRecord, source: sourceInfo || undefined }} onDrillThrough={onDrillThrough} />,
       origin,
     )
   }
@@ -455,6 +464,16 @@ export default function UnifiedDuplicatesDialog({
         marginRight: 4,
       }
       const noMatchMarker = <span style={markerStyle}>NO SPECIFIC MATCH</span>
+      // Same chip shape as the markers above, in the neutral tone: a tier is supporting detail on a
+      // candidate, not a state the row is in, so it must not compete with NO SPECIFIC MATCH for the eye.
+      const candidateTierStyle = {
+        ...markerStyle,
+        marginRight: 0,
+        fontWeight: 600,
+        background: 'var(--surface2)',
+        color: 'var(--muted)',
+        border: '1px solid var(--border)',
+      }
       const transferMarker = (
         <span style={{
           ...markerStyle,
@@ -489,6 +508,14 @@ export default function UnifiedDuplicatesDialog({
                   {c.cross_account && c.account_name ? (
                     <span style={{ marginLeft: 4, fontSize: 9.5, fontWeight: 600, color: 'var(--accent2)', whiteSpace: 'nowrap' }}>
                       on {c.account_name}
+                    </span>
+                  ) : null}
+                  {/* How this row's wording agreed with the incoming one — the evidence that earned it a
+                      place in the list, since past ±1 day a shared amount alone no longer qualifies a
+                      candidate. Absent on a candidate matched on date evidence alone, which renders none. */}
+                  {c.text_relation_label ? (
+                    <span title={c.text_relation_description || ''} style={{ ...candidateTierStyle, marginLeft: 6 }}>
+                      {c.text_relation_label}
                     </span>
                   ) : null}
                 </div>

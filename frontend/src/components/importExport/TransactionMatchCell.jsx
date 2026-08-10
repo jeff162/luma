@@ -35,6 +35,10 @@ export function SourceFileLink({ filename, batchId, importedAt, dateStart, dateE
 // csv_values?, source? }. `null` renders a muted em-dash. `csv_values` (a raw import row) is exposed on
 // hover so a merchant-less funding leg is still identifiable; `account_merged_into` annotates a later
 // account merge without hiding what the file said.
+//
+// The `csv_values` hover is a *native* title, so it is the fallback, not the first choice: a caller that
+// wraps this cell in the richer origin hover card must withhold `csv_values`, or the cell shows a second
+// tooltip on the browser's own dwell over the top of the first. See UnifiedDuplicatesDialog.partyBlock.
 export function TransactionMatchCell({ record, onDrillThrough }) {
   if (!record) return <span style={{ color: 'var(--muted)' }}>—</span>
   const acct = record.account_name || ''

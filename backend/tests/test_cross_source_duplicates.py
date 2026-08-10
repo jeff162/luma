@@ -388,5 +388,128 @@ class WeakTierTests(unittest.TestCase):
         self.assertGreaterEqual(score, TEXT_DUPLICATE_MATCH_FLOOR)
 
 
+class InScopeCoverageExplanationTests(_LedgerTestCase):
+    """The same charge, two sources, but filed under two accounts of one linked group.
+
+    In-scope coverage rejects on the whole group's claim, so the row it is rejecting against is
+    routinely the sibling's copy. Naming that copy is the entire job of the report entry — a rejected
+    row whose replacement cannot be named is what makes auditing rejections impossible.
+    """
+
+    CHILD = "acct-checking-child"
+    CSV_LABEL = "Everyday Checking"        # a file's own name for the account — a third source
+    IN_COVERAGE = "2026-07-01"             # inside the connections' coverage, well clear of the window
+
+    def setUp(self):
+        super().setUp()
+        with self._db() as conn:
+            conn.execute(
+                "INSERT INTO account (id, name, display_name, type, owner_id, parent_account_id)"
+                " VALUES (?, 'EVERYDAY CHECKING ···4417', 'Everyday Checking', 'depository', ?, ?)",
+                (self.CHILD, SHARED_OWNER_ID, ACCOUNT),
+            )
+
+    def _context(self, conn):
+        # No `compare_targets`: the ordinary import, mapping onto accounts that already exist. Only an
+        # import that CREATES an account and groups it ever recorded one, and building the linked-group
+        # index from compare targets alone is exactly what left this case with nothing to point at.
+        return build_dedupe_context(
+            conn,
+            source_values=[self.CSV_LABEL],
+            account_by_source_value={self.CSV_LABEL: ACCOUNT},
+        )
+
+    def _verdict(self, ctx):
+        return evaluate_duplicate(
+            context=ctx, receiving_account_id=ACCOUNT, csv_value=self.CSV_LABEL,
+            content_hash="incoming-hash", parsed_date=self.IN_COVERAGE, amount=-95.0,
+            scope_id=ACCOUNT,
+            txn_payload={"merchant_name": "Annual Membership Fee", "display_name": None,
+                         "raw_name": "ANNUAL MEMBERSHIP FEE", "import_evidence": None},
+        )
+
+    def test_the_group_index_is_built_without_an_explicit_compare_target(self):
+        # The regression guard one level down from the behavior below: an empty index is silent, and a
+        # scope fold over an empty index looks exactly like a scope fold that found nothing.
+        self._sync_card("card-a", "conn-a")
+        self._row("sibling", "card-a", label=LABEL_A, date=self.IN_COVERAGE, amount=-95.0,
+                  text="ANNUAL MEMBERSHIP FEE", account_id=self.CHILD)
+        with self._db() as conn:
+            ctx = self._context(conn)
+        self.assertIn(ACCOUNT, ctx.existing_rows_by_effective_account_amount,
+                      "the receiving account's own linked-group root must be indexed")
+
+    def test_a_coverage_reject_names_the_siblings_copy(self):
+        self._sync_card("card-a", "conn-a")
+        self._row("sibling", "card-a", label=LABEL_A, date=self.IN_COVERAGE, amount=-95.0,
+                  text="ANNUAL MEMBERSHIP FEE", account_id=self.CHILD)
+        with self._db() as conn:
+            verdict = self._verdict(self._context(conn))
+        self.assertTrue(verdict.hard_reject)
+        self.assertIn("account scope", verdict.reason)
+        self.assertEqual([c["id"] for c in verdict.matched["candidates"]], ["sibling"])
+        # Naming the right row by the wrong route is its own defect: with the group unreachable, the
+        # transfer fallback can reach the same row and tag it `cross_account`, which the report renders
+        # as "possible transfer match" — a funding leg to confirm or reject, not the duplicate it is.
+        self.assertNotIn("cross_account", verdict.matched["candidates"][0])
+
+    def test_the_sibling_outranks_a_coincidental_same_amount_row_days_away(self):
+        # The reported failure. With the group unreachable, the exact-date probe found nothing and the
+        # widened ±N-day reach then named an unrelated charge that merely shared the amount — an
+        # explanation confident enough to act on ("Enrich existing" folds the incoming detail into the
+        # named row) and wrong.
+        self._sync_card("card-a", "conn-a")
+        self._row("sibling", "card-a", label=LABEL_A, date=self.IN_COVERAGE, amount=-95.0,
+                  text="ANNUAL MEMBERSHIP FEE", account_id=self.CHILD)
+        self._row("coincidence", "card-a", label=LABEL_A, date="2026-06-26", amount=-95.0,
+                  text="Parks & Recreation Dept")
+        with self._db() as conn:
+            verdict = self._verdict(self._context(conn))
+        self.assertEqual([c["id"] for c in verdict.matched["candidates"]], ["sibling"],
+                         "an exact-date sibling must never lose to a five-day-old same-amount row")
+        self.assertNotIn("day_offset", verdict.matched["candidates"][0])
+
+    def test_a_reject_survives_its_only_candidate_being_filtered_out(self):
+        # The load-bearing test for where the text filter is wired. `_coverage_reject_verdict` treats an
+        # EMPTY candidate list as a signal: a named row with nothing to point at goes down the
+        # find_ledger_payment_match escape hatch and, finding no corroborating charge, IMPORTS instead of
+        # being rejected. So the filter has to run after that check, on the reported list only. Wire it
+        # one line earlier and this row silently enters the ledger — the failure this pins.
+        self._sync_card("card-a", "conn-a")
+        self._row("coincidence", "card-a", label=LABEL_A, date="2026-06-27", amount=-95.0,
+                  text="Parks & Recreation Dept", account_id=self.CHILD)
+        with self._db() as conn:
+            verdict = self._verdict(self._context(conn))
+        self.assertTrue(verdict.hard_reject, "the coverage rejection must not become an import")
+        self.assertIn("account scope", verdict.reason)
+        self.assertEqual(verdict.matched["candidates"], [],
+                         "a same-amount row sharing no wording is not an explanation")
+        self.assertEqual(verdict.matched["candidate_count"], 0)
+
+    def test_same_source_coverage_still_does_not_reach_the_group(self):
+        # Rule 1's premise is narrower — THIS source already covered this range for this account — so it
+        # keeps its same-account-only lookup. Widening it would let a sibling's row explain a rejection
+        # the sibling had no part in.
+        self._sync_card("card-a", "conn-a")
+        self._row("sibling", "card-a", label=LABEL_A, date=self.IN_COVERAGE, amount=-95.0,
+                  text="ANNUAL MEMBERSHIP FEE", account_id=self.CHILD)
+        with self._db() as conn:
+            # Ingesting under connection A's own label makes A's coverage same-source rather than
+            # in-scope, which is the distinction Rule 1 turns on.
+            ctx = build_dedupe_context(
+                conn, source_values=[LABEL_A], account_by_source_value={LABEL_A: ACCOUNT},
+            )
+            verdict = evaluate_duplicate(
+                context=ctx, receiving_account_id=ACCOUNT, csv_value=LABEL_A,
+                content_hash="incoming-hash", parsed_date=self.IN_COVERAGE, amount=-95.0,
+                scope_id=ACCOUNT,
+                txn_payload={"merchant_name": None, "display_name": None,
+                             "raw_name": "ANNUAL MEMBERSHIP FEE", "import_evidence": None},
+            )
+        self.assertTrue(verdict.hard_reject)
+        self.assertIn("this source account", verdict.reason)
+        self.assertEqual(verdict.matched["candidates"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -241,6 +241,10 @@ def source_match_texts(merchant_name, raw_name, evidence_json) -> set[str]:
     normalized description slot plus each **descriptive** `extra_text_fields` value (an "Original
     Statement", a counterparty, …).
 
+    `evidence_json` is either the stored JSON string or an already-parsed dict: a row still in flight
+    (an import's `txn_payload`, a stored `txn_payload_json` blob) carries it as a dict, and making
+    callers re-serialize just to have it parsed back is waste in the middle of a per-row loop.
+
     Comparing the union (rather than a single preferred field) is what lets a byte-identical bank
     descriptor match across sources that stored it in different columns. `display_name` is deliberately
     excluded — a user rename or a rule's clean_name must neither create nor hide a match. Empty strings
@@ -260,10 +264,13 @@ def source_match_texts(merchant_name, raw_name, evidence_json) -> set[str]:
     if evidence_json:
         # Parse inline (rather than importing categorizer.extract_source_match_text, which concatenates
         # into one haystack) because an EXACT per-field comparison needs the fields kept separate.
-        try:
-            evidence = json.loads(evidence_json)
-        except (ValueError, TypeError):
-            evidence = None
+        if isinstance(evidence_json, dict):
+            evidence = evidence_json
+        else:
+            try:
+                evidence = json.loads(evidence_json)
+            except (ValueError, TypeError):
+                evidence = None
         if isinstance(evidence, dict):
             description = evidence.get("description")
             if isinstance(description, dict):
@@ -606,6 +613,20 @@ def score_duplicate_text_match(left_text: str, right_text: str) -> tuple[float, 
 TEXT_DUPLICATE_MATCH_FLOOR = 0.78
 
 
+# The text sets an indexed candidate carries for matching. Never persisted — and `source_texts` is a
+# `set`, which `json.dumps` refuses outright — so every path that turns a candidate into a stored
+# `matched` dict has to strip them. Named once because the failure mode is silent until the day a new
+# key reaches the encoder.
+_CANDIDATE_TEXT_KEYS = ("match_texts", "source_texts")
+
+# Everything `candidate_summary` strips: the text sets plus the rest of the matcher's bookkeeping.
+# `duplicate_scope` is in here but is deliberately NOT stripped by `find_textual_duplicate_candidate` —
+# its caller reads it back to word the reject reason.
+_INTERNAL_CANDIDATE_KEYS = (
+    "_consumed", "content_hash", *_CANDIDATE_TEXT_KEYS, "duplicate_scope", "csv_value", "scope_id",
+)
+
+
 def find_textual_duplicate_candidate(candidate_rows: list[dict], txn_payload: dict) -> Optional[dict]:
     """The best-scoring candidate at or above `TEXT_DUPLICATE_MATCH_FLOOR`, or None. Candidates
     arrive pre-narrowed to the same (date, amount), so this only decides *which* same-amount row on
@@ -634,7 +655,8 @@ def find_textual_duplicate_candidate(candidate_rows: list[dict], txn_payload: di
     if not best_candidate:
         return None
     matched = dict(best_candidate)
-    matched.pop("match_texts", None)
+    for key in _CANDIDATE_TEXT_KEYS:
+        matched.pop(key, None)
     matched["duplicate_match_score"] = round(best_score, 3)
     return matched
 
@@ -788,7 +810,7 @@ def candidate_summary(candidate: Optional[dict]) -> Optional[dict]:
     if not isinstance(candidate, dict):
         return None
     summary = dict(candidate)
-    for key in ("_consumed", "content_hash", "match_texts", "duplicate_scope", "csv_value", "scope_id"):
+    for key in _INTERNAL_CANDIDATE_KEYS:
         summary.pop(key, None)
     return summary
 
@@ -1033,7 +1055,8 @@ def _far_date_offsets(parsed_date: str) -> list[tuple[str, int]]:
 
 def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_account_id: str,
                                           parsed_date: str, amount: float,
-                                          include_scope: bool) -> list[dict]:
+                                          scope_id: Optional[str],
+                                          incoming_texts: Optional[set[str]] = None) -> list[dict]:
     """For a coverage-window hit, look up actual same-account candidate rows by (date, amount).
     Returns a list of compact dicts the unified report renders directly. Empty list means
     'covered date but no specific match' — the report flags those for manual review.
@@ -1049,12 +1072,34 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
     replacement can't be named is precisely what makes auditing the rejections hard.
 
     The lookup re-uses the per-account amount index that text-strategy already populates, so the
-    cost is dict lookups, not extra queries. For in-scope coverage we also fold in candidates from
-    sibling accounts in the linked group, since the rule's premise is that the prior import covered
-    the whole effective-account scope.
+    cost is dict lookups, not extra queries. `scope_id` (the row's linked-group root, passed only by
+    the in-scope coverage rule) additionally folds in candidates from sibling accounts in that group,
+    since that rule's premise is that the prior import covered the whole effective-account scope. It
+    names ONE scope on purpose: the index holds a map per scope in the pass, and reaching into all of
+    them would let an unrelated account group in the same import supply a candidate.
+
+    `incoming_texts` (the incoming row's `source_match_texts`) tiers each hit against the incoming
+    descriptor with `classify_source_text_relation`, recording the result on `text_relation`. This
+    function only *labels*; `_display_candidates` decides what to hide. Keeping the two apart is what
+    lets the verdict path go on seeing the complete list — see `_coverage_reject_verdict`.
     """
     seen_ids: set[str] = set()
     out: list[dict] = []
+    relation_cache: dict[str, Optional[str]] = {}
+
+    def _relation(candidate: dict) -> Optional[str]:
+        """The candidate's text tier, or None when it has none — or when either side has no captured
+        text at all, which is not disagreement but an absence of evidence (a nameless money-movement
+        leg text-matches nothing, by design)."""
+        if not incoming_texts:
+            return None
+        candidate_texts = candidate.get("source_texts")
+        if not candidate_texts:
+            return None
+        cid = str(candidate.get("id") or "")
+        if cid not in relation_cache:
+            relation_cache[cid] = classify_source_text_relation(incoming_texts, candidate_texts)
+        return relation_cache[cid]
 
     def _append(candidate: dict, day_offset: int) -> None:
         cid = candidate.get("id")
@@ -1071,6 +1116,12 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
         }
         if day_offset:
             row["day_offset"] = day_offset  # candidate's date is this many days off the incoming row's
+        relation = _relation(candidate)
+        if relation:
+            row["text_relation"] = relation  # 'exact' | 'fuzzy' | 'weak'; absent = unjudged or unrelated
+        # Whether the pair was *judgeable* at all, so `_display_candidates` can tell "no agreement"
+        # (a real signal) apart from "nothing to compare" (never grounds to hide a row).
+        row["_text_comparable"] = bool(incoming_texts and candidate.get("source_texts"))
         if candidate.get("cross_account"):
             # A transfer twin on the funding account — carry the marker + account label so the report
             # can label it 'possible transfer match on <account>' rather than a same-account match.
@@ -1083,13 +1134,11 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
             key = duplicate_amount_key(day, amount)
             for candidate in context.existing_rows_by_account_amount.get(receiving_account_id, {}).get(key, []):
                 _append(candidate, day_offset)
-            if include_scope:
-                # Linked-group rows too. We don't have compare_target_id at this point in the
-                # signature, so we iterate the whole effective-account map looking up by amount-key
-                # — cheap because the second-level dict is keyed by amount-key.
-                for scope_map in context.existing_rows_by_effective_account_amount.values():
-                    for candidate in scope_map.get(key, []):
-                        _append(candidate, day_offset)
+            if scope_id:
+                # Linked-group rows too — the sibling/child account a second source files the same
+                # charge under is exactly what the receiving-account index above cannot see.
+                for candidate in context.existing_rows_by_effective_account_amount.get(scope_id, {}).get(key, []):
+                    _append(candidate, day_offset)
 
     _probe(_adjacent_date_offsets(parsed_date))
     # Only reach to ±2 when exact/±1 produced nothing, so a real exact/±1 match is never diluted
@@ -1105,6 +1154,41 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
         ):
             _append(candidate, 0)
     return out
+
+
+def _display_candidates(candidates: list[dict]) -> list[dict]:
+    """The subset of a coverage hit's candidates worth showing as "this is what the row duplicates".
+
+    The lookup finds candidates by amount and date alone, and past ±1 that is thin evidence: on a real
+    ledger a week-wide window around any common amount picks up unrelated charges, and the report then
+    presents a coincidence with the same confidence as the actual twin. So a candidate found by the
+    *widened* reach has to also agree textually — exact, fuzzy, or the weak shared-token tier, the same
+    ladder `scan_scope_for_cross_account_duplicates` uses to decide what is worth a human's attention.
+
+    Two deliberate exemptions:
+
+      * **Exact date and ±1 are kept regardless of wording.** That band is not a guess — a same-amount
+        row a day either side of a covered date is the case this lookup was built for, and two sources
+        routinely describe one charge with no shared text whatsoever (a bank's terminal string against
+        an aggregator's cleaned merchant name). Filtering it would drop correct matches to fix noise
+        that only occurs further out.
+      * **A pair with no text on one side is never hidden** (`_text_comparable`). A nameless
+        money-movement leg matches nothing by design, and silence is not disagreement.
+
+    Display-only: callers pass the full list to the verdict logic first (see `_coverage_reject_verdict`).
+    Order is preserved — closest-day-first, as collected.
+    """
+    def _keep(candidate: dict) -> bool:
+        if candidate.get("text_relation"):
+            return True
+        if not candidate.get("_text_comparable"):
+            return True
+        return abs(candidate.get("day_offset") or 0) < 2
+
+    return [
+        {key: value for key, value in candidate.items() if key != "_text_comparable"}
+        for candidate in candidates if _keep(candidate)
+    ]
 
 
 def _coverage_matched(cov: dict, candidates: list[dict]) -> dict:
@@ -1130,8 +1214,9 @@ def _coverage_matched(cov: dict, candidates: list[dict]) -> dict:
 
 
 def _coverage_reject_verdict(context: "DedupeContext", cov: dict, receiving_account_id: str,
-                             parsed_date: str, amount: float, include_scope: bool,
-                             incoming_merchant, reason: str):
+                             parsed_date: str, amount: float, scope_id: Optional[str],
+                             incoming_merchant, reason: str,
+                             incoming_texts: Optional[set[str]] = None):
     """The verdict for a coverage-window hit: a hard-reject, carrying any same-account/transfer candidates
     for the report. One exception keeps real spending from being silently dropped: a **named** row (a real
     payment, not a nameless money-movement leg) with no such candidate is only treated as a duplicate when
@@ -1139,9 +1224,14 @@ def _coverage_reject_verdict(context: "DedupeContext", cov: dict, receiving_acco
     matched by merchant + amount). When none does, the payment is genuinely new — the covering import
     never saw it (it was funded from the wallet balance, so it never hit a card/bank) — and this returns
     ``None`` so the row falls through to import instead of being buried as 'covered, no specific match'.
-    Nameless money-movement rows keep their existing coverage rejection unchanged."""
+    Nameless money-movement rows keep their existing coverage rejection unchanged.
+
+    That exception is why `_display_candidates` is applied **last**, to the reported list only. "No
+    candidate" is load-bearing here — it is what sends a named row down the escape hatch — so trimming
+    the list the check reads would turn rejections into imports. The text tiering decides what the
+    report *shows*; it must not decide what the ladder *does*."""
     candidates = _candidate_summary_rows_for_coverage(
-        context, receiving_account_id, parsed_date, amount, include_scope,
+        context, receiving_account_id, parsed_date, amount, scope_id, incoming_texts,
     )
     if not candidates and incoming_merchant and context.conn is not None:
         payment_match = find_ledger_payment_match(
@@ -1152,7 +1242,7 @@ def _coverage_reject_verdict(context: "DedupeContext", cov: dict, receiving_acco
         candidates = [payment_match]
     return DedupeVerdict(
         hard_reject=True, passthrough=False,
-        matched=_coverage_matched(cov, candidates), reason=reason,
+        matched=_coverage_matched(cov, _display_candidates(candidates)), reason=reason,
     )
 
 
@@ -1182,6 +1272,11 @@ def evaluate_duplicate(
     incoming_merchant = txn_payload.get("merchant_name")
     # Every date this row could legitimately be filed under, most-authoritative first.
     row_dates = [d for d in (parsed_date, authorized_date) if d]
+    # This row as its source described it, for tiering the coverage rules' reported candidates. Built
+    # once here rather than per candidate: the coverage rules can each look at a handful of them.
+    incoming_texts = source_match_texts(
+        txn_payload.get("merchant_name"), txn_payload.get("raw_name"), txn_payload.get("import_evidence"),
+    )
 
     # Coverage rules run before the exact-hash rules below. When a row both falls in an already-
     # imported date range AND exactly matches an existing row, both verdicts are hard-rejects — the
@@ -1205,7 +1300,7 @@ def evaluate_duplicate(
         if cov:
             verdict = _coverage_reject_verdict(
                 context, cov, receiving_account_id, parsed_date, amount,
-                include_scope=False, incoming_merchant=incoming_merchant,
+                scope_id=None, incoming_merchant=incoming_merchant, incoming_texts=incoming_texts,
                 reason="Falls within the fully covered date range from an earlier import for this source account",
             )
             if verdict is not None:
@@ -1232,7 +1327,7 @@ def evaluate_duplicate(
         if cov:
             verdict = _coverage_reject_verdict(
                 context, cov, receiving_account_id, parsed_date, amount,
-                include_scope=True, incoming_merchant=incoming_merchant,
+                scope_id=scope_id, incoming_merchant=incoming_merchant, incoming_texts=incoming_texts,
                 reason="Falls within the fully covered date range from an earlier import in this account scope",
             )
             if verdict is not None:
@@ -1389,7 +1484,6 @@ def build_dedupe_context(
     }
     if fallback_account_id:
         relevant_account_ids.add(str(fallback_account_id))
-    relevant_effective_account_ids = {str(v) for v in compare_targets.values() if v}
 
     effective_scope_cache: dict[str, Optional[str]] = {}
 
@@ -1406,6 +1500,25 @@ def build_dedupe_context(
             effective_row = get_effective_account_row(conn, normalized_account_id)
             effective_scope_cache[normalized_account_id] = str(effective_row["id"]) if effective_row else normalized_account_id
         return effective_scope_cache[normalized_account_id]
+
+    current_scope_ids = {
+        s for s in (
+            scope_id_for(account_by_source_value.get(v) or fallback_account_id, v)
+            for v in source_values
+        ) if s
+    }
+
+    # Every scope the ladder can consult, so the linked-group index below is populated for all of them.
+    # Building it from `compare_targets` alone was a hole: a compare target is only ever recorded when an
+    # import *creates* an account and groups it, so a run mapping onto pre-existing accounts left the
+    # index empty — and the in-scope coverage rule, which fires off `scope_id` (a linked-group root,
+    # compare target or not), then had no sibling rows to name as candidates. It rejected a row on the
+    # group's coverage while only ever able to point at the receiving account, so the twin filed under a
+    # sibling was invisible and the widened ±N-day fallback pointed at whatever same-amount row happened
+    # to sit nearby instead. Note this changes no *verdict*: the two rules that hard-reject across a
+    # scope (exact-hash and fuzzy-text, below) both gate on an explicit compare target first, so the
+    # scopes added here are keys they never look up.
+    relevant_effective_account_ids = {str(v) for v in compare_targets.values() if v} | current_scope_ids
 
     existing_hashes_by_account: dict[str, dict[str, dict]] = {}
     existing_hashes_by_effective_account: dict[str, dict[str, dict]] = {}
@@ -1443,6 +1556,11 @@ def build_dedupe_context(
                 display_name=r["display_name"],
                 raw_name=r["raw_name"],
                 import_evidence=parse_import_evidence(r["import_evidence_json"]),
+            ),
+            # The sweeps' text set, kept alongside the ladder's: the coverage report tiers its
+            # candidates with `classify_source_text_relation`, which is defined over this one.
+            "source_texts": source_match_texts(
+                r["merchant_name"], r["raw_name"], r["import_evidence_json"],
             ),
         }
 
@@ -1518,13 +1636,6 @@ def build_dedupe_context(
             for stored_date in _row_date_variants(r):
                 key = duplicate_amount_key(stored_date, r["amount"])
                 existing_rows_by_effective_account_amount.setdefault(r["effective_account_id"], {}).setdefault(key, []).append(summary_row)
-
-    current_scope_ids = {
-        s for s in (
-            scope_id_for(account_by_source_value.get(v) or fallback_account_id, v)
-            for v in source_values
-        ) if s
-    }
 
     # A data connection's coverage lives on `connection_account`, not on its sync cards: a cursor delta
     # is not a date range (it is "everything new since a checkpoint", scattered across arbitrary dates),
@@ -2210,6 +2321,31 @@ _RULE_LABELS = {
     "other_soft":                      ("Other (review)",     "Soft-flagged with a reason this report does not yet have a friendly label for."),
 }
 
+# How a coverage reject's candidate agreed with the incoming row's text — the same three tiers the
+# soft-flag rules above name, worded for a row inside a candidate list rather than for a rule badge.
+# Applied when the report is READ, not when the verdict is written: the stored candidate carries only
+# the tier key, so re-wording these never requires re-importing a file to take effect.
+_CANDIDATE_TEXT_RELATION_LABELS = {
+    "exact": ("Same wording",
+              "A captured description of this transaction is identical to the incoming row's (or is the same text, clipped)."),
+    "fuzzy": ("Similar wording",
+              "The two descriptions are very similar but not identical."),
+    "weak":  ("Same payee, different wording",
+              "The descriptions do not resemble each other as text, but they share the distinctive words that name the payee."),
+}
+
+
+def _with_text_relation_label(candidate: dict) -> dict:
+    """Resolve a candidate's stored tier key to its user-facing label + tooltip. A candidate with no
+    tier — an exact/±1 hit kept on date evidence alone, or one from before this was recorded — is
+    returned untouched, and the report simply shows no badge for it."""
+    labels = _CANDIDATE_TEXT_RELATION_LABELS.get(candidate.get("text_relation"))
+    if not labels:
+        return candidate
+    labelled = dict(candidate)
+    labelled["text_relation_label"], labelled["text_relation_description"] = labels
+    return labelled
+
 
 # A suspect's stored reason records the account relationship that *created* the flag, and a later merge
 # retires that premise: the two rows are now on one account, so "cross-account match" states something
@@ -2425,21 +2561,34 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
         if not account_id or not parsed_date or amount is None:
             continue  # a row whose payload can't place it is not something to guess about
         rule_key, _ = _classify_hard_reject_reason(row["reason"])
+        # Rule 2 folded in the linked group; Rule 1 did not. Recompute the same shape the original
+        # verdict used, so the explanation matches the rule that produced it. The scope is re-derived
+        # from the account rather than stored on the entry — a group the account joined after the
+        # import is the case this refresh most wants to see.
+        scope_id = None
+        if rule_key == "coverage_in_scope":
+            effective_row = get_effective_account_row(conn, account_id)
+            scope_id = str(effective_row["id"]) if effective_row else account_id
         pending.append({
             "row_number": row["row_number"],
             "matched": matched,
             "account_id": account_id,
             "parsed_date": parsed_date,
             "amount": float(amount),
-            # Rule 2 folded in the linked group; Rule 1 did not. Recompute the same shape the
-            # original verdict used, so the explanation matches the rule that produced it.
-            "include_scope": rule_key == "coverage_in_scope",
+            "scope_id": scope_id,
+            # The same text tiering the import applied. Without it this pass would hand back exactly
+            # the coincidental same-amount rows the import filtered out, one report-open later.
+            "incoming_texts": source_match_texts(
+                (payload or {}).get("merchant_name"), (payload or {}).get("raw_name"),
+                (payload or {}).get("import_evidence"),
+            ),
         })
 
     if not pending:
         return 0
 
     account_ids = {p["account_id"] for p in pending}
+    scope_ids = {p["scope_id"] for p in pending if p["scope_id"]}
     amounts = {round(p["amount"], 2) for p in pending}
     # Exactly the days the lookup will probe, taken from the same helpers it uses so the two cannot
     # drift apart. Filtering on them turns a scan of the account into an index seek (`idx_txn_date`)
@@ -2452,23 +2601,28 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
     account_ph = _placeholders(account_ids)
     amount_ph = _placeholders(amounts)
     date_ph = _placeholders(probe_dates)
+    # Sibling accounts in a pending entry's linked group, for the in-scope entries that can use them.
+    # Filtering on the rejected row's own account alone would rebuild the very blind spot this refresh
+    # is meant to close: the twin a second source filed under a sibling is off-account by definition.
+    scope_clause = f" OR COALESCE(a.parent_account_id, a.id) IN ({_placeholders(scope_ids)})" if scope_ids else ""
     # `conn=None` deliberately: it disables the cross-account transfer fallback inside the lookup.
     # That fallback issues a query per unexplained entry — the dominant cost by far — and re-running it
     # here is near-pure waste, because an entry only reaches this function by having found nothing at
     # import time, when the fallback already ran on the same question with the same ±3 window. What
-    # this refresh exists to add is the widened *same-account* reach, which needs no connection.
+    # this refresh exists to add is the widened same-account and linked-group reach, neither of which
+    # needs a connection — both read the indexes built just below.
     context = DedupeContext(conn=None)
     for r in conn.execute(
         f"""SELECT t.id, t.account_id, t.date, t.authorized_date, t.raw_name, t.merchant_name,
                    t.display_name, t.amount, t.import_evidence_json, t.import_batch_id,
                    COALESCE(a.parent_account_id, a.id) AS effective_account_id
             FROM   txn t JOIN account a ON a.id = t.account_id
-            WHERE  t.account_id IN ({account_ph})
+            WHERE  (t.account_id IN ({account_ph}){scope_clause})
               AND  ROUND(t.amount, 2) IN ({amount_ph})
               AND  (t.date IN ({date_ph}) OR t.authorized_date IN ({date_ph}))
               AND  t.is_pending = 0
               AND  t.trashed_at IS NULL""",
-        [*account_ids, *amounts, *probe_dates, *probe_dates],
+        [*account_ids, *scope_ids, *amounts, *probe_dates, *probe_dates],
     ).fetchall():
         summary = {
             "id": r["id"],
@@ -2477,6 +2631,9 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
             "amount": r["amount"],
             "account_id": r["account_id"],
             "import_batch_id": r["import_batch_id"],
+            "source_texts": source_match_texts(
+                r["merchant_name"], r["raw_name"], r["import_evidence_json"],
+            ),
         }
         # Both dates, for the same reason the ingestion path indexes both: the twin may be filed under
         # whichever of the two its own source published.
@@ -2496,9 +2653,9 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
         # actually turns up is a file carrying the same charge twice under two different account
         # labels — one copy imports, the other is rejected by coverage. Suppressing the imported copy
         # hid exactly the explanation the report exists to give.
-        candidates = _candidate_summary_rows_for_coverage(
-            context, p["account_id"], p["parsed_date"], p["amount"], p["include_scope"],
-        )
+        candidates = _display_candidates(_candidate_summary_rows_for_coverage(
+            context, p["account_id"], p["parsed_date"], p["amount"], p["scope_id"], p["incoming_texts"],
+        ))
         if not candidates:
             continue
         matched = dict(p["matched"])
@@ -2684,7 +2841,7 @@ def list_unified_batch_duplicates(conn: sqlite3.Connection, batch_id: str) -> li
                 enriched_matched = dict(enriched_matched)
                 enriched_matched["covered"] = enrich_with_source(covered, covered.get("source_batch_id"))
                 enriched_matched["candidates"] = [
-                    enrich_with_source(c, c.get("import_batch_id"))
+                    _with_text_relation_label(enrich_with_source(c, c.get("import_batch_id")))
                     for c in (enriched_matched.get("candidates") or [])
                 ]
             elif enriched_matched.get("import_batch_id"):

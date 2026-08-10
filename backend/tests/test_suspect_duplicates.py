@@ -179,7 +179,7 @@ class SuspectDuplicateTests(unittest.TestCase):
         # the cross-account suspect check runs for all batch rows regardless of whether the
         # receiving account is brand new — no precondition gate.
         account_a = self._insert_account("Chase")
-        account_b = self._insert_account("Credit Card ...6612")
+        account_b = self._insert_account("Credit Card ...4103")
         batch = self._insert_batch()
 
         existing_id = self._insert_txn(

@@ -175,7 +175,7 @@ class PaypalMoneyMovementTests(unittest.IsolatedAsyncioTestCase):
         # The created rule carries account_type='paypal' (not a single account id), so a same-text
         # transaction on a non-PayPal account can never match it.
         result = await self._import()
-        other_account = self._insert_account("Northgate Checking")  # stays type 'depository'
+        other_account = self._insert_account("Everyday Checking")  # stays type 'depository'
         with self._use_db_path(), get_db() as conn:
             # A checking transaction whose text contains the same Type string.
             conn.execute(

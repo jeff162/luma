@@ -64,7 +64,7 @@ class MigrationV24Tests(unittest.TestCase):
             INSERT INTO connection (id, provider, external_id, institution)
               VALUES ('conn-1', 'plaid', 'item-1', 'Chase');
             INSERT INTO account (id, name, display_name, type, mask, external_account_id, connection_id, provider)
-              VALUES ('acct-card', 'CREDIT CARD', 'CREDIT CARD', 'credit', '6612', 'ext-card', 'conn-1', 'plaid');
+              VALUES ('acct-card', 'CREDIT CARD', 'CREDIT CARD', 'credit', '4103', 'ext-card', 'conn-1', 'plaid');
             INSERT INTO account (id, name, display_name, type, provider)
               VALUES ('acct-csv', 'Monarch Checking', 'Monarch Checking', 'depository', 'csv');
             INSERT INTO import_batch (id, filename, status, connection_id)
@@ -129,7 +129,7 @@ class MigrationV24Tests(unittest.TestCase):
         self.assertEqual(row["target_account_id"], "acct-card",
                          "'existing' compares against the account itself")
         self.assertEqual(row["provider_name"], "CREDIT CARD")
-        self.assertEqual(row["provider_mask"], "6612")
+        self.assertEqual(row["provider_mask"], "4103")
 
     def test_an_unconnected_account_gets_no_mapping_row(self):
         self._migrate()
@@ -142,7 +142,7 @@ class MigrationV24Tests(unittest.TestCase):
         self._migrate()
         self.assertEqual(self.conn.execute(
             "SELECT csv_value FROM import_batch_account WHERE batch_id = 'card-1'"
-        ).fetchone()["csv_value"], "CREDIT CARD ···6612")
+        ).fetchone()["csv_value"], "CREDIT CARD ···4103")
 
     def test_a_csv_batchs_source_value_is_untouched(self):
         self.conn.executescript("""
@@ -161,13 +161,13 @@ class MigrationV24Tests(unittest.TestCase):
         # the opaque one goes, rather than the whole migration aborting.
         self.conn.execute(
             "INSERT INTO import_batch_account (batch_id, csv_value, account_id, row_count)"
-            " VALUES ('card-1', 'CREDIT CARD ···6612', 'acct-card', 5)"
+            " VALUES ('card-1', 'CREDIT CARD ···4103', 'acct-card', 5)"
         )
         self._migrate()
         rows = self.conn.execute(
             "SELECT csv_value, row_count FROM import_batch_account WHERE batch_id = 'card-1'"
         ).fetchall()
-        self.assertEqual([r["csv_value"] for r in rows], ["CREDIT CARD ···6612"])
+        self.assertEqual([r["csv_value"] for r in rows], ["CREDIT CARD ···4103"])
         self.assertEqual(rows[0]["row_count"], 5)
 
     def test_an_account_with_neither_name_nor_mask_keeps_its_opaque_value(self):

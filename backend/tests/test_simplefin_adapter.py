@@ -66,7 +66,7 @@ def _payload(transactions=None, *, errlist=None, accounts=None):
     return {
         "errlist": errlist or [],
         "connections": [{
-            "conn_id": "CONN-1", "name": "My Bank - Jeff", "org_id": "INST-1",
+            "conn_id": "CONN-1", "name": "My Bank - Mark", "org_id": "INST-1",
             "org_name": "My Bank", "org_url": "https://mybank.example",
         }],
         "accounts": accounts if accounts is not None else [{

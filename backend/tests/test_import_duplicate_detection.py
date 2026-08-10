@@ -439,7 +439,7 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
                     INSERT INTO connection_account
                       (connection_id, external_account_id, account_id, mapping_mode, target_account_id,
                        provider_name, provider_mask, coverage_start_date, coverage_through_date)
-                    VALUES ('conn-1', 'ext-card', ?, ?, ?, 'CREDIT CARD', '6612', ?, ?)
+                    VALUES ('conn-1', 'ext-card', ?, ?, ?, 'CREDIT CARD', '4103', ?, ?)
                     """,
                     (account_id, mode, account_id if mode == "existing" else None, covers[0], covers[1]),
                 )
@@ -455,7 +455,7 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
                 "notes": "Notes",
                 "date_format": "%Y-%m-%d",
             },
-            account_map={"CREDIT CARD (...6612)": card_id},
+            account_map={"CREDIT CARD (...4103)": card_id},
         )
 
     def _seed_synced_rows(self, card_id):
@@ -473,7 +473,7 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         # fully-covered stretch ends 12/01. The file's 11/20 and 11/28 rows are inside it and are the
         # provider's rows arriving a second time through a file; 12/05 (inside the soft trailing edge)
         # and 12/12 (past the claim entirely) are not covered and must land.
-        card_id = self._insert_account("Northgate Voyager", account_type="credit", mask="6612")
+        card_id = self._insert_account("Northgate Voyager", account_type="credit", mask="4103")
         synced = self._seed_synced_rows(card_id)
         self._connection_with_coverage(card_id)
 
@@ -506,8 +506,8 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         # The control that shows the mapping does the work, not the mere existence of coverage: mapped
         # 'new', the provider account is a different physical account, its claim says nothing about the
         # file's account, and all four rows import. Same precondition the sync direction has.
-        card_id = self._insert_account("Northgate Voyager", account_type="credit", mask="6612")
-        connection_account_id = self._insert_account("CREDIT CARD", account_type="credit", mask="6612")
+        card_id = self._insert_account("Northgate Voyager", account_type="credit", mask="4103")
+        connection_account_id = self._insert_account("CREDIT CARD", account_type="credit", mask="4103")
         self._seed_synced_rows(connection_account_id)
         self._connection_with_coverage(connection_account_id, mode="new")
 
@@ -1028,10 +1028,28 @@ class ImportDuplicateDetectionTests(unittest.IsolatedAsyncioTestCase):
         self._insert_coverage_reject(batch_id=batch, filename="f.csv", row_number=2, candidates=[])
         self._insert_coverage_reject(batch_id=batch, filename="f.csv", row_number=3,
                                      candidates=[{"id": "y", "date": "2023-08-12", "amount": 20.22,
-                                                  "cross_account": True, "account_name": "Northgate Checking"}])
+                                                  "cross_account": True, "account_name": "Everyday Checking"}])
         self.assertEqual(self._entry_for_row(batch, 1)["review_substate"], "matched_near_date")
         self.assertEqual(self._entry_for_row(batch, 2)["review_substate"], "no_match")
         self.assertEqual(self._entry_for_row(batch, 3)["review_substate"], "transfer_match")
+
+    def test_candidate_text_tier_is_worded_when_the_report_is_read(self):
+        # The stored verdict carries only the tier key, so the wording can be revised without
+        # re-importing every file it was already written into. A candidate with no tier — kept on date
+        # evidence alone — must stay bare rather than acquire a label that asserts agreement.
+        batch = "batch-tier"
+        self._insert_coverage_reject(
+            batch_id=batch, filename="f.csv", row_number=1,
+            candidates=[
+                {"id": "a", "date": "2023-08-13", "amount": 20.22, "day_offset": 2, "text_relation": "exact"},
+                {"id": "b", "date": "2023-08-14", "amount": 20.22, "day_offset": 3, "text_relation": "weak"},
+                {"id": "c", "date": "2023-08-11", "amount": 20.22},
+            ])
+        candidates = self._entry_for_row(batch, 1)["matched"]["candidates"]
+        self.assertEqual([c.get("text_relation_label") for c in candidates],
+                         ["Same wording", "Same payee, different wording", None])
+        self.assertTrue(candidates[0]["text_relation_description"])
+        self.assertNotIn("text_relation_description", candidates[2])
 
     def test_mark_reviewed_clears_substate(self):
         batch = "batch-ack"

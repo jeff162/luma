@@ -27,7 +27,7 @@ class CrossAccountTransferMatchTests(unittest.TestCase):
         self.db_path = Path(self.tempdir.name) / "transfer-match.db"
         init_db(str(self.db_path))
         with self._use_db_path(), get_db() as conn:
-            for acc_id, name in (("paypal", "PayPal"), ("checking", "Northgate Checking"), ("card", "Northgate Rewards")):
+            for acc_id, name in (("paypal", "PayPal"), ("checking", "Everyday Checking"), ("card", "Rewards Card")):
                 conn.execute(
                     """INSERT INTO account (id, external_account_id, provider, name, display_name, type, owner_id)
                        VALUES (?, ?, 'fixture', ?, ?, 'checking', ?)""",
@@ -63,13 +63,13 @@ class CrossAccountTransferMatchTests(unittest.TestCase):
             return find_cross_account_transfer_candidates(conn, "paypal", date, amount)
 
     def test_finds_the_opposite_signed_funding_twin_named_for_the_wallet(self):
-        # Deposit leg into PayPal is stored -716 (a credit); the funding row on Northgate Checking is +716,
+        # Deposit leg into PayPal is stored -716 (a credit); the funding row on Everyday Checking is +716,
         # named "PayPal", a day later — the twin the same-account lookup can't see.
         fund = self._txn("checking", 716.0, "2026-01-21", "PayPal")
         out = self._find("2026-01-20", -716.0)
         self.assertEqual([c["id"] for c in out], [fund])
         self.assertTrue(out[0]["cross_account"])
-        self.assertEqual(out[0]["account_name"], "Northgate Checking")
+        self.assertEqual(out[0]["account_name"], "Everyday Checking")
 
     def test_matches_a_wallet_token_embedded_in_a_longer_name(self):
         fund = self._txn("checking", 2251.67, "2026-03-12", "WDRL-ACH PAYPAL INSTANT TRANSFER - INST XFER")

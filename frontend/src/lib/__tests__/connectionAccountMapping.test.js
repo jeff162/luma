@@ -15,7 +15,7 @@ import {
 } from '../connectionAccountMapping.js'
 
 const ACCOUNTS = [
-  { id: 'acct-csv', name: 'Northgate Voyager', type: 'credit', mask: '6612' },
+  { id: 'acct-csv', name: 'Northgate Voyager', type: 'credit', mask: '4103' },
   { id: 'acct-new', name: 'Riverstone Summit Cash', type: 'credit', mask: '5093' },
 ]
 
@@ -23,7 +23,7 @@ const ACCOUNTS = [
 // produces, and the case the suggestion exists for.
 const providerAccount = (over = {}) => ({
   external_account_id: 'ext-1',
-  source_label: 'Northgate Voyager ···6612',
+  source_label: 'Northgate Voyager ···4103',
   provider_name: 'Northgate Voyager',
   provider_type: 'credit',
   account_name: null,
@@ -146,14 +146,14 @@ describe('a mapping whose account has since been merged into a group', () => {
   // live mapping as "— Select —". The mapping was never lost; the surfaces were handed a root-only
   // account list, so the child the mapping points at was missing from both. These pin the two halves.
 
-  const MERGED_CHILD = { id: 'acct-child', name: 'CREDIT CARD', type: 'credit', mask: '2741',
-                         display_name: 'Northgate Rewards', parent_account_id: 'acct-parent' }
-  const GROUP_ROOT = { id: 'acct-parent', name: 'Northgate Rewards', type: 'credit',
-                       display_name: 'Northgate Rewards' }
+  const MERGED_CHILD = { id: 'acct-child', name: 'CREDIT CARD', type: 'credit', mask: '4102',
+                         display_name: 'Rewards Card', parent_account_id: 'acct-parent' }
+  const GROUP_ROOT = { id: 'acct-parent', name: 'Rewards Card', type: 'credit',
+                       display_name: 'Rewards Card' }
   const WITH_CHILDREN = [...ACCOUNTS, MERGED_CHILD, GROUP_ROOT]
 
   const mergedMapping = providerAccount({
-    external_account_id: 'ext-2741', source_label: 'CREDIT CARD ···2741',
+    external_account_id: 'ext-4102', source_label: 'CREDIT CARD ···4102',
     mapping_mode: 'existing', account_id: 'acct-child', target_account_id: 'acct-child',
   })
 

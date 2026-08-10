@@ -117,7 +117,7 @@ class ConnectionRescanTests(unittest.TestCase):
             conn.execute(
                 "INSERT INTO import_batch_account (batch_id, csv_value, account_id, row_count, was_skipped,"
                 " coverage_start_date, coverage_end_date, terminal_date) VALUES"
-                " ('b-csv','CREDIT CARD (...6612)',?,?,0,?,?,?)",
+                " ('b-csv','CREDIT CARD (...4103)',?,?,0,?,?,?)",
                 (account_id, len(rows), coverage[0], coverage[1], terminal),
             )
             for i, (day, amount, text) in enumerate(rows):
@@ -127,7 +127,7 @@ class ConnectionRescanTests(unittest.TestCase):
                     " VALUES (?,?,?,?,?,?,?,?,0,?, 'b-csv', ?)",
                     (f"csv-{i}", account_id, SHARED_OWNER_ID, amount, text, text, text, day,
                      f"csvhash-{i}",
-                     json.dumps({"account": {"header": "Account", "value": "CREDIT CARD (...6612)"}})),
+                     json.dumps({"account": {"header": "Account", "value": "CREDIT CARD (...4103)"}})),
                 )
 
     def _map(self, mode, target=None, account_id=None):
@@ -137,7 +137,7 @@ class ConnectionRescanTests(unittest.TestCase):
                 INSERT INTO connection_account
                   (connection_id, external_account_id, account_id, mapping_mode, target_account_id,
                    provider_name, provider_mask)
-                VALUES ('conn-1', ?, ?, ?, ?, 'CREDIT CARD', '6612')
+                VALUES ('conn-1', ?, ?, ?, ?, 'CREDIT CARD', '4103')
                 ON CONFLICT(connection_id, external_account_id) DO UPDATE SET
                    account_id = excluded.account_id, mapping_mode = excluded.mapping_mode,
                    target_account_id = excluded.target_account_id
@@ -353,7 +353,7 @@ class ConnectionRescanTests(unittest.TestCase):
         with self._db() as conn:
             conn.execute(
                 "INSERT INTO connection_account (connection_id, external_account_id, provider_name, provider_mask)"
-                " VALUES ('conn-1', ?, 'CREDIT CARD', '6612')",
+                " VALUES ('conn-1', ?, 'CREDIT CARD', '4103')",
                 (self.EXTERNAL,),
             )
 

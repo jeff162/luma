@@ -117,7 +117,7 @@ class SyncEvidenceTests(unittest.TestCase):
             "location": "1 Main St, Boston, MA",
             **overrides,
         }
-        return json.loads(build_sync_evidence(txn, source_label="CREDIT CARD ···6612",
+        return json.loads(build_sync_evidence(txn, source_label="CREDIT CARD ···4103",
                                               captured_fields=_captured))
 
     def test_account_label_is_written_so_the_row_can_serve_as_a_terminal_candidate(self):
@@ -125,7 +125,7 @@ class SyncEvidenceTests(unittest.TestCase):
         # Without it a synced row can never be a candidate, which is why synced rows were invisible to
         # that rule entirely.
         ev = self._evidence()
-        self.assertEqual(ev["account"], {"header": "Account", "value": "CREDIT CARD ···6612"})
+        self.assertEqual(ev["account"], {"header": "Account", "value": "CREDIT CARD ···4103"})
 
     def test_captured_detail_feeds_the_shared_text_matcher(self):
         # The payoff: because the shape matches a CSV's, collect_duplicate_match_texts picks the
@@ -133,7 +133,7 @@ class SyncEvidenceTests(unittest.TestCase):
         raw = build_sync_evidence(
             {"raw_name": "CAREMARK MAIL", "counterparties": ["CVS Caremark"], "authorized_date": None,
              "merchant_entity_id": None, "check_number": None, "location": None},
-            source_label="CREDIT CARD ···6612", captured_fields=set(),
+            source_label="CREDIT CARD ···4103", captured_fields=set(),
         )
         texts = collect_duplicate_match_texts(
             merchant_name="CVS Caremark", display_name=None, raw_name="CAREMARK MAIL",

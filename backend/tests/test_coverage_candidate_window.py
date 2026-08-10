@@ -12,8 +12,8 @@ candidate lookup directly, no import needed.
 
 The window used to stop at ±2, sized for the foreign-transaction case (a charge posts a local
 calendar day ahead, turning ±1 settlement drift into ±2). Real settlement skew between two sources
-runs further — a `TST BLACKBIRD DOUGHNUTS` charge dated the 17th by one export and the 20th by
-another — and at ±2 those rows were correctly rejected and then reported as "no specific match",
+runs further — one charge dated the 17th by one export and the 20th by another — and at ±2 those
+rows were correctly rejected and then reported as "no specific match",
 which is the worst pairing: the row is out of the ledger AND the report can't say what replaced it.
 """
 
@@ -28,7 +28,9 @@ from backend.services.duplicate_detection import (
     DedupeContext,
     _adjacent_date_offsets,
     _candidate_summary_rows_for_coverage,
+    _display_candidates,
     duplicate_amount_key as amount_key,
+    source_match_texts,
 )
 
 
@@ -40,7 +42,7 @@ class CoverageCandidateWindowTests(unittest.TestCase):
 
     def _lookup(self, ctx, incoming_date, amount="12.34"):
         return _candidate_summary_rows_for_coverage(
-            ctx, "acct", incoming_date, float(amount), include_scope=False
+            ctx, "acct", incoming_date, float(amount), scope_id=None
         )
 
     def test_adjacent_date_offsets(self):
@@ -137,7 +139,7 @@ class CoverageCandidateWindowTests(unittest.TestCase):
         # and its results are carried through with the cross_account marker + account label intact.
         transfer = {
             "id": "fund", "date": "2026-01-11", "merchant_name": "PayPal", "amount": 716.0,
-            "account_id": "checking", "account_name": "Northgate Checking", "cross_account": True,
+            "account_id": "checking", "account_name": "Everyday Checking", "cross_account": True,
         }
         calls = []
 
@@ -160,8 +162,111 @@ class CoverageCandidateWindowTests(unittest.TestCase):
             out2 = self._lookup(ctx2, "2026-01-10", amount="716.00")
             self.assertEqual([c["id"] for c in out2], ["fund"])
             self.assertTrue(out2[0]["cross_account"])
-            self.assertEqual(out2[0]["account_name"], "Northgate Checking")
+            self.assertEqual(out2[0]["account_name"], "Everyday Checking")
             self.assertEqual(calls, [("acct", "2026-01-10", 716.0)])
+
+    def test_a_scope_fold_reaches_a_sibling_account_the_receiving_account_cannot_see(self):
+        # The in-scope coverage rule rejects on a whole linked group's coverage, so the twin it is
+        # rejecting against is routinely filed under a SIBLING account — a second source's copy of the
+        # same card. Without the fold the exact-date probe finds nothing on the receiving account and
+        # the widened reach then names whatever same-amount row sits nearby instead.
+        sibling = {"id": "sib", "date": "2026-01-10", "merchant_name": "Annual Fee", "amount": 12.34,
+                   "account_id": "sibling-acct"}
+        coincidence = {"id": "coincidence", "date": "2026-01-05", "merchant_name": "Rec Dept",
+                       "amount": 12.34, "account_id": "acct"}
+        ctx = self._context({amount_key("2026-01-05", 12.34): [coincidence]})
+        ctx.existing_rows_by_effective_account_amount = {
+            "group-root": {amount_key("2026-01-10", 12.34): [sibling]},
+        }
+        self.assertEqual([c["id"] for c in self._lookup(ctx, "2026-01-10")], ["coincidence"],
+                         "no scope → the old behavior, reaching five days out for an unrelated row")
+        out = _candidate_summary_rows_for_coverage(ctx, "acct", "2026-01-10", 12.34, scope_id="group-root")
+        self.assertEqual([c["id"] for c in out], ["sib"], "the exact-date sibling wins outright")
+        self.assertNotIn("day_offset", out[0])
+
+    def test_a_scope_fold_reads_only_its_own_scope(self):
+        # One pass indexes a map per scope. Reaching into all of them would let an unrelated account
+        # group imported in the same run supply a candidate for this row.
+        other = {"id": "other-group", "date": "2026-01-10", "merchant_name": "X", "amount": 12.34,
+                 "account_id": "unrelated"}
+        ctx = self._context({})
+        ctx.existing_rows_by_effective_account_amount = {
+            "other-root": {amount_key("2026-01-10", 12.34): [other]},
+        }
+        out = _candidate_summary_rows_for_coverage(ctx, "acct", "2026-01-10", 12.34, scope_id="group-root")
+        self.assertEqual(out, [])
+
+    # ---- text tiering of the widened band -------------------------------
+
+    def _texted(self, txn_id, date, text, amount=7.75):
+        return {"id": txn_id, "date": date, "merchant_name": text, "amount": amount,
+                "account_id": "acct", "source_texts": source_match_texts(text, text, None)}
+
+    def _tiered_lookup(self, ctx, incoming_date, incoming_text, amount=7.75):
+        """The lookup plus the display filter, i.e. what the report actually receives."""
+        return _display_candidates(_candidate_summary_rows_for_coverage(
+            ctx, "acct", incoming_date, amount, None,
+            source_match_texts(incoming_text, incoming_text, None),
+        ))
+
+    def test_the_widened_band_drops_a_row_that_only_shares_an_amount(self):
+        # The reported case. Four same-amount rows inside ±7 of an incoming "TST*JP LICKS - NEWTON":
+        # two name the same shop, one names the same shop at another branch, and one is an unrelated
+        # charge that happens to cost the same. Only the last is not evidence of anything.
+        rows = {
+            "2026-07-05": self._texted("creamery", "2026-07-05", "COUNTRY CREAMERY & COFFE"),
+            "2026-07-12": self._texted("newton-a",  "2026-07-12", "TST*JP LICKS - NEWTON"),
+            "2026-07-14": self._texted("newton-b",  "2026-07-14", "TST*JP LICKS - NEWTON"),
+            "2026-07-16": self._texted("davis",     "2026-07-16", "TST*JP LICKS - DAVIS"),
+        }
+        ctx = self._context({amount_key(d, 7.75): [r] for d, r in rows.items()})
+        out = self._tiered_lookup(ctx, "2026-07-09", "TST*JP LICKS - NEWTON")
+
+        self.assertEqual([c["id"] for c in out], ["newton-a", "newton-b", "davis"],
+                         "the same-amount coincidence is dropped; order stays closest-day-first")
+        self.assertEqual([c["text_relation"] for c in out], ["exact", "exact", "weak"],
+                         "the other-branch row is real but weaker evidence, and says so")
+
+    def test_the_internal_comparability_marker_never_reaches_the_report(self):
+        # `_text_comparable` exists only to let the filter tell "no agreement" apart from "nothing to
+        # compare". Persisting it would put matcher bookkeeping into every stored verdict.
+        ctx = self._context({amount_key("2026-07-12", 7.75): [
+            self._texted("newton-a", "2026-07-12", "TST*JP LICKS - NEWTON")]})
+        out = self._tiered_lookup(ctx, "2026-07-09", "TST*JP LICKS - NEWTON")
+        self.assertNotIn("_text_comparable", out[0])
+
+    def test_an_exact_date_candidate_survives_with_no_text_agreement_at_all(self):
+        # The near-band exemption. Two sources describing one charge with nothing in common is ordinary
+        # (a terminal string against a cleaned merchant name); at the same date and amount that is the
+        # case this lookup exists for, and the text test has no business overruling it.
+        ctx = self._context({amount_key("2026-07-09", 7.75): [
+            self._texted("same-day", "2026-07-09", "POS PURCHASE TERMINAL 4471")]})
+        out = self._tiered_lookup(ctx, "2026-07-09", "Corner Grocery")
+        self.assertEqual([c["id"] for c in out], ["same-day"])
+        self.assertNotIn("text_relation", out[0], "kept on date evidence — no tier to claim")
+
+    def test_a_one_day_candidate_is_exempt_too(self):
+        ctx = self._context({amount_key("2026-07-10", 7.75): [
+            self._texted("next-day", "2026-07-10", "POS PURCHASE TERMINAL 4471")]})
+        self.assertEqual(
+            [c["id"] for c in self._tiered_lookup(ctx, "2026-07-09", "Corner Grocery")], ["next-day"])
+
+    def test_an_incoming_row_with_no_text_keeps_its_whole_list(self):
+        # A nameless money-movement leg matches nothing by design. Silence is not disagreement, so the
+        # filter must not read it as one and empty the list.
+        ctx = self._context({amount_key("2026-07-14", 7.75): [
+            self._texted("far", "2026-07-14", "COUNTRY CREAMERY & COFFE")]})
+        out = _display_candidates(_candidate_summary_rows_for_coverage(
+            ctx, "acct", "2026-07-09", 7.75, None, set()))
+        self.assertEqual([c["id"] for c in out], ["far"])
+
+    def test_a_candidate_with_no_text_is_kept_in_the_widened_band(self):
+        # The other half of the same rule: the untexted side may be the stored row instead.
+        ctx = self._context({amount_key("2026-07-14", 7.75): [
+            {"id": "nameless", "date": "2026-07-14", "merchant_name": "", "amount": 7.75,
+             "account_id": "acct", "source_texts": set()}]})
+        out = self._tiered_lookup(ctx, "2026-07-09", "TST*JP LICKS - NEWTON")
+        self.assertEqual([c["id"] for c in out], ["nameless"])
 
     def test_cross_account_fallback_without_a_connection_is_a_no_op(self):
         # A context with no connection (a pure-unit caller) skips the ledger fallback rather than

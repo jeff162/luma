@@ -40,7 +40,7 @@ describe('computeReportSpendingConflicts — category report', () => {
   })
 
   it('ignores indirect facets (account/owner) even when excluded', () => {
-    const out = computeReportSpendingConflicts({ ...base, selections: [exclude('account', 'a1', 'Checking'), exclude('owner', 'o1', 'Jeff')] })
+    const out = computeReportSpendingConflicts({ ...base, selections: [exclude('account', 'a1', 'Checking'), exclude('owner', 'o1', 'Mark')] })
     expect(out).toEqual([])
   })
 

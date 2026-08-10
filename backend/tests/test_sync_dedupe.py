@@ -81,7 +81,7 @@ class SyncDedupeTests(unittest.TestCase):
     CSV_ACCOUNT = "acct-csv"
     PLAID_ACCOUNT = "acct-plaid"
     EXTERNAL = "ext-card"
-    LABEL = "CREDIT CARD ···6612"
+    LABEL = "CREDIT CARD ···4103"
 
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
@@ -124,7 +124,7 @@ class SyncDedupeTests(unittest.TestCase):
                 INSERT INTO connection_account
                   (connection_id, external_account_id, account_id, mapping_mode, target_account_id,
                    provider_name, provider_mask)
-                VALUES ('conn-1', ?, ?, ?, ?, 'CREDIT CARD', '6612')
+                VALUES ('conn-1', ?, ?, ?, ?, 'CREDIT CARD', '4103')
                 """,
                 (self.EXTERNAL,
                  self.CSV_ACCOUNT if mode == "existing" else self.PLAID_ACCOUNT,
@@ -140,7 +140,7 @@ class SyncDedupeTests(unittest.TestCase):
             conn.execute(
                 "INSERT INTO import_batch_account (batch_id, csv_value, account_id, row_count, was_skipped,"
                 " coverage_start_date, coverage_end_date, terminal_date) VALUES"
-                " ('b-csv','CREDIT CARD (...6612)',?,?,0,?,?,?)",
+                " ('b-csv','CREDIT CARD (...4103)',?,?,0,?,?,?)",
                 (self.CSV_ACCOUNT, len(rows), coverage[0], coverage[1], terminal),
             )
             for i, (day, amount, text) in enumerate(rows):
@@ -150,7 +150,7 @@ class SyncDedupeTests(unittest.TestCase):
                     " VALUES (?,?,?,?,?,?,?,?,0,?, 'b-csv', ?)",
                     (f"csv-{i}", self.CSV_ACCOUNT, SHARED_OWNER_ID, amount, text, text, text, day,
                      f"csvhash-{i}",
-                     json.dumps({"account": {"header": "Account", "value": "CREDIT CARD (...6612)"}})),
+                     json.dumps({"account": {"header": "Account", "value": "CREDIT CARD (...4103)"}})),
                 )
 
     def _synced(self, txn_id, day, amount, merchant, raw, authorized_date=None):

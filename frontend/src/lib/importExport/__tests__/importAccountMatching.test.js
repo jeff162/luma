@@ -29,7 +29,7 @@ describe('normalizeAccountMatchStem', () => {
     // `provider_account_label` renders "{provider name} ···{mask}", and that string reaches this same
     // matcher. Before this it stemmed to "riverstone summit cash 5093" and matched nothing.
     expect(normalizeAccountMatchStem('Riverstone Summit Cash ···5093')).toBe('riverstone summit cash')
-    expect(normalizeAccountMatchStem('CREDIT CARD ···6612')).toBe('credit card')
+    expect(normalizeAccountMatchStem('CREDIT CARD ···4103')).toBe('credit card')
     expect(normalizeAccountMatchStem('Checking•••1111')).toBe('checking')
     expect(normalizeAccountMatchStem('Savings …7304')).toBe('savings')
   })
@@ -116,7 +116,7 @@ describe('findLikelyAccountMatch across merged accounts', () => {
       { id: 'root-umbrella', name: 'Legacy Card' },
       { id: 'child-rewards', name: 'Riverstone Rewards', parent_account_id: 'root-umbrella' },
     ]
-    expect(findLikelyAccountMatch(accounts, 'Riverstone Rewards ···6612')?.id).toBe('root-umbrella')
+    expect(findLikelyAccountMatch(accounts, 'Riverstone Rewards ···4103')?.id).toBe('root-umbrella')
   })
 
   it('still declines when candidates belong to different groups', () => {
@@ -131,7 +131,7 @@ describe('findLikelyAccountMatch across merged accounts', () => {
   it('survives a parent chain that points at itself', () => {
     // Corrupt data must not hang the render the suggestion is computed during.
     const accounts = [{ id: 'loop', name: 'Riverstone Rewards', parent_account_id: 'loop' }]
-    expect(findLikelyAccountMatch(accounts, 'Riverstone Rewards ···6612')?.id).toBe('loop')
+    expect(findLikelyAccountMatch(accounts, 'Riverstone Rewards ···4103')?.id).toBe('loop')
   })
 })
 
@@ -140,10 +140,10 @@ describe('selectableAccountOptions', () => {
   // omit the child a mapping is on and the picker renders a live decision as an empty control, invite
   // the "fix", and silently re-point the source. Offer every child instead and the list doubles with
   // entries indistinguishable from their own parents.
-  const ROOT_A = { id: 'root-a', name: 'Northgate Rewards' }
+  const ROOT_A = { id: 'root-a', name: 'Rewards Card' }
   const ROOT_B = { id: 'root-b', name: 'Northgate Voyager' }
-  const CHILD = { id: 'child', name: 'CREDIT CARD', mask: '2741', parent_account_id: 'root-a' }
-  const OTHER_CHILD = { id: 'child-2', name: 'CREDIT CARD', mask: '6612', parent_account_id: 'root-b' }
+  const CHILD = { id: 'child', name: 'CREDIT CARD', mask: '4102', parent_account_id: 'root-a' }
+  const OTHER_CHILD = { id: 'child-2', name: 'CREDIT CARD', mask: '4103', parent_account_id: 'root-b' }
   const ALL = [ROOT_A, ROOT_B, CHILD, OTHER_CHILD]
 
   it('offers roots only when nothing is selected', () => {

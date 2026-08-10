@@ -141,7 +141,7 @@ describe('import rule suggestion lookback grouping', () => {
         review_status: 'pending',
         merchant_label: 'WALGREENS #13081',
         keyword: 'walgreens',
-        owner_id: 'jeff',
+        owner_id: 'mark',
         latest_txn_date: '2022-10-23',
       },
     ], '2024-06-27')
@@ -165,7 +165,7 @@ describe('import rule suggestion lookback grouping', () => {
         review_status: 'pending',
         merchant_label: 'WALGREENS #13081',
         keyword: 'walgreens',
-        owner_id: 'jeff',
+        owner_id: 'mark',
         latest_txn_date: '2022-10-23',
       },
     ], '2024-06-27')
@@ -176,11 +176,11 @@ describe('import rule suggestion lookback grouping', () => {
   it('keeps an older pending merchant active while a recent same-merchant sibling is still visible', () => {
     const groups = getInWindowPendingSuggestionGroups([
       {
-        id: 'national-grid:jeff',
+        id: 'national-grid:mark',
         review_status: 'discarded',
         merchant_label: 'National Grid',
         keyword: 'national grid',
-        owner_id: 'jeff',
+        owner_id: 'mark',
         latest_txn_date: '2026-03-26',
       },
       {
