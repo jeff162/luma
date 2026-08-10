@@ -150,6 +150,11 @@ delete the backlog file.
 - [test-coverage-gaps.md](test-coverage-gaps.md) — **running checklist.** Owed tests: rule-collision
   HTTP + E2E + component coverage, the migration/fresh-schema parity guard (build with the first
   post-rebrand migration), and rule-suggestion owner-scope stability.
+- [database-diagnostics.md](database-diagnostics.md) — **backlog, not started (2026-08-10).** Nothing
+  ever checks that the databases are intact — no health surface, and notably no check of the *target*
+  before a destructive restore. Structural half is small (`integrity_check` + `foreign_key_check`, ~100 ms
+  on a 60 MB DB; note the former does **not** cover foreign keys). The larger half is an invariant
+  checker for the semantic inconsistencies those pragmas call "ok" — kept deliberately separate.
 - [misc-followups.md](misc-followups.md) — **catch-all.** One-offs too small for their own file;
   currently the unwritten CHANGELOG entry for the category-owner → tag migration.
 
