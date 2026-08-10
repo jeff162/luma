@@ -43,6 +43,14 @@ near-miss above `CROSS_ACCOUNT_FUZZY_RATIO` flags `'cross_account_fuzzy'`; two s
 flag `'cross_account_weak'`. The latter two are `REVIEW_ONLY_SOFT_FLAG_REASONS` and are never auto-
 confirmed (so a slightly-different spelling is surfaced, not silently trashed).
 
+The union has one carve-out (`row_match_texts` / `RowMatchTexts`): when BOTH rows carry precise text —
+`raw_name` or evidence, as against the cleaned `merchant_name` — the tier is decided on the precise
+half alone, and the payee name can then reach no higher than `'cross_account_weak'`. Without it a chain's
+branches all clean to one merchant string, so two rows naming different branches intersect on the payee
+and come back byte-identical, i.e. the top tier (and auto-confirm-on-merge) asserted from the one field
+that cannot tell them apart. The ladder's own hard-reject rung deliberately keeps the plain union — see
+`classify_source_text_relation` for the measurement behind that split.
+
 **What the sweep pairs, and why it is not "cross-account".** The premise has always been *two independent
 sources describing one charge* — a single source does not report a charge twice, so two rows from one
 source are a legitimate repeat and are never paired. Landing on two different accounts used to imply
@@ -116,7 +124,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, NamedTuple, Optional
 
 from backend.services.categorizer import source_match_text_from_json
 from backend.services.connection_mapping import provider_account_label
@@ -382,16 +390,32 @@ REVIEW_ONLY_SOFT_FLAG_REASONS = ("cross_account_fuzzy", "cross_account_weak")
 AUTO_CROSS_SOURCE_RESOLVED_BY = "auto_cross_source"
 
 
-def classify_source_text_relation(texts_a: set[str], texts_b: set[str]) -> Optional[str]:
-    """`classify_text_match` plus a third, weakest tier: 'weak' — no exact overlap and no near-miss, but
-    the two rows share at least `_WEAK_SHARED_TOKEN_FLOOR` distinctive tokens.
+class RowMatchTexts(NamedTuple):
+    """A row's captured texts, split by how precisely they describe the transaction.
 
-    Used by the soft-flag sweeps, which reach here only for pairs already narrowed to the same amount
-    inside the date window AND coming from two independent sources — a population small enough (measured:
-    single digits across a 21k-row ledger) that the text test is ranking evidence rather than holding back
-    a flood. The ladder's own rules keep using `classify_text_match`: they can hard-reject, and shared
-    tokens are not grounds to drop a row unseen.
+    `all` is every text (`source_match_texts`). `precise` drops the cleaned payee name, keeping only
+    what the source actually delivered — `raw_name` and the descriptive evidence fields. The split
+    exists because merging them loses the one distinction that matters when several same-amount
+    candidates compete: a cleaned `merchant_name` collapses every branch of a chain to one string, so
+    two rows can agree there byte-for-byte while their statement text positively disagrees.
     """
+    all: frozenset
+    precise: frozenset
+
+
+def row_match_texts(merchant_name, raw_name, evidence_json) -> RowMatchTexts:
+    """`source_match_texts` split into its precise and payee-level halves. See `RowMatchTexts`."""
+    precise = source_match_texts(None, raw_name, evidence_json)
+    return RowMatchTexts(
+        all=frozenset(precise | source_match_texts(merchant_name, None, None)),
+        precise=frozenset(precise),
+    )
+
+
+def _union_text_relation(texts_a: set[str], texts_b: set[str]) -> Optional[str]:
+    """Best agreement anywhere across two rows' captured texts: `classify_text_match` plus a third,
+    weakest tier — 'weak', no exact overlap and no near-miss, but at least
+    `_WEAK_SHARED_TOKEN_FLOOR` distinctive tokens in common."""
     kind = classify_text_match(texts_a, texts_b)
     if kind is not None:
         return kind
@@ -405,6 +429,39 @@ def classify_source_text_relation(texts_a: set[str], texts_b: set[str]) -> Optio
         tokens_b.update(tokenize_duplicate_match_text(text))
     shared = _count_fuzzy_token_overlap(sorted(tokens_a), sorted(tokens_b))
     return "weak" if shared >= _WEAK_SHARED_TOKEN_FLOOR else None
+
+
+def classify_source_text_relation(a: RowMatchTexts, b: RowMatchTexts) -> Optional[str]:
+    """How two rows' captured texts relate: 'exact' | 'fuzzy' | 'weak' | None.
+
+    **When both rows carry precise text, the tier is decided there** — the cleaned payee name can
+    then only ever produce 'weak'. Judging on the union instead lets the coarsest field win: a chain's
+    every branch cleans to one merchant string, so "TST*<SHOP> - <BRANCH A>" and
+    "TST*<SHOP> - <BRANCH B>" intersect on the payee and come back 'exact', which is the strongest tier
+    asserted on the weakest evidence while the field that actually discriminates is ignored. Demoting
+    them to 'weak' is not a hedge — same payee, different branch detail is *equally* consistent with one
+    charge described twice and with two real charges at two branches, and 'weak' is precisely the tier
+    that means "worth a look, never act on it unseen".
+
+    Rows with no precise text on one side keep the union rule: a source that publishes only a cleaned
+    name has nothing more precise to be judged on, and silence is not disagreement.
+
+    Used by the soft-flag sweeps and by the coverage report's candidate tiering. Both reach here only
+    for pairs already narrowed to the same amount inside a date window, so this is ranking evidence
+    rather than holding back a flood. The ladder's hard-reject rung does NOT use this — see Rule 6,
+    which scores `collect_duplicate_match_texts` with `score_duplicate_text_match`. Keeping that on the
+    union is deliberate and measured: on a real ledger 32 of 45 recorded text-strategy rejects pair two
+    sources that word a charge completely differently ("<PAYEE> Transfer" against
+    "Send Money <PAYEE> <RECIPIENT>"), where the cleaned name is the only thing that legitimately binds
+    them, and where same-date-and-amount already rules out the branch ambiguity above.
+    """
+    if a.precise and b.precise:
+        precise_kind = classify_text_match(a.precise, b.precise)
+        if precise_kind is not None:
+            return precise_kind
+        # The precise descriptors disagree. Anything the payee names still share caps out at 'weak'.
+        return "weak" if _union_text_relation(a.all, b.all) else None
+    return _union_text_relation(a.all, b.all)
 
 
 def _parse_iso_date(value):
@@ -1056,7 +1113,7 @@ def _far_date_offsets(parsed_date: str) -> list[tuple[str, int]]:
 def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_account_id: str,
                                           parsed_date: str, amount: float,
                                           scope_id: Optional[str],
-                                          incoming_texts: Optional[set[str]] = None) -> list[dict]:
+                                          incoming_texts: Optional[RowMatchTexts] = None) -> list[dict]:
     """For a coverage-window hit, look up actual same-account candidate rows by (date, amount).
     Returns a list of compact dicts the unified report renders directly. Empty list means
     'covered date but no specific match' — the report flags those for manual review.
@@ -1078,7 +1135,7 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
     names ONE scope on purpose: the index holds a map per scope in the pass, and reaching into all of
     them would let an unrelated account group in the same import supply a candidate.
 
-    `incoming_texts` (the incoming row's `source_match_texts`) tiers each hit against the incoming
+    `incoming_texts` (the incoming row's `row_match_texts`) tiers each hit against the incoming
     descriptor with `classify_source_text_relation`, recording the result on `text_relation`. This
     function only *labels*; `_display_candidates` decides what to hide. Keeping the two apart is what
     lets the verdict path go on seeing the complete list — see `_coverage_reject_verdict`.
@@ -1086,15 +1143,18 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
     seen_ids: set[str] = set()
     out: list[dict] = []
     relation_cache: dict[str, Optional[str]] = {}
+    # `RowMatchTexts` is a tuple, so it is truthy even when it holds nothing — every emptiness test
+    # here has to go through `.all` rather than the object.
+    incoming_has_text = bool(incoming_texts and incoming_texts.all)
 
     def _relation(candidate: dict) -> Optional[str]:
         """The candidate's text tier, or None when it has none — or when either side has no captured
         text at all, which is not disagreement but an absence of evidence (a nameless money-movement
         leg text-matches nothing, by design)."""
-        if not incoming_texts:
+        if not incoming_has_text:
             return None
         candidate_texts = candidate.get("source_texts")
-        if not candidate_texts:
+        if not (candidate_texts and candidate_texts.all):
             return None
         cid = str(candidate.get("id") or "")
         if cid not in relation_cache:
@@ -1121,7 +1181,8 @@ def _candidate_summary_rows_for_coverage(context: "DedupeContext", receiving_acc
             row["text_relation"] = relation  # 'exact' | 'fuzzy' | 'weak'; absent = unjudged or unrelated
         # Whether the pair was *judgeable* at all, so `_display_candidates` can tell "no agreement"
         # (a real signal) apart from "nothing to compare" (never grounds to hide a row).
-        row["_text_comparable"] = bool(incoming_texts and candidate.get("source_texts"))
+        candidate_texts = candidate.get("source_texts")
+        row["_text_comparable"] = incoming_has_text and bool(candidate_texts and candidate_texts.all)
         if candidate.get("cross_account"):
             # A transfer twin on the funding account — carry the marker + account label so the report
             # can label it 'possible transfer match on <account>' rather than a same-account match.
@@ -1216,7 +1277,7 @@ def _coverage_matched(cov: dict, candidates: list[dict]) -> dict:
 def _coverage_reject_verdict(context: "DedupeContext", cov: dict, receiving_account_id: str,
                              parsed_date: str, amount: float, scope_id: Optional[str],
                              incoming_merchant, reason: str,
-                             incoming_texts: Optional[set[str]] = None):
+                             incoming_texts: Optional[RowMatchTexts] = None):
     """The verdict for a coverage-window hit: a hard-reject, carrying any same-account/transfer candidates
     for the report. One exception keeps real spending from being silently dropped: a **named** row (a real
     payment, not a nameless money-movement leg) with no such candidate is only treated as a duplicate when
@@ -1274,7 +1335,7 @@ def evaluate_duplicate(
     row_dates = [d for d in (parsed_date, authorized_date) if d]
     # This row as its source described it, for tiering the coverage rules' reported candidates. Built
     # once here rather than per candidate: the coverage rules can each look at a handful of them.
-    incoming_texts = source_match_texts(
+    incoming_texts = row_match_texts(
         txn_payload.get("merchant_name"), txn_payload.get("raw_name"), txn_payload.get("import_evidence"),
     )
 
@@ -1557,9 +1618,9 @@ def build_dedupe_context(
                 raw_name=r["raw_name"],
                 import_evidence=parse_import_evidence(r["import_evidence_json"]),
             ),
-            # The sweeps' text set, kept alongside the ladder's: the coverage report tiers its
-            # candidates with `classify_source_text_relation`, which is defined over this one.
-            "source_texts": source_match_texts(
+            # The sweeps' text sets, kept alongside the ladder's: the coverage report tiers its
+            # candidates with `classify_source_text_relation`, which is defined over these.
+            "source_texts": row_match_texts(
                 r["merchant_name"], r["raw_name"], r["import_evidence_json"],
             ),
         }
@@ -2017,7 +2078,7 @@ def _select_best_cross_account_matches(candidate_rows) -> list[dict]:
         key = (merchant, raw, evidence)
         cached = text_cache.get(key)
         if cached is None:
-            cached = source_match_texts(merchant, raw, evidence)
+            cached = row_match_texts(merchant, raw, evidence)
             text_cache[key] = cached
         return cached
 
@@ -2578,7 +2639,7 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
             "scope_id": scope_id,
             # The same text tiering the import applied. Without it this pass would hand back exactly
             # the coincidental same-amount rows the import filtered out, one report-open later.
-            "incoming_texts": source_match_texts(
+            "incoming_texts": row_match_texts(
                 (payload or {}).get("merchant_name"), (payload or {}).get("raw_name"),
                 (payload or {}).get("import_evidence"),
             ),
@@ -2631,7 +2692,7 @@ def refresh_unexplained_coverage_candidates(conn: sqlite3.Connection, batch_id: 
             "amount": r["amount"],
             "account_id": r["account_id"],
             "import_batch_id": r["import_batch_id"],
-            "source_texts": source_match_texts(
+            "source_texts": row_match_texts(
                 r["merchant_name"], r["raw_name"], r["import_evidence_json"],
             ),
         }
@@ -3263,14 +3324,14 @@ def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
 
     # Group by amount alone — NOT date, NOT a single payee string — so posted-vs-transaction twins and
     # sources that spell/park the descriptor differently still land together; the date window and the
-    # source-text match (union of captured texts, exact or fuzzy — see `source_match_texts`) are applied
-    # when pairing within a group below. Each row's match-text set is precomputed once; a row with no
-    # captured text can never match, so it is dropped here.
-    row_texts: dict[str, set[str]] = {}
+    # source-text match (captured texts, precise ones deciding the tier — see `row_match_texts`) are
+    # applied when pairing within a group below. Each row's match-text sets are precomputed once; a row
+    # with no captured text can never match, so it is dropped here.
+    row_texts: dict[str, RowMatchTexts] = {}
     groups: dict[float, list] = {}
     for r in rows:
-        texts = source_match_texts(r["merchant_name"], r["raw_name"], r["import_evidence_json"])
-        if not texts:
+        texts = row_match_texts(r["merchant_name"], r["raw_name"], r["import_evidence_json"])
+        if not texts.all:
             continue
         row_texts[r["id"]] = texts
         groups.setdefault(r["amt"], []).append(r)

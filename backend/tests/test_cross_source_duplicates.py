@@ -47,6 +47,7 @@ from backend.services.duplicate_detection import (
     mark_import_suspects,
     promote_in_group_suspects_to_confirmed,
     resolve_suspect,
+    row_match_texts,
     scan_scope_for_cross_account_duplicates,
     score_duplicate_text_match,
 )
@@ -351,23 +352,29 @@ class WeakTierTests(unittest.TestCase):
     """Shared distinctive tokens as the weakest review tier — and why the same evidence must not reach
     the hard-reject rung."""
 
-    A = {"wdrl-ach arbormut ins 5990 - debitpmt"}
-    B = {"arbormut insurance debitpmt"}
+    # Built the way a real row is: the descriptor lands in `raw_name`, so it is *precise* text and
+    # decides the tier on its own. A bare set would exercise the payee-only path instead.
+    A = row_match_texts(None, "wdrl-ach arbormut ins 5990 - debitpmt", None)
+    B = row_match_texts(None, "arbormut insurance debitpmt", None)
 
     def test_two_shared_tokens_earn_a_review(self):
         # Character similarity puts these two at ~0.57, nowhere near the fuzzy tier, yet they name one
         # payee. This is the case the tier exists for — and `classify_text_match`, which the hard-reject
         # rules use, correctly still sees nothing.
-        self.assertIsNone(classify_text_match(self.A, self.B))
+        self.assertIsNone(classify_text_match(self.A.all, self.B.all))
         self.assertEqual(classify_source_text_relation(self.A, self.B), "weak")
 
     def test_one_shared_boilerplate_token_does_not(self):
         # The measured false positive: two unrelated rows joined only by a generic word that happens to
         # have escaped the blocklist.
-        self.assertIsNone(classify_source_text_relation({"general hold paypal"}, {"from general fund"}))
+        self.assertIsNone(classify_source_text_relation(
+            row_match_texts(None, "general hold paypal", None),
+            row_match_texts(None, "from general fund", None)))
 
     def test_an_exact_overlap_still_outranks_it(self):
-        self.assertEqual(classify_source_text_relation({"corner market"}, {"corner market"}), "exact")
+        self.assertEqual(classify_source_text_relation(
+            row_match_texts(None, "corner market", None),
+            row_match_texts(None, "corner market", None)), "exact")
 
     def test_the_same_evidence_does_not_hard_reject(self):
         # The hard-reject rung sees a 2-of-3 token overlap and must stay below its floor: two matched

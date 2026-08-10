@@ -30,7 +30,7 @@ from backend.services.duplicate_detection import (
     _candidate_summary_rows_for_coverage,
     _display_candidates,
     duplicate_amount_key as amount_key,
-    source_match_texts,
+    row_match_texts,
 )
 
 
@@ -198,41 +198,60 @@ class CoverageCandidateWindowTests(unittest.TestCase):
 
     # ---- text tiering of the widened band -------------------------------
 
-    def _texted(self, txn_id, date, text, amount=7.75):
-        return {"id": txn_id, "date": date, "merchant_name": text, "amount": amount,
-                "account_id": "acct", "source_texts": source_match_texts(text, text, None)}
+    # A stored row's shape is not "one descriptor everywhere": both a data connection and an aggregator
+    # export publish a CLEANED `merchant_name` — the payee, with the branch stripped — alongside the
+    # as-delivered `raw_name`. Fixtures that put the full descriptor in both fields cannot reproduce the
+    # case these tests exist for, because the payee-level agreement that outvotes a branch disagreement
+    # never exists in them. Build every candidate the way the ledger actually holds one.
+    def _texted(self, txn_id, date, statement, payee, amount=7.75):
+        return {"id": txn_id, "date": date, "merchant_name": statement, "amount": amount,
+                "account_id": "acct", "source_texts": row_match_texts(payee, statement, None)}
 
-    def _tiered_lookup(self, ctx, incoming_date, incoming_text, amount=7.75):
+    def _tiered_lookup(self, ctx, incoming_date, statement, payee, amount=7.75):
         """The lookup plus the display filter, i.e. what the report actually receives."""
         return _display_candidates(_candidate_summary_rows_for_coverage(
-            ctx, "acct", incoming_date, amount, None,
-            source_match_texts(incoming_text, incoming_text, None),
+            ctx, "acct", incoming_date, amount, None, row_match_texts(payee, statement, None),
         ))
 
     def test_the_widened_band_drops_a_row_that_only_shares_an_amount(self):
-        # The reported case. Four same-amount rows inside ±7 of an incoming "TST*JP LICKS - NEWTON":
-        # two name the same shop, one names the same shop at another branch, and one is an unrelated
-        # charge that happens to cost the same. Only the last is not evidence of anything.
+        # The reported case, in the shape the ledger actually holds it. Four same-amount rows inside ±7
+        # of an incoming charge: two name the same shop and branch, one names the same shop at ANOTHER
+        # branch, and one is an unrelated charge that happens to cost the same.
+        #
+        # Every one of these rows cleans to the same payee, so a union-of-texts comparison calls all
+        # three shop rows 'exact' — the strongest tier, resting on the field that cannot tell branches
+        # apart. Deciding on the precise text instead demotes the other-branch row to 'weak', which is
+        # what it is: same payee, different wording, equally consistent with a second real visit.
         rows = {
-            "2026-07-05": self._texted("creamery", "2026-07-05", "COUNTRY CREAMERY & COFFE"),
-            "2026-07-12": self._texted("newton-a",  "2026-07-12", "TST*JP LICKS - NEWTON"),
-            "2026-07-14": self._texted("newton-b",  "2026-07-14", "TST*JP LICKS - NEWTON"),
-            "2026-07-16": self._texted("davis",     "2026-07-16", "TST*JP LICKS - DAVIS"),
+            "2026-07-05": self._texted("creamery", "2026-07-05", "COUNTRY CREAMERY & COFFE", "Country Creamery"),
+            "2026-07-12": self._texted("newton-a", "2026-07-12", "TST*JP LICKS - NEWTON", "Jp Licks"),
+            "2026-07-14": self._texted("newton-b", "2026-07-14", "TST*JP LICKS - NEWTON", "Jp Licks"),
+            "2026-07-16": self._texted("davis",    "2026-07-16", "TST*JP LICKS - DAVIS",  "Jp Licks"),
         }
         ctx = self._context({amount_key(d, 7.75): [r] for d, r in rows.items()})
-        out = self._tiered_lookup(ctx, "2026-07-09", "TST*JP LICKS - NEWTON")
+        out = self._tiered_lookup(ctx, "2026-07-09", "TST*JP LICKS - NEWTON", "Jp Licks")
 
         self.assertEqual([c["id"] for c in out], ["newton-a", "newton-b", "davis"],
                          "the same-amount coincidence is dropped; order stays closest-day-first")
         self.assertEqual([c["text_relation"] for c in out], ["exact", "exact", "weak"],
-                         "the other-branch row is real but weaker evidence, and says so")
+                         "the other-branch row is real but weaker evidence, and must say so")
+
+    def test_a_shared_payee_name_cannot_carry_a_branch_disagreement_to_exact(self):
+        # The single assertion behind the tier split, stated without the surrounding lookup: these two
+        # rows agree byte-for-byte on their cleaned payee and disagree on the only field that names the
+        # branch. 'exact' here would be the report asserting identity from the coarser of two fields.
+        newton = row_match_texts("Jp Licks", "TST*JP LICKS - NEWTON", None)
+        davis = row_match_texts("Jp Licks", "TST*JP LICKS - DAVIS", None)
+        self.assertIn("jp licks", newton.all & davis.all, "the payee agreement really is there")
+        self.assertEqual(duplicate_detection.classify_source_text_relation(newton, davis), "weak")
+        self.assertEqual(duplicate_detection.classify_source_text_relation(newton, newton), "exact")
 
     def test_the_internal_comparability_marker_never_reaches_the_report(self):
         # `_text_comparable` exists only to let the filter tell "no agreement" apart from "nothing to
         # compare". Persisting it would put matcher bookkeeping into every stored verdict.
         ctx = self._context({amount_key("2026-07-12", 7.75): [
-            self._texted("newton-a", "2026-07-12", "TST*JP LICKS - NEWTON")]})
-        out = self._tiered_lookup(ctx, "2026-07-09", "TST*JP LICKS - NEWTON")
+            self._texted("newton-a", "2026-07-12", "TST*JP LICKS - NEWTON", "Jp Licks")]})
+        out = self._tiered_lookup(ctx, "2026-07-09", "TST*JP LICKS - NEWTON", "Jp Licks")
         self.assertNotIn("_text_comparable", out[0])
 
     def test_an_exact_date_candidate_survives_with_no_text_agreement_at_all(self):
@@ -240,32 +259,33 @@ class CoverageCandidateWindowTests(unittest.TestCase):
         # (a terminal string against a cleaned merchant name); at the same date and amount that is the
         # case this lookup exists for, and the text test has no business overruling it.
         ctx = self._context({amount_key("2026-07-09", 7.75): [
-            self._texted("same-day", "2026-07-09", "POS PURCHASE TERMINAL 4471")]})
-        out = self._tiered_lookup(ctx, "2026-07-09", "Corner Grocery")
+            self._texted("same-day", "2026-07-09", "POS PURCHASE TERMINAL 4471", "Terminal 4471")]})
+        out = self._tiered_lookup(ctx, "2026-07-09", "Corner Grocery", "Corner Grocery")
         self.assertEqual([c["id"] for c in out], ["same-day"])
         self.assertNotIn("text_relation", out[0], "kept on date evidence — no tier to claim")
 
     def test_a_one_day_candidate_is_exempt_too(self):
         ctx = self._context({amount_key("2026-07-10", 7.75): [
-            self._texted("next-day", "2026-07-10", "POS PURCHASE TERMINAL 4471")]})
+            self._texted("next-day", "2026-07-10", "POS PURCHASE TERMINAL 4471", "Terminal 4471")]})
         self.assertEqual(
-            [c["id"] for c in self._tiered_lookup(ctx, "2026-07-09", "Corner Grocery")], ["next-day"])
+            [c["id"] for c in self._tiered_lookup(ctx, "2026-07-09", "Corner Grocery", "Corner Grocery")],
+            ["next-day"])
 
     def test_an_incoming_row_with_no_text_keeps_its_whole_list(self):
         # A nameless money-movement leg matches nothing by design. Silence is not disagreement, so the
         # filter must not read it as one and empty the list.
         ctx = self._context({amount_key("2026-07-14", 7.75): [
-            self._texted("far", "2026-07-14", "COUNTRY CREAMERY & COFFE")]})
+            self._texted("far", "2026-07-14", "COUNTRY CREAMERY & COFFE", "Country Creamery")]})
         out = _display_candidates(_candidate_summary_rows_for_coverage(
-            ctx, "acct", "2026-07-09", 7.75, None, set()))
+            ctx, "acct", "2026-07-09", 7.75, None, row_match_texts(None, None, None)))
         self.assertEqual([c["id"] for c in out], ["far"])
 
     def test_a_candidate_with_no_text_is_kept_in_the_widened_band(self):
         # The other half of the same rule: the untexted side may be the stored row instead.
         ctx = self._context({amount_key("2026-07-14", 7.75): [
             {"id": "nameless", "date": "2026-07-14", "merchant_name": "", "amount": 7.75,
-             "account_id": "acct", "source_texts": set()}]})
-        out = self._tiered_lookup(ctx, "2026-07-09", "TST*JP LICKS - NEWTON")
+             "account_id": "acct", "source_texts": row_match_texts(None, None, None)}]})
+        out = self._tiered_lookup(ctx, "2026-07-09", "TST*JP LICKS - NEWTON", "Jp Licks")
         self.assertEqual([c["id"] for c in out], ["nameless"])
 
     def test_cross_account_fallback_without_a_connection_is_a_no_op(self):
