@@ -89,6 +89,8 @@ not in these tables.
 | **`MinimizedReportPill`** — the nav-bar restore chip for any minimized detached report viewer (label + optional attention badge + tone) | a bespoke minimized-report nav chip | `components/MinimizedReportPill.jsx` |
 | **`useUserPreference` (`UserPreferencesContext`)** — persisted per-user UI preferences | storing UI prefs ad-hoc | `lib/UserPreferencesContext.jsx` |
 | **`useVaultGate`** — the credential-vault gate: `await ensureVault()` before any action needing an unlocked vault, and the action resumes itself once the passphrase lands (`force` re-prompts on a late `423`); the host renders the dialog for `mode` and answers with `closeVault(true/false)` | an inline "vault locked?" check that opens a dialog and returns (it drops the action, costing a second press), or disabling a control because the vault is locked | `lib/useVaultGate.js` |
+| **`VaultPassphraseDialog`** (+ `SENSITIVE_FIELD_PROPS`) — the passphrase prompt `useVaultGate` asks the host to render for its `mode` ('set' / 'unlock'), with the strength meter. `SENSITIVE_FIELD_PROPS` is the autofill/password-manager opt-out set every secret field wants | a hand-rolled passphrase prompt, or re-deriving the autofill-suppression attributes on a new secret field | `components/VaultPassphraseDialog.jsx` |
+| **`downloadUrl(url)`** — fetch a server-generated file and save it without navigating, so a non-200 raises the standard `buildResponseError` (with `detail.code`) instead of replacing the app with the raw response | `<a href={apiUrl}>` or `window.location.assign(apiUrl)` for a download — any error status then renders as a raw JSON page and no handler can run | `lib/api.js` |
 
 ## Recurring patterns without a shared control yet (watchlist)
 

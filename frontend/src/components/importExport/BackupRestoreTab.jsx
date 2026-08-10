@@ -8,10 +8,12 @@
 // replacing data.
 
 import { useEffect, useState } from 'react'
-import { api } from '../../lib/api.js'
-import { Button, Card } from '../ui.jsx'
+import { api, downloadUrl } from '../../lib/api.js'
+import { Button, Card, Input } from '../ui.jsx'
 import { SectionTitle } from './importPresentational.jsx'
 import { APP_NAME } from '../../lib/appConfig.js'
+import { useVaultGate } from '../../lib/useVaultGate.js'
+import { VaultPassphraseDialog, SENSITIVE_FIELD_PROPS } from '../VaultPassphraseDialog.jsx'
 
 // Human-readable explanation for the restore compatibility guard's 409 detail.
 function describeRestoreIncompatibility(detail) {
@@ -54,16 +56,50 @@ export function BackupRestoreTab() {
   const [restoreMsg, setRestoreMsg] = useState(null)
   const [restoreSuccess, setRestoreSuccess] = useState(null)
   const [pendingConfirm, setPendingConfirm] = useState(null)
+  const [backupMsg, setBackupMsg] = useState(null)
+  const [downloading, setDownloading] = useState(false)
+  // The passphrase of the vault that produced a credentials backup — asked for only once the server
+  // says the file came from elsewhere, so the ordinary "my own backup, this machine" restore never
+  // sees a prompt at all.
+  const [backupPassphrase, setBackupPassphrase] = useState('')
+  const [needsBackupPassphrase, setNeedsBackupPassphrase] = useState(false)
+  const [vault, setVault] = useState({ configured: false, unlocked: false })
+  // Restoring credentials re-keys them under this workspace's DEK, so it needs the vault open. The gate
+  // prompts and the action resumes itself — see lib/useVaultGate.js.
+  const { mode: vaultDialog, ensureVault, closeVault } = useVaultGate(vault)
   const enabledRecipients = backupRecipients.filter(r => r.enabled)
   const hasStoredCredentials = !!credentialBackupStatus?.has_credentials
+
+  async function refreshVault() {
+    const status = await api.getAuthStatus().catch(() => null)
+    const u = status?.user || {}
+    setVault({ configured: !!u.vault_configured, unlocked: !!u.vault_unlocked })
+  }
 
   useEffect(() => {
     api.getBackupRecipients().then(setBackupRecipients).catch(() => { })
     api.getCredentialsBackupStatus().then(setCredentialBackupStatus).catch(() => { })
+    refreshVault()
   }, [])
 
-  function startDownload(url) {
-    window.location.assign(url)
+  async function submitVault(passphrase) {
+    if (vaultDialog === 'set') await api.setVaultPassphrase(passphrase)
+    else await api.unlockVault(passphrase)
+    await refreshVault()
+    closeVault(true)
+  }
+
+  // Fetch-and-save rather than navigate: a navigation hands the response to the browser, so any error
+  // status renders as a raw JSON page with the app gone from under it.
+  async function startDownload(url) {
+    setBackupMsg(null)
+    setDownloading(true)
+    try {
+      await downloadUrl(url)
+    } catch (e) {
+      setBackupMsg(`❌ ${e.message || 'Could not generate the backup'}`)
+    }
+    setDownloading(false)
   }
 
   async function handleRestoreFileChange(file) {
@@ -89,16 +125,38 @@ export function BackupRestoreTab() {
     }
   }
 
+  /** One credentials-restore attempt. Throws so the caller can run the gate's single 423 retry. */
+  async function restoreCredentialsOnce(file) {
+    const r = await api.restoreCredentialsFile(file, backupPassphrase || null)
+    setRestoreMsg(null)
+    setNeedsBackupPassphrase(false)
+    setBackupPassphrase('')
+    setRestoreSuccess(`Restored ${r.restored} credential(s).`)
+  }
+
   async function performRestore(file, type, force = false) {
     setPendingConfirm(null)
     if (type === 'credentials') {
       setRestoring(true)
       try {
-        const r = await api.restoreCredentialsFile(file)
-        setRestoreMsg(null)
-        setRestoreSuccess(`Restored ${r.restored} credential(s).`)
+        await restoreCredentialsOnce(file)
+      } catch (e) {
+        const code = e.detail?.code
+        if (code === 'backup_passphrase_required' || code === 'incorrect_backup_passphrase') {
+          // The file came from another install, so its ciphertext has to be reopened with the vault
+          // passphrase that sealed it before it can be re-keyed under this one. Reveal the field and
+          // let the user press Restore again — this is not the local vault's passphrase.
+          setNeedsBackupPassphrase(true)
+          setRestoreMsg(`❌ ${e.message}`)
+        } else if (e.status === 423 && await ensureVault({ force: true })) {
+          // A late 423: the vault flags said unlocked but the server's DEK had already expired (or was
+          // never open). The gate prompts and the one retry runs against the state the unlock produced.
+          try { await restoreCredentialsOnce(file) }
+          catch (retry) { setRestoreMsg(`❌ ${retry.message}`) }
+        } else {
+          setRestoreMsg(`❌ ${e.message}`)
+        }
       }
-      catch (e) { setRestoreMsg(`❌ ${e.message}`) }
       setRestoring(false); return
     }
     setRestoring(true)
@@ -172,8 +230,8 @@ export function BackupRestoreTab() {
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Data backup</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>All categories, rules, owners, accounts, transactions. No Plaid tokens.</div>
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-            <Button variant="ghost" onClick={() => startDownload(api.exportBackup(false))}>Generate backup</Button>
-            <Button variant="ghost" disabled={enabledRecipients.length === 0} onClick={() => startDownload(api.exportBackup(true))}>Generate encrypted backup</Button>
+            <Button variant="ghost" disabled={downloading} onClick={() => startDownload(api.exportBackup(false))}>Generate backup</Button>
+            <Button variant="ghost" disabled={enabledRecipients.length === 0 || downloading} onClick={() => startDownload(api.exportBackup(true))}>Generate encrypted backup</Button>
           </div>
           {enabledRecipients.length === 0 ? (
             <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
@@ -187,43 +245,29 @@ export function BackupRestoreTab() {
         </div>
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Credentials backup</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', opacity: hasStoredCredentials ? 1 : 0.58 }}>
-            <a
-              href={hasStoredCredentials ? api.exportCredentials(false) : undefined}
-              onClick={event => {
-                if (!hasStoredCredentials) event.preventDefault()
-              }}
-            >
-              <Button disabled={!hasStoredCredentials}>Generate credentials backup</Button>
-            </a>
-            <a
-              href={hasStoredCredentials && enabledRecipients.length > 0 ? api.exportCredentials(true) : undefined}
-              onClick={event => {
-                if (!hasStoredCredentials || enabledRecipients.length === 0) event.preventDefault()
-              }}
-            >
-              <Button variant="ghost" disabled={!hasStoredCredentials || enabledRecipients.length === 0}>Generate encrypted credentials backup</Button>
-            </a>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 10 }}>
+            Your data-source credentials, backed up still encrypted. There is no separate encrypted
+            version because the contents never leave the vault in the clear.
           </div>
-          {!hasStoredCredentials ? (
-            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
-              No stored Plaid credentials exist to back up.
-            </div>
-          ) : enabledRecipients.length === 0 ? (
-            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
-              Add an enabled backup recipient in Settings to enable encrypted backup creation.
-            </div>
-          ) : (
-            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
-              Encrypted credentials backups will be readable by: {enabledRecipients.map(r => r.label).join(', ')}.
-            </div>
-          )}
-          {hasStoredCredentials ? (
-            <div style={{ display: 'inline-block', fontSize: 13, background: 'color-mix(in srgb, var(--warning) 10%, var(--surface2))', border: '1px solid var(--warning)', borderRadius: 6, padding: '8px 12px', marginTop: 10 }}>
-              ⚠️ Plain credentials backups contain Plaid access tokens.
-            </div>
-          ) : null}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+            <Button
+              disabled={!hasStoredCredentials || downloading}
+              onClick={() => startDownload(api.exportCredentials())}
+            >Generate credentials backup</Button>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+            {hasStoredCredentials
+              ? 'Restoring it needs the vault passphrase that was in force when it was made — that passphrase is the only thing protecting the file, so store it somewhere you would store a password.'
+              : 'No stored data-source credentials exist to back up.'}
+          </div>
         </div>
+        {backupMsg ? (
+          <div style={{
+            padding: '10px 14px', borderRadius: 8, fontSize: 14,
+            background: 'color-mix(in srgb, var(--danger) 12%, var(--surface2))',
+            border: '1px solid color-mix(in srgb, var(--danger) 35%, var(--border))',
+          }}>{backupMsg}</div>
+        ) : null}
       </Card>
 
       <SectionTitle>Restore</SectionTitle>
@@ -362,6 +406,25 @@ export function BackupRestoreTab() {
               {restoring ? 'Restoring…' : 'Restore credentials'}
             </Button>
           </div>
+          {/* Only shown once the server says the file came from another install: its contents are sealed
+              under that vault's key, so they have to be reopened with that vault's passphrase before
+              they can be re-sealed under this one. Restoring your own backup here never asks. */}
+          {needsBackupPassphrase ? (
+            <div style={{ display: 'grid', gap: 6, marginTop: 12, maxWidth: 420 }}>
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                This backup was made on another system. Enter the vault passphrase it was created with —
+                not this system&apos;s.
+              </div>
+              <Input
+                type="password"
+                value={backupPassphrase}
+                onChange={setBackupPassphrase}
+                placeholder="Vault passphrase this backup was made with"
+                autoFocus
+                {...SENSITIVE_FIELD_PROPS}
+              />
+            </div>
+          ) : null}
         </div>
       </Card>
 
@@ -474,6 +537,13 @@ export function BackupRestoreTab() {
           </div>
         </div>
       )}
+
+      {/* The gate's prompt for THIS system's vault, raised when a restore needs to re-key credentials
+          under the workspace DEK. Distinct from the backup-passphrase field above, which opens the
+          file. `closeVault(true)` releases the waiting action; `false` declines it. */}
+      {vaultDialog ? (
+        <VaultPassphraseDialog mode={vaultDialog} onSubmit={submitVault} onClose={() => closeVault(false)} />
+      ) : null}
     </div>
   )
 }

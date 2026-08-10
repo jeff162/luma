@@ -231,18 +231,76 @@ def _write_passphrase_slot(user_id: str, passphrase: str, dek: bytes) -> None:
     )
 
 
+def unwrap_dek_from_slot(slot: dict, passphrase: str, *, user_id: str) -> bytes:
+    """The DEK a passphrase unwraps from an **arbitrary** slot — this install's, or one carried in a
+    credentials backup taken on another machine.
+
+    `user_id` is the id the slot was wrapped *for*, not necessarily the caller: `_slot_aad` binds the
+    wrap to it, so a foreign slot only opens when its own id comes along with it. That is why the
+    credentials backup carries the exporting user's id beside the wrapped DEK.
+
+    Deliberately does **not** populate the unlock cache. The DEK this returns belongs to whatever
+    workspace produced the slot; caching it under the local user would quietly install a foreign key as
+    this workspace's own.
+    """
+    kek = _derive_kek(passphrase, _b64d(slot["kdf_salt"]), slot["kdf_n"], slot["kdf_r"], slot["kdf_p"])
+    try:
+        return _unwrap(kek, slot["wrapped_dek"], aad=_slot_aad(user_id))
+    except Exception as exc:
+        # The AEAD tag is the verifier: a wrong passphrase fails to decrypt.
+        raise ValueError("incorrect passphrase") from exc
+
+
 def unlock(user_id: str, passphrase: str) -> bytes:
     slot = cdb.get_vault_slot(user_id)
     if not slot:
         raise VaultLocked("no passphrase is set for this user")
-    kek = _derive_kek(passphrase, _b64d(slot["kdf_salt"]), slot["kdf_n"], slot["kdf_r"], slot["kdf_p"])
-    try:
-        dek = _unwrap(kek, slot["wrapped_dek"], aad=_slot_aad(user_id))
-    except Exception as exc:
-        # The AEAD tag is the verifier: a wrong passphrase fails to decrypt.
-        raise ValueError("incorrect passphrase") from exc
+    dek = unwrap_dek_from_slot(slot, passphrase, user_id=user_id)
     _cache_put(user_id, dek)
     return dek
+
+
+def export_vault_slot(user_id: str) -> dict | None:
+    """The user's passphrase slot as portable material: exactly enough to re-derive the KEK and unwrap
+    the DEK **given the passphrase**, and nothing else. `None` when no slot exists.
+
+    This is what makes a ciphertext credentials backup restorable on another machine — without it the
+    exported ciphertext is undecryptable anywhere but the install that produced it (the key lives in the
+    control DB, the ciphertext in the data DB). It is safe to hand out only because `wrapped_dek` is
+    passphrase-wrapped: the file's security is exactly the vault passphrase's strength, which is why
+    `meets_production_min` rides along for the UI to warn on.
+    """
+    slot = cdb.get_vault_slot(user_id)
+    if not slot:
+        return None
+    return {
+        "user_id":              user_id,   # the slot's AAD — see `unwrap_dek_from_slot`
+        "method":               slot["method"],
+        "wrapped_dek":          slot["wrapped_dek"],
+        "kdf_algo":             slot["kdf_algo"],
+        "kdf_salt":             slot["kdf_salt"],
+        "kdf_n":                slot["kdf_n"],
+        "kdf_r":                slot["kdf_r"],
+        "kdf_p":                slot["kdf_p"],
+        "meets_production_min": bool(slot["meets_production_min"]),
+    }
+
+
+def vault_slot_is_local(exported: dict | None, user_id: str) -> bool:
+    """Whether an exported slot is this workspace's own — same user and the identical wrap.
+
+    When it is, a backup's ciphertext is already valid against the live DEK and can be restored
+    verbatim: no passphrase, no unlock, no re-encryption. That is the ordinary "restore my own backup
+    onto the machine that made it" case, and it should not demand a passphrase to do nothing.
+    """
+    if not exported:
+        return False
+    local = cdb.get_vault_slot(user_id)
+    return bool(
+        local
+        and exported.get("user_id") == user_id
+        and exported.get("wrapped_dek") == local["wrapped_dek"]
+    )
 
 
 # --- Per-connection secret encrypt/decrypt (under the DEK) ---------------------------------------
@@ -280,12 +338,23 @@ def encrypt_connection_credential(user: dict, provider: str, external_id: str, s
     return "", payload
 
 
-def decrypt_connection_credential(user: dict, provider: str, external_id: str, credential: str | None, credential_enc: str | None) -> str:
+def decrypt_connection_credential_with_dek(dek: bytes, provider: str, external_id: str,
+                                           credential: str | None, credential_enc: str | None) -> str:
+    """Decrypt under an explicitly supplied DEK rather than the caller's unlocked one — the restore path
+    for a credentials backup taken elsewhere, where the ciphertext belongs to the *backup's* workspace.
+    Keeps the AAD construction in here; a caller reconstructing it would be a second copy of the rule."""
     if credential_enc:
-        dek = require_dek(user["id"])
         return decrypt_secret(dek, credential_enc, aad=_connection_aad(provider, external_id))
     # A legacy plaintext row (never encrypted) reads straight through — no DEK needed. New writes never
     # take this path.
+    return credential or ""
+
+
+def decrypt_connection_credential(user: dict, provider: str, external_id: str, credential: str | None, credential_enc: str | None) -> str:
+    if credential_enc:
+        return decrypt_connection_credential_with_dek(
+            require_dek(user["id"]), provider, external_id, credential, credential_enc,
+        )
     return credential or ""
 
 
@@ -306,8 +375,14 @@ def encrypt_app_credential(user: dict, provider: str, secret: str) -> tuple[str,
     return "", payload
 
 
+def decrypt_app_credential_with_dek(dek: bytes, provider: str, secret: str | None, secret_enc: str | None) -> str:
+    """The app-credential twin of `decrypt_connection_credential_with_dek` — see there."""
+    if secret_enc:
+        return decrypt_secret(dek, secret_enc, aad=_app_credential_aad(provider))
+    return secret or ""
+
+
 def decrypt_app_credential(user: dict, provider: str, secret: str | None, secret_enc: str | None) -> str:
     if secret_enc:
-        dek = require_dek(user["id"])
-        return decrypt_secret(dek, secret_enc, aad=_app_credential_aad(provider))
+        return decrypt_app_credential_with_dek(require_dek(user["id"]), provider, secret, secret_enc)
     return secret or ""

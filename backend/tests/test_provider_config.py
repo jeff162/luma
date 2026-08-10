@@ -10,6 +10,7 @@ holds; and app credentials ride the credentials backup.
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -252,7 +253,11 @@ class ProviderConfigEndpointTests(unittest.TestCase):
             )
             pc = next(p for p in payload["provider_configs"] if p["provider"] == "plaid")
             self.assertEqual(pc["client_id"], "cid")
-            self.assertEqual(pc["secret"], "app-secret")
+            # The app secret rides as CIPHERTEXT. `client_id` is semi-public and stays readable; the
+            # secret itself must never appear in the file in a usable form (v3 — see export_credentials).
+            self.assertEqual(pc["secret"], "")
+            self.assertTrue(pc["secret_enc"])
+            self.assertNotIn("app-secret", json.dumps(payload))
 
             restored = client.post("/api/import-export/restore/credentials", json={"data": payload})
             self.assertEqual(restored.status_code, 200, restored.text)

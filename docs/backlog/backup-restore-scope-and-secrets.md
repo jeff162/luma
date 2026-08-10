@@ -1,6 +1,27 @@
 # Backup/restore scope, the secrets backup & restore-time identity handling
 
-**Status: parked, do after phase 6 (2026-08-01).** A backup/restore redesign that makes the *scope* of
+**Status update (2026-08-10): the phase-6 gate is MET, and the credentials backup piece has landed.**
+`security-and-deployment-model.md` records 6a, 6b-1, 6b-2 and 6b-3 as implemented; only phases 4–5
+(passkey slots, enrollment/invite) remain and they were never the gate. What shipped is the *secrets*
+half of the design below:
+
+- The credentials backup is **payload v3: ciphertext + the wrapped DEK** (`export_vault_slot`), so it
+  spans both databases as this document requires, and restores on another machine given the vault
+  passphrase that made it. Export needs **no unlocked vault** (it copies wrapped material); the
+  passphrase moved to restore, which re-keys every secret under the local DEK rather than adopting a
+  foreign slot. A backup taken on *this* install restores verbatim with no prompt at all.
+- **The plaintext credentials export is gone**, along with the RSA-encrypted variant — a payload that is
+  already ciphertext has nothing to gain from a second layer. That answers two of the open questions
+  below. v1/v2 files still *restore* (and are upgraded to ciphertext in the process).
+- **Secrets stay where they are:** ciphertext in the data DB, keys in the control DB. Co-locating them
+  would put the wrapped DEK beside the material it unwraps, collapsing the "leaked DB ≠ leaked tokens"
+  property; and `connection` carries ledger-coupled sync state (`transactions_cursor`) that does not
+  belong in the security DB.
+
+**Still parked, unstarted:** the sectioned "back up all" artifact, the restore-time identity
+reconciliation flow, `backup_recipient` inclusion, and the data-restore cursor reset noted below.
+
+**Original status: parked, do after phase 6 (2026-08-01).** A backup/restore redesign that makes the *scope* of
 each backup explicit on the Backup page, adds a coherent "accounts & secrets" backup (the control DB +
 the data DB's vaulted tokens, which are now cryptographically coupled), a "back up all" option, and a
 restore flow that asks the user how to reconcile identities. Deliberately deferred until **after phase 6**
@@ -144,9 +165,12 @@ has its own blast radius.
 
 - **Restore-all and the perimeter:** offer-with-confirmation (recommended) vs. an automatic reset. The
   identity-reconciliation flow above is offer-with-confirmation; confirm that's the final call.
-- **Unencrypted "accounts & secrets":** allowed for stay-at-home, but the file contains password hashes
-  (perimeter, offline-crackable) and the wrapped DEK (tokens, if the vault passphrase is weak) — still
-  somewhat on the fence about permitting a fully plaintext version at all vs. always-encrypt for this one.
+- ~~**Unencrypted "accounts & secrets"**~~ — **settled for the credentials half (2026-08-10).** The
+  question dissolved once the payload became ciphertext: there is no plaintext variant to permit, and no
+  encryption toggle, because the sensitive part is already sealed under the vault passphrase. The file's
+  security *is* that passphrase's strength, which is why `meets_production_min` rides along in the
+  payload. The same reasoning should carry to the wider "accounts & secrets" artifact when it is built —
+  though that one additionally contains password hashes, which have no such wrapping.
 - **`backup_recipient` inclusion:** include it in the accounts & secrets backup, or keep it machine-local?
 
 ## Cross-refs

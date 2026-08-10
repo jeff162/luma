@@ -707,6 +707,18 @@ class CredentialBackupTests(unittest.TestCase):
             self._connect_one(client)  # reconnect the same bank
             self.assertIsNotNone(next(a for a in client.get("/api/accounts").json() if a["name"] == "Checking")["connection_id"])
 
+    def _stored_token(self, client, external_id="item-1") -> str:
+        """What a stored connection credential decrypts to under this install's DEK. The export no
+        longer reveals plaintext, so the round trip is verified against the ledger instead of the file."""
+        user_id = client.get("/api/auth/status").json()["user"]["id"]
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT * FROM connection WHERE external_id = ?", (external_id,)
+            ).fetchone()
+        return cs.decrypt_connection_credential(
+            {"id": user_id}, "plaid", external_id, row["credential"], row["credential_enc"],
+        )
+
     def test_credentials_export_restore_roundtrip(self):
         with api_client() as (client, _):
             client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
@@ -715,16 +727,19 @@ class CredentialBackupTests(unittest.TestCase):
             exported = client.get("/api/import-export/backup/credentials")
             self.assertEqual(exported.status_code, 200)
             payload = _load_json_or_zip_payload(exported.content, "luma_credentials.zip", "luma_credentials")
-            self.assertEqual(payload["version"], 2)
+            # v3 exports CIPHERTEXT plus the vault material that reopens it — the token itself must not
+            # be in the file (see routers/import_export/backup.py::export_credentials).
+            self.assertEqual(payload["version"], 3)
             self.assertEqual(payload["connections"][0]["provider"], "plaid")
-            self.assertEqual(payload["connections"][0]["credential"], "access-sandbox-xyz")
+            self.assertNotIn("access-sandbox-xyz", json.dumps(payload))
+            self.assertTrue(payload["connections"][0]["credential_enc"])
+            self.assertTrue(payload["vault"]["wrapped_dek"])
 
             restored = client.post("/api/import-export/restore/credentials", json={"data": payload})
             self.assertEqual(restored.status_code, 200, restored.text)
             self.assertEqual(restored.json()["restored"], 2)  # 1 connection + 1 provider_config
-            # Re-export proves the restored credential re-encrypted and still decrypts to the same secret.
-            again = _load_json_or_zip_payload(client.get("/api/import-export/backup/credentials").content, "luma_credentials.zip", "luma_credentials")
-            self.assertEqual(again["connections"][0]["credential"], "access-sandbox-xyz")
+            self.assertEqual(self._stored_token(client), "access-sandbox-xyz",
+                             "the restored credential still decrypts to the original secret")
 
     def test_restore_accepts_legacy_v1_plaid_items(self):
         with api_client() as (client, _):
@@ -738,8 +753,13 @@ class CredentialBackupTests(unittest.TestCase):
             self.assertEqual(restored.json()["restored"], 1)
             again = _load_json_or_zip_payload(client.get("/api/import-export/backup/credentials").content, "luma_credentials.zip", "luma_credentials")
             self.assertEqual(again["connections"][0]["provider"], "plaid")
+            self.assertEqual(self._stored_token(client, "item-legacy"), "tok-legacy",
+                             "a legacy plaintext payload is vaulted on the way in")
             self.assertEqual(again["connections"][0]["external_id"], "item-legacy")
-            self.assertEqual(again["connections"][0]["credential"], "tok-legacy")
+            # Round-tripping a v1 file UPGRADES it: what was plaintext on the way in comes back out as
+            # ciphertext, so the legacy artifact is not reproduced.
+            self.assertEqual(again["connections"][0]["credential"], "")
+            self.assertTrue(again["connections"][0]["credential_enc"])
 
 
 if __name__ == "__main__":

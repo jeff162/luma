@@ -109,6 +109,9 @@ class RestoreRequest(BaseModel):
 
 class CredentialsRestoreRequest(BaseModel):
     data: dict
+    # The passphrase of the vault that *produced* the backup — needed only for a v3 file from another
+    # install, whose ciphertext must be reopened with its own DEK before being re-keyed under this one.
+    passphrase: str | None = None
 
 
 # --- Encryption envelope + archive (de)serialization -------------------------------------------
@@ -709,72 +712,50 @@ def export_backup(encrypted: bool = Query(False)):
 
 
 @router.get("/backup/credentials")
-def export_credentials(request: Request, encrypted: bool = Query(False)):
-    """Export data-source connection credentials — treat this file like a password."""
+def export_credentials(request: Request):
+    """Export data-source credentials **as ciphertext**, with the vault material needed to reopen them.
+
+    This deliberately never decrypts. Versions 1 and 2 wrote *plaintext* access tokens and app secrets
+    into a plain zip — an artifact strictly weaker than the databases it came from, which hold only
+    ciphertext — and producing it was the sole reason the export demanded an unlocked vault. Copying the
+    ciphertext instead needs no DEK, so a locked vault is no longer an error here at all; the passphrase
+    is asked for at *restore*, where re-keying genuinely cannot proceed without it.
+
+    The wrapped DEK travels with it (`vault`). Without it the ciphertext is undecryptable anywhere but
+    the install that produced it — the key lives in the control DB and the ciphertext in the data DB, so
+    a credentials backup that carried only one half would restore nowhere. It is safe to include only
+    because it is passphrase-wrapped: this file's security is exactly the vault passphrase's strength,
+    and no second encryption layer is offered because the payload is already encrypted.
+
+    A legacy row that was never vaulted (plaintext `credential`, no `credential_enc`) is exported as it
+    sits. That keeps the invariant that matters — **the backup is never weaker than the DB at rest** —
+    without needing a DEK to upgrade it here.
+    """
     with get_db() as conn:
-        connections = conn.execute(
+        connections = [dict(r) for r in conn.execute(
             "SELECT id, provider, external_id, credential, credential_enc, institution FROM connection"
-        ).fetchall()
-        provider_configs = conn.execute(
+        ).fetchall()]
+        provider_configs = [dict(r) for r in conn.execute(
             "SELECT provider, client_id, secret, secret_enc, env FROM provider_config"
-        ).fetchall()
-        recipients = []
-        if encrypted:
-            recipients = [dict(r) for r in conn.execute("""
-                SELECT id, label, public_key
-                FROM   backup_recipient
-                WHERE  enabled = 1
-                ORDER  BY created_at DESC, label
-            """).fetchall()]
+        ).fetchall()]
     user = getattr(request.state, "user", None)
-    # Credentials are vault ciphertext at rest; producing a plaintext export needs the DEK.
-    if (connections or provider_configs) and not (user and crypto_service.is_unlocked(user["id"])):
-        raise HTTPException(status_code=423, detail={
-            "code": "vault_locked",
-            "message": "Unlock the vault to export credentials.",
-        })
-    exported_connections = []
-    for row in connections:
-        conn_row = dict(row)
-        conn_row["credential"] = crypto_service.decrypt_connection_credential(
-            user,
-            conn_row["provider"],
-            conn_row["external_id"],
-            conn_row.get("credential"),
-            conn_row.get("credential_enc"),
-        )
-        conn_row.pop("credential_enc", None)
-        exported_connections.append(conn_row)
-    exported_provider_configs = []
-    for row in provider_configs:
-        pc_row = dict(row)
-        pc_row["secret"] = crypto_service.decrypt_app_credential(
-            user, pc_row["provider"], pc_row.get("secret"), pc_row.get("secret_enc")
-        )
-        pc_row.pop("secret_enc", None)
-        exported_provider_configs.append(pc_row)
     payload = _stamp_content_hash({
-        "version":          2,
+        "version":          3,
         "exported_at":      utcnow_iso(),
-        "warning":          "This file contains sensitive data-source access tokens. Store securely.",
-        "connections":      exported_connections,
-        "provider_configs": exported_provider_configs,
+        "warning":          "This file holds encrypted data-source credentials. Anyone with it and your "
+                            "vault passphrase can use them. Store securely.",
+        "connections":      connections,
+        "provider_configs": provider_configs,
+        # The wrapped DEK, or None when no vault slot exists (nothing here is encrypted either, then).
+        "vault":            crypto_service.export_vault_slot(user["id"]) if user else None,
     })
-    if encrypted:
-        if not recipients:
-            raise HTTPException(status_code=400, detail="No enabled backup recipients are configured")
-        content = _build_encrypted_backup_bytes(
-            _zip_json_bytes("luma_credentials.json", payload),
-            recipients,
-        )
-        filename = _dated_backup_filename("luma_credentials", ".encrypted.zip")
-    else:
-        content = _zip_json_bytes("luma_credentials.json", payload)
-        filename = _dated_backup_filename("luma_credentials", ".zip")
     return StreamingResponse(
-        iter([content]),
+        iter([_zip_json_bytes("luma_credentials.json", payload)]),
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="{_dated_backup_filename("luma_credentials", ".zip")}"'
+        },
     )
 
 
@@ -1259,12 +1240,13 @@ async def inspect_backup_file(file: UploadFile = File(...)):
 def restore_credentials(body: CredentialsRestoreRequest, request: Request):
     d = body.data
     version = d.get("version")
-    if version not in (1, 2):
+    if version not in (1, 2, 3):
         raise HTTPException(status_code=400, detail="Unrecognized credentials backup version")
     _verify_payload_content_hash(d)
-    # v2 carries provider-agnostic connections; v1 (legacy) carried Plaid items — fold those into
+    # v3 carries ciphertext + the exporting vault's wrapped DEK; v2 carries provider-agnostic
+    # connections in plaintext; v1 (legacy) carried plaintext Plaid items — fold those into
     # provider='plaid' connections so an older credentials export still restores after the cutover.
-    if version == 2:
+    if version in (2, 3):
         connections = [dict(c) for c in d.get("connections", [])]
     else:
         connections = [
@@ -1276,24 +1258,77 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
             }
             for item in d.get("plaid_items", [])
         ]
-    # App-level provider credentials ride the same credentials backup (v2 only; legacy v1 had none).
-    provider_configs = [dict(pc) for pc in d.get("provider_configs", [])] if version == 2 else []
+    # App-level provider credentials ride the same credentials backup (v2+; legacy v1 had none).
+    provider_configs = [dict(pc) for pc in d.get("provider_configs", [])] if version in (2, 3) else []
     user = getattr(request.state, "user", None)
-    # Re-encrypting restored credentials under the workspace DEK needs the vault unlocked.
-    if (connections or provider_configs) and not (user and crypto_service.is_unlocked(user["id"])):
+
+    # A v3 file taken on THIS install needs nothing: its ciphertext is already valid against the live
+    # DEK, so the rows go back verbatim — no passphrase, no unlock, no re-encryption. Asking for a
+    # passphrase to perform a byte-for-byte copy would be ceremony, and it is the common case (restoring
+    # your own backup onto the machine that made it).
+    verbatim = version == 3 and crypto_service.vault_slot_is_local(d.get("vault"), user["id"]) if user else False
+
+    # Otherwise every secret has to be reopened with the key that sealed it and re-sealed under this
+    # workspace's own. For v3-from-elsewhere that key comes from the backup's slot + the passphrase that
+    # went with it; for v1/v2 the payload is already plaintext and there is nothing to reopen.
+    backup_dek = None
+    if version == 3 and not verbatim and (connections or provider_configs):
+        vault = d.get("vault") or {}
+        if not vault.get("wrapped_dek"):
+            raise HTTPException(status_code=400, detail={
+                "code": "vault_material_missing",
+                "message": "This credentials backup carries no vault key, so its contents cannot be reopened.",
+            })
+        if not body.passphrase:
+            raise HTTPException(status_code=400, detail={
+                "code": "backup_passphrase_required",
+                "message": "Enter the vault passphrase this backup was created with.",
+            })
+        try:
+            backup_dek = crypto_service.unwrap_dek_from_slot(
+                vault, body.passphrase, user_id=vault.get("user_id") or "",
+            )
+        except ValueError:
+            raise HTTPException(status_code=400, detail={
+                "code": "incorrect_backup_passphrase",
+                "message": "That passphrase does not open this backup's vault key.",
+            })
+
+    # Re-encrypting restored credentials under the workspace DEK needs the local vault unlocked.
+    if not verbatim and (connections or provider_configs) and not (user and crypto_service.is_unlocked(user["id"])):
         raise HTTPException(status_code=423, detail={
             "code": "vault_locked",
             "message": "Unlock the vault to restore credentials.",
         })
+
+    def _connection_secret(c: dict) -> tuple[str, str | None]:
+        """The (credential, credential_enc) pair to store for one incoming row."""
+        if verbatim:
+            return c.get("credential") or "", c.get("credential_enc")
+        plain = (
+            crypto_service.decrypt_connection_credential_with_dek(
+                backup_dek, c["provider"], c["external_id"], c.get("credential"), c.get("credential_enc"),
+            )
+            if backup_dek else c.get("credential") or ""
+        )
+        return crypto_service.encrypt_connection_credential(user, c["provider"], c["external_id"], plain)
+
+    def _provider_secret(pc: dict) -> tuple[str, str | None]:
+        if verbatim:
+            return pc.get("secret") or "", pc.get("secret_enc")
+        plain = (
+            crypto_service.decrypt_app_credential_with_dek(
+                backup_dek, pc["provider"], pc.get("secret"), pc.get("secret_enc"),
+            )
+            if backup_dek else pc.get("secret") or ""
+        )
+        # Only a non-empty app secret is vaulted; a config with just client_id/env stores no ciphertext.
+        return crypto_service.encrypt_app_credential(user, pc["provider"], plain) if plain else ("", None)
+
     with get_db() as conn:
         conn.execute("DELETE FROM connection")
         for c in connections:
-            credential, credential_enc = crypto_service.encrypt_connection_credential(
-                user,
-                c["provider"],
-                c["external_id"],
-                c["credential"],
-            )
+            credential, credential_enc = _connection_secret(c)
             conn.execute(
                 """
                 INSERT OR IGNORE INTO connection (id, provider, external_id, credential, credential_enc, institution)
@@ -1310,9 +1345,7 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
             )
         conn.execute("DELETE FROM provider_config")
         for pc in provider_configs:
-            plain = pc.get("secret") or ""
-            # Only a non-empty app secret is vaulted; a config with just client_id/env stores no ciphertext.
-            secret, secret_enc = crypto_service.encrypt_app_credential(user, pc["provider"], plain) if plain else ("", None)
+            secret, secret_enc = _provider_secret(pc)
             conn.execute(
                 """
                 INSERT OR IGNORE INTO provider_config (provider, client_id, secret, secret_enc, env)
@@ -1343,7 +1376,8 @@ async def restore_backup_file(
 
 
 @router.post("/restore/credentials-file")
-async def restore_credentials_file(request: Request, file: UploadFile = File(...)):
+async def restore_credentials_file(request: Request, file: UploadFile = File(...),
+                                   passphrase: str | None = Form(None)):
     content = await file.read()
     payload = _load_json_or_zip_payload(content, file.filename or "", "credentials")
-    return restore_credentials(CredentialsRestoreRequest(data=payload), request)
+    return restore_credentials(CredentialsRestoreRequest(data=payload, passphrase=passphrase), request)

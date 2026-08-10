@@ -734,6 +734,42 @@ Backup/restore deals with two different classes of data:
 
 Those are intentionally separated so normal backups can stay safer and simpler.
 
+**The credentials backup (payload version 3) exports ciphertext, never plaintext.** Versions 1 and 2
+*decrypted* every connection credential and app-level provider secret into a plain zip — an artifact
+strictly weaker than the databases it came from, which hold only ciphertext — and producing it was the
+sole reason the export demanded an unlocked vault. v3 copies `connection.credential_enc` and
+`provider_config.secret_enc` as they sit and carries the exporting vault's **wrapped DEK** alongside them
+(`vault: {user_id, wrapped_dek, kdf_*, meets_production_min}` from `crypto_service.export_vault_slot`).
+Consequences, each load-bearing:
+
+- **Export needs no vault at all.** It copies wrapped material and never touches a plaintext secret, so a
+  locked vault is not an error on this path. (It used to answer `423`, and because the button was a plain
+  browser navigation rather than a fetch, the user got a raw JSON error page in place of the app — see
+  `downloadUrl` in `lib/api.js`.)
+- **The wrapped DEK is what makes the file portable.** The ciphertext lives in the data DB and the key
+  that opens it in the control DB (`vault_slot`), so a credentials backup carrying only one half restores
+  nowhere but the install that produced it. Including it is safe *because* it is passphrase-wrapped: the
+  file's security is exactly the vault passphrase's strength, which is why `meets_production_min` rides
+  along for the UI to warn on.
+- **There is no encrypted variant.** A payload that is already ciphertext gains nothing from the RSA
+  recipient layer, so the credentials section offers one button and no choice. (Data backups keep theirs
+  — that payload really is plaintext.)
+- **Restore is where the passphrase is asked for**, and only when it must be. A v3 file whose `vault`
+  matches the local slot (`crypto_service.vault_slot_is_local`) restores **verbatim** — the ciphertext is
+  already valid against the live DEK, so no passphrase, no unlock, no re-encryption. A file from
+  elsewhere needs the passphrase *that backup* was made with (`unwrap_dek_from_slot`, whose AAD is the
+  exporting `user_id` — hence that id in the payload) **and** the local vault unlocked, because each
+  secret is reopened with the backup's DEK and re-sealed under this workspace's own. A foreign slot is
+  never adopted into `vault_slot`: one DEK per workspace.
+- **v1 and v2 still restore** (their plaintext payloads keep the old local-vault requirement — there is
+  something to encrypt), and round-tripping one **upgrades** it: what came in as plaintext goes back out
+  as ciphertext.
+
+Secrets deliberately stay in the **data** DB while keys stay in the **control** DB. That is not "secrets
+in the data DB" but the standard separation of key material from the ciphertext it protects, and it is
+the only reason the "leaked DB ≠ leaked tokens" property holds; `connection` additionally carries
+ledger-coupled sync state (`transactions_cursor`) that has no business in the security DB.
+
 The regular backup (payload **version 8**) covers the full **data-DB** state so a restore reproduces the working app, not just the ledger: owners, accounts, categories/groups, rules, merchant renames, import profiles/batches/history, transactions, the entire **tag system** (`tag` plus every attachment — `txn_tag`, `category_tag`, `account_tag`, `rule_tag`), the `account_pair_distinct` and `amazon_charge_distinct` assertions, the `amazon_charge_reviewed` acknowledgments (reconciliation reverse-scan "Mark reviewed" state), the **recurring series** (`recurring_series` plus the
 `txn.recurring_series_id` membership link), the **transaction links** (`txn_link` plus its `txn_link_member` membership — see "Transaction links and Amazon order import"), the **Amazon funding-source map** (`amazon_funding_map` — the instrument→account mappings the Amazon importer resolves charges against), the **parked Amazon items** (`amazon_pending_item` — per-item detail from an items file awaiting its orders file; kept whole rows whose `parked_batch_id` survived the restore), the **connection account mapping** (`connection_account` — see Accounts; it rides the *data* backup because nothing in it is a credential and its coverage claim must move with the ledger it describes, re-resolving `account_id` via the stable `external_account_id` on restore), and **UI/layout preferences** (`ui_preference` — see below). Restore is destructive — it wipes and rebuilds in foreign-key-safe order (tag definitions before any attachment; attachments after their other parent), and drops any attachment whose endpoints didn't survive the restore. **Versions 7 and 8** are still accepted, each with its pre-rename columns translated on restore: v7's `plaid_account_id`/`plaid_item_id` account columns to the current `external_account_id`/`connection_id`/`provider` shape, and pre-v9's `plaid_transaction_id` to `external_transaction_id` (see the two-version-axes note below); older payload versions are no longer accepted.
 

@@ -757,7 +757,8 @@ export const api = {
   updateBackupRecipient: (id, data) => request(`/import-export/backup/recipients/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteBackupRecipient: (id) => request(`/import-export/backup/recipients/${id}`, { method: 'DELETE' }),
   exportBackup:      (encrypted = false)  => `/api/import-export/backup${encrypted ? '?encrypted=true' : ''}`,
-  exportCredentials: (encrypted = false)  => `/api/import-export/backup/credentials${encrypted ? '?encrypted=true' : ''}`,
+  // No `encrypted` variant: a credentials backup is ciphertext already (see export_credentials).
+  exportCredentials: ()                   => '/api/import-export/backup/credentials',
   inspectBackupFile: async (file) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -786,17 +787,49 @@ export const api = {
     signalDataMutated()
     return res.json()
   },
-  restoreCredentialsFile: async (file) => {
+  restoreCredentialsFile: async (file, passphrase = null) => {
     const fd = new FormData()
     fd.append('file', file)
+    // The passphrase of the vault that PRODUCED the backup — only needed for a file from another
+    // install, whose ciphertext must be reopened before it can be re-keyed under this workspace.
+    if (passphrase) fd.append('passphrase', passphrase)
     const res = await fetch('/api/import-export/restore/credentials-file', { method: 'POST', body: fd })
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: res.statusText }))
-      const error = new Error(err.detail || 'Request failed')
-      error.status = res.status
-      throw error
+      // `buildResponseError` (not a bare Error) so callers can branch on `detail.code` — this endpoint
+      // answers `backup_passphrase_required` / `incorrect_backup_passphrase` / `vault_locked`.
+      throw buildResponseError(await res.json().catch(() => ({ detail: res.statusText })), res.status)
     }
     signalDataMutated()
     return res.json()
   },
+}
+
+// Download a file the API serves as an attachment, WITHOUT navigating.
+//
+// A plain `<a href>` or `location.assign` hands the URL to the browser, which then renders whatever
+// comes back — so any non-200 replaces the app with a raw JSON error page and no error handling can
+// run. Fetching keeps the response in the app's hands: failures raise the same `buildResponseError`
+// shape as every other call, and the SPA is never left.
+export async function downloadUrl(url) {
+  const res = await fetch(url)
+  if (!res.ok) {
+    throw buildResponseError(await res.json().catch(() => ({ detail: res.statusText })), res.status)
+  }
+  const blob = await res.blob()
+  // Filename comes from Content-Disposition; the server already dates and names these.
+  const disposition = res.headers.get('Content-Disposition') || ''
+  const match = /filename="?([^"';]+)"?/i.exec(disposition)
+  const objectUrl = URL.createObjectURL(blob)
+  try {
+    const anchor = document.createElement('a')
+    anchor.href = objectUrl
+    anchor.download = match ? match[1] : 'download'
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+  } finally {
+    // Revoked on a turn of the event loop: revoking synchronously can beat the click through in some
+    // browsers and yield a zero-byte save.
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000)
+  }
 }
