@@ -29,6 +29,7 @@ from pydantic import BaseModel
 from backend.db.database import SHARED_OWNER_NAME, SHARED_OWNER_ID, get_db
 from backend.json_utils import safe_json_dict
 from backend.time_utils import utcnow_iso
+from backend.routers.sync import SYNC_SOURCE_KIND
 from backend.services.connection_mapping import apply_account_mapping, record_provider_accounts
 from backend.services.duplicate_detection import (
     account_skipped_duplicate_summary,
@@ -274,10 +275,18 @@ def _replace_account_reference_in_batch_snapshots(conn, source_account_id: str, 
             )
 
 
+def _batch_has_duplicates(conn, batch_id: str) -> bool:
+    """Whether the card still holds a duplicate report — asked of the rows rather than of
+    `deduped_count`, so a counter that has drifted low cannot take a real report down with the card."""
+    return conn.execute(
+        "SELECT 1 FROM import_batch_duplicate WHERE batch_id = ? LIMIT 1", (batch_id,)
+    ).fetchone() is not None
+
+
 def _refresh_import_batch_summaries(conn, batch_ids: set[str]):
     for batch_id in sorted(batch_id for batch_id in batch_ids if batch_id):
         batch = conn.execute(
-            "SELECT id, skipped_count, deduped_count, config_snapshot FROM import_batch WHERE id = ?",
+            "SELECT id, skipped_count, deduped_count, source_kind, config_snapshot FROM import_batch WHERE id = ?",
             (batch_id,),
         ).fetchone()
         if not batch:
@@ -290,6 +299,21 @@ def _refresh_import_batch_summaries(conn, batch_ids: set[str]):
         skipped_count = int(batch["skipped_count"] or 0)
         deduped_count = int(batch["deduped_count"] or 0)
         total_rows = imported_count + skipped_count + deduped_count
+
+        # A data-source card that recomputes to nothing is deleted rather than left at zero rows, on the
+        # same reasoning `connections.remove_synced_transactions` deletes cards instead of leaving
+        # tombstones: a sync card records *rows*, so with its last row gone it records nothing, and the
+        # card resolvers key on (connection, backfill/period) without regard to status — a survivor would
+        # simply be reused by the next backfill. Deleting the accounts a connection synced into used to
+        # strand one of these, and disconnecting afterwards (`connection_id` is ON DELETE SET NULL) left
+        # it unreachable by every cleanup path that keys on the connection, showing up on Import/Export
+        # as an empty card labelled "Data connection" for a source that no longer exists.
+        #
+        # A CSV card is deliberately not treated this way: it records a file the user supplied, which
+        # remains true — and re-importable — after its rows are gone.
+        if total_rows == 0 and batch["source_kind"] == SYNC_SOURCE_KIND and not _batch_has_duplicates(conn, batch_id):
+            conn.execute("DELETE FROM import_batch WHERE id = ?", (batch_id,))
+            continue
 
         conn.execute(
             "UPDATE import_batch SET row_count = ? WHERE id = ?",

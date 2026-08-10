@@ -81,7 +81,27 @@ two steps:
   `account_pair_distinct` pair + re-flag, un-trash the replaced row) — it's
   replaying a soft-delete inverse, not new recovery logic.
 
-## Bank-side transaction-type prefixes — revisit once a second provider feeds the same account
+## Bank-side transaction-type prefixes — re-measured; still deferred, for a different reason
+
+**Status update.** The precondition below ("revisit once a second provider feeds the same account") has
+since been met, the re-measurement was done, and the item stays deferred — but the earlier reasoning no
+longer describes why. The second provider does word those charges differently, and the resulting pair was
+a genuine duplicate that reached the ledger. Stripping the leading token still would not have bridged it:
+with `WDRL-ACH` removed, the two descriptors reduce to `<payee> / ins / debitpmt` against
+`<payee> / insurance / debitpmt`, which is a 2-of-3 token overlap — the token that fails is `ins` against
+`insurance`, blocked by the 4-character floor in `_duplicate_tokens_match`, not by the prefix. So the
+prefix was never the obstacle in this case.
+
+What closed the case instead was not a text change at all: the pair was reaching the text rules only
+because a connection's trailing coverage window had no candidate slots (see `data-model.md`), and the
+terminal-day rule now reconciles it on amount alone. The residual text-level need — surfacing a
+differently-worded pair the coverage rules genuinely miss — is served by the `cross_account_weak` shared-
+token tier rather than by normalizing prefixes away. **If this is picked up again, the question to ask is
+about the 4-character prefix floor, not the leading token.**
+
+---
+
+## Original entry: revisit once a second provider feeds the same account
 
 **Context.** The cross-account text comparison drops a leading payment-processor tag (`<tag> *MERCHANT`)
 before matching, because sources disagree about passing that tag through — see `data-model.md` for why

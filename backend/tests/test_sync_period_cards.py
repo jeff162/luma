@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_db_path, set_current_db_path
+from backend.routers import accounts as accounts_module
 from backend.routers import sync as sync_module
 from backend.routers import providers as providers_module
 
@@ -179,6 +180,37 @@ class SyncPeriodCardTests(unittest.TestCase):
         cards = self._cards()
         self.assertEqual(len(cards), 1)
         self.assertEqual(cards[0]["row_count"], 1)
+
+    def test_deleting_the_synced_account_takes_the_emptied_card_with_it(self):
+        # The card resolvers key on (connection, backfill/period) without regard to row count, so a card
+        # left at zero rows is not inert — the next backfill reuses it. And once the connection is
+        # disconnected (`connection_id` is ON DELETE SET NULL) nothing that keys on the connection can
+        # reach it, leaving an unremovable empty card on Import/Export. A CSV card is the deliberate
+        # exception: it records a file, which stays true after its rows are gone.
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "INSERT INTO import_batch (id, filename, status, row_count) "
+                "VALUES ('csv-1', 'statement.csv', 'completed', 1)"
+            )
+        with self._driven_sync([self._txn("t1", -10.0, "Coffee"), self._txn("t2", -20.0, "Lunch")]) as res:
+            self.assertEqual(res["added"], 2)
+        # One of the two rows re-filed onto the CSV card, so both cards hold a row on the same account
+        # and the deletion below empties them together.
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "UPDATE txn SET import_batch_id = 'csv-1' WHERE external_transaction_id = 't2'"
+            )
+            csv_rows = conn.execute("SELECT COUNT(*) n FROM txn WHERE import_batch_id = 'csv-1'").fetchone()["n"]
+        self.assertEqual(csv_rows, 1)  # the fixture is only meaningful if the CSV card really holds a row
+        self.assertEqual(len(self._cards()), 1)
+
+        with self._use_db_path():
+            accounts_module.delete_account("a1")
+
+        self.assertEqual(self._cards(), [])
+        with self._use_db_path(), get_db() as conn:
+            surviving = [r["id"] for r in conn.execute("SELECT id FROM import_batch").fetchall()]
+        self.assertEqual(surviving, ["csv-1"])
 
     # ---- cursor / paging / readiness ------------------------------------
 

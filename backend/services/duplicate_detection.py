@@ -31,7 +31,7 @@ order:
   5.   Terminal-day reconciliation, then
   6.   a fuzzy-text fallback (medium confidence).
 
-Soft-flag (imported with a suspect pointer for review): the cross-account match by (date-window,
+Soft-flag (imported with a suspect pointer for review): the cross-SOURCE match by (date-window,
 amount, source text) comes from the post-batch sweep (`mark_import_suspects`), not the ladder above; the
 user resolves it with Keep (assert the two accounts are distinct) or Reject (confirm a duplicate). The
 text side compares the UNION of each row's captured texts (`source_match_texts`: merchant_name, raw_name,
@@ -39,8 +39,23 @@ and the `import_evidence_json` description + extra fields), not one normalized p
 sources for the same charge often store the rawest bank descriptor in different fields (a data-connection
 row in `raw_name`; a CSV that cleaned `raw_name` keeps the original in an "Original Statement" evidence
 field). A byte-identical overlap flags `'cross_account'` (high confidence — auto-confirmed on merge); a
-near-miss above `CROSS_ACCOUNT_FUZZY_RATIO` flags `'cross_account_fuzzy'`, a review-only tier that is
-never auto-confirmed on merge (so a slightly-different spelling is surfaced, not silently trashed).
+near-miss above `CROSS_ACCOUNT_FUZZY_RATIO` flags `'cross_account_fuzzy'`; two shared distinctive tokens
+flag `'cross_account_weak'`. The latter two are `REVIEW_ONLY_SOFT_FLAG_REASONS` and are never auto-
+confirmed (so a slightly-different spelling is surfaced, not silently trashed).
+
+**What the sweep pairs, and why it is not "cross-account".** The premise has always been *two independent
+sources describing one charge* — a single source does not report a charge twice, so two rows from one
+source are a legitimate repeat and are never paired. Landing on two different accounts used to imply
+that, and still counts on its own. It stopped being NECESSARY once two data connections could each map
+`existing` onto ONE local account: the same charge then arrives twice on that account, worded differently
+by each provider, and an account-difference test cannot see it. So the pairing condition is a *differing
+origin* — a different connection, or a different file when neither row came from a connection — with
+"different accounts" retained as the other sufficient arm. Measured on a real ledger, the origin gate is
+what makes this safe: same-account cross-source candidates numbered in the single digits, against
+thousands of same-account same-source repeats it correctly refuses to pair. Manual rows carry no origin
+and so never pair within one account. A same-account exact match is auto-confirmed by
+`promote_in_group_suspects_to_confirmed` (they trivially share an effective root) under its own
+`AUTO_CROSS_SOURCE_RESOLVED_BY` marker, so the user is not asked about it.
 
 Check-number discriminator (`are_distinct_checks`): two genuinely different checks can share
 date+amount+description (often just "Check"), so they collide on the content hash AND on the
@@ -331,6 +346,60 @@ def classify_text_match(texts_a: set[str], texts_b: set[str]) -> Optional[str]:
     return "fuzzy" if best >= CROSS_ACCOUNT_FUZZY_RATIO else None
 
 
+# How many distinctive (non-generic) tokens two rows must share for the weakest review tier. Two is
+# measured, not guessed: at one shared token a pair joined only by a survivor of
+# `GENERIC_DUPLICATE_TEXT_TOKENS` ("general", "account") is admitted, which is noise; at two, the pairs
+# that survive share a real counterparty word. This tier exists because character similarity is the wrong
+# instrument when two sources bracket the same payee with different boilerplate — "WDRL-ACH <PAYEE> 599…"
+# against "<PAYEE> Insurance Debitpmt" sits at ratio 0.57, nowhere near `CROSS_ACCOUNT_FUZZY_RATIO`,
+# while sharing the two tokens that matter. It is review-only and never auto-confirmed.
+_WEAK_SHARED_TOKEN_FLOOR = 2
+
+# One place mapping a text relation to the soft-flag reason it records and to its precedence when several
+# existing rows compete for one incoming row. Strongest binds first, so a byte-identical twin is never
+# displaced by a merely similar one, and a weak-tier pair is only chosen when nothing better exists.
+_TEXT_RELATION_REASONS = {
+    "exact": "cross_account",
+    "fuzzy": "cross_account_fuzzy",
+    "weak":  "cross_account_weak",
+}
+_TEXT_RELATION_RANK = {"exact": 0, "fuzzy": 1, "weak": 2}
+
+# The soft-flag tiers that are NEVER auto-confirmed — not on a merge, not on a same-account cross-source
+# pairing. Both rest on similarity rather than on agreement, so the user resolves them or they stay.
+REVIEW_ONLY_SOFT_FLAG_REASONS = ("cross_account_fuzzy", "cross_account_weak")
+
+# `dedupe_resolved_by` for an exact cross-source match auto-confirmed between two rows on the SAME
+# account. Deliberately not 'auto_merge': that marker means "a merge asserted this, and a detach should
+# take it back", and there is no merge here to undo — the rows share one account outright.
+AUTO_CROSS_SOURCE_RESOLVED_BY = "auto_cross_source"
+
+
+def classify_source_text_relation(texts_a: set[str], texts_b: set[str]) -> Optional[str]:
+    """`classify_text_match` plus a third, weakest tier: 'weak' — no exact overlap and no near-miss, but
+    the two rows share at least `_WEAK_SHARED_TOKEN_FLOOR` distinctive tokens.
+
+    Used by the soft-flag sweeps, which reach here only for pairs already narrowed to the same amount
+    inside the date window AND coming from two independent sources — a population small enough (measured:
+    single digits across a 21k-row ledger) that the text test is ranking evidence rather than holding back
+    a flood. The ladder's own rules keep using `classify_text_match`: they can hard-reject, and shared
+    tokens are not grounds to drop a row unseen.
+    """
+    kind = classify_text_match(texts_a, texts_b)
+    if kind is not None:
+        return kind
+    if not texts_a or not texts_b:
+        return None
+    tokens_a: set[str] = set()
+    tokens_b: set[str] = set()
+    for text in texts_a:
+        tokens_a.update(tokenize_duplicate_match_text(text))
+    for text in texts_b:
+        tokens_b.update(tokenize_duplicate_match_text(text))
+    shared = _count_fuzzy_token_overlap(sorted(tokens_a), sorted(tokens_b))
+    return "weak" if shared >= _WEAK_SHARED_TOKEN_FLOOR else None
+
+
 def _parse_iso_date(value):
     try:
         return datetime.strptime(value, "%Y-%m-%d").date()
@@ -473,6 +542,20 @@ def collect_duplicate_match_texts(*, merchant_name: Optional[str], display_name:
     return texts
 
 
+# Token-overlap fraction at which two matched tokens are enough to lift a pair over
+# `TEXT_DUPLICATE_MATCH_FLOOR` — i.e. enough to **hard-reject** it, unseen. Deliberately set ABOVE two
+# thirds, so a 2-of-3 overlap does NOT clear it while 3-of-4 does. Two matched tokens out of three is
+# real evidence, but not rejection-grade: one of the two is routinely boilerplate that simply never made
+# it onto `GENERIC_DUPLICATE_TEXT_TOKENS` (a bank's payment-type suffix, a processor's product word), so
+# a single distinctive token would be carrying the whole decision. That band belongs in review, and has
+# somewhere to go: the cross-source sweep's `_WEAK_SHARED_TOKEN_FLOOR` tier surfaces exactly this
+# evidence for the user to resolve. This value stood at `0.67` for a while and read as an approximation of
+# two thirds that a 2-of-3 overlap could never clear; "correcting" it to a true 2/3 converts precisely the
+# pair a user wants to be asked about into a silent rejection. Stated as an explicit bound instead, with a
+# regression test pinning the 2-of-3 case.
+_TOKEN_OVERLAP_HARD_REJECT_FLOOR = 0.7
+
+
 def score_duplicate_text_match(left_text: str, right_text: str) -> tuple[float, dict]:
     """Similarity of two descriptors in [0, 1], plus the signals behind it (for diagnosis).
 
@@ -503,7 +586,7 @@ def score_duplicate_text_match(left_text: str, right_text: str) -> tuple[float, 
     score = max(ratio, overlap)
     if contains:
         score = max(score, min(0.92, score + 0.08))
-    if matched_tokens >= 2 and overlap >= 0.67:
+    if matched_tokens >= 2 and overlap >= _TOKEN_OVERLAP_HARD_REJECT_FLOOR:
         score = max(score, 0.82)
     if matched_tokens >= 3 and overlap >= 0.8:
         score = max(score, 0.9)
@@ -1470,21 +1553,46 @@ def build_dedupe_context(
         connection_coverage_query += f" AND ca.connection_id NOT IN ({_placeholders(exclude_connection_ids)})"
         connection_coverage_params.extend(exclude_connection_ids)
 
+    # A connection's trailing window needs candidate SLOTS as well as a shortened coverage range, and
+    # they cannot come from the `import_batch_account` pass below: a sync card deliberately records no
+    # terminal date (routers/sync.py — a cursor delta is not a date range), so `connection_account` is the
+    # only thing that knows where a connection's trailing edge falls. Without these, a connection got the
+    # coverage carve-out with none of the reconciliation it exists to enable — a `terminal_window_days`-
+    # wide hole at the trailing edge of its coverage, in which neither the coverage rules nor Rule 5 could
+    # fire, and through which a second source's copy of a charge imported silently.
+    connection_terminal_lookup: dict[tuple[str, str, str], dict] = {}
+    connection_terminal_dates: set[str] = set()
+    connection_terminal_ids: set[str] = set()
+
     for row in conn.execute(connection_coverage_query, connection_coverage_params).fetchall():
         account_id = str(row["account_id"] or "").strip()
         scope_id = scope_id_for(account_id, "")
         if account_id not in relevant_account_ids and scope_id not in current_scope_ids:
             continue
+        label = provider_account_label(row)
+        window_days = terminal_window_days_for(row)
+        connection_id = str(row["connection_id"] or "").strip()
+
+        # Slots are registered BEFORE the coverage checks below, which `continue` past a connection whose
+        # coverage is entirely swallowed by its own lag. Such a connection still has a trailing window,
+        # and its rows are still the candidates Rule 5 must reconcile an incoming row against.
+        if connection_id and account_id:
+            for soft_date in terminal_window_dates(row["coverage_through_date"], window_days):
+                connection_terminal_lookup[(connection_id, account_id, soft_date)] = {
+                    "csv_value": label, "scope_id": scope_id,
+                }
+                connection_terminal_dates.add(soft_date)
+            connection_terminal_ids.add(connection_id)
+
         # The trailing edge of a connection's coverage is soft for the same reason a file's is: the
         # provider lags the bank, so its most recent days are still filling in.
-        soft_start = terminal_window_start(row["coverage_through_date"], terminal_window_days_for(row))
+        soft_start = terminal_window_start(row["coverage_through_date"], window_days)
         end_date = None
         if soft_start:
             parsed = _parse_iso_date(soft_start)
             end_date = (parsed - timedelta(days=1)).isoformat() if parsed else None
         if not end_date or not row["coverage_start_date"] or end_date < row["coverage_start_date"]:
             continue
-        label = provider_account_label(row)
         entry = {
             "start_date": row["coverage_start_date"],
             "end_date": end_date,
@@ -1495,6 +1603,54 @@ def build_dedupe_context(
         import_coverage_by_csv_value.setdefault(label, []).append(entry)
         if scope_id:
             import_coverage_by_scope_id.setdefault(scope_id, []).append(entry)
+
+    if connection_terminal_lookup:
+        # The connection's own rows on those days, keyed into the SAME two indexes a file's terminal rows
+        # feed, so Rule 5 consumes them without knowing which shape recorded them. The source label comes
+        # from the current mapping rather than from each row's captured evidence — the same priority
+        # `_source_label_for_row` applies, and for the same reason: rows synced before a mapping existed
+        # carry whatever the sync could name them at the time, and judging them under that label would key
+        # into maps that hold nothing.
+        for row in conn.execute(
+            f"""SELECT t.id, t.account_id, t.content_hash, t.date, t.raw_name, t.merchant_name,
+                       t.display_name, t.amount, t.import_evidence_json, t.import_batch_id,
+                       b.connection_id
+                FROM   txn t JOIN import_batch b ON b.id = t.import_batch_id
+                WHERE  b.connection_id IN ({_placeholders(connection_terminal_ids)})
+                  AND  t.date IN ({_placeholders(connection_terminal_dates)})
+                  AND  t.is_pending = 0
+                  AND  t.content_hash IS NOT NULL""",
+            [*connection_terminal_ids, *connection_terminal_dates],
+        ).fetchall():
+            terminal_meta = connection_terminal_lookup.get((
+                str(row["connection_id"] or "").strip(),
+                str(row["account_id"] or "").strip(),
+                str(row["date"] or "").strip(),
+            ))
+            if not terminal_meta or _from_excluded_batch(row):
+                continue
+            csv_value = terminal_meta["csv_value"]
+            candidate = {
+                "id": row["id"],
+                "date": row["date"],
+                "merchant_name": row["display_name"] or row["merchant_name"] or row["raw_name"],
+                "amount": row["amount"],
+                "content_hash": row["content_hash"],
+                "match_texts": collect_duplicate_match_texts(
+                    merchant_name=row["merchant_name"],
+                    display_name=row["display_name"],
+                    raw_name=row["raw_name"],
+                    import_evidence=parse_import_evidence(row["import_evidence_json"]),
+                ),
+                "csv_value": csv_value,
+                "scope_id": terminal_meta.get("scope_id"),
+                "_consumed": False,
+            }
+            terminal_day_candidates_by_csv_day.setdefault((csv_value, row["date"]), []).append(candidate)
+            if terminal_meta.get("scope_id"):
+                terminal_day_candidates_by_scope_day.setdefault(
+                    (terminal_meta["scope_id"], row["date"]), []
+                ).append(candidate)
 
     # `terminal_window_days` comes from the source that produced the batch: a saved CSV data source
     # (csv_import_profile) or a connection account. A batch with neither — a one-off file import — falls
@@ -1758,14 +1914,14 @@ def _select_best_cross_account_matches(candidate_rows) -> list[dict]:
     for r in candidate_rows:
         if are_distinct_checks(r["new_merchant"], r["existing_merchant"]):
             continue
-        kind = classify_text_match(
+        kind = classify_source_text_relation(
             _texts(r["new_merchant"], r["new_raw"], r["new_evidence"]),
             _texts(r["existing_merchant"], r["existing_raw"], r["existing_evidence"]),
         )
         if kind is None:
             continue
         rank = (
-            0 if kind == "exact" else 1,
+            _TEXT_RELATION_RANK[kind],
             _date_distance_days(r["new_date"], r["existing_date"]),
             str(r["existing_id"]),
         )
@@ -1774,14 +1930,14 @@ def _select_best_cross_account_matches(candidate_rows) -> list[dict]:
             best_by_new[r["new_id"]] = {
                 "new_id": r["new_id"],
                 "existing_id": r["existing_id"],
-                "reason": "cross_account" if kind == "exact" else "cross_account_fuzzy",
+                "reason": _TEXT_RELATION_REASONS[kind],
                 "_rank": rank,
             }
     return list(best_by_new.values())
 
 
 def mark_import_suspects(conn: sqlite3.Connection, batch_id: str) -> int:
-    """After a batch's transactions have been inserted, flag every cross-batch cross-account match by
+    """After a batch's transactions have been inserted, flag every cross-batch cross-SOURCE match by
     (date-window, amount, source text) as a soft-flag suspect — unless the pair of accounts is already in
     `account_pair_distinct` (the user has previously declared them distinct). Returns the number flagged.
 
@@ -1789,14 +1945,19 @@ def mark_import_suspects(conn: sqlite3.Connection, batch_id: str) -> int:
     `account_pair_distinct` filter is what keeps the output non-noisy after the user has reviewed each
     pair once. Text matching compares the UNION of each row's captured texts (`source_match_texts`): an
     exact (byte-identical) match flags `'cross_account'` (high confidence — auto-confirmed on merge); a
-    near-miss above `CROSS_ACCOUNT_FUZZY_RATIO` flags `'cross_account_fuzzy'` (review-only — never auto-
-    confirmed). See the module-level notes above `CROSS_ACCOUNT_FUZZY_RATIO`.
+    near-miss above `CROSS_ACCOUNT_FUZZY_RATIO` flags `'cross_account_fuzzy'`; two shared distinctive
+    tokens flag `'cross_account_weak'`. The last two are review-only and never auto-confirmed. See the
+    module-level notes above `CROSS_ACCOUNT_FUZZY_RATIO` and `_WEAK_SHARED_TOKEN_FLOOR`.
+
+    Pairs are drawn from rows on **different accounts** OR from rows on one account that arrived from two
+    different sources — see the comment on the SQL condition for why the second is not a widening of the
+    first but a statement of what the first was always standing in for.
 
     Within-batch (same-batch) pairs are skipped: the source asserts via the CSV that two rows on
     different accounts in the same file are distinct transactions, even if they share date/amount/text.
     Cross-batch pairs are candidates.
     """
-    # SQL narrows to same-amount, ±window-day (transaction vs posted date), cross-account, cross-batch,
+    # SQL narrows to same-amount, ±window-day (transaction vs posted date), cross-source, cross-batch,
     # not-distinct candidate pairs; the text match + closest-date-wins selection happens in Python
     # (`_select_best_cross_account_matches`) because comparing evidence-JSON fields per row can't be
     # expressed in the join. Returns every candidate pair, then one existing match is kept per new row.
@@ -1811,9 +1972,9 @@ def mark_import_suspects(conn: sqlite3.Connection, batch_id: str) -> int:
           t2.merchant_name AS existing_merchant, t2.raw_name AS existing_raw,
           t2.import_evidence_json AS existing_evidence
         FROM   txn t1
+        LEFT   JOIN import_batch b1 ON b1.id = t1.import_batch_id
         JOIN   txn t2
           ON   t2.id != t1.id
-          AND  t2.account_id != t1.account_id
           -- Either row's dates may line up: two sources routinely publish the transaction date and
           -- the posted date for the same charge, so the pair is a candidate if ANY combination falls
           -- inside the window. COALESCE keeps a row with no authorized_date comparing on its own date.
@@ -1830,9 +1991,24 @@ def mark_import_suspects(conn: sqlite3.Connection, batch_id: str) -> int:
                 WHERE  p.account_id_low  = MIN(t1.account_id, t2.account_id)
                   AND  p.account_id_high = MAX(t1.account_id, t2.account_id)
           )
+        LEFT   JOIN import_batch b2 ON b2.id = t2.import_batch_id
         WHERE  t1.import_batch_id = ?
           AND  t1.trashed_at IS NULL
           AND  t1.suspect_duplicate_of IS NULL
+          -- Two rows are comparable when two INDEPENDENT sources describe them. Landing on different
+          -- accounts has always implied that, and stays sufficient on its own; it stopped being
+          -- NECESSARY once two connections could each map `existing` onto ONE local account, at which
+          -- point the same charge arrives twice on that account and an account-difference test cannot
+          -- see it. The second arm asks the question directly: different connection, or different file
+          -- when neither row came from a connection. Manual rows (no ingesting source) are excluded from
+          -- it — they assert nothing about each other, and two same-amount manual entries days apart on
+          -- one account are far likelier a legitimate repeat than a duplicate. (In the WHERE rather than
+          -- the join's ON only because it reads `b2`, which cannot be joined before t2 itself.)
+          AND  (   t2.account_id != t1.account_id
+                OR (    COALESCE(b1.connection_id, t1.import_batch_id) IS NOT NULL
+                    AND COALESCE(b2.connection_id, t2.import_batch_id) IS NOT NULL
+                    AND COALESCE(b1.connection_id, t1.import_batch_id)
+                        != COALESCE(b2.connection_id, t2.import_batch_id)))
         """,
         (*([f"-{window} days", f"+{window} days"] * 3), batch_id),
     ).fetchall()
@@ -1955,6 +2131,9 @@ _SOFT_FLAG_CLASSIFIERS = {
     # Near-miss text match (same amount + date window, similar-but-not-identical source text). A
     # lower-confidence, review-only tier: never auto-confirmed on merge.
     "cross_account_fuzzy": ("cross_account_fuzzy", "low"),
+    # Weakest tier: the descriptors do not resemble each other as strings, but they share at least
+    # `_WEAK_SHARED_TOKEN_FLOOR` distinctive words. Review-only, like the fuzzy tier.
+    "cross_account_weak": ("cross_account_weak", "low"),
     # Legacy reasons kept in the map for forward-compatibility while old data is being
     # migrated; both map to the same rule_key for UI purposes since they represent the
     # same logical case (cross-account same-(date, amount, payee) match).
@@ -1995,6 +2174,10 @@ _RULE_LABELS = {
                                         "Same amount and date, with very similar — but not identical — source text on a different account. Surfaced for review; not auto-removed on merge."),
     "cross_account_fuzzy_confirmed":   ("Possible cross-account match (confirmed)",
                                         "You confirmed this near-match is the same real-world transaction as one on a different account; the row stays out of the active ledger."),
+    "cross_account_weak":              ("Same payee, different wording",
+                                        "Same amount and a nearby date on a different account, described in different words that still name the same payee. Too little agreement to remove automatically, so it is surfaced for review."),
+    "cross_account_weak_confirmed":    ("Same payee, different wording (confirmed)",
+                                        "You confirmed these two differently-worded records are the same real-world transaction; the row stays out of the active ledger."),
     # The same four flags once the two accounts have become one (see `_IN_ACCOUNT_RULE_KEYS`). Same
     # evidence, same tiers — only the account relationship the badge asserts is different.
     "in_account":                      ("Duplicate in this account",
@@ -2005,6 +2188,10 @@ _RULE_LABELS = {
                                         "Same amount and a nearby date, with very similar — but not identical — source text, on this same account. Similarity alone is not conclusive, so it is surfaced for review rather than removed."),
     "in_account_fuzzy_confirmed":      ("Possible duplicate in this account (confirmed)",
                                         "You confirmed this near-match is the same real-world transaction as another on this account; the row stays out of the active ledger."),
+    "in_account_weak":                 ("Same payee, different wording",
+                                        "Two sources reported the same amount on the same account within a few days, wording it differently but naming the same payee. Surfaced for review rather than removed, since the wording alone is not conclusive."),
+    "in_account_weak_confirmed":       ("Same payee, different wording (confirmed)",
+                                        "You confirmed these two differently-worded records are one transaction reported twice on this account; the row stays out of the active ledger."),
     # Legacy keys retained so labels still render correctly for old rows that may exist before
     # the migration sweep has touched them. New rows use the cross_account key above.
     "import_new_account":              ("Cross-account match",
@@ -2038,6 +2225,7 @@ _RULE_LABELS = {
 _IN_ACCOUNT_RULE_KEYS = {
     "cross_account": "in_account",
     "cross_account_fuzzy": "in_account_fuzzy",
+    "cross_account_weak": "in_account_weak",
 }
 
 
@@ -2678,7 +2866,8 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
 
     Actions:
       - 'keep' / 'not_duplicate': clears the suspect flag; the row stays in the active ledger as
-        a confirmed-distinct transaction.
+        a confirmed-distinct transaction. Broad (asserts the two ACCOUNTS are distinct and cascades)
+        only when the pair straddles two accounts; per-row when both rows are on one account.
       - 'reject' / 'trash': confirms the suspect as a real duplicate; the row is hidden from
         active ledger queries (`trashed_at` set) and tagged with `rejection_reason =
         'duplicate_confirmed'` so the unified duplicate report can surface it alongside the
@@ -2794,7 +2983,18 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
         suspect_account = conn.execute(
             "SELECT account_id FROM txn WHERE id = ?", (txn_id,),
         ).fetchone()
-        if matched_row and suspect_account and matched_row["account_id"] and suspect_account["account_id"]:
+        # The broad reading applies only to a pair of DISTINCT accounts. When both rows sit on one account
+        # there is no pair to assert anything about: `account_pair_distinct` would take a (X, X) row that
+        # its own `MIN/MAX` filter would then match for every future candidate on that account, switching
+        # detection off there permanently, and the cascade below would clear every unresolved suspect on
+        # it. Keep is per-row in that case — which is the correct meaning anyway, since "these two accounts
+        # are different" says nothing about two records inside one account.
+        same_account = bool(
+            matched_row and suspect_account
+            and matched_row["account_id"] == suspect_account["account_id"]
+        )
+        if (matched_row and suspect_account and matched_row["account_id"]
+                and suspect_account["account_id"] and not same_account):
             low, high = _sorted_pair(suspect_account["account_id"], matched_row["account_id"])
             conn.execute(
                 """
@@ -2826,8 +3026,8 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
                 (low, high, high, low),
             )
         else:
-            # No account info available (shouldn't normally happen, but be defensive); just
-            # clear the single flag we were asked about.
+            # A same-account pair (above), or no account info at all (shouldn't normally happen, but be
+            # defensive); either way, just clear the single flag we were asked about.
             conn.execute(
                 """
                 UPDATE txn
@@ -2842,17 +3042,37 @@ def resolve_suspect(conn: sqlite3.Connection, txn_id: str, *, action: str) -> di
     return {"resolved": False, "reason": "invalid_action"}
 
 
+def _same_origin(row_a, row_b) -> bool:
+    """Whether two stored rows were reported by the same source, and so must not be paired.
+
+    Rows on different accounts are never same-origin: landing in two accounts is itself the assertion
+    that they are two things, and pairing them is the long-standing cross-account case. On ONE account the
+    question is real, and a missing `origin_id` (a manual entry) answers it conservatively — a row with no
+    ingesting source asserts nothing, so it is treated as sharing an origin with everything on its account
+    rather than pairing against a legitimate repeat.
+    """
+    if row_a["account_id"] != row_b["account_id"]:
+        return False
+    origin_a, origin_b = row_a["origin_id"], row_b["origin_id"]
+    return not origin_a or not origin_b or origin_a == origin_b
+
+
 def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
                                             account_ids: Iterable[str]) -> int:
-    """Fresh existing-vs-existing cross-account scan within a set of accounts (a just-merged group).
+    """Fresh existing-vs-existing cross-source scan within a set of accounts (a just-merged group).
 
     The import-time evaluator and `mark_import_suspects` only ever compare an *incoming* batch's rows
     against what already exists; a pair of rows that both predate the comparison — e.g. a synced row that
     ran no detection before this feature, and a CSV row imported earlier — is never looked at. A merge is
     the strongest "these are the same account" signal, so it is the right moment to close that gap: scan
     every row now in the unified group and soft-flag each un-compared same-(date, amount, normalized payee)
-    match that straddles two DIFFERENT accounts in the group. The following `promote_in_group_suspects_to_
-    confirmed` then graduates these (and any pre-existing) in-group soft-flags to confirmed, reversibly.
+    match reported by two different sources. The following `promote_in_group_suspects_to_confirmed` then
+    graduates these (and any pre-existing) in-group soft-flags to confirmed, reversibly.
+
+    Pairing is on differing SOURCE, not differing account — the same premise `mark_import_suspects` uses,
+    for the same reason: two connections can both map `existing` onto one local account, so one account
+    can hold two independent reports of one charge. Two rows from the same source are never paired, which
+    is what keeps a legitimate repeat (the same amount twice in a week on one account) out of the report.
 
     Canonical choice (which row is KEPT vs. which becomes the trashed suspect): keep the more-curated row.
     A row still awaiting review (needs_review = 1 — every synced row starts here) yields to a reviewed one;
@@ -2860,8 +3080,10 @@ def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
     the categorized CSV row it duplicates, not the reverse. Only rows not already carrying a suspect pointer
     are flagged. Returns the number of rows newly flagged.
     """
+    # A single account is a legitimate scope: two sources can both report into one account, so a group of
+    # one still has pairs worth finding. (The old floor of two accounts encoded the cross-account premise.)
     ids = [aid for aid in (account_ids or []) if aid]
-    if len(ids) < 2:
+    if not ids:
         return 0
     ph = _placeholders(ids)
     rows = conn.execute(
@@ -2870,7 +3092,10 @@ def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
                t.merchant_name, t.raw_name, t.import_evidence_json,
                COALESCE(t.needs_review, 0) AS needs_review,
                t.suspect_duplicate_of,
-               COALESCE(b.imported_at, '') AS imported_at
+               COALESCE(b.imported_at, '') AS imported_at,
+               -- What reported this row: the connection if it came from one, else the file. NULL for a
+               -- manual entry, which asserts nothing and therefore pairs with nothing on its own account.
+               COALESCE(b.connection_id, t.import_batch_id) AS origin_id
         FROM   txn t
         LEFT JOIN import_batch b ON b.id = t.import_batch_id
         WHERE  t.account_id IN ({ph})
@@ -2908,28 +3133,29 @@ def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
     window = CROSS_ACCOUNT_DATE_WINDOW_DAYS
     flagged: list[tuple[str, str, str]] = []
     for members in groups.values():
-        if len(members) < 2 or len({m["account_id"] for m in members}) < 2:
+        if len(members) < 2:
             continue
-        # Pair cross-account rows within the date window, each row to at most one partner. Ordering: an
-        # exact text match binds before a fuzzy one, then a same-day twin before a near-date one, then the
-        # priority tie-break. Two distinct same-amount charges more than `window` days apart never pair (so
-        # a monthly repeat isn't flagged against itself), a differing explicit check number is discarded
-        # (two distinct checks share amount + "Check"), and pairs whose texts don't match are skipped.
+        # Pair cross-source rows within the date window, each row to at most one partner. Ordering: an
+        # exact text match binds before a fuzzy one and a fuzzy before a weak one, then a same-day twin
+        # before a near-date one, then the priority tie-break. Two distinct same-amount charges more than
+        # `window` days apart never pair (so a monthly repeat isn't flagged against itself), a differing
+        # explicit check number is discarded (two distinct checks share amount + "Check"), and pairs whose
+        # texts don't relate at all are skipped.
         candidates = []
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
                 a, b = members[i], members[j]
-                if a["account_id"] == b["account_id"]:
-                    continue  # a legit repeat on one account, not a cross-account duplicate
+                if _same_origin(a, b):
+                    continue  # one source does not report a charge twice — a legitimate repeat
                 dist = _date_distance_days(a["date"], b["date"])
                 if dist > window:
                     continue
                 if are_distinct_checks(a["merchant_name"], b["merchant_name"]):
                     continue
-                kind = classify_text_match(row_texts[a["id"]], row_texts[b["id"]])
+                kind = classify_source_text_relation(row_texts[a["id"]], row_texts[b["id"]])
                 if kind is None:
                     continue
-                candidates.append((0 if kind == "exact" else 1, dist, kind, a, b))
+                candidates.append((_TEXT_RELATION_RANK[kind], dist, kind, a, b))
         candidates.sort(key=lambda c: (c[0], c[1], _priority(c[3]), _priority(c[4])))
         matched: set = set()
         for _kind_rank, _dist, kind, a, b in candidates:
@@ -2940,8 +3166,7 @@ def scan_scope_for_cross_account_duplicates(conn: sqlite3.Connection,
                 continue  # already flagged/compared — leave the existing pointer intact
             if canonical["suspect_duplicate_of"] == other["id"]:
                 continue  # the pair is already linked the other way — don't add a reciprocal flag
-            reason = "cross_account" if kind == "exact" else "cross_account_fuzzy"
-            flagged.append((canonical["id"], other["id"], reason))
+            flagged.append((canonical["id"], other["id"], _TEXT_RELATION_REASONS[kind]))
             matched.add(a["id"])
             matched.add(b["id"])
 
@@ -2973,22 +3198,31 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
     `resolve_suspect(action='reject')` does. The audit pointer `suspect_duplicate_of` stays so
     the user can still see what was matched and Restore if the auto-promotion was wrong.
 
-    EXACT cross-account soft-flags (`suspect_duplicate_reason='cross_account'`) are promoted; the
-    review-only FUZZY tier (`'cross_account_fuzzy'`, a near-miss text match) is deliberately left for the
-    user to resolve, so a merge never silently trashes a row on similarity alone. This is the merge-time
-    resolution sweep; exact soft-flags are created at import time (and by the merge-time fresh scan).
+    EXACT soft-flags (`suspect_duplicate_reason='cross_account'`) are promoted; the review-only tiers in
+    `REVIEW_ONLY_SOFT_FLAG_REASONS` (a near-miss text match, or two merely-shared tokens) are deliberately
+    left for the user to resolve, so a merge never silently trashes a row on similarity alone. This is the
+    merge-time resolution sweep; exact soft-flags are created at import time (and by the merge-time fresh
+    scan).
 
-    A fuzzy flag left here is not left *undescribed*: the report re-derives its account relationship from
-    the current grouping (`_IN_ACCOUNT_RULE_KEYS`), so it reads as an in-account near-match rather than
-    continuing to claim a cross-account premise this merge just retired.
+    A review-only flag left here is not left *undescribed*: the report re-derives its account relationship
+    from the current grouping (`_IN_ACCOUNT_RULE_KEYS`), so it reads as an in-account near-match rather
+    than continuing to claim a cross-account premise this merge just retired.
+
+    **Same-account pairs are promoted too, and this is the path that resolves them.** Two rows on ONE
+    account trivially share an effective root, so an exact cross-source match lands here on the first
+    sweep after it is flagged — which is the intended outcome (byte-identical captured text, same amount,
+    same account, two independent sources) and means the user is never asked about it. They are stamped
+    `AUTO_CROSS_SOURCE_RESOLVED_BY` rather than `'auto_merge'`, because no merge produced them and
+    `restore_auto_merged_after_detach` must not un-trash them when some unrelated account is detached.
     """
     account_id_list = [aid for aid in (account_ids or []) if aid]
     if not account_id_list:
         return 0
     ph = _placeholders(account_id_list)
+    review_only_ph = _placeholders(REVIEW_ONLY_SOFT_FLAG_REASONS)
     rows = conn.execute(
         f"""
-        SELECT t1.id
+        SELECT t1.id, (t1.account_id = t2.account_id) AS same_account
         FROM   txn t1
         JOIN   txn t2 ON t2.id = t1.suspect_duplicate_of
         JOIN   account a1 ON a1.id = t1.account_id
@@ -2997,11 +3231,11 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
           AND  t1.suspect_resolved_at IS NULL
           AND  t1.rejection_reason IS NULL
           AND  t1.trashed_at IS NULL
-          AND  COALESCE(t1.suspect_duplicate_reason, '') != 'cross_account_fuzzy'
+          AND  COALESCE(t1.suspect_duplicate_reason, '') NOT IN ({review_only_ph})
           AND  COALESCE(a1.parent_account_id, a1.id) = COALESCE(a2.parent_account_id, a2.id)
           AND  (t1.account_id IN ({ph}) OR t2.account_id IN ({ph}))
         """,
-        [*account_id_list, *account_id_list],
+        [*REVIEW_ONLY_SOFT_FLAG_REASONS, *account_id_list, *account_id_list],
     ).fetchall()
     if not rows:
         return 0
@@ -3010,16 +3244,23 @@ def promote_in_group_suspects_to_confirmed(conn: sqlite3.Connection,
     # user subsequently detaches the accounts, `restore_auto_merged_after_detach` looks for this
     # marker and reverses these promotions. Rows the user explicitly Reject (with
     # `dedupe_resolved_by='user'`) are left alone on detach.
+    #
+    # A same-account promotion gets its own marker instead. Its premise is not the grouping — the two
+    # rows are on ONE account and no detach can separate them — so reversing it on detach would restore
+    # a duplicate for a reason that never applied. Restore stays available per-row from the report.
     conn.executemany(
         """
         UPDATE txn
         SET    trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
                rejection_reason = 'duplicate_confirmed',
                suspect_resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-               dedupe_resolved_by = 'auto_merge'
+               dedupe_resolved_by = ?
         WHERE  id = ?
         """,
-        [(i,) for i in ids],
+        [
+            (AUTO_CROSS_SOURCE_RESOLVED_BY if r["same_account"] else "auto_merge", r["id"])
+            for r in rows
+        ],
     )
     # Same-batch transitive clear: a single CSV asserts (via account-column) that rows on
     # different accounts in that file are distinct transactions. If a promoted row Y (now
