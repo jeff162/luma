@@ -126,7 +126,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 33
+CURRENT_VERSION = 34
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -991,6 +991,21 @@ def _connection_sync_in_progress(conn):
     conn.execute("ALTER TABLE connection ADD COLUMN sync_started_at TEXT")
 
 
+@migration(34)
+def _sync_log_destination_and_windows(conn):
+    # Two facts a sync log row could not previously state: which import cards the rows landed on, and which
+    # date ranges were actually requested to get them. Both are diagnostics with no reader before this
+    # migration, so existing rows stay NULL — "not recorded", which is what they are. See the baseline
+    # CREATE for why each is worth storing.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection_sync_log)")}
+    if not cols:
+        return  # a minimal hand-built fixture without the table
+    if "card_counts" not in cols:
+        conn.execute("ALTER TABLE connection_sync_log ADD COLUMN card_counts TEXT")
+    if "requested_windows" not in cols:
+        conn.execute("ALTER TABLE connection_sync_log ADD COLUMN requested_windows TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -1328,7 +1343,17 @@ def init_db(db_path: str | None = None):
                 -- {provider account id: {added, updated, skipped_*}} for this call. Keyed by the provider's
                 -- id, not the local account's, so an account with no local destination still appears —
                 -- a breakdown built from what landed can never mention the account that received nothing.
-                account_counts  TEXT
+                account_counts  TEXT,
+                -- [{card, added}] — which import cards this pull's rows landed on. A sync files each row
+                -- under its own transaction month, so one call routinely writes to several cards while
+                -- `added` reports a single total; without this the total reconciles against nothing the
+                -- Import/Export page shows, and reads as rows having disappeared.
+                card_counts     TEXT,
+                -- [{start, end}] — the date ranges actually requested, in order. A walking, budgeted
+                -- adapter makes many requests per call and can stop partway, so neither the rows returned
+                -- nor the resume checkpoint can reconstruct what was looked at. Empty for a cursor
+                -- provider, which asks for "everything since this token" and names no window.
+                requested_windows TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_connection_sync_log_started
                 ON connection_sync_log(started_at);

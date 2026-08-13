@@ -12,11 +12,28 @@ import json
 import sqlite3
 from typing import Optional
 
+from backend.services.account_groups import effective_account_id_sql
 from backend.services.transaction_tags import (
     load_rule_tag_sync_rows,
     sync_rule_tags_for_transaction,
     would_sync_rule_tags_change,
 )
+
+
+def rule_scope_account_sql(alias: str = "") -> str:
+    """The `account_id` projection every SELECT that loads a rule **for matching** must use.
+
+    `category_rule.account_id` is a *scope*: "apply this rule to rows on that account". The rows it is
+    compared against always resolve to their group root, so the rule's own id has to as well — merging
+    the scoped account into another otherwise turns the rule off silently, since nothing resolves to a
+    merged child any more. Projected under the plain name `account_id` so `rule_matches_row` and the
+    inline matchers keep reading one key and cannot end up comparing the raw column by accident.
+
+    Not for a SELECT that *displays* or *edits* a rule: those want the account the user actually picked
+    (`docs/data-model.md` → Accounts, and `services/account_groups.py` for the general invariant).
+    """
+    column = f"{alias}.account_id" if alias else "account_id"
+    return f"{effective_account_id_sql(column)} AS account_id"
 
 
 def extract_source_match_text(evidence) -> str:
@@ -188,22 +205,6 @@ def rule_matches_row(rule, row) -> bool:
     return _amount_rule_matches(row["amount"], rule["amount_min"], rule["amount_max"], rule["debit_credit"])
 
 
-def _resolve_effective_account_id(
-    conn: sqlite3.Connection,
-    account_id: str | None,
-    effective_account_id: str | None = None,
-) -> str | None:
-    if effective_account_id:
-        return effective_account_id
-    if not account_id:
-        return None
-    row = conn.execute(
-        "SELECT COALESCE(parent_account_id, id) AS effective_account_id FROM account WHERE id = ?",
-        (account_id,),
-    ).fetchone()
-    return row["effective_account_id"] if row else account_id
-
-
 def _resolve_effective_account(
     conn: sqlite3.Connection,
     account_id: str | None,
@@ -243,8 +244,9 @@ def load_categorization_rules(conn: sqlite3.Connection) -> list:
     recategorize-preview calls vs ≈1s when the rules are loaded once).
     """
     return conn.execute(
-        """SELECT cr.id, cr.category_id, cr.keyword, cr.match_expr, cr.amount_min, cr.amount_max,
-                  cr.debit_credit, cr.owner_id, cr.account_id, cr.account_type, cr.clean_name, cr.match_source_text
+        f"""SELECT cr.id, cr.category_id, cr.keyword, cr.match_expr, cr.amount_min, cr.amount_max,
+                  cr.debit_credit, cr.owner_id, {rule_scope_account_sql("cr")}, cr.account_type,
+                  cr.clean_name, cr.match_source_text
            FROM   category_rule cr
            LEFT   JOIN category c ON c.id = cr.category_id
            -- Deactivating a category prunes its rules, but stay defensive: a rule must never

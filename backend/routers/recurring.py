@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from backend.db.database import get_db
 from backend.services.recurring_detection import (
     CADENCES,
+    SERIES_SCOPE_ACCOUNT_SQL,
     link_series_members,
     maybe_auto_scan,
     scan_and_store,
@@ -42,7 +43,10 @@ def _serialize(row: sqlite3.Row) -> dict:
         "display_name": row["display_name"],
         "category_id": row["category_id"],
         "category_name": row["category_name"] if "category_name" in row.keys() else None,
-        "account_id": row["account_id"],
+        # The series' account *scope*, resolved to the group it belongs to now — so the account picker
+        # (which lists top-level accounts) preselects the right one after a merge, and the UI agrees
+        # with what the matcher actually scopes by. See `recurring_detection.SERIES_SCOPE_ACCOUNT_SQL`.
+        "account_id": row["scope_account_id"] if "scope_account_id" in row.keys() else row["account_id"],
         "account_name": row["account_name"] if "account_name" in row.keys() else None,
         "cadence": row["cadence"],
         "period_days": row["period_days"],
@@ -66,8 +70,8 @@ def _serialize(row: sqlite3.Row) -> dict:
 
 def _fetch(conn: sqlite3.Connection, series_id: str) -> sqlite3.Row:
     row = conn.execute(
-        """
-        SELECT s.*, c.name AS category_name, a.display_name AS account_name,
+        f"""
+        SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, c.name AS category_name, a.display_name AS account_name,
                COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) AS excluded_from_totals
         FROM   recurring_series s
         LEFT   JOIN category c  ON c.id = s.category_id
@@ -90,7 +94,7 @@ def list_series(include_suppressed: bool = False):
         where = "" if include_suppressed else "WHERE s.status != 'suppressed'"
         rows = conn.execute(
             f"""
-            SELECT s.*, c.name AS category_name, a.display_name AS account_name,
+            SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL}, c.name AS category_name, a.display_name AS account_name,
                    COALESCE(pc.exclude_from_totals, c.exclude_from_totals, 0) AS excluded_from_totals
             FROM   recurring_series s
             LEFT   JOIN category c  ON c.id = s.category_id

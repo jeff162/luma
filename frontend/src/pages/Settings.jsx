@@ -17,6 +17,7 @@ import TransientTextInput from '../components/TransientTextInput.jsx'
 import { TagGlyph, TAG_COLOR_PALETTE } from '../components/TagUi.jsx'
 import { invalidateTags } from '../lib/useTags.js'
 import { DEFAULT_LEDGER_CURRENCY, applyLedgerCurrency, currencySymbolFor } from '../lib/moneyDisplay.js'
+import { cardSummary, checkpointSummary, windowSummary } from '../lib/syncLogSummary.js'
 
 const SETTINGS_SECTIONS_PREF_KEY = 'ui.settings.stickySections'
 // Stable default so the preference value keeps a constant identity when nothing is saved yet.
@@ -2099,6 +2100,15 @@ function SyncLogRow({ entry }) {
   // this is a user-facing log, and a row reading `status: null` says "something is broken" when it in fact
   // means "this provider does not report one". With none left, the row itself is omitted.
   const statuses = (entry.status_sequence || []).filter(s => s != null)
+  // How many requests the pull actually spent, which for a walking adapter is the number that answers
+  // "why did this take so long" — `pages` is a cursor provider's notion and reads 1 for every walk, however
+  // many requests it made. Kept as the fallback for the providers where it is the true figure.
+  const requests = entry.requested_windows?.length || null
+  const cards = cardSummary(entry.card_counts, entry.institution)
+  // The raw fingerprints stay as the fallback: a provider whose checkpoint this cannot interpret must still
+  // show *something*, since whether the token advanced is the first question a stalled sync raises.
+  const checkpoint = [windowSummary(entry.requested_windows), checkpointSummary(entry.cursor_before, entry.cursor_after)]
+    .filter(Boolean).join(' · ')
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', display: 'grid', gap: 6, fontSize: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -2117,9 +2127,21 @@ function SyncLogRow({ entry }) {
         <span>updated <b style={{ color: 'var(--text)' }}>{entry.updated}</b></span>
         <span>removed <b style={{ color: 'var(--text)' }}>{entry.removed}</b></span>
         <span>skipped <b style={{ color: 'var(--text)' }}>{entry.skipped}</b></span>
-        <span>pages <b style={{ color: 'var(--text)' }}>{entry.pages}</b></span>
-        {entry.days_requested != null ? <span>days_requested <b style={{ color: 'var(--text)' }}>{entry.days_requested}</b></span> : null}
+        {requests
+          ? <span><b style={{ color: 'var(--text)' }}>{requests}</b> request{requests === 1 ? '' : 's'}</span>
+          : <span>pages <b style={{ color: 'var(--text)' }}>{entry.pages}</b></span>}
+        {entry.days_requested != null
+          ? <span>asked for <b style={{ color: 'var(--text)' }}>{entry.days_requested}</b> days</span>
+          : null}
       </div>
+      {/* Where the rows went. A sync files each row under its own transaction month, so one pull lands on
+          as many cards as it spans — and the Import/Export page shows one card at a time, which makes an
+          `added` total that matches no visible card read as rows having gone missing. */}
+      {cards ? (
+        <div style={{ color: 'var(--muted)' }}>
+          rows filed on <span style={{ color: 'var(--text)' }}>{cards}</span>
+        </div>
+      ) : null}
       {statuses.length ? (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           <span style={{ color: 'var(--muted)' }}>status:</span>
@@ -2128,9 +2150,13 @@ function SyncLogRow({ entry }) {
           ))}
         </div>
       ) : null}
-      <div style={{ color: 'var(--muted)', fontFamily: 'monospace', fontSize: 11 }}>
-        cursor {entry.cursor_before || 'none'} → {entry.cursor_after || 'none'}
-      </div>
+      {checkpoint ? (
+        <div style={{ color: 'var(--muted)', fontSize: 11 }}>{checkpoint}</div>
+      ) : (
+        <div style={{ color: 'var(--muted)', fontFamily: 'monospace', fontSize: 11 }}>
+          cursor {entry.cursor_before || 'none'} → {entry.cursor_after || 'none'}
+        </div>
+      )}
       {entry.error ? (
         <div style={{ color: 'var(--danger)', fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-word' }}>{entry.error}</div>
       ) : null}
@@ -2164,7 +2190,11 @@ function syncLogAsText(entries, scopeLabel) {
   const lines = [`Luma connection sync log${scopeLabel ? ` — ${scopeLabel}` : ''} (${entries.length} calls, newest first)`, '']
   for (const e of entries) {
     lines.push(`${e.started_at || '?'}  ${e.institution || e.provider || 'connection'} [${e.provider || '?'}] ${e.mode || '?'}`)
-    lines.push(`  added ${e.added} · updated ${e.updated} · removed ${e.removed} · skipped ${e.skipped} · pages ${e.pages} · days_requested ${e.days_requested ?? '—'}`)
+    const requests = e.requested_windows?.length
+    lines.push(`  added ${e.added} · updated ${e.updated} · removed ${e.removed} · skipped ${e.skipped}`
+      + ` · ${requests ? `${requests} request(s)` : `pages ${e.pages}`} · asked for ${e.days_requested ?? '—'} days`)
+    const cards = cardSummary(e.card_counts, e.institution)
+    if (cards) lines.push(`  rows filed on ${cards}`)
     // Same reasoning as the rendered row: drop statuses the provider never reported. The completion
     // marker shared this line, so it is kept on its own rather than lost along with them.
     const statuses = (e.status_sequence || []).filter(s => s != null)
@@ -2173,6 +2203,12 @@ function syncLogAsText(entries, scopeLabel) {
       e.became_complete ? 'backfill complete' : null,
     ].filter(Boolean)
     if (state.length) lines.push(`  ${state.join(' · ')}`)
+    const checkpoint = [windowSummary(e.requested_windows), checkpointSummary(e.cursor_before, e.cursor_after)]
+      .filter(Boolean).join(' · ')
+    if (checkpoint) lines.push(`  ${checkpoint}`)
+    // The raw fingerprints stay in the pasteable copy even when the line above interpreted them: this text
+    // exists to be read by someone debugging, for whom "the token did not advance" is the finding, and an
+    // interpretation is a worse artifact than the value it was derived from.
     lines.push(`  cursor ${e.cursor_before || 'none'} → ${e.cursor_after || 'none'}`)
     if (e.error) lines.push(`  ERROR: ${e.error}`)
     for (const w of e.warnings || []) lines.push(`  WARNING: ${w}`)

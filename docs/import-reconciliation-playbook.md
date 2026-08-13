@@ -214,7 +214,10 @@ if none is on-date, the order lands in No charge found for manual linking.
 
 The matcher looks for an unlinked charge of the same amount within ±3 days, narrowed by whatever
 account signal the order carries: a **mapped funding source** pins it to that account; failing that the
-card's **last-4** rules out accounts whose mask disagrees. An order whose payments string names **no
+card's **last-4** rules out accounts whose mask disagrees. A funding source follows its account into a
+merge — if the card it names is later merged into another account (a reissued card, or a CSV-imported
+account merged into the synced one), the mapping keeps pointing at the same physical card and charges
+arriving on the surviving account still match. An order whose payments string names **no
 card at all** (a digital `D01` order, or one paid off-card) has neither — so the payee becomes the only
 remaining signal and the charge must at least *look* like Amazon (`AMZN`/`AMAZON`). Without that rule,
 amount + date alone would match any coincidental same-amount charge in the window, on any account.

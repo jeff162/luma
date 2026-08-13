@@ -33,7 +33,16 @@ from collections import Counter, defaultdict
 from datetime import date, timedelta
 from typing import NamedTuple
 
-from backend.services.categorizer import rule_matches_row
+from backend.services.account_groups import effective_account_id_sql
+from backend.services.categorizer import rule_matches_row, rule_scope_account_sql
+
+# `recurring_series.account_id` is a matching *scope*: "this series only owns rows on that account".
+# It is written as an already-effective (group-root) id, but a later merge can turn that root into a
+# child — at which point no transaction resolves to it any more and the series silently owns nothing.
+# Every read that compares or displays the scope projects it through this rather than reading the raw
+# column, which is what keeps the scope correct as the account graph changes (`account_groups.py`).
+# Requires the `recurring_series` table to be aliased `s`.
+SERIES_SCOPE_ACCOUNT_SQL = f"{effective_account_id_sql('s.account_id')} AS scope_account_id"
 
 # Canonical cadences: (name, period in days). Monthly/quarterly/etc. use average calendar lengths so a
 # calendar-aligned series (same day-of-month) still snaps cleanly despite 28–31-day months.
@@ -429,7 +438,7 @@ def _match_members(pool: list[dict], series: sqlite3.Row) -> list[dict]:
             continue
         if series["category_id"] is not None and row["category_id"] != series["category_id"]:
             continue
-        if series["account_id"] is not None and row["account_id"] != series["account_id"]:
+        if series["scope_account_id"] is not None and row["account_id"] != series["scope_account_id"]:
             continue
         if want_sign is not None and row["sign"] != want_sign:
             continue
@@ -554,7 +563,8 @@ def _load_series_rules(conn: sqlite3.Connection, series_list) -> dict:
         return {}
     placeholders = ",".join("?" * len(rule_ids))
     rows = conn.execute(
-        f"""SELECT id, keyword, match_expr, owner_id, account_id, account_type, amount_min, amount_max, debit_credit, match_source_text
+        f"""SELECT id, keyword, match_expr, owner_id, {rule_scope_account_sql()}, account_type,
+                   amount_min, amount_max, debit_credit, match_source_text
             FROM category_rule WHERE id IN ({placeholders})""",
         list(rule_ids),
     ).fetchall()
@@ -650,7 +660,9 @@ def link_series_members(conn: sqlite3.Connection, series_id: str, *, window_mont
     freshly created (or edited) series shows its members immediately instead of only after the next full
     scan. A single-series `reconcile_series` call — same matching, same never-steal-another-series'-row
     guard, scoped to this one series. Returns its member count."""
-    series = conn.execute("SELECT * FROM recurring_series WHERE id = ?", (series_id,)).fetchone()
+    series = conn.execute(
+        f"SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL} FROM recurring_series s WHERE s.id = ?", (series_id,)
+    ).fetchone()
     if series is None:
         return 0
     pool, _ = _load_pool(conn, window_months)
@@ -714,7 +726,8 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     # membership is the rule's matches, which can span payees a scoped pool doesn't contain, so scoping
     # them out would strand new members between full scans.
     existing = [
-        r for r in conn.execute("SELECT * FROM recurring_series").fetchall()
+        r for r in conn.execute(
+            f"SELECT s.*, {SERIES_SCOPE_ACCOUNT_SQL} FROM recurring_series s").fetchall()
         if payee_keys is None or r["payee_key"] in payee_keys or r["source"] == "rule"
     ]
     user_owned = [
@@ -749,7 +762,8 @@ def scan_and_store(conn: sqlite3.Connection, *, window_months: int = _WINDOW_MON
     def _covered_by_owned(cand):
         for r in user_owned:
             if (r["payee_key"] == cand["payee_key"] and r["category_id"] == cand["category_id"]
-                    and (r["account_id"] == cand["account_id"] or r["account_id"] is None or cand["account_id"] is None)):
+                    and (r["scope_account_id"] == cand["account_id"]
+                         or r["scope_account_id"] is None or cand["account_id"] is None)):
                 return True
         return False
 

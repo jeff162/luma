@@ -33,6 +33,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Optional
 
+from backend.services.account_groups import effective_account_id, effective_account_id_sql
+
 
 @dataclass
 class FundingResolution:
@@ -57,13 +59,19 @@ def resolve_funding_account(
     network: Optional[str],
 ) -> FundingResolution:
     """Resolve an instrument to a funding disposition, preferring a per-account override over the global
-    default. An instrument with no last-4 (a bare off-card leg) can't be keyed, so it is ``unmapped``."""
+    default. An instrument with no last-4 (a bare off-card leg) can't be keyed, so it is ``unmapped``.
+
+    The override scope matches on **group roots**, not raw ids: both the stored `amazon_account_id` and
+    the importing account are references that a merge can turn into children, and an override keyed to a
+    since-merged account would otherwise never be found again — silently demoting the order to the global
+    row or to unmapped (see ``services/account_groups.py``)."""
     if not last4:
         return FundingResolution("unmapped")
     net = normalize_network(network)
     scopes = []
-    if amazon_account_id:
-        scopes.append(("amazon_account_id = ?", (amazon_account_id,)))
+    scope_root = effective_account_id(conn, amazon_account_id)
+    if scope_root:
+        scopes.append((f"{effective_account_id_sql('amazon_account_id')} = ?", (scope_root,)))
     scopes.append(("amazon_account_id IS NULL", ()))
     for scope_clause, scope_params in scopes:
         row = conn.execute(
@@ -129,9 +137,16 @@ def delete_funding_source(conn: sqlite3.Connection, mapping_id: str) -> bool:
 
 def list_funding_map(conn: sqlite3.Connection) -> list[dict]:
     """All mappings, joined with account display names for the UI. Global rows first, then overrides;
-    within each, by instrument."""
+    within each, by instrument.
+
+    Both account ids are reported as their **group roots**. The stored id can name an account that was
+    later merged into another, and the settings picker offers top-level accounts only — so reporting the
+    raw child would render a live mapping as an empty picker, reading as "unmapped" when it is anything
+    but. The matcher resolves the same way, so what the UI shows is what the search will use."""
     rows = conn.execute(
-        """SELECT m.id, m.last4, m.network, m.amazon_account_id, m.funding_account_id,
+        f"""SELECT m.id, m.last4, m.network,
+                  {effective_account_id_sql('m.amazon_account_id')}  AS amazon_account_id,
+                  {effective_account_id_sql('m.funding_account_id')} AS funding_account_id,
                   fa.display_name AS funding_account_display, fa.name AS funding_account_name,
                   aa.display_name AS amazon_account_display, aa.name AS amazon_account_name
            FROM   amazon_funding_map m

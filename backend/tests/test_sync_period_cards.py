@@ -302,6 +302,36 @@ class SyncPeriodCardTests(unittest.TestCase):
             ).fetchone()["c"]
             self.assertEqual(total, 1, "no duplicate row for the posted transaction")
 
+    def test_a_pending_row_resent_under_its_own_id_re_dates_rather_than_only_unflagging(self):
+        # The other shape of pending→posted, and the one a provider with no pending pointer produces: the
+        # settled charge comes back as the *same* transaction id, so it lands on the already-held branch
+        # rather than the in-place conversion above. That branch used to flip `is_pending` and nothing else,
+        # which is invisible until the two versions disagree about something — and they always do about the
+        # date, since a pending charge has no posted date to report and is filed under when it happened.
+        with self._driven_sync([self._txn("s1", -20.24, "Bakeshop", day="2026-08-11", pending=True)]) as res:
+            self.assertEqual(res["added"], 1)
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "UPDATE txn SET display_name = 'My Bakery', display_name_source = 'manual' "
+                "WHERE external_transaction_id = 's1'"
+            )
+            before = conn.execute("SELECT content_hash FROM txn WHERE external_transaction_id = 's1'").fetchone()
+        settled = self._txn("s1", -21.00, "Bakeshop", day="2026-08-13", pending=False)
+        with self._driven_sync([settled], on_date="2026-08-13") as res:
+            self.assertEqual(res["added"], 0, "the same id is not a second transaction")
+            self.assertEqual(res["updated"], 1)
+        with self._use_db_path(), get_db() as conn:
+            row = conn.execute(
+                "SELECT date, amount, is_pending, display_name, content_hash FROM txn "
+                "WHERE external_transaction_id = 's1'"
+            ).fetchone()
+        self.assertEqual(row["date"], "2026-08-13")     # the posted date now that there is one
+        self.assertEqual(row["amount"], -21.00)         # a pending amount can be an estimate
+        self.assertEqual(row["is_pending"], 0)
+        self.assertEqual(row["display_name"], "My Bakery")  # user rename preserved
+        self.assertNotEqual(row["content_hash"], before["content_hash"],
+                            "the hash is derived from the date and must not keep describing the pending row")
+
     def test_a_zero_amount_row_is_kept_so_its_settlement_has_somewhere_to_land(self):
         # Why sync must NOT filter $0 rows, even though CSV import rejects them (core.py, and the
         # zero-amount invariant in the sync module docstring — read it before "cleaning this up").

@@ -58,11 +58,18 @@ class Txn:
     """
 
     def __init__(self, txn_id, account, posted, amount, description,
-                 memo=None, payee=None, transacted_at=None, pending=False, mcc=None):
+                 memo=None, payee=None, transacted_at=None, pending=False, mcc=None,
+                 unposted=False):
         self.id = txn_id
         self.account = account
         self.posted = posted
         self.transacted_at = transacted_at or posted
+        # A charge that has not posted has no posting instant, and the protocol requires the field — so the
+        # server sends `posted: 0` rather than omitting it. The row still has to be *findable*, though: the
+        # bank files it under the date it does have, so the instant this fixture filters on and the value it
+        # puts on the wire diverge here, and only here. Without this the pending case can only be written as
+        # a row with a real posting date, which is the one shape a pending row never has.
+        self.unposted = unposted
         # The instant the server would filter on. Kept alongside the readable date because a transaction
         # posted at 23:30 and one posted at midnight sit on the same *date* but on opposite sides of a
         # window bound expressed as a timestamp — which is how the protocol expresses it.
@@ -81,7 +88,7 @@ class Txn:
     def as_payload(self) -> dict:
         out = {
             "id": self.id,
-            "posted": self.posted_epoch,
+            "posted": 0 if self.unposted else self.posted_epoch,
             "transacted_at": epoch(self.transacted_at),
             "amount": self.amount,
             "description": self.description,
@@ -345,9 +352,11 @@ def _deliberate_patterns(accounts, end):
 
     # Pending, and the same charge once it posts under a *different* id — which is how a provider with no
     # pending-to-posted pointer expresses it. Nothing else in the fixture makes a sync see the same real
-    # world event twice under two identities.
+    # world event twice under two identities. The pending half carries `posted: 0` because that is what a
+    # real pending row carries; giving it a posting date instead made every test here agree that dates
+    # always arrive, and the one date that does not arrive is the whole difficulty of a pending row.
     rows.append(Txn("pending-1", primary, at(2), "-64.10", "Pending charge",
-                    memo="PENDING CHARGE", payee="Hardware Store", pending=True))
+                    memo="PENDING CHARGE", payee="Hardware Store", pending=True, unposted=True))
     rows.append(Txn("posted-of-pending-1", primary, at(1), "-64.10", "Pending charge",
                     memo="PENDING CHARGE", payee="Hardware Store"))
 

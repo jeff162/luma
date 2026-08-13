@@ -22,6 +22,8 @@ from __future__ import annotations
 import sqlite3
 from typing import Iterable
 
+from backend.services.account_groups import effective_account_id_sql
+
 
 VISIBLE_TXN_TAG_SQL = "(tt.manual_state = 1 OR (tt.manual_state = 0 AND tt.rule_present = 1))"
 
@@ -34,8 +36,10 @@ _SOURCE_PRIORITY = {"account": 0, "group": 1, "category": 2, "direct": 3}
 
 # A transaction's account tags come from its *effective* (top-level) account: a child account
 # resolves to its parent, so a parent's tags propagate to children's transactions while a child's
-# own tags stay dormant while merged.
-_EFFECTIVE_ACCOUNT_ID_SQL = "COALESCE((SELECT parent_account_id FROM account WHERE id = t.account_id), t.account_id)"
+# own tags stay dormant while merged. Only the *row* side resolves here — `account_tag.account_id`
+# names one specific account row and is deliberately left raw, which is what makes a child's tags
+# dormant rather than merged into the parent's (see `services/account_groups.py`).
+_EFFECTIVE_ACCOUNT_ID_SQL = effective_account_id_sql("t.account_id")
 
 
 # Synthetic tag-filter selection: "rows with no effective tag at all" (the complement of having any

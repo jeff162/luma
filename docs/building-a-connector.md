@@ -22,6 +22,7 @@ all ones that shipped, and every one of them was silent.
 * [Capability declarations](#capability-declarations)
 * [Transaction ids must be globally unique](#transaction-ids-must-be-globally-unique)
 * [Zero-amount rows](#zero-amount-rows)
+* [Dates a source does not have](#dates-a-source-does-not-have)
 * [Currency](#currency)
 * [Request budgets and pausing](#request-budgets-and-pausing)
 * [Coverage claims](#coverage-claims)
@@ -99,7 +100,7 @@ own separate row, and duplicate detection cannot pair the two because their amou
 | Source | Policy | Why |
 | --- | --- | --- |
 | Plaid | `keep` | Revises in place, via `modified` and `pending_transaction_id`. |
-| SimpleFIN | `reject` | No change feed, no pending pointer; a settling charge arrives under a *new* id, stranding the placeholder. |
+| SimpleFIN | `reject` | No change feed and no pending pointer, so nothing *guarantees* reachability: a settling charge is sometimes re-sent under its original id (observed live) and sometimes arrives as a new one, stranding the placeholder. A revision that may or may not find the row cannot carry a policy whose whole premise is that it will. |
 | CSV / PayPal | `reject` | No identity carries between files, so nothing can ever revise the placeholder. |
 | Amazon | `keep` | A $0 order is a finished record; reconciliation would otherwise read it as an order whose charge was not found. |
 
@@ -114,6 +115,31 @@ inherit another source's reasoning.
 
 A refusal is only acceptable while it stays visible — see
 [Reporting what was refused](#reporting-what-was-refused).
+
+## Dates a source does not have
+
+A **required** protocol field is not a promise that it carries a value. Where the protocol makes a field
+mandatory and the source has nothing to put in it, the field does not go missing — it degrades into a
+**sentinel**, and a numeric sentinel converts without raising anything. SimpleFIN's `posted` is required
+and reads `0` for a charge that has not posted, which `datetime.fromtimestamp` turns into a perfectly
+well-formed 1970-01-01. Nothing errors, nothing is logged, and the row lands in the ledger sorting before
+every other transaction, inside no report period, unreachable by every date test in the duplicate ladder,
+and filed on a sync card labelled "January 1970".
+
+So an adapter must decide, per date field, **which values mean "absent"** — not only a missing key. Then:
+
+* Prefer the field the ledger actually reports on (`posted`), and **fall back** to the other date the
+  source publishes (`transacted_at`) rather than to nothing. A pending row is ledger content, and the date
+  it *does* have is when the charge was made.
+* Never synthesize a date from the import time or a window bound. A fabricated date is indistinguishable
+  from a real one; a dropped row is at least honest, and a row with no usable date anywhere is dropped.
+* Where the settled version of a row can arrive later, the sync must **re-stamp** the date, not merely
+  clear the pending flag — see `_refresh_provider_fields` in `routers/sync.py`. A field written from a
+  provisional version of a row is provisional until the row is superseded.
+
+The corresponding trap on the fixture side is that a simulator is written from what a source *documents*.
+The captured demo data and the first version of `_simplefin_sim.py` gave every pending row a real posting
+timestamp, so the entire class was invisible to a test suite that otherwise covered pending rows well.
 
 ## Currency
 

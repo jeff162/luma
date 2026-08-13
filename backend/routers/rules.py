@@ -21,6 +21,7 @@ from backend.services.categorizer import (
     merchant_matcher_matches,
     match_expr_clause_texts,
     bump_rule_effect_dates,
+    rule_scope_account_sql,
 )
 from backend.services.recurring_detection import CADENCES, link_series_members, _normalize_payee
 from backend.services.transaction_tags import sync_rule_tags_for_transaction, would_sync_rule_tags_change, get_visible_transaction_tag_map
@@ -148,8 +149,9 @@ def _find_matching_rule(conn, txn):
     fallback_rule_id = None
     for rule in rules:
         full_rule = conn.execute(
-            """
-            SELECT id, keyword, match_expr, amount_min, amount_max, debit_credit, owner_id, account_id, account_type, category_id, clean_name, match_source_text
+            f"""
+            SELECT id, keyword, match_expr, amount_min, amount_max, debit_credit, owner_id,
+                   {rule_scope_account_sql()}, account_type, category_id, clean_name, match_source_text
             FROM category_rule
             WHERE id = ?
             """,
@@ -208,7 +210,8 @@ def _apply_rule_to_existing(conn, rule_id: str, *, preserve_manual: bool = False
     # when accepting an import-rule suggestion so the rule's outputs land on exactly the rows that
     # generated it, leaving conflicting rows for other suggestions alone.
     rule = conn.execute(
-        """SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name, owner_id, account_id, account_type, match_source_text
+        f"""SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name,
+                   owner_id, {rule_scope_account_sql()}, account_type, match_source_text
            FROM category_rule
            WHERE id = ?""",
         (rule_id,),
@@ -433,8 +436,8 @@ def rule_matches(rule_id: str):
     page. Returns the true total `count` plus up to `_RULE_MATCHES_ROW_LIMIT` of the newest matched rows."""
     with get_db() as conn:
         rule = conn.execute(
-            """SELECT id, keyword, match_expr, amount_min, amount_max, debit_credit, owner_id, account_id,
-                      account_type, category_id, clean_name, match_source_text
+            f"""SELECT id, keyword, match_expr, amount_min, amount_max, debit_credit, owner_id,
+                      {rule_scope_account_sql()}, account_type, category_id, clean_name, match_source_text
                FROM category_rule WHERE id = ?""",
             (rule_id,),
         ).fetchone()
@@ -917,8 +920,8 @@ def update_rule(rule_id: str, body: RuleUpdate, on_existing: Literal["reject", "
         if reconcile:
             affected_ids = set(affected)
             post_rule = conn.execute(
-                """SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name,
-                          owner_id, account_id, account_type, match_source_text
+                f"""SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name,
+                          owner_id, {rule_scope_account_sql()}, account_type, match_source_text
                    FROM category_rule WHERE id = ?""",
                 (rule_id,),
             ).fetchone()
@@ -979,8 +982,8 @@ def _trash_rule(conn, rule_id: str, *, reconcile: bool = False) -> None:
     affected: list[str] = []
     if reconcile:
         rule = conn.execute(
-            """SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name,
-                      owner_id, account_id, account_type, match_source_text
+            f"""SELECT id, keyword, match_expr, category_id, amount_min, amount_max, debit_credit, clean_name,
+                      owner_id, {rule_scope_account_sql()}, account_type, match_source_text
                FROM category_rule WHERE id = ? AND deleted_at IS NULL""",
             (rule_id,),
         ).fetchone()

@@ -251,6 +251,55 @@ class SyncDiagnosticsLogTests(unittest.TestCase):
         self.assertEqual(self._advisories(self._log_rows()[0]), [])
         self.assertIsNone(self._log_rows()[0]["advisories"])
 
+    # ---- what the counts alone cannot say ---------------------------------
+
+    def test_the_cards_the_rows_landed_on_are_named_alongside_the_total(self):
+        # `added` is one number, but a sync files each row under its own transaction month, so a pull
+        # spanning a month boundary writes to two cards — and the Import/Export page shows one at a time.
+        # Without this a correct total reconciles against no visible card and reads as rows going missing.
+        # Past the initial backfill, which is the one pull that deliberately keeps everything on one card.
+        with self._use_db_path(), get_db() as conn:
+            conn.execute(
+                "UPDATE connection SET initial_sync_complete = 1, transactions_cursor = 'c0' WHERE id = ?",
+                (self.CONNECTION_ID,),
+            )
+        with self._driven_sync(pages=[{
+            "added": [dict(self._txn("t1"), date="2026-07-30"),
+                      dict(self._txn("t2"), date="2026-08-09"),
+                      dict(self._txn("t3"), date="2026-08-10")],
+            "has_more": False, "update_status": _DONE,
+        }]):
+            pass
+        row = self._log_rows()[0]
+        self.assertEqual(row["added"], 3)
+        cards = json.loads(row["card_counts"])
+        # Ordered by size so the card that took the bulk of a pull is the one read first.
+        self.assertEqual([(c["card"].split(" · ")[-1], c["added"]) for c in cards],
+                         [("August 2026", 2), ("July 2026", 1)])
+
+    def test_the_requested_date_ranges_are_recorded_when_the_adapter_reports_them(self):
+        with self._driven_sync(pages=[{
+            "added": [], "has_more": False, "update_status": _DONE,
+            "requested_windows": [{"start": "2026-08-05", "end": "2026-08-12"}],
+        }]):
+            pass
+        self.assertEqual(json.loads(self._log_rows()[0]["requested_windows"]),
+                         [{"start": "2026-08-05", "end": "2026-08-12"}])
+
+    def test_an_adapter_that_names_no_window_records_none_rather_than_failing(self):
+        # A cursor provider asks for "everything since this token" and has no window to report; the key is
+        # simply absent from its page, exactly as `advisories` is for an adapter predating that field.
+        with self._driven_sync():
+            pass
+        self.assertIsNone(self._log_rows()[0]["requested_windows"])
+
+    def test_a_pull_that_added_nothing_names_no_card(self):
+        # An empty list is stored as NULL rather than "[]", matching every other optional column here, so
+        # a reader cannot mistake "recorded, and it was nothing" for "recorded nothing".
+        with self._driven_sync():
+            pass
+        self.assertIsNone(self._log_rows()[0]["card_counts"])
+
     # ---- the provider-agnostic notices -----------------------------------
     #
     # Driven through the Plaid-shaped fake on purpose. These are the sync layer's own notices, not any

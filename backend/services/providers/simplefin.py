@@ -278,9 +278,25 @@ def _check_payload(payload: dict, *, context: str) -> tuple[list[str], list[dict
 
 
 def _epoch_to_iso_date(value) -> str | None:
+    """A protocol timestamp as an ISO date, or None where the field carries no date at all.
+
+    **Zero is not midnight on 1 January 1970, it is "no such instant exists yet".** `posted` is required on
+    every transaction, so a server with nothing to put there sends 0 rather than omitting the field — which
+    is precisely what a *pending* charge looks like, since it has not posted. Converting that literally
+    fails silently and completely: `int(0)` raises nothing, so the row enters the ledger dated 1970-01-01,
+    sorts before every other transaction, falls outside every report period, and names the sync's period
+    card "January 1970". Anything non-positive is therefore read as absent, leaving the caller to decide
+    what an undated row should do — which is the only place that knows.
+    """
     try:
-        return datetime.fromtimestamp(int(value), tz=timezone.utc).date().isoformat()
-    except (TypeError, ValueError, OSError, OverflowError):
+        epoch = int(value)
+    except (TypeError, ValueError):
+        return None
+    if epoch <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(epoch, tz=timezone.utc).date().isoformat()
+    except (OSError, OverflowError, ValueError):
         return None
 
 
@@ -518,6 +534,11 @@ class SimpleFinAdapter(ProviderAdapter):
 
     @staticmethod
     def _normalize_txn(account_external_id: str, t: dict) -> dict:
+        posted_date = _epoch_to_iso_date(t.get("posted"))
+        # When the charge was made, as against when it posted — the field duplicate detection values most,
+        # because two sources for one charge routinely report different ones of the two. It is also the
+        # only date a pending row has, which is why it is read before the mapping rather than inside it.
+        transacted_date = _epoch_to_iso_date(t.get("transacted_at"))
         return {
             # **Namespaced by account, exactly as the account id itself is namespaced by provider.** The
             # ledger treats `external_transaction_id` as globally unique (a UNIQUE column, and every sync
@@ -541,17 +562,22 @@ class SimpleFinAdapter(ProviderAdapter):
             # hover both read this, and the store number a cleaned label drops is exactly the detail that
             # tells two similar charges apart and matches a CSV's own raw column.
             "raw_name":                (t.get("memo") or "").strip() or t.get("description"),
-            "date":                    _epoch_to_iso_date(t.get("posted")),
-            # When the charge was made, as against when it posted — the field duplicate detection values
-            # most, because two sources for one charge routinely report different ones of the two.
-            "authorized_date":         _epoch_to_iso_date(t.get("transacted_at")),
+            # The posted date where the charge has posted, and the transaction date while it is still
+            # pending. A pending row needs a real date for the same reason it is imported at all: it is
+            # ledger content, showing money already committed, and every date test in the duplicate ladder
+            # works within a few days of a charge's actual date — so a row dated decades away is invisible
+            # to the ladder and to every report. The settled version arrives under the same id and the sync
+            # re-stamps this with the true posted date then. Both absent leaves it None, which
+            # `_fetch_window` drops: a row with no date anywhere has nothing to file it under.
+            "date":                    posted_date or transacted_date,
+            "authorized_date":         transacted_date,
             "is_pending":              bool(t.get("pending")),
         }
 
     def _fetch_window(self, credential: str, start: date, end: date,
                       account_ids: list[str] | None = None,
                       ledger_currency: str = DEFAULT_LEDGER_CURRENCY,
-                      *, end_of_day: bool,
+                      *, end_of_day: bool, requested: list | None = None,
                       ) -> tuple[list[dict], list[str], list[dict], dict[str, str]]:
         """One request: transactions in one window, the non-fatal problems reported alongside them split
         into `(warnings, advisories)`, and the accounts whose rows were discarded for being in another
@@ -578,6 +604,14 @@ class SimpleFinAdapter(ProviderAdapter):
         # provider transaction id) but not free, since it inflated every response by a day and, because the
         # bounds are instants, stretched a nominal N-day window to N days plus 23:59:59 on the wire — which
         # is what made a 45-day walk trip the server's own 45-day range advisory.
+        # Recorded here because this is the one place every dated request passes through, so a window can
+        # never be asked for without being reported. What it feeds is the sync log: "which days did this
+        # actually go and look at" is the question a walking, budgeted adapter leaves open, and the resume
+        # checkpoint alone cannot answer it — the checkpoint says where the pull *ended up*, not what it
+        # asked for on the way. The two differ exactly when it matters, since a pull that stops on its
+        # budget moves its frontier less far than the requests it spent would suggest.
+        if requested is not None:
+            requested.append({"start": start.isoformat(), "end": end.isoformat()})
         end_time = datetime.max.time() if end_of_day else datetime.min.time()
         params = {
             "start-date": int(datetime.combine(start, datetime.min.time(), tzinfo=timezone.utc).timestamp()),
@@ -660,7 +694,8 @@ class SimpleFinAdapter(ProviderAdapter):
         return True
 
     def _fetch_recent(self, credential: str, state: dict, today: date, warnings: dict,
-                      advisories: dict, dropped: dict[str, str], ledger_currency: str) -> list[dict]:
+                      advisories: dict, dropped: dict[str, str], ledger_currency: str,
+                      requested: list | None = None) -> list[dict]:
         """The recent window — one request, overlapping what is already held.
 
         The overlap is the provider's own guidance and covers a real case: a transaction can post with a
@@ -674,7 +709,7 @@ class SimpleFinAdapter(ProviderAdapter):
             credential, window_start, today, ledger_currency=ledger_currency,
             # The top-up is always the newest bound there is, so its end runs to the close of today —
             # otherwise every sync would miss whatever posted since midnight and never come back for it.
-            end_of_day=True)
+            end_of_day=True, requested=requested)
         warnings.update(dict.fromkeys(window_warnings))
         _merge_advisories(advisories, window_advisories)
         dropped.update(window_dropped)
@@ -683,7 +718,8 @@ class SimpleFinAdapter(ProviderAdapter):
 
     def _walk_history(self, credential: str, state: dict, targets: list[dict], today: date,
                       warnings: dict, advisories: dict, dropped: dict[str, str],
-                      ledger_currency: str) -> tuple[list[dict], dict, bool]:
+                      ledger_currency: str, requested: list | None = None,
+                      ) -> tuple[list[dict], dict, bool]:
         """Walk backward until every targeted account has reached its requested depth or run out of history.
 
         One loop serves every case there is — a first backfill, a deepening pull, and an account that joined
@@ -731,7 +767,7 @@ class SimpleFinAdapter(ProviderAdapter):
                 # the previous window of this run, or, for an account resuming from a stored `reached`, the
                 # window that reached it (which ran from that date's midnight forward). Today is the one
                 # exception: on a fresh account the first window ends there with nothing after it.
-                end_of_day=window_end == today,
+                end_of_day=window_end == today, requested=requested,
             )
             warnings.update(dict.fromkeys(window_warnings))
             # Counted rather than set-deduped: a walk provokes the same advisory on every one of its ~24
@@ -784,6 +820,10 @@ class SimpleFinAdapter(ProviderAdapter):
         # Accounts whose rows this pull discarded for being in another currency. Accumulated across every
         # window rather than per window, since one account's denomination does not change between them.
         dropped_currency: dict[str, str] = {}
+        # Every dated request this call makes, in the order made. Diagnostic only — nothing decides anything
+        # from it — but it is the one record of what was actually asked for, which neither the row counts nor
+        # the resume checkpoint can reconstruct.
+        requested_windows: list[dict] = []
 
         if account_targets:
             # Where the walk will begin: the newest point any account still wants data from.
@@ -799,7 +839,7 @@ class SimpleFinAdapter(ProviderAdapter):
                 if self._spend(state, today):
                     added.extend(self._fetch_recent(
                         credential, state, today, warnings, advisories, dropped_currency,
-                        ledger_currency))
+                        ledger_currency, requested_windows))
                 else:
                     resume_later = True
             else:
@@ -809,13 +849,14 @@ class SimpleFinAdapter(ProviderAdapter):
 
             walk_added, coverage, walk_resume = self._walk_history(
                 credential, state, account_targets, today, warnings, advisories, dropped_currency,
-                ledger_currency,
+                ledger_currency, requested_windows,
             )
             added.extend(walk_added)
             resume_later = resume_later or walk_resume
         elif self._spend(state, today):
             added.extend(self._fetch_recent(
-                credential, state, today, warnings, advisories, dropped_currency, ledger_currency))
+                credential, state, today, warnings, advisories, dropped_currency, ledger_currency,
+                requested_windows))
         else:
             resume_later = True
 
@@ -850,6 +891,10 @@ class SimpleFinAdapter(ProviderAdapter):
             "resume_later":  resume_later,
             # Per account, and only what this pull actually reached — never what it set out to reach.
             "account_coverage": coverage,
+            # The date ranges this call actually asked the server for. Optional in the page contract, and
+            # meaningful only for an adapter that pulls ranges: a cursor provider asks for "everything since
+            # this token" and has no window to report.
+            "requested_windows": requested_windows,
             # Banks on this access URL that reported a problem while the others delivered normally.
             "warnings": list(warnings),
             # What the server said about *our* requests — a range it considers too wide, and so on. Never

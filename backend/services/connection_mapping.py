@@ -41,6 +41,7 @@ import sqlite3
 import uuid
 from typing import Optional
 
+from backend.services.account_groups import effective_account_id
 from backend.services.import_evidence import EVIDENCE_ROLE_CATEGORICAL
 from backend.services.ledger_currency import currency_matches, get_ledger_currency
 from backend.time_utils import utcnow_iso
@@ -162,24 +163,6 @@ def unmapped_count(conn: sqlite3.Connection, connection_id: Optional[str] = None
     ).fetchone()["n"] or 0)
 
 
-def _effective_account_root(conn, account_id: Optional[str]) -> Optional[str]:
-    """The top of `account_id`'s linked group — the id the dedupe ladder scopes a row by.
-
-    A local walk rather than `duplicate_detection.get_effective_account_row`, which would be the
-    natural reuse: that module imports *this* one (for `provider_account_label`), so importing it back
-    is a cycle. The walk is bounded by a visited set so a corrupt parent loop can't hang a request.
-    """
-    current = str(account_id or "").strip()
-    seen: set[str] = set()
-    while current and current not in seen:
-        seen.add(current)
-        row = conn.execute("SELECT parent_account_id FROM account WHERE id = ?", (current,)).fetchone()
-        if not row or not row["parent_account_id"]:
-            return current
-        current = str(row["parent_account_id"])
-    return current or None
-
-
 def _link_account_to_connection(conn, *, account_id: str, connection_id: str, provider: str,
                                 external_account_id: str) -> None:
     """Stamp the provider linkage onto a local account so sync resolves rows into it.
@@ -287,7 +270,7 @@ def apply_account_mapping(conn: sqlite3.Connection, *, connection_id: str, provi
             # nothing else resolves to. The CSV import path does the same
             # (`_attach_import_created_account_to_group` resolves the effective row first).
             if mode == "group" and target_account_id:
-                target_account_id = _effective_account_root(conn, target_account_id) or target_account_id
+                target_account_id = effective_account_id(conn, target_account_id) or target_account_id
             # Whenever a local account already holds this provider handle, it IS this provider
             # account locally — so reuse it rather than creating a second one. That covers the
             # obvious case (re-applying an unchanged mapping must not duplicate the account) and the
@@ -448,7 +431,7 @@ def dedupe_inputs_for_connection(conn: sqlite3.Connection, connection_id: str) -
             # CSV import's group attachment produces (`_attach_import_created_account_to_group`
             # returns the root and it becomes the compare target). No alias: grouping says "related",
             # not "the same physical account".
-            root = _effective_account_root(conn, r["account_id"])
+            root = effective_account_id(conn, r["account_id"])
             if root:
                 compare_targets[label] = root
 

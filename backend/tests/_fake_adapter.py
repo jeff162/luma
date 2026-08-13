@@ -63,6 +63,10 @@ class FakeCursorAdapter(ProviderAdapter):
             # field — which the sync loop must tolerate, since the contract's default lives in the base
             # class and an override is free not to copy it.
             **({"advisories": page["advisories"]} if "advisories" in page else {}),
+            # Same reasoning, and doubly so here: a cursor provider genuinely has no window to name, so
+            # absent is this fake's *correct* answer and a page scripts the key only to model an adapter
+            # that does pull ranges.
+            **({"requested_windows": page["requested_windows"]} if "requested_windows" in page else {}),
         }
 
     def connect(self, app_config, payload):

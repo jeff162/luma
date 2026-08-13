@@ -42,6 +42,7 @@ from pydantic import BaseModel
 
 from backend.db.database import get_db, get_tenant_workflow_state, set_tenant_workflow_state
 from backend.services import amazon_funding, txn_links
+from backend.services.account_groups import account_group_member_ids, effective_account_id
 from backend.services.transfer_categories import ensure_excluded_transfers_leaf
 from backend.services.amazon_import import (
     AmazonItem,
@@ -112,9 +113,11 @@ def find_matching_charge(
     leg), so it never matches — otherwise it would pair with any stray $0 row.
 
     ``restrict_account_id`` is the authoritative funding-source → account map's answer (see
-    ``amazon_funding``): when set, the search is constrained to that one account, and the last-4 clause is
-    dropped entirely — the map already says which account, and narrowing to it is exactly what resolves an
-    otherwise-ambiguous same-amount collision across accounts. When it is **not** set (an unmapped
+    ``amazon_funding``): when set, the search is constrained to that account's **group**, and the last-4
+    clause is dropped entirely — the map already says which account, and narrowing to it is exactly what
+    resolves an otherwise-ambiguous same-amount collision across accounts. The group rather than the bare
+    id because the map stores a plain account id that a later merge can turn into a child, after which the
+    charges arrive on the parent (see ``services/account_groups.py``). When it is **not** set (an unmapped
     instrument), the card's last-4 is a *disambiguator among accounts that carry a mask*, not a hard
     requirement: a maskless account (e.g. CSV-imported, no card number on file) can't contradict the
     last-4, so it stays eligible and is carried by the amount + date + uniqueness guard instead. Without
@@ -154,15 +157,19 @@ def _charge_candidate_ids(conn: sqlite3.Connection, *, amount, match_date, last4
         "NOT EXISTS (SELECT 1 FROM txn_link_member m WHERE m.txn_id = t.id)",
     ]
     params: list = [round(amount, 2)]
+    # Both account constraints compare *group roots*, never raw ids: the Amazon account and the mapped
+    # funding account are both stored ids that a merge can turn into children, while the charges keep
+    # arriving on whichever account is the root. `COALESCE(a.parent_account_id, a.id)` reuses the join
+    # this query already has (`effective_account_id_sql` is the same resolution as a subquery).
     if exclude_account_id:
-        clauses.append("t.account_id != ?")
-        params.append(exclude_account_id)
+        clauses.append("COALESCE(a.parent_account_id, a.id) != ?")
+        params.append(effective_account_id(conn, exclude_account_id))
     if match_date:
         clauses.append("ABS(julianday(t.date) - julianday(?)) <= ?")
         params += [match_date, window_days]
     if restrict_account_id:
-        clauses.append("t.account_id = ?")
-        params.append(restrict_account_id)
+        clauses.append("COALESCE(a.parent_account_id, a.id) = ?")
+        params.append(effective_account_id(conn, restrict_account_id))
     elif last4:
         clauses.append("(COALESCE(p.mask, a.mask) = ? OR COALESCE(p.mask, a.mask) IS NULL OR COALESCE(p.mask, a.mask) = '')")
         params.append(last4)
@@ -1098,13 +1105,18 @@ def _txn_summary(conn: sqlite3.Connection, txn_id: str) -> Optional[dict]:
 
 def _charge_accounts(conn: sqlite3.Connection, seed_accounts) -> set:
     """The accounts Amazon charges land on: the given seed (this batch's matched-charge accounts) plus every
-    globally-mapped funding account. The shared search space for the reverse scan and duplicate detection."""
+    globally-mapped funding account. The shared search space for the reverse scan and duplicate detection.
+
+    Expanded to whole account *groups* because the pool is expressed as `t.account_id IN (...)`: a mapped
+    funding account that has since been merged names a child no charge lands on any more, so without the
+    expansion an unmatched order gets neither a split suggestion nor an "unaccounted charge" listing —
+    the charge is simply invisible to the report (see ``services/account_groups.py``)."""
     accounts = set(seed_accounts)
     for r in conn.execute(
         "SELECT DISTINCT funding_account_id FROM amazon_funding_map WHERE funding_account_id IS NOT NULL"
     ).fetchall():
         accounts.add(r["funding_account_id"])
-    return {a for a in accounts if a}
+    return account_group_member_ids(conn, accounts)
 
 
 def _amazon_charge_pool(conn, order_dates: list[str], seed_accounts: set, window_days: int) -> list[dict]:
@@ -2482,14 +2494,18 @@ def _scan_instruments(conn, orders, account_id: Optional[str]) -> list[dict]:
             conn, account_id, disposition.match_last4, disposition.match_network
         )
         account_name = None
-        if funding.state == "mapped" and funding.funding_account_id:
+        # Reported as the group root, matching what the search will actually constrain to and what the
+        # scan dialog's (top-level-only) picker can preselect — see `amazon_funding.list_funding_map`.
+        mapped_account_id = (effective_account_id(conn, funding.funding_account_id)
+                             if funding.state == "mapped" else funding.funding_account_id)
+        if mapped_account_id:
             row = conn.execute(
-                "SELECT display_name, name FROM account WHERE id = ?", (funding.funding_account_id,)
+                "SELECT display_name, name FROM account WHERE id = ?", (mapped_account_id,)
             ).fetchone()
             if row:
                 account_name = row["display_name"] or row["name"]
         seen[key] = {**inst, "state": funding.state,
-                     "funding_account_id": funding.funding_account_id, "funding_account_name": account_name}
+                     "funding_account_id": mapped_account_id, "funding_account_name": account_name}
     return list(seen.values())
 
 

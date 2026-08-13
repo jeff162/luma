@@ -177,7 +177,7 @@ class ProviderAdapter(ABC):
 
             {added:[txn…], modified:[txn…], removed:[external_transaction_id…], next_cursor, has_more,
              update_status, backfill_complete, resume_later, account_coverage, warnings, advisories,
-             unsupported_currency}
+             unsupported_currency, requested_windows}
 
         Each `added` / `modified` transaction dict is the same shape as `fetch_transactions` returns, plus
         `pending_external_transaction_id`: when a posted transaction supersedes a pending one, this holds the
@@ -251,6 +251,12 @@ class ProviderAdapter(ABC):
         the depth it requested — correct for a cursor provider, whose maintained window really is the
         requested one.
 
+        `requested_windows` is `[{"start": iso_date, "end": iso_date}]` — the date ranges this call actually
+        asked the provider for, in the order asked. Purely diagnostic: it exists because a walking, budgeted
+        adapter can make many requests inside one call and stop partway, so neither the rows returned nor
+        the resume checkpoint can reconstruct what was looked at. Optional, and empty for a cursor provider,
+        which asks for "everything since this token" and has no window to name.
+
         Reporting per account rather than per connection is not tidiness. One figure applied to every
         account over-claims the moment a pull covers some of them and not others, and an overstated coverage
         claim makes duplicate detection **reject genuine transactions** that fall in a range nothing ever
@@ -285,6 +291,7 @@ class ProviderAdapter(ABC):
             # An adapter that cannot report an account's denomination cannot know it dropped anything for
             # it, so the default is silence rather than a claim that everything was in the ledger's currency.
             "unsupported_currency": {},
+            "requested_windows": [{"start": start.isoformat(), "end": end.isoformat()}],
         }
 
     def capture_fields(self) -> list[dict]:

@@ -258,6 +258,29 @@ def _cursor_fingerprint(cursor: str | None) -> str | None:
     return ", ".join(parts) if parts else f"len={len(cursor)}"
 
 
+def _card_counts(conn, card_added: dict, baseline: dict) -> list[dict]:
+    """What this connection's pull wrote, per import card.
+
+    `added` is one number for a whole call, but a sync files each row under its **own transaction month**,
+    so one pull routinely lands on two or three cards — while the history page shows one card at a time. A
+    total that reconciles against no card on screen reads as rows having gone missing, and the only way to
+    tell that story straight is to name the cards and what each received.
+
+    Differenced against a baseline snapshot rather than read directly, because the tallies accumulate across
+    every connection in the call and this row describes one of them."""
+    out = []
+    for card_id, n in card_added.items():
+        delta = n - baseline.get(card_id, 0)
+        if delta <= 0:
+            continue
+        row = conn.execute("SELECT filename FROM import_batch WHERE id = ?", (card_id,)).fetchone()
+        # The filename is the card's user-visible label ("SimpleFIN Bridge · August 2026"), which is the
+        # whole point: this has to be matchable by eye against the history page. The id is a last resort for
+        # a card deleted between the write and the read.
+        out.append({"card": row["filename"] if row else card_id, "added": delta})
+    return sorted(out, key=lambda c: (-c["added"], c["card"]))
+
+
 def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
     """Persist this sync's per-connection diagnostic rows and prune to the retention window. Called only
     when developer options are enabled; never lets a logging failure affect the sync itself."""
@@ -268,8 +291,8 @@ def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
                 (id, connection_id, provider, institution, started_at, finished_at, mode, days_requested,
                  cursor_before, cursor_after, pages, added, updated, removed, skipped, status_sequence,
                  final_status, became_complete, error, warnings, advisories,
-                 skipped_no_account, skipped_already_held, account_counts)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 skipped_no_account, skipped_already_held, account_counts, card_counts, requested_windows)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 str(uuid.uuid4()), r["connection_id"], r["provider"], r["institution"], r["started_at"],
@@ -284,6 +307,8 @@ def _write_sync_diagnostics(conn, rows: list[dict]) -> None:
                 r.get("skipped_no_account") or 0,
                 r.get("skipped_already_held") or 0,
                 json.dumps(r["account_counts"]) if r.get("account_counts") else None,
+                json.dumps(r["card_counts"]) if r.get("card_counts") else None,
+                json.dumps(r["requested_windows"]) if r.get("requested_windows") else None,
             ),
         )
     conn.execute(
@@ -761,6 +786,28 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 _add_advisory(connection_advisories, detail)
             return len(newly_recorded)
 
+        def _refresh_provider_fields(txn_id, t) -> None:
+            """Re-stamp the provider-owned fields of a row already held, leaving the user's category,
+            display-name and tag edits untouched.
+
+            Shared by the two paths that learn something new about a held row — an explicit `modified`, and
+            a pending row the provider re-sends once it has settled — because both revise the same facts
+            about the same charge. Keeping the second one narrower than the first was a real defect rather
+            than an economy: it flipped `is_pending` alone, so a row whose date could only have come from
+            the pending version kept that date permanently, and its `content_hash` went on describing a
+            state the provider had already superseded. A provider with no pending→posted pointer reaches
+            here rather than through the in-place conversion above, since for it the settled charge is the
+            same transaction id, not a new one pointing back."""
+            conn.execute(
+                """
+                UPDATE txn SET amount = ?, date = ?, is_pending = ?, merchant_name = ?, raw_name = ?,
+                               content_hash = ?
+                WHERE  id = ?
+                """,
+                (t["amount"], t["date"], 1 if t["is_pending"] else 0, t["merchant_name"], t["raw_name"],
+                 make_hash(t["date"], t["amount"], t["raw_name"] or t["merchant_name"] or ""), txn_id),
+            )
+
         def _insert_added(t, get_card, dedupe, seen_unknown=None, tally=None) -> bool:
             """Insert one `added` transaction. `get_card` lazily resolves (and creates) the connection's
             card only when a row is actually inserted, so a no-op sync leaves no empty card. Idempotent on
@@ -831,7 +878,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             ).fetchone()
             if existing:
                 if existing["is_pending"] and not t["is_pending"]:
-                    conn.execute("UPDATE txn SET is_pending = 0 WHERE id = ?", (existing["id"],))
+                    _refresh_provider_fields(existing["id"], t)
                     updated += 1
                     _bump(tally, t["external_account_id"], "updated")
                     touched_ids.append(existing["id"])
@@ -939,16 +986,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 # and it is neither a blocked import nor a re-fetch.
                 _bump(tally, t["external_account_id"], "skipped_not_held")
                 return
-            content_hash = make_hash(t["date"], t["amount"], t["raw_name"] or t["merchant_name"] or "")
-            conn.execute(
-                """
-                UPDATE txn SET amount = ?, date = ?, is_pending = ?, merchant_name = ?, raw_name = ?,
-                               content_hash = ?
-                WHERE  id = ?
-                """,
-                (t["amount"], t["date"], 1 if t["is_pending"] else 0, t["merchant_name"], t["raw_name"],
-                 content_hash, existing["id"]),
-            )
+            _refresh_provider_fields(existing["id"], t)
             updated += 1
             touched_ids.append(existing["id"])
 
@@ -989,8 +1027,12 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             started_at = _utcnow_iso()
             cursor_before = connection["transactions_cursor"]
             status_sequence: list = []
+            requested_windows: list = []
             pages = 0
             added0, updated0, removed0, skipped0 = added, updated, removed, skipped
+            # The card tallies are call-wide and accumulate across connections, so this row's share of them
+            # is a difference, exactly as the count deltas above are.
+            card_added0 = dict(card_added)
 
             def _record(*, error=None, became_complete=False):
                 sync_diagnostics.append({
@@ -1022,6 +1064,10 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     "skipped_no_account":   sum(c.get("skipped_no_account", 0) for c in account_tally.values()),
                     "skipped_already_held": sum(c.get("skipped_already_held", 0) for c in account_tally.values()),
                     "account_counts": {a: dict(c) for a, c in account_tally.items()},
+                    # Where the rows went, and what was asked for to get them — the two facts a reader needs
+                    # to reconcile this row against the history page and against the provider's own limits.
+                    "card_counts":      _card_counts(conn, card_added, card_added0),
+                    "requested_windows": list(requested_windows),
                 })
 
             # The card is created lazily on the first actually-inserted row (a no-op sync leaves no empty
@@ -1115,6 +1161,9 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     ):
                         if w not in connection_warnings:
                             connection_warnings.append(w)
+                    for window in page.get("requested_windows") or []:
+                        if isinstance(window, dict) and window.get("start") and window.get("end"):
+                            requested_windows.append({"start": window["start"], "end": window["end"]})
                     pages += 1
                     status_sequence.append(page["update_status"])
                     if not page["has_more"]:
@@ -1318,6 +1367,8 @@ def sync_diagnostics(limit: int = 100, connection_id: str | None = None):
         # Older rows predate these columns, so a missing key reads as "none recorded" rather than absent.
         d["warnings"] = _json_list(d.get("warnings"))
         d["advisories"] = _json_list(d.get("advisories"))
+        d["card_counts"] = _json_list(d.get("card_counts"))
+        d["requested_windows"] = _json_list(d.get("requested_windows"))
         d["became_complete"] = bool(r["became_complete"])
         return d
 

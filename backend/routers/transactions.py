@@ -18,6 +18,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import re
 from backend.db.database import get_db
+from backend.services.account_groups import effective_account_id_sql
 from backend.services.transaction_tags import (
     tag_filter_membership_sql,
     effective_selected_tag_signature_sql,
@@ -30,7 +31,7 @@ from backend.services.transaction_tags import (
 
 router = APIRouter()
 
-EFFECTIVE_ACCOUNT_ID_SQL = "COALESCE((SELECT parent_account_id FROM account WHERE id = t.account_id), t.account_id)"
+EFFECTIVE_ACCOUNT_ID_SQL = effective_account_id_sql("t.account_id")
 QUICK_FILTER_ACCOUNT_LABEL_SQL = """
 TRIM(
     REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
