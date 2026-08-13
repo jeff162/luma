@@ -768,6 +768,19 @@ Consequences, each load-bearing:
 - **v1 and v2 still restore** (their plaintext payloads keep the old local-vault requirement — there is
   something to encrypt), and round-tripping one **upgrades** it: what came in as plaintext goes back out
   as ciphertext.
+- **Each export is recorded, so a passphrase change can name what it strands.** Changing the passphrase
+  rewraps the *same* DEK under a new salt: stored ciphertext is untouched and no data source needs
+  re-linking, but every credentials file written beforehand carries the old wrap and stays restorable
+  **only with the old passphrase, permanently**. Nothing on screen would otherwise reveal that at the
+  moment it happens. `credentials_export` (control DB, beside `vault_slot`) therefore holds one row per
+  export: a timestamp and `wrapped_dek_fingerprint`, a salt-free digest of the wrapped DEK — never the
+  passphrase, never the DEK, and not the wrap itself, since the only question it answers is "same
+  wrapping?". The change dialog matches it against the slot in force and names those backups by date;
+  files from before an earlier change are deliberately *not* listed, having been stranded already, and a
+  general caution covers exports predating the record. It lives in the control DB because it describes
+  vault state and must survive a **data** restore — the event most likely to be followed by wondering
+  which backup still opens. Distinct from `meets_production_min` above, which travels *inside* the file
+  and describes the strength of the wrap rather than which wrap it was.
 
 Secrets deliberately stay in the **data** DB while keys stay in the **control** DB. That is not "secrets
 in the data DB" but the standard separation of key material from the ciphertext it protects, and it is

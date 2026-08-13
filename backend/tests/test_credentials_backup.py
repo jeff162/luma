@@ -23,9 +23,9 @@ import unittest
 from backend.db.database import get_db
 from backend.routers.import_export.backup import _load_json_or_zip_payload
 from backend.services import crypto_service as cs
-from backend.tests._api_client import api_client
+from backend.tests._api_client import STRONG_PASSPHRASE, api_client
 
-PASSPHRASE = "a-strong-passphrase"
+PASSPHRASE = STRONG_PASSPHRASE
 OTHER_PASSPHRASE = "a-different-strong-passphrase"
 TOKEN = "access-sandbox-TEST-TOKEN"
 APP_SECRET = "app-secret-value"
@@ -87,6 +87,47 @@ class CredentialsBackupTests(unittest.TestCase):
         self.assertEqual(payload["version"], 3)
         self.assertTrue(payload["connections"][0]["credential_enc"])
         self.assertTrue(payload["vault"]["wrapped_dek"])
+
+    # ---- knowing which backups a passphrase change would strand ----------
+
+    def test_an_export_is_recorded_against_the_wrapping_it_carried(self):
+        # A credentials backup outlives the app's memory of it: change the passphrase and the DEK is
+        # rewrapped, leaving the file restorable only with the old passphrase, permanently. The record is
+        # what lets the change dialog name the file by date rather than issue a caution about backups
+        # in general.
+        with api_client() as (client, _):
+            self._seed(client)
+            self.assertEqual(client.get("/api/auth/vault/credentials-backups").json()["backups"], [],
+                             "nothing is at stake before an export is taken")
+            self._export(client)
+            backups = client.get("/api/auth/vault/credentials-backups").json()["backups"]
+        self.assertEqual(len(backups), 1)
+        self.assertTrue(backups[0]["exported_at"])
+
+    def test_changing_the_passphrase_drops_the_backup_out_of_the_at_stake_list(self):
+        # The other side of the same fact, and the reason the lookup matches on the fingerprint rather
+        # than listing every export: once the change has happened, that file is already stranded, and
+        # warning about it at the *next* change would be noise at the moment a decision is being weighed.
+        with api_client() as (client, _):
+            self._seed(client)
+            self._export(client)
+            r = client.post("/api/auth/vault/change-passphrase",
+                            json={"old_passphrase": PASSPHRASE, "new_passphrase": OTHER_PASSPHRASE})
+            self.assertEqual(r.status_code, 200, r.text)
+            backups = client.get("/api/auth/vault/credentials-backups").json()["backups"]
+        self.assertEqual(backups, [])
+
+    def test_the_record_holds_no_key_material(self):
+        # It only ever answers "same wrapping?", so it must not be a place the wrap, the DEK or the
+        # passphrase can be read back out of.
+        with api_client() as (client, _):
+            self._seed(client)
+            payload = self._export(client)
+            user_id = self._user_id(client)
+            fingerprint = cs.current_wrapped_dek_fingerprint(user_id)
+        self.assertEqual(fingerprint, cs.wrapped_dek_fingerprint(payload["vault"]["wrapped_dek"]))
+        self.assertNotIn(payload["vault"]["wrapped_dek"], fingerprint)
+        self.assertNotIn(PASSPHRASE, fingerprint)
 
     def test_no_usable_secret_appears_anywhere_in_the_file(self):
         # The invariant the whole format change exists for. Asserted over the serialized bytes rather

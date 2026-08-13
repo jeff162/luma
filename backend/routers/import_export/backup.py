@@ -53,7 +53,9 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from backend.db.database import CURRENT_VERSION, get_db, get_db_instance_id, get_db_version, run_post_restore_data_init
 from backend.db.demo_data import is_demo_data_loaded
+from backend.db import control_database
 from backend.db.control_database import auth_required
+from backend.app_logging import log_warning
 from backend.time_utils import utcnow_iso
 from backend.services import crypto_service
 from backend.services.transaction_tags import tag_filter_membership_sql
@@ -749,6 +751,21 @@ def export_credentials(request: Request):
         # The wrapped DEK, or None when no vault slot exists (nothing here is encrypted either, then).
         "vault":            crypto_service.export_vault_slot(user["id"]) if user else None,
     })
+    # Note which wrapping went into the file. This artifact outlives the app's memory of it: change the
+    # passphrase and the DEK is rewrapped, leaving every file written before that restorable only with the
+    # old passphrase, permanently — a consequence the user has no way to notice at the moment it happens.
+    # Recorded here rather than in the UI because only this path knows what was actually written, and it
+    # is deliberately not allowed to fail the export: the file is the valuable thing, the note about it
+    # is a courtesy, and a control-DB hiccup must not cost someone their backup.
+    if user:
+        try:
+            fingerprint = crypto_service.wrapped_dek_fingerprint(
+                (payload.get("vault") or {}).get("wrapped_dek")
+            )
+            if fingerprint:
+                control_database.record_credentials_export(user["id"], fingerprint)
+        except Exception as exc:                                    # pragma: no cover - defensive
+            log_warning(f"[backup] could not record the credentials export: {exc}")
     return StreamingResponse(
         iter([_zip_json_bytes("luma_credentials.json", payload)]),
         media_type="application/zip",

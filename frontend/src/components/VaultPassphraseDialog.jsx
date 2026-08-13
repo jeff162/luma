@@ -6,15 +6,24 @@
 // Connections tab when the Backup tab became its second host: restoring a credentials backup re-keys
 // secrets under the workspace DEK, so it needs the same gate and the same prompt.
 //
+// A third mode, 'change', rewraps the DEK under a new passphrase. It is not a gate mode — nothing awaits
+// it — but it asks for the same fields against the same floor, and a separate dialog would be the same
+// component with one extra input and its own opportunity to disagree about the rules.
+//
 // The strength meter travels with it (no other caller). `SENSITIVE_FIELD_PROPS` is exported rather than
 // private: the Connections tab's provider-secret fields want the same autofill suppression, and one copy
 // of that opt-out list is the point.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button, Input, AppDialog, DialogActions } from './ui.jsx'
+import { useAppSession } from '../lib/AppSessionContext.jsx'
+import { passphraseLimits, passphraseShortfall } from '../lib/vaultPassphrase.js'
+import { api } from '../lib/api.js'
+import { formatDate } from '../lib/utils.js'
 
-// Advisory only — a rough entropy estimate to nudge toward a stronger passphrase; it never blocks
-// (the hard Production floor lives in the backend). Bits ≈ length × log2(effective alphabet), heavily
+// Advisory only — a rough entropy estimate, shown alongside the hard floor rather than in place of it.
+// The floor decides whether the passphrase is *allowed* (see `vaultPassphrase.js`); this says how good
+// it is beyond that, which is the part worth nudging. Bits ≈ length × log2(effective alphabet), heavily
 // penalized when very few distinct characters are used (a repeated char clears length but not entropy).
 const STRENGTH_LABELS = ['Very weak', 'Weak', 'Fair', 'Good', 'Strong']
 const STRENGTH_COLORS = ['#dc2626', '#dc2626', '#eab308', '#16a34a', '#16a34a']
@@ -86,21 +95,51 @@ export const SENSITIVE_FIELD_PROPS = {
   suppressAutofillId: true,
 }
 
+// Credentials backups the vault's current wrapping would strand. Fetched when the change dialog opens,
+// because it is only ever true of *this* moment: a change rewraps the DEK, and every file exported before
+// it stays restorable with the old passphrase alone. A failure to fetch leaves the list empty, which is
+// the right degradation — the general caution below is unconditional and covers the same ground less
+// specifically.
+function useStrandedBackups(active) {
+  const [backups, setBackups] = useState([])
+  useEffect(() => {
+    if (!active) return undefined
+    let alive = true
+    api.vaultCredentialsBackups()
+      .then(r => { if (alive) setBackups(r.backups || []) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [active])
+  return backups
+}
+
 export function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
   // mode: 'set' (mint/replace the workspace vault) | 'unlock' (open it for this session)
+  //     | 'change' (rewrap the DEK under a new passphrase)
   const [passphrase, setPassphrase] = useState('')
   const [confirm, setConfirm] = useState('')
+  const [current, setCurrent] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const setting = mode === 'set'
+  const changing = mode === 'change'
+  const setting = mode === 'set' || changing        // both choose a NEW passphrase, against the floor
+  const session = useAppSession()
+  const limits = passphraseLimits(session?.currentUser)
+  const shortfall = setting ? passphraseShortfall(passphrase, limits) : null
+  const stranded = useStrandedBackups(changing)
+  // Disabled rather than refused on submit: the floor is a rule the user can satisfy before spending a
+  // round trip, and letting the click through only to answer it with an error is what made the old
+  // advisory meter feel like the passphrase had been accepted.
+  const blocked = busy || (setting && (!passphrase || !!shortfall))
 
   async function submit() {
     if (setting && passphrase !== confirm) { setError('The passphrases do not match.'); return }
     if (!passphrase) { setError('Enter a passphrase.'); return }
+    if (changing && !current) { setError('Enter your current passphrase.'); return }
     setBusy(true)
     setError('')
     try {
-      await onSubmit(passphrase)
+      await onSubmit(changing ? { current, next: passphrase } : passphrase)
     } catch (e) {
       setError(e.message || 'Could not update the vault')
       setBusy(false)
@@ -109,10 +148,12 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
 
   return (
     <AppDialog
-      title={setting ? 'Set a vault passphrase' : 'Unlock the vault'}
-      description={setting
-        ? 'The vault encrypts your data-source credentials at rest. You will enter this passphrase once per session to connect or sync.'
-        : 'Enter your vault passphrase to connect and sync data sources this session.'}
+      title={changing ? 'Change the vault passphrase' : setting ? 'Set a vault passphrase' : 'Unlock the vault'}
+      description={changing
+        ? 'The new passphrase re-protects the same encrypted credentials. Nothing is re-encrypted and no data source needs re-linking.'
+        : setting
+          ? 'The vault encrypts your data-source credentials at rest. You will enter this passphrase once per session to connect or sync.'
+          : 'Enter your vault passphrase to connect and sync data sources this session.'}
       onClose={onClose}
       // Above the standard dialog layer: this is the one dialog that opens *on top of* another one —
       // a connect or a disconnect confirmation raises it and waits behind it — and at the shared
@@ -122,21 +163,59 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
       actions={
         <DialogActions>
           <Button variant="ghost" small onClick={onClose}>Cancel</Button>
-          <Button small onClick={submit} disabled={busy}>{busy ? 'Working…' : (setting ? 'Set passphrase' : 'Unlock')}</Button>
+          <Button small onClick={submit} disabled={blocked}>
+            {busy ? 'Working…' : changing ? 'Change passphrase' : setting ? 'Set passphrase' : 'Unlock'}
+          </Button>
         </DialogActions>
       }
     >
       <div style={{ display: 'grid', gap: 12 }}>
+        {changing ? (
+          <Input type="password" value={current} onChange={setCurrent}
+            placeholder="Current passphrase" autoFocus {...SENSITIVE_FIELD_PROPS} />
+        ) : null}
         <Input type="password" value={passphrase} onChange={setPassphrase}
-          placeholder="Vault passphrase" autoFocus {...SENSITIVE_FIELD_PROPS} />
+          placeholder={changing ? 'New passphrase' : 'Vault passphrase'} autoFocus={!changing}
+          {...SENSITIVE_FIELD_PROPS} />
         {setting ? <PassphraseStrengthMeter passphrase={passphrase} /> : null}
-        {setting ? (
-          <Input type="password" value={confirm} onChange={setConfirm}
-            placeholder="Confirm passphrase" {...SENSITIVE_FIELD_PROPS} />
+        {shortfall ? (
+          <div style={{ fontSize: 12, color: '#dc2626', marginTop: -6 }}>{shortfall}</div>
         ) : null}
         {setting ? (
+          <Input type="password" value={confirm} onChange={setConfirm}
+            placeholder={changing ? 'Confirm new passphrase' : 'Confirm passphrase'} {...SENSITIVE_FIELD_PROPS} />
+        ) : null}
+        {/* The consequence a passphrase change has that nothing else on screen would reveal: the same DEK
+            is rewrapped, so stored ciphertext is untouched, but any credentials backup already written
+            carries the OLD wrap and stays restorable only with the old passphrase — permanently. Named
+            by date where the record knows of one, since "you have a backup from this date" is actionable
+            in a way that "if you hold any backup…" is not. The general line stays for files exported
+            before that record existed. */}
+        {changing ? (
+          <div style={{
+            fontSize: 12, lineHeight: 1.5, borderRadius: 6, padding: '8px 10px',
+            background: 'color-mix(in srgb, var(--warning, #d97706) 12%, var(--surface2))',
+            color: 'var(--text)',
+          }}>
+            {stranded.length ? (
+              <>
+                <b>Keep your current passphrase.</b> {stranded.length === 1 ? 'A credentials backup' : 'Credentials backups'} taken
+                {' '}{stranded.map(b => formatDate(String(b.exported_at).slice(0, 10))).join(', ')}
+                {' '}can only be restored with it, even after this change.
+              </>
+            ) : (
+              <>
+                <b>Keep your current passphrase.</b> Any credentials backup taken before now can only be
+                restored with it, even after this change.
+              </>
+            )}
+          </div>
+        ) : null}
+        {setting && !changing ? (
           <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
-            There is no recovery if this is lost — you would simply re-link your data sources. Store it in a password manager; for Production it must be at least 20 characters.
+            There is no recovery if this is lost — you would simply re-link your data sources. Store it in
+            a password manager; it must be at least {limits.minLength} characters using at least
+            {' '}{limits.minDistinct} different ones.
           </p>
         ) : null}
         {error ? <div style={{ fontSize: 13, color: '#dc2626' }}>{error}</div> : null}

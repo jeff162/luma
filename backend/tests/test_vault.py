@@ -181,21 +181,36 @@ class VaultTests(unittest.TestCase):
 
     # --- Production readiness (all-slots property) -----------------------------------------------
 
-    def test_production_requires_a_strong_passphrase(self):
-        self.assertFalse(cs.ready_for_production())  # no vault yet
-        cs.set_passphrase(self.alice, "short")  # under the Production length minimum
-        self.assertFalse(cs.ready_for_production())
-        cs.change_passphrase(self.alice, "short", "a-sufficiently-long-passphrase")
-        self.assertTrue(cs.ready_for_production())
+    def test_a_passphrase_under_the_floor_cannot_be_set_at_all(self):
+        # There is no weak tier to land in any more: the floor is refused at the point of writing a slot,
+        # rather than accepted and then held back from "production". A weak passphrase that can be stored
+        # is a weak wrap on the DEK, whatever the install is subsequently allowed to do with it.
+        with self.assertRaises(cs.WeakPassphrase):
+            cs.set_passphrase(self.alice, "short")
+        self.assertFalse(cs.vault_configured(), "a refused passphrase must not leave a half-made vault")
 
-    def test_production_rejects_a_long_but_degenerate_passphrase(self):
-        # Length alone isn't enough: a passphrase that is one character repeated clears the length floor
-        # but has almost no entropy, so the distinct-character guard keeps it out of Production.
-        cs.set_passphrase(self.alice, "a" * 30)
-        self.assertFalse(cs.ready_for_production())
+    def test_a_long_but_degenerate_passphrase_is_refused_too(self):
+        # Length alone isn't enough: one character repeated clears the length floor while carrying almost
+        # no entropy, so the distinct-character guard rejects it.
+        with self.assertRaises(cs.WeakPassphrase):
+            cs.set_passphrase(self.alice, "a" * 30)
 
-    def test_production_is_blocked_by_any_weak_slot(self):
-        # Two slots, one weak: the DEK is only as strong as its weakest wrap, so Production stays off.
+    def test_a_change_cannot_weaken_an_existing_slot(self):
+        # The other half of the same rule, and the one a check placed only on `set_passphrase` would miss.
+        cs.set_passphrase(self.alice, "a-sufficiently-long-passphrase")
+        with self.assertRaises(cs.WeakPassphrase):
+            cs.change_passphrase(self.alice, "a-sufficiently-long-passphrase", "short")
+        self.assertTrue(cs.ready_for_production(), "the refused change must leave the strong slot intact")
+        # And the old passphrase still unlocks: nothing was rewrapped on the way to the refusal.
+        cs.lock(self.alice)
+        cs.unlock(self.alice, "a-sufficiently-long-passphrase")
+
+    def test_readiness_is_still_blocked_by_a_weak_slot_written_another_way(self):
+        # Why `ready_for_production` survives the floor being unconditional. It is not asking about the
+        # passphrase just set — nothing weak can be set — it is asserting a property of *every* slot,
+        # including one this service did not write: a slot carried in from an older, laxer install, or a
+        # future slot method (phase 4's passkeys) that wraps the same DEK. The DEK is only ever as strong
+        # as its weakest wrap, and a check that ran only when a passphrase was chosen would never see one.
         cs.set_passphrase(self.alice, "a-sufficiently-long-passphrase")
         cdb.upsert_vault_slot(
             self.bob,

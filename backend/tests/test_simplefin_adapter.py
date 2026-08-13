@@ -487,15 +487,6 @@ class SimpleFinConnectTests(unittest.TestCase):
             second = self.adapter.connect({}, {"setup_token": DEMO_TOKEN})
         self.assertEqual(first["external_id"], second["external_id"])
 
-    def test_a_real_token_demands_a_production_strength_vault(self):
-        # SimpleFIN has no sandbox, so the first connection is already live bank data and there is no later
-        # moment at which to ask for a strong passphrase.
-        real = "aHR0cHM6Ly9iZXRhLWJyaWRnZS5zaW1wbGVmaW4ub3JnL3NpbXBsZWZpbi9jbGFpbS9BQkMxMjM="
-        self.assertTrue(self.adapter.connect_requires_production_vault({"setup_token": real}))
-
-    def test_the_demo_token_is_exempt(self):
-        self.assertFalse(self.adapter.connect_requires_production_vault({"setup_token": DEMO_TOKEN}))
-
     def test_remove_is_a_silent_no_op(self):
         # There is no revocation call. It must not raise: the local disconnect really did succeed, and the
         # part that did not happen is carried in the UI's confirm copy.

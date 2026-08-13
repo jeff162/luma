@@ -231,6 +231,29 @@ def init_control_db():
                 UNIQUE(user_id, method)
             );
 
+            -- One row per credentials backup taken, recording *which wrapping* went into the file.
+            --
+            -- A credentials backup carries the DEK wrapped under the passphrase in force when it was
+            -- written. Changing the passphrase rewraps the same DEK under a new salt, so the stored
+            -- ciphertext is untouched but every previously exported file is thereafter restorable only
+            -- with the *old* passphrase — permanently, and with nothing on screen to say so. This table is
+            -- what lets the change dialog name the backups it is about to strand, by date, instead of
+            -- offering a generic caution the user cannot act on.
+            --
+            -- `wrapped_dek_fingerprint` is a salted digest of the wrapped DEK, never the passphrase, never
+            -- the DEK, and not the wrap itself: it only ever has to answer "is this the same wrapping the
+            -- current slot has", so a value that cannot be turned back into key material is enough.
+            --
+            -- It lives in the control DB beside `vault_slot` because it describes vault state and must
+            -- survive a *data* restore — the event most likely to be followed by wondering which backup
+            -- still opens.
+            CREATE TABLE IF NOT EXISTS credentials_export (
+                id                      TEXT PRIMARY KEY,
+                user_id                 TEXT REFERENCES user_account(id) ON DELETE CASCADE,
+                wrapped_dek_fingerprint TEXT NOT NULL,
+                exported_at             TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             -- Retired with the vault rework: the old `user_secret_material` held a per-user DEK wrapped
             -- under an app master key (the `server_managed` model), which never delivered
             -- leaked-DB != leaked-tokens. Its ciphertext is unrecoverable under the new model by design
@@ -856,6 +879,35 @@ def all_slots_meet_production_min() -> bool:
             "SELECT COUNT(*) FROM vault_slot WHERE meets_production_min = 0"
         ).fetchone()[0]
     return weak == 0
+
+
+def record_credentials_export(user_id: str | None, wrapped_dek_fingerprint: str) -> None:
+    """Note that a credentials backup was written against this wrapping of the DEK.
+
+    Append-only and unbounded in principle, but bounded in practice by how often a person exports
+    credentials by hand; pruning would cost the exact history the change warning reads."""
+    with get_control_db() as conn:
+        conn.execute(
+            "INSERT INTO credentials_export (id, user_id, wrapped_dek_fingerprint) VALUES (?,?,?)",
+            (str(uuid.uuid4()), user_id, wrapped_dek_fingerprint),
+        )
+
+
+def credentials_exports_for_fingerprint(fingerprint: str) -> list[dict]:
+    """Every recorded export taken against one wrapping, newest first.
+
+    Matching on the fingerprint rather than listing all exports is what makes the warning specific: a
+    backup written under a *previous* passphrase was stranded by an earlier change and saying so again
+    is noise, while one written under the current wrapping is precisely what the next change breaks."""
+    if not fingerprint:
+        return []
+    with get_control_db() as conn:
+        rows = conn.execute(
+            "SELECT id, exported_at FROM credentials_export WHERE wrapped_dek_fingerprint = ? "
+            "ORDER BY exported_at DESC, id DESC",
+            (fingerprint,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def create_user(

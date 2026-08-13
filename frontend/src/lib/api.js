@@ -123,6 +123,10 @@ export const api = {
   unlockVault: (passphrase) =>
     request('/auth/vault/unlock', { method: 'POST', body: JSON.stringify({ passphrase }) }),
   lockVault: () => request('/auth/vault/lock', { method: 'POST' }),
+  // Credentials backups taken against the wrapping currently in force — the ones a passphrase change is
+  // about to strand. Only those: a backup from before an earlier change is already stranded, and saying
+  // so again would bury the one that still matters.
+  vaultCredentialsBackups: () => request('/auth/vault/credentials-backups'),
   // Per-provider app-level credentials (the Configure card). Status never returns the secret.
   getProviders: () => request('/providers'),
   getProviderConfig: (provider) => request(`/providers/${provider}/config`),

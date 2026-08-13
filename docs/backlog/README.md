@@ -78,6 +78,19 @@ delete the backlog file.
   Deferred: the actual windowing — a per-source recent window with a reachable **"Older imports"** archive
   grouped by year (marketplace cards too), a *reachable* re-bound on the fetch, and an explicit
   batch-history deletion strategy (purge records, not the imported transactions).
+- [vault-passphrase-recovery.md](vault-passphrase-recovery.md) — **backlog, not started (2026-08-13).**
+  A forgotten vault passphrase is currently a dead end — `unlock` needs it and `set_passphrase` needs the
+  vault already unlocked — with no endpoint and no UI for a state every install eventually reaches. Sets
+  out the recovery ladder in order: a **credentials backup opened with the passphrase it was made under**
+  is a complete recovery needing no re-linking (and `credentials_export` already knows whether one
+  exists), with a destructive **reset** — drop the slot, clear the two encrypted columns, flag every
+  connection for reconnection, keep every account and transaction — as the only other option. Names the
+  wrinkle that decides how good this can be: `connect` upserts on `(provider, external_id)`, so a
+  provider whose handle is **issued** (Plaid's `item_id`) re-links in place while one whose handle is
+  **derived from the credential** (SimpleFIN's access-URL hash) arrives as a new connection, stranding the
+  old one's account mappings. Open: multi-user (another member's slot still opens the same DEK — that is
+  re-enrollment, phase 5, not a reset). Also flags an existing bug worth fixing regardless —
+  `VaultDecryptError` is unclassified and reports as a generic sync failure instead of "reconnect needed".
 - [ofx-direct-connect.md](ofx-direct-connect.md) — **researched, parked (2026-08-07).** OFX Direct
   Connect as a data-source provider — the only transaction pull with no aggregator in the middle. Settles
   the technology (`ofxtools`, pure Python; **not** aqbanking, a per-platform C build whose own consumers

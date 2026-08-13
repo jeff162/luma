@@ -480,6 +480,13 @@ intended default) makes loss unlikely anyway. Multi-wrap still *allows* a user t
 slot (e.g. passphrase + passkey) if they want the convenience — it's just never mandatory, and no slot
 exists purely as an escrow.
 
+**"No escrow" is not "no exit."** This settles that the *keys* are unrecoverable, which is deliberate; it
+does not settle what the app does when someone reaches that state. As built there is no way out at all —
+unlocking needs the passphrase and replacing it needs the vault already unlocked — so a forgotten
+passphrase leaves the vault permanently shut with nothing on screen to say so, and "re-link" is advice the
+UI offers no way to act on. The reset path that turns this decision into something a user can actually
+perform is [vault-passphrase-recovery.md](vault-passphrase-recovery.md).
+
 ### The vault is the only custody path — no `off`, no `server_managed` (settled)
 
 `server_managed` privacy mode is **retired** (it let the server decrypt at rest, so it never delivered
@@ -490,12 +497,32 @@ passphrase costs nothing. Dropping `off` also removes the footgun where an insta
 production while custody is off and silently leaks real tokens. Retire the `APP_MASTER_KEY` →
 `SESSION_SECRET` fallback along with all this.
 
-**Passphrase strength is keyed to provider mode.** Sandbox accepts *any* vault passphrase (even trivial —
-you type a throwaway once per session via the unlock cache). **Switching a provider to Production requires
-the vault passphrase to meet a real minimum first**, so real tokens can never sit under a weak secret —
-turning "definitely not plaintext/weak in Production" from a hope into an enforced gate. (This is the
-*vault passphrase's* own minimum; separate from the app-login password policy — `none`/`min_8`/`strong` —
-which governs the orthogonal network perimeter.)
+**Passphrase strength is unconditional — there is no weak tier and no test-mode exemption.** Every vault
+passphrase must meet the minimum before *any* data connection can be configured, whatever the provider and
+whatever environment it points at. (This is the *vault passphrase's* own minimum; separate from the
+app-login password policy — `none`/`min_8`/`strong` — which governs the orthogonal network perimeter.)
+
+This **strengthens** the settled decision above rather than qualifying it. The original design keyed
+strength to provider mode: Sandbox accepted any passphrase, and switching a provider to Production was the
+gate that demanded a real one. The reasoning was that a throwaway passphrase costs nothing when the
+credentials are fake — but that premise dissolves once the passphrase lives in a password manager, where
+entering a long one costs the same as a short one. Two things argued for removing the tier outright.
+
+A conditional floor has to be **right at every gate that guards it, and stay right as providers are
+added** — the connect path, the environment switch, and each adapter's judgment about whether its own
+credentials are live. An unconditional floor cannot be got wrong, and it deletes the adapter capability
+(`connect_requires_production_vault`) that existed only to answer that question.
+
+And the tier's removal is what makes the model *say* something simple. "A strong passphrase protects your
+data-source credentials" is a rule a user can hold; "your passphrase requirements depend on which
+environment your provider is pointed at" is one they cannot, and it invited the exact confusion where
+Sandbox credentials feel like a rehearsal for the real thing.
+
+A **relaxed passphrase for test/sandbox use was considered and rejected** on the same grounds — see the
+briefly-planned Plaid-sandbox-without-a-vault exemption, which would have introduced a plaintext
+credential path and an encrypt-on-first-vault sweep to make it safe. Neither is needed once nothing weak
+can exist: no plaintext credentials are written, so there is nothing for a sweep to find, and the
+sandbox→production flip needs no special handling because a vault is required either way.
 
 **Consequence:** connecting a live data source **always** requires setting a vault passphrase — even on a
 passwordless-app (perimeter-off) install. That's correct: app-login and the vault are orthogonal, and

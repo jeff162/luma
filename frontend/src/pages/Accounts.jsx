@@ -631,9 +631,6 @@ function ProviderConfigDialog({ provider, initial, onSave, onClose, ensureVault 
             { value: 'production', label: 'Production' },
           ]} />
         </div>
-        <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
-          Switching to Production requires a strong vault passphrase first, so live bank tokens are never protected by a weak secret.
-        </p>
         {error ? <div style={{ fontSize: 13, color: '#dc2626' }}>{error}</div> : null}
       </div>
     </AppDialog>
@@ -737,7 +734,7 @@ function TokenConnectDialog({ provider, spec, historyDays, onConnect, onClose })
 }
 
 
-function VaultStrip({ vault, onSet, onUnlock, onLock }) {
+function VaultStrip({ vault, onSet, onUnlock, onLock, onChange }) {
   const box = (bg, border) => ({
     display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
     background: bg, border: `1px solid ${border}`, borderRadius: 8, padding: '10px 14px', marginBottom: 12,
@@ -769,7 +766,12 @@ function VaultStrip({ vault, onSet, onUnlock, onLock }) {
   return (
     <div style={box('var(--surface2)', 'var(--border)')}>
       <span style={{ color: 'var(--muted)' }}>Vault unlocked for this session.</span>
-      <Button variant="ghost" small onClick={onLock} style={{ marginLeft: 'auto' }}>Lock</Button>
+      {/* Offered only while unlocked, and deliberately not beside Unlock. Unlocked, the DEK is already
+          held, so this rewraps it directly; locked, the change would have to ask for the old passphrase
+          anyway and would leave the vault unlocked either way — making it a worse Unlock button wearing
+          a different label. */}
+      <Button variant="ghost" small onClick={onChange} style={{ marginLeft: 'auto' }}>Change passphrase</Button>
+      <Button variant="ghost" small onClick={onLock}>Lock</Button>
     </div>
   )
 }
@@ -803,6 +805,10 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // Every action needing an open vault goes through this gate: it prompts and the action then continues
   // itself (see lib/useVaultGate.js). `vaultDialog` is only which passphrase dialog to render.
   const { mode: vaultDialog, ensureVault, openVault, closeVault } = useVaultGate(vault)
+  // Held apart from the gate's own mode on purpose: the gate exists to make a blocked action resume once
+  // the vault opens, and nothing is waiting on a passphrase change. Sharing its state would give the
+  // change dialog a waiter to settle and let a change resolve some unrelated pending action as "unlocked".
+  const [changingPassphrase, setChangingPassphrase] = useState(false)
   const [notice, setNotice] = useState(null)
   const [disconnectTarget, setDisconnectTarget] = useState(null) // { provider, external_id, institution }
   const [disconnecting, setDisconnecting] = useState(false)
@@ -959,6 +965,20 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     if (resp?.user) setCurrentUser?.(resp.user)
     await refresh()
     closeVault(true)
+  }
+
+  // Deliberately not routed through `closeVault`: no action is waiting, and the vault was already open
+  // before this ran — a change rewraps the DEK the session is holding rather than obtaining one.
+  async function submitPassphraseChange({ current, next }) {
+    const resp = await api.changeVaultPassphrase(current, next)
+    if (resp?.user) setCurrentUser?.(resp.user)
+    await refresh()
+    setChangingPassphrase(false)
+    setNotice({
+      title: 'Vault passphrase changed',
+      description: 'Your data sources are unaffected. Any credentials backup taken before now still '
+        + 'needs the previous passphrase to restore.',
+    })
   }
 
   async function lockVault() {
@@ -1435,6 +1455,7 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
         vault={vault}
         onSet={() => openVault('set')}
         onUnlock={() => openVault('unlock')}
+        onChange={() => setChangingPassphrase(true)}
         onLock={lockVault}
       />
 
@@ -1799,6 +1820,10 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
 
       {vaultDialog ? (
         <VaultPassphraseDialog mode={vaultDialog} onSubmit={submitVault} onClose={() => closeVault(false)} />
+      ) : null}
+      {changingPassphrase ? (
+        <VaultPassphraseDialog mode="change" onSubmit={submitPassphraseChange}
+          onClose={() => setChangingPassphrase(false)} />
       ) : null}
 
       {disconnectTarget ? (

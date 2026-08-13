@@ -23,6 +23,7 @@ a live connection simply re-links).
 """
 
 import base64
+import hashlib
 import json
 import os
 import threading
@@ -47,18 +48,34 @@ DEK_BYTES = 32  # AES-256
 # also drops it (re-unlock required). Sliding — each use pushes the deadline out.
 UNLOCK_TTL_SECONDS = 8 * 60 * 60
 
-# Production vault-passphrase floor (real, live bank tokens). Sandbox accepts any passphrase; this is the
-# *vault* minimum, separate from the app-login password policy. Length is the main lever — the passphrase
-# is meant to live in a password manager (a passkey/biometric is the everyday unlock, phase 4), so a long
-# floor costs no typing. A small distinct-character requirement rejects degenerate inputs (a single char
-# repeated, trivial alternations) that pass a length check but have almost no entropy. Both are enforced
-# only at the Production gate; the frontend also shows an advisory strength meter that blocks nothing.
+# The vault-passphrase floor. **Every** passphrase meets it — there is no weaker tier and no test-mode
+# exemption. This is the *vault* minimum, separate from the app-login password policy.
+#
+# It used to be conditional, demanded only where a connection was judged "live": Plaid gated on the switch
+# to `env == "production"`, SimpleFIN on the claim URL not being its demo one. That was a real weak tier,
+# and the argument for keeping it — that a throwaway passphrase makes clicking around a sandbox cheaper —
+# does not survive the passphrase living in a password manager, where entering a long one costs the same
+# as a short one. A conditional floor also has to be right at every gate that guards it and stays right as
+# providers are added; an unconditional one cannot be got wrong. So the tier is gone: a strong passphrase
+# is required before any data connection can be configured, whatever the provider or its environment.
+#
+# Length is the main lever, for the password-manager reason above. The small distinct-character
+# requirement rejects degenerate inputs (one character repeated, trivial alternations) that clear a length
+# check while carrying almost no entropy.
 VAULT_PRODUCTION_MIN_LEN = 20
 VAULT_PRODUCTION_MIN_DISTINCT = 6
 
 
 class VaultLocked(Exception):
     """The workspace vault is not unlocked for this user, so the DEK is unavailable."""
+
+
+class WeakPassphrase(ValueError):
+    """A passphrase below the floor in `passphrase_meets_production_min` was offered for a vault slot.
+
+    Typed rather than a bare ValueError because the endpoints turn it into a specific error code the UI
+    keys on, and because the two numbers a user needs to hear are the constants above — a caller that has
+    to parse a message string to say "20 characters, 6 distinct" will drift from them."""
 
 
 class VaultDecryptError(Exception):
@@ -158,8 +175,14 @@ def is_unlocked(user_id: str) -> bool:
 
 
 def ready_for_production() -> bool:
-    """The vault may hold live (Production) tokens only when every slot meets the Production minimum,
-    so the DEK is never recoverable through a weak wrap."""
+    """Every slot in the vault meets the passphrase floor, so the DEK is not recoverable through a weak wrap.
+
+    Trivially true for any slot written by `_write_passphrase_slot`, which now refuses to write a weak one.
+    Kept anyway, and still checked at the connect boundary: it is the *invariant*, and what it guards
+    against is a future slot **type** rather than a weak passphrase — phase 4's passkey slots wrap the same
+    DEK, and a slot method that reintroduced a weak wrap would be invisible to a check that only ran when
+    the passphrase was set. The flag it reads is also carried in the credentials backup payload, where the
+    slot may have been written by an older, laxer install."""
     return cdb.all_slots_meet_production_min()
 
 
@@ -215,6 +238,14 @@ def change_passphrase(user_id: str, old_passphrase: str, new_passphrase: str) ->
 
 
 def _write_passphrase_slot(user_id: str, passphrase: str, dek: bytes) -> None:
+    # The floor is enforced here rather than in `set_passphrase` and `change_passphrase` separately,
+    # because this is the single point every passphrase slot is written through — a check on the two
+    # callers would have to be re-added to a third, and the one that got missed would be the hole.
+    if not passphrase_meets_production_min(passphrase):
+        raise WeakPassphrase(
+            f"the vault passphrase must be at least {VAULT_PRODUCTION_MIN_LEN} characters with at least "
+            f"{VAULT_PRODUCTION_MIN_DISTINCT} distinct characters"
+        )
     salt = os.urandom(16)
     kek = _derive_kek(passphrase, salt)
     wrapped = _wrap(kek, dek, aad=_slot_aad(user_id))
@@ -229,6 +260,29 @@ def _write_passphrase_slot(user_id: str, passphrase: str, dek: bytes) -> None:
         kdf_p=SCRYPT_P,
         meets_production_min=passphrase_meets_production_min(passphrase),
     )
+
+
+def wrapped_dek_fingerprint(wrapped_dek: str | None) -> str | None:
+    """A stable, non-reversible marker for one *wrapping* of the DEK.
+
+    It answers exactly one question — "was this file written against the wrapping the vault has now?" —
+    which is what lets a passphrase change name the credentials backups it is about to strand instead of
+    warning about backups in general. Equality is the whole contract; nothing derives key material from
+    it, and it must never be treated as one.
+
+    A plain digest suffices and no secret salt is involved: the input already sits in the control DB, so
+    hashing it exposes nothing new, and a fingerprint that varied per call could not be compared across
+    the export and the change that invalidates it. The domain-separation prefix keeps this digest from
+    colliding with any other use of the same bytes."""
+    if not wrapped_dek:
+        return None
+    return hashlib.sha256(b"vault.wrapped-dek.v1|" + wrapped_dek.encode("utf-8")).hexdigest()
+
+
+def current_wrapped_dek_fingerprint(user_id: str) -> str | None:
+    """The fingerprint of the wrapping in force for this user, or None when no slot exists."""
+    slot = cdb.get_vault_slot(user_id)
+    return wrapped_dek_fingerprint(slot["wrapped_dek"]) if slot else None
 
 
 def unwrap_dek_from_slot(slot: dict, passphrase: str, *, user_id: str) -> bytes:

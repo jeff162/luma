@@ -20,6 +20,13 @@ from fastapi.testclient import TestClient
 
 from backend.db import control_database, database
 
+# A vault passphrase that actually clears the floor `crypto_service` enforces on every slot. Shared so a
+# test setting one up says what it means rather than restating the policy — and because the literal it
+# replaces, "a-strong-passphrase", was nineteen characters against a floor of twenty. It read as strong
+# in twenty places while being the one thing the fixture claimed it was not, which is the failure mode a
+# named constant exists to prevent.
+STRONG_PASSPHRASE = "a-strong-vault-passphrase"
+
 
 @contextmanager
 def api_client():

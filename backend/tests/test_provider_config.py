@@ -24,7 +24,7 @@ from backend.routers.import_export.backup import _load_json_or_zip_payload
 from backend.services import crypto_service as cs
 from backend.services.providers import config as provider_config
 from backend.services.providers import resolve_app_config
-from backend.tests._api_client import api_client
+from backend.tests._api_client import STRONG_PASSPHRASE, api_client
 
 
 @contextmanager
@@ -86,7 +86,7 @@ class ProviderConfigServiceTests(unittest.TestCase):
         self._stack.__enter__()
         cs.lock_all()
         self.alice = cdb.create_local_identity("alice")["id"]
-        cs.set_passphrase(self.alice, "a-strong-passphrase")  # configures + unlocks
+        cs.set_passphrase(self.alice, STRONG_PASSPHRASE)  # configures + unlocks
         self.user = {"id": self.alice}
         # Neutralize any PLAID_* the developer may have exported, so DB-vs-fallback is deterministic.
         self._noenv = mock.patch.object(provider_config, "_env_fallback", return_value=None)
@@ -176,7 +176,7 @@ class ProviderConfigEndpointTests(unittest.TestCase):
 
     def test_save_and_get_roundtrip(self):
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             saved = client.post("/api/providers/plaid/config", json={"client_id": "cid", "secret": "sek", "env": "sandbox"})
             self.assertEqual(saved.status_code, 200, saved.text)
             self.assertTrue(saved.json()["has_secret"])
@@ -185,12 +185,16 @@ class ProviderConfigEndpointTests(unittest.TestCase):
             self.assertEqual(got["source"], "vault")
             self.assertNotIn("secret", got)
 
-    def test_production_gate_blocks_under_a_weak_vault(self):
+    def test_the_environment_no_longer_governs_the_passphrase(self):
+        # This endpoint used to refuse `env: production` under a weak vault, because Sandbox accepted one.
+        # With the weak tier gone that check could only ever pass, and keeping it would go on telling the
+        # user their environment decides their passphrase — the model this change exists to remove.
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "shortpass"})  # under the Production min
-            r = client.post("/api/providers/plaid/config", json={"env": "production"})
-            self.assertEqual(r.status_code, 400)
-            self.assertIn("vault passphrase", r.json()["detail"])
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            for env in ("sandbox", "production"):
+                r = client.post("/api/providers/plaid/config",
+                                json={"client_id": "cid", "secret": "sek", "env": env})
+                self.assertEqual(r.status_code, 200, f"{env}: {r.text}")
 
     # ---- revealing the stored secret (the Configure dialog's Show) ----------
     #
@@ -201,7 +205,7 @@ class ProviderConfigEndpointTests(unittest.TestCase):
 
     def test_reveal_returns_the_stored_secret_when_unlocked(self):
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             client.post("/api/providers/plaid/config", json={"client_id": "cid", "secret": "sek"})
             r = client.get("/api/providers/plaid/secret")
             self.assertEqual(r.status_code, 200, r.text)
@@ -210,7 +214,7 @@ class ProviderConfigEndpointTests(unittest.TestCase):
 
     def test_reveal_needs_the_vault_unlocked(self):
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             client.post("/api/providers/plaid/config", json={"client_id": "cid", "secret": "sek"})
             cs.lock_all()
             r = client.get("/api/providers/plaid/secret")
@@ -219,7 +223,7 @@ class ProviderConfigEndpointTests(unittest.TestCase):
 
     def test_reveal_without_a_secret_on_file_is_409(self):
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             client.post("/api/providers/plaid/config", json={"client_id": "cid"})  # client_id only
             r = client.get("/api/providers/plaid/secret")
             self.assertEqual(r.status_code, 409)
@@ -246,7 +250,7 @@ class ProviderConfigEndpointTests(unittest.TestCase):
 
     def test_app_credential_rides_the_credentials_backup(self):
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             client.post("/api/providers/plaid/config", json={"client_id": "cid", "secret": "app-secret"})
             payload = _load_json_or_zip_payload(
                 client.get("/api/import-export/backup/credentials").content, "luma_credentials.zip", "luma_credentials"

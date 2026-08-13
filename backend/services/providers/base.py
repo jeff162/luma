@@ -151,16 +151,6 @@ class ProviderAdapter(ABC):
         """Link-style providers only — see the module docstring."""
         raise NotImplementedError(f"{self.provider} has no Link-style connect flow")
 
-    def connect_requires_production_vault(self, payload: dict) -> bool:
-        """Whether this particular connect attempt must be behind a Production-strength vault passphrase.
-
-        False for a provider with a sandbox: its strength gate belongs on the switch to Production, where
-        the credentials stop being fake. A provider with no test mode has no such moment — its first
-        connection is already live bank access — so it answers True and the gate moves to connect time.
-        Taking `payload` lets an adapter exempt a known test credential from its own otherwise-live rule.
-        """
-        return False
-
     @abstractmethod
     def fetch_accounts(self, app_config: dict, credential: str) -> list[dict]: ...
 

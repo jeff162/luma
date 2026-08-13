@@ -127,17 +127,18 @@ def establish_connection(request: Request, provider: str, payload: dict) -> dict
         })
 
     adapter = get_adapter(provider)
-    # A provider with no sandbox hands out live bank access on its very first connection, so there is no
-    # moment later at which to demand a strong vault — the Production gate has to be here. Plaid's
-    # equivalent rides its env change on the config endpoint instead, which is why this is the adapter's
-    # call rather than a flag the router reads.
-    if adapter.connect_requires_production_vault(payload) and not crypto_service.ready_for_production():
+    # Unconditional, and deliberately kept even though `set_passphrase` now refuses to write a weak slot:
+    # this is the boundary where a live bank credential is about to be stored, and it asserts the property
+    # that makes storing it safe rather than trusting that every path which could have created a slot
+    # enforced it. It used to ask the *adapter* whether this particular attempt was live enough to deserve
+    # a strong passphrase; that question has only one answer now, and asking it per provider was one more
+    # thing a new adapter could answer wrongly.
+    if not crypto_service.ready_for_production():
         raise HTTPException(status_code=400, detail={
             "code": "weak_vault",
             "message": (
-                "Set a strong vault passphrase before connecting this data source. It has no test mode, so "
-                f"every connection is live bank data. Each vault passphrase must be at least "
-                f"{crypto_service.VAULT_PRODUCTION_MIN_LEN} characters with at least "
+                "Set a strong vault passphrase before connecting a data source. Each vault passphrase must "
+                f"be at least {crypto_service.VAULT_PRODUCTION_MIN_LEN} characters with at least "
                 f"{crypto_service.VAULT_PRODUCTION_MIN_DISTINCT} distinct characters."
             ),
         })
@@ -252,16 +253,11 @@ def save_config(provider: str, body: ProviderConfigRequest, request: Request):
             "code": "no_app_credential",
             "message": "This data source has no app-level credentials to configure.",
         })
-    # Switching to Production holds real, live bank tokens, so every vault slot must meet the Production
-    # passphrase minimum first — the DEK can never sit behind a weak wrap. Same all-slots gate the legacy
-    # environment endpoint enforced; Sandbox stays lax.
-    if (body.env or "").strip() == "production" and not crypto_service.ready_for_production():
-        raise HTTPException(status_code=400, detail=(
-            "Set a strong vault passphrase before switching to Production. Every vault passphrase "
-            f"must be at least {crypto_service.VAULT_PRODUCTION_MIN_LEN} characters with at least "
-            f"{crypto_service.VAULT_PRODUCTION_MIN_DISTINCT} distinct characters, so live bank tokens "
-            "are never protected by a weak secret."
-        ))
+    # No environment gate here any more. Switching to Production used to demand a strong passphrase,
+    # because Sandbox accepted a weak one; with the weak tier gone the check could only ever pass, and
+    # keeping it would tell the user that the environment is what governs their passphrase — which is
+    # exactly the model this change removes. Storing a secret at all still requires an unlocked vault
+    # (the VaultLocked arm below), and that vault is strong by construction.
     try:
         set_provider_config(
             request.state.user, provider,

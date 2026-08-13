@@ -28,7 +28,7 @@ from backend.services import crypto_service as cs
 from backend.services.providers import PlaidAdapter, UnknownProviderError, get_adapter
 from backend.services.providers.base import ProviderAdapter
 from backend.services.providers.simplefin import SimpleFinError
-from backend.tests._api_client import api_client
+from backend.tests._api_client import STRONG_PASSPHRASE, api_client
 
 
 @contextmanager
@@ -511,7 +511,7 @@ class GenericConnectTests(unittest.TestCase):
 
     def test_a_token_provider_connects_and_records_its_accounts(self):
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             r = self._connect(client)
             self.assertEqual(r.status_code, 200, r.text)
             body = r.json()
@@ -521,7 +521,7 @@ class GenericConnectTests(unittest.TestCase):
 
     def test_the_credential_is_vaulted_and_the_handle_is_not_the_credential(self):
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             self._connect(client)
             with get_db() as conn:
                 row = conn.execute("SELECT external_id, credential, credential_enc FROM connection").fetchone()
@@ -536,12 +536,22 @@ class GenericConnectTests(unittest.TestCase):
         self.assertEqual(r.status_code, 409, r.text)
         self.assertEqual(r.json()["detail"]["code"], "vault_not_configured")
 
-    def test_a_provider_with_no_sandbox_requires_a_production_strength_vault(self):
+    def test_connecting_is_refused_under_a_weak_slot_this_install_did_not_write(self):
+        # The connect gate is unconditional now — it no longer asks the adapter whether *this* attempt is
+        # live enough to deserve a strong passphrase, because every attempt is. Reaching it at all takes a
+        # slot `set_passphrase` would refuse to create: an install carried in from before the floor, or a
+        # future slot method that wraps the same DEK more weakly. That is the only remaining way the vault
+        # can be weak, and it is what the gate is left standing for.
+        #
+        # Patched at `ready_for_production` rather than by fabricating that slot: its own answer to a weak
+        # slot is pinned in test_vault.py, and what needs proving here is that connect consults it and
+        # refuses — the seam, not the slot plumbing.
         real_token = base64.b64encode(b"https://bridge.example/simplefin/claim/REAL-abc").decode()
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "short"})
-            r = client.post("/api/providers/simplefin/connect",
-                            json={"payload": {"setup_token": real_token}})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            with mock.patch.object(cs, "ready_for_production", return_value=False):
+                r = client.post("/api/providers/simplefin/connect",
+                                json={"payload": {"setup_token": real_token}})
         self.assertEqual(r.status_code, 400, r.text)
         self.assertEqual(r.json()["detail"]["code"], "weak_vault")
 
@@ -559,7 +569,7 @@ class GenericConnectTests(unittest.TestCase):
             self.assertIsNone(before["env"], "no sandbox/production distinction to badge")
             self.assertEqual(before["connect_spec"]["style"], "token")
 
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             self._connect(client)
             self.assertTrue(_simplefin()["configured"])
 
@@ -568,7 +578,7 @@ class GenericConnectTests(unittest.TestCase):
         # health travels with the connection list rather than behind a separate call a collapsed card
         # would have no reason to make.
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             self._connect(client)
             with get_db() as conn:
                 conn.execute(
@@ -589,7 +599,7 @@ class GenericConnectTests(unittest.TestCase):
         # what actually went wrong, so collapsing it into "Internal Server Error" is what turns a
         # five-second fix into a debugging session.
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             with mock.patch("backend.services.providers.simplefin._http",
                             side_effect=SimpleFinError("SimpleFIN returned 403: error code: 1010.")):
                 r = client.post("/api/providers/simplefin/connect",
@@ -608,7 +618,7 @@ class GenericConnectTests(unittest.TestCase):
         # SimpleFIN has no revocation call, so remove() is a no-op. Disconnect must still drop the local
         # connection rather than fail — the part that did not happen is carried in the UI's confirm copy.
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             external_id = self._connect(client).json() and None
             with get_db() as conn:
                 external_id = conn.execute("SELECT external_id FROM connection").fetchone()["external_id"]
@@ -652,7 +662,7 @@ class CredentialBackupTests(unittest.TestCase):
 
     def test_disconnect_revokes_at_provider_and_removes_the_connection(self):
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             self._connect_one(client)
             plaid = next(p for p in client.get("/api/providers").json()["providers"] if p["provider"] == "plaid")
             self.assertEqual(len(plaid["connections"]), 1)
@@ -673,7 +683,7 @@ class CredentialBackupTests(unittest.TestCase):
 
     def test_exchange_writes_a_connection_and_status_counts_it(self):
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             self._connect_one(client)
             status = client.get("/api/import-export/backup/credentials/status").json()
             self.assertTrue(status["has_credentials"])
@@ -686,7 +696,7 @@ class CredentialBackupTests(unittest.TestCase):
         # which re-exchanges to the same item_id. That must upsert cleanly (200), not 500 on the connection's
         # UNIQUE(provider, external_id) or the account's UNIQUE(external_account_id).
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             self._connect_one(client)
             self._connect_one(client)  # second exchange for the same item — must not raise
             plaid = next(p for p in client.get("/api/providers").json()["providers"] if p["provider"] == "plaid")
@@ -699,7 +709,7 @@ class CredentialBackupTests(unittest.TestCase):
         # Reconnecting a bank whose accounts were left dangling by a prior disconnect (connection_id NULL)
         # re-attaches them: the account upsert re-stamps connection_id on conflict.
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             self._connect_one(client)
             with mock.patch("backend.services.plaid_service.remove_item"):
                 client.post("/api/providers/plaid/disconnect", json={"external_id": "item-1"})
@@ -721,7 +731,7 @@ class CredentialBackupTests(unittest.TestCase):
 
     def test_credentials_export_restore_roundtrip(self):
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             self._connect_one(client)
 
             exported = client.get("/api/import-export/backup/credentials")
@@ -743,7 +753,7 @@ class CredentialBackupTests(unittest.TestCase):
 
     def test_restore_accepts_legacy_v1_plaid_items(self):
         with api_client() as (client, _):
-            client.post("/api/auth/vault/set-passphrase", json={"passphrase": "a-strong-passphrase"})
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
             # A pre-6a credentials export: version 1, plaid_items shape. The content hash is only verified
             # when present, so a hand-built legacy payload without it restores (matching old exports that
             # predate the hash field).

@@ -25,6 +25,7 @@ from backend.db.control_database import (
     authenticate_user,
     begin_totp_setup,
     bootstrap_required,
+    credentials_exports_for_fingerprint,
     enable_auth_mode,
     disable_auth_mode,
     auth_required,
@@ -225,6 +226,11 @@ def _session_payload(user: dict) -> dict:
         "vault_configured": crypto_service.vault_configured(),
         "vault_has_passphrase": crypto_service.user_has_slot(user["id"]),
         "vault_unlocked": crypto_service.is_unlocked(user["id"]),
+        # The floor the dialog gates its own submit button on. Served rather than duplicated in the
+        # client because the two must agree exactly: a client holding its own copy either blocks a
+        # passphrase the server would take or offers one it refuses, and both read as a broken vault.
+        "vault_passphrase_min_length": crypto_service.VAULT_PRODUCTION_MIN_LEN,
+        "vault_passphrase_min_distinct": crypto_service.VAULT_PRODUCTION_MIN_DISTINCT,
         "must_change_password": bool(user.get("must_change_password")),
         "two_factor_enabled": bool(user.get("totp_enabled")),
         "recovery_code_count": recovery_code_count(user["id"]),
@@ -759,6 +765,21 @@ def regenerate_recovery_codes(body: TotpVerifyRequest, request: Request):
     return {"user": _session_payload(updated), "recovery_codes": recovery_codes}
 
 
+def _weak_passphrase_error(exc: crypto_service.WeakPassphrase) -> HTTPException:
+    """The floor stated as data, not only as prose.
+
+    The dialog disables its submit button on the same two numbers, so it has to be able to read them
+    rather than parse them back out of a sentence — and a client that fell out of step with the server
+    would either block a passphrase the server accepts or offer one it refuses, both of which look like a
+    bug in the vault. `code` is what the UI keys on; the message is for anything that only shows text."""
+    return HTTPException(status_code=400, detail={
+        "code": "weak_passphrase",
+        "message": str(exc),
+        "min_length": crypto_service.VAULT_PRODUCTION_MIN_LEN,
+        "min_distinct": crypto_service.VAULT_PRODUCTION_MIN_DISTINCT,
+    })
+
+
 @router.post("/vault/set-passphrase")
 def vault_set_passphrase(body: VaultPassphraseRequest, request: Request):
     # Set (or replace) this user's vault passphrase. The first passphrase in the workspace mints the
@@ -770,9 +791,29 @@ def vault_set_passphrase(body: VaultPassphraseRequest, request: Request):
         crypto_service.set_passphrase(user["id"], body.passphrase)
     except crypto_service.VaultLocked as exc:
         raise HTTPException(status_code=409, detail=str(exc) or "Vault enrollment is not available yet")
+    # Before the ValueError arm below, which it subclasses — reversed, the typed body would never be sent.
+    except crypto_service.WeakPassphrase as exc:
+        raise _weak_passphrase_error(exc)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"user": _session_payload(user)}
+
+
+@router.get("/vault/credentials-backups")
+def vault_credentials_backups(request: Request):
+    """Credentials backups written against the wrapping the vault has *now* — the ones a passphrase
+    change is about to strand, newest first.
+
+    Only these, never the full export history: a backup taken under a previous passphrase was already
+    stranded by an earlier change, and repeating that is noise at the moment a user is being asked to
+    weigh a decision. An empty list is not "no backups exist" — it is "none that this change would
+    break, as far as anything recorded knows" — which is why the dialog keeps a general caution for
+    files that predate this record.
+    """
+    user = _require_current_user(request)
+    fingerprint = crypto_service.current_wrapped_dek_fingerprint(user["id"])
+    exports = credentials_exports_for_fingerprint(fingerprint) if fingerprint else []
+    return {"backups": [{"exported_at": e["exported_at"]} for e in exports]}
 
 
 @router.post("/vault/change-passphrase")
@@ -782,6 +823,8 @@ def vault_change_passphrase(body: VaultChangePassphraseRequest, request: Request
         crypto_service.change_passphrase(user["id"], body.old_passphrase, body.new_passphrase)
     except crypto_service.VaultLocked as exc:
         raise HTTPException(status_code=409, detail=str(exc) or "No vault passphrase is set")
+    except crypto_service.WeakPassphrase as exc:
+        raise _weak_passphrase_error(exc)
     except ValueError as exc:
         # Wrong old passphrase, or an empty new one.
         raise HTTPException(status_code=400, detail=str(exc))

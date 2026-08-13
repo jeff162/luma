@@ -12,9 +12,12 @@ mapping:
 whole credential. `requires_app_config = False` is what stops "no app config" from reading as "setup not
 finished yet" throughout the routers.
 
-**No sandbox.** Every access URL is live bank data, so there is no later moment at which to demand a
-strong vault passphrase — the Production gate moves to connect time. The Bridge's published demo token is
-the one exemption, since it serves fabricated accounts.
+**No sandbox.** Every access URL is live bank data — there is no environment switch at which a credential
+stops being fake, because none of them ever were. This used to shape the vault gate (connect time here,
+the Production switch for a provider with a sandbox, with the Bridge's demo token exempted); it no longer
+does, since every vault passphrase must now clear the same floor before any connection is configured.
+What survives the change is the reason the distinction was worth drawing at all: a first connection here
+is already live bank access, so nothing about this provider is ever safe to treat as a rehearsal.
 
 **No cursor, and no way to ask how far back history goes.** The protocol has no change feed and no
 coverage-start field, so a backfill is a *walk*: request fixed-size windows (`WINDOW_DAYS`) backward until
@@ -97,11 +100,6 @@ EMPTY_WINDOWS_END_HISTORY = 2
 # Marker on `update_status` when the walk stopped on its request budget rather than at the end of history.
 # Carried for diagnostics and display; the machine-readable signal is `resume_later`.
 BUDGET_PAUSED = "BUDGET_PAUSED"
-
-# The Bridge's published demo token claims fabricated accounts. Recognized so the Production-strength vault
-# gate — correct for a provider whose every real credential is live bank access — does not also stand
-# between a developer and the one credential that is not.
-_DEMO_CLAIM_MARKER = "/claim/DEMO-"
 
 _HTTP_TIMEOUT_SECONDS = 60
 _ACCOUNT_ID_PREFIX = "simplefin:"
@@ -389,15 +387,6 @@ class SimpleFinAdapter(ProviderAdapter):
         if not decoded.lower().startswith("https://"):
             raise SimpleFinError("That does not look like a SimpleFIN setup token.")
         return decoded
-
-    def connect_requires_production_vault(self, payload: dict) -> bool:
-        try:
-            claim_url = self._claim_url(payload.get("setup_token", ""))
-        except SimpleFinError:
-            # An unusable token is rejected by `connect` with a message about the token. Demanding a
-            # stronger passphrase first would answer a question the user did not get wrong.
-            return False
-        return _DEMO_CLAIM_MARKER.lower() not in claim_url.lower()
 
     def connect(self, app_config: dict, payload: dict) -> dict:
         claim_url = self._claim_url(payload.get("setup_token", ""))
