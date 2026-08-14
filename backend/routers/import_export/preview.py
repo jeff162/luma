@@ -10,6 +10,13 @@ distinct values and counts for account mapping/skip totals) and surfaces continu
 best-matching saved profile and the most recent completed batch for the same file content, so a
 re-import can restore the previous column/account configuration. It writes nothing.
 
+`/preview/amounts` serves the same stage: it answers what the amount of each previewed row will be
+under the current convention and column mapping. It exists because a preview computed by a second
+implementation can disagree with the import precisely when that matters — the client used to parse
+amounts itself and got `single_unsigned`, `DR`/`CR` suffixes and blank two-column cells wrong — so
+the amounts shown come from the same `parse_amount` the import runs. It posts rows rather than a
+file because `/preview` persists nothing there is a handle to re-parse.
+
 The actual import (`/run`) and the shared parse/hash/header primitives it co-owns live in `core`;
 this module reuses those primitives so preview and run agree on how a file is read.
 """
@@ -19,17 +26,40 @@ import io
 import json
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from backend.db.database import get_db
 
 from .core import (
     MAX_DISTINCT_VALUES_PER_COLUMN,
+    AmountColumnMap,
     _detect_header_row_index,
     make_import_file_hash,
+    parse_amount,
     sniff_paypal_activity,
 )
 
 router = APIRouter()
+
+# The mapping table previews 10 rows; the cap only exists so the endpoint can't be handed a whole file.
+MAX_PREVIEW_AMOUNT_ROWS = 50
+
+
+class PreviewAmountsRequest(BaseModel):
+    rows:              list[dict]
+    amount_convention: str = "single_signed"
+    column_map:        AmountColumnMap
+
+
+def _amount_columns_mapped(convention: str, col_map: AmountColumnMap) -> bool:
+    """
+    Whether the convention's required columns are mapped. Without this a half-configured mapping
+    would render `$0.00` rather than the unparseable marker, because `parse_amount`'s `two_column`
+    branch reads a missing column as an empty cell and an empty pair sums to zero.
+    """
+    if convention == "two_column":
+        return bool(col_map.debit and col_map.credit)
+    return bool(col_map.amount)
 
 
 def _summarize_tail_lines(all_lines: list[str], count: int = 20) -> tuple[list[str], int]:
@@ -193,4 +223,30 @@ async def preview_csv(file: UploadFile = File(...)):
         "column_distinct_values": column_distinct_values,
         "column_value_counts":    column_value_counts,
         "column_distinct_meta":   column_distinct_meta,
+    }
+
+
+@router.post("/preview/amounts")
+async def preview_amounts(req: PreviewAmountsRequest):
+    """
+    Return the signed amount for each posted preview row — positionally aligned with `rows`, `null`
+    where the row can't be parsed or the convention's columns aren't mapped.
+
+    This is a loop over the import's own `parse_amount`, which is the entire point: the preview and
+    the import cannot disagree about a row's sign or magnitude because only one of them parses.
+    """
+    if len(req.rows) > MAX_PREVIEW_AMOUNT_ROWS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many rows to preview amounts for (limit {MAX_PREVIEW_AMOUNT_ROWS})",
+        )
+
+    if not _amount_columns_mapped(req.amount_convention, req.column_map):
+        return {"amounts": [None] * len(req.rows)}
+
+    return {
+        "amounts": [
+            parse_amount(row, req.amount_convention, req.column_map)
+            for row in req.rows
+        ]
     }

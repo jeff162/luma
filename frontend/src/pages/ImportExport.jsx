@@ -121,6 +121,7 @@ import {
   getNewAccountCategoryScopeToken,
   summarizeImportedCategorySettings,
 } from '../lib/importExport/importedCategorySettings.js'
+import { mergePreviewAmounts, usePreviewAmounts } from '../lib/importExport/previewAmounts.js'
 import {
   guessNewAccountTypeFromName,
   findExactAccountNameMatch,
@@ -1134,43 +1135,31 @@ function ImportTab({ onAmazonDetected }) {
     }
   }, [colDate, columnAnalysis.dateAnalysisByHeader, dateFormat, dateFormatLocked])
 
+  const previewSourceRows = useMemo(
+    () => (preview?.rows ? preview.rows.slice(skipRows) : []),
+    [preview?.rows, skipRows],
+  )
+
+  // Amounts are parsed by the backend, not here — see lib/importExport/previewAmounts.js for why the
+  // client owns no amount parsing.
+  const previewAmounts = usePreviewAmounts(previewSourceRows, amtConv, {
+    amount: colAmount, debit: colDebit, credit: colCredit, direction: colDir,
+  })
+
   function computePreviewRows() {
-    if (!preview?.rows) return []
-    return preview.rows.slice(skipRows).map((row, i) => {
-      let amount = null
-      let rawAmountStr = null
-      try {
-        if (amtConv === 'two_column' && colDebit && colCredit) {
-          const dRaw = String(row[colDebit] ?? '').replace(/[,$\s]/g, '').replace(/[()]/g, '-')
-          const cRaw = String(row[colCredit] ?? '').replace(/[,$\s]/g, '').replace(/[()]/g, '-')
-          const d = parseFloat(dRaw), c = parseFloat(cRaw)
-          if (!isNaN(d) && d !== 0) amount = d
-          else if (!isNaN(c) && c !== 0) amount = -c
-        } else if (colAmount) {
-          const cell = row[colAmount]
-          rawAmountStr = String(cell ?? '')
-          // Accept the statement formats we actually see from banks so preview totals
-          // and validation stay stable before import.
-          const cleaned = rawAmountStr
-            .replace(/[$,\s]/g, '')
-            .replace(/\(([0-9.]+)\)/, '-$1')
-            .replace(/\s*CR$/i, '')
-          const val = parseFloat(cleaned)
-          if (!isNaN(val)) amount = -val
-        }
-      } catch { }
-      return {
-        i,
-        rawDate: colDate ? String(row[colDate] ?? '').trim() : null,
-        rawDesc: colDesc ? String(row[colDesc] ?? '').trim() : null,
-        rawCat: colCategory ? String(row[colCategory] ?? '').trim() : null,
-        rawAcct: colAccount ? String(row[colAccount] ?? '').trim() : null,
-        rawAmountStr,
-        amount,
-      }
-    })
+    return previewSourceRows.map((row, i) => ({
+      i,
+      rawDate: colDate ? String(row[colDate] ?? '').trim() : null,
+      rawDesc: colDesc ? String(row[colDesc] ?? '').trim() : null,
+      rawCat: colCategory ? String(row[colCategory] ?? '').trim() : null,
+      rawAcct: colAccount ? String(row[colAccount] ?? '').trim() : null,
+      // Kept client-side: the unparseable marker shows the cell as the file wrote it, and only the
+      // single-amount-column conventions have one cell to show.
+      rawAmountStr: amtConv !== 'two_column' && colAmount ? String(row[colAmount] ?? '') : null,
+      amount: null,
+    }))
   }
-  const previewRows = computePreviewRows()
+  const previewRows = mergePreviewAmounts(computePreviewRows(), previewAmounts)
   const detectedHeaderOffset = preview?.header_row_index ?? 0
   const headerDetectedBeyondFirstLine = detectedHeaderOffset > 0
   const displayedSkipRows = skipRows + detectedHeaderOffset

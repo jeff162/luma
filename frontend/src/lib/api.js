@@ -530,6 +530,15 @@ export const api = {
   },
   updateAccount: (id, data) => request(`/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
+  // The mapping table's amounts. Parsed server-side by the same code the import runs, so the preview
+  // cannot disagree with what will be stored; `suppressMutationSignal` because this POST writes nothing.
+  previewAmounts: (body) =>
+    request('/import-export/preview/amounts', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      suppressMutationSignal: true,
+    }),
+
   // Multipart uploads intentionally bypass request() so fetch can set the boundary instead of inheriting the JSON content-type.
   previewCsv: (file) => {
     const fd = new FormData()

@@ -180,12 +180,19 @@ def _require_developer_access(request: Request):
     return user
 
 
-class ColumnMap(BaseModel):
-    date:         str
+class AmountColumnMap(BaseModel):
+    """
+    The columns an amount can be read from — the whole input `parse_amount` needs. Split out of
+    `ColumnMap` so the preview's amount endpoint can ask what a row's amount will be without
+    also having to claim a date and description column it has no use for.
+    """
     amount:       Optional[str] = None
     debit:        Optional[str] = None
     credit:       Optional[str] = None
     direction:    Optional[str] = None
+
+class ColumnMap(AmountColumnMap):
+    date:         str
     pending:      Optional[str] = None
     description:  str
     category:     Optional[str] = None
@@ -2040,7 +2047,7 @@ def _reconcile_batch_history(conn, batch_ids: list[str]) -> None:
             save_batch_snapshot(conn, batch_id, snapshot)
 
 
-def parse_amount(row: dict, convention: str, col_map: ColumnMap) -> Optional[float]:
+def parse_amount(row: dict, convention: str, col_map: AmountColumnMap) -> Optional[float]:
     """
     Parse an amount cell and return a signed float.
     Positive = debit (money out), negative = credit (money in).
@@ -2051,32 +2058,50 @@ def parse_amount(row: dict, convention: str, col_map: ColumnMap) -> Optional[flo
       50.00 CR      trailing CR = credit (income)
       50.00 DR      trailing DR = debit (expense)
       $1,234.56     dollar sign and thousands separators
+
+    A cell carries at most one of two direction signals, and they are read in separate steps because
+    they disagree about which way is positive: a `DR`/`CR` suffix names the direction outright, while a
+    bare sign is in the *file's* convention (positive = money in), which is the opposite of what this
+    function returns. Reading the suffix as if it were the latter is what made `50.00 CR` import as a
+    debit — the suffix survived one flip too many.
     """
     import re
 
-    def clean(raw: str) -> Optional[float]:
+    # The cell's numeric value in FILE convention, plus its explicit direction marker if it has one.
+    # Callers apply the direction; nothing here is in stored convention yet.
+    def clean(raw: str) -> tuple[float, Optional[str]]:
         s = raw.strip().replace(",", "").replace("$", "").replace(" ", "")
         m = re.fullmatch(r'\(([0-9.]+)\)', s)
         if m:
-            return -float(m.group(1))
-        if re.search(r'CR$', s, re.IGNORECASE):
-            val = float(re.sub(r'CR$', '', s, flags=re.IGNORECASE))
-            return -abs(val)
-        if re.search(r'DR$', s, re.IGNORECASE):
-            val = float(re.sub(r'DR$', '', s, flags=re.IGNORECASE))
-            return abs(val)
-        return float(s)
+            return -float(m.group(1)), None
+        for marker in ("CR", "DR"):
+            if re.search(f'{marker}$', s, re.IGNORECASE):
+                return abs(float(re.sub(f'{marker}$', '', s, flags=re.IGNORECASE))), marker
+        return float(s), None
+
+    # Resolve one cell to stored convention (positive = debit). An explicit marker wins; otherwise the
+    # cell's own sign decides, oriented by where it was read from — `column_sign` is -1 for a value in
+    # file convention (a single signed amount, or a credit-column cell) and +1 for a debit-column cell.
+    def to_stored(value: float, marker: Optional[str], column_sign: int) -> float:
+        if marker == "CR":
+            return -abs(value)
+        if marker == "DR":
+            return abs(value)
+        return column_sign * value
 
     try:
         if convention == "two_column":
             d_raw = str(row.get(col_map.debit,  "") or "")
             c_raw = str(row.get(col_map.credit, "") or "")
-            debit  = clean(d_raw) if d_raw.strip() else 0.0
-            credit = clean(c_raw) if c_raw.strip() else 0.0
-            return debit if debit else -(credit or 0)
+            d_value, d_marker = clean(d_raw) if d_raw.strip() else (0.0, None)
+            c_value, c_marker = clean(c_raw) if c_raw.strip() else (0.0, None)
+            debit  = to_stored(d_value, d_marker,  1)
+            credit = to_stored(c_value, c_marker, -1)
+            # `or 0.0` so a blank/blank row is a plain zero rather than the -0.0 the credit side yields.
+            return debit or credit or 0.0
 
         raw = str(row.get(col_map.amount, "") or "").strip()
-        val = clean(raw)
+        val, marker = clean(raw)
 
         if convention == "single_unsigned" and col_map.direction:
             direction = str(row.get(col_map.direction, "")).strip().lower()
@@ -2084,7 +2109,7 @@ def parse_amount(row: dict, convention: str, col_map: ColumnMap) -> Optional[flo
                 return -abs(val)
             return abs(val)
 
-        return -val
+        return to_stored(val, marker, -1)
 
     except (ValueError, TypeError, AttributeError):
         return None
