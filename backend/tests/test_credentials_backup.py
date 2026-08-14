@@ -4,7 +4,7 @@ The credentials backup: ciphertext out, re-keyed in.
 Versions 1 and 2 exported *decrypted* access tokens and app secrets into a plain zip — an artifact
 strictly weaker than the databases it came from, which hold only ciphertext — and producing it was the
 only reason the export demanded an unlocked vault. v3 copies the ciphertext instead and carries the
-vault's wrapped DEK beside it, so:
+exporting vault's own key material beside it (v4 the same, for keypair slots), so:
 
   * export needs no vault at all (the reported bug: a locked vault answered 423, and because the button
     was a plain browser navigation the user got a raw JSON page);
@@ -21,7 +21,7 @@ import json
 import unittest
 
 from backend.db.database import get_db
-from backend.routers.import_export.backup import _load_json_or_zip_payload
+from backend.routers.import_export.backup import _load_json_or_zip_payload, _stamp_content_hash
 from backend.services import crypto_service as cs
 from backend.tests._api_client import STRONG_PASSPHRASE, api_client
 
@@ -84,9 +84,10 @@ class CredentialsBackupTests(unittest.TestCase):
             client.post("/api/auth/vault/lock")
             payload = self._export(client)
 
-        self.assertEqual(payload["version"], 3)
+        self.assertEqual(payload["version"], 4)
         self.assertTrue(payload["connections"][0]["credential_enc"])
-        self.assertTrue(payload["vault"]["wrapped_dek"])
+        self.assertTrue(payload["vault"]["wrapped_private_key"])
+        self.assertTrue(payload["vault"]["sealed_dek"])
 
     # ---- knowing which backups a passphrase change would strand ----------
 
@@ -125,9 +126,26 @@ class CredentialsBackupTests(unittest.TestCase):
             payload = self._export(client)
             user_id = self._user_id(client)
             fingerprint = cs.current_wrapped_dek_fingerprint(user_id)
-        self.assertEqual(fingerprint, cs.wrapped_dek_fingerprint(payload["vault"]["wrapped_dek"]))
-        self.assertNotIn(payload["vault"]["wrapped_dek"], fingerprint)
+        self.assertEqual(fingerprint, cs.exported_slot_fingerprint(payload["vault"]))
+        self.assertNotIn(payload["vault"]["wrapped_private_key"], fingerprint)
         self.assertNotIn(PASSPHRASE, fingerprint)
+
+    def test_the_fingerprint_tracks_the_wrapping_a_change_replaces(self):
+        # Which field it is taken over is load-bearing, and the two candidates disagree exactly here:
+        # a passphrase change rewraps the slot's private key and leaves the DEK's seal byte-identical.
+        # Fingerprinting the seal would report "nothing changed" after precisely the event this record
+        # exists to detect, silently keeping stranded backups on the at-stake list forever.
+        with api_client() as (client, _):
+            self._seed(client)
+            before = self._export(client)
+            client.post("/api/auth/vault/change-passphrase",
+                        json={"old_passphrase": PASSPHRASE, "new_passphrase": OTHER_PASSPHRASE})
+            after = self._export(client)
+        self.assertEqual(before["vault"]["sealed_dek"], after["vault"]["sealed_dek"])
+        self.assertNotEqual(
+            cs.exported_slot_fingerprint(before["vault"]),
+            cs.exported_slot_fingerprint(after["vault"]),
+        )
 
     def test_no_usable_secret_appears_anywhere_in_the_file(self):
         # The invariant the whole format change exists for. Asserted over the serialized bytes rather
@@ -202,6 +220,49 @@ class CredentialsBackupTests(unittest.TestCase):
                 stored = conn.execute("SELECT credential_enc FROM connection WHERE external_id='ext-1'").fetchone()
             self.assertNotEqual(stored["credential_enc"], payload["connections"][0]["credential_enc"],
                                 "re-keyed under this workspace's DEK, not stored as the backup's ciphertext")
+
+    def test_a_version_3_file_from_before_keypair_slots_still_restores(self):
+        # Files already sitting in people's backup folders were written against directly-wrapped slots.
+        # A credentials backup is kept precisely for the day the machine is gone, so the reader has to
+        # keep understanding the older shape — the version bump exists to route it, not to retire it.
+        import os
+        import uuid
+
+        foreign_user = str(uuid.uuid4())
+        dek = os.urandom(cs.DEK_BYTES)
+        salt = os.urandom(16)
+        kek = cs._derive_kek(PASSPHRASE, salt)
+        payload = _stamp_content_hash({
+            "version":     3,
+            "exported_at": "2026-01-01T00:00:00Z",
+            "connections": [{
+                "id": "conn-1", "provider": "plaid", "external_id": "ext-1", "credential": "",
+                "credential_enc": cs.encrypt_secret(dek, TOKEN, aad=cs._connection_aad("plaid", "ext-1")),
+                "institution": "Northgate Bank",
+            }],
+            "provider_configs": [{
+                "provider": "plaid", "client_id": "cid", "secret": "",
+                "secret_enc": cs.encrypt_secret(dek, APP_SECRET, aad=cs._app_credential_aad("plaid")),
+                "env": "sandbox",
+            }],
+            "vault": {
+                "user_id": foreign_user, "method": "passphrase",
+                "wrapped_dek": cs._wrap(kek, dek, aad=cs._slot_aad(foreign_user)),
+                "kdf_algo": "scrypt", "kdf_salt": cs._b64e(salt),
+                "kdf_n": cs.SCRYPT_N, "kdf_r": cs.SCRYPT_R, "kdf_p": cs.SCRYPT_P,
+                "meets_production_min": True,
+            },
+        })
+
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": OTHER_PASSPHRASE})
+            local_user = self._user_id(client)
+            r = client.post(
+                "/api/import-export/restore/credentials",
+                json={"data": payload, "passphrase": PASSPHRASE},
+            )
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(self._stored_secrets(local_user), (TOKEN, APP_SECRET))
 
     # ---- refusals -------------------------------------------------------
 

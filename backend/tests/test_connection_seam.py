@@ -737,13 +737,13 @@ class CredentialBackupTests(unittest.TestCase):
             exported = client.get("/api/import-export/backup/credentials")
             self.assertEqual(exported.status_code, 200)
             payload = _load_json_or_zip_payload(exported.content, "luma_credentials.zip", "luma_credentials")
-            # v3 exports CIPHERTEXT plus the vault material that reopens it — the token itself must not
-            # be in the file (see routers/import_export/backup.py::export_credentials).
-            self.assertEqual(payload["version"], 3)
+            # The export carries CIPHERTEXT plus the vault material that reopens it — the token itself
+            # must not be in the file (see routers/import_export/backup.py::export_credentials).
+            self.assertEqual(payload["version"], 4)
             self.assertEqual(payload["connections"][0]["provider"], "plaid")
             self.assertNotIn("access-sandbox-xyz", json.dumps(payload))
             self.assertTrue(payload["connections"][0]["credential_enc"])
-            self.assertTrue(payload["vault"]["wrapped_dek"])
+            self.assertTrue(payload["vault"]["sealed_dek"])
 
             restored = client.post("/api/import-export/restore/credentials", json={"data": payload})
             self.assertEqual(restored.status_code, 200, restored.text)

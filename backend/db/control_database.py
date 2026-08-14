@@ -209,28 +209,6 @@ def init_control_db():
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
-            -- Vault key slots (multi-wrap envelope encryption). One workspace DEK protects every
-            -- per-connection provider secret; it is wrapped once per user "slot" under a KEK derived
-            -- from that user's unlock secret. A slot stores only the *wrapped* DEK and the public KDF
-            -- parameters — never the unlock secret and never the DEK in the clear. `method` is
-            -- 'passphrase' today; a 'passkey' (WebAuthn PRF) method joins in a later phase, which is
-            -- why this is a per-(user, method) table rather than one column on user_account.
-            CREATE TABLE IF NOT EXISTS vault_slot (
-                id                   TEXT PRIMARY KEY,
-                user_id              TEXT NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,
-                method               TEXT NOT NULL DEFAULT 'passphrase',
-                wrapped_dek          TEXT NOT NULL,
-                kdf_algo             TEXT NOT NULL DEFAULT 'scrypt',
-                kdf_salt             TEXT NOT NULL,
-                kdf_n                INTEGER NOT NULL,
-                kdf_r                INTEGER NOT NULL,
-                kdf_p                INTEGER NOT NULL,
-                meets_production_min INTEGER NOT NULL DEFAULT 0,
-                created_at           TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at           TEXT NOT NULL DEFAULT (datetime('now')),
-                UNIQUE(user_id, method)
-            );
-
             -- One row per credentials backup taken, recording *which wrapping* went into the file.
             --
             -- A credentials backup carries the DEK wrapped under the passphrase in force when it was
@@ -307,6 +285,8 @@ def init_control_db():
                     "UPDATE user_account SET role = 'admin' WHERE id = ?",
                     (first_user["id"],),
                 )
+
+        _init_vault_slot_table(conn)
 
     # After the schema transaction commits (so `_create_user_with_tenant`'s own connection can write),
     # fold any legacy local preference profiles into unified `user_account` identities.
@@ -803,25 +783,243 @@ def recovery_code_count(user_id: str) -> int:
 
 # --- Vault key slots (see the `vault_slot` table and `crypto_service`) ---------------------------
 #
-# A slot is one wrapping of the single workspace DEK under one user's unlock method. The control DB
-# only ever holds the *wrapped* DEK plus public KDF parameters; the unlock secret and the DEK in the
-# clear live only in the process at unlock time. These helpers are thin storage — all crypto (KDF,
-# wrap/unwrap, the unlock cache) lives in `crypto_service`.
+# A slot is one user's way into the single workspace DEK. The control DB holds only material that is
+# useless without the unlock secret; the secret itself and the DEK in the clear live only in the
+# process at unlock time. These helpers are thin storage — all crypto (KDF, wrap/unwrap, sealing, the
+# unlock cache) lives in `crypto_service`.
+#
+# Two slot formats coexist, because the first one cannot express what phase 5 needs:
+#
+#   format 1 — `wrapped_dek` = AEAD(KEK, DEK). The KEK comes from the user's own secret, so *only that
+#              user* can ever produce their wrap. That makes granting a second person access require a
+#              secret to travel between two humans, and makes key rotation unable to preserve anyone
+#              else's slot (the rotator cannot compute a KEK they have no secret for).
+#   format 2 — the slot owns an X25519 keypair: `public_key` in the clear, `wrapped_private_key` =
+#              AEAD(KEK, private key), and `sealed_dek` = the DEK sealed *to that public key*. Anyone
+#              holding the DEK can therefore seal it for anyone else without holding their secret,
+#              which is what makes enrollment ("this user asked for access") and rotation possible.
+#
+# A format-2 slot with a NULL `sealed_dek` is a real, fully-formed slot that simply has not been
+# granted the DEK yet — the pending state of the enrollment flow, not a half-written row.
+#
+# `sealed_dek_prev` exists only during a rotation. Rotation must write two databases (slots here, the
+# re-encrypted ciphertext in the data DB) and no transaction spans both, so the previous DEK stays
+# reachable until the new ciphertext is committed. See `crypto_service.rotate_dek`.
+
+_VAULT_SLOT_DDL = """
+    CREATE TABLE IF NOT EXISTS {table} (
+        id                   TEXT PRIMARY KEY,
+        user_id              TEXT NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,
+        method               TEXT NOT NULL DEFAULT 'passphrase',
+        label                TEXT,
+        format               INTEGER NOT NULL DEFAULT 2,
+        kdf_algo             TEXT,
+        kdf_salt             TEXT,
+        kdf_n                INTEGER,
+        kdf_r                INTEGER,
+        kdf_p                INTEGER,
+        credential_id        TEXT,
+        prf_salt             TEXT,
+        public_key           TEXT,
+        wrapped_private_key  TEXT,
+        sealed_dek           TEXT,
+        sealed_dek_prev      TEXT,
+        wrapped_dek          TEXT,
+        meets_production_min INTEGER NOT NULL DEFAULT 0,
+        created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+"""
+
+# One passphrase per user, any number of passkeys — a person may keep a laptop's platform
+# authenticator and a phone's, and both must open the same vault. This replaces the original
+# table-level UNIQUE(user_id, method), which allowed only one of each.
+_VAULT_SLOT_INDEXES = """
+    CREATE UNIQUE INDEX IF NOT EXISTS vault_slot_one_passphrase
+        ON vault_slot(user_id) WHERE method = 'passphrase';
+    CREATE UNIQUE INDEX IF NOT EXISTS vault_slot_credential
+        ON vault_slot(credential_id) WHERE credential_id IS NOT NULL;
+"""
+
+
+def _init_vault_slot_table(conn):
+    """Create `vault_slot`, rebuilding a pre-phase-4 table in place.
+
+    The old shape cannot be reached by ALTER: `wrapped_dek` and the KDF columns were NOT NULL (a
+    passkey slot has no KDF parameters and a pending slot has no wrapped key at all), and the
+    table-level UNIQUE(user_id, method) permitted only one passkey. Rows copy across as **format 1** —
+    converting one needs the passphrase, so `crypto_service.unlock` does it lazily at the one moment
+    both the KEK and the DEK are in hand.
+    """
+    conn.executescript(_VAULT_SLOT_DDL.format(table="vault_slot"))
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(vault_slot)").fetchall()}
+    if "format" not in columns:
+        # A partially-applied earlier attempt leaves the scratch table behind; start it clean.
+        conn.execute("DROP TABLE IF EXISTS vault_slot_rebuilt")
+        conn.executescript(_VAULT_SLOT_DDL.format(table="vault_slot_rebuilt"))
+        conn.execute(
+            """
+            INSERT INTO vault_slot_rebuilt
+                (id, user_id, method, format, kdf_algo, kdf_salt, kdf_n, kdf_r, kdf_p,
+                 wrapped_dek, meets_production_min, created_at, updated_at)
+            SELECT id, user_id, method, 1, kdf_algo, kdf_salt, kdf_n, kdf_r, kdf_p,
+                   wrapped_dek, meets_production_min, created_at, updated_at
+            FROM vault_slot
+            """
+        )
+        conn.execute("DROP TABLE vault_slot")
+        conn.execute("ALTER TABLE vault_slot_rebuilt RENAME TO vault_slot")
+    conn.executescript(_VAULT_SLOT_INDEXES)
+
+
+# A slot that can actually produce the DEK, as opposed to one still awaiting a grant. Written once
+# here because three different questions ask it — who counts toward the vault existing, whose wrap the
+# Production floor must hold for, and which slots a rotation has to re-seal.
+_HOLDS_DEK = "((format = 1 AND wrapped_dek IS NOT NULL) OR (format = 2 AND sealed_dek IS NOT NULL))"
+
 
 def get_vault_slot(user_id: str, method: str = "passphrase") -> dict | None:
+    """One user's slot for a method. Passphrase slots are unique per user, so this is exact for them;
+    for passkeys (several per user) it returns the oldest and callers wanting all of them use
+    `list_vault_slots`."""
     with get_control_db() as conn:
         row = conn.execute(
-            "SELECT * FROM vault_slot WHERE user_id = ? AND method = ?",
+            "SELECT * FROM vault_slot WHERE user_id = ? AND method = ? ORDER BY created_at, id",
             (user_id, method),
         ).fetchone()
     return dict(row) if row else None
+
+
+def get_vault_slot_by_id(slot_id: str) -> dict | None:
+    with get_control_db() as conn:
+        row = conn.execute("SELECT * FROM vault_slot WHERE id = ?", (slot_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_vault_slot_by_credential(credential_id: str) -> dict | None:
+    with get_control_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM vault_slot WHERE credential_id = ?", (credential_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_vault_slots(user_id: str | None = None, *, method: str | None = None) -> list[dict]:
+    clauses, params = [], []
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    if method is not None:
+        clauses.append("method = ?")
+        params.append(method)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with get_control_db() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM vault_slot {where} ORDER BY created_at, id", params
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_pending_vault_slots() -> list[dict]:
+    """Slots awaiting a grant, with the identity behind each — the enrollment queue an unlocked member
+    is asked to approve. Joined here rather than in the router because "who is waiting" is one
+    question and a caller assembling it from two round trips would have to re-derive the join."""
+    with get_control_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT s.*, u.username, u.display_name
+            FROM vault_slot s
+            JOIN user_account u ON u.id = s.user_id
+            WHERE NOT {_HOLDS_DEK}
+            ORDER BY s.created_at, s.id
+            """
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_vault_members() -> list[dict]:
+    """One row per person who can open the vault, with how many ways in they have.
+
+    Grouped by user rather than listed per slot because this answers a question about *people* — who
+    holds the workspace's credentials — and someone with a passphrase and two passkeys is one person
+    with access, not three."""
+    with get_control_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT u.id AS user_id, u.username, u.display_name, u.role,
+                   COUNT(*) AS method_count, MIN(s.created_at) AS since
+            FROM vault_slot s
+            JOIN user_account u ON u.id = s.user_id
+            WHERE {_HOLDS_DEK}
+            GROUP BY u.id, u.username, u.display_name, u.role
+            ORDER BY MIN(s.created_at), u.username
+            """
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def upsert_vault_slot(
     user_id: str,
     *,
     method: str,
-    wrapped_dek: str,
+    slot_id: str | None = None,
+    label: str | None = None,
+    kdf_algo: str | None = None,
+    kdf_salt: str | None = None,
+    kdf_n: int | None = None,
+    kdf_r: int | None = None,
+    kdf_p: int | None = None,
+    credential_id: str | None = None,
+    prf_salt: str | None = None,
+    public_key: str,
+    wrapped_private_key: str,
+    sealed_dek: str | None,
+    meets_production_min: bool,
+) -> str:
+    """Write a format-2 slot, replacing the row `slot_id` names if it already exists.
+
+    Identity is by slot id alone — never re-derived from (user, method) — because the caller has
+    already bound that id into the AAD of the material being stored. A row written under one id and
+    saved over another would be unopenable."""
+    with get_control_db() as conn:
+        existing = conn.execute("SELECT id FROM vault_slot WHERE id = ?", (slot_id,)).fetchone() if slot_id else None
+        values = (
+            method, label, kdf_algo, kdf_salt, kdf_n, kdf_r, kdf_p, credential_id, prf_salt,
+            public_key, wrapped_private_key, sealed_dek, 1 if meets_production_min else 0,
+        )
+        if existing:
+            conn.execute(
+                """
+                UPDATE vault_slot SET
+                    method = ?, label = ?, format = 2,
+                    kdf_algo = ?, kdf_salt = ?, kdf_n = ?, kdf_r = ?, kdf_p = ?,
+                    credential_id = ?, prf_salt = ?,
+                    public_key = ?, wrapped_private_key = ?, sealed_dek = ?,
+                    sealed_dek_prev = NULL, wrapped_dek = NULL,
+                    meets_production_min = ?, updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                values + (existing["id"],),
+            )
+            return existing["id"]
+        new_id = slot_id or str(uuid.uuid4())
+        conn.execute(
+            """
+            INSERT INTO vault_slot
+                (id, user_id, method, label, format, kdf_algo, kdf_salt, kdf_n, kdf_r, kdf_p,
+                 credential_id, prf_salt, public_key, wrapped_private_key, sealed_dek,
+                 meets_production_min)
+            VALUES (?,?,?,?,2,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (new_id, user_id) + values,
+        )
+        return new_id
+
+
+def rewrap_vault_slot_secret(
+    slot_id: str,
+    *,
+    wrapped_private_key: str,
     kdf_algo: str,
     kdf_salt: str,
     kdf_n: int,
@@ -829,27 +1027,51 @@ def upsert_vault_slot(
     kdf_p: int,
     meets_production_min: bool,
 ):
+    """Re-guard an existing slot with a new unlock secret, touching nothing else.
+
+    A passphrase change replaces only the KEK, so the keypair and the DEK's seal stay exactly as they
+    are — no other slot is disturbed, no credential is re-encrypted, and nothing mid-rotation is
+    disrupted. Re-sealing here as well would be busywork that quietly discards `sealed_dek_prev`."""
     with get_control_db() as conn:
         conn.execute(
             """
-            INSERT INTO vault_slot
-                (id, user_id, method, wrapped_dek, kdf_algo, kdf_salt, kdf_n, kdf_r, kdf_p, meets_production_min)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(user_id, method) DO UPDATE SET
-                wrapped_dek          = excluded.wrapped_dek,
-                kdf_algo             = excluded.kdf_algo,
-                kdf_salt             = excluded.kdf_salt,
-                kdf_n                = excluded.kdf_n,
-                kdf_r                = excluded.kdf_r,
-                kdf_p                = excluded.kdf_p,
-                meets_production_min = excluded.meets_production_min,
-                updated_at           = datetime('now')
+            UPDATE vault_slot
+               SET wrapped_private_key = ?, kdf_algo = ?, kdf_salt = ?, kdf_n = ?, kdf_r = ?, kdf_p = ?,
+                   meets_production_min = ?, updated_at = datetime('now')
+             WHERE id = ?
             """,
-            (
-                str(uuid.uuid4()), user_id, method, wrapped_dek, kdf_algo, kdf_salt,
-                kdf_n, kdf_r, kdf_p, 1 if meets_production_min else 0,
-            ),
+            (wrapped_private_key, kdf_algo, kdf_salt, kdf_n, kdf_r, kdf_p,
+             1 if meets_production_min else 0, slot_id),
         )
+
+
+def set_vault_slot_sealed_dek(slot_id: str, sealed_dek: str, *, keep_previous: bool = False):
+    """Point a slot at a (new) DEK. `keep_previous` retains the outgoing seal in `sealed_dek_prev` so a
+    rotation interrupted before the ciphertext is rewritten leaves both keys reachable."""
+    with get_control_db() as conn:
+        conn.execute(
+            f"""
+            UPDATE vault_slot
+               SET sealed_dek_prev = {'sealed_dek' if keep_previous else 'NULL'},
+                   sealed_dek = ?,
+                   updated_at = datetime('now')
+             WHERE id = ?
+            """,
+            (sealed_dek, slot_id),
+        )
+
+
+def clear_vault_slot_previous_deks():
+    """Drop every retained previous seal — the last step of a rotation, once no ciphertext needs the
+    old key. Workspace-wide because the DEK is workspace-wide: a rotation either finished for everyone
+    or has not finished."""
+    with get_control_db() as conn:
+        conn.execute("UPDATE vault_slot SET sealed_dek_prev = NULL WHERE sealed_dek_prev IS NOT NULL")
+
+
+def delete_vault_slot(slot_id: str):
+    with get_control_db() as conn:
+        conn.execute("DELETE FROM vault_slot WHERE id = ?", (slot_id,))
 
 
 def delete_vault_slots(user_id: str, method: str | None = None):
@@ -864,21 +1086,58 @@ def delete_vault_slots(user_id: str, method: str | None = None):
 
 
 def vault_slot_count() -> int:
+    """Slots that hold the DEK. A pending slot is deliberately not counted: the vault "exists" once
+    some slot can open it, and counting a request to join as an existing vault would let the first
+    user's own enrollment mint a second DEK over the top of the real one."""
     with get_control_db() as conn:
-        return conn.execute("SELECT COUNT(*) FROM vault_slot").fetchone()[0]
+        return conn.execute(f"SELECT COUNT(*) FROM vault_slot WHERE {_HOLDS_DEK}").fetchone()[0]
 
 
 def all_slots_meet_production_min() -> bool:
     # Production readiness is an *all-slots* property: the DEK is only as strong as its weakest wrap,
     # so a single weak passphrase slot would let an offline attacker recover the DEK (and every token).
+    # Pending slots are exempt because they wrap nothing yet — the grant is where they start counting.
     with get_control_db() as conn:
-        total = conn.execute("SELECT COUNT(*) FROM vault_slot").fetchone()[0]
+        total = conn.execute(f"SELECT COUNT(*) FROM vault_slot WHERE {_HOLDS_DEK}").fetchone()[0]
         if total == 0:
             return False
         weak = conn.execute(
-            "SELECT COUNT(*) FROM vault_slot WHERE meets_production_min = 0"
+            f"SELECT COUNT(*) FROM vault_slot WHERE {_HOLDS_DEK} AND meets_production_min = 0"
         ).fetchone()[0]
     return weak == 0
+
+
+def upgrade_vault_slot_to_format_2(
+    slot_id: str,
+    *,
+    public_key: str,
+    wrapped_private_key: str,
+    sealed_dek: str,
+    old_fingerprint: str | None,
+    new_fingerprint: str,
+):
+    """Convert one legacy slot to the keypair format, carrying its credentials-export history with it.
+
+    Re-pointing `credentials_export` is not bookkeeping: those rows answer "which backups would a
+    passphrase change strand", keyed by the wrapping in force. The upgrade changes which value that is
+    while changing *nothing* about which passphrase opens those files, so leaving the rows behind would
+    silently stop the change dialog naming backups that are still perfectly restorable.
+    """
+    with get_control_db() as conn:
+        conn.execute(
+            """
+            UPDATE vault_slot
+               SET format = 2, public_key = ?, wrapped_private_key = ?, sealed_dek = ?,
+                   wrapped_dek = NULL, updated_at = datetime('now')
+             WHERE id = ?
+            """,
+            (public_key, wrapped_private_key, sealed_dek, slot_id),
+        )
+        if old_fingerprint:
+            conn.execute(
+                "UPDATE credentials_export SET wrapped_dek_fingerprint = ? WHERE wrapped_dek_fingerprint = ?",
+                (new_fingerprint, old_fingerprint),
+            )
 
 
 def record_credentials_export(user_id: str | None, wrapped_dek_fingerprint: str) -> None:

@@ -121,6 +121,20 @@ class VaultChangePassphraseRequest(BaseModel):
     new_passphrase: str
 
 
+class VaultPasskeyRegisterRequest(BaseModel):
+    # `prf_output` is the authenticator's PRF result for `prf_salt`, base64. It is the unlock secret
+    # itself — the exact counterpart of a passphrase in the request above — and is never stored.
+    credential_id: str
+    prf_output: str
+    prf_salt: str
+    label: str | None = None
+
+
+class VaultPasskeyUnlockRequest(BaseModel):
+    credential_id: str
+    prf_output: str
+
+
 class EnableAuthRequest(BaseModel):
     enabled: bool = True
     # When present, turning on sign-in protection claims an existing identity as admin: `claim_user_id`
@@ -222,10 +236,17 @@ def _session_payload(user: dict) -> dict:
         "display_name": user.get("display_name") or user["username"],
         "role": user.get("role", "member"),
         # Vault status: whether the workspace DEK exists at all, whether *this* user can unlock it
-        # (has a slot), and whether it is unlocked in the current process for this user.
+        # (holds a slot that opens it), and whether it is unlocked in the current process for them.
         "vault_configured": crypto_service.vault_configured(),
         "vault_has_passphrase": crypto_service.user_has_slot(user["id"]),
         "vault_unlocked": crypto_service.is_unlocked(user["id"]),
+        # A slot that exists but has not been granted the DEK. Distinct from "no slot" because the two
+        # ask opposite things of the user — one offers to enrol, the other says who to wait for.
+        "vault_access_pending": crypto_service.user_access_pending(user["id"]),
+        # Whether this user could approve someone else, so the UI can offer the queue only to a member
+        # who can act on it. Requires holding the DEK, not merely being an admin.
+        "vault_can_grant": crypto_service.is_unlocked(user["id"]),
+        "vault_passkeys": crypto_service.user_passkey_slots(user["id"]),
         # The floor the dialog gates its own submit button on. Served rather than duplicated in the
         # client because the two must agree exactly: a client holding its own copy either blocks a
         # passphrase the server would take or offers one it refuses, and both read as a broken vault.
@@ -783,14 +804,14 @@ def _weak_passphrase_error(exc: crypto_service.WeakPassphrase) -> HTTPException:
 @router.post("/vault/set-passphrase")
 def vault_set_passphrase(body: VaultPassphraseRequest, request: Request):
     # Set (or replace) this user's vault passphrase. The first passphrase in the workspace mints the
-    # DEK; re-setting your own re-wraps it (requires being unlocked). Enrolling a *new* user into an
-    # existing vault (co-present / invite) is a later phase — until then only the first user, or a
-    # user re-setting their own, can set a passphrase.
+    # DEK; re-setting your own re-seals it (requires being unlocked). For anyone else this is an
+    # *enrollment* — the slot is written and waits for a member to grant it, which the response reports
+    # as `vault_access_pending` rather than as a failure.
     user = _require_current_user(request)
     try:
         crypto_service.set_passphrase(user["id"], body.passphrase)
     except crypto_service.VaultLocked as exc:
-        raise HTTPException(status_code=409, detail=str(exc) or "Vault enrollment is not available yet")
+        raise HTTPException(status_code=409, detail=str(exc) or "The vault could not be opened")
     # Before the ValueError arm below, which it subclasses — reversed, the typed body would never be sent.
     except crypto_service.WeakPassphrase as exc:
         raise _weak_passphrase_error(exc)
@@ -836,6 +857,8 @@ def vault_unlock(body: VaultPassphraseRequest, request: Request):
     user = _require_current_user(request)
     try:
         crypto_service.unlock(user["id"], body.passphrase)
+    except crypto_service.VaultAccessPending as exc:
+        raise _access_pending_error(exc)
     except crypto_service.VaultLocked as exc:
         raise HTTPException(status_code=409, detail=str(exc) or "No vault passphrase is set")
     except ValueError as exc:
@@ -847,6 +870,193 @@ def vault_unlock(body: VaultPassphraseRequest, request: Request):
 def vault_lock(request: Request):
     user = _require_current_user(request)
     crypto_service.lock(user["id"])
+    return {"user": _session_payload(user)}
+
+
+def _access_pending_error(exc: Exception) -> HTTPException:
+    """A correct secret against a slot nobody has approved yet.
+
+    Coded rather than folded into the generic locked/refused arms because it is the one vault failure a
+    user cannot act on alone, and the two neighbouring stories both send them somewhere useless — "wrong
+    passphrase" invites retyping something that was never wrong, and "vault locked" invites unlocking a
+    slot that has nothing in it."""
+    return HTTPException(status_code=409, detail={
+        "code":    "vault_access_pending",
+        "message": str(exc) or "Vault access has not been approved yet.",
+    })
+
+
+# --- Vault access: enrollment, grant, revoke, rotate ----------------------------------------------
+#
+# Granting is deliberately **not** admin-gated: it is the same authority as connecting or syncing a data
+# source (any member with the vault open), and gating it on admin would mean a household's only unlocked
+# member could be unable to let anyone else in. Admin still governs *accounts*; this governs credentials.
+
+@router.get("/vault/access-requests")
+def vault_access_requests(request: Request):
+    """Who is waiting for vault access. Readable by any signed-in user — it names people already in the
+    workspace and carries no key material — so the UI can show a waiting user their own request as well
+    as show a member the queue."""
+    _require_current_user(request)
+    return {"requests": crypto_service.pending_access_requests()}
+
+
+@router.get("/vault/members")
+def vault_members(request: Request):
+    """Who can open the vault. Readable by any signed-in user, like the request queue: it names people
+    already in the workspace and carries no key material, and "who holds the credentials" is a question
+    a household member is entitled to an answer to."""
+    _require_current_user(request)
+    return {"members": crypto_service.vault_members()}
+
+
+@router.post("/vault/access-requests/{slot_id}/approve")
+def vault_approve_access(slot_id: str, request: Request):
+    user = _require_current_user(request)
+    try:
+        granted = crypto_service.grant_access(user["id"], slot_id)
+    except crypto_service.VaultLocked:
+        raise HTTPException(status_code=423, detail={
+            "code":    "vault_locked",
+            "message": "Unlock the vault to approve access for someone else.",
+        })
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"granted": granted, "requests": crypto_service.pending_access_requests()}
+
+
+@router.post("/vault/access/{user_id}/revoke")
+def vault_revoke_access(user_id: str, request: Request):
+    """Remove someone's vault access. Admin-gated, unlike granting: this is the removal half of user
+    management, and it is the one direction that can be performed against a person who is not present.
+    Perimeter-off installs fall through the usual `_require_admin_or_local` seam — with no sign-in there
+    is no admin boundary to enforce, since anyone can already select any identity."""
+    admin = _require_admin_or_local(request)
+    if admin.get("id") == user_id:
+        # Revoking your own last slot is the "remove my only unlock method" footgun wearing another
+        # label, and there is no recovery path behind it.
+        raise HTTPException(status_code=400, detail="Use Vault settings to manage your own unlock methods")
+    crypto_service.revoke_access(user_id)
+    return {"ok": True}
+
+
+@router.post("/vault/rotate")
+def vault_rotate(request: Request):
+    """Replace the workspace key and re-encrypt every stored credential under it.
+
+    Not admin-gated, for the same reason approving is not: it needs the DEK, and only an unlocked member
+    has it. What it *does* need is for revocations to have happened first — rotation re-seals for the
+    slots that remain, so removing access and then rotating is the order that ends a departed member's
+    reach."""
+    user = _require_current_user(request)
+    try:
+        result = crypto_service.rotate_dek(user["id"])
+    except crypto_service.VaultLocked:
+        raise HTTPException(status_code=423, detail={
+            "code":    "vault_locked",
+            "message": "Unlock the vault to replace its key.",
+        })
+    except crypto_service.VaultDecryptError:
+        raise HTTPException(status_code=409, detail={
+            "code":    "vault_rotation_blocked",
+            "message": "A stored credential could not be read with the current key, so it cannot be "
+                       "re-encrypted. Reconnect the affected data source, then try again.",
+        })
+    return {"result": result, "user": _session_payload(user)}
+
+
+# --- Passkey slots (WebAuthn PRF) -----------------------------------------------------------------
+#
+# The browser runs the ceremony; the backend only ever sees the PRF output, which it treats exactly as
+# it treats a passphrase (see `crypto_service` for why no assertion is verified). What the backend does
+# own is the two preconditions the browser can only report as opaque failures.
+
+def _passkey_context(request: Request) -> dict:
+    """The Relying Party id a ceremony must run under, or why one cannot run here.
+
+    Two constraints, both outside the app's control. WebAuthn requires a **secure context**, so a
+    cleartext network bind cannot register or use a passkey at all. And an RP id must be a *domain* —
+    a bare IP address is not one, so a LAN server reached as `192.168.x.x` can never host passkeys
+    however it is served. Both are reported as stated reasons rather than left to surface as an
+    unexplained browser exception, because in both cases the answer is "use a passphrase here".
+    """
+    host = (request.url.hostname or "").strip("[]")
+    # A hostname made only of digits and dots, or containing a colon, is an address rather than a name.
+    is_address = bool(host) and (":" in host or all(part.isdigit() for part in host.split(".") if part))
+    # The address check comes first because the two reasons differ in whether anything can be done: an
+    # address can never host passkeys however it is served, while cleartext is fixed by configuring
+    # HTTPS. Reporting the fixable one on a host where the fix would not help sends the user to set up
+    # TLS and arrive back at the same refusal.
+    if is_address:
+        return {"available": False, "reason": "ip_address_host", "rp_id": None}
+    if not (transport.request_is_https(request) or transport.request_is_loopback(request)):
+        return {"available": False, "reason": "insecure_context", "rp_id": None}
+    return {"available": True, "reason": None, "rp_id": host}
+
+
+@router.get("/vault/passkey/params")
+def vault_passkey_params(request: Request):
+    """Everything the browser needs to run a registration or unlock ceremony.
+
+    The registration salt is minted per call and echoed back by the client on register, rather than
+    stored ahead of time: a salt only becomes meaningful once a credential exists to pair it with, and a
+    ceremony the user abandons should leave nothing behind.
+    """
+    user = _require_current_user(request)
+    context = _passkey_context(request)
+    return {
+        **context,
+        "user_handle":   user["id"],
+        "user_name":     user["username"],
+        "display_name":  user.get("display_name") or user["username"],
+        "register_salt": crypto_service.new_passkey_salt(),
+        # Registered credentials, so `get()` can scope itself and the UI can list what exists.
+        "credentials":   crypto_service.passkey_credentials(user["id"]),
+    }
+
+
+@router.post("/vault/passkey/register")
+def vault_passkey_register(body: VaultPasskeyRegisterRequest, request: Request):
+    user = _require_current_user(request)
+    if not _passkey_context(request)["available"]:
+        raise HTTPException(status_code=400, detail="Passkeys need an HTTPS connection to a named host")
+    try:
+        result = crypto_service.register_passkey_slot(
+            user["id"], credential_id=body.credential_id, prf_output=body.prf_output,
+            prf_salt=body.prf_salt, label=body.label,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"passkey": result, "user": _session_payload(user)}
+
+
+@router.post("/vault/passkey/unlock")
+def vault_passkey_unlock(body: VaultPasskeyUnlockRequest, request: Request):
+    user = _require_current_user(request)
+    try:
+        owner_id, _ = crypto_service.unlock_with_passkey(body.credential_id, body.prf_output)
+    except crypto_service.VaultAccessPending as exc:
+        raise _access_pending_error(exc)
+    except crypto_service.VaultLocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc) or "That passkey is not registered")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if owner_id != user["id"]:
+        # The credential opened a slot belonging to someone else. Its DEK was cached against its owner,
+        # so nothing leaks to this session — but a signed-in user must not end up operating the vault as
+        # a different identity, so this is refused rather than quietly honoured.
+        crypto_service.lock(owner_id)
+        raise HTTPException(status_code=403, detail="That passkey belongs to a different user")
+    return {"user": _session_payload(user)}
+
+
+@router.delete("/vault/passkey/{slot_id}")
+def vault_passkey_remove(slot_id: str, request: Request):
+    user = _require_current_user(request)
+    try:
+        crypto_service.remove_slot(user["id"], slot_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"user": _session_payload(user)}
 
 

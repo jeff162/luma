@@ -1,6 +1,6 @@
 # Security & deployment model
 
-**Status: decided (2026-07-30). Phases 1–3 implemented (identity unified to one `user_account` table,
+**Status: COMPLETE (2026-08-13). Every phase is built.** Phases 1–3 implemented (identity unified to one `user_account` table,
 session-based identity in both modes, enable/disable as flag flips; and the multi-wrap vault core +
 transport-security policy — workspace DEK, passphrase slots, server-side unlock cache, `server_managed`/
 master-key retired, Production passphrase gate, `SESSION_COOKIE_SECURE`/`--proxy-headers`/computed HTTPS
@@ -8,8 +8,11 @@ task), phase 6a (the provider-agnostic `connection`/adapter seam, Plaid retarget
 (app-level provider creds into the vaulted `provider_config` table, `.env` demoted to a bootstrap fallback),
 phase 6b-2 (the per-provider Connections-tab UI + the vault set/unlock UI; provider config removed from
 Settings), and phase 6b-3 (the deferred account columns — migration v20: `external_account_id`/
-`connection_id`/`provider`, `plaid_item` table dropped, backup payload v8 with v7 restore-translation);
-phases 4–5 (passkey slots, enrollment/invite) not started — they are all that remains of this initiative.** This
+`connection_id`/`provider`, `plaid_item` table dropped, backup payload v8 with v7 restore-translation),
+6c (SimpleFIN as the second adapter and the seam generalizations it paid for), and finally **phases 4–5**
+(passkey PRF slots; enrollment, grant, revocation and key rotation). The last of those replaced the
+planned invite ceremony with **keypair slots** — see "A slot holds a keypair" for the rotation
+impossibility that forced the change. This
 is the design decision that
 [`pre-auth-security-ui.md`](pre-auth-security-ui.md) was blocked on. It settles which deployments
 Luma supports, what the login perimeter is (and isn't) for, and how Plaid credentials are protected
@@ -454,17 +457,68 @@ Deployment packaging (LAN-server vs single-user desktop shell) is tracked separa
 [`deployment-topologies.md`](deployment-topologies.md); this section is only the transport-security
 policy that the vault phase must honor.
 
+### A slot holds a keypair, not the DEK (settled 2026-08-13, supersedes direct wrapping)
+
+The original design wrapped the DEK *directly* under each slot's KEK. That works for unlocking and for
+nothing else, because a wrap made from someone's own secret can only ever be made **by** them. Two
+consequences, one of which was recorded as a design and one as a plan:
+
+- **Rotation as written was not implementable.** "Generate DEK′, re-encrypt all tokens under it, re-wrap
+  DEK′ for every *remaining* slot" (see "Provisioning a new user") requires each remaining user's
+  passphrase, which the rotating user does not have. Direct wrapping could only ever have **destroyed**
+  every other slot and forced everyone to re-enroll.
+- **The whole invite ceremony existed to work around it.** If access cannot be handed over
+  cryptographically, a *secret* has to travel between two people instead — hence a 128-bit bearer code,
+  an expiry, single-use, and a revoke path, all of it machinery to limit the damage of a secret in
+  transit.
+
+Both dissolve if the slot owns an **X25519 keypair**: `public_key` in the clear, `wrapped_private_key`
+sealed under the KEK, and `sealed_dek` the DEK sealed *to that public key*. Anyone holding the DEK can
+then seal it for anyone else from their public key alone. Enrollment becomes **enrol → approve** (the
+joiner writes a slot with no `sealed_dek`; any member with the vault open seals the DEK to it), and
+rotation re-seals for every remaining slot. Nothing secret moves between people at any point, so there is
+no bearer code to intercept, expire, or revoke.
+
+Cost: a second slot format. Legacy directly-wrapped slots (**format 1**) keep unlocking and convert in
+place at the next unlock — the one moment both the KEK and the DEK exist in the process. The credentials
+backup carries whichever format wrote it (payload **v4**; v3 and earlier still restore).
+
+**"Co-present" and "invite" stop being two mechanisms.** They were two answers to "how does the secret
+get there", and the secret no longer travels. What remains is one flow used at two tempos: standing over
+the same machine, or approving later from anywhere.
+
 ### Unlock methods (key slots)
 
-The Plaid vault secret is **separate from the login password** — a deliberate, settled decision. A slot's
-KEK can come from either source:
+The vault secret is **separate from the login password** — a deliberate, settled decision. A slot's KEK
+can come from either source:
 
-- **Passphrase slot** — KEK = `Argon2/scrypt(passphrase)`. (`user_secret_material` already has the unused
-  `wrapping_kdf_salt` / `wrapping_kdf_iters` columns for this.)
-- **Passkey slot (WebAuthn PRF)** — KEK = `PRF(salt)` from the passkey. NOTE: a *plain* passkey is
+- **Passphrase slot** — KEK = `scrypt(passphrase)`.
+- **Passkey slot (WebAuthn PRF)** — KEK = `HKDF(PRF(salt))` from the passkey. NOTE: a *plain* passkey is
   auth-only and yields no stable key material; the **`prf` extension** (CTAP2 `hmac-secret`) is what
   returns a stable, secret, high-entropy value usable as a KEK. Must be enabled at *registration*, and
-  the PRF output is only available during a live `get()` ceremony (matters for enrollment, below).
+  the PRF output is only available during a live `get()` ceremony. No stretching — the output is already
+  32 uniform bytes from the authenticator, so there is nothing weak to harden.
+
+  The doc previously flagged a **"passkey twist"**: that a PRF KEK exists only during the enrollee's own
+  live ceremony, so a co-present grant had to happen inside their session. Keypair slots remove it — a
+  grant needs only the public key the registration already wrote, and can happen days later with nobody
+  present. Passkey enrollment is therefore no different from passphrase enrollment.
+
+**Several passkeys per user, one passphrase.** A person with a laptop and a phone registers both; the
+partial unique index on `vault_slot` enforces the passphrase's singularity and permits the rest. Removing
+the *last* method that opens the vault is refused, because there is no recovery behind it.
+
+**Two preconditions belong to the browser, not the app, and are reported rather than hit.** WebAuthn needs
+a **secure context**, and an RP id must be a **domain** — so a LAN server reached as `192.168.x.x` can
+never host passkeys however it is served, and no amount of TLS changes that. Both are detected server-side
+and returned as stated reasons, since the answer to each is "use a passphrase on this connection" and a
+raw browser exception would never say so.
+
+**No WebAuthn assertion is verified, deliberately.** The vault is not an authentication decision — the app
+login is a separate perimeter. A PRF output that is wrong fails to open `wrapped_private_key` at the AEAD
+tag, exactly as a wrong passphrase does, so the slot is self-verifying. Checking a signature on top would
+mean storing credential public keys and running challenge state to prove what is already proven, and would
+add a WebAuthn library to do it.
 
 Intended default UX: the user keeps a **passkey in their password vault** (1Password / iCloud Keychain /
 Google Password Manager — synced, so it survives device loss), and **fingerprint / Face ID** is the
@@ -528,92 +582,64 @@ sandbox→production flip needs no special handling because a vault is required 
 passwordless-app (perimeter-off) install. That's correct: app-login and the vault are orthogonal, and
 "store real bank tokens with zero secrets" is exactly what must be impossible.
 
-## Provisioning a new user (the one real cost of multi-wrap)
+## Provisioning a new user
 
-To wrap the DEK for a new user you must hold the DEK **in plaintext at that moment** — and it's only
-recoverable by an existing member unlocking their own slot. So an admin creating user B **cannot** grant
-B vault access alone (admin lacks B's secret; B lacks the DEK). Two paths, **both supported**:
+Granting the DEK to user B needs B's **public key** and nothing else — no secret from B, and no secret
+carried to them. B enrols by choosing an unlock method (which writes their keypair and leaves
+`sealed_dek` empty), and any member holding the DEK approves it. The two acts are independent in time and
+place, so what used to be two mechanisms is one:
 
-- **Co-present enrollment** — an existing unlocked member is at the machine when B sets up their slot;
-  the DEK is wrapped for B on the spot. (Passkey twist: the PRF KEK only exists during B's live `get()`,
-  so this must happen inside B's active session.)
-- **Invite** — for the not-co-present case. An existing member mints a one-time invite secret that the
-  DEK is wrapped under; the new user redeems it and re-wraps under their own slot. Full ceremony below.
+- **Co-present** — B enrols at the machine and the member approves immediately. A tempo, not a mode.
+- **Not co-present** — B enrols whenever; the member approves whenever. No code changes hands, so there
+  is nothing to expire or intercept.
+
+The **order is inverted** from the old invite design: B acts first and the member approves, rather than
+the member minting something B redeems. That direction is what removes the bearer secret — a grant
+addressed to an already-published public key has no window in which a third party could claim it, which
+the invite's own "whoever holds `S` first can claim the slot" caveat had to accept.
+
+An admin can still create B's *app account* without any of this (that needs admin and no DEK); it is the
+vault grant that needs an unlocked member. The two stay separable, as they always were.
 
 Removing a user = drop their slot. If the departure is **untrusted**, that isn't enough (they may have
-seen the DEK while unlocked): **rotate** — generate DEK′, re-encrypt all tokens under it, re-wrap DEK′
-for every *remaining* slot. Their old slot and any retained DEK copy are then dead for new ciphertext.
-Rotation can't undo *past* access, so a genuinely hostile departure also implies **re-linking** the
-affected banks. (This is the same rotation you'd run when rotating the vault after any secret exposure.)
+seen the DEK while unlocked): **rotate** — generate DEK′, re-encrypt every stored credential under it, and
+re-seal DEK′ for the slots that remain. Their old slot and any retained DEK copy are then dead for new
+ciphertext. Rotation can't undo *past* access, so a genuinely hostile departure also implies **re-linking**
+the affected banks. Revoke *then* rotate: rotation re-seals for whatever slots are present when it runs.
 
-## Invite ceremony
+### Rotation crosses two databases, so it runs in three phases
 
-Purpose: let a not-co-present new user B get a vault slot so B can connect their own banks and sync. It's
-just the multi-wrap pattern applied twice — a throwaway invite slot that exists only long enough to birth
-B's real slot. Runs server-side (trusted-server model above).
+Slots live in the control DB and the ciphertext in the data DB, and no transaction spans both. A failure
+between the two writes would otherwise leave every credential sealed under a key no slot can produce —
+the total loss the whole design exists to avoid. So the new key is sealed into every slot **first**, with
+the outgoing key retained in `sealed_dek_prev`; then the ciphertext is rewritten; then the previous seals
+are cleared. An interruption at any point leaves every row readable under one of the two keys.
 
-**The invite secret `S`.** Machine-generated, **128 bits** of randomness, rendered as ~26 Crockford
-base32 chars (no ambiguous `0/O`, `1/I/L`; case-insensitive; readable aloud), grouped for legibility
-(`7K4W-9QMX-2TBR-8HN3-JCP5-DYG2-NF`) — or, as a link, the same 128 bits as a ~22-char base64url blob in
-the URL **fragment** (`luma.local/invite/<invite_id>#<S>`), which the browser never sends to the server.
-Because `S` is already high-entropy it feeds a cheap `HKDF`, not `Argon2` (nothing weak to harden). It
-must resist *offline* brute force on its own, since a DB stolen during the live window exposes
-`wrapped_DEK_S` — 128 bits covers that with room to spare.
+An interrupted rotation is **resumed, not restarted** — starting a fresh one would push the key the
+ciphertext is actually under off the end of the two a slot can hold, converting a recoverable state into
+the unrecoverable one. Retaining the old key briefly does not weaken the rotation: it is sealed only to
+the slots that survive, and a revoked slot was deleted before any of it ran.
 
-**Delivery: the app mints, the human carries.** The app does **not** send email or any message itself
-(no SMTP infra for a self-hosted LAN app; and it'd pin `S` into an inbox). It produces a **copy-able code
-or link**; the granter delivers it over whatever channel they choose (aloud, ephemeral messenger, email).
-This keeps `S` and `wrapped_DEK_S` in **separate trust domains** — an attacker needs both. And they must
-coincide **in time**: `wrapped_DEK_S` is expiry-bounded and single-use, deleted on redemption, so a stale
-`S` in an old inbox later is **inert**. If B already has an app account (the common household case), also
-drop a *non-secret* "you've been invited → [Redeem]" notice in-app — pure UX, carries no secret.
+### ~~Invite ceremony~~ — retired before it was built (2026-08-13)
 
-### 1. Create (granter, while unlocked)
+The specified ceremony (128-bit `S` rendered as a Crockford-base32 code or a URL-fragment link, an
+`HKDF`-derived throwaway slot in a `pending_invite` table, 48–72h expiry, single-use, revocable, the AEAD
+tag as verifier, delivered by the human rather than by email) was a well-formed answer to a question that
+keypair slots stop asking. Recorded here because the reasoning is worth not repeating: **every part of it
+was machinery for limiting the damage of a secret in transit**, and there is now no secret in transit.
+Expiry, single-use, revocation and the "bearer token until redeemed" caveat all existed only to bound
+that window.
 
-The granter must have an **unlocked session** (the server holds the DEK in their session cache — the same
-cache that powers "first sync of the day"). The server:
-
-- generates `S` (128-bit) and a non-secret `invite_id`;
-- derives `KEK_S = HKDF(S)` and computes `wrapped_DEK_S = AEAD(KEK_S, DEK, aad=invite_id)`;
-- stores a `pending_invite` row `{invite_id, wrapped_DEK_S, expiry, created_by}` — **`S` is never stored
-  in any recoverable form**, and no separate verifier is needed because the **AEAD tag is the verifier**
-  (a wrong `S` fails to decrypt);
-- returns `S` to the granter **once** (as the code/link) to carry out-of-band.
-
-Default expiry **48–72h**; single-use; granter/admin can revoke a pending invite before it's used.
-
-### 2. Deliver (out of band)
-
-Granter hands the code/link to B over any channel they like. `invite_id` is non-secret; `S` is the bearer
-secret.
-
-### 3. Redeem (B, live session)
-
-- B opens the invite (`invite_id` + `S`). Server looks up by `invite_id`, checks not expired / not
-  consumed, derives `KEK_S = HKDF(S)`, and **trial-decrypts** `wrapped_DEK_S` → DEK (failure = wrong `S`,
-  reject; rate-limit redemption attempts).
-- B chooses their **permanent** unlock method and the server writes B's slot `wrapped_DEK_B`:
-  - **passphrase** → `KEK_B = Argon2(P, fresh_salt)`;
-  - **passkey** → register with the `prf` extension in B's browser; PRF output → `KEK_B`. *(Must run in
-    B's live session with the authenticator present — which redemption is.)*
-- Server **deletes the `pending_invite`** (single-use); DEK leaves memory.
-
-`S` is a **bearer token** until redeemed — whoever holds it first can claim the slot. Short expiry +
-single-use + out-of-band delivery + revocability are the mitigations; acceptable for a household, and
-worth stating in the invite copy.
-
-### Account creation vs. vault grant are separable
-
-Creating B's *app account* (username, optional password, role) needs **admin** and no DEK. Granting B's
-*vault slot* needs an **unlocked member** and the DEK. When the granter is an unlocked admin it's one
-"invite a person" flow; otherwise it splits (admin makes the account; any unlocked member sends the vault
-invite). Build the combined flow, allow the split.
+If a future provider or deployment ever reintroduces a case where access genuinely must be handed over
+out of band, this is the design to return to — but it should not be rebuilt merely to have an "invite"
+affordance, because approve-a-request covers the same journeys with strictly fewer moving parts.
 
 ## Where things live / why no DB-file encryption
 
-- Token **ciphertext** → data DB (`plaid_item.access_token_enc`), so it travels with data backups.
-- **Wrapping material** (per-slot wrapped DEK, KDF salt/iters, `key_mode`) → control DB
-  (`user_secret_material`).
+- Credential **ciphertext** → data DB (`connection.credential_enc`, `provider_config.secret_enc`), so it
+  travels with data backups.
+- **Slot material** (public key, KEK-wrapped private key, the sealed DEK, KDF salt/params) → control DB
+  (`vault_slot`).
 - Unlock secrets (passphrase / passkey PRF) → **never at rest**.
 
 Because the crown jewels are already ciphertext and the keys are never stored decryptable, **whole-DB
@@ -633,14 +659,18 @@ vs client-server falls out of per-request loopback/network, the only real user c
 forward-looking "connecting a data source?" declaration, and `security_profile` is demoted to a
 pre-detection stopgap — see "Topology is detected, not a chosen profile"); trusted-server / server-side crypto (browser-side only if we
 ever want an untrusted host); retire `server_managed`, the master-key fallback, **and any `off`/plaintext
-token path** — the vault is the *only* custody, with passphrase strength keyed to provider mode (sandbox
-lax, Production enforced); no required fallback slot / no recovery escrow (loss = re-link); passkeys are
-Plaid-vault-only; **identity & perimeter** — password optionality is an all-or-nothing *workspace* toggle
+token path** — the vault is the *only* custody, with an **unconditional** passphrase floor (the
+sandbox-lax/Production-enforced tier was removed — see "Passphrase strength is unconditional"); no
+required fallback slot / no recovery escrow (loss of the *last* slot = re-link, though another member's
+slot is now a real way back — see [vault-passphrase-recovery.md](vault-passphrase-recovery.md)); passkeys
+are vault-only, never app login; **identity & perimeter** — password optionality is an all-or-nothing *workspace* toggle
 (the existing two modes), per-user auth when on; **unify to one `user_account` table** (the flag toggles
 only password verification — reverses the earlier "keep two tables" call; makes disable a flag flip);
-**invite ceremony** — 128-bit HKDF bearer secret, app mints a copy-able code/link and
-the human carries it (no email sending), 48–72h + single-use, AEAD-tag-as-verifier, account-creation
-separable from vault-grant, rotate-on-untrusted-departure; **provider-agnostic connections** — a
+**enrollment by keypair slot** — a slot owns an X25519 keypair rather than wrapping the DEK, so access is
+granted from a public key alone: enrol → approve, no bearer secret, no expiry, and a rotation that
+preserves every remaining member (the invite ceremony this replaced is recorded, retired, under
+"Provisioning a new user"); account-creation stays separable from vault-grant; revoke-then-rotate on an
+untrusted departure; **provider-agnostic connections** — a
 `connection` table with a `provider` discriminator + opaque encrypted credential blob and an adapter
 interface, Plaid first then Teller then SimpleFIN, app-level credentials moved from `.env` into the DB
 under the vault, per-provider **data-source cards** on the Accounts → Connections tab (provider config
@@ -693,15 +723,50 @@ premise was wrong.
    "Set up HTTPS" task (`tasks.py`) — *required*/non-dismissible when a provider is intended, *recommended*/
    suppressible (persisted `https_warning_suppressed`) for plain client-server — self-clearing over HTTPS;
    `/auth/status` gains a `transport` block; connecting a provider returns a `transport_warning` on a
-   cleartext network bind. **Not** built here (deferred per scope): the passphrase/unlock **UI** (rides
-   phase-6 connection cards), the three-radio→single-question topology **UI collapse** (the detection
-   primitive it needs now exists), and co-present/invite **enrollment** (phase 5) — so today only the first
-   user, or a user re-setting their own, can set a passphrase.
-4. **Passkey (PRF) slot** — registration with the `prf` extension, unlock ceremony, biometric daily
-   unlock, graceful "your authenticator lacks PRF → use a passphrase slot" fallback.
-5. **Enrollment/invite** — co-present path first (simpler), then the invite ceremony (mint copy-able
-   code/link, `pending_invite` table, redeem + re-wrap, expiry/single-use/revoke), then rotation-on-
-   departure. No email sending.
+   cleartext network bind. **Not** built here (deferred per scope): the passphrase/unlock **UI** (rode the
+   phase-6 connection cards), the three-radio→single-question topology **UI collapse** (still outstanding;
+   the detection primitive it needs exists), and **enrollment** — so as of phase 3 only the first user, or
+   a user re-setting their own, could set a passphrase. Phase 5 lifted that.
+4. **[DONE 2026-08-13]** **Passkey (PRF) slot.** Registration with the `prf` extension, the unlock
+   ceremony, several passkeys per user (a labelled slot list; the partial unique index keeps the
+   passphrase singular), and the "your authenticator lacks PRF → use a passphrase" fallback — returned as
+   a *reason* the UI turns into advice rather than thrown as an error, since the vault has a real
+   fallback to offer. The PRF output is read from a follow-up `get()` rather than from `create()`, whose
+   results are not reliable across browsers; trusting it would produce a slot nothing could ever open.
+   No WebAuthn assertion is verified and no WebAuthn library is used — see "Unlock methods" for why that
+   is a decision rather than an omission. The two hard preconditions (secure context, RP id must be a
+   domain) are detected server-side (`_passkey_context`) and reported as stated reasons.
+
+   **Two ceremony lessons, both found in first use (2026-08-13).** Registration originally asked only to
+   *enable* PRF at `create()` and always evaluated the salt in a second `get()`, because `create()`
+   results are not universally returned. Correct, but it made the ordinary case cost **two prompts**, and
+   the second is indistinguishable from a repeat of the first — so dismissing it was the natural response
+   to a registration that appeared finished, and nothing was saved. Asking for `eval` *at creation* costs
+   nothing where unsupported (the field is ignored and the fallback still runs) and removes the prompt
+   where it is not. And the dialog **swallowed a cancelled ceremony**, on the reasoning that declining is
+   the user's own answer. That only holds when they know what they declined: the silent version left the
+   surface untouched, which reads as "press it again". Generalized: **a multi-step ceremony must report
+   every non-success outcome, including the ones the user appears to have chosen.**
+5. **[DONE 2026-08-13]** **Enrollment, grant, revocation and rotation.** Built on keypair slots (see "A
+   slot holds a keypair"), which replaced the invite ceremony rather than implementing it: setting a
+   passphrase as a user the vault does not know enrols them (`vault_access_pending`), any member holding
+   the DEK approves (`POST /auth/vault/access-requests/{slot}/approve`), admin revokes, and
+   `POST /auth/vault/rotate` re-keys in the three phases above. `VaultSettingsDialog` is the UI home for
+   all of it — unlock methods, **who holds access** (`GET /auth/vault/members`, grouped per person) with
+   Remove access, the approval queue, and Replace vault key. The Connections strip gained the
+   request/pending/passkey-unlock states, and the pending queue also surfaces as a computed task for
+   members who can act on it.
+
+   **The member list was missing from the first build while the rotate copy already referred to it** —
+   "do this after removing someone's access", with nowhere to see who had access or to take it away. The
+   endpoint existed; only the surface did not. The general shape, worth stating rather than treating as a
+   one-off: *copy that names a capability is a claim the UI has to honour*, and the moment to check is
+   when the copy is written, not when someone tries to follow it.
+
+   **Also landed here:** slot **format 2** with a lazy format-1 conversion at unlock (carrying the
+   `credentials_export` fingerprint history across, since the passphrase that opens those backups has not
+   changed); the export fingerprint moving to the *private-key wrap*, which is what a passphrase change
+   actually replaces; and credentials backup payload **v4** (v1–v3 still restore).
 6. **Generalize to provider-agnostic connections** — `connection` table (`provider` + opaque encrypted
    credential blob) replacing `plaid_item`; a provider-adapter interface refactored out of
    `plaid_service`/sync; move app-level credentials from `.env` into the DB under vault custody; extend

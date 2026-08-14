@@ -116,13 +116,17 @@ function useStrandedBackups(active) {
 export function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
   // mode: 'set' (mint/replace the workspace vault) | 'unlock' (open it for this session)
   //     | 'change' (rewrap the DEK under a new passphrase)
+  //     | 'request' (join a vault that already exists — same passphrase against the same floor, but it
+  //       opens nothing until a member approves, and saying so up front is the whole difference)
   const [passphrase, setPassphrase] = useState('')
   const [confirm, setConfirm] = useState('')
   const [current, setCurrent] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const changing = mode === 'change'
-  const setting = mode === 'set' || changing        // both choose a NEW passphrase, against the floor
+  const requesting = mode === 'request'
+  // Every one of these three chooses a NEW passphrase and is held to the floor.
+  const setting = mode === 'set' || changing || requesting
   const session = useAppSession()
   const limits = passphraseLimits(session?.currentUser)
   const shortfall = setting ? passphraseShortfall(passphrase, limits) : null
@@ -148,12 +152,16 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
 
   return (
     <AppDialog
-      title={changing ? 'Change the vault passphrase' : setting ? 'Set a vault passphrase' : 'Unlock the vault'}
+      title={changing ? 'Change the vault passphrase'
+        : requesting ? 'Request vault access'
+          : setting ? 'Set a vault passphrase' : 'Unlock the vault'}
       description={changing
         ? 'The new passphrase re-protects the same encrypted credentials. Nothing is re-encrypted and no data source needs re-linking.'
-        : setting
-          ? 'The vault encrypts your data-source credentials at rest. You will enter this passphrase once per session to connect or sync.'
-          : 'Enter your vault passphrase to connect and sync data sources this session.'}
+        : requesting
+          ? 'This workspace already has a credential vault. Choose the passphrase that will open it for you — it starts working once a member who can already open the vault approves the request.'
+          : setting
+            ? 'The vault encrypts your data-source credentials at rest. You will enter this passphrase once per session to connect or sync.'
+            : 'Enter your vault passphrase to connect and sync data sources this session.'}
       onClose={onClose}
       // Above the standard dialog layer: this is the one dialog that opens *on top of* another one —
       // a connect or a disconnect confirmation raises it and waits behind it — and at the shared
@@ -164,7 +172,10 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
         <DialogActions>
           <Button variant="ghost" small onClick={onClose}>Cancel</Button>
           <Button small onClick={submit} disabled={blocked}>
-            {busy ? 'Working…' : changing ? 'Change passphrase' : setting ? 'Set passphrase' : 'Unlock'}
+            {busy ? 'Working…'
+              : changing ? 'Change passphrase'
+                : requesting ? 'Request access'
+                  : setting ? 'Set passphrase' : 'Unlock'}
           </Button>
         </DialogActions>
       }
@@ -213,9 +224,11 @@ export function VaultPassphraseDialog({ mode, onSubmit, onClose }) {
         ) : null}
         {setting && !changing ? (
           <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
-            There is no recovery if this is lost — you would simply re-link your data sources. Store it in
-            a password manager; it must be at least {limits.minLength} characters using at least
-            {' '}{limits.minDistinct} different ones.
+            {requesting
+              ? 'Nobody else ever learns this passphrase — approval does not require it.'
+              : 'There is no recovery if this is lost — you would simply re-link your data sources.'}
+            {' '}Store it in a password manager; it must be at least {limits.minLength} characters using
+            at least {limits.minDistinct} different ones.
           </p>
         ) : null}
         {error ? <div style={{ fontSize: 13, color: '#dc2626' }}>{error}</div> : null}

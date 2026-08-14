@@ -94,5 +94,279 @@ class VaultEndpointTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
 
 
+class VaultAccessEndpointTests(unittest.TestCase):
+    """Enrollment and grant over HTTP: the states a second household member actually moves through.
+
+    Perimeter-off, so identities are switched with `select-identity` — which is also the real shape of
+    the case this exists for, since a passwordless install still needs vault access to be shareable.
+    """
+
+    OTHER_PASSPHRASE = "another-strong-vault-passphrase"
+
+    def setUp(self):
+        cs.lock_all()
+
+    def tearDown(self):
+        cs.lock_all()
+
+    def _add_identity(self, client, name: str) -> str:
+        return client.post("/api/auth/identities", json={"name": name}).json()["identity"]["id"]
+
+    def _become(self, client, user_id: str):
+        client.post("/api/auth/select-identity", json={"user_id": user_id})
+
+    def test_a_second_user_enrolls_and_is_approved(self):
+        with api_client() as (client, _):
+            owner = client.get("/api/auth/status").json()["user"]["id"]
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+
+            joiner = self._add_identity(client, "Joiner")
+            self._become(client, joiner)
+            enrolled = client.post("/api/auth/vault/set-passphrase", json={"passphrase": self.OTHER_PASSPHRASE})
+            self.assertEqual(enrolled.status_code, 200, enrolled.text)
+            user = enrolled.json()["user"]
+            self.assertTrue(user["vault_access_pending"])
+            self.assertFalse(user["vault_has_passphrase"])
+
+            # Unlocking now must say *pending*, not "wrong passphrase" — the passphrase is correct and
+            # retyping it can never help.
+            blocked = client.post("/api/auth/vault/unlock", json={"passphrase": self.OTHER_PASSPHRASE})
+            self.assertEqual(blocked.status_code, 409)
+            self.assertEqual(blocked.json()["detail"]["code"], "vault_access_pending")
+
+            self._become(client, owner)
+            requests = client.get("/api/auth/vault/access-requests").json()["requests"]
+            self.assertEqual(len(requests), 1)
+            self.assertEqual(requests[0]["user_id"], joiner)
+            approved = client.post(f"/api/auth/vault/access-requests/{requests[0]['slot_id']}/approve")
+            self.assertEqual(approved.status_code, 200, approved.text)
+            self.assertEqual(approved.json()["requests"], [])
+
+            self._become(client, joiner)
+            opened = client.post("/api/auth/vault/unlock", json={"passphrase": self.OTHER_PASSPHRASE})
+            self.assertEqual(opened.status_code, 200, opened.text)
+            self.assertTrue(opened.json()["user"]["vault_unlocked"])
+
+    def test_approving_with_a_locked_vault_is_a_423(self):
+        with api_client() as (client, _):
+            owner = client.get("/api/auth/status").json()["user"]["id"]
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            joiner = self._add_identity(client, "Joiner")
+            self._become(client, joiner)
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": self.OTHER_PASSPHRASE})
+
+            self._become(client, owner)
+            client.post("/api/auth/vault/lock")
+            slot_id = client.get("/api/auth/vault/access-requests").json()["requests"][0]["slot_id"]
+            r = client.post(f"/api/auth/vault/access-requests/{slot_id}/approve")
+            self.assertEqual(r.status_code, 423)
+            self.assertEqual(r.json()["detail"]["code"], "vault_locked")
+
+    def test_rotation_keeps_every_granted_member_working(self):
+        with api_client() as (client, _):
+            owner = client.get("/api/auth/status").json()["user"]["id"]
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            client.post("/api/providers/plaid/config", json={"client_id": "cid", "secret": "app-secret"})
+
+            joiner = self._add_identity(client, "Joiner")
+            self._become(client, joiner)
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": self.OTHER_PASSPHRASE})
+            self._become(client, owner)
+            slot_id = client.get("/api/auth/vault/access-requests").json()["requests"][0]["slot_id"]
+            client.post(f"/api/auth/vault/access-requests/{slot_id}/approve")
+
+            rotated = client.post("/api/auth/vault/rotate")
+            self.assertEqual(rotated.status_code, 200, rotated.text)
+            self.assertEqual(rotated.json()["result"]["secrets_reencrypted"], 1)
+
+            # Both members still open the vault, and the stored app secret still reads back.
+            self._become(client, joiner)
+            self.assertEqual(
+                client.post("/api/auth/vault/unlock", json={"passphrase": self.OTHER_PASSPHRASE}).status_code, 200,
+            )
+            secret = client.get("/api/providers/plaid/secret")
+            self.assertEqual(secret.status_code, 200, secret.text)
+            self.assertEqual(secret.json()["secret"], "app-secret")
+
+    def test_rotating_with_a_locked_vault_is_a_423(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            client.post("/api/auth/vault/lock")
+            r = client.post("/api/auth/vault/rotate")
+            self.assertEqual(r.status_code, 423)
+
+    def test_the_pending_queue_surfaces_as_a_task_only_to_someone_who_can_act(self):
+        # A computed task, like the HTTPS one: no stored dismissal, and it disappears by the condition
+        # ceasing to hold. Scoped to a member holding the key, because an admin with a locked vault has
+        # no action available and a nag they cannot answer is worse than silence.
+        with api_client() as (client, _):
+            owner = client.get("/api/auth/status").json()["user"]["id"]
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            joiner = self._add_identity(client, "Joiner")
+            self._become(client, joiner)
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": self.OTHER_PASSPHRASE})
+
+            # The person waiting is not told to approve themselves.
+            self.assertNotIn("vault_access_requests", self._task_ids(client))
+
+            self._become(client, owner)
+            self.assertIn("vault_access_requests", self._task_ids(client))
+            client.post("/api/auth/vault/lock")
+            self.assertNotIn("vault_access_requests", self._task_ids(client))
+
+            client.post("/api/auth/vault/unlock", json={"passphrase": STRONG_PASSPHRASE})
+            slot_id = client.get("/api/auth/vault/access-requests").json()["requests"][0]["slot_id"]
+            client.post(f"/api/auth/vault/access-requests/{slot_id}/approve")
+            self.assertNotIn("vault_access_requests", self._task_ids(client),
+                             "the task must self-clear once the queue empties")
+
+    def _task_ids(self, client) -> list[str]:
+        return [t["id"] for t in client.get("/api/tasks").json()["tasks"]]
+
+    def test_revoking_access_needs_admin_and_ends_the_users_reach(self):
+        with api_client() as (client, _):
+            owner = client.get("/api/auth/status").json()["user"]["id"]
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            joiner = self._add_identity(client, "Joiner")
+            self._become(client, joiner)
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": self.OTHER_PASSPHRASE})
+            self._become(client, owner)
+            slot_id = client.get("/api/auth/vault/access-requests").json()["requests"][0]["slot_id"]
+            client.post(f"/api/auth/vault/access-requests/{slot_id}/approve")
+
+            revoked = client.post(f"/api/auth/vault/access/{joiner}/revoke")
+            self.assertEqual(revoked.status_code, 200, revoked.text)
+
+            self._become(client, joiner)
+            r = client.post("/api/auth/vault/unlock", json={"passphrase": self.OTHER_PASSPHRASE})
+            self.assertEqual(r.status_code, 409)
+
+    def test_members_lists_who_can_open_the_vault_and_drops_a_revoked_one(self):
+        # The half that was missing: the UI could show who was *asking* for the credentials but not who
+        # already held them, which left "remove someone's access before replacing the key" as advice
+        # with nothing to act on.
+        with api_client() as (client, _):
+            owner = client.get("/api/auth/status").json()["user"]["id"]
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+
+            members = client.get("/api/auth/vault/members").json()["members"]
+            self.assertEqual([m["user_id"] for m in members], [owner])
+            self.assertEqual(members[0]["method_count"], 1)
+
+            joiner = self._add_identity(client, "Joiner")
+            self._become(client, joiner)
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": self.OTHER_PASSPHRASE})
+            # Still pending, so not a member yet — the two lists must not blur together.
+            self.assertEqual(
+                [m["user_id"] for m in client.get("/api/auth/vault/members").json()["members"]], [owner],
+            )
+
+            self._become(client, owner)
+            slot_id = client.get("/api/auth/vault/access-requests").json()["requests"][0]["slot_id"]
+            client.post(f"/api/auth/vault/access-requests/{slot_id}/approve")
+            self.assertEqual(
+                sorted(m["user_id"] for m in client.get("/api/auth/vault/members").json()["members"]),
+                sorted([owner, joiner]),
+            )
+
+            client.post(f"/api/auth/vault/access/{joiner}/revoke")
+            self.assertEqual(
+                [m["user_id"] for m in client.get("/api/auth/vault/members").json()["members"]], [owner],
+            )
+
+    def test_members_counts_unlock_methods_per_person_not_per_slot(self):
+        # One person with a passphrase and two passkeys is one member with three ways in, not three
+        # people — the list answers a question about who holds the credentials.
+        prf = cs._b64e(b"\x05" * 32)
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            for cred in ("c1", "c2"):
+                client.post("/api/auth/vault/passkey/register", headers={"host": "localhost:8000"},
+                            json={"credential_id": cred, "prf_output": prf, "prf_salt": "s"})
+            members = client.get("/api/auth/vault/members").json()["members"]
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0]["method_count"], 3)
+
+    def test_revoking_your_own_access_is_refused(self):
+        # It is "remove my only unlock method" wearing a different label, and nothing recovers from it.
+        with api_client() as (client, _):
+            owner = client.get("/api/auth/status").json()["user"]["id"]
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            r = client.post(f"/api/auth/vault/access/{owner}/revoke")
+            self.assertEqual(r.status_code, 400)
+
+
+class VaultPasskeyEndpointTests(unittest.TestCase):
+    """The two preconditions the backend owns, and the identity boundary on unlock.
+
+    The ceremony itself is the browser's; what is testable here is that a connection which cannot host
+    passkeys says so plainly rather than letting the browser fail opaquely.
+    """
+
+    def setUp(self):
+        cs.lock_all()
+
+    def tearDown(self):
+        cs.lock_all()
+
+    def test_loopback_can_host_passkeys(self):
+        # Loopback is a secure context by definition, so the desktop case needs no TLS to use passkeys.
+        with api_client() as (client, _):
+            params = client.get("/api/auth/vault/passkey/params",
+                                headers={"host": "localhost:8000"}).json()
+        self.assertTrue(params["available"])
+        self.assertEqual(params["rp_id"], "localhost")
+        self.assertTrue(params["register_salt"])
+        self.assertEqual(params["credentials"], [])
+
+    def test_an_ip_address_host_cannot_and_says_why(self):
+        # WebAuthn's Relying Party id must be a domain, so a LAN server reached as 192.168.x.x can never
+        # host passkeys however it is served. Reported as a stated reason because the answer the user
+        # needs — "use a passphrase here" — is not one a browser exception would ever give them.
+        with api_client() as (client, _):
+            params = client.get("/api/auth/vault/passkey/params",
+                                headers={"host": "192.168.1.50:8000"}).json()
+        self.assertFalse(params["available"])
+        self.assertEqual(params["reason"], "ip_address_host")
+        self.assertIsNone(params["rp_id"])
+
+    def test_a_cleartext_network_bind_cannot_either(self):
+        with api_client() as (client, _):
+            params = client.get("/api/auth/vault/passkey/params",
+                                headers={"host": "luma.example.org"}).json()
+        self.assertFalse(params["available"])
+        self.assertEqual(params["reason"], "insecure_context")
+
+    def test_registering_where_no_ceremony_can_run_is_refused(self):
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            r = client.post("/api/auth/vault/passkey/register",
+                            headers={"host": "192.168.1.50:8000"},
+                            json={"credential_id": "c1", "prf_output": cs._b64e(b"\x01" * 32),
+                                  "prf_salt": "salt"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_a_passkey_belonging_to_another_user_is_refused_on_unlock(self):
+        # The credential opens its owner's slot, never the caller's session. Honouring it would leave a
+        # signed-in user operating the vault as somebody else.
+        prf = cs._b64e(b"\x07" * 32)
+        with api_client() as (client, _):
+            client.post("/api/auth/vault/set-passphrase", json={"passphrase": STRONG_PASSPHRASE})
+            registered = client.post("/api/auth/vault/passkey/register",
+                                     headers={"host": "localhost:8000"},
+                                     json={"credential_id": "c1", "prf_output": prf,
+                                           "prf_salt": "salt", "label": "Laptop"})
+            self.assertEqual(registered.status_code, 200, registered.text)
+            self.assertEqual(len(registered.json()["user"]["vault_passkeys"]), 1)
+
+            other = client.post("/api/auth/identities", json={"name": "Other"}).json()["identity"]["id"]
+            client.post("/api/auth/select-identity", json={"user_id": other})
+            r = client.post("/api/auth/vault/passkey/unlock",
+                            headers={"host": "localhost:8000"},
+                            json={"credential_id": "c1", "prf_output": prf})
+            self.assertEqual(r.status_code, 403)
+            self.assertFalse(client.get("/api/auth/status").json()["user"]["vault_unlocked"])
+
+
 if __name__ == "__main__":
     unittest.main()

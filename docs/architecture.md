@@ -312,26 +312,51 @@ access, materially worse than the plaintext ledger — so they get real at-rest 
 
 - **One workspace Data Encryption Key (DEK)** encrypts every per-connection secret
   (`connection.credential_enc`; the retired `plaid_item.access_token_enc` was folded into `connection`
-  by migration v18 — see "Provider connections" below). The DEK is wrapped once **per user "slot"** under a KEK derived from
-  that user's unlock secret — a passphrase via `scrypt` now, a passkey PRF later. Slots live in the
-  control DB's `vault_slot` table (wrapped DEK + public KDF params only); the ciphertext travels with
-  data backups, the wrapping material with the control DB. **The property is leaked-DB ≠ leaked-tokens**:
-  no live unlock secret ⇒ no KEK ⇒ every wrapped DEK stays opaque. It deliberately does *not* defend a
-  compromised *running* host (the server is trusted and holds the DEK while unlocked) — matching the
-  self-hosted/LAN model. The **ledger stays plaintext at rest** (host-protected, not vault-encrypted).
-- **Unlocking** re-derives the KEK, unwraps the DEK, and holds it in a **server-side, in-process cache
-  keyed by `user_id` with an idle TTL** — *never* the signed session cookie (which serializes to the
-  browser). Dropped on logout and on restart (re-unlock ⇒ "first sync of the day"). Endpoints:
-  `POST /auth/vault/{set-passphrase,change-passphrase,unlock,lock}`; status via `vault_configured`/
-  `vault_has_passphrase`/`vault_unlocked`. Plaid connect/sync and credential export/restore require an
-  unlocked vault (`423`; connect on an unconfigured vault `409`). The first user's passphrase mints the
-  DEK; enrolling *other* users (co-present/invite) is a later phase. There is **no `off`/plaintext path
-  and no app-held master key** — the vault is the only custody. Switching a provider to **Production**
-  requires every slot to meet a real passphrase minimum — **≥ 20 chars and ≥ 6 distinct characters**
-  (`passphrase_meets_production_min`; the distinct-char guard rejects a long-but-degenerate repeat), an
-  *all-slots* property since the DEK is only as strong as its weakest wrap; **Sandbox** stays lax. The
-  passphrase is meant to live in a password manager (a passkey/biometric daily unlock is a later phase),
-  so length is cheap; the vault set dialog shows an **advisory strength meter** that blocks nothing.
+  by migration v18 — see "Provider connections" below) and every app-level provider secret
+  (`provider_config.secret_enc`). Those two columns are the *entire* set, registered as
+  `crypto_service.ENCRYPTED_COLUMNS` so rotation reaches all of them and a test fails if a third is added
+  without being listed. The ciphertext travels with data backups, the key material with the control DB.
+  **The property is leaked-DB ≠ leaked-tokens**: no live unlock secret ⇒ no KEK ⇒ nothing opens. It
+  deliberately does *not* defend a compromised *running* host (the server is trusted and holds the DEK
+  while unlocked) — matching the self-hosted/LAN model. The **ledger stays plaintext at rest**
+  (host-protected, not vault-encrypted).
+- **A slot is a keypair, not a wrapped DEK.** Each `vault_slot` row (control DB) holds a public X25519 key
+  in the clear, its private key AEAD-wrapped under the KEK derived from that user's unlock secret, and the
+  DEK **sealed to that public key**. Unlocking derives the KEK, opens the private key, and unseals the DEK.
+  The indirection is what makes the DEK *giveable*: sealing needs only a public key, so a member can grant
+  access to someone whose secret they do not have, and rotation can re-seal for every remaining slot.
+  Wrapping the DEK directly (**format 1**, still readable and converted in place at the next unlock) could
+  do neither — see the backlog doc's "A slot holds a keypair".
+- **Unlock secrets** are a passphrase via `scrypt`, or a passkey's WebAuthn **PRF output** via `HKDF` (no
+  stretching — it is already 32 uniform bytes from the authenticator). One passphrase and any number of
+  passkeys per user, enforced by a partial unique index; the last method that opens the vault cannot be
+  removed. **No WebAuthn assertion is verified**: a wrong PRF output fails at the AEAD tag exactly as a
+  wrong passphrase does, so the slot is self-verifying and no WebAuthn library is needed. WebAuthn's own
+  two preconditions — a secure context, and an RP id that is a domain rather than an IP address — are
+  detected server-side and returned as stated reasons, since the answer to both is "use a passphrase here".
+- **Unlocking** holds the DEK in a **server-side, in-process cache keyed by `user_id` with an idle TTL** —
+  *never* the signed session cookie (which serializes to the browser). Dropped on logout and on restart
+  (re-unlock ⇒ "first sync of the day"). Endpoints: `POST /auth/vault/{set-passphrase,change-passphrase,
+  unlock,lock}`, `/auth/vault/passkey/{params,register,unlock}`; status via `vault_configured`/
+  `vault_has_passphrase`/`vault_unlocked`/`vault_access_pending`. Connect/sync and credential
+  export/restore require an unlocked vault (`423`; connect on an unconfigured vault `409`). There is **no
+  `off`/plaintext path and no app-held master key** — the vault is the only custody. Every passphrase must
+  meet **≥ 20 chars and ≥ 6 distinct characters** (`passphrase_meets_production_min`; the distinct-char
+  guard rejects a long-but-degenerate repeat), an *all-slots* property since the DEK is only as strong as
+  its weakest wrap. The passphrase is meant to live in a password manager, so length is cheap; the set
+  dialog shows an **advisory strength meter** that blocks nothing.
+- **Enrollment, revocation and rotation.** Setting a passphrase (or registering a passkey) as a user the
+  vault does not yet know **enrols** them: the slot is written with no sealed DEK and reports
+  `vault_access_pending` — a state distinct from "locked", because no secret they could enter would help.
+  Any member holding the DEK approves it (`/auth/vault/access-requests/{slot}/approve`, `423` if locked);
+  admins revoke (`/auth/vault/access/{user}/revoke`). `GET /auth/vault/members` lists who currently holds
+  access, grouped per person with a count of their unlock methods — the counterpart to the request queue,
+  and what makes "remove someone's access, then rotate" an instruction with something to act on. `POST /auth/vault/rotate` mints a new DEK and
+  re-encrypts every registered column under it, in **three phases** — seal the new key into every slot
+  (retaining the outgoing one in `sealed_dek_prev`), rewrite the ciphertext, then clear the previous seals
+  — because no transaction spans the control and data DBs, and a failure between the two writes would
+  otherwise strand every credential under a key no slot can produce. An interrupted rotation is **resumed**
+  on the next call, never restarted. Revoke *then* rotate: rotation re-seals for whatever slots remain.
 - **Transport** is a per-topology property, not an app mode: the backend always speaks HTTP; a
   client-server deployment terminates TLS at a reverse proxy (Caddy) with uvicorn on `--proxy-headers`,
   so `request.url.scheme` reflects the external scheme. `backend/transport.py` detects loopback-vs-network

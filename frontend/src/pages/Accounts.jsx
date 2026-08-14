@@ -14,6 +14,8 @@ import FeatureExplainer from '../help/FeatureExplainer.jsx'
 import { useDismissibleLayer, useDismissiblePopup, useTransientTextEdit } from '../lib/uiInteractions.js'
 import TransientTextInput from '../components/TransientTextInput.jsx'
 import { VaultPassphraseDialog, SENSITIVE_FIELD_PROPS } from '../components/VaultPassphraseDialog.jsx'
+import { VaultSettingsDialog } from '../components/VaultSettingsDialog.jsx'
+import { PASSKEY_UNAVAILABLE, unlockWithPasskey as unlockWithPasskeyCeremony } from '../lib/vaultPasskey.js'
 import ConnectionAccountMapDialog from '../components/accounts/ConnectionAccountMapDialog.jsx'
 import { EditedTransactionsWarning } from '../components/EditedTransactionsWarning.jsx'
 import { ActionMenu, ActionMenuButton } from '../components/ActionMenu.jsx'
@@ -734,7 +736,7 @@ function TokenConnectDialog({ provider, spec, historyDays, onConnect, onClose })
 }
 
 
-function VaultStrip({ vault, onSet, onUnlock, onLock, onChange }) {
+function VaultStrip({ vault, requestCount, onSet, onRequest, onUnlock, onUnlockPasskey, onLock, onSettings }) {
   const box = (bg, border) => ({
     display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
     background: bg, border: `1px solid ${border}`, borderRadius: 8, padding: '10px 14px', marginBottom: 12,
@@ -748,10 +750,25 @@ function VaultStrip({ vault, onSet, onUnlock, onLock, onChange }) {
       </div>
     )
   }
+  // Waiting on someone else, and the only state on this strip with no action on it — which is why it
+  // says who has to act rather than offering a button that would do nothing.
+  if (vault.accessPending) {
+    return (
+      <div style={box('var(--surface2)', 'var(--border)')}>
+        <span style={{ color: 'var(--muted)' }}>
+          Vault access requested. Someone who can already open the vault needs to approve it before you
+          can connect or sync data sources.
+        </span>
+      </div>
+    )
+  }
   if (!vault.hasPassphrase) {
     return (
       <div style={box('var(--surface2)', 'var(--border)')}>
-        <span style={{ color: 'var(--muted)' }}>The vault was set up by another user; per-user enrollment isn’t available yet.</span>
+        <span style={{ color: 'var(--muted)' }}>
+          This workspace already has a credential vault. Set your own passphrase to ask for access to it.
+        </span>
+        <Button small onClick={onRequest} style={{ marginLeft: 'auto' }}>Request vault access</Button>
       </div>
     )
   }
@@ -759,18 +776,27 @@ function VaultStrip({ vault, onSet, onUnlock, onLock, onChange }) {
     return (
       <div style={box('rgba(234, 179, 8, 0.12)', 'rgba(234, 179, 8, 0.4)')}>
         <span>The vault is locked. Unlock it to connect or sync.</span>
-        <Button small onClick={onUnlock} style={{ marginLeft: 'auto' }}>Unlock vault</Button>
+        {/* Offered first where it exists, because it is the day-to-day unlock the passkey slot was added
+            for: a touch or a glance against retyping a 20-character passphrase. */}
+        {vault.hasPasskey ? (
+          <Button small onClick={onUnlockPasskey} style={{ marginLeft: 'auto' }}>Unlock with a passkey</Button>
+        ) : null}
+        <Button small variant={vault.hasPasskey ? 'ghost' : 'primary'} onClick={onUnlock}
+          style={vault.hasPasskey ? undefined : { marginLeft: 'auto' }}>
+          Unlock with a passphrase
+        </Button>
       </div>
     )
   }
   return (
     <div style={box('var(--surface2)', 'var(--border)')}>
       <span style={{ color: 'var(--muted)' }}>Vault unlocked for this session.</span>
-      {/* Offered only while unlocked, and deliberately not beside Unlock. Unlocked, the DEK is already
-          held, so this rewraps it directly; locked, the change would have to ask for the old passphrase
-          anyway and would leave the vault unlocked either way — making it a worse Unlock button wearing
-          a different label. */}
-      <Button variant="ghost" small onClick={onChange} style={{ marginLeft: 'auto' }}>Change passphrase</Button>
+      {/* Reachable only while unlocked, and that is the gate rather than the styling: approving someone
+          and replacing the key both need the key in hand. The waiting count rides the button because
+          this strip is the only place on the page a pending request would otherwise be visible. */}
+      <Button variant="ghost" small onClick={onSettings} style={{ marginLeft: 'auto' }}>
+        {requestCount ? `Vault settings (${requestCount} waiting)` : 'Vault settings'}
+      </Button>
       <Button variant="ghost" small onClick={onLock}>Lock</Button>
     </div>
   )
@@ -809,6 +835,10 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // the vault opens, and nothing is waiting on a passphrase change. Sharing its state would give the
   // change dialog a waiter to settle and let a change resolve some unrelated pending action as "unlocked".
   const [changingPassphrase, setChangingPassphrase] = useState(false)
+  const [vaultSettingsOpen, setVaultSettingsOpen] = useState(false)
+  // Only the count, and only to badge the settings button — the queue itself lives in that dialog. Held
+  // here because the strip renders whether or not the dialog has ever been opened.
+  const [accessRequestCount, setAccessRequestCount] = useState(0)
   const [notice, setNotice] = useState(null)
   const [disconnectTarget, setDisconnectTarget] = useState(null) // { provider, external_id, institution }
   const [disconnecting, setDisconnecting] = useState(false)
@@ -883,7 +913,17 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       configured: !!u.vault_configured,
       hasPassphrase: !!u.vault_has_passphrase,
       unlocked: !!u.vault_unlocked,
+      accessPending: !!u.vault_access_pending,
+      hasPasskey: (u.vault_passkeys || []).some(pk => !pk.pending),
     })
+    // Only a member holding the key can approve, so only they are asked to look. Fetching it for anyone
+    // else would put a count on screen that clicking through could not act on.
+    if (u.vault_unlocked) {
+      const pending = await api.vaultAccessRequests().catch(() => ({ requests: [] }))
+      setAccessRequestCount((pending.requests || []).filter(r => r.user_id !== u.id).length)
+    } else {
+      setAccessRequestCount(0)
+    }
     setProviders(provResp.providers || [])
     // Roll each connection's sync period cards up to a suspect/card count for the review badge below.
     const summary = {}
@@ -959,12 +999,24 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
   // The dialog is dismissed only after the session's vault flags have been re-read, so whatever action
   // was waiting on the gate resumes against the state the unlock actually produced.
   async function submitVault(passphrase) {
-    const resp = vaultDialog === 'set'
+    // 'set' and 'request' are the same call — which of the two it turns out to be is the server's to
+    // decide, since only it knows whether this workspace already has a vault. The response says which
+    // happened via `vault_access_pending`.
+    const resp = vaultDialog === 'set' || vaultDialog === 'request'
       ? await api.setVaultPassphrase(passphrase)
       : await api.unlockVault(passphrase)
     if (resp?.user) setCurrentUser?.(resp.user)
     await refresh()
-    closeVault(true)
+    // A request grants nothing yet, so settling the gate as "unlocked" would let whatever action was
+    // waiting run straight into a locked vault. It closes as declined, and the strip explains the wait.
+    closeVault(!resp?.user?.vault_access_pending)
+    if (resp?.user?.vault_access_pending) {
+      setNotice({
+        title: 'Vault access requested',
+        description: 'Your passphrase is saved. It starts opening the vault as soon as someone who can '
+          + 'already open it approves the request — they do not need your passphrase to do that.',
+      })
+    }
   }
 
   // Deliberately not routed through `closeVault`: no action is waiting, and the vault was already open
@@ -986,6 +1038,31 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
     const status = await api.getAuthStatus().catch(() => ({}))
     if (status?.user) setCurrentUser?.(status.user)
     await refresh()
+  }
+
+  // Unlocking by passkey settles the gate exactly as the passphrase dialog does, so an action waiting on
+  // `ensureVault` resumes either way. A refused or dismissed ceremony leaves the gate open on the
+  // passphrase prompt rather than closing it, because the passphrase is the fallback the user still has.
+  async function unlockWithPasskey() {
+    try {
+      const params = await api.vaultPasskeyParams()
+      const result = await unlockWithPasskeyCeremony(params)
+      if (!result.ok) {
+        if (result.reason !== 'cancelled') {
+          setNotice({
+            title: 'Could not use a passkey',
+            description: PASSKEY_UNAVAILABLE[result.reason] || PASSKEY_UNAVAILABLE.unsupported,
+          })
+        }
+        return
+      }
+      const resp = await api.unlockVaultWithPasskey(result.credentialId, result.prfOutput)
+      if (resp?.user) setCurrentUser?.(resp.user)
+      await refresh()
+      closeVault(true)
+    } catch (e) {
+      setNotice({ title: 'Could not use a passkey', description: e?.message || 'The vault stayed locked.' })
+    }
   }
 
   // A 423 is the gate arriving late: this page's "the vault is open" is a cached answer, and the server
@@ -1453,9 +1530,12 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       ) : null}
       <VaultStrip
         vault={vault}
+        requestCount={accessRequestCount}
         onSet={() => openVault('set')}
+        onRequest={() => openVault('request')}
         onUnlock={() => openVault('unlock')}
-        onChange={() => setChangingPassphrase(true)}
+        onUnlockPasskey={unlockWithPasskey}
+        onSettings={() => setVaultSettingsOpen(true)}
         onLock={lockVault}
       />
 
@@ -1473,12 +1553,15 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
         const serverSyncing = connections.some(c => c.syncing)
         // A locked vault deliberately does NOT disable this: clicking asks for the passphrase and then
         // goes on to connect. What still disables is what no dialog here can resolve — missing HTTPS,
-        // and a vault this user holds no slot in (there is no passphrase they could enter).
+        // and a vault this user cannot open yet, whether because they have not asked for access or
+        // because the request has not been approved. Both of those are answered on the strip above,
+        // which is where the button's title points.
         const noVaultSlot = vault.configured && !vault.hasPassphrase
         const connectDisabled = disabled || noVaultSlot || httpsBlocked
-        const connectTitle = noVaultSlot ? 'The vault was set up by another user'
-          : httpsBlocked ? 'Configure HTTPS before connecting on a networked server'
-            : ''
+        const connectTitle = vault.accessPending ? 'Waiting for your vault access to be approved'
+          : noVaultSlot ? 'Request access to this workspace’s credential vault first'
+            : httpsBlocked ? 'Configure HTTPS before connecting on a networked server'
+              : ''
         const s = providerSummary(p)
         const lastSyncedLabel = formatTimestamp(s.lastSynced)
         const expanded = expandedProviders[p.provider] !== undefined
@@ -1824,6 +1907,15 @@ function DataSourceConnections({ accounts, onAccountsChanged, currentUser, setCu
       {changingPassphrase ? (
         <VaultPassphraseDialog mode="change" onSubmit={submitPassphraseChange}
           onClose={() => setChangingPassphrase(false)} />
+      ) : null}
+      {vaultSettingsOpen ? (
+        <VaultSettingsDialog
+          currentUserId={currentUser?.id}
+          isAdmin={isAdmin}
+          onChangePassphrase={() => { setVaultSettingsOpen(false); setChangingPassphrase(true) }}
+          onChanged={refresh}
+          onClose={() => setVaultSettingsOpen(false)}
+        />
       ) : null}
 
       {disconnectTarget ? (

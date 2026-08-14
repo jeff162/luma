@@ -742,7 +742,10 @@ def export_credentials(request: Request):
         ).fetchall()]
     user = getattr(request.state, "user", None)
     payload = _stamp_content_hash({
-        "version":          3,
+        # v4 carries a keypair slot (the DEK sealed to a public key) where v3 carried the DEK wrapped
+        # straight under the KEK. The bump is what makes an older install reject this file outright
+        # rather than reporting the passphrase as wrong when it reaches material it cannot read.
+        "version":          4,
         "exported_at":      utcnow_iso(),
         "warning":          "This file holds encrypted data-source credentials. Anyone with it and your "
                             "vault passphrase can use them. Store securely.",
@@ -759,9 +762,7 @@ def export_credentials(request: Request):
     # is a courtesy, and a control-DB hiccup must not cost someone their backup.
     if user:
         try:
-            fingerprint = crypto_service.wrapped_dek_fingerprint(
-                (payload.get("vault") or {}).get("wrapped_dek")
-            )
+            fingerprint = crypto_service.exported_slot_fingerprint(payload.get("vault"))
             if fingerprint:
                 control_database.record_credentials_export(user["id"], fingerprint)
         except Exception as exc:                                    # pragma: no cover - defensive
@@ -1257,13 +1258,15 @@ async def inspect_backup_file(file: UploadFile = File(...)):
 def restore_credentials(body: CredentialsRestoreRequest, request: Request):
     d = body.data
     version = d.get("version")
-    if version not in (1, 2, 3):
+    if version not in (1, 2, 3, 4):
         raise HTTPException(status_code=400, detail="Unrecognized credentials backup version")
     _verify_payload_content_hash(d)
-    # v3 carries ciphertext + the exporting vault's wrapped DEK; v2 carries provider-agnostic
-    # connections in plaintext; v1 (legacy) carried plaintext Plaid items — fold those into
-    # provider='plaid' connections so an older credentials export still restores after the cutover.
-    if version in (2, 3):
+    # v3/v4 carry ciphertext + the exporting vault's own key material (v4's is a keypair slot, v3's a
+    # directly-wrapped DEK — `crypto_service` reads either); v2 carries provider-agnostic connections in
+    # plaintext; v1 (legacy) carried plaintext Plaid items — fold those into provider='plaid'
+    # connections so an older credentials export still restores after the cutover.
+    encrypted = version in (3, 4)
+    if version >= 2:
         connections = [dict(c) for c in d.get("connections", [])]
     else:
         connections = [
@@ -1276,22 +1279,23 @@ def restore_credentials(body: CredentialsRestoreRequest, request: Request):
             for item in d.get("plaid_items", [])
         ]
     # App-level provider credentials ride the same credentials backup (v2+; legacy v1 had none).
-    provider_configs = [dict(pc) for pc in d.get("provider_configs", [])] if version in (2, 3) else []
+    provider_configs = [dict(pc) for pc in d.get("provider_configs", [])] if version >= 2 else []
     user = getattr(request.state, "user", None)
 
-    # A v3 file taken on THIS install needs nothing: its ciphertext is already valid against the live
+    # A file taken on THIS install needs nothing: its ciphertext is already valid against the live
     # DEK, so the rows go back verbatim — no passphrase, no unlock, no re-encryption. Asking for a
     # passphrase to perform a byte-for-byte copy would be ceremony, and it is the common case (restoring
     # your own backup onto the machine that made it).
-    verbatim = version == 3 and crypto_service.vault_slot_is_local(d.get("vault"), user["id"]) if user else False
+    verbatim = encrypted and crypto_service.vault_slot_is_local(d.get("vault"), user["id"]) if user else False
 
     # Otherwise every secret has to be reopened with the key that sealed it and re-sealed under this
-    # workspace's own. For v3-from-elsewhere that key comes from the backup's slot + the passphrase that
-    # went with it; for v1/v2 the payload is already plaintext and there is nothing to reopen.
+    # workspace's own. For an encrypted file from elsewhere that key comes from the backup's own slot +
+    # the passphrase that went with it; for v1/v2 the payload is already plaintext and there is nothing
+    # to reopen.
     backup_dek = None
-    if version == 3 and not verbatim and (connections or provider_configs):
+    if encrypted and not verbatim and (connections or provider_configs):
         vault = d.get("vault") or {}
-        if not vault.get("wrapped_dek"):
+        if not (vault.get("wrapped_dek") or vault.get("sealed_dek")):
             raise HTTPException(status_code=400, detail={
                 "code": "vault_material_missing",
                 "message": "This credentials backup carries no vault key, so its contents cannot be reopened.",

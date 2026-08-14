@@ -127,6 +127,25 @@ export const api = {
   // about to strand. Only those: a backup from before an earlier change is already stranded, and saying
   // so again would bury the one that still matters.
   vaultCredentialsBackups: () => request('/auth/vault/credentials-backups'),
+  // Vault access. Setting a passphrase as a user the vault does not know yet *enrols* them — the slot
+  // exists but opens nothing until a member holding the key approves it, which is what these cover.
+  vaultAccessRequests: () => request('/auth/vault/access-requests'),
+  vaultMembers: () => request('/auth/vault/members'),
+  approveVaultAccess: (slotId) =>
+    request(`/auth/vault/access-requests/${slotId}/approve`, { method: 'POST' }),
+  revokeVaultAccess: (userId) =>
+    request(`/auth/vault/access/${userId}/revoke`, { method: 'POST' }),
+  // Replace the workspace key and re-encrypt every stored credential under it. Revoke first, then
+  // rotate: rotation re-seals for whoever still holds a slot.
+  rotateVault: () => request('/auth/vault/rotate', { method: 'POST' }),
+  // Passkey unlock methods. `params` reports whether a ceremony can run here at all (WebAuthn needs a
+  // secure context and a named host) and carries the ids/salts a ceremony needs.
+  vaultPasskeyParams: () => request('/auth/vault/passkey/params'),
+  registerVaultPasskey: (data) =>
+    request('/auth/vault/passkey/register', { method: 'POST', body: JSON.stringify(data) }),
+  unlockVaultWithPasskey: (credential_id, prf_output) =>
+    request('/auth/vault/passkey/unlock', { method: 'POST', body: JSON.stringify({ credential_id, prf_output }) }),
+  removeVaultPasskey: (slotId) => request(`/auth/vault/passkey/${slotId}`, { method: 'DELETE' }),
   // Per-provider app-level credentials (the Configure card). Status never returns the secret.
   getProviders: () => request('/providers'),
   getProviderConfig: (provider) => request(`/providers/${provider}/config`),

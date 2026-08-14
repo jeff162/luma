@@ -740,27 +740,30 @@ Backup/restore deals with two different classes of data:
 
 Those are intentionally separated so normal backups can stay safer and simpler.
 
-**The credentials backup (payload version 3) exports ciphertext, never plaintext.** Versions 1 and 2
+**The credentials backup (payload version 4) exports ciphertext, never plaintext.** Versions 1 and 2
 *decrypted* every connection credential and app-level provider secret into a plain zip — an artifact
 strictly weaker than the databases it came from, which hold only ciphertext — and producing it was the
 sole reason the export demanded an unlocked vault. v3 copies `connection.credential_enc` and
-`provider_config.secret_enc` as they sit and carries the exporting vault's **wrapped DEK** alongside them
-(`vault: {user_id, wrapped_dek, kdf_*, meets_production_min}` from `crypto_service.export_vault_slot`).
-Consequences, each load-bearing:
+`provider_config.secret_enc` as they sit and carries the exporting vault's key material alongside them
+(`vault: {...}` from `crypto_service.export_vault_slot`). **v4 is the same file with a keypair slot in
+that block** — `{public_key, wrapped_private_key, sealed_dek}` where v3 had a directly-wrapped
+`wrapped_dek` — and the block is read by its `format`, so v1–v3 all still restore. The version bump exists
+so an *older* install rejects a v4 file outright rather than reporting the passphrase as wrong when it
+reaches material it cannot interpret. Consequences, each load-bearing:
 
 - **Export needs no vault at all.** It copies wrapped material and never touches a plaintext secret, so a
   locked vault is not an error on this path. (It used to answer `423`, and because the button was a plain
   browser navigation rather than a fetch, the user got a raw JSON error page in place of the app — see
   `downloadUrl` in `lib/api.js`.)
-- **The wrapped DEK is what makes the file portable.** The ciphertext lives in the data DB and the key
+- **The slot material is what makes the file portable.** The ciphertext lives in the data DB and the key
   that opens it in the control DB (`vault_slot`), so a credentials backup carrying only one half restores
-  nowhere but the install that produced it. Including it is safe *because* it is passphrase-wrapped: the
-  file's security is exactly the vault passphrase's strength, which is why `meets_production_min` rides
-  along for the UI to warn on.
+  nowhere but the install that produced it. Including it is safe *because* every part of it is guarded by
+  the passphrase: the file's security is exactly the vault passphrase's strength, which is why
+  `meets_production_min` rides along for the UI to warn on.
 - **There is no encrypted variant.** A payload that is already ciphertext gains nothing from the RSA
   recipient layer, so the credentials section offers one button and no choice. (Data backups keep theirs
   — that payload really is plaintext.)
-- **Restore is where the passphrase is asked for**, and only when it must be. A v3 file whose `vault`
+- **Restore is where the passphrase is asked for**, and only when it must be. A file whose `vault`
   matches the local slot (`crypto_service.vault_slot_is_local`) restores **verbatim** — the ciphertext is
   already valid against the live DEK, so no passphrase, no unlock, no re-encryption. A file from
   elsewhere needs the passphrase *that backup* was made with (`unwrap_dek_from_slot`, whose AAD is the
@@ -771,13 +774,18 @@ Consequences, each load-bearing:
   something to encrypt), and round-tripping one **upgrades** it: what came in as plaintext goes back out
   as ciphertext.
 - **Each export is recorded, so a passphrase change can name what it strands.** Changing the passphrase
-  rewraps the *same* DEK under a new salt: stored ciphertext is untouched and no data source needs
-  re-linking, but every credentials file written beforehand carries the old wrap and stays restorable
-  **only with the old passphrase, permanently**. Nothing on screen would otherwise reveal that at the
-  moment it happens. `credentials_export` (control DB, beside `vault_slot`) therefore holds one row per
-  export: a timestamp and `wrapped_dek_fingerprint`, a salt-free digest of the wrapped DEK — never the
-  passphrase, never the DEK, and not the wrap itself, since the only question it answers is "same
-  wrapping?". The change dialog matches it against the slot in force and names those backups by date;
+  re-guards the *same* slot under a new KEK: stored ciphertext is untouched, the DEK's seal is untouched,
+  and no data source needs re-linking — but every credentials file written beforehand carries the old
+  wrapping and stays restorable **only with the old passphrase, permanently**. Nothing on screen would
+  otherwise reveal that at the moment it happens. `credentials_export` (control DB, beside `vault_slot`)
+  therefore holds one row per export: a timestamp and `wrapped_dek_fingerprint`, a salt-free digest of the
+  slot's **wrapping** — never the passphrase, never the DEK, and not the wrap itself, since the only
+  question it answers is "same wrapping?". *Which field that digest covers is load-bearing:* on a keypair
+  slot it is `wrapped_private_key`, because a passphrase change leaves `sealed_dek` byte-identical, and
+  fingerprinting the seal would report "nothing changed" after exactly the event this record exists to
+  detect. (Converting a format-1 slot re-points the existing rows to the new value rather than orphaning
+  them — the conversion does not change which passphrase opens those files.)
+  The change dialog matches it against the slot in force and names those backups by date;
   files from before an earlier change are deliberately *not* listed, having been stranded already, and a
   general caution covers exports predating the record. It lives in the control DB because it describes
   vault state and must survive a **data** restore — the event most likely to be followed by wondering

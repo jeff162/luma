@@ -92,12 +92,21 @@ rotation, not only after a forgotten passphrase.
 
 ## Open decisions
 
-**Multi-user.** Slots are per-user but there is one DEK per workspace, so one member forgetting theirs is
-not a reason to destroy the workspace's credentials — another member's slot still opens the same DEK. The
-correct answer there is re-enrollment, which is phase 5 and not built (`set_passphrase` still refuses with
-"enrollment for a new user is not yet available"). Until it is, the reset should probably **refuse** when
-another slot exists and say that a member who can unlock is the way back, rather than silently wiping
-credentials that are still reachable.
+**Multi-user — settled by phase 5 (2026-08-13).** Slots are per-user but there is one DEK per workspace,
+so one member forgetting theirs was never a reason to destroy the workspace's credentials — another
+member's slot still opens the same DEK. That escape now exists and is cheap: the stuck user removes their
+own slot (or an admin revokes it via `/auth/vault/access/{user}/revoke`), sets a new passphrase — which
+enrols them, since they no longer hold a slot — and any unlocked member approves it. **No credential is
+touched and nothing is re-linked.**
+
+So the reset below **must refuse while another granted slot exists**, and say that a member who can unlock
+is the way back. Wiping credentials that are still perfectly reachable would be the worse outcome, and the
+alternative is now a real flow rather than advice. The destructive reset is only for the genuine dead end:
+the *last* slot in the workspace forgotten, with no other member who can open the vault.
+
+A second consequence: **a passkey is now the cheapest insurance against this whole scenario.** A user with
+both a passphrase and a passkey has two independent ways in, and `remove_slot` refuses to leave them with
+none — so the "I forgot it and there is no way out" state takes losing both.
 
 **How hard to make it.** Irreversible, so: a typed confirmation, a count of the connections that will need
 re-linking, and — first, above the warning — the statement that transactions and accounts are kept.
@@ -121,5 +130,6 @@ has stopped working", which is the wrong story even before any reset feature exi
 - a new passphrase after a reset mints a *different* DEK — the old ciphertext must not decrypt;
 - reset → set → restore a credentials backup taken under the old passphrase re-keys the credentials and
   leaves the connections syncable, which is the whole first rung of the ladder;
-- reset refuses (or does not) when a second slot exists, per the decision above;
+- reset refuses when another granted slot exists, and points at re-enrollment instead (per the decision
+  above, now settled);
 - `VaultDecryptError` during a sync records `reauth_required`, not a generic failure.

@@ -19,6 +19,7 @@ from backend.db.control_database import (
     get_https_warning_suppressed,
 )
 from backend import transport
+from backend.services import crypto_service
 
 router = APIRouter()
 
@@ -61,6 +62,33 @@ def _https_setup_task(request: Request | None) -> dict | None:
     }
 
 
+def _vault_access_task(request: Request | None) -> dict | None:
+    """Someone is waiting to be let into the credential vault.
+
+    Shown only to a member who can actually approve it — that means holding the DEK, so an admin with a
+    locked vault sees nothing, because there is nothing they could do from here. Without this the
+    request is invisible: the person waiting has no way to reach the people who could grant it, and the
+    people who could have no reason to open the page where the queue lives.
+    """
+    user = getattr(request, "state", None) and getattr(request.state, "user", None)
+    if not user or not crypto_service.is_unlocked(user["id"]):
+        return None
+    waiting = [r for r in crypto_service.pending_access_requests() if r["user_id"] != user["id"]]
+    if not waiting:
+        return None
+    names = ", ".join(r["display_name"] for r in waiting)
+    return {
+        "id":          "vault_access_requests",
+        "title":       "Vault access requested",
+        "description": f"{names} {'is' if len(waiting) == 1 else 'are'} waiting for access to the "
+                       "data-source credential vault. Approving lets them connect and sync data sources.",
+        "count":       len(waiting),
+        "link":        "/accounts?tab=connections",
+        "link_label":  "Review vault access",
+        "severity":    SEVERITY_INFO,
+    }
+
+
 @router.get("")
 def get_tasks(request: Request = None):
     tasks = []
@@ -68,6 +96,10 @@ def get_tasks(request: Request = None):
     https_task = _https_setup_task(request)
     if https_task:
         tasks.append(https_task)
+
+    vault_task = _vault_access_task(request)
+    if vault_task:
+        tasks.append(vault_task)
 
     with get_db() as conn:
         owner_count = conn.execute("""
