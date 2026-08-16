@@ -24,13 +24,16 @@ import io
 import json
 import unittest
 from datetime import date, datetime, timedelta, timezone
+from datetime import time as dtime
 from unittest import mock
 
 from backend.services.providers import get_adapter
 from backend.services.providers.simplefin import (
-    DAILY_REQUEST_BUDGET,
     EMPTY_WINDOWS_END_HISTORY,
+    FILTERED_WALK_MAX_ACCOUNTS,
     INCREMENTAL_OVERLAP_DAYS,
+    REQUEST_BUDGET_CAPACITY,
+    REQUEST_BUDGET_REFILL_PER_HOUR,
     WINDOW_DAYS,
     SimpleFinAdapter,
     SimpleFinError,
@@ -547,17 +550,36 @@ class SimpleFinWalkTests(unittest.TestCase):
 
     def setUp(self):
         self.adapter = SimpleFinAdapter()
+        # One spend record across every `_sync` in a test, which is what the sync layer keeps per
+        # connection. Held here rather than threaded through each call so a two-call test exercises the
+        # thing that actually carries between syncs.
+        self.budget = {}
 
     def _targets(self, *accounts, from_date="2016-01-01", reached=None, empty_streak=0):
         return [{"external_account_id": a, "from_date": from_date,
                  "reached": reached, "empty_streak": empty_streak} for a in accounts]
 
-    def _sync(self, server, targets, cursor=None, today=None):
+    def _moment(self, today=None, hour=12) -> float:
+        return datetime.combine(date.fromisoformat(today or self.TODAY),
+                                dtime(hour), tzinfo=timezone.utc).timestamp()
+
+    def _drained(self, *pools, today=None, hour=12) -> dict:
+        """A spend record with the named allowances already empty — the state a walk that ran out leaves
+        behind. `"shared"` is the unfiltered pool; anything else names a provider account."""
+        return {"pools": {p: {"tokens": 0.0, "as_of": self._moment(today, hour)} for p in pools}}
+
+    def _sync(self, server, targets, cursor=None, today=None, hour=12, budget=None):
+        # Both clocks move together. The budget is metered against instants and the windows are chosen by
+        # date, so a test that advanced one without the other would be asserting against a moment nothing
+        # was requested at.
         with mock.patch("backend.services.providers.simplefin._http", server), \
                 mock.patch("backend.services.providers.simplefin._utc_today",
-                           lambda: date.fromisoformat(today or self.TODAY)):
-            return self.adapter.fetch_transactions_sync({}, ACCESS_URL, cursor=cursor,
-                                                        account_targets=targets)
+                           lambda: date.fromisoformat(today or self.TODAY)), \
+                mock.patch("backend.services.providers.simplefin._utcnow_epoch",
+                           lambda: self._moment(today, hour)):
+            return self.adapter.fetch_transactions_sync(
+                {}, ACCESS_URL, cursor=cursor, account_targets=targets,
+                request_budget=self.budget if budget is None else budget)
 
     def _busy(self, account="simplefin:2930002", count=80):
         """Windows that always return data, so only the budget can end a walk."""
@@ -652,10 +674,9 @@ class SimpleFinWalkTests(unittest.TestCase):
         # `through` is where the next top-up starts, so advancing it for a pull that fetched only old
         # windows would silently skip everything between the real last top-up and the new watermark.
         server = self._busy()
-        state = json.dumps({"through": "2026-08-01",
-                            "budget_date": self.TODAY, "requests_used": DAILY_REQUEST_BUDGET})
         result = self._sync(server, self._targets("simplefin:2930002", reached="2026-06-01"),
-                            cursor=state)
+                            cursor=json.dumps({"through": "2026-08-01"}),
+                            budget=self._drained("shared", "simplefin:2930002"))
         self.assertTrue(result["resume_later"])
         self.assertEqual(json.loads(result["next_cursor"])["through"], "2026-08-01",
                          "no budget for the top-up means the watermark must not move")
@@ -699,26 +720,36 @@ class SimpleFinWalkTests(unittest.TestCase):
 
     # ---- the filter rule ------------------------------------------------
 
-    def test_a_shared_window_is_fetched_unfiltered(self):
-        # A request is bounded by a date range, not an account, so one window advances every account that
-        # wants that period. Filtering a plural set would multiply requests without fetching anything more.
+    def test_a_wide_walk_shares_one_unfiltered_window(self):
+        # A request is bounded by a date range, not an account, so one unfiltered window advances every
+        # account that wants that period, for one token. Fetching a wide set per account would multiply
+        # round trips by the number of accounts to reach exactly the same depth.
         server = _Server(windows={})
-        self._sync(server, self._targets("simplefin:a", "simplefin:b"))
+        self._sync(server, self._targets(*[f"simplefin:{n}" for n in range(FILTERED_WALK_MAX_ACCOUNTS + 1)]))
         for url in server.calls:
             self.assertNotIn("account=", url)
 
-    def test_a_lone_account_is_fetched_filtered(self):
-        # Same request count, less data — and if per-account requests draw on a separate quota, it also
-        # spares the main one.
+    def test_a_narrow_walk_is_fetched_one_account_at_a_time(self):
+        # Each account has its own allowance at the Bridge, so a few accounts catching up can do it without
+        # touching the shared pool the top-up and account discovery spend from.
         server = _Server(windows={})
         self._sync(server, self._targets("simplefin:a"))
         for url in server.calls:
             self.assertIn("account=a", url)
             self.assertNotIn("simplefin%3A", url, "the namespace prefix is ours, not the provider's")
 
-    def test_the_filter_appears_once_the_others_have_finished(self):
-        # Two accounts start together unfiltered; when one completes, the remaining one is on its own and
-        # the window narrows to it.
+    def test_a_filtered_request_never_names_more_than_one_account(self):
+        # The separate per-account allowance was described in the singular. Nothing says which pool a
+        # request naming two accounts is charged to, so the shape whose cost is known is the only one sent —
+        # otherwise the budget here would be metering something the server accounts for differently.
+        server = _Server(windows={})
+        self._sync(server, self._targets("simplefin:a", "simplefin:b"))
+        for url in server.calls:
+            self.assertLessEqual(url.count("account="), 1, f"{url} names several accounts at once")
+
+    def test_the_walk_narrows_to_filtering_once_enough_accounts_have_finished(self):
+        # A wide walk shares windows; as accounts drop out it becomes a narrow one, and the remaining
+        # stragglers move to their own allowances rather than going on spending the shared pool.
         today = date.fromisoformat(self.TODAY)
         deep = {
             ((today - timedelta(days=WINDOW_DAYS * (n + 1))).isoformat(),
@@ -727,11 +758,13 @@ class SimpleFinWalkTests(unittest.TestCase):
             for n in range(6)
         }
         server = _Server(windows=deep)
-        # `a` delivers in every window; `b` never does, so it completes after two empties.
-        self._sync(server, self._targets("simplefin:2930002", "simplefin:b"))
+        # `2930002` delivers in every window; the rest never do, so they complete after two empties and the
+        # walking set falls to one.
+        quiet = [f"simplefin:quiet{n}" for n in range(FILTERED_WALK_MAX_ACCOUNTS)]
+        self._sync(server, self._targets("simplefin:2930002", *quiet))
         self.assertNotIn("account=", server.calls[0])
         self.assertTrue(any("account=" in u for u in server.calls[2:]),
-                        "once only one account is still walking, the window narrows to it")
+                        "once few enough accounts are still walking, the windows narrow to them")
 
     # ---- the request budget ---------------------------------------------
 
@@ -739,7 +772,7 @@ class SimpleFinWalkTests(unittest.TestCase):
         # Exceeding SimpleFIN's published budget gets the token disabled, so the walk stops itself.
         server = self._busy()
         result = self._sync(server, self._targets("simplefin:2930002"))
-        self.assertEqual(len(server.requested_windows), DAILY_REQUEST_BUDGET)
+        self.assertEqual(len(server.requested_windows), REQUEST_BUDGET_CAPACITY)
         self.assertTrue(result["resume_later"])
         self.assertFalse(result["backfill_complete"])
         self.assertFalse(result["has_more"], "the client must stop polling a provider that just cut it off")
@@ -761,26 +794,67 @@ class SimpleFinWalkTests(unittest.TestCase):
         self._sync(server, self._targets("simplefin:2930002", reached=reached),
                    cursor=first["next_cursor"], today="2026-08-08")
         # The next day opens with the recent top-up, then the walk continues from where it stopped.
-        resumed = server.requested_windows[DAILY_REQUEST_BUDGET + 1]
+        resumed = server.requested_windows[REQUEST_BUDGET_CAPACITY + 1]
         self.assertEqual(resumed[1].isoformat(), reached)
 
-    def test_the_budget_is_not_spent_twice_in_one_day(self):
+    def test_an_exhausted_allowance_is_not_spent_again_before_it_refills(self):
         server = self._busy()
         first = self._sync(server, self._targets("simplefin:2930002"))
         reached = first["account_coverage"]["simplefin:2930002"]["reached"]
+        spent = len(server.requested_windows)
         second = self._sync(server, self._targets("simplefin:2930002", reached=reached),
                             cursor=first["next_cursor"])
-        self.assertEqual(len(server.requested_windows), DAILY_REQUEST_BUDGET,
-                         "a second sync the same day must make no further requests")
+        # One further request, and exactly one: the walk's own allowance is empty, but the recent top-up is
+        # an unfiltered call and the shared allowance it draws on has not been touched. That the ledger
+        # stays current while history is paused is the point of the pools being separate.
+        self.assertEqual(len(server.requested_windows), spent + 1,
+                         "the paused walk must not fetch, and the top-up must not be blocked by it")
         self.assertTrue(second["resume_later"])
 
-    def test_the_budget_day_is_utc_not_the_servers_local_date(self):
-        # Overrunning the limit is the one error with a punitive outcome, and a counter keyed to local
-        # midnight hands a machine behind UTC a second allowance partway through the provider's day.
+    def test_an_allowance_refills_with_the_hours_that_passed(self):
+        # The distinction a per-day counter cannot draw. Coming back part-way through must return part of
+        # the allowance — a counter keyed to the calendar returns all of it the moment the date rolls, which
+        # is how a walk resuming shortly after midnight overruns a limit that has barely refilled.
+        server = self._busy()
+        first = self._sync(server, self._targets("simplefin:2930002"))
+        spent = len(server.requested_windows)
+        # Resumed from the reach the first pull recorded, so the walk stays on `_busy`'s window grid and
+        # keeps finding data — otherwise it would stop on two empty windows and measure the wrong thing.
+        reached = first["account_coverage"]["simplefin:2930002"]["reached"]
+
+        elapsed = 5
+        result = self._sync(server, self._targets("simplefin:2930002", reached=reached),
+                            cursor=first["next_cursor"], hour=12 + elapsed)
+        walked = len(server.requested_windows) - spent - 1   # less the top-up, which is a different pool
+        self.assertEqual(walked, int(elapsed * REQUEST_BUDGET_REFILL_PER_HOUR),
+                         "five hours must return five requests — no more, and no fewer")
+        self.assertTrue(result["resume_later"], "and the rest still waits on the allowance")
+
+    def test_a_pre_bucket_checkpoints_spend_is_carried_into_the_allowance(self):
+        # The allowance used to live in the resume token as a counter keyed to a UTC date. Ignoring that on
+        # the first sync after the change would grant a full bucket on top of one already spent the same
+        # day — the exact over-spend the bucket exists to prevent, arriving once, at the upgrade.
+        server = self._busy()
+        already_spent = REQUEST_BUDGET_CAPACITY - 3
+        result = self._sync(server, self._targets("simplefin:2930002", reached="2026-08-01"),
+                            cursor=json.dumps({"through": "2026-08-01", "budget_date": self.TODAY,
+                                               "requests_used": already_spent}))
+        # Three were left; the top-up spends one of them. The walk draws on the account's own allowance, so
+        # it is not what this measures.
+        self.assertEqual(self.budget["pools"]["shared"]["tokens"], 2.0,
+                         "the legacy counter's spend must carry over, not be forgotten")
+        carried = json.loads(result["next_cursor"])
+        self.assertNotIn("requests_used", carried, "and must not be left behind to be adopted twice")
+        self.assertNotIn("budget_date", carried)
+
+    def test_the_walk_window_is_dated_from_utc_not_the_hosts_local_date(self):
+        # Overrunning the provider's limits is the one error with a punitive outcome, and every bound this
+        # adapter sends is a UTC instant — so a host running behind UTC that dated its windows locally would
+        # ask for a window ending yesterday and then record coverage through today.
         #
-        # The two clocks are pinned to *disagree*, which is the whole test: a host at UTC-7 at 20:00 on
-        # the 6th is already the 7th in UTC. Asserting a date that both clocks happen to share proves
-        # nothing — an earlier version of this test did exactly that and passed against the bug.
+        # The two clocks are pinned to *disagree*, which is the whole test: a host at UTC-7 at 20:00 on the
+        # 6th is already the 7th in UTC. Asserting a date both clocks happen to share proves nothing — an
+        # earlier version of this test did exactly that and passed against the bug.
         server = self._busy()
         with mock.patch("backend.services.providers.simplefin.datetime") as fake_datetime, \
                 mock.patch("backend.services.providers.simplefin.date", _FrozenDate("2026-08-06")):
@@ -789,10 +863,11 @@ class SimpleFinWalkTests(unittest.TestCase):
             fake_datetime.min = datetime.min
             fake_datetime.max = datetime.max
             with mock.patch("backend.services.providers.simplefin._http", server):
-                result = self.adapter.fetch_transactions_sync(
-                    {}, ACCESS_URL, account_targets=self._targets("simplefin:2930002"))
-        self.assertEqual(json.loads(result["next_cursor"])["budget_date"], "2026-08-07",
-                         "the budget must be counted against the provider's day, not the host's")
+                self.adapter.fetch_transactions_sync(
+                    {}, ACCESS_URL, account_targets=self._targets("simplefin:2930002"),
+                    request_budget=self.budget)
+        self.assertEqual(max(w[1] for w in server.requested_windows).isoformat(), "2026-08-07",
+                         "windows must be dated by the provider's day, not the host's")
 
     # ---- accounts joining a walk already in progress --------------------
 
@@ -829,7 +904,7 @@ class SimpleFinRoutineSyncTests(unittest.TestCase):
             return self.adapter.fetch_transactions_sync({}, ACCESS_URL, cursor=cursor)
 
     def _state(self, through="2026-08-05"):
-        return json.dumps({"through": through, "budget_date": self.TODAY, "requests_used": 0})
+        return json.dumps({"through": through})
 
     def test_a_routine_sync_costs_one_request(self):
         server = _Server(windows={})

@@ -39,9 +39,11 @@ class FakeCursorAdapter(ProviderAdapter):
         self._idx = 0
 
     def fetch_transactions_sync(self, app_config, credential, *, cursor=None, days_requested=730,
-                                account_targets=None, ledger_currency=DEFAULT_LEDGER_CURRENCY):
+                                account_targets=None, ledger_currency=DEFAULT_LEDGER_CURRENCY,
+                                request_budget=None):
         self.calls.append({"cursor": cursor, "days_requested": days_requested,
-                           "account_targets": account_targets, "ledger_currency": ledger_currency})
+                           "account_targets": account_targets, "ledger_currency": ledger_currency,
+                           "request_budget": request_budget})
         page = self._pages[self._idx] if self._idx < len(self._pages) else {}
         self._idx += 1
         status = page.get("update_status", DONE)

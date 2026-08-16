@@ -21,7 +21,7 @@ Nothing here touches the network. The captures were taken once, by hand.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -121,7 +121,16 @@ class SimpleFinSim:
         # Set to an exception to make the server refuse every request — how a revoked access URL presents,
         # since SimpleFIN has no revocation API and nothing announces the revocation in advance.
         self.refuse_with: Exception | None = None
+        # How many requests succeed before `refuse_with` starts firing. A bank that fails from the very
+        # first request and one that fails partway through a walk are different tests: only the second
+        # leaves a *partial* pull behind, with requests already spent and rows already fetched, which is
+        # what anything claiming to survive a failure has to survive.
+        self.refuse_after: int | None = None
         self._today = date.fromisoformat(today)
+        # Midday, so `advance_hours` can move in either direction within a day without rolling the date by
+        # accident — the scenarios choose windows by date and meter the budget by instant, and a helper that
+        # quietly changed the date while claiming to move hours would make the two disagree.
+        self._time_of_day = time(12, 0)
         self.errlist_for = errlist_for or (lambda params: [])
         self.requests: list[dict] = []
         self._envelope = _load("accounts_balances_only")
@@ -136,8 +145,24 @@ class SimpleFinSim:
     def today(self) -> date:
         return self._today
 
+    @property
+    def now(self) -> datetime:
+        """The wall-clock instant the simulated day currently sits at.
+
+        Owned here rather than in the harness that drives it, because the request budget is metered against
+        instants while windows are chosen by date, and the two must agree. When the test's clock and the
+        request log disagreed about what "now" was, an allowance could be asserted against a moment nothing
+        was actually requested at."""
+        return datetime.combine(self._today, self._time_of_day, tzinfo=timezone.utc)
+
     def advance_days(self, n: int) -> None:
         self._today = self._today + timedelta(days=n)
+
+    def advance_hours(self, n: int) -> None:
+        """Move within a day, which is the only way to reach the case a refilling allowance exists for:
+        coming back part-way through, when some but not all of what was spent has been returned."""
+        moved = self.now + timedelta(hours=n)
+        self._today, self._time_of_day = moved.date(), moved.time()
 
     def set_today(self, day: str) -> None:
         self._today = date.fromisoformat(day)
@@ -162,7 +187,8 @@ class SimpleFinSim:
 
     def __call__(self, url, *, method="GET", headers=None):
         """Stands in for `simplefin._http`."""
-        if self.refuse_with is not None:
+        if self.refuse_with is not None and (self.refuse_after is None
+                                             or len(self.requests) >= self.refuse_after):
             raise self.refuse_with
         params = {k: v for k, v in parse_qs(urlsplit(url).query).items()}
         wanted = params.get("account")
@@ -182,6 +208,7 @@ class SimpleFinSim:
             "start": start, "end": end,
             "accounts": None if wanted is None else [f"simplefin:{a}" for a in wanted],
             "balances_only": balances_only, "on": self._today.isoformat(),
+            "at": self.now.timestamp(),
         })
 
         accounts = []
@@ -224,6 +251,31 @@ class SimpleFinSim:
 
     def requests_on(self, day: str) -> int:
         return sum(1 for r in self.requests if r["on"] == day)
+
+    def requests_by_pool(self, test=None) -> dict[str, list[float]]:
+        """When each request was made, grouped by the allowance the Bridge would charge it to.
+
+        An unfiltered call and a `?account=X` call draw on separate allowances, so a log that did not
+        separate them could only assert a total — which is satisfied by a walk that drains one pool
+        completely while another sits untouched.
+
+        A request naming **several** accounts is failed outright rather than attributed. The separate
+        allowance was described in the singular, and nothing says whether a two-account request costs one
+        token from each pool, one from either, or one from the shared one. Guessing here would bless a
+        request shape whose real cost is unknown, so the fixture refuses to have an opinion and the code is
+        held to sending only the shape that was actually described.
+        """
+        pools: dict[str, list[float]] = {}
+        for r in self.requests:
+            named = r["accounts"]
+            if named is not None and len(named) > 1 and test is not None:
+                test.fail(
+                    f"a request named {len(named)} accounts at once ({named}); which allowance the Bridge "
+                    f"charges that to is undocumented, so it must be sent one account at a time"
+                )
+            key = "shared" if named is None else named[0]
+            pools.setdefault(key, []).append(r["at"])
+        return pools
 
     def expected_ids(self, account_id: str, since: str, until: str) -> set[str]:
         """The transaction ids this bank holds for an account in a range — what a ledger claiming to cover

@@ -163,9 +163,33 @@ Marking it complete there strands the unfetched history behind a short routine l
 to go back for it.
 
 Record where the walk got to. For a cursorless provider the `connection.transactions_cursor` column
-carries whatever checkpoint the adapter's own resume needs (SimpleFIN keeps a JSON walk position plus a
-request-budget ledger there) — the column was always defined as an opaque resume token, not literally a
-cursor.
+carries whatever checkpoint the adapter's own resume needs (SimpleFIN keeps a JSON walk position there) —
+the column was always defined as an opaque resume token, not literally a cursor.
+
+**Spending is not part of that checkpoint.** It travels as `request_budget`, a mutable dict the adapter
+writes through as it spends, persisted separately in `connection.provider_request_budget`. Two rules follow
+from the difference, and both are easy to get backwards:
+
+* **A resume checkpoint must roll back with a failed pull; spending must not.** A checkpoint claims data is
+  held, so a pull that inserted nothing must not advance it. A request that has already left the machine
+  counts whether or not the call it belonged to returned. Sharing one field forces one persistence rule on
+  both, and each one's correct rule is the other's bug — a budget that forgets a failed pull's requests
+  overruns exactly when a user is retrying a broken connection hardest.
+* **Mutable, because a return value cannot escape an exception.** The sync layer writes the record back in
+  a `finally`, so a failure mode added later cannot silently opt out of being metered.
+
+**Model a published limit as what it actually is.** A limit described as "N per day, replenished through
+the day" is a refilling bucket, not a daily quota, and a counter that resets on a calendar boundary hands
+out a full allowance immediately after one already spent — which is precisely what a backfill resuming
+night after night does. Where the refill rate is inferred rather than stated, infer it *slow*: crediting
+too slowly costs a request that could have been made, while crediting too fast spends one the provider has
+not granted.
+
+**Check whether the limit is one allowance or several.** SimpleFIN grants an unfiltered `/accounts` call
+and each `?account=` call their own, which changes what an account-filtered request is *for*: not a
+bandwidth saving but a different pool to spend from. It also bounds how a filtered request may be shaped —
+the separate allowance was described for a single account, so a request naming several has no known cost
+and is not sent.
 
 ## Coverage claims
 
@@ -176,6 +200,14 @@ already-covered range. Watch for silent server-side truncation of over-wide date
 
 Note that a **card's** date span is not a coverage claim: a delta card can span a month while holding the
 three rows that happened to arrive. Coverage lives on `connection_account`.
+
+**"Reports no per-account coverage" and "reports none this time" are different claims**, and collapsing
+them over-claims. An adapter that does not track coverage per account (a cursor provider) licenses the sync
+layer to record the depth it *requested*; an adapter that does track it, reporting an empty set, is saying
+this pull reached nothing new — which licenses recording nothing. A walking provider reports exactly the
+empty set once every account's history is complete, so reading the two as one makes "Fetch more history" on
+a finished connection claim the full requested depth for accounts nothing fetched. The signal is therefore
+the *presence* of `account_coverage`, never its truthiness.
 
 ## Reporting what was refused
 

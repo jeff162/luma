@@ -234,8 +234,9 @@ def _cursor_fingerprint(cursor: str | None) -> str | None:
     token, where a length plus a leading slice is the only marker available and reads fine. A provider with
     no change feed stores its own **JSON checkpoint** there instead (see the SimpleFIN adapter), and slicing
     that yields `{"throug` — meaningless, and looking for all the world like a truncation bug, while hiding
-    the two facts actually worth having: how far the walk has reached and how much of the request budget it
-    has spent. A checkpoint is therefore summarized as its own short scalars.
+    the fact actually worth having: how far the walk has reached. A checkpoint is therefore summarized as
+    its own short scalars. What a metered provider has *spent* is not here and never was a cursor fact — it
+    lives in `provider_request_budget`, which persists under the opposite rule (see the column comment).
 
     Values longer than `_FINGERPRINT_VALUE_CHARS` are elided rather than printed: a JSON token is not
     automatically non-secret just because it parses, so the "never store the whole token" rule holds for
@@ -601,7 +602,7 @@ def _record_sync_coverage(conn, connection, *, is_range_pull: bool, requested_st
     which for that provider is accurate: it maintains one window across the whole item.
     """
     today = date.today().isoformat()
-    if account_coverage:
+    if account_coverage is not None:
         for external_account_id, reported in account_coverage.items():
             conn.execute(
                 """
@@ -617,6 +618,22 @@ def _record_sync_coverage(conn, connection, *, is_range_pull: bool, requested_st
                 (reported["reached"], reported["reached"], today,
                  1 if reported.get("complete") else 0, reported.get("empty_streak", 0),
                  connection["id"], external_account_id),
+            )
+        # A pull routinely touches accounts the walk had nothing to say about: once every account's history
+        # is complete there is no walk left, yet the recent top-up still fetched current rows for all of
+        # them. Their trailing edge advanced even though their start did not, and only the trailing edge is
+        # written here — extending a claim that was never established is what over-claims.
+        for external_account_id in synced_accounts:
+            if external_account_id in account_coverage:
+                continue
+            conn.execute(
+                """
+                UPDATE connection_account
+                SET    coverage_through_date = ?
+                WHERE  connection_id = ? AND external_account_id = ?
+                  AND  coverage_start_date IS NOT NULL
+                """,
+                (today, connection["id"], external_account_id),
             )
         return
     for external_account_id in synced_accounts:
@@ -706,7 +723,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
 
     _SELECT_CONNECTIONS = (
         "SELECT id, provider, external_id, credential, credential_enc, institution, "
-        "transactions_cursor, initial_sync_complete FROM connection"
+        "transactions_cursor, initial_sync_complete, provider_request_budget FROM connection"
     )
 
     with get_db() as conn:
@@ -1008,10 +1025,20 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
             # than inferred from `days`, which a routine top-up sends identically.
             is_range_pull = initial or full_history
             cursor = connection["transactions_cursor"]
+            # A metered adapter's spend record, handed down mutable and written back in the `finally` below
+            # whatever happens to the pull. Unreadable JSON resets to empty rather than failing the sync —
+            # the cost is one over-generous allowance, where refusing to sync at all would leave a
+            # connection permanently stuck behind a corrupt diagnostic field.
+            try:
+                request_budget = json.loads(connection["provider_request_budget"] or "{}")
+            except (TypeError, ValueError):
+                request_budget = {}
+            if not isinstance(request_budget, dict):
+                request_budget = {}
             final_status = None
             backfill_complete = True
             resume_later = False
-            account_coverage: dict = {}
+            account_coverage: dict | None = None
             connection_warnings: list[str] = []   # non-fatal provider problems, for the card's badge
             # Everything that is not a failure and not the user's to act on: what the provider said about
             # our own requests, and the sync layer's own "nothing could be imported because…" notices.
@@ -1134,6 +1161,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     page = adapter.fetch_transactions_sync(
                         app_config, credential, cursor=cursor, days_requested=days_requested,
                         account_targets=account_targets, ledger_currency=ledger_currency,
+                        request_budget=request_budget,
                     )
                     page_added.extend(page["added"])
                     page_modified.extend(page["modified"])
@@ -1144,7 +1172,13 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     # "done when the status says so", which is what it meant.
                     backfill_complete = page.get("backfill_complete", True)
                     resume_later = page.get("resume_later", False)
-                    account_coverage = page.get("account_coverage") or {}
+                    # `None` and `{}` mean different things and must not be collapsed. `None` is "this
+                    # provider does not report per-account coverage", which licenses recording the depth
+                    # that was *requested*; `{}` is a provider that does report it saying this pull reached
+                    # nothing new — which licenses recording nothing. Reading them as one claimed the full
+                    # requested depth for a walking provider whenever its accounts had all finished, since
+                    # a pull with no history left to fetch reports exactly `{}`.
+                    account_coverage = page.get("account_coverage")
                     for w in page.get("warnings") or []:
                         if w not in connection_warnings:
                             connection_warnings.append(w)
@@ -1205,6 +1239,19 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 _record_sync_failure(conn, connection["id"], str(e))
                 _record(error=str(e))
                 continue
+            finally:
+                # What the pull spent at the provider, recorded whether it succeeded or raised — the one
+                # piece of sync state that must survive a failure. Everything else written here is a claim
+                # about data in the ledger and correctly disappears with a pull that inserted nothing; the
+                # requests themselves were still made, and a provider that meters them is not going to
+                # forget. Without this, a walk that fails after twenty requests starts the next attempt
+                # believing it has spent nothing — and the connection a user retries most is exactly the one
+                # that would overrun. `finally` rather than a line in each handler so a failure mode added
+                # later cannot silently opt out.
+                conn.execute(
+                    "UPDATE connection SET provider_request_budget = ? WHERE id = ?",
+                    (json.dumps(request_budget) if request_budget else None, connection["id"]),
+                )
 
             # Persist the advanced resume token, and flip the connection out of "initial" once its history
             # has actually been fetched to the end — subsequent syncs then accrete onto monthly cards

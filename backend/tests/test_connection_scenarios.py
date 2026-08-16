@@ -19,7 +19,7 @@ import json
 import tempfile
 import unittest
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -28,7 +28,8 @@ from backend.db.database import SHARED_OWNER_ID, get_db, init_db, reset_current_
 from backend.routers import sync as sync_module
 from backend.services.ledger_currency import set_ledger_currency
 from backend.services.providers.simplefin import (
-    DAILY_REQUEST_BUDGET,
+    REQUEST_BUDGET_CAPACITY,
+    REQUEST_BUDGET_REFILL_PER_HOUR,
     WINDOW_DAYS,
     SimpleFinAdapter,
     SimpleFinError,
@@ -118,8 +119,7 @@ class ConnectionScenarioTests(unittest.TestCase):
 
             @classmethod
             def now(cls, tz=None):
-                return datetime(sim.today.year, sim.today.month, sim.today.day, 12, 0,
-                                tzinfo=tz or timezone.utc)
+                return sim.now if tz in (None, timezone.utc) else sim.now.astimezone(tz)
 
         token = set_current_db_path(str(self.db_path))
         try:
@@ -137,7 +137,8 @@ class ConnectionScenarioTests(unittest.TestCase):
 
         with self._db() as conn:
             assert_invariants(self, conn, self.sim, CONNECTION_ID,
-                              window_days=WINDOW_DAYS, daily_budget=DAILY_REQUEST_BUDGET,
+                              window_days=WINDOW_DAYS, budget_capacity=REQUEST_BUDGET_CAPACITY,
+                              budget_refill_per_hour=REQUEST_BUDGET_REFILL_PER_HOUR,
                               # Stated by the scenario, never read from the setting the code reads: an
                               # invariant that resolved it the same way the app does would agree with the
                               # app about a currency it had got wrong.
@@ -150,6 +151,12 @@ class ConnectionScenarioTests(unittest.TestCase):
                 "SELECT external_account_id, coverage_start_date, coverage_through_date, "
                 "history_complete FROM connection_account WHERE connection_id = ?", (CONNECTION_ID,),
             )}
+
+    def _request_budget(self):
+        with self._db() as conn:
+            stored = conn.execute("SELECT provider_request_budget FROM connection WHERE id = ?",
+                                  (CONNECTION_ID,)).fetchone()["provider_request_budget"]
+        return json.loads(stored) if stored else {}
 
     def _row_count(self):
         with self._db() as conn:
@@ -349,20 +356,139 @@ class ConnectionScenarioTests(unittest.TestCase):
         self.assertFalse(expected - held,
                          "activity posted between the last top-up and the claimed range was never fetched")
 
-    def test_the_budget_resets_on_the_utc_day_not_the_hosts_local_one(self):
-        # The bug this scenario is built around had nothing to do with the network: the counter was keyed
-        # to the server's local date while the limit it protects is the provider's. A host behind UTC then
-        # gets a second allowance partway through the provider's day, and overrunning gets a token
-        # disabled. Only a test owning the clock can see it.
-        self._offer(CHECKING)
-        self._offer(SAVINGS)
-        self._sync(days=0, full_history=True)
-        spent = self.sim.requests_on(self.sim.today.isoformat())
-        self.assertEqual(spent, DAILY_REQUEST_BUDGET, "the first day should exhaust the allowance")
+    def _wide_bank(self):
+        """A connection whose walk can only ever be stopped by the allowance.
 
-        # Same UTC day, another attempt: nothing more may be spent.
+        Two properties, both needed, and both absent from the shared ledger fixture:
+
+        - **More accounts than `FILTERED_WALK_MAX_ACCOUNTS`**, so the walk shares unfiltered windows and
+          therefore spends the *shared* allowance. A narrower walk is fetched per account against each
+          account's own allowance — right, and the wrong fixture for a test about the shared pool.
+        - **Every account equally deep, and deeper than one full allowance can reach.** `build_ledger`
+          staggers its accounts on purpose, which here would let some finish early, drop the walking set
+          below the threshold, and quietly move the rest onto per-account allowances mid-test.
+        """
+        accounts = ["Demo Checking", "Demo Savings", "Demo Travel", "Demo Brokerage"]
+        day, last, ledger, n = date(2012, 1, 1), date(2026, 8, 8), [], 0
+        while day <= last:
+            for account in accounts:
+                n += 1
+                ledger.append(Txn(txn_id=f"deep-{n}", account=account, posted=day.isoformat(),
+                                  amount=f"-{10 + n % 90}.00", description="Grocery store",
+                                  memo="LOCAL GROCER STORE #1133", payee="Grocery store"))
+            day += timedelta(days=6)
+        self.sim = SimpleFinSim(transactions=ledger, accounts=accounts, today="2026-08-08")
+        for name in accounts:
+            self._offer(f"simplefin:{name}")
+
+    def test_an_exhausted_allowance_grants_nothing_more_until_it_refills(self):
+        self._wide_bank()
+        result = self._sync(days=0, full_history=True)
+        spent = len(self.sim.requests)
+        self.assertTrue(result["paused"], "this bank holds more history than one allowance can reach")
+        self.assertEqual(spent, REQUEST_BUDGET_CAPACITY, "the first pull should exhaust the allowance")
+
+        # Immediately again: nothing has been returned yet, so nothing more may be spent.
         self._sync(days=0, full_history=True)
-        self.assertEqual(self.sim.requests_on(self.sim.today.isoformat()), DAILY_REQUEST_BUDGET)
+        self.assertEqual(len(self.sim.requests), spent,
+                         "an allowance that has refilled by nothing must grant nothing")
+
+    def test_a_history_pull_with_nothing_left_to_walk_claims_nothing_new(self):
+        # Once every account's history is complete, "Fetch more history" has no account left to walk — and
+        # a pull that walked nothing must not record having reached anywhere. The tempting reading is that
+        # a pull reporting no per-account coverage is a pull that keeps no per-account coverage, so the
+        # depth *requested* applies; that is right for a cursor provider and badly wrong for a walking one,
+        # which reports exactly that when it has nothing left to do. The connection then claims a decade it
+        # never fetched, and duplicate detection hard-rejects genuine rows anywhere inside it.
+        shallow = [Txn(txn_id="only-1", account="Demo Checking", posted="2026-07-20", amount="-12.00",
+                       description="Grocery store", memo="LOCAL GROCER STORE #1133", payee="Grocery store")]
+        self.sim = SimpleFinSim(transactions=shallow, accounts=["Demo Checking"], today="2026-08-08")
+        self._offer(CHECKING)
+        self._sync(days=0, full_history=True)
+        self.assertTrue(self._coverage()[CHECKING]["history_complete"],
+                        "this bank holds one transaction; its history must run out immediately")
+        established = self._coverage()[CHECKING]["coverage_start_date"]
+
+        self.sim.advance_days(1)
+        self._sync(days=0, full_history=True)
+        after = self._coverage()[CHECKING]
+        self.assertEqual(after["coverage_start_date"], established,
+                         "a pull with nothing to walk must not deepen the claim")
+        # The trailing edge is the half that *should* move: the top-up did fetch today's activity for it.
+        self.assertEqual(after["coverage_through_date"], self.sim.today.isoformat())
+
+    def test_requests_spent_by_a_pull_that_then_failed_are_still_counted(self):
+        # The one piece of sync state that must survive a failure. Everything else a pull writes is a claim
+        # about data in the ledger and correctly vanishes with a pull that inserted nothing — but the
+        # requests were made, and the provider is not going to forget them. A connection that fails is also
+        # the one a user retries hardest, so forgetting here overruns the limit exactly where it hurts.
+        self._wide_bank()
+        self.sim.refuse_with = SimpleFinError("the bank hung up")
+        self.sim.refuse_after = 5
+        self._sync(days=0, full_history=True)
+
+        served = len(self.sim.requests)
+        self.assertEqual(served, 5, "the walk should have got some way in before the bank quit")
+        pools = self._request_budget().get("pools") or {}
+        self.assertTrue(pools, "a failed pull recorded no spending at all")
+        # At least what the server answered, and in fact one more: the request that raised was spent too.
+        # Stated as a floor rather than an exact figure so this asserts the property — nothing spent is
+        # forgotten — rather than pinning where in the walk the failure happened to land.
+        spent = REQUEST_BUDGET_CAPACITY - pools["shared"]["tokens"]
+        self.assertGreaterEqual(spent, served,
+                                "the allowance must account for every request that actually went out")
+
+    def test_a_failed_pull_does_not_hand_the_next_one_a_fresh_allowance(self):
+        # The consequence of the above, and the shape the overrun actually takes: retry after retry, each
+        # believing it has spent nothing.
+        self._wide_bank()
+        self.sim.refuse_with = SimpleFinError("the bank hung up")
+        self.sim.refuse_after = 5
+        self._sync(days=0, full_history=True)
+        self.sim.refuse_with = None
+        self._sync(days=0, full_history=True)
+        # Invariant 4 is what would fail if the second pull got a clean allowance; this states it in the
+        # open so the failure reads as what it is.
+        self.assertLessEqual(len(self.sim.requests), REQUEST_BUDGET_CAPACITY,
+                             "the retry must continue the allowance, not restart it")
+
+    def test_a_date_rolling_over_does_not_hand_back_the_whole_allowance(self):
+        # The overrun a per-day counter cannot see, and the reason the allowance is modelled as a bucket.
+        # A walk that empties the allowance late one evening and resumes two hours later has been given
+        # back two requests, not twenty-two — but a counter keyed to the calendar sees a new day and grants
+        # everything. Nothing about this is exotic: spending the allowance and coming back for the rest is
+        # exactly what a deep backfill does, night after night, until it finishes.
+        #
+        # The hours are the whole test. Advancing a clean day would let a per-day counter and a bucket agree
+        # (24h really does refill everything), so the boundary has to be crossed *narrowly* for the two
+        # models to give different answers.
+        self._wide_bank()
+        self.sim.advance_hours(11)          # 23:00
+        self._sync(days=0, full_history=True)
+        spent = len(self.sim.requests)
+        self.assertEqual(spent, REQUEST_BUDGET_CAPACITY, "the evening pull should exhaust the allowance")
+
+        self.sim.advance_hours(2)           # 01:00 the next date, two hours later
+        self._sync(days=0, full_history=True)
+        self.assertEqual(len(self.sim.requests) - spent, 2,
+                         "crossing midnight returns two hours' worth of requests, not a fresh allowance")
+
+    def test_a_partly_refilled_allowance_grants_back_only_what_it_returned(self):
+        # The case a per-day counter cannot express, and the reason this is a bucket. Coming back part-way
+        # through must yield *some* of the allowance — a counter keyed to the calendar hands back all of it
+        # the moment the date rolls, which is how a resuming backfill overruns a limit it never sees.
+        self._wide_bank()
+        self._sync(days=0, full_history=True)
+        spent = len(self.sim.requests)
+
+        self.sim.advance_hours(6)
+        self._sync(days=0, full_history=True)
+        returned = len(self.sim.requests) - spent
+        # Six hours back is six requests' worth, and the walk takes every one of them — it still has years
+        # of history to reach. Asserting the exact figure rather than "more than zero" is deliberate: the
+        # failure that matters here is crediting too *fast*, which a lower bound would wave through.
+        self.assertEqual(returned, int(6 * REQUEST_BUDGET_REFILL_PER_HOUR),
+                         "six hours must return six requests — no more, and no fewer")
 
     def test_a_bank_reporting_a_problem_does_not_stop_the_others(self):
         # One institution needing re-authentication must not block every other account on the credential,

@@ -126,7 +126,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 34
+CURRENT_VERSION = 35
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1006,6 +1006,22 @@ def _sync_log_destination_and_windows(conn):
         conn.execute("ALTER TABLE connection_sync_log ADD COLUMN requested_windows TEXT")
 
 
+@migration(35)
+def _connection_request_budget(conn):
+    # What a connection has spent against a metered provider's published request limits, split out from
+    # transactions_cursor because the two must persist under opposite rules — see the baseline CREATE.
+    #
+    # Existing rows stay NULL, which reads as "nothing recorded" and grants a full allowance on the next
+    # sync. For the one provider this affects, that is not quite free: its allowance used to live inside the
+    # resume token, so a connection could have spent today's already. The adapter reads those legacy fields
+    # out of its own checkpoint on first use rather than having them copied here — the shape is the
+    # adapter's private business, and this migration has no license to parse it.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection)")}
+    if not cols or "provider_request_budget" in cols:
+        return  # already migrated, or a minimal hand-built fixture without the table
+    conn.execute("ALTER TABLE connection ADD COLUMN provider_request_budget TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -1218,7 +1234,19 @@ def init_db(db_path: str | None = None):
                 -- loop lives in component state, so navigating away used to re-enable "Sync now" and invite
                 -- a second concurrent pull. Believed only for `_SYNC_MARKER_STALE_AFTER`, so a process that
                 -- dies mid-sync cannot leave a connection looking permanently busy.
-                sync_started_at           TEXT
+                sync_started_at           TEXT,
+                -- What this connection has already spent against a metered provider's published request
+                -- limits, in whatever shape that provider's adapter needs (SimpleFIN keeps refilling token
+                -- buckets here; see its module docstring). Opaque to everything but the adapter.
+                --
+                -- Deliberately NOT part of transactions_cursor, though both are adapter-owned state, because
+                -- the two have opposite persistence rules. A cursor is a claim about data held, so it must
+                -- roll back with the rows a failed pull never inserted; spending must never roll back, since
+                -- the requests were made whatever became of the pull. Sharing one column would force a
+                -- single rule on both, and each one's correct rule is the other's bug — a budget that
+                -- forgets a failed pull's requests overruns the limit precisely when a user is retrying a
+                -- broken connection hardest, and the penalty for overrunning is a disabled token.
+                provider_request_budget   TEXT
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_provider_external
                 ON connection(provider, external_id);

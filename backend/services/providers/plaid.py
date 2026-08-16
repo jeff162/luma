@@ -116,7 +116,11 @@ class PlaidAdapter(ProviderAdapter):
     def fetch_transactions_sync(
         self, app_config: dict, credential: str, cursor: str | None = None, days_requested: int = 730,
         account_targets: list[dict] | None = None, ledger_currency: str = DEFAULT_LEDGER_CURRENCY,
+        request_budget: dict | None = None,
     ) -> dict:
+        # `request_budget` is ignored: Plaid publishes no per-request allowance to spend down, so there is
+        # nothing for this adapter to meter and nothing to record between syncs.
+        #
         # `account_targets` is ignored: a cursor is a checkpoint in a change feed, not a date range, so
         # there is no way to ask this API for one account's history. Plaid reaches it by raising
         # `days_requested`, which backfills every account on the item through the same cursor.

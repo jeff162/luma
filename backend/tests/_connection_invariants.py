@@ -26,7 +26,8 @@ def _connection_accounts(conn, connection_id):
     )]
 
 
-def assert_invariants(test, conn, sim, connection_id, *, window_days, daily_budget, ledger_currency):
+def assert_invariants(test, conn, sim, connection_id, *, window_days, budget_capacity,
+                      budget_refill_per_hour, ledger_currency):
     """Every rule, checked together. `test` is the TestCase, so failures name themselves.
 
     `ledger_currency` is passed in rather than imported from the code under test. The rules here are
@@ -83,11 +84,29 @@ def assert_invariants(test, conn, sim, connection_id, *, window_days, daily_budg
         span = (__import__("datetime").date.fromisoformat(end)
                 - __import__("datetime").date.fromisoformat(start)).days
         test.assertLessEqual(span, window_days, f"window {start}..{end} exceeds the {window_days}-day cap")
-    for day in {r["on"] for r in sim.requests}:
-        test.assertLessEqual(
-            sim.requests_on(day), daily_budget,
-            f"{sim.requests_on(day)} requests on {day} exceeds the {daily_budget}/day budget",
-        )
+
+    # Metered per *allowance*, not per request, because the provider grants several: an unfiltered
+    # /accounts call and each ?account= call draw on their own. Summing them into one count would fail a
+    # walk that is well inside every real limit, and — the direction that matters — a single count tuned to
+    # pass that walk would stop noticing one pool being drained on its own.
+    #
+    # The rule checked is the provider's own — an allowance that holds `capacity` and refills as time passes
+    # — rather than "N per calendar day", which the provider does not publish and which cannot express the
+    # overrun that matters here: a full allowance spent late in one day and a second full one spent minutes
+    # later, on the far side of a boundary the real allowance knows nothing about. Anchoring at every
+    # request in turn is what makes a boundary impossible to straddle, and starting each anchor from a *full*
+    # bucket is the most permissive assumption available, so a failure here is never the invariant being
+    # stricter than the server.
+    for pool, moments in sim.requests_by_pool(test).items():
+        for i, anchor in enumerate(moments):
+            for count, moment in enumerate(moments[i:], start=1):
+                allowed = budget_capacity + (moment - anchor) / 3600 * budget_refill_per_hour
+                test.assertLessEqual(
+                    count, allowed,
+                    f"the {pool!r} allowance saw {count} requests in the "
+                    f"{(moment - anchor) / 3600:.1f}h from the one at {anchor}, which a bucket holding "
+                    f"{budget_capacity} and refilling {budget_refill_per_hour}/h could not have served",
+                )
 
     # --- 5. Claimed coverage is honoured: the rows are actually there --------------------------
     # The end-to-end consistency check, and the one that generalizes furthest — it fails for any reason a

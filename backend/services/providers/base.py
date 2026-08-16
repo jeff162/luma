@@ -162,6 +162,7 @@ class ProviderAdapter(ABC):
     def fetch_transactions_sync(
         self, app_config: dict, credential: str, cursor: str | None = None, days_requested: int = 730,
         account_targets: list[dict] | None = None, ledger_currency: str = DEFAULT_LEDGER_CURRENCY,
+        request_budget: dict | None = None,
     ) -> dict:
         """One pull's worth of change, plus the state the sync loop needs to decide what happens next:
 
@@ -193,6 +194,24 @@ class ProviderAdapter(ABC):
         `next_cursor` is an **opaque provider resume token**, not necessarily a cursor: a provider with no
         change feed stores whatever checkpoint its own resume needs (see the SimpleFIN adapter). `cursor=None`
         starts an initial pull; `days_requested` bounds how far back to fetch.
+
+        `request_budget` is the other half of that state, kept deliberately apart from it: an **opaque,
+        mutable** record of what this connection has already spent against a metered provider's limits, which
+        the adapter updates *in place* as it spends. Two properties make it its own parameter rather than a
+        field of the resume token.
+
+        - **It is mutable because a failed pull still spent what it spent.** A return value describes a call
+          that finished; a request that has already left the machine counts whether or not the call it
+          belonged to ever returns. Only an argument the adapter writes through can carry that fact back out
+          of an exception, and a metered adapter whose spending is forgotten on failure will overrun the
+          limit exactly when a user is retrying a broken connection hardest.
+        - **It is separate because the two have opposite persistence rules.** A resume token is a claim about
+          data held, so it must roll back with the rows a failed pull never inserted. Spending must not roll
+          back at all. Sharing one field would force one rule on both, and each one's correct rule is the
+          other's bug.
+
+        Callers persist it across syncs and must write it back on **every** exit path, success or raise.
+        Adapters for providers with no published limits ignore it entirely.
 
         `warnings` is a list of user-displayable strings for problems that did **not** fail the pull — one
         institution needing re-authentication while the others on the same credential returned data, an

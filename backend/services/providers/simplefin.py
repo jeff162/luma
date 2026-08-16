@@ -25,11 +25,19 @@ they come back empty. Nothing in the response says when to stop, which is why th
 consecutive empty windows rather than one — a single quiet quarter on a low-activity card is not evidence
 that history ended.
 
-**A published request budget** — 24 requests/day, with token disablement as the penalty. That is far more
-than a walk normally needs (24 windows reaches back about three years, and one request covers every account
-on the URL), so the budget is a guard against the runaway case, not a schedule. When it does run out the walk
-records where it got to and reports `resume_later`, so the sync stops rather than pushing the token toward
-disablement, and a later sync continues from the same checkpoint.
+**A published request budget** — 24 requests, replenished through the day, with token disablement as the
+penalty. It is a *refilling allowance* rather than a daily quota, and it is not one allowance but many: the
+Bridge grants an unfiltered `/accounts` call and each `?account=` call their own (confirmed with SimpleFIN,
+2026-08). Both facts shape this adapter — see `REQUEST_BUDGET_CAPACITY` for the bucket and
+`FILTERED_WALK_MAX_ACCOUNTS` for which allowance a walk draws on. When one runs out the walk records where
+it got to and reports `resume_later`, so the sync stops rather than pushing the token toward disablement,
+and a later sync continues from the same checkpoint.
+
+**Spending is not part of the resume checkpoint**, and the two are stored apart on purpose. A checkpoint
+says *what data is held*, so it must roll back with the rows a failed pull never inserted; spend says *what
+was asked of the provider*, which no failure can take back. Sharing one column would force one persistence
+rule on both, and the safe rule for each is the other's bug. So the budget travels as a mutable dict the
+caller owns and writes whether the pull succeeds or raises (`connection.provider_request_budget`).
 
 **No revocation.** There is no call that invalidates an access URL, so `remove()` deletes Luma's copy and
 nothing more; only the user, at the Bridge, can actually revoke one. The disconnect confirmation has to
@@ -86,11 +94,45 @@ WINDOW_DAYS = 45
 # the sync's insert is idempotent on the provider transaction id.
 INCREMENTAL_OVERLAP_DAYS = 5
 
-# Of the 24 requests/day the Bridge publishes, the ones a transaction walk may spend. The remainder is
-# left for the operations a user runs alongside it — refreshing accounts, reconnecting — so a deep walk
-# cannot leave the connection unusable for the rest of the day. At the window size above this reaches
-# roughly 2.7 years back in a single day, comfortably past what the Bridge's upstreams actually hold.
-DAILY_REQUEST_BUDGET = 22
+# The allowance, modelled as a token bucket rather than a per-day counter.
+#
+# The Bridge publishes "24 requests or fewer per day … quotas are replenished throughout the day", which is
+# a bucket that refills, not a quota that resets. The distinction is not academic: a counter keyed to a
+# calendar day hands out a full allowance the moment the date rolls over, so a walk that spent everything
+# late one day could spend it all again minutes later against a bucket that had refilled by one. That
+# pairing is not exotic — it is what a deep backfill does as it resumes day after day, which is the case
+# `resume_later` exists to produce.
+#
+# Capacity is held below the published 24 so the calls that never pass through here — account discovery,
+# reconnecting — cannot be starved by a walk that spent everything. At the window size above, one full
+# bucket reaches roughly 2.7 years back, comfortably past what the Bridge's upstreams actually hold.
+REQUEST_BUDGET_CAPACITY = 22
+
+# Tokens returned per hour. **Inferred** from the published 24/day, not stated by the provider, so it is
+# deliberately the conservative reading: crediting more slowly than the server does costs at worst a request
+# that could have been made, while crediting faster spends one the server has not granted — and the penalty
+# for overrunning is a disabled token, which for this provider cannot be re-issued without the user
+# re-linking at the Bridge.
+REQUEST_BUDGET_REFILL_PER_HOUR = 1.0
+
+# The pool an unfiltered request draws on. Every other pool is keyed by provider account id, which cannot
+# collide with this because account ids reaching the budget are namespaced (`simplefin:…`).
+_SHARED_POOL = "shared"
+
+# How many accounts may still be walking before the walk stops filtering per account.
+#
+# The two ways to advance N accounts by one window cost the same *depth* but draw on different allowances:
+# one unfiltered request advances all N and costs one shared token, while N filtered requests advance the
+# same N and cost one token from each account's own pool. Filtering therefore buys no extra reach — every
+# pool is the same size — it moves the cost off the shared pool, which is also what the routine top-up and
+# account discovery spend from.
+#
+# That trade is worth making for the case it was meant for, a few newly-mapped accounts catching up, and
+# not for a first backfill: N filtered requests per window is an N-fold increase in round trips, and on a
+# first connect N is every account on the credential. So a small walking set filters and a large one shares
+# the window — the same rule the code carried when it filtered only a lone account, with the threshold
+# raised now that the separate-pool question is settled.
+FILTERED_WALK_MAX_ACCOUNTS = 3
 
 # Consecutive empty windows that end the backward walk. One is not enough: an account with no activity for
 # a quarter would report exactly the same thing as an account whose history has run out, and stopping
@@ -227,8 +269,8 @@ def _merge_advisories(store: dict, entries: list[dict]) -> None:
     """Fold one request's advisories into a pull's running set, keyed on the message.
 
     Keyed on the message alone because that is what makes the aggregation useful: a remark about our
-    request shape repeats on every window of a walk, and one entry saying "×24" is the diagnostic, where
-    24 near-identical entries are noise. The *first* context is kept rather than the last or all of them —
+    request shape repeats on every window of a walk, and one entry saying "×22" is the diagnostic, where
+    22 near-identical entries are noise. The *first* context is kept rather than the last or all of them —
     it names a concrete request to go look at, which is what a reader wants, and it does not grow with the
     walk. The count then says whether that one window was special or the whole pull was."""
     for entry in entries:
@@ -299,12 +341,84 @@ def _epoch_to_iso_date(value) -> str | None:
 
 
 def _utc_today() -> date:
-    """The day the request budget is counted against, in UTC rather than the server's local time.
+    """The provider's day, in UTC rather than the server's local time.
 
-    The distinction matters because overrunning the limit is the one error with a punitive outcome — the
-    provider disables the token — and a counter that resets on local midnight gives a machine running
-    behind UTC a second allowance partway through the provider's day."""
+    Every window bound this adapter sends is a UTC instant, so the day a walk starts from has to be the
+    provider's too. A machine running behind UTC that used its own date would ask for a window ending
+    yesterday and then record coverage through today."""
     return datetime.now(timezone.utc).date()
+
+
+def _utcnow_epoch() -> float:
+    """The instant the request budget is measured against, as a Unix timestamp.
+
+    Seconds rather than an ISO string because this value is only ever subtracted from another one: an
+    epoch needs no parsing back, carries no timezone to lose across a round trip through JSON, and cannot
+    be misread as a wall-clock date by something comparing budget records."""
+    return datetime.now(timezone.utc).timestamp()
+
+
+# ---- the request budget --------------------------------------------------
+#
+# One token bucket per allowance the Bridge grants, all inside the record the caller persists:
+#
+#     {"pools": {"shared": {"tokens": float, "as_of": epoch_seconds}, "<account id>": {…}, …}}
+#
+# Tokens are fractional on purpose. Crediting whole hours and re-stamping `as_of` to now would throw the
+# remainder away on every call, so a connection synced every 50 minutes would refill at zero — the bug a
+# floor-and-reset refill invites, and one that only shows up under exactly the usage this exists to serve.
+
+
+def _refill(pool: dict, now: float) -> dict:
+    """Bring one pool up to date. A pool with no `as_of` is new and starts full."""
+    as_of = pool.get("as_of")
+    # A clock that moved backwards credits nothing rather than paying out a negative interval, and `as_of`
+    # still advances — so once the clock is corrected, refilling resumes from now instead of settling up for
+    # a gap nothing actually waited through. Capacity bounds it in every case, which is the real guarantee.
+    elapsed_hours = max(0.0, (now - float(as_of)) / 3600) if as_of is not None else 0.0
+    pool["tokens"] = min(
+        float(REQUEST_BUDGET_CAPACITY),
+        float(pool.get("tokens", REQUEST_BUDGET_CAPACITY)) + elapsed_hours * REQUEST_BUDGET_REFILL_PER_HOUR,
+    )
+    pool["as_of"] = now
+    return pool
+
+
+def _take_request(budget: dict, key: str, now: float) -> bool:
+    """Spend one request from `key`'s allowance, returning whether there was one to spend."""
+    pool = _refill(budget.setdefault("pools", {}).setdefault(key, {}), now)
+    if pool["tokens"] < 1:
+        return False
+    pool["tokens"] -= 1
+    return True
+
+
+def _prune_full_pools(budget: dict) -> None:
+    """Drop pools that have refilled completely.
+
+    A full pool and a pool that never existed grant exactly the same thing, so forgetting one loses nothing
+    — and without this the record would keep a permanent entry for every account ever walked, growing with
+    the connection's history rather than with what it currently owes."""
+    pools = budget.get("pools") or {}
+    for key in [k for k, p in pools.items() if p.get("tokens", 0) >= REQUEST_BUDGET_CAPACITY]:
+        del pools[key]
+
+
+def _adopt_legacy_budget(budget: dict, state: dict, today: date, now: float) -> None:
+    """Carry a pre-bucket checkpoint's spend into the bucket, once.
+
+    The allowance used to live in the resume token as a counter keyed to a UTC calendar date. Ignoring that
+    on the first sync after the change would grant a full bucket on top of one already spent the same day —
+    the very over-spend the bucket exists to prevent, arriving exactly once, at the upgrade. Cheap
+    insurance: the penalty it guards against is a disabled token, which this provider cannot re-issue
+    without the user re-linking at the Bridge."""
+    used = state.pop("requests_used", None)
+    spent_on = state.pop("budget_date", None)
+    if budget.get("pools") or used is None or spent_on != today.isoformat():
+        return
+    budget.setdefault("pools", {})[_SHARED_POOL] = {
+        "tokens": max(0.0, float(REQUEST_BUDGET_CAPACITY) - float(used)), "as_of": now,
+    }
 
 
 def _account_currency(account: dict) -> str:
@@ -669,19 +783,6 @@ class SimpleFinAdapter(ProviderAdapter):
             state = {}
         return state if isinstance(state, dict) else {}
 
-    @staticmethod
-    def _spend(state: dict, today: date) -> bool:
-        """Take one request from today's allowance, returning whether there was one to take. The counter
-        resets by date, so an exhausted walk becomes runnable again the next day without anything having
-        to schedule it."""
-        if state.get("budget_date") != today.isoformat():
-            state["budget_date"] = today.isoformat()
-            state["requests_used"] = 0
-        if state.get("requests_used", 0) >= DAILY_REQUEST_BUDGET:
-            return False
-        state["requests_used"] = state.get("requests_used", 0) + 1
-        return True
-
     def _fetch_recent(self, credential: str, state: dict, today: date, warnings: dict,
                       advisories: dict, dropped: dict[str, str], ledger_currency: str,
                       requested: list | None = None) -> list[dict]:
@@ -705,7 +806,7 @@ class SimpleFinAdapter(ProviderAdapter):
         state["through"] = today.isoformat()
         return rows
 
-    def _walk_history(self, credential: str, state: dict, targets: list[dict], today: date,
+    def _walk_history(self, credential: str, budget: dict, targets: list[dict], today: date, now: float,
                       warnings: dict, advisories: dict, dropped: dict[str, str],
                       ledger_currency: str, requested: list | None = None,
                       ) -> tuple[list[dict], dict, bool]:
@@ -715,11 +816,20 @@ class SimpleFinAdapter(ProviderAdapter):
         the connection later — because they differ only in *which* accounts still want older data and how far
         back. That is what the targets say, so nothing here needs to know which situation it is in.
 
-        The window is shared: a request is bounded by a date range, not by an account, so one window advances
-        every account that still wants that period at once. Filtering is therefore applied **only** when a
-        single account is still walking, where it saves bandwidth (and, if per-account requests draw on a
-        separate quota, spares the main one). Filtering a plural set would multiply requests without
-        fetching anything more.
+        **Which allowance a window is charged to** is the one decision that varies, and it turns on how many
+        accounts are still walking (`FILTERED_WALK_MAX_ACCOUNTS`). A large set shares one unfiltered window
+        that advances all of them for a single shared token. A small set is fetched per account instead, one
+        request each against each account's own allowance, leaving the shared pool for the top-up and for
+        account discovery.
+
+        A filtered round asks for **one account per request**, never several in one call. The Bridge
+        describes the separate allowance for `?account=X` in the singular, and nothing says which pool a
+        request naming two accounts would be charged to — so the shape that was actually described is the
+        only one used.
+
+        Per-account rounds also drop the shared frontier: since each account is being asked for separately
+        anyway, each is asked for *its own* window, and an account whose allowance runs out pauses on its
+        own without stalling its siblings.
         """
         reach = {t["external_account_id"]: date.fromisoformat(t["from_date"]) for t in targets}
         streaks = {t["external_account_id"]: int(t.get("empty_streak") or 0) for t in targets}
@@ -735,68 +845,124 @@ class SimpleFinAdapter(ProviderAdapter):
         }
         added: list[dict] = []
         resume_later = False
+        # Accounts that ran out of their own allowance mid-walk. Held apart from the stop rules because this
+        # is not a conclusion about their history — they are simply done being asked *today*, and must not
+        # be re-offered to the loop or it would spin on an account it can no longer fetch.
+        out_of_budget: set[str] = set()
 
         def still_walking() -> list[str]:
             return [a for a in reach
-                    if frontier[a] > reach[a] and streaks[a] < EMPTY_WINDOWS_END_HISTORY]
+                    if a not in out_of_budget
+                    and frontier[a] > reach[a] and streaks[a] < EMPTY_WINDOWS_END_HISTORY]
 
-        while (active := still_walking()):
-            if not self._spend(state, today):
-                # Out of allowance with history still to walk. Stopping here is what keeps the token from
-                # being disabled; each account's recorded reach is what makes the rest resume rather than
-                # be forgotten — no separate parking state is needed.
-                resume_later = True
-                break
-            window_end = max(frontier[a] for a in active)
-            window_start = window_end - timedelta(days=WINDOW_DAYS)
-            rows, window_warnings, window_advisories, window_dropped = self._fetch_window(
-                credential, window_start, window_end, active if len(active) == 1 else None,
-                ledger_currency=ledger_currency,
-                # The walk moves backward, so its end is normally a date something newer already covers —
-                # the previous window of this run, or, for an account resuming from a stored `reached`, the
-                # window that reached it (which ran from that date's midnight forward). Today is the one
-                # exception: on a fresh account the first window ends there with nothing after it.
-                end_of_day=window_end == today, requested=requested,
-            )
+        def absorb(result) -> set[str]:
+            """Fold one request's answer into the pull, returning which accounts it delivered rows for."""
+            rows, window_warnings, window_advisories, window_dropped = result
             warnings.update(dict.fromkeys(window_warnings))
-            # Counted rather than set-deduped: a walk provokes the same advisory on every one of its ~24
-            # requests, and "24 times" is the diagnostic signal — it says the whole walk was affected, not
+            # Counted rather than set-deduped: a walk provokes the same advisory on every one of its ~22
+            # requests, and "22 times" is the diagnostic signal — it says the whole walk was affected, not
             # one stray request. Warnings stay a plain ordered set above; they describe a bank, and how many
             # windows re-reported it says nothing about the bank.
             _merge_advisories(advisories, window_advisories)
             dropped.update(window_dropped)
             added.extend(rows)
+            return {r["external_account_id"] for r in rows}
 
-            delivered = {r["external_account_id"] for r in rows}
+        def advance(account: str, window_start: date, delivered: set[str]) -> None:
+            streaks[account] = 0 if account in delivered else streaks[account] + 1
+            frontier[account] = max(window_start, reach[account])
+            coverage[account] = {
+                "reached": frontier[account].isoformat(),
+                # Only an account whose own windows came back empty has *ended*; one that merely hit the
+                # depth asked for has more behind it, and saying otherwise would stop a later, deeper
+                # request from ever looking.
+                "complete": streaks[account] >= EMPTY_WINDOWS_END_HISTORY,
+                # Carried so a walk that pauses mid-streak resumes counting rather than starting over and
+                # needing two more empty windows to reach the same conclusion.
+                "empty_streak": streaks[account],
+            }
+
+        # The walk moves backward, so a window's end is normally a date something newer already covers — the
+        # previous window of this run, or, for an account resuming from a stored `reached`, the window that
+        # reached it (which ran from that date's midnight forward). Today is the one exception: on a fresh
+        # account the first window ends there with nothing after it.
+        while (active := still_walking()):
+            if len(active) <= FILTERED_WALK_MAX_ACCOUNTS:
+                for account in active:
+                    if not _take_request(budget, account, now):
+                        out_of_budget.add(account)
+                        resume_later = True
+                        continue
+                    window_end = frontier[account]
+                    window_start = window_end - timedelta(days=WINDOW_DAYS)
+                    delivered = absorb(self._fetch_window(
+                        credential, window_start, window_end, [account], ledger_currency=ledger_currency,
+                        end_of_day=window_end == today, requested=requested,
+                    ))
+                    advance(account, window_start, delivered)
+                continue
+            if not _take_request(budget, _SHARED_POOL, now):
+                # Out of allowance with history still to walk. Stopping here is what keeps the token from
+                # being disabled; each account's recorded reach is what makes the rest resume rather than
+                # be forgotten — no separate parking state is needed.
+                #
+                # **Pausing here is a choice, not the only option**, and it is worth being explicit because
+                # the code no longer looks like it: every account's own allowance is sitting untouched one
+                # line away. A wide walk *could* fall back to per-account requests and keep going, and since
+                # the pools are independent that would roughly double the depth reachable in a day.
+                #
+                # It is deliberately not done. The fallback only ever engages on a *wide* walk — a narrow
+                # one is already filtering — so it trades one paused sync for N requests per window across
+                # every account still walking. On a first backfill N is every account on the credential,
+                # which turns a pull that stops after 22 requests into one making several hundred: minutes
+                # of syncing, on a user's first impression of the connection, to reach history that the
+                # next sync reaches anyway. The paused walk is not losing anything but time, and time is
+                # exactly what the fallback spends.
+                #
+                # What would change the answer: a walk that pauses and *cannot* resume promptly (a
+                # connection synced rarely enough that "the next sync" is weeks away), or evidence that
+                # users abandon a backfill that takes several days to finish. Neither is measurable from
+                # here today. If it is revisited, note that the honest version is not "fall back when the
+                # shared pool empties" but "spend the shared pool on the windows that serve the most
+                # accounts, and per-account allowances on the stragglers" — the fallback framing wastes the
+                # shared pool on accounts that would have been cheaper to fetch individually.
+                resume_later = True
+                break
+            window_end = max(frontier[a] for a in active)
+            window_start = window_end - timedelta(days=WINDOW_DAYS)
+            delivered = absorb(self._fetch_window(
+                credential, window_start, window_end, None, ledger_currency=ledger_currency,
+                end_of_day=window_end == today, requested=requested,
+            ))
             for account in active:
                 if frontier[account] != window_end:
                     continue  # this account had already gone deeper; the window told it nothing new
-                streaks[account] = 0 if account in delivered else streaks[account] + 1
-                frontier[account] = max(window_start, reach[account])
-                coverage[account] = {
-                    "reached": frontier[account].isoformat(),
-                    # Only an account whose own windows came back empty has *ended*; one that merely hit
-                    # the depth asked for has more behind it, and saying otherwise would stop a later,
-                    # deeper request from ever looking.
-                    "complete": streaks[account] >= EMPTY_WINDOWS_END_HISTORY,
-                    # Carried so a walk that pauses mid-streak resumes counting rather than starting over
-                    # and needing two more empty windows to reach the same conclusion.
-                    "empty_streak": streaks[account],
-                }
+                advance(account, window_start, delivered)
         return added, coverage, resume_later
 
     def fetch_transactions_sync(
         self, app_config: dict, credential: str, cursor: str | None = None, days_requested: int = 730,
         account_targets: list[dict] | None = None, ledger_currency: str = DEFAULT_LEDGER_CURRENCY,
+        request_budget: dict | None = None,
     ) -> dict:
         """Walk history for whichever accounts still want it, or top up the recent window.
 
         Which one happens is decided by the caller, which owns the database and therefore knows each
-        account's coverage; this adapter holds no history state of its own. What remains in its resume token
-        is the request-budget ledger and the newest date covered — the only genuinely provider-owned facts.
+        account's coverage; this adapter holds no history state of its own. All that remains in its resume
+        token is the newest date covered — the only genuinely provider-owned fact left, now that spending
+        lives in `request_budget` instead (see the module docstring for why the two cannot share a home).
+
+        `request_budget` is updated **in place** as each request is spent, which is the entire reason it is
+        a parameter rather than part of the return value: a pull that raises partway through has still made
+        every request it made, and only a mutable argument can carry that back out of an exception. Omitting
+        it is honest but unmetered — a caller that keeps no record gets no throttling — so the sync path
+        always passes one.
         """
         state = self._load_state(cursor)
         today = _utc_today()
+        now = _utcnow_epoch()
+        budget = request_budget if request_budget is not None else {}
+        _adopt_legacy_budget(budget, state, today, now)
         added: list[dict] = []
         resume_later = False
         # Deduplicated in order: the same bank reports the same problem in every window the walk touches,
@@ -825,7 +991,9 @@ class SimpleFinAdapter(ProviderAdapter):
                 # *new* transaction would arrive for however many days the walk takes to finish. One
                 # request on the recent window first keeps the ledger current — which is the part a user
                 # actually looks at — while history fills in behind it.
-                if self._spend(state, today):
+                # Charged to the shared pool because it is an unfiltered window: it covers every account at
+                # once, which is exactly what makes it worth one request instead of one per account.
+                if _take_request(budget, _SHARED_POOL, now):
                     added.extend(self._fetch_recent(
                         credential, state, today, warnings, advisories, dropped_currency,
                         ledger_currency, requested_windows))
@@ -837,17 +1005,18 @@ class SimpleFinAdapter(ProviderAdapter):
                 state["through"] = today.isoformat()
 
             walk_added, coverage, walk_resume = self._walk_history(
-                credential, state, account_targets, today, warnings, advisories, dropped_currency,
+                credential, budget, account_targets, today, now, warnings, advisories, dropped_currency,
                 ledger_currency, requested_windows,
             )
             added.extend(walk_added)
             resume_later = resume_later or walk_resume
-        elif self._spend(state, today):
+        elif _take_request(budget, _SHARED_POOL, now):
             added.extend(self._fetch_recent(
                 credential, state, today, warnings, advisories, dropped_currency, ledger_currency,
                 requested_windows))
         else:
             resume_later = True
+        _prune_full_pools(budget)
 
         # Every targeted account either reached the depth asked of it or ran out of history. A pull with no
         # targets had no history to finish, so it is trivially done.
