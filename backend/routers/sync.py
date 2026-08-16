@@ -1035,6 +1035,21 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                 request_budget = {}
             if not isinstance(request_budget, dict):
                 request_budget = {}
+
+            def _checkpoint_budget(connection=connection, request_budget=request_budget):
+                """Make a debit durable before the request it paid for is issued.
+
+                Called by a metered adapter the moment it spends, never afterwards, because the two
+                orderings fail differently and only one of them is survivable. Recording after the request
+                loses it on a crash in between, so the count reads *low* and the next sync over-spends a
+                limit whose penalty may be the provider cutting the connection off. Recording first can
+                only forfeit an allowance nothing used — and this provider's refills, so that heals itself.
+                """
+                conn.execute(
+                    "UPDATE connection SET provider_request_budget = ? WHERE id = ?",
+                    (json.dumps(request_budget) if request_budget else None, connection["id"]),
+                )
+                conn.commit()
             final_status = None
             backfill_complete = True
             resume_later = False
@@ -1142,29 +1157,56 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     request.state.user, connection["provider"], connection["external_id"],
                     connection["credential"], connection["credential_enc"],
                 )
-                # Drain the pages available right now (has_more) into one change set, then apply added →
-                # modified → removed. Draining first guarantees every `added` is processed before any
-                # `removed` even when a pending→posted pair straddles a page boundary, so the pending row is
-                # converted in place (in _insert_added) before its `removed` entry would trash it. The cursor
-                # advances per page and is persisted at the end, so a mid-loop failure rolls back the whole
-                # call and the next retry resumes from the last committed cursor.
-                # What still wants older data, decided here because the mapping and coverage live here. Only
-                # a range pull asks for history; a routine top-up passes none, which is what tells the
-                # adapter to fetch its recent window instead.
-                account_targets = _build_account_targets(
-                    conn, connection, target_start=date.today() - timedelta(days=days_requested),
-                    ledger_currency=ledger_currency,
-                ) if is_range_pull else None
-
-                page_added, page_modified, page_removed = [], [], []
+                # **A page at a time, applied and committed before the next fetch.**
+                #
+                # The provider call is the slow part of a sync — a walking provider can spend a minute in
+                # one request and does many of them — and holding the write transaction across it is what
+                # made the rest of the app unusable while a sync ran: SQLite serializes writers, so every
+                # other request that writes waited out the busy timeout and then failed outright. Committing
+                # per page collapses that hold from minutes to milliseconds.
+                #
+                # It also bounds what a failure can discard. A pull used to roll back entirely, so failing
+                # on the last window of a walk threw away every row before it *and* the metered requests
+                # spent to fetch them; now a failure costs one page.
+                #
+                # `removed` is the one thing that cannot be applied per page. Processing every `added`
+                # before any `removed` is what converts a pending→posted pair in place rather than trashing
+                # and re-adding it (see `_insert_added`), and that pair can straddle a page boundary — so
+                # removals accumulate across the drain and are applied once it finishes. They are rare and
+                # tiny next to `added`, so deferring them costs nothing that matters.
+                page_removed: list = []
+                # Accumulated across pages, not per page: it feeds account discovery after the drain, and an
+                # unknown account seen on page 1 must still be discovered if page 3 is where the drain ends.
+                seen_unknown: set[str] = set()
+                # Accounts whose rows are being discarded for being in another currency, remembered for the
+                # whole drain. The adapter keeps them out of the coverage *it* reports, but it can only
+                # speak for the page it just fetched — an account whose rows were dropped on page 1 appears
+                # in page 3's coverage as an ordinary account that simply had no activity. Only the caller
+                # spans the pages, so only the caller can keep the claim off it for the rest of the pull.
+                unsupported_accounts: set[str] = set()
                 for _ in range(_MAX_PAGES_PER_CALL):
+                    # Nothing may be held open across the fetch below. This is the commit the restructure
+                    # exists for; on the first pass it also flushes the in-progress marker so the rest of
+                    # the app can see that a sync is running.
+                    conn.commit()
+                    # Re-derived per page, from coverage this loop just committed, because that is what a
+                    # walking adapter resumes from. Built once per connection it would freeze at the depths
+                    # held before the first page, and every later page would re-fetch the same window
+                    # forever. Only a range pull asks for history; a routine top-up passes none, which is
+                    # what tells the adapter to fetch its recent window instead.
+                    account_targets = _build_account_targets(
+                        conn, connection, target_start=date.today() - timedelta(days=days_requested),
+                        ledger_currency=ledger_currency,
+                    ) if is_range_pull else None
                     page = adapter.fetch_transactions_sync(
                         app_config, credential, cursor=cursor, days_requested=days_requested,
                         account_targets=account_targets, ledger_currency=ledger_currency,
                         request_budget=request_budget,
+                        # False on the first call, True on every page after it — see the contract. Some
+                        # work belongs to a pull rather than a page and must not repeat per page.
+                        continuing=pages > 0,
+                        budget_checkpoint=_checkpoint_budget,
                     )
-                    page_added.extend(page["added"])
-                    page_modified.extend(page["modified"])
                     page_removed.extend(page["removed"])
                     cursor = page["next_cursor"]
                     final_status = page["update_status"]
@@ -1189,6 +1231,7 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                             _add_advisory(connection_advisories, entry["message"],
                                           count=int(entry.get("count") or 1),
                                           context=entry.get("context"))
+                    unsupported_accounts.update(page.get("unsupported_currency") or {})
                     for w in _currency_warnings(
                         conn, connection["id"], page.get("unsupported_currency") or {}, ledger_currency,
                         connection_advisories,
@@ -1200,15 +1243,44 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                             requested_windows.append({"start": window["start"], "end": window["end"]})
                     pages += 1
                     status_sequence.append(page["update_status"])
+
+                    for t in page["added"]:
+                        _insert_added(t, _get_card, dedupe, seen_unknown, account_tally)
+                    for t in page["modified"]:
+                        _apply_modified(t, account_tally)
+                    # This page's rows and the claims that describe them land together, so what the ledger
+                    # holds and what it says it holds can never disagree across a crash. Coverage is
+                    # deliberately written per page rather than once at the end: it is the durable record of
+                    # how far the walk has reached, which is both the resume point and the progress a client
+                    # reads while the sync is still running.
+                    conn.execute(
+                        "UPDATE connection SET transactions_cursor = ?, sync_progress = ? WHERE id = ?",
+                        (cursor, json.dumps({
+                            "started_at": started_at,
+                            "added": added - added0,
+                            "requests": len(requested_windows),
+                            "pages": pages,
+                        }), connection["id"]),
+                    )
+                    _record_sync_coverage(
+                        conn, connection,
+                        is_range_pull=is_range_pull,
+                        requested_start=(date.today() - timedelta(days=days_requested)
+                                         if is_range_pull else None),
+                        synced_accounts=dedupe.label_by_external,
+                        account_coverage=(
+                            {a: c for a, c in account_coverage.items() if a not in unsupported_accounts}
+                            if account_coverage is not None else None
+                        ),
+                    )
                     if not page["has_more"]:
                         break
-                seen_unknown: set[str] = set()
-                for t in page_added:
-                    _insert_added(t, _get_card, dedupe, seen_unknown, account_tally)
-                for t in page_modified:
-                    _apply_modified(t, account_tally)
+
                 for ext_id in page_removed:
                     _apply_removed(ext_id)
+                # Account discovery talks to the provider, so the drain's last page has to be committed
+                # before it — same rule as the fetch above.
+                conn.commit()
                 discovered += _discover_new_provider_accounts(
                     connection, adapter, app_config, credential, seen_unknown, connection_advisories,
                 )
@@ -1253,25 +1325,20 @@ def _run_sync(days: int = 0, connection_id: str = None, provider: str = None,
                     (json.dumps(request_budget) if request_budget else None, connection["id"]),
                 )
 
-            # Persist the advanced resume token, and flip the connection out of "initial" once its history
-            # has actually been fetched to the end — subsequent syncs then accrete onto monthly cards
-            # instead of the one backfill card. This reads `backfill_complete` and NOT the poll-stop
-            # signal: a pull can legitimately stop early while more history remains (a metered provider
-            # pausing a multi-window walk), and flipping the flag then would strand that history behind a
-            # short routine look-back with nothing left to go back for it.
+            # Flip the connection out of "initial" once its history has actually been fetched to the end —
+            # subsequent syncs then accrete onto monthly cards instead of the one backfill card. This reads
+            # `backfill_complete` and NOT the poll-stop signal: a pull can legitimately stop early while
+            # more history remains (a metered provider pausing a multi-window walk), and flipping the flag
+            # then would strand that history behind a short routine look-back with nothing left to go back
+            # for it.
+            #
+            # Unlike the cursor and the coverage claims, this is a conclusion about the *whole* pull rather
+            # than about a page, so it is the one piece of connection state still written here. A pull that
+            # dies partway leaves it un-flipped, which is correct: its history is not finished.
             became_complete = initial and backfill_complete
             conn.execute(
-                "UPDATE connection SET transactions_cursor = ?, initial_sync_complete = ? WHERE id = ?",
-                (cursor, 1 if (connection["initial_sync_complete"] or became_complete) else 0, connection["id"]),
-            )
-            # Per account where the adapter reports it, so a pull that reached different depths for
-            # different accounts — or touched only some of them — records exactly that.
-            _record_sync_coverage(
-                conn, connection,
-                is_range_pull=is_range_pull,
-                requested_start=date.today() - timedelta(days=days_requested) if is_range_pull else None,
-                synced_accounts=dedupe.label_by_external,
-                account_coverage=account_coverage,
+                "UPDATE connection SET initial_sync_complete = ? WHERE id = ?",
+                (1 if (connection["initial_sync_complete"] or became_complete) else 0, connection["id"]),
             )
             # The pull itself succeeded, whatever it did or did not find — a paused walk included, since
             # pausing is the adapter doing the right thing rather than a failure.

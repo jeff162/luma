@@ -191,6 +191,33 @@ bandwidth saving but a different pool to spend from. It also bounds how a filter
 the separate allowance was described for a single account, so a request naming several has no known cost
 and is not sent.
 
+## Pages, commits, and what a failure may cost
+
+**A pull is delivered a page at a time, and each page is committed before the next is fetched.** The sync
+layer holds no write transaction across a provider call. Two things follow that an adapter has to
+cooperate with:
+
+* **Report `has_more` while work remains**, rather than draining everything into one call. A walking
+  adapter should return after a small number of windows — SimpleFIN uses one (`WINDOWS_PER_PAGE`), because
+  a page boundary costs a commit (~1ms) and bounds a provider request (~1s), which is not a close call.
+  Draining instead means the write lock is held for the length of the whole pull, which makes the rest of
+  the app unusable, and a failure discards everything fetched.
+* **Report only what *this page* did.** `account_coverage` must describe the accounts the page actually
+  advanced — never pre-seeded from where they already stood. A page that ends early says nothing about the
+  accounts it did not reach, and an adapter that reports them anyway claims depth nothing fetched.
+
+`continuing` distinguishes the first call of a pull from the pages after it, for work that belongs to the
+pull rather than the page. SimpleFIN opens a pull by fetching its recent window once, so the ledger stays
+current while a long walk fills in behind it; repeating that per page would spend a metered request
+re-fetching one window. The adapter cannot tell the two apart from its own state — only the caller knows
+whether it is starting or draining.
+
+**Metered adapters must checkpoint before they spend.** Call `budget_checkpoint()` immediately after
+debiting and *before* issuing the request it paid for. The orderings fail differently: debiting afterwards
+loses the request on a crash in between, so the count reads low and the next sync over-spends a limit whose
+penalty may be a disabled credential; debiting first can only forfeit an allowance nothing used, which a
+refilling allowance heals on its own.
+
 ## Coverage claims
 
 Only claim what was actually fetched. A walk that advances its frontier by the window it *asked for*,

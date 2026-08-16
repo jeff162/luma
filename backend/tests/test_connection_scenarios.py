@@ -16,6 +16,7 @@ scenario only has to describe what happened; what must always be true is stated 
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -95,10 +96,14 @@ class ConnectionScenarioTests(unittest.TestCase):
             )
         return local
 
-    def _sync(self, *, days=0, full_history=False):
+    def _sync(self, *, days=0, full_history=False, transport=None):
         """One `POST /sync`, with the clock and the transport pointed at the simulator, then every
         invariant checked. Deliberately goes through `run_sync` and the database rather than calling the
-        adapter — two of the three bugs this file exists for lived in the write, not the fetch."""
+        adapter — two of the three bugs this file exists for lived in the write, not the fetch.
+
+        `transport` replaces the simulator as the HTTP layer, for a test that needs to observe the world
+        *at the moment a provider call is in flight* — which is the only point at which "is a write
+        transaction being held across this?" can be asked."""
         request = SimpleNamespace(state=SimpleNamespace(user={"id": "u1"}))
 
         class _Clock(date):
@@ -128,7 +133,7 @@ class ConnectionScenarioTests(unittest.TestCase):
                                    return_value="https://u:p@bridge.example/simplefin"), \
                  mock.patch.object(sync_module, "get_adapter", return_value=self.adapter), \
                  mock.patch.object(sync_module, "date", _Clock), \
-                 mock.patch("backend.services.providers.simplefin._http", self.sim), \
+                 mock.patch("backend.services.providers.simplefin._http", transport or self.sim), \
                  mock.patch("backend.services.providers.simplefin.datetime", _UtcClock):
                 result = sync_module.run_sync(days=days, connection_id=CONNECTION_ID, request=request,
                                               full_history=full_history)
@@ -416,6 +421,141 @@ class ConnectionScenarioTests(unittest.TestCase):
                          "a pull with nothing to walk must not deepen the claim")
         # The trailing edge is the half that *should* move: the top-up did fetch today's activity for it.
         self.assertEqual(after["coverage_through_date"], self.sim.today.isoformat())
+
+    def test_no_write_transaction_is_held_across_a_provider_call(self):
+        """The rule the whole per-page commit restructure exists to enforce.
+
+        SQLite serializes writers, so a transaction held open across a provider call blocks *every* other
+        request that writes for as long as the network takes — which for a walking provider is minutes.
+        The user-visible result was an app that routed but would not load: navigation is client-side, so
+        clicks worked while anything writing (the recurring auto-scan on app load, preference saves) waited
+        out the busy timeout and then failed with `database is locked`.
+
+        Asserted from inside the transport, because the moment a request is in flight is the only moment
+        the question can be asked. The probe is a second connection with a short timeout, standing in for
+        the concurrent request a real user generates by clicking something.
+        """
+        blocked = []
+        sim, db_path = self.sim, str(self.db_path)
+
+        def probing_transport(url, *, method="GET", headers=None):
+            probe = sqlite3.connect(db_path, timeout=0.25)
+            try:
+                # Any write will do; this one changes nothing, so the probe cannot affect the scenario it
+                # is observing. What matters is that it has to *take the write lock* to do it.
+                probe.execute("UPDATE db_meta SET value = value WHERE key = 'version'")
+                probe.commit()
+            except sqlite3.OperationalError as e:
+                blocked.append(f"{e} (during {url.split('?')[0]})")
+            finally:
+                probe.close()
+            return sim(url, method=method, headers=headers)
+
+        self._offer(CHECKING)
+        self._offer(SAVINGS)
+        self._sync(days=90, full_history=True, transport=probing_transport)
+        self.assertEqual(blocked, [], "a write transaction was open while the provider was being called")
+
+    def test_progress_is_readable_from_outside_while_the_sync_is_still_running(self):
+        """A long backfill is one HTTP call, so its own response says nothing until it is over.
+
+        That is fine for the tab that started it and useless for everything else — another tab, a reload,
+        or the user navigating away and back. So progress is committed as the pull goes, and read from the
+        connection like any other state. Checked from a second connection, which sees only committed data;
+        reading through the sync's own would see uncommitted writes and prove nothing.
+        """
+        observed = []
+        self._wide_bank()          # replaces self.sim, so bind the transport to it afterwards
+        sim, db_path = self.sim, str(self.db_path)
+
+        def transport(url, *, method="GET", headers=None):
+            probe = sqlite3.connect(db_path, timeout=0.25)
+            try:
+                row = probe.execute(
+                    "SELECT sync_started_at, sync_progress FROM connection WHERE id = ?",
+                    (CONNECTION_ID,)).fetchone()
+            finally:
+                probe.close()
+            observed.append((row[0], json.loads(row[1]) if row[1] else None))
+            return sim(url, method=method, headers=headers)
+
+        self._sync(days=0, full_history=True, transport=transport)
+
+        self.assertTrue(all(started for started, _ in observed),
+                        "the in-progress marker must be visible before any provider call, not after")
+        progress = [p for _, p in observed if p]
+        self.assertTrue(progress, "no progress was readable at any point during a multi-page walk")
+        # Monotonic, and actually moving — a counter that never advances is indistinguishable from a stall,
+        # which is the impression this whole change exists to remove.
+        self.assertEqual([p["requests"] for p in progress], sorted(p["requests"] for p in progress))
+        self.assertGreater(progress[-1]["requests"], progress[0]["requests"])
+
+        # And it is cleared when the run ends: a finished sync is described by `last_sync`, and leaving
+        # progress behind would make it read as one still going.
+        with self._db() as conn:
+            self.assertIsNone(conn.execute(
+                "SELECT sync_progress FROM connection WHERE id = ?", (CONNECTION_ID,)).fetchone()[0])
+
+    def test_a_requests_debit_is_durable_before_that_request_is_issued(self):
+        """Write-ahead, and the asymmetry that forces it.
+
+        Recording a spend *after* its request loses it if anything goes wrong in between, so the count
+        reads low and the next sync over-spends a limit whose penalty is the provider disabling the token —
+        which for this provider cannot be re-issued without re-linking at the Bridge. Recording first can
+        only forfeit an allowance nothing used, and a refilling allowance heals that on its own.
+
+        Read from a *second* connection, so it sees only what has actually been committed. Reading through
+        the sync's own connection would see its uncommitted writes and pass against exactly the bug.
+        """
+        seen = []
+        sim, db_path = self.sim, str(self.db_path)
+
+        def transport(url, *, method="GET", headers=None):
+            probe = sqlite3.connect(db_path, timeout=0.25)
+            try:
+                row = probe.execute("SELECT provider_request_budget FROM connection WHERE id = ?",
+                                    (CONNECTION_ID,)).fetchone()
+            finally:
+                probe.close()
+            pools = (json.loads(row[0]) if row and row[0] else {}).get("pools") or {}
+            seen.append(sum(REQUEST_BUDGET_CAPACITY - p["tokens"] for p in pools.values()))
+            return sim(url, method=method, headers=headers)
+
+        self._offer(CHECKING)
+        self._sync(days=90, full_history=True, transport=transport)
+
+        self.assertTrue(seen, "the walk must have made requests for this to say anything")
+        # At the moment request N is on the wire, the committed record must already account for it — so the
+        # debit seen by the Nth call is at least N. Never fewer; one more is fine and is the safe direction.
+        for issued, committed in enumerate(seen, start=1):
+            self.assertGreaterEqual(
+                committed, issued,
+                f"request {issued} went out with only {committed} debited — a crash here would lose it",
+            )
+
+    def test_rows_committed_before_a_pull_dies_outright_survive(self):
+        # A *caught* provider error is not the interesting case: `run_sync` handles it per connection, so
+        # the pull returns normally and the outer transaction commits either way. What one transaction
+        # spanning a whole pull could never survive is the pull **dying** — the process going away, or the
+        # final commit itself failing on the very lock this work exists to release. Everything fetched
+        # would roll back, including the metered requests spent to fetch it.
+        #
+        # Modelled with a BaseException, which `except Exception` deliberately does not catch, so it
+        # escapes `run_sync` exactly as an interrupt or a hard failure would and the outer transaction is
+        # never reached.
+        self._wide_bank()
+        self.sim.refuse_with = KeyboardInterrupt()
+        self.sim.refuse_after = 5
+        with self.assertRaises(KeyboardInterrupt):
+            self._sync(days=0, full_history=True)
+
+        self.assertEqual(len(self.sim.requests), 5, "the walk should have got some way in before it died")
+        self.assertGreater(self._row_count(), 0,
+                           "every row fetched before the pull died was discarded with it")
+        # And the claim matches what survived: coverage is committed with the rows it describes, so a pull
+        # that died partway cannot leave the ledger asserting a range it no longer holds.
+        covered = [c for c in self._coverage().values() if c["coverage_start_date"]]
+        self.assertTrue(covered, "the pages that did commit should have recorded how far they reached")
 
     def test_requests_spent_by_a_pull_that_then_failed_are_still_counted(self):
         # The one piece of sync state that must survive a failure. Everything else a pull writes is a claim

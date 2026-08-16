@@ -30,6 +30,7 @@ from unittest import mock
 from backend.services.providers import get_adapter
 from backend.services.providers.simplefin import (
     EMPTY_WINDOWS_END_HISTORY,
+    _merge_advisories,
     FILTERED_WALK_MAX_ACCOUNTS,
     INCREMENTAL_OVERLAP_DAYS,
     REQUEST_BUDGET_CAPACITY,
@@ -78,6 +79,41 @@ def _payload(transactions=None, *, errlist=None, accounts=None):
             "transactions": transactions or [],
         }],
     }
+
+
+def drain_pull(fetch_page, targets):
+    """Every page of one pull, merged the way `run_sync` merges them.
+
+    A page is `WINDOWS_PER_PAGE` windows, so one `fetch_transactions_sync` no longer walks a history to
+    its end — the caller comes back while `has_more`, committing as it goes. Tests about what a *walk*
+    does go through here; tests about what a single *page* does call the adapter directly.
+
+    Two details mirror the sync layer rather than being conveniences. Targets are re-derived from the
+    coverage each page reports, because that is what the caller does by re-reading `connection_account`;
+    a frozen target list would restart every page from the same resume point and loop forever. And
+    advisories are folded with the adapter's own `_merge_advisories`, because a `count` is now per page
+    and "how many of this *pull's* requests drew it" is the caller's sum.
+    """
+    added, coverage, advisories, warnings, page = [], {}, {}, {}, None
+    targets = [dict(t) for t in targets]
+    for _ in range(200):
+        page = fetch_page(targets)
+        added.extend(page["added"])
+        coverage.update(page.get("account_coverage") or {})
+        _merge_advisories(advisories, page.get("advisories") or [])
+        warnings.update(dict.fromkeys(page.get("warnings") or []))
+        if not page["has_more"]:
+            break
+        targets = [
+            {**t,
+             "reached": coverage.get(t["external_account_id"], {}).get("reached", t.get("reached")),
+             "empty_streak": coverage.get(t["external_account_id"], {}).get(
+                 "empty_streak", t.get("empty_streak", 0))}
+            for t in targets
+            if not coverage.get(t["external_account_id"], {}).get("complete")
+        ]
+    return {**page, "added": added, "account_coverage": coverage,
+            "advisories": list(advisories.values()), "warnings": list(warnings)}
 
 
 class _Server:
@@ -260,6 +296,29 @@ class SimpleFinErrorTests(unittest.TestCase):
     def setUp(self):
         self.adapter = SimpleFinAdapter()
 
+    def _drain_walk(self, server, account):
+        """A whole walk, since these are claims about what a *pull* reports rather than one page.
+
+        Aggregation moved with the paging: an adapter now reports what one page saw, and folding those
+        into "how many of this pull's requests drew the same remark" is the caller's job. `drain_pull`
+        does it with the adapter's own `_merge_advisories`, which is the same fold `run_sync` applies.
+        """
+        budget, pages = {}, {"n": 0}
+
+        def fetch_page(targets):
+            with mock.patch("backend.services.providers.simplefin._http", server), \
+                    mock.patch("backend.services.providers.simplefin._utc_today", lambda: date(2026, 8, 7)):
+                page = self.adapter.fetch_transactions_sync(
+                    {}, ACCESS_URL, account_targets=targets, request_budget=budget,
+                    continuing=pages["n"] > 0)
+            pages["n"] += 1
+            return page
+
+        return drain_pull(fetch_page, [
+            {"external_account_id": account, "from_date": "2016-01-01",
+             "reached": None, "empty_streak": 0},
+        ])
+
     def test_error_with_no_accounts_is_raised_with_the_providers_message(self):
         server = _Server(payload=_payload(
             errlist=[{"code": "con.auth", "msg": "Authentication required", "conn_id": "CONN-1"}],
@@ -300,12 +359,7 @@ class SimpleFinErrorTests(unittest.TestCase):
             [_txn("t1", "2026-08-01", "-5.00", "SHOP")],
             errlist=[{"code": "con.auth", "msg": "Authentication required", "conn_id": "CONN-2"}],
         ))
-        with mock.patch("backend.services.providers.simplefin._http", server), \
-                mock.patch("backend.services.providers.simplefin._utc_today", lambda: date(2026, 8, 7)):
-            result = self.adapter.fetch_transactions_sync({}, ACCESS_URL, account_targets=[
-                {"external_account_id": "simplefin:2930002", "from_date": "2016-01-01",
-                 "reached": None, "empty_streak": 0},
-            ])
+        result = self._drain_walk(server, "simplefin:2930002")
         self.assertGreater(len(server.requested_windows), 1, "this must actually span several windows")
         self.assertEqual(result["warnings"], ["Authentication required"])
 
@@ -342,12 +396,7 @@ class SimpleFinErrorTests(unittest.TestCase):
             [_txn("t1", "2026-08-01", "-5.00", "SHOP")],
             errlist=[{"code": "gen.api", "msg": "Requested date range exceeds recommended range of 45 days."}],
         ))
-        with mock.patch("backend.services.providers.simplefin._http", server), \
-                mock.patch("backend.services.providers.simplefin._utc_today", lambda: date(2026, 8, 7)):
-            result = self.adapter.fetch_transactions_sync({}, ACCESS_URL, account_targets=[
-                {"external_account_id": "simplefin:2930002", "from_date": "2016-01-01",
-                 "reached": None, "empty_streak": 0},
-            ])
+        result = self._drain_walk(server, "simplefin:2930002")
         windows = len(server.requested_windows)
         self.assertGreater(windows, 1, "this must actually span several windows")
         self.assertEqual(len(result["advisories"]), 1, "one entry, however many windows drew it")
@@ -568,7 +617,7 @@ class SimpleFinWalkTests(unittest.TestCase):
         behind. `"shared"` is the unfiltered pool; anything else names a provider account."""
         return {"pools": {p: {"tokens": 0.0, "as_of": self._moment(today, hour)} for p in pools}}
 
-    def _sync(self, server, targets, cursor=None, today=None, hour=12, budget=None):
+    def _sync(self, server, targets, cursor=None, today=None, hour=12, budget=None, continuing=False):
         # Both clocks move together. The budget is metered against instants and the windows are chosen by
         # date, so a test that advanced one without the other would be asserting against a moment nothing
         # was requested at.
@@ -578,8 +627,22 @@ class SimpleFinWalkTests(unittest.TestCase):
                 mock.patch("backend.services.providers.simplefin._utcnow_epoch",
                            lambda: self._moment(today, hour)):
             return self.adapter.fetch_transactions_sync(
-                {}, ACCESS_URL, cursor=cursor, account_targets=targets,
+                {}, ACCESS_URL, cursor=cursor, account_targets=targets, continuing=continuing,
                 request_budget=self.budget if budget is None else budget)
+
+    def _drain(self, server, targets, cursor=None, today=None, hour=12, budget=None):
+        """One pull, all its pages — see `drain_pull`. The cursor advances across pages exactly as the
+        sync layer advances it, since a walk's `through` watermark rides in it."""
+        state = {"cursor": cursor, "pages": 0}
+
+        def fetch_page(page_targets):
+            page = self._sync(server, page_targets, cursor=state["cursor"], today=today, hour=hour,
+                              budget=budget, continuing=state["pages"] > 0)
+            state["cursor"] = page["next_cursor"]
+            state["pages"] += 1
+            return page
+
+        return drain_pull(fetch_page, targets)
 
     def _busy(self, account="simplefin:2930002", count=80):
         """Windows that always return data, so only the budget can end a walk."""
@@ -597,7 +660,7 @@ class SimpleFinWalkTests(unittest.TestCase):
         # The 5-day overlap belongs to the incremental fetch, not here: overlapping the historical walk
         # would spend extra requests out of a metered budget to re-fetch what the previous window held.
         server = _Server(windows={})
-        self._sync(server, self._targets("simplefin:2930002"))
+        self._drain(server, self._targets("simplefin:2930002"))
         windows = server.requested_windows
         self.assertEqual((windows[0][1] - windows[0][0]).days, WINDOW_DAYS)
         self.assertEqual(windows[1][1], windows[0][0], "windows must abut, not overlap")
@@ -689,7 +752,7 @@ class SimpleFinWalkTests(unittest.TestCase):
         server = _Server(windows={
             (recent[0].isoformat(), recent[1].isoformat()): [_txn("t1", "2026-07-20", "-5.00", "A")],
         })
-        result = self._sync(server, self._targets("simplefin:2930002"))
+        result = self._drain(server, self._targets("simplefin:2930002"))
         self.assertEqual(len(server.requested_windows), 1 + EMPTY_WINDOWS_END_HISTORY)
         self.assertTrue(result["account_coverage"]["simplefin:2930002"]["complete"])
         self.assertTrue(result["backfill_complete"])
@@ -704,7 +767,7 @@ class SimpleFinWalkTests(unittest.TestCase):
             (w1[0].isoformat(), w1[1].isoformat()): [_txn("t1", "2026-07-20", "-5.00", "A")],
             (w3[0].isoformat(), w3[1].isoformat()): [_txn("t2", "2026-04-20", "-9.00", "B")],
         })
-        result = self._sync(server, self._targets("simplefin:2930002"))
+        result = self._drain(server, self._targets("simplefin:2930002"))
         self.assertIn(_ext_id("t2"), {r["external_transaction_id"] for r in result["added"]})
 
     def test_reaching_the_requested_depth_is_not_the_same_as_being_complete(self):
@@ -761,7 +824,7 @@ class SimpleFinWalkTests(unittest.TestCase):
         # `2930002` delivers in every window; the rest never do, so they complete after two empties and the
         # walking set falls to one.
         quiet = [f"simplefin:quiet{n}" for n in range(FILTERED_WALK_MAX_ACCOUNTS)]
-        self._sync(server, self._targets("simplefin:2930002", *quiet))
+        self._drain(server, self._targets("simplefin:2930002", *quiet))
         self.assertNotIn("account=", server.calls[0])
         self.assertTrue(any("account=" in u for u in server.calls[2:]),
                         "once few enough accounts are still walking, the windows narrow to them")
@@ -771,7 +834,7 @@ class SimpleFinWalkTests(unittest.TestCase):
     def test_the_budget_pauses_the_walk_instead_of_exceeding_it(self):
         # Exceeding SimpleFIN's published budget gets the token disabled, so the walk stops itself.
         server = self._busy()
-        result = self._sync(server, self._targets("simplefin:2930002"))
+        result = self._drain(server, self._targets("simplefin:2930002"))
         self.assertEqual(len(server.requested_windows), REQUEST_BUDGET_CAPACITY)
         self.assertTrue(result["resume_later"])
         self.assertFalse(result["backfill_complete"])
@@ -788,10 +851,10 @@ class SimpleFinWalkTests(unittest.TestCase):
 
     def test_a_paused_walk_resumes_the_next_day_from_its_recorded_reach(self):
         server = self._busy()
-        first = self._sync(server, self._targets("simplefin:2930002"))
+        first = self._drain(server, self._targets("simplefin:2930002"))
         reached = first["account_coverage"]["simplefin:2930002"]["reached"]
 
-        self._sync(server, self._targets("simplefin:2930002", reached=reached),
+        self._drain(server, self._targets("simplefin:2930002", reached=reached),
                    cursor=first["next_cursor"], today="2026-08-08")
         # The next day opens with the recent top-up, then the walk continues from where it stopped.
         resumed = server.requested_windows[REQUEST_BUDGET_CAPACITY + 1]
@@ -799,10 +862,10 @@ class SimpleFinWalkTests(unittest.TestCase):
 
     def test_an_exhausted_allowance_is_not_spent_again_before_it_refills(self):
         server = self._busy()
-        first = self._sync(server, self._targets("simplefin:2930002"))
+        first = self._drain(server, self._targets("simplefin:2930002"))
         reached = first["account_coverage"]["simplefin:2930002"]["reached"]
         spent = len(server.requested_windows)
-        second = self._sync(server, self._targets("simplefin:2930002", reached=reached),
+        second = self._drain(server, self._targets("simplefin:2930002", reached=reached),
                             cursor=first["next_cursor"])
         # One further request, and exactly one: the walk's own allowance is empty, but the recent top-up is
         # an unfiltered call and the shared allowance it draws on has not been touched. That the ledger
@@ -816,14 +879,14 @@ class SimpleFinWalkTests(unittest.TestCase):
         # the allowance — a counter keyed to the calendar returns all of it the moment the date rolls, which
         # is how a walk resuming shortly after midnight overruns a limit that has barely refilled.
         server = self._busy()
-        first = self._sync(server, self._targets("simplefin:2930002"))
+        first = self._drain(server, self._targets("simplefin:2930002"))
         spent = len(server.requested_windows)
         # Resumed from the reach the first pull recorded, so the walk stays on `_busy`'s window grid and
         # keeps finding data — otherwise it would stop on two empty windows and measure the wrong thing.
         reached = first["account_coverage"]["simplefin:2930002"]["reached"]
 
         elapsed = 5
-        result = self._sync(server, self._targets("simplefin:2930002", reached=reached),
+        result = self._drain(server, self._targets("simplefin:2930002", reached=reached),
                             cursor=first["next_cursor"], hour=12 + elapsed)
         walked = len(server.requested_windows) - spent - 1   # less the top-up, which is a different pool
         self.assertEqual(walked, int(elapsed * REQUEST_BUDGET_REFILL_PER_HOUR),
@@ -882,7 +945,7 @@ class SimpleFinWalkTests(unittest.TestCase):
             {"external_account_id": "simplefin:new", "from_date": "2026-01-01",
              "reached": None, "empty_streak": 0},
         ]
-        result = self._sync(server, targets)
+        result = self._drain(server, targets)
         # The newcomer's first window starts at today; the established account never re-fetches above
         # where it had already reached.
         self.assertEqual(max(w[1] for w in server.requested_windows).isoformat(), self.TODAY)

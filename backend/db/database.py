@@ -76,11 +76,25 @@ def ensure_shared_owner(conn: sqlite3.Connection) -> str:
     return SHARED_OWNER_ID
 
 
+# How long a write waits for another writer before giving up with "database is locked".
+#
+# WAL lets readers run freely but still serializes writers, so this bounds how long one request's write can
+# be delayed by another's. Python's default is 5 seconds, which was chosen for neither this workload nor
+# any other — it was simply never set.
+#
+# It is defence in depth rather than the fix. What made contention long enough to matter was a sync holding
+# its transaction open across provider network calls; that is now committed per page, so the window a writer
+# can collide with is milliseconds. This value covers what remains: a large import or a backup restore
+# writing in bulk while someone clicks something. Raising it further would only trade a visible error for an
+# invisible stall, which is the worse failure for a request a user is waiting on.
+_BUSY_TIMEOUT_SECONDS = 15
+
+
 @contextmanager
 def get_db(db_path: str | None = None):
     resolved_path = _normalize_db_path(db_path)
     Path(resolved_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(resolved_path)
+    conn = sqlite3.connect(resolved_path, timeout=_BUSY_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -126,7 +140,7 @@ def get_db(db_path: str | None = None):
 # adds the per-account breakdown the connection card reads. v33 adds `connection.sync_started_at`, so a
 # running sync stays visible after the page that started it is navigated away from.
 
-CURRENT_VERSION = 35
+CURRENT_VERSION = 36
 
 # Kept as a literal rather than imported from `services.duplicate_detection`, which imports this module.
 # It must stay equal to that module's DEFAULT_TERMINAL_WINDOW_DAYS, which owns the reasoning; the same
@@ -1022,6 +1036,17 @@ def _connection_request_budget(conn):
     conn.execute("ALTER TABLE connection ADD COLUMN provider_request_budget TEXT")
 
 
+@migration(36)
+def _connection_sync_progress(conn):
+    # Live progress of a running sync, so a pull that takes minutes can be observed while it happens rather
+    # than only reported once it ends — see the baseline CREATE. Existing rows stay NULL, which is exactly
+    # right: nothing was running when this migration applied.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(connection)")}
+    if not cols or "sync_progress" in cols:
+        return  # already migrated, or a minimal hand-built fixture without the table
+    conn.execute("ALTER TABLE connection ADD COLUMN sync_progress TEXT")
+
+
 def get_db_version(conn) -> int:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS db_meta (
@@ -1246,7 +1271,14 @@ def init_db(db_path: str | None = None):
                 -- single rule on both, and each one's correct rule is the other's bug — a budget that
                 -- forgets a failed pull's requests overruns the limit precisely when a user is retrying a
                 -- broken connection hardest, and the penalty for overrunning is a disabled token.
-                provider_request_budget   TEXT
+                provider_request_budget   TEXT,
+                -- Live progress of the sync currently running, as JSON, or NULL when none is. Written at
+                -- every page commit and cleared when the run ends, so it is readable by any request while
+                -- a pull is still in flight — which is the whole point: a long backfill is one HTTP call,
+                -- so its own response says nothing until it is over, and a client that navigated away or
+                -- reloaded has nothing to reconnect to. Paired with `sync_started_at`, which says a run
+                -- exists; this says how far it has got.
+                sync_progress             TEXT
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_provider_external
                 ON connection(provider, external_id);

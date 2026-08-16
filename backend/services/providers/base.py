@@ -162,7 +162,8 @@ class ProviderAdapter(ABC):
     def fetch_transactions_sync(
         self, app_config: dict, credential: str, cursor: str | None = None, days_requested: int = 730,
         account_targets: list[dict] | None = None, ledger_currency: str = DEFAULT_LEDGER_CURRENCY,
-        request_budget: dict | None = None,
+        request_budget: dict | None = None, continuing: bool = False,
+        budget_checkpoint=None,
     ) -> dict:
         """One pull's worth of change, plus the state the sync loop needs to decide what happens next:
 
@@ -212,6 +213,27 @@ class ProviderAdapter(ABC):
 
         Callers persist it across syncs and must write it back on **every** exit path, success or raise.
         Adapters for providers with no published limits ignore it entirely.
+
+        `budget_checkpoint` is how a metered adapter gets its spending recorded **before** the request that
+        spends it. The adapter calls it immediately after debiting `request_budget` and before issuing the
+        corresponding request; the caller's implementation persists the record and commits. It is a callback
+        rather than a return value for the same reason `request_budget` is mutable — the fact has to become
+        durable *during* the call, not after it.
+
+        The ordering is not a detail, and it is not symmetric. Debiting after the request means a crash in
+        between loses the record of a request that **was** made: the count runs low, and a low count leads
+        to over-spending a limit whose penalty may be the provider cutting the connection off. Debiting
+        first means a crash forfeits an allowance that was never used — recoverable, and for a refilling
+        allowance it heals on its own. Adapters must therefore checkpoint first and request second, and
+        callers must make the checkpoint durable rather than buffering it.
+
+        `continuing` is False on the first call of a pull and True on every `has_more` page after it. It
+        exists because "a new pull started" and "another page of the pull already running" are otherwise
+        indistinguishable from inside the adapter, and some work belongs to the *pull* rather than to the
+        page — the SimpleFIN adapter opens a pull by fetching its recent window once, so that the ledger
+        stays current while a long walk fills in history behind it, and repeating that per page would spend
+        a metered request on the same window over and over. Only the caller can tell the two apart, since
+        only it knows whether it is draining or starting.
 
         `warnings` is a list of user-displayable strings for problems that did **not** fail the pull — one
         institution needing re-authentication while the others on the same credential returned data, an

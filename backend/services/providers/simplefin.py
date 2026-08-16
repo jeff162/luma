@@ -134,6 +134,19 @@ _SHARED_POOL = "shared"
 # raised now that the separate-pool question is settled.
 FILTERED_WALK_MAX_ACCOUNTS = 3
 
+# Windows fetched before the walk hands control back to the caller as a page (`has_more`).
+#
+# One, because the cost of a page boundary is a database commit (~a millisecond) and the thing it bounds is
+# a provider request (~a second): paying 0.1% to make every fetched window durable the moment it arrives is
+# not a close call. What it buys is threefold — a crash or a bank hanging up mid-walk costs one window
+# rather than everything fetched so far; the write transaction is released between every request, so the
+# rest of the app keeps working during a sync; and per-account reach is recorded continuously, which is
+# what a progress display reads.
+#
+# Nothing here needs to remember where it was: the walk was already built to resume from each account's
+# recorded reach, so a page boundary is just a resume point that happens immediately.
+WINDOWS_PER_PAGE = 1
+
 # Consecutive empty windows that end the backward walk. One is not enough: an account with no activity for
 # a quarter would report exactly the same thing as an account whose history has run out, and stopping
 # there would silently truncate the backfill.
@@ -384,12 +397,20 @@ def _refill(pool: dict, now: float) -> dict:
     return pool
 
 
-def _take_request(budget: dict, key: str, now: float) -> bool:
-    """Spend one request from `key`'s allowance, returning whether there was one to spend."""
+def _take_request(budget: dict, key: str, now: float, checkpoint=None) -> bool:
+    """Spend one request from `key`'s allowance, returning whether there was one to spend.
+
+    `checkpoint` makes the spend durable *before* the caller issues the request it paid for, which is the
+    only ordering that is safe here. Recording afterwards loses the request on a crash in between, and a
+    lost request means the count reads low — which leads to over-spending a limit whose penalty is a
+    disabled token this provider cannot re-issue without the user re-linking at the Bridge. Recording
+    first can only forfeit an allowance that went unused, and this one refills, so that error heals."""
     pool = _refill(budget.setdefault("pools", {}).setdefault(key, {}), now)
     if pool["tokens"] < 1:
         return False
     pool["tokens"] -= 1
+    if checkpoint is not None:
+        checkpoint()
     return True
 
 
@@ -808,8 +829,8 @@ class SimpleFinAdapter(ProviderAdapter):
 
     def _walk_history(self, credential: str, budget: dict, targets: list[dict], today: date, now: float,
                       warnings: dict, advisories: dict, dropped: dict[str, str],
-                      ledger_currency: str, requested: list | None = None,
-                      ) -> tuple[list[dict], dict, bool]:
+                      ledger_currency: str, requested: list | None = None, checkpoint=None,
+                      ) -> tuple[list[dict], dict, bool, bool]:
         """Walk backward until every targeted account has reached its requested depth or run out of history.
 
         One loop serves every case there is — a first backfill, a deepening pull, and an account that joined
@@ -839,12 +860,20 @@ class SimpleFinAdapter(ProviderAdapter):
             t["external_account_id"]: date.fromisoformat(t["reached"]) if t.get("reached") else today
             for t in targets
         }
-        coverage = {
-            a: {"reached": frontier[a].isoformat(), "complete": False, "empty_streak": streaks[a]}
-            for a in reach
-        }
+        # Only accounts this call actually advanced, populated by `advance` below — never pre-seeded from
+        # where they already stood. Seeding it made every target report `reached` even when the call never
+        # fetched for it, which was invisible while a call always walked every account to its end but
+        # becomes an over-claim the moment a page stops early: an account that was merely waiting its turn
+        # would report having reached *today*, and coverage that overstates itself makes duplicate
+        # detection reject genuine rows inside the range it invented. Saying nothing about an untouched
+        # account is both true and what the caller wants — it writes only what it is told.
+        coverage: dict[str, dict] = {}
         added: list[dict] = []
         resume_later = False
+        # Windows fetched in this call, against `WINDOWS_PER_PAGE`. Reaching the limit ends the page, not
+        # the walk — the difference is what `more_to_walk` below reports, and it is the difference between
+        # the caller committing and coming straight back versus concluding the history is finished.
+        windows_fetched = 0
         # Accounts that ran out of their own allowance mid-walk. Held apart from the stop rules because this
         # is not a conclusion about their history — they are simply done being asked *today*, and must not
         # be re-offered to the loop or it would spin on an account it can no longer fetch.
@@ -887,9 +916,17 @@ class SimpleFinAdapter(ProviderAdapter):
         # reached it (which ran from that date's midnight forward). Today is the one exception: on a fresh
         # account the first window ends there with nothing after it.
         while (active := still_walking()):
+            if windows_fetched >= WINDOWS_PER_PAGE:
+                break  # page full; the caller commits what this reached and comes straight back
             if len(active) <= FILTERED_WALK_MAX_ACCOUNTS:
                 for account in active:
-                    if not _take_request(budget, account, now):
+                    # Counted per *request*, not per pass: a filtered round makes one call per account, and
+                    # each is its own round trip and its own token. Stopping partway through leaves some
+                    # accounts advanced and others not, which needs no bookkeeping — each carries its own
+                    # frontier, so the next page simply picks up whichever are still behind.
+                    if windows_fetched >= WINDOWS_PER_PAGE:
+                        break
+                    if not _take_request(budget, account, now, checkpoint):
                         out_of_budget.add(account)
                         resume_later = True
                         continue
@@ -899,9 +936,10 @@ class SimpleFinAdapter(ProviderAdapter):
                         credential, window_start, window_end, [account], ledger_currency=ledger_currency,
                         end_of_day=window_end == today, requested=requested,
                     ))
+                    windows_fetched += 1
                     advance(account, window_start, delivered)
                 continue
-            if not _take_request(budget, _SHARED_POOL, now):
+            if not _take_request(budget, _SHARED_POOL, now, checkpoint):
                 # Out of allowance with history still to walk. Stopping here is what keeps the token from
                 # being disabled; each account's recorded reach is what makes the rest resume rather than
                 # be forgotten — no separate parking state is needed.
@@ -934,16 +972,20 @@ class SimpleFinAdapter(ProviderAdapter):
                 credential, window_start, window_end, None, ledger_currency=ledger_currency,
                 end_of_day=window_end == today, requested=requested,
             ))
+            windows_fetched += 1
             for account in active:
                 if frontier[account] != window_end:
                     continue  # this account had already gone deeper; the window told it nothing new
                 advance(account, window_start, delivered)
-        return added, coverage, resume_later
+        # Whether anything is still owed data. Distinct from `resume_later`: this says "come straight back
+        # for another page", that says "stop asking until the allowance refills".
+        return added, coverage, resume_later, bool(still_walking())
 
     def fetch_transactions_sync(
         self, app_config: dict, credential: str, cursor: str | None = None, days_requested: int = 730,
         account_targets: list[dict] | None = None, ledger_currency: str = DEFAULT_LEDGER_CURRENCY,
-        request_budget: dict | None = None,
+        request_budget: dict | None = None, continuing: bool = False,
+        budget_checkpoint=None,
     ) -> dict:
         """Walk history for whichever accounts still want it, or top up the recent window.
 
@@ -965,6 +1007,8 @@ class SimpleFinAdapter(ProviderAdapter):
         _adopt_legacy_budget(budget, state, today, now)
         added: list[dict] = []
         resume_later = False
+        # Whether this call left history still to walk. False for a routine top-up, which has no walk.
+        more_to_walk = False
         # Deduplicated in order: the same bank reports the same problem in every window the walk touches,
         # and a user reading the connection card needs the distinct problems, not one per request.
         warnings: dict[str, None] = {}
@@ -986,14 +1030,21 @@ class SimpleFinAdapter(ProviderAdapter):
                 (date.fromisoformat(t["reached"]) if t.get("reached") else today)
                 for t in account_targets
             )
-            if walk_from < today:
+            # Opens a *pull*, not a page — hence `continuing`. A walk is delivered a page at a time, so
+            # from the second page onward every call looks exactly like a resuming walk (`walk_from` has
+            # moved back from today by then), and guarding on `walk_from` alone bought a fresh unfiltered
+            # top-up on every page: metered requests spent re-fetching one window, and rows arriving for
+            # accounts the walk had deliberately filtered out. The state cannot answer this on its own —
+            # "a new pull started today" and "another page of the pull already running" look identical from
+            # in here — so the caller, which is the only thing that knows, says which it is.
+            if walk_from < today and not continuing:
                 # The walk has already moved back from today, so every window it fetches is old and no
                 # *new* transaction would arrive for however many days the walk takes to finish. One
                 # request on the recent window first keeps the ledger current — which is the part a user
                 # actually looks at — while history fills in behind it.
                 # Charged to the shared pool because it is an unfiltered window: it covers every account at
                 # once, which is exactly what makes it worth one request instead of one per account.
-                if _take_request(budget, _SHARED_POOL, now):
+                if _take_request(budget, _SHARED_POOL, now, budget_checkpoint):
                     added.extend(self._fetch_recent(
                         credential, state, today, warnings, advisories, dropped_currency,
                         ledger_currency, requested_windows))
@@ -1004,13 +1055,13 @@ class SimpleFinAdapter(ProviderAdapter):
                 # a separate top-up would re-fetch a subset of it for nothing.
                 state["through"] = today.isoformat()
 
-            walk_added, coverage, walk_resume = self._walk_history(
+            walk_added, coverage, walk_resume, more_to_walk = self._walk_history(
                 credential, budget, account_targets, today, now, warnings, advisories, dropped_currency,
-                ledger_currency, requested_windows,
+                ledger_currency, requested_windows, budget_checkpoint,
             )
             added.extend(walk_added)
             resume_later = resume_later or walk_resume
-        elif _take_request(budget, _SHARED_POOL, now):
+        elif _take_request(budget, _SHARED_POOL, now, budget_checkpoint):
             added.extend(self._fetch_recent(
                 credential, state, today, warnings, advisories, dropped_currency, ledger_currency,
                 requested_windows))
@@ -1018,12 +1069,13 @@ class SimpleFinAdapter(ProviderAdapter):
             resume_later = True
         _prune_full_pools(budget)
 
-        # Every targeted account either reached the depth asked of it or ran out of history. A pull with no
-        # targets had no history to finish, so it is trivially done.
-        backfill_complete = not resume_later and all(
-            c["complete"] or c["reached"] <= t["from_date"]
-            for t, c in ((t, coverage[t["external_account_id"]]) for t in (account_targets or []))
-        )
+        # Every targeted account either reached the depth asked of it or ran out of history — which is
+        # exactly what "nothing is still walking" means, so the walk's own stop condition answers this
+        # rather than a second pass over the coverage it reported. It has to: coverage now describes only
+        # the accounts *this page* touched, so a page that ended early says nothing about the rest, and
+        # reading completeness out of it would call a paused walk finished. A pull with no targets had no
+        # history to finish, so it is trivially done.
+        backfill_complete = not resume_later and not more_to_walk
         # An account whose rows were discarded is claimed for nothing, whatever the walk recorded for it.
         # The caller normally keeps such an account out of the targets entirely (it reads the currency it
         # stored at connect time), but that stored value can be absent — a restore carries `connection_account`
@@ -1041,9 +1093,14 @@ class SimpleFinAdapter(ProviderAdapter):
             # same as it confirming that none were.
             "removed":       [],
             "next_cursor":   json.dumps(state),
-            # The walk drains its whole allowance inside this one call, so there is never a second page for
-            # the caller to ask for — pausing is reported through `resume_later`, not by paging.
-            "has_more":      False,
+            # A page is `WINDOWS_PER_PAGE` windows, so a walk with history left asks the caller to come
+            # straight back for the next one. That is what makes each window's rows durable as they arrive
+            # and releases the write lock between requests.
+            #
+            # A walk stopped by its *allowance* reports `has_more: False` even with history outstanding:
+            # the provider has just declined to serve us, so polling it again is the opposite of what it
+            # asked for. `resume_later` is what carries that case, and a later sync picks it up.
+            "has_more":      more_to_walk and not resume_later,
             "update_status": BUDGET_PAUSED if resume_later else None,
             "backfill_complete": bool(backfill_complete),
             "resume_later":  resume_later,

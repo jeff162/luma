@@ -417,8 +417,19 @@ phase 6a), so adding Teller or SimpleFIN is an adapter, not a change to the conn
   back the pull *actually* reached **per account**, since a walk that stops early — out of history, or out
   of request budget — covers less than it asked for, and may have covered some accounts and not others.
   Overstating either makes duplicate detection reject genuine rows (`docs/data-model.md` → "coverage has
-  two shapes"). `removed` is unavoidably empty on the range-pull
+  two shapes") — and a paged pull sharpens that rule: a page reports only the accounts *it* advanced, never
+  the ones still waiting their turn, since seeding coverage from where an account already stood claims
+  depth the page never fetched. `removed` is unavoidably empty on the range-pull
   path: the provider *cannot report* deletions, which is not the same as confirming there were none.
+  **Each page is applied and committed before the next is fetched**, so no write transaction spans a
+  provider call — SQLite serializes writers, and a transaction held across a multi-minute pull left the app
+  routing but unable to load anything that writes. Two contract pieces exist for that shape: `continuing`
+  (false on a pull's first call, true on its pages) for work belonging to the pull rather than the page,
+  such as SimpleFIN's one-per-pull recent-window top-up; and `budget_checkpoint`, which a metered adapter
+  calls after debiting and *before* issuing the request, so a crash can only forfeit an unused allowance
+  rather than lose the record of a request already made. Progress is committed with each page
+  (`connection.sync_progress`), which is what lets any request observe a pull still in flight — the pull's
+  own HTTP response cannot, being a single call that returns only at the end.
   `run_sync` takes `full_history` to tell an initial/deepening pull from a routine top-up (they otherwise
   send identical arguments), and `provider` to scope a sync so one card cannot spend another provider's
   request budget. A pull may also return **`warnings`** — problems that did not fail it, such as one bank
@@ -612,6 +623,39 @@ phase 6a), so adding Teller or SimpleFIN is an adapter, not a change to the conn
   Removals are trashed, never deleted, carrying `rejection_reason='duplicate_confirmed'` +
   `dedupe_resolved_by='connection_rescan'` + the `suspect_duplicate_of` audit pointer — the same state an
   account merge produces, so the card's duplicate report shows them and Restore returns them intact.
+
+### Database concurrency
+
+**The backend is multi-threaded, and always has been.** FastAPI runs plain `def` endpoints in a worker
+threadpool, so several requests genuinely execute at once — a fact worth stating because it is invisible in
+code that contains no threading of its own, and it changes what "safe" means for anything touching the DB.
+
+**Nothing is shared between those threads.** `get_db()` opens a *fresh* `sqlite3` connection per call and
+closes it at the end of the block; there is no pool, no module-global connection, and no caching.
+`check_same_thread` is left at its default (`True`), which is correct here precisely because connections
+are never handed across threads. DB routing is per-request for the same reason: `_current_db_path` is a
+`ContextVar`, not a global, so the control-DB / data-DB split cannot leak between concurrent requests. The
+practical consequence is that **there is no Python-level data race to defend against** — the concurrency
+that matters is SQLite's own.
+
+**WAL means readers never block; writers serialize.** Any number of requests can read while one writes, so
+contention shows up only between writers, and it shows up as *waiting*: a blocked writer waits out the busy
+timeout (`_BUSY_TIMEOUT_SECONDS`, explicitly set — Python's 5-second default was never chosen for this
+workload) and then fails with `database is locked`. Data is never lost to contention, but a request can be.
+
+**So the rule that matters is: never hold a write transaction across slow work.** A transaction spanning
+network I/O converts "one slow operation" into "every writing request fails for the duration", which is how
+a long sync used to leave the app routing but unable to load anything — navigation is client-side, so
+clicks worked while the recurring auto-scan on app load, preference saves, and cache updates all timed out.
+The provider-sync path is the case this was learned on and the pattern to copy: fetch with nothing open,
+apply, commit, repeat. `backend/routers/import_export/core.py` also shows the defensive half — a read
+endpoint whose best-effort write is wrapped so transient lock contention degrades instead of 500ing.
+
+**Commits are genuinely durable, and cheap enough to take often.** No `PRAGMA synchronous` is set, so it is
+SQLite's default `FULL`: each commit fsyncs the WAL and survives power loss, not merely process death. The
+WAL being append-only also guarantees ordering — a later commit cannot survive without an earlier one. At
+roughly a millisecond each they are noise beside anything network-bound, which is why the sync path commits
+per page rather than batching.
 
 ### Storage layers
 

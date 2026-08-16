@@ -116,10 +116,13 @@ class PlaidAdapter(ProviderAdapter):
     def fetch_transactions_sync(
         self, app_config: dict, credential: str, cursor: str | None = None, days_requested: int = 730,
         account_targets: list[dict] | None = None, ledger_currency: str = DEFAULT_LEDGER_CURRENCY,
-        request_budget: dict | None = None,
+        request_budget: dict | None = None, continuing: bool = False,
+        budget_checkpoint=None,
     ) -> dict:
         # `request_budget` is ignored: Plaid publishes no per-request allowance to spend down, so there is
-        # nothing for this adapter to meter and nothing to record between syncs.
+        # nothing for this adapter to meter and nothing to record between syncs, and so nothing for
+        # `budget_checkpoint` to make durable. `continuing` likewise: a cursor names its own resume point,
+        # so every page of a pull is the same call shape as the first.
         #
         # `account_targets` is ignored: a cursor is a checkpoint in a change feed, not a date range, so
         # there is no way to ask this API for one account's history. Plaid reaches it by raising

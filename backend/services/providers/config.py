@@ -109,18 +109,24 @@ _SYNC_MARKER_STALE_AFTER = timedelta(minutes=30)
 def set_sync_running(connection_ids: list[str], running: bool) -> None:
     """Mark connections as syncing, or clear the mark, **in its own transaction**.
 
-    This deliberately opens its own `get_db()` rather than reusing the sync's connection. `get_db` commits
-    when its block exits, and `run_sync` holds one open for the whole pull — so a marker written on that
-    connection would not be visible to any other request until the sync it announces had already finished.
-    Written here, it commits immediately and a concurrent request (another tab, a page reload) can see it.
+    This deliberately opens its own `get_db()` rather than reusing the sync's connection, so the marker is
+    committed the instant it is written and a concurrent request (another tab, a page reload) can see that
+    a sync is running. The sync's own connection now commits at every page boundary, so writing it there
+    would also become visible — but only at the first page, which is after the first provider call, and the
+    marker's whole job is to be visible *before* anything slow starts.
+
+    Clearing also drops `sync_progress`: it describes a run in flight, and a run that has ended is
+    described by `last_sync` instead. Leaving it would make a finished sync read as a stalled one.
     """
     if not connection_ids:
         return
     placeholders = ",".join("?" * len(connection_ids))
     with get_db() as conn:
         conn.execute(
-            f"UPDATE connection SET sync_started_at = ? WHERE id IN ({placeholders})",
-            [utcnow_iso() if running else None, *connection_ids],
+            f"UPDATE connection SET sync_started_at = ?, "
+            f"sync_progress = CASE WHEN ? THEN sync_progress ELSE NULL END "
+            f"WHERE id IN ({placeholders})",
+            [utcnow_iso() if running else None, 1 if running else 0, *connection_ids],
         )
 
 
@@ -200,7 +206,8 @@ def list_connections(provider: str) -> list[dict]:
     with get_db() as conn:
         rows = conn.execute(
             "SELECT id, external_id, institution, last_synced_at, last_sync_error, last_sync_error_at, "
-            "consecutive_sync_failures, last_sync_warnings, reauth_required, sync_started_at "
+            "consecutive_sync_failures, last_sync_warnings, reauth_required, sync_started_at, "
+            "sync_progress "
             "FROM connection WHERE provider = ? ORDER BY rowid",
             (provider,),
         ).fetchall()
@@ -229,8 +236,28 @@ def list_connections(provider: str) -> list[dict]:
             # for good. Imported here rather than duplicating the rule — the router owns it because it is
             # the thing that writes it.
             "syncing": sync_marker_is_live(r["sync_started_at"]),
+            # How far the running sync has got, or None when none is running. Read from the connection
+            # rather than from the sync's own response because a long backfill is a single HTTP call: its
+            # response says nothing until it finishes, and a client that navigated away or reloaded has no
+            # response to wait on at all. Gated on the same staleness check as `syncing`, so a marker left
+            # behind by a dead process cannot leave stale numbers on screen.
+            "sync_progress": (
+                _json_or_none(r["sync_progress"]) if sync_marker_is_live(r["sync_started_at"]) else None
+            ),
         })
     return out
+
+
+def _json_or_none(value):
+    """Stored JSON, or None when absent or unreadable. A progress blob is a diagnostic — showing nothing
+    beats failing a connection listing over it."""
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _last_sync_summary(log, connection_row) -> dict | None:
