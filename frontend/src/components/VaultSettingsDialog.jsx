@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { AppConfirmDialog, AppDialog, Button, DialogActions, Input, SectionEyebrow, Spinner } from './ui.jsx'
-import { SENSITIVE_FIELD_PROPS } from './VaultPassphraseDialog.jsx'
+import { SENSITIVE_FIELD_PROPS } from '../lib/sensitiveFields.js'
 import { PASSKEY_UNAVAILABLE, passkeyAvailability, registerPasskey } from '../lib/vaultPasskey.js'
 import { api } from '../lib/api.js'
 import { formatDate } from '../lib/utils.js'

@@ -4,7 +4,7 @@
 // among them: every label must have its own distinct rank, and each state's representative row must land
 // on the label + rank the table promises.
 import { describe, it, expect } from 'vitest'
-import { KIND_STATES, kindMeta, kindRank } from '../UnifiedDuplicatesDialog.jsx'
+import { KIND_STATES, kindMeta, kindRank } from '../duplicateKinds.js'
 
 // One representative entry per state, in the table's own order (most urgent first).
 const SAMPLES = [

@@ -13,7 +13,8 @@ import { Button, Card, Input } from '../ui.jsx'
 import { SectionTitle } from './importPresentational.jsx'
 import { APP_NAME } from '../../lib/appConfig.js'
 import { useVaultGate } from '../../lib/useVaultGate.js'
-import { VaultPassphraseDialog, SENSITIVE_FIELD_PROPS } from '../VaultPassphraseDialog.jsx'
+import { VaultPassphraseDialog } from '../VaultPassphraseDialog.jsx'
+import { SENSITIVE_FIELD_PROPS } from '../../lib/sensitiveFields.js'
 
 // Human-readable explanation for the restore compatibility guard's 409 detail.
 function describeRestoreIncompatibility(detail) {

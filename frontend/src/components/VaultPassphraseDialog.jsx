@@ -10,14 +10,16 @@
 // it — but it asks for the same fields against the same floor, and a separate dialog would be the same
 // component with one extra input and its own opportunity to disagree about the rules.
 //
-// The strength meter travels with it (no other caller). `SENSITIVE_FIELD_PROPS` is exported rather than
-// private: the Connections tab's provider-secret fields want the same autofill suppression, and one copy
-// of that opt-out list is the point.
+// The strength meter travels with it (no other caller). The autofill-suppression props do not: the
+// Connections tab's provider-secret fields and the backup tab want the same opt-out list, and one copy of
+// it is the point, so it lives in `lib/sensitiveFields.js` — a shared constant, and not a vault-specific
+// one, so a component module was the wrong home for it in both directions.
 
 import { useEffect, useState } from 'react'
 import { Button, Input, AppDialog, DialogActions } from './ui.jsx'
 import { useAppSession } from '../lib/AppSessionContext.jsx'
 import { passphraseLimits, passphraseShortfall } from '../lib/vaultPassphrase.js'
+import { SENSITIVE_FIELD_PROPS } from '../lib/sensitiveFields.js'
 import { api } from '../lib/api.js'
 import { formatDate } from '../lib/utils.js'
 
@@ -64,35 +66,6 @@ function PassphraseStrengthMeter({ passphrase }) {
       </div>
     </div>
   )
-}
-
-// Secret fields (vault passphrase/confirm, provider secret): the value is meant to live in a password
-// manager — we tell the user so, and the Production vault floor is ≥20 chars — so suppress the browser's
-// own autofill/suggestion dropdown and any autocorrect/capitalize/spellcheck that would mangle a pasted
-// secret. `autoComplete="new-password"` is the reliable cross-browser suppressor even on the unlock field
-// (`"off"` is widely ignored for password inputs). Copy/paste stays fully enabled — Input adds no onPaste
-// blocker — since typing a 20+ char manager-generated secret isn't realistic.
-export const SENSITIVE_FIELD_PROPS = {
-  autoComplete: 'new-password',
-  autoCorrect: 'off',
-  autoCapitalize: 'off',
-  spellCheck: false,
-  // Password-manager extensions (1Password/LastPass/Bitwarden/Dashlane) inject a "choose a saved login"
-  // overlay on any type=password field and ignore autoComplete — these per-vendor opt-out attributes tell
-  // them to leave this one alone. The vault passphrase is a one-off secret to paste, not a site login to
-  // fill or capture. (`autoComplete="new-password"` already suppresses the *browser's own* saved-password
-  // dropdown; the dialog is not a <form> and never submits one, so the native save-password prompt — which
-  // fires on form submission — doesn't trigger either.)
-  'data-1p-ignore': 'true',
-  'data-lpignore': 'true',
-  'data-bwignore': 'true',
-  'data-form-type': 'other',
-  // Render with NO id/name so the browser has no handle to key its form-field history on. The shared
-  // Input auto-assigns a `useId` id, but those ids are reused across views, so a text search box that
-  // rendered as the same `:rN:` leaks its saved suggestions onto this password field even with
-  // autoComplete="new-password" set. Being an "unnamed field" (the console warns about it — intended
-  // here) is what actually stops the suggestion dropdown. See Input's `suppressAutofillId`.
-  suppressAutofillId: true,
 }
 
 // Credentials backups the vault's current wrapping would strand. Fetched when the change dialog opens,
